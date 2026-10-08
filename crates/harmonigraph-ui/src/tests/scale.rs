@@ -229,15 +229,7 @@ fn control_row(
                                     .desired_width(110.0 * scale);
                                 ui.add(field)
                             }
-                            // Its click target reaches half a row gap past the
-                            // pill each way, into air nothing else claims, and
-                            // that reach is not an allocation; the pill is.
-                            Control::Switch => {
-                                let switch = crate::widgets::toggle_switch(ui, &mut flag, &label);
-                                let reach = ui.spacing().item_spacing.y / 2.0;
-                                let pill = switch.rect.shrink2(egui::vec2(0.0, reach));
-                                switch.with_new_rect(pill)
-                            }
+                            Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
                             Control::Record => {
                                 crate::widgets::record_button(ui, &mut flag, false, &label)
                             }

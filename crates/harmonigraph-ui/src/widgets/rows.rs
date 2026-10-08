@@ -140,7 +140,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             theme::text(),
         );
         painter.galley(
-            egui::pos2(track.right() + gap, rect.center().y - top - caps / 2.0),
+            super::text_at(ui, rect, &galley, track.right() + gap),
             galley,
             theme::text(),
         );
@@ -212,7 +212,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             );
         }
         painter.galley(
-            super::bar::text_at(ui, rect, &galley, rect.left() + pad_x + dot_r * 2.0 + gap),
+            super::text_at(ui, rect, &galley, rect.left() + pad_x + dot_r * 2.0 + gap),
             galley,
             theme::text(),
         );

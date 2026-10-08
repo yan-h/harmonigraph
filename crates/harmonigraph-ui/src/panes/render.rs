@@ -683,18 +683,21 @@ fn export_queue(
                 }
             }
         }
-        if !interaction.take.export_error.is_empty() { ui.label(&interaction.take.export_error); }
+        if !interaction.take.export_error.is_empty() { crate::widgets::label(ui, &interaction.take.export_error); }
         crate::widgets::weak(ui, "Queue survives closing this editor. Removing the plugin or closing the project cancels unfinished jobs. No crash resume.");
     });
     for job in &interaction.take.exports {
         ui.push_id(job.id, |ui| {
-            ui.label(format!(
-                "#{} {:?} · {} · {}",
-                job.id,
-                job.state,
-                job.size.map_or_else(|| "captured size".into(), |[w, h]| format!("{w}×{h}")),
-                job.take.file_name().unwrap_or_default().to_string_lossy()
-            ));
+            crate::widgets::label(
+                ui,
+                format!(
+                    "#{} {:?} · {} · {}",
+                    job.id,
+                    job.state,
+                    job.size.map_or_else(|| "captured size".into(), |[w, h]| format!("{w}×{h}")),
+                    job.take.file_name().unwrap_or_default().to_string_lossy()
+                ),
+            );
             crate::widgets::weak(ui, job.output.display().to_string());
             if matches!(job.state, ExportStatus::Running | ExportStatus::Cancelling) {
                 let progress = job.progress;
@@ -709,7 +712,7 @@ fn export_queue(
                     ));
             }
             if !job.detail.is_empty() {
-                ui.label(&job.detail);
+                crate::widgets::label(ui, &job.detail);
             }
             button_row(ui, |ui| {
                 if matches!(job.state, ExportStatus::Pending | ExportStatus::Running)

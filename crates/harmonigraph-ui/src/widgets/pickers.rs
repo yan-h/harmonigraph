@@ -32,7 +32,7 @@ pub(crate) fn skin_color(
     );
     let galley = super::bar::elided_name(ui.painter(), job, rect.width(), scale, 20.0 * scale);
     ui.painter().galley(
-        super::bar::text_at(ui, rect, &galley, rect.left() + super::bar::BAR_TEXT_PAD * scale),
+        super::text_at(ui, rect, &galley, rect.left() + super::bar::BAR_TEXT_PAD * scale),
         galley,
         theme::text(),
     );

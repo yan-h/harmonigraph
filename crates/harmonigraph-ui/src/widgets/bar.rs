@@ -27,19 +27,6 @@ pub(super) fn bar_radius(scale: f32) -> u8 {
 }
 /// Inset of a bar's name and its value readout from the bar's own ends.
 pub(super) const BAR_TEXT_PAD: f32 = 7.0;
-/// Where a run of text standing in `row` at `x` goes: its CAPITALS centred
-/// across the row, not its line box.
-///
-/// A line box carries the descender room under the baseline and next to none
-/// over the capitals, so centring the box stands every name and readout about
-/// half a point low — on a 13.5pt line in a 19pt bar, five pixels over the
-/// caps and four under. Centred on the caps the air is even, and stays even at
-/// any row height or [chrome scale](theme::ui_scale). Descenders hang into the
-/// air below, as they do under a trimmed [`label`](mod@super::label).
-pub(super) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
-    let (top, bottom) = super::cap_trim(ui, galley);
-    egui::pos2(x, row.center().y - (top + galley.size().y - bottom) * 0.5)
-}
 /// Clear space kept between the two, so an elided name stops short of the
 /// number rather than touching it.
 pub(super) const BAR_LABEL_GAP: f32 = 6.0;

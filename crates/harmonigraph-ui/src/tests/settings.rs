@@ -436,16 +436,26 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
             _ => None,
         })
         .collect();
+    let fields: Vec<egui::Pos2> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == crate::panes::view::PRESET_NAME_HINT => {
+                Some(t.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .collect();
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            // The camera preset's name field is a row-high well as well, and
-            // is told from a bar by its declared width.
+            // The camera preset's name field is a row-high well too, told from
+            // a bar by the hint it holds, as the record panel is by its dot —
+            // not by its width, which the column clamps at the narrow end.
             egui::Shape::Rect(r)
                 if r.fill == well
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
-                    && (r.rect.width() - crate::panes::view::PRESET_NAME_WIDTH).abs() >= 0.6
-                    && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
+                    && !dots.iter().any(|&dot| r.rect.contains(dot))
+                    && !fields.iter().any(|&field| r.rect.contains(field)) =>
             {
                 if let Some(picture) = pictures.iter().find(|picture| {
                     r.rect.left() >= picture.right()

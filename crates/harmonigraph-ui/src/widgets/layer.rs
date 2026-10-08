@@ -6,8 +6,9 @@ use harmonigraph_scene::{ViewConfig, SEVENS_LAYER_LIMIT};
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    text_at, track_fill, BAR_TEXT_PAD, HANDLE_W,
+    track_fill, BAR_TEXT_PAD, HANDLE_W,
 };
+use super::text_at;
 use crate::theme;
 
 /// Gap between two cells, so a stack reads as a row of separate sheets rather

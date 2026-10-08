@@ -5,10 +5,11 @@ use std::ops::RangeInclusive;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, elided_name, grip_radius, name_color, paint_thumbs, text_at, track_fill,
+    bar_radius, bar_width, elided_name, grip_radius, name_color, paint_thumbs, track_fill,
     BAR_TEXT_PAD, HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
+use super::text_at;
 use crate::theme;
 
 /// Segments a [`ValueBar::swatch`] track is drawn in: enough that a hue

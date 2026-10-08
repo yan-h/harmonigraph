@@ -12,10 +12,11 @@ use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PIT
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    text_at, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE,
-    HANDLE_W, TEXT_GAP,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
+use super::text_at;
 use crate::panes::scene_color;
 use crate::theme;
 

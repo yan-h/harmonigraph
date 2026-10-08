@@ -33,6 +33,20 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     (top.max(0.0), bottom.max(0.0))
 }
 
+/// Where a run of text standing in `row` at `x` goes: its CAPITALS centred
+/// across the row, not its line box. For every run drawn inside a control —
+/// a bar's name and readout, a switch's or the record button's label.
+///
+/// A line box carries the descender room under the baseline and next to none
+/// over the capitals, so centring the box stands a bar's name and readout about
+/// half a point low — on a 13.5pt line in a 19pt bar, five pixels over the
+/// caps and four under. Centred on the caps the air is even, and stays even at
+/// any row height or [chrome scale](crate::theme::ui_scale). Descenders hang into the
+/// air below, as they do under a trimmed [`label`].
+pub(crate) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
+    let (top, bottom) = cap_trim(ui, galley);
+    egui::pos2(x, row.center().y - (top + galley.size().y - bottom) * 0.5)
+}
 /// The height of a capital above the baseline in `font`, read off the ink of
 /// an "H". egui caches the layout, so asking every frame is a lookup.
 fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {

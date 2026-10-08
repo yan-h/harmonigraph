@@ -7,10 +7,11 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    text_at, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE,
-    HANDLE_W, TEXT_GAP,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
+use super::text_at;
 use crate::theme;
 
 /// Segments the ramp half of a [`fade_span`](RangeBar::fade_span) fill is drawn

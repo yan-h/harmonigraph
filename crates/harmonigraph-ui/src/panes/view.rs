@@ -35,7 +35,10 @@ use harmonigraph_scene::SEVENS_SIZE_RANGE;
 /// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
 /// so the field shrinks with the row on its own and a narrow column caps it
 /// well under this.
-pub(crate) const PRESET_NAME_WIDTH: f32 = 110.0;
+const PRESET_NAME_WIDTH: f32 = 110.0;
+/// What the empty preset name field shows, which is also how a test tells
+/// that field from a bar: both are row-high wells.
+pub(crate) const PRESET_NAME_HINT: &str = "preset name";
 
 /// Camera framing: projection, angle, and saved angles.
 pub(super) fn camera(
@@ -175,7 +178,7 @@ pub(super) fn camera(
         });
         button_row(ui, |ui| {
             let field = crate::widgets::row_field(ui, &mut interaction.preset_name)
-                .hint_text("preset name")
+                .hint_text(PRESET_NAME_HINT)
                 .desired_width(PRESET_NAME_WIDTH * crate::theme::ui_scale(ui.ctx()));
             ui.add(field);
             if ui
