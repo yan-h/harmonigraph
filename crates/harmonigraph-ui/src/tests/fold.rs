@@ -273,6 +273,61 @@ fn dividers_follow_the_pointer_in_both_arrangements() {
     }
 }
 
+/// The settings divider stops at the settings floor rather than at the
+/// pictures' minimum: past it the column's plots would have to stack.
+#[test]
+fn the_settings_divider_stops_at_the_settings_floor() {
+    for position in [Position::Right, Position::Below] {
+        let mut state = fresh();
+        state.workspace.layout.position = position;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let [lattice, analyzer, settings] = state.workspace.layout_runtime.rects;
+        let picture = if position == Position::Below { lattice } else { analyzer };
+        let origin = egui::pos2((picture.right() + settings.left()) * 0.5, settings.center().y);
+        let past = origin + egui::vec2(2000.0, 0.0);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
+        h.frame(&mut state, vec![press(origin, true)]);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(past)]);
+        h.frame(&mut state, vec![press(past, false)]);
+        let width = state.workspace.layout_runtime.rects[Section::Settings as usize].width();
+        assert!(
+            (width - theme::min_settings(1.0)).abs() < 0.1,
+            "{position:?}: settings dragged to {width}"
+        );
+        // Saved there too, not only drawn there: a saved width under the floor
+        // would draw at the floor all the same, and the drag back would have
+        // to make up the difference before the divider moved at all.
+        let layout = &state.workspace.layout;
+        let saved =
+            if position == Position::Below { layout.below.settings } else { layout.right.settings };
+        assert!((saved - width).abs() < 0.1, "{position:?}: saved {saved}, drawn {width}");
+    }
+}
+
+/// A window narrowed until the settings column sits on its floor, then widened
+/// back, returns to the layout it started from: the floor is drawn, not saved.
+#[test]
+fn a_window_narrowed_past_the_settings_floor_widens_back_to_its_layout() {
+    for position in [Position::Right, Position::Below] {
+        let mut state = fresh();
+        state.workspace.layout.position = position;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let window = h.screen;
+        let before = state.workspace.layout_runtime.rects;
+        h.screen.max.x = h.screen.min.x + shell::MIN_WINDOW_SIZE.x;
+        h.settle(&mut state);
+        let narrow = state.workspace.layout_runtime.rects[Section::Settings as usize].width();
+        assert!((narrow - theme::min_settings(1.0)).abs() < 0.1, "{position:?}: {narrow}");
+        h.screen = window;
+        h.settle(&mut state);
+        for (now, was) in state.workspace.layout_runtime.rects.iter().zip(before) {
+            near(now.size(), was.size());
+        }
+    }
+}
+
 #[test]
 fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
     let mut state = split_state();

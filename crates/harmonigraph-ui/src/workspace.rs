@@ -234,12 +234,15 @@ impl Layout {
         self.folded.map(|folded| !folded || rail > 0.0)
     }
 
-    fn natural_size(&self, rail: f32, gap: f32) -> Vec2 {
+    /// The window these sizes ask for. A settings column saved narrower than
+    /// `floor` asks for the floor, which is what [`Self::rects`] draws it at,
+    /// so the pictures are not narrowed to pay for the difference.
+    fn natural_size(&self, rail: f32, gap: f32, floor: f32) -> Vec2 {
         let sizes = self.laid_out();
         let extent = |index, size| if self.folded[index] { rail } else { size };
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
-        let settings = extent(2, sizes.settings);
+        let settings = extent(2, sizes.settings.max(floor));
         let room = self.takes_room(rail);
         if self.compact() {
             return vec2(
@@ -323,9 +326,47 @@ impl Layout {
         }
     }
 
-    fn rects(&self, area: Rect, rail: f32, gap: f32) -> [Rect; 3] {
-        let sizes = self.laid_out();
+    /// Where each section is drawn. An open settings column narrower than
+    /// `floor` is widened to it out of the open pictures beside it, in
+    /// proportion to their widths and as far as they have width to give.
+    ///
+    /// Here rather than in [`Self::fit`], which keeps the saved sizes in the
+    /// proportions the window was fitted at: a window narrowed past the floor
+    /// and widened again comes back to the same layout, rather than to one
+    /// whose settings column kept the share the floor took. And the Spiral
+    /// tab's lent width (see [`Self::repaid`]) is reckoned on those
+    /// proportional sizes, so it still adds up to the window it was fitted to.
+    fn rects(&self, area: Rect, rail: f32, gap: f32, floor: f32) -> [Rect; 3] {
+        let mut sizes = self.laid_out();
         let extent = |index, size| if self.folded[index] { rail } else { size };
+        let below = self.position == Position::Below;
+        if !self.folded[2] && !self.compact() && sizes.settings < floor {
+            let open = |index: usize| !self.folded[index];
+            let pictures = if below {
+                sizes.cross
+            } else {
+                [sizes.lattice, sizes.analyzer]
+                    .into_iter()
+                    .zip([open(0), open(1)])
+                    .filter(|(_, open)| *open)
+                    .map(|(size, _)| size)
+                    .sum()
+            };
+            let taken = (floor - sizes.settings).min(pictures);
+            if taken > 0.0 {
+                let ratio = (pictures - taken) / pictures;
+                if below {
+                    sizes.cross *= ratio;
+                } else {
+                    for (size, index) in [(&mut sizes.lattice, 0), (&mut sizes.analyzer, 1)] {
+                        if open(index) {
+                            *size *= ratio;
+                        }
+                    }
+                }
+                sizes.settings += taken;
+            }
+        }
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
         let settings = extent(2, sizes.settings);
@@ -454,6 +495,7 @@ pub(crate) fn show(
     let scale = theme::ui_scale(ui.ctx());
     let rail = if frameless { 0.0 } else { theme::tab_bar_height(scale) };
     let gap = 3.0 * scale;
+    let floor = theme::min_settings(scale);
     let resized = runtime.area.is_none_or(|last| (last - area.size()).length_sq() > 0.25);
     // A request is answered before the next plugin frame. Keep the guard
     // across egui's discarded/repeated passes as well as the answering frame.
@@ -478,7 +520,7 @@ pub(crate) fn show(
     runtime.area = Some(area.size());
     let mut drawn = layout.clone();
     drawn.fit(area.size(), rail, gap);
-    runtime.rects = drawn.rects(area, rail, gap);
+    runtime.rects = drawn.rects(area, rail, gap, floor);
     runtime.bodies = [None; 3];
     let before = layout.clone();
     // The dock is set on the Analyzer settings page, which draws through the
@@ -528,7 +570,7 @@ pub(crate) fn show(
         runtime.requested = Some(frame);
         runtime.before_request = Some(before);
         ui.ctx().request_repaint();
-        return Some(layout.natural_size(rail, gap) - area.size());
+        return Some(layout.natural_size(rail, gap, floor) - area.size());
     }
     None
 }
@@ -817,8 +859,9 @@ fn dividers(
                 } else {
                     &mut next.lattice
                 };
+                let floor = theme::min_settings(ui_scale);
                 let delta =
-                    delta.clamp(-(*picture - min).max(0.0), (sizes.settings - min).max(0.0));
+                    delta.clamp(-(*picture - min).max(0.0), (sizes.settings - floor).max(0.0));
                 *picture += delta;
                 next.settings -= delta;
             }

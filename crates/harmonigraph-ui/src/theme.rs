@@ -301,6 +301,24 @@ pub(crate) fn min_pane(scale: f32) -> f32 {
     4.0 * tab_bar_height(scale)
 }
 
+/// The narrowest a settings pane's content box is ever laid out at, in design
+/// points: where a plot still has room for its exact values beside the picture
+/// (a 112-point well, the gap, and bars wide enough for a name and a readout),
+/// and the Tuning pane's sources still fit their three-column grid.
+///
+/// Above it a narrower column only wraps a row of buttons or turns one into a
+/// dropdown, and each row keeps its place. Below it those two blocks would have
+/// to stack, which moves everything under them by hundreds of points, so the
+/// column stops here instead and neither has a stacked layout to fall back to.
+pub(crate) const SETTINGS_MIN_CONTENT: f32 = 220.0;
+
+/// The narrowest the settings column is dragged or fitted to, at this scale:
+/// [`SETTINGS_MIN_CONTENT`] plus the pane margin either side of it. Only a
+/// window too narrow to hold it at all draws the column any narrower.
+pub(crate) fn min_settings(scale: f32) -> f32 {
+    SETTINGS_MIN_CONTENT * scale + 2.0 * f32::from(dock_pane_margin(scale))
+}
+
 /// Give a scroll area built INSIDE a pane a lane of its own to draw its bar in.
 ///
 /// The bar is [as wide as the gutter](style_at) a pane leaves down its right
