@@ -9,8 +9,9 @@ pub(super) struct Plot {
     fields: Rect,
 }
 impl Plot {
-    /// Keep the picture a stable size beside exact values. Very narrow panes
-    /// stack instead of squeezing labels, numbers, and handles into one row.
+    /// Keep the picture a stable size beside exact values. There is no stacked
+    /// layout for a narrow pane: the dock holds the settings column at the width
+    /// this needs ([`theme::SETTINGS_MIN_CONTENT`]) wherever the window can.
     pub fn with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {
         Self::new(ui, Some(label), count, false)
     }
@@ -24,8 +25,7 @@ impl Plot {
         let scale = theme::ui_scale(ui.ctx());
         let width = super::bar::bar_width(ui);
         let gap = ui.spacing().item_spacing.y;
-        let beside = count > 0 && width >= 220.0 * scale;
-        let title_beside = label.is_some() && beside && count < 3;
+        let title_beside = label.is_some() && count < 3;
         if title_beside {
             super::label::group_space(ui);
         } else if let Some(label) = label {
@@ -33,32 +33,17 @@ impl Plot {
         }
         let rows = count + usize::from(title_beside);
         let fields_height = (rows as f32 * (theme::row_height(scale) + gap) - gap).max(0.0);
-        let total_height =
-            height(scale) + if count > 0 && !beside { gap + fields_height } else { 0.0 };
         let (bounds, response) =
-            ui.allocate_exact_size(Vec2::new(width, total_height), Sense::hover());
+            ui.allocate_exact_size(Vec2::new(width, height(scale)), Sense::hover());
         let well = Rect::from_min_size(
             bounds.min,
-            Vec2::new(
-                if square {
-                    height(scale).min(width)
-                } else if beside {
-                    112.0 * scale
-                } else {
-                    width
-                },
-                height(scale),
-            ),
+            Vec2::new(if square { height(scale) } else { 112.0 * scale }, height(scale)),
         );
         ui.painter().rect_filled(well, super::bar::bar_radius(scale), theme::well());
-        let mut fields = if beside {
-            Rect::from_min_max(
-                egui::pos2(well.right() + gap, bounds.center().y - fields_height / 2.0),
-                egui::pos2(bounds.right(), bounds.center().y + fields_height / 2.0),
-            )
-        } else {
-            Rect::from_min_max(egui::pos2(bounds.left(), well.bottom() + gap), bounds.max)
-        };
+        let mut fields = Rect::from_min_max(
+            egui::pos2(well.right() + gap, bounds.center().y - fields_height / 2.0),
+            egui::pos2(bounds.right(), bounds.center().y + fields_height / 2.0),
+        );
         if let Some(label) = label.filter(|_| title_beside) {
             let mut title_rect = fields;
             title_rect.min.x += super::bar::BAR_TEXT_PAD * scale;

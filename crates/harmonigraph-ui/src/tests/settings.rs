@@ -463,25 +463,6 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
         .collect()
 }
 
-/// Every bar in a settings pane is the same length, and that length is the
-/// column's — so dragging the column narrower narrows all of them together.
-///
-/// What breaks it is invisible in the code that draws a bar, which is why this
-/// is pinned rather than left to reading: egui's `Region::expand_to_include_rect`
-/// unions `max_rect` as well as `min_rect`, so any control that overruns the
-/// column widens the column for everything BELOW it, and a bar sizing itself
-/// from bare `available_width` inherits the overrun as a floor it cannot shrink
-/// past. Each bar's minimum length is then the width of the widest thing above
-/// it — five different minimums down one pane, the bars under a wide row running
-/// their value readout off the pane edge while the bars above it compress
-/// properly. `widgets::bar_width` is the answer, and the reason it measures the
-/// clip rect rather than trusting the layout.
-///
-/// Swept past the width where the pane's other controls stop fitting on purpose.
-/// Above about 100pt nothing overruns at all (see below), so those widths would
-/// pass whether a bar clamped itself or not; 100 and 80, where the record button
-/// and the Options field have nowhere left to go, are where the clamp is the
-/// only thing holding the bars level.
 /// How many source-to-display mappings a fresh view carries, each drawn as a
 /// weight bar in the Mappings page's MIDI note intensity section.
 fn fresh_mappings() -> usize {
@@ -493,12 +474,28 @@ fn fresh_mappings() -> usize {
         .count()
 }
 
+/// Every bar in a settings pane is the same length, and that length is the
+/// column's — so dragging the column narrower narrows all of them together.
+///
+/// What breaks it is invisible in the code that draws a bar, which is why this
+/// is pinned rather than left to reading: egui's `Region::expand_to_include_rect`
+/// unions `max_rect` as well as `min_rect`, so any control that overruns the
+/// column widens the column for everything BELOW it, and a bar sizing itself
+/// from the layout (`widgets::bar_width`) inherits the overrun as a floor it
+/// cannot shrink past. Each bar's minimum length is then the width of the
+/// widest thing above it — the bars under a wide row running their value
+/// readout off the pane edge while the bars above it compress properly.
+///
+/// Swept down to [`crate::theme::SETTINGS_MIN_CONTENT`], the narrowest the
+/// dock lays a settings pane out at, and on to 190, because
+/// a window too narrow to hold the floor still draws narrower: at 1.5x scale,
+/// with both pictures folded, a 400pt window leaves about 193 design points.
 #[test]
 fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
-    for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
+    for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
         for &pane in SETTINGS_PANES {
             for &projection in projections_for(pane) {
                 let widths = bar_track_widths(&settings_pane_at_width(pane, width, projection));
@@ -860,24 +857,22 @@ fn a_render_that_has_not_announced_its_total_has_no_fraction() {
 /// dragged to its end, and horizontal scrolling is deliberately off in the dock
 /// (see `panes::Viewer::scroll_bars`), so there is no way to reach it.
 ///
-/// Three things hold it: rows wrap, and so do the labels of the buttons in them
-/// (`widgets::button_row`); bars take the column's visible width
-/// (`widgets::bar_width`); and a bar's name elides against its own value readout
-/// instead of running over it and out of the pane.
+/// Two things hold it: rows wrap, and so do the labels of the buttons in them
+/// (`widgets::button_row`); and a bar's name elides against its own value
+/// readout instead of running over it and out of the pane. Bars take the
+/// column's width only because of it (`widgets::bar_width`).
 ///
-/// 120pt is the narrowest pinned because it is the last width where everything
-/// still fits. Below about 100 what is left is widgets that wrap nothing and
-/// have nowhere to wrap to — the record button, a `toggle_switch` label, the
-/// Options field — and the answer there would be to elide those too, which costs
-/// every reader something to buy back a column nobody drags to.
+/// The sweep reaches [`crate::theme::SETTINGS_MIN_CONTENT`], the narrowest the
+/// dock lays a settings pane's content out at, and goes on to 190, because
+/// a window too narrow to hold the floor still draws narrower: at 1.5x scale,
+/// with both pictures folded, a 400pt window leaves about 193 design points.
 ///
-/// The column opens at around 423pt (`state::SETTINGS_SPLIT` of the reference
-/// window) and fits there, which is why this went unnoticed: the overrun starts
-/// somewhere under 400, and by 300 the Tuning pane was running 32pt of bar off
-/// its own edge. It is a resize bug, so the sweep is the test.
+/// The overrun this was written for started somewhere under 400pt, and by 300
+/// the Tuning pane was running 32pt of bar off its own edge. It is a resize
+/// bug, so the sweep is the test.
 #[test]
 fn no_settings_pane_overruns_a_narrow_column() {
-    for width in [400.0f32, 300.0, 240.0, 200.0, 160.0, 120.0] {
+    for width in [400.0f32, 300.0, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
         let edge = pane_content_right(width);
         // The pane's own clip is the tab body, a margin wider than the content
         // box on each side.
@@ -1318,9 +1313,8 @@ fn scrolling_settings_pane(
     let tab = pane;
     state.workspace.layout = workspace::Layout::solo(tab);
     // The same shell [`settings_pane_at_width`] draws for, so the Video pane
-    // brings its record row and its progress bar — the two controls
-    // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
-    // two likeliest to reach the lane.
+    // brings its record row and its progress bar — the two controls with
+    // nowhere to wrap to, and so the two likeliest to reach the lane.
     state.workspace.interaction.take.supported = true;
     state.workspace.interaction.take.last_take = Some("music.take".into());
     state.workspace.interaction.take.exports = vec![fixture_export()];

@@ -44,9 +44,6 @@ pub(crate) fn skin_color(
     let response = response.on_hover_text("Choose hue and color amount");
     egui::Popup::menu(&response).style(super::menu_style(ui.ctx())).show(|ui| {
         ui.set_width(280.0 * theme::ui_scale(ui.ctx()));
-        let key = crate::panes::pane_content_right();
-        let previous = ui.data(|d| d.get_temp::<f32>(key));
-        ui.data_mut(|d| d.insert_temp(key, ui.max_rect().right()));
         ui.push_id(label, |ui| {
             let plot = Plot::with_fields(ui, "Hue → / amount ↑", 2);
             // Use the skin's own OKLab conversion and permitted chroma.
@@ -72,13 +69,6 @@ pub(crate) fn skin_color(
                 value_bar(ui, amount, 0.0..=1.0, [labels[1], "Amount"], 100.0, "%");
             });
             plot.dot(ui, *hue / 360.0, *amount);
-        });
-        ui.data_mut(|d| {
-            if let Some(right) = previous {
-                d.insert_temp(key, right);
-            } else {
-                d.remove::<f32>(key);
-            }
         });
     });
 }

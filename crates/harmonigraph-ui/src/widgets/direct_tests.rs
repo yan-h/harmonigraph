@@ -360,11 +360,9 @@ fn spectrum_buttons_form_a_compact_rectangle_and_select_each_edge() {
 }
 
 #[test]
-fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
+fn color_popup_edits_its_real_skin_coordinates() {
     let ctx = crate::tests::probe::themed_at(1.0);
     let (mut hue, mut amount) = (180.0, 0.3);
-    let key = crate::panes::pane_content_right();
-    ctx.data_mut(|d| d.insert_temp(key, 120.0f32));
     let mut draw = |ui: &mut Ui| {
         ui.set_max_width(120.0);
         skin_color(ui, "Accent", &mut hue, &mut amount, ["Hue", "Amount"], |h, s| {
@@ -391,7 +389,6 @@ fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
     frame(&ctx, vec![Event::PointerMoved(handle + egui::vec2(30.0, -10.0))], &mut draw);
     frame(&ctx, vec![press(handle + egui::vec2(30.0, -10.0), false)], &mut draw);
     assert!(hue > 180.0 && amount > 0.3);
-    assert_eq!(ctx.data(|d| d.get_temp::<f32>(key)), Some(120.0));
 }
 
 #[test]
@@ -440,9 +437,9 @@ fn numeric_entries_use_display_units_and_reject_non_finite_input() {
 }
 
 #[test]
-fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
+fn compact_values_fit_beside_the_picture() {
     for scale in [0.7, 1.0, 1.5] {
-        for width in [120.0, 219.0, 220.0, 240.0, 320.0] {
+        for width in [crate::theme::SETTINGS_MIN_CONTENT, 240.0, 320.0] {
             let ctx = crate::tests::probe::themed_scaled(scale);
             let screen = egui::vec2(800.0, 500.0);
             let pane =
@@ -476,14 +473,12 @@ fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
                     });
                     let after = ui.label("Next setting").rect;
                     assert!(after.top() >= plot.response.rect.bottom());
-                    if width >= 220.0 {
-                        let three_rows = crate::theme::row_height(scale) * 3.0
-                            + ui.spacing().item_spacing.y * 2.0;
-                        assert!(
-                            (plot.response.rect.height() - three_rows).abs() < 0.1,
-                            "compact control must be three rows tall"
-                        );
-                    }
+                    let three_rows =
+                        crate::theme::row_height(scale) * 3.0 + ui.spacing().item_spacing.y * 2.0;
+                    assert!(
+                        (plot.response.rect.height() - three_rows).abs() < 0.1,
+                        "compact control must be three rows tall"
+                    );
                 });
             }
         }
