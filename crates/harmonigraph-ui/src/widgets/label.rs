@@ -33,17 +33,31 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     (top.max(0.0), bottom.max(0.0))
 }
 
-/// Where a run of text standing in `row` at `x` goes: its CAPITALS centred
-/// across the row, not its line box. For every run drawn inside a control —
-/// a bar's name and readout, a switch's or the record button's label.
+/// Where a run of text standing in `row` at `x` goes, with its CAPITALS
+/// centred across the row. For every run drawn inside a control — a bar's
+/// name and readout, a switch's or the record button's label.
 ///
-/// A line box carries the descender room under the baseline and next to none
-/// over the capitals, so centring the box stands a bar's name and readout about
-/// half a point low — on a 13.5pt line in a 19pt bar, five pixels over the
-/// caps and four under. Centred on the caps the air is even, and stays even at
-/// any row height or [chrome scale](crate::theme::ui_scale). Descenders hang into the
-/// air below, as they do under a trimmed [`label`].
+/// How depends on the face. Atkinson's own metrics centre its capitals in its
+/// line box (3.81pt over them, 3.91pt under the baseline at 13.5pt), so its
+/// box is centred, exactly as egui centres a button's text: a bar's name then
+/// stands at the same height as the button beside it at every pixel density.
+/// Measuring the caps off the ink instead rounds them to the pixel grid, which
+/// at 2x stood a name one device pixel lower than a button's text (#1481).
+///
+/// Iosevka's capitals stand about 0.4pt above the middle of its box (3.1pt
+/// over them, 3.85pt under the baseline), so a monospace run — a readout — is
+/// centred on its measured caps instead,
+/// and descenders hang into the air below, as they do under a trimmed
+/// [`label`].
 pub(crate) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
+    let monospace = galley
+        .job
+        .sections
+        .first()
+        .is_some_and(|section| section.format.font_id.family == egui::FontFamily::Monospace);
+    if !monospace {
+        return egui::pos2(x, row.center().y - galley.size().y * 0.5);
+    }
     let (top, bottom) = cap_trim(ui, galley);
     egui::pos2(x, row.center().y - (top + galley.size().y - bottom) * 0.5)
 }
