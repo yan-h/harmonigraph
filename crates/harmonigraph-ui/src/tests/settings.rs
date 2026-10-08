@@ -1232,7 +1232,7 @@ fn a_transient_tuning_status_does_not_move_the_adaptive_controls() {
     let adaptive_y = |pending| {
         let mut state = fresh();
         state.picture.runtime.configuration_pending = pending;
-        let output = tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT);
+        let output = adaptive_tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT);
         if pending {
             assert!(
                 text_y(&output.shapes, "Tuning change pending audio adoption").is_some(),
@@ -1247,6 +1247,17 @@ fn a_transient_tuning_status_does_not_move_the_adaptive_controls() {
         pending, settled,
         "the transient status moved Adaptive tuning from {settled} to {pending}",
     );
+}
+
+/// A backend with no engine selector reads as Pass through, so the Tuning
+/// pane offers it no adaptive policy to edit.
+#[test]
+fn without_an_engine_selector_the_tuning_pane_shows_no_adaptive_controls() {
+    let mut state = fresh();
+    let shapes = tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes;
+    assert!(text_y(&shapes, "ADAPTIVE TUNING").is_none());
+    let shapes = adaptive_tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes;
+    assert!(text_y(&shapes, "ADAPTIVE TUNING").is_some(), "the heading this looks for");
 }
 
 /// A configuration fault latches until the host resets the plugin, so its

@@ -401,7 +401,7 @@ fn draw_map_overlay(
     let painter = ui.painter().with_clip_rect(rect);
     let maps = state.runtime.lattice_maps.as_ref();
     let engine =
-        maps.map_or(harmonigraph_core::lattice_map::TuningEngine::Adaptive, |m| m.playback.engine);
+        maps.map_or(harmonigraph_core::lattice_map::TuningEngine::Off, |m| m.playback.engine);
     if let Some(pos) = state
         .surfaces
         .hovered
