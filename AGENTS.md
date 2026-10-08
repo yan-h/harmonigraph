@@ -10,7 +10,7 @@ Claude's Edit and Write tools refuse to write through a symlink.
 Cross-project skills are installed globally from the personal `agent-config` checkout ([setup](docs/development.md#shared-agent-skills));
 keep each skill's guidance at that single source rather than copying it per agent.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
-except `.claude/commands/` and `.claude/agents/`, which hold procedure any agent can read directly.
+except `.claude/agents/`, which holds procedure any agent can read directly.
 
 ## Lazy-loaded detail lives in `.claude/skills/`
 

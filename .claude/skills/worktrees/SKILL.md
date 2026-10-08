@@ -1,6 +1,6 @@
 ---
 name: worktrees
-description: Worktree ownership for Claude and Codex sessions, the Codex-companion handoff, why a hand-written worktree lock is never released, and when parallel sessions are worth running. Use when creating, dispatching into, locking or cleaning up a worktree, when handing work to Codex, or when planning parallel sessions.
+description: Worktree ownership for Claude and Codex sessions, why a hand-written worktree lock is never released, and when parallel sessions are worth running. Use when creating, dispatching into, locking or cleaning up a worktree, or when planning parallel sessions.
 ---
 
 # Worktrees and parallel sessions
@@ -20,11 +20,6 @@ Codex owns its worktrees' cleanup and snapshots, and the Claude reclaimer remove
 A hand-made worktree outside either owner has no automatic cleanup and is not a supported session workspace.
 A write-capable session that finds itself in main starts over elsewhere:
 Claude through `EnterWorktree`, a Codex coordinator by sending the edit to a worktree task.
-
-The Claude Companion handoff is not a Codex-managed task:
-Codex inherits the dispatching Claude session's cwd.
-Claude therefore enters its worktree before dispatching, never after;
-`.claude/commands/implement-with-codex.md` makes that its first step.
 
 ## Before running sessions in parallel, check for file overlap
 
