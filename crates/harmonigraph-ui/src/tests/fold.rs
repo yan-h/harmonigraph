@@ -366,6 +366,11 @@ fn in_a_window_narrowed_past_the_floor_the_dividers_keep_pace_with_the_pointer()
         };
         let origin = egui::pos2((left.right() + right.left()) * 0.5, settings.center().y);
         let to = origin + egui::vec2(delta, 0.0);
+        let saved_settings = |state: &SharedState| match position {
+            Position::Right => state.workspace.layout.right.settings,
+            Position::Below => state.workspace.layout.below.settings,
+        };
+        let untouched = saved_settings(&state);
         h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
         h.frame(&mut state, vec![press(origin, true)]);
         h.frame(&mut state, vec![egui::Event::PointerMoved(to)]);
@@ -377,7 +382,30 @@ fn in_a_window_narrowed_past_the_floor_the_dividers_keep_pace_with_the_pointer()
             (grew - delta.abs()).abs() < 0.1,
             "{position:?}/{section:?}: a {delta}pt drag moved the divider {grew}pt"
         );
+        // Trading width between the pictures leaves the settings column's own
+        // saved width alone, so a wider window still gives it back.
+        if section == Section::Lattice {
+            assert_eq!(saved_settings(&state), untouched, "the pictures' divider saved the floor");
+        }
     }
+}
+
+/// A switch of analyzer tab edits no saved width (see `Layout::repaid`), and
+/// that holds in a window narrow enough for the floor to be drawn.
+#[test]
+fn in_a_window_narrowed_past_the_floor_a_tab_switch_edits_no_saved_width() {
+    let (mut h, mut state) = narrowed_past_the_floor(Position::Right);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    // The region fold started from the drawn layout and saved the floor, so
+    // narrow again for the switch to start from a column the floor overrides.
+    h.screen.max.x -= 60.0;
+    h.settle(&mut state);
+    let saved = state.workspace.layout.right;
+    assert!(saved.settings < theme::min_settings(1.0) - 10.0, "fixture saved {saved:?}");
+    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
+    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
+    assert_eq!(state.workspace.layout.right, saved);
 }
 
 /// Folding one picture in a window narrowed past the floor leaves the other
