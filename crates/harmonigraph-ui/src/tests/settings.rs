@@ -487,13 +487,15 @@ fn fresh_mappings() -> usize {
 /// readout off the pane edge while the bars above it compress properly.
 ///
 /// Swept down to [`crate::theme::SETTINGS_MIN_CONTENT`], the narrowest the
-/// dock lays a settings pane out at.
+/// dock lays a settings pane out at, and on to 190, because
+/// a window too narrow to hold the floor still draws narrower: at 1.5x scale,
+/// with both pictures folded, a 400pt window leaves about 193 design points.
 #[test]
 fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
-    for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT] {
+    for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
         for &pane in SETTINGS_PANES {
             for &projection in projections_for(pane) {
                 let widths = bar_track_widths(&settings_pane_at_width(pane, width, projection));
@@ -860,15 +862,17 @@ fn a_render_that_has_not_announced_its_total_has_no_fraction() {
 /// readout instead of running over it and out of the pane. Bars take the
 /// column's width only because of it (`widgets::bar_width`).
 ///
-/// The sweep stops at [`crate::theme::SETTINGS_MIN_CONTENT`], the narrowest the
-/// dock ever lays a settings pane's content out at.
+/// The sweep reaches [`crate::theme::SETTINGS_MIN_CONTENT`], the narrowest the
+/// dock lays a settings pane's content out at, and goes on to 190, because
+/// a window too narrow to hold the floor still draws narrower: at 1.5x scale,
+/// with both pictures folded, a 400pt window leaves about 193 design points.
 ///
 /// The overrun this was written for started somewhere under 400pt, and by 300
 /// the Tuning pane was running 32pt of bar off its own edge. It is a resize
 /// bug, so the sweep is the test.
 #[test]
 fn no_settings_pane_overruns_a_narrow_column() {
-    for width in [400.0f32, 300.0, 240.0, crate::theme::SETTINGS_MIN_CONTENT] {
+    for width in [400.0f32, 300.0, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
         let edge = pane_content_right(width);
         // The pane's own clip is the tab body, a margin wider than the content
         // box on each side.

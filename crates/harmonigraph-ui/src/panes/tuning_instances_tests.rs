@@ -119,7 +119,9 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
         let params = Instances::new();
         let state = fresh_picture();
         params.0.borrow_mut().rotate_left(selected);
-        for width in [crate::theme::SETTINGS_MIN_CONTENT, 240.0, 300.0, 420.0] {
+        // 190 is under the settings floor on purpose: a window too narrow to
+        // hold the floor (1.5x scale, pictures folded, 400pt) still gets there.
+        for width in [190.0, crate::theme::SETTINGS_MIN_CONTENT, 240.0, 300.0, 420.0] {
             let ctx = themed();
             let size = egui::vec2(width, 2400.0);
             let mut used = 0.0;
