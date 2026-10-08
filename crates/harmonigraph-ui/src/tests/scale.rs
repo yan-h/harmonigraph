@@ -285,6 +285,11 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
     }
 }
 
+/// How far a drawn height may stand off the one declared for it: egui lands
+/// every allocation on a [`GUI_ROUNDING`](egui::emath::GUI_ROUNDING) grid, and
+/// the sweep's scales do not all make a row a whole number of those.
+const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
+
 /// A row of any of the six controls a settings row can be built from stands
 /// exactly one [`ROW_HEIGHT`](crate::theme::ROW_HEIGHT), so a pane reads as a
 /// column of rows rather than as a stack that changes gauge wherever a button
@@ -318,13 +323,8 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
 /// wraps does not, so the headroom is not the same fraction twice. With no
 /// vertical padding it is at its narrowest at 0.75: 1.25pt.
 ///
-/// [`every_bar_is_one_row_high`] covers the other half of a settings pane, the
+/// [`every_bar_has_its_declared_height`] covers the other half of a settings pane, the
 /// bars, which reach the height by allocating it rather than by any floor.
-/// How far a drawn height may stand off the one declared for it: egui lands
-/// every allocation on a [`GUI_ROUNDING`](egui::emath::GUI_ROUNDING) grid, and
-/// the sweep's scales do not all make a row a whole number of those.
-const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
-
 #[test]
 fn every_settings_row_is_one_row_high() {
     for kind in CONTROLS {

@@ -457,12 +457,15 @@ fn style_at(scale: f32) -> egui::Style {
     // any value that fits under the floor draws the same button and any value
     // over it is a button standing taller than its row.
     //
-    // At a 19-point row that is none at all. Its text lays out a whole number
-    // of points high (17 at the design size), and a point of padding each side
+    // At a 19-point row that is none at all. Its text lays out on the pixel
+    // grid (17 points at the design size on a 1x display), and a point of
+    // padding each side
     // is 19 there but 13.7 in a 13.3 row at 0.7, the frame margin rounding to
     // whole points where the type does not. With none the floor holds at
     // every scale in [`UI_SCALE_RANGE`], by 1.25pt at its tightest (0.75: a
-    // 13pt line in a 14.25pt row) and 2pt at the design size. This is what a
+    // 13pt line in a 14.25pt row) and 2pt at the design size on a 1x display;
+    // a 2x display rounds the line to half points, which moves either by a
+    // quarter point at most. This is what a
     // session retuning the type or the row is spending, and
     // `every_settings_row_is_one_row_high` sweeps the range and says so after
     // a change to either.

@@ -245,12 +245,22 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 /// adding it.
 pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
     let scale = theme::ui_scale(ui.ctx());
-    // The field is as tall as its galley, which egui lands on a whole point,
-    // so the line it measures against is rounded the same way: at 1.05 a
-    // 17.6pt line lays out 18 high, and a margin taken from 17.6 is a point
-    // over.
+    // The field is as tall as its font's line or its galley, whichever is
+    // more, and egui lands a galley on the PIXEL grid — whole points at 1x,
+    // half points on a 2x display — so the galley is measured rather than
+    // predicted: at 1.05 and 1x a 17.6pt line lays out 18 high, and a margin
+    // taken from 17.6 stands the field a point over its row.
     let line = ui.text_style_height(&TextStyle::Body);
-    let room = theme::row_height(scale) - line.max(line.round());
+    let laid = ui
+        .painter()
+        .layout_no_wrap(
+            "Hg".into(),
+            TextStyle::Body.resolve(ui.style()),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .y;
+    let room = theme::row_height(scale) - line.max(laid);
     TextEdit::singleline(text).margin(egui::Margin::symmetric(
         // The side margin is egui's own, scaled: a field's WIDTH is nobody's
         // alignment problem, unlike its height.
