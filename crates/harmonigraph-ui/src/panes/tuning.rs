@@ -868,6 +868,8 @@ fn map_controls(
         MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, MIDI_LABELS, OFFSET_LIMIT,
     };
     use harmonigraph_core::lattice_map::{Follow, TuningEngine};
+    // Not the engine default: a backend with no engine selector still has
+    // the adaptive policy to edit.
     let Some(view) = params.lattice_maps() else {
         return TuningEngine::Adaptive;
     };

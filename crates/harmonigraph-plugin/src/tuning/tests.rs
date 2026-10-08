@@ -280,6 +280,20 @@ unsafe extern "C" fn push(
     sink.values.push((header.time, value));
     true
 }
+/// A host parameter event by string id, at its CLAP value: a stepped
+/// parameter's step index.
+fn parameter(id: &str, value: f64, time: u32) -> Input {
+    Input::Param(clap_event_param_value {
+        header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
+        param_id: nice_plug::wrapper::hash_param_id(id),
+        cookie: ptr::null_mut(),
+        note_id: -1,
+        port_index: -1,
+        channel: -1,
+        key: -1,
+        value,
+    })
+}
 /// The one parameter the Tune exports.
 const DELAY_PARAM: u32 = 0;
 struct Device {
@@ -325,24 +339,22 @@ impl Device {
         device
     }
     /// Note retuning defaults to Pass through; these fixtures are about the
-    /// adaptive correction, so the Hub starts with it selected.
+    /// adaptive correction, so the Hub starts with it selected. The Hub adopts
+    /// a flush at its next process boundary, ahead of that callback's events,
+    /// so the value is not readable here; the adaptive tests failing without
+    /// it is what shows it lands.
     fn select_adaptive(&self) {
-        let events = vec![Input::Param(clap_event_param_value {
-            header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, 0),
-            param_id: nice_plug::wrapper::hash_param_id("tuning-engine"),
-            cookie: ptr::null_mut(),
-            note_id: -1,
-            port_index: -1,
-            channel: -1,
-            key: -1,
-            value: 1.0,
-        })];
+        let events = vec![parameter("tuning-engine", 1.0, 0)];
         let input = clap_input_events {
             ctx: (&events as *const Vec<Input>).cast_mut().cast(),
             size: Some(size),
             get: Some(get),
         };
-        let mut sink = Sink::default();
+        let mut sink = Sink {
+            values: Vec::with_capacity(64),
+            rejected: Vec::with_capacity(64),
+            ..Default::default()
+        };
         let output =
             clap_output_events { ctx: (&mut sink as *mut Sink).cast(), try_push: Some(push) };
         unsafe { (self.params().flush.unwrap())(self.plugin, &input, &output) };

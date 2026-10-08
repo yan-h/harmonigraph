@@ -304,7 +304,7 @@ impl AudioMaps {
             },
             adopted: false,
             engine_revision: 0,
-            seed_mode: 0,
+            seed_mode: params.tuning_engine.value(),
             seed_map: 0,
             seed_offset: MapOffsets::default(),
             seed_follow: 0,

@@ -2256,7 +2256,8 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
 }
 
 /// A fresh Hub leaves player pitch alone until someone picks a retuning
-/// engine: the saved param and what the audio thread adopts both say so.
+/// engine: the saved param and the engine the audio thread adopted both say
+/// so.
 #[test]
 fn a_fresh_hub_passes_note_pitch_through() {
     let _scope = crate::test_scope::enter();
@@ -2264,10 +2265,7 @@ fn a_fresh_hub_passes_note_pitch_through() {
     device.activate();
     device.run(0, vec![], false);
     let (param, engine) = device.wrapper().test_inspect_plugin(|plugin| {
-        (
-            plugin.params.tuning_engine.value(),
-            crate::lattice_maps::view(&plugin.params).playback.engine,
-        )
+        (plugin.params.tuning_engine.value(), plugin.params.map_playback.lock().engine)
     });
     assert_eq!(param, 0);
     assert_eq!(engine, harmonigraph_core::lattice_map::TuningEngine::Off);
