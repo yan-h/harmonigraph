@@ -1,16 +1,14 @@
 # AGENTS.md
 
 A Rust CLAP plugin that draws a harmonic pitch lattice and an audio spectrum, plus an offline renderer for video export.
-Everything below is a gotcha or a contract —
-the rest of the repo explains itself by being read.
 
 ## Agent guidance has one source
 
 `CLAUDE.md` and `GEMINI.md` are symlinks to this file, and `.agents/skills` is a symlink to `.claude/skills`.
 Edit this file rather than a link:
 Claude's Edit and Write tools refuse to write through a symlink.
-Cross-project skills are installed globally from the personal `agent-config` checkout ([setup](docs/development.md#shared-agent-skills)).
-Keep each skill's guidance at that single source rather than copying it per agent.
+Cross-project skills are installed globally from the personal `agent-config` checkout ([setup](docs/development.md#shared-agent-skills));
+keep each skill's guidance at that single source rather than copying it per agent.
 Tool-specific hooks, permissions and commands stay in each tool's native configuration —
 except `.claude/commands/` and `.claude/agents/`, which hold procedure any agent can read directly.
 
@@ -26,7 +24,6 @@ A session that may change tracked files works in its own worktree, never in the 
 Claude in `.claude/worktrees/<branch>/` through `EnterWorktree`;
 Codex in its app-managed worktree, creating its `codex/<slug>` branch before the first edit because that worktree begins detached.
 A write-capable session that finds itself in main leaves whatever is there alone.
-The `worktrees` skill has ownership, the Codex handoff and parallel-session planning.
 
 A completed change is committed, pushed and opened as a **draft** PR with `gh pr create --draft`, documentation and configuration included;
 the handoff says it is open, draft and **not merged**, and nothing merges unless Yan asks.
@@ -40,8 +37,6 @@ A change that touches the picture also owes the build below, and satisfying one 
 
 `.cargo/config.toml` sets `rustc-wrapper = "sccache"`, so **`sccache` must be on PATH or every build dies with "could not execute process sccache"** (`brew install sccache`).
 `RUSTC_WRAPPER="" cargo build ...` bypasses it to rule it out.
-Each worktree keeps its own `target/`;
-the cache shares compiled dependencies between them.
 
 ## Pausing = a loadable build exists (sessions build, Yan loads)
 
@@ -55,22 +50,11 @@ cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 
 **Both packages.** The offline renderer draws through `harmonigraph-ui` and `harmonigraph-render`, so any picture change is a video-export change even when nothing under `crates/harmonigraph-offline/` moved;
 skipping it leaves exports drawn by an old binary with nothing on screen saying so (PR #340).
-Push and open the PR first, then build while CI runs.
-End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show.
-A session on a remote machine (a cloud session) has no local worktree for the loader to find, so it hands over `./build-pr.sh --load <PR>` instead.
 Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
-The `build-handover` skill has the loader, the tag and why not `cargo xtask bundle`.
 
-## Finish the session's workspace
-
-Use the shared `session-lifecycle` skill for completion.
-`./session-lifecycle.sh run -- <command>` holds the workspace lock for builds and tests;
-`./ci.sh` uses it automatically when the shared tool is installed.
-After committing, pushing and opening the draft PR, run `./session-lifecycle.sh handoff` as the final build step.
-The binaries still remain under `target/release`, so the existing handover command works during rollout.
-Neither completion nor cache pruning authorizes a merge or swaps the DAW slot.
-
-After a confirmed merge or explicit abandonment, release the worktree through its owner.
+Push and open the draft PR first, then run `./session-lifecycle.sh handoff`, which builds both packages while CI runs.
+End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show, read with `./load-plugin.sh --tag`.
+A session on a remote machine (a cloud session) has no local worktree for the loader to find, so it hands over `./build-pr.sh --load <PR>` instead.
 
 ## A shader-affecting edit owes a regenerated Metal corpus in the SAME commit
 
@@ -87,10 +71,10 @@ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
 
 It passes only with `1 passed`:
 the catalog compiles on macOS alone,
-so elsewhere it runs 0 tests and proves nothing (the `metal-corpus` skill has what to do instead).
+so elsewhere it runs 0 tests and proves nothing.
 `Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
 Regenerate on the runner, never locally —
-the `metal-corpus` skill has the command, the import, and why grepping the fallback notice is not a check (#947).
+the `metal-corpus` skill has the command, what to run off macOS, and why grepping the fallback notice is not a check (#947).
 
 ## House style: formatting is mechanical, and a diff edits what moves
 
@@ -108,9 +92,8 @@ Rewrite whole only where the file is short or most of it is genuinely moving.
 
 ## Two defects that actually ship here: cache keys and fixture reach
 
-Both are cheap to write, invisible to `ci.sh`, and each has landed more than once.
-They are the standing prior when reading a diff —
-your own or anyone's.
+Both are cheap to write, invisible to `ci.sh`, and each has landed more than once,
+so they are the standing prior when reading any diff, your own included.
 
 **A cache key is wrong in two directions, and the second one is this repo's.** For every cache, memo, dirty flag or derived value, write down what it is keyed on and then ask both questions.
 What else feeds the value and is missing from the key serves a stale value.
@@ -126,7 +109,8 @@ A diff that narrows a key owes an answer for what is newly reachable.
 
 **A test reaches a path only if its fixture is big enough to get there.** A fixture too small to reach the new branch passes for the wrong reason and reads as coverage, which is worse than no test.
 Issue #450 is the worked example:
-four shadow tests, each missing the shape it claims to measure, and a disc passing for a cross through all 145. For a path this diff adds, name the test that executes it and check the fixture actually arrives.
+four shadow tests, each missing the shape it claims to measure, and a disc passing for a cross through all 145.
+For a path this diff adds, name the test that executes it and check the fixture actually arrives.
 
 The count is the other half.
 A committed test earns its place the way a comment does:
@@ -148,9 +132,7 @@ The value on screen must still be the value the file holds, so a change of range
 The tree carries **no compat shims at all**, and that is the invariant to hold:
 no `legacy_*` fields, migration passes or serde aliases for deleted variants.
 A rename is a rename, a dropped variant is dropped.
-A container-level `#[serde(default)]` on every persisted struct and the `UI_PERSIST_VERSION` floor carry the weight instead;
-neither covers a DROPPED ENUM VARIANT, which fails the whole parse —
-still fine, but say so in the PR body.
+A dropped enum variant fails the whole parse, which is still fine when the PR body says so.
 Read the `persistence-contract` skill before changing a persisted shape.
 
 ## Fix what you find in this PR; an issue is for a substantial design decision

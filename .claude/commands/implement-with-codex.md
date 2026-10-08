@@ -7,22 +7,18 @@ allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
 Delegate the edit to Codex;
 keep the context assembly and the verification in this session.
 
-This command is the Claude Companion path, not a direct Codex app task.
-A direct app task gets a Codex-managed worktree under the root contract in `CLAUDE.md`;
-Companion instead inherits this Claude session's cwd.
-
 ## Why the brief is the whole Claude-side job
 
 Codex reads `AGENTS.md`, the same file Claude reads through `CLAUDE.md`, so it arrives knowing the worktree rule, the draft-PR rule and the two-package build.
 What it does not know is which file, which line, and which constraint —
 and the plugin's `codex:codex-rescue` subagent cannot find out, because its own definition forbids it from reading the repo.
 Whatever crosses the handoff crosses in the prompt.
-
-That is a division worth keeping rather than working around.
-A brief you can read before any code exists is where a wrong approach is cheapest to catch.
+Keep that division rather than working around it:
+a brief you can read before any code exists is where a wrong approach is cheapest to catch.
 
 ## First: this session must already be in a worktree
 
+This Companion path is not a Codex app task with its own managed worktree:
 Codex inherits this session's working directory.
 Dispatched with `--write` from the main checkout it edits the main checkout, and it cannot rescue itself from that —
 the harness lock is not something it can take.
@@ -64,11 +60,10 @@ Use the XML block shape the plugin's bundled `gpt-5-4-prompting` skill prescribe
 </action_safety>
 ```
 
-The `verification_loop` block is where this repo's two standing defect priors go.
-They are invisible to `ci.sh`, each has landed more than once, and a generic coding prompt has no reason to look for either —
-see the cache-key and fixture-reach section of `CLAUDE.md`.
+The `verification_loop` block carries this repo's two standing defect priors from the cache-key and fixture-reach section of `CLAUDE.md`,
+because a generic coding prompt has no reason to look for either.
 
-The `action_safety` block is not boilerplate either.
+The `action_safety` block is not boilerplate:
 Codex is one more Bash-granted agent with the plugin slot in reach, and review subagents have swapped it before despite explicit prohibitions.
 
 ## Dispatch
@@ -104,7 +99,7 @@ restating the brief invites Codex to redo settled parts of it.
 ## What comes back here
 
 Read the **diff**, not the files.
-Re-reading everything Codex touched spends the context the handoff was meant to save, and it is how a delegated task ends up costing more than an undelegated one.
+Re-reading everything Codex touched spends the context the handoff was meant to save.
 
 Then, before anything else:
 
@@ -115,7 +110,7 @@ cat ../../../target/bundled/.loaded   # the live slot is whatever it was
 
 The slot is the **main checkout's**, not this worktree's —
 a bare `target/bundled/.loaded` reads a private directory that usually does not exist here, so the check fails to find anything and that is indistinguishable from finding nothing wrong.
-Three levels up is the main checkout because `.claude/worktrees/<branch>/` is a fixed depth, which is one more thing the load-bearing path buys.
+Three levels up is the main checkout because `.claude/worktrees/<branch>/` is a fixed depth.
 
 Count the levels rather than deriving them.
 A worktree-isolated session refuses a command whose reach it cannot verify statically, and a `$(git rev-parse --git-common-dir)` inside the path is exactly that shape —
@@ -125,6 +120,4 @@ Verification stays here because Full CI passing is not the same claim as the cha
 What a review finds here is fixed here —
 do not send the finding back as a second task unless the fix is genuinely another implementation job.
 
-Finish the change the way every change finishes:
-committed, pushed, and open as a **draft** PR that says what Codex wrote.
-Yan merges, nothing else does.
+Finish the change the way `CLAUDE.md` finishes every change, with a draft PR body that says what Codex wrote.
