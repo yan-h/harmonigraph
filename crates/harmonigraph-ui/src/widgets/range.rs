@@ -296,7 +296,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// whole length, which is what makes it scannable.
 ///
 /// **Each end still reads out beside its own handle**, which is where a range's
-/// numbers mean the most, and three text runs fit a 20pt row because the name's
+/// numbers mean the most, and three text runs fit a 19pt row because the name's
 /// zone is taken OUT of the room the numbers roam in — see [`Self::show`] for
 /// the arithmetic that makes that provable rather than lucky.
 ///
@@ -1032,7 +1032,7 @@ mod tests {
         }
     }
 
-    /// The bar names itself on its own row: three text runs in a 20pt row,
+    /// The bar names itself on its own row: three text runs in a 19pt row,
     /// the name where a ValueBar puts one and each number beside the handle it
     /// belongs to. What this is worth is the row it saves: a control with no
     /// name of its own costs a label row above it, which is what a range with

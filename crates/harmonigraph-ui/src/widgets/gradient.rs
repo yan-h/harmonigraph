@@ -108,7 +108,7 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// It costs the track that much travel, which is the whole trade and a cheap
 /// one: the track stands for a whole turn at any length, so a shorter one is a
 /// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
-/// pixel. A row costs 20pt of a column that already scrolls.
+/// pixel. A row costs 19pt of a column that already scrolls.
 ///
 /// The far end from where the arc starts, so the button sits past the end of
 /// the reading rather than in front of it: the track is cut at the arc's own

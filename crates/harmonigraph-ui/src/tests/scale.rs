@@ -229,7 +229,15 @@ fn control_row(
                                     .desired_width(110.0 * scale);
                                 ui.add(field)
                             }
-                            Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
+                            // Its click target reaches half a row gap past the
+                            // pill each way, into air nothing else claims, and
+                            // that reach is not an allocation; the pill is.
+                            Control::Switch => {
+                                let switch = crate::widgets::toggle_switch(ui, &mut flag, &label);
+                                let reach = ui.spacing().item_spacing.y / 2.0;
+                                let pill = switch.rect.shrink2(egui::vec2(0.0, reach));
+                                switch.with_new_rect(pill)
+                            }
                             Control::Record => {
                                 crate::widgets::record_button(ui, &mut flag, false, &label)
                             }
@@ -290,8 +298,8 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
 /// The ROW is what is pinned to the number, and the controls only to not
 /// exceeding it, because those are two different questions and only the first
 /// is what a reader sees. A control shorter than its row is inset in it — the
-/// switch's pill is 15 points in a 20-point row deliberately, and a text field
-/// lands a point under at most scales because egui stores its margin as whole
+/// switch's pill is 15 points in a 19-point row deliberately, and a text field
+/// lands up to a point under at most scales because egui stores its margin as whole
 /// points. A control TALLER than its row takes the row with it, which is the
 /// misalignment this is here about.
 ///
@@ -300,19 +308,23 @@ fn pointing_at_a_control_leaves_the_row_where_it_is() {
 /// is as tall as its text plus `button_padding`, or the floor, whichever is
 /// more, and only the floor is a round height: a frame's margin is whole points
 /// too, so a button sized by its padding alone lands on its text plus an even
-/// number and can miss a 20-point row either way.
+/// number and can miss a 19-point row either way.
 ///
 /// Which makes the padding what breaks this, quietly and from a distance: raise
 /// the type or the padding until their sum clears the floor and the floor stops
 /// applying, one control at a time. The sweep is the whole [scale
 /// range](crate::theme::UI_SCALE_RANGE) because the sum clears it at some
 /// scales before others — the margin rounds to whole points while the type it
-/// wraps does not, so the headroom is not the same fraction twice. It is at its
-/// narrowest at the two ends: 0.28pt at 0.7, and 0.88pt at 1.5 where the
-/// padding rounds up to 2.
+/// wraps does not, so the headroom is not the same fraction twice. With no
+/// vertical padding it is at its narrowest at 0.75: 1.25pt.
 ///
 /// [`every_bar_is_one_row_high`] covers the other half of a settings pane, the
 /// bars, which reach the height by allocating it rather than by any floor.
+/// How far a drawn height may stand off the one declared for it: egui lands
+/// every allocation on a [`GUI_ROUNDING`](egui::emath::GUI_ROUNDING) grid, and
+/// the sweep's scales do not all make a row a whole number of those.
+const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
+
 #[test]
 fn every_settings_row_is_one_row_high() {
     for kind in CONTROLS {
@@ -321,13 +333,13 @@ fn every_settings_row_is_one_row_high() {
             let want = crate::theme::row_height(scale);
             let (row, controls) = control_row(kind, scale, None, false);
             assert!(
-                (row.height() - want).abs() < 0.01,
+                (row.height() - want).abs() < ROUNDING,
                 "a row of {kind:?} at scale {scale} stands {}pt high, not {want}pt",
                 row.height(),
             );
             for rect in &controls {
                 assert!(
-                    rect.height() <= want + 0.01,
+                    rect.height() <= want + ROUNDING,
                     "a {kind:?} at scale {scale} stands {}pt high and takes its {want}pt row \
                      up with it",
                     rect.height(),
@@ -395,16 +407,15 @@ fn every_bar_has_its_declared_height() {
                 if r.fill != crate::theme::well()
                     || !r.rect.is_finite()
                     || ((width - PANE_WIDTH).abs() > 1.0 && (width - track).abs() > 1.0)
-                    || (r.rect.height() - plot).abs() < 0.01
-                    || (r.rect.height() - crate::widgets::direct_plot_height(scale)).abs() < 0.01
+                    || (r.rect.height() - plot).abs() < ROUNDING
+                    || (r.rect.height() - crate::widgets::direct_plot_height(scale)).abs()
+                        < ROUNDING
                 {
                     continue;
                 }
                 found += 1;
-                // Every scale in the sweep makes the row height a whole point;
-                // the tolerance covers only f32 arithmetic on that height.
                 assert!(
-                    (r.rect.height() - want).abs() < 0.01,
+                    (r.rect.height() - want).abs() < ROUNDING,
                     "{pane:?} at scale {scale} drew a {}pt bar, not its declared {want}pt",
                     r.rect.height(),
                 );

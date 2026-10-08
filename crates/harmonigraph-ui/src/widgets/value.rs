@@ -1357,7 +1357,7 @@ mod tests {
     /// - the name's budget subtracts the room the readout needs, or the name
     ///   runs over the number (measured: 6pt of overlap at 160, 16pt at 120);
     /// - the name is held to ONE row, or it wraps to two and spills above and
-    ///   below into the bars either side (a 29pt galley in a 20pt track);
+    ///   below into the bars either side (a 29pt galley in a 19pt track);
     /// - both runs are centred in the track ([`text_at`]), or they sit a
     ///   half-line low with 7pt of a 17pt line below the track.
     ///

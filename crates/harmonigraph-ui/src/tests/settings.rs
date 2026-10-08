@@ -439,9 +439,12 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
+            // The camera preset's name field is a row-high well as well, and
+            // is told from a bar by its declared width.
             egui::Shape::Rect(r)
                 if r.fill == well
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
+                    && (r.rect.width() - crate::panes::view::PRESET_NAME_WIDTH).abs() >= 0.6
                     && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
             {
                 if let Some(picture) = pictures.iter().find(|picture| {

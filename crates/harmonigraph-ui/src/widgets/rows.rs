@@ -18,8 +18,8 @@ const CHECKBOX_CHECK: f32 = 9.0;
 /// it.
 ///
 /// Every other control fills its row edge to edge, so the row gap is the gap
-/// a reader sees between them. egui's box is 14 points, and in a 20-point row
-/// it stands 3 points in from each edge — two checkboxes in a row read 10
+/// a reader sees between them. egui's box is 14 points, and in a 19-point row
+/// it stands 2.5 points in from each edge — two checkboxes in a row read 9
 /// points apart where two bars read 4, the column's loosest joint. Here the
 /// row is the line (17 at the design size) and the box 16, so the joint is the
 /// row gap plus a point.
@@ -235,7 +235,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 /// The margin is therefore the lever, and it takes the largest whole number of
 /// points that still FITS rather than the one nearest the row. egui stores a
 /// margin as whole points, so a field can only land on its text plus an even
-/// number and 20 is not one of them; rounding up puts the field back over the
+/// number and the row need not be one of them; rounding up puts the field back over the
 /// row and takes the row up with it, which is the whole defect. Rounding down
 /// leaves it a point inside a row that the button beside it holds open, where
 /// it reads as an inset field rather than as a row out of line.
@@ -245,7 +245,12 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 /// adding it.
 pub fn row_field<'t>(ui: &Ui, text: &'t mut String) -> TextEdit<'t> {
     let scale = theme::ui_scale(ui.ctx());
-    let room = theme::row_height(scale) - ui.text_style_height(&TextStyle::Body);
+    // The field is as tall as its galley, which egui lands on a whole point,
+    // so the line it measures against is rounded the same way: at 1.05 a
+    // 17.6pt line lays out 18 high, and a margin taken from 17.6 is a point
+    // over.
+    let line = ui.text_style_height(&TextStyle::Body);
+    let room = theme::row_height(scale) - line.max(line.round());
     TextEdit::singleline(text).margin(egui::Margin::symmetric(
         // The side margin is egui's own, scaled: a field's WIDTH is nobody's
         // alignment problem, unlike its height.

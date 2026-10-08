@@ -11,7 +11,7 @@ use crate::theme;
 
 // The bars' own geometry, written at the design size — scale 1.0. Each is
 // multiplied by `theme::ui_scale` where it is drawn, so a bar shrinks with the
-// type inside it rather than keeping a 20-point row around 9-point text.
+// type inside it rather than keeping a 19-point row around 9-point text.
 
 // A bar's own HEIGHT is not among them: it is `theme::row_height`, which every
 // control in a settings row is drawn at. A number here instead would be free to
@@ -26,14 +26,14 @@ pub(super) fn bar_radius(scale: f32) -> u8 {
     theme::control_radius(scale)
 }
 /// Inset of a bar's name and its value readout from the bar's own ends.
-pub(super) const BAR_TEXT_PAD: f32 = 8.0;
+pub(super) const BAR_TEXT_PAD: f32 = 7.0;
 /// Where a run of text standing in `row` at `x` goes: its CAPITALS centred
 /// across the row, not its line box.
 ///
 /// A line box carries the descender room under the baseline and next to none
 /// over the capitals, so centring the box stands every name and readout about
-/// half a point low — on a 13.5pt line in a 20pt bar, six pixels over the
-/// caps and five under. Centred on the caps the air is even, and stays even at
+/// half a point low — on a 13.5pt line in a 19pt bar, five pixels over the
+/// caps and four under. Centred on the caps the air is even, and stays even at
 /// any row height or [chrome scale](theme::ui_scale). Descenders hang into the
 /// air below, as they do under a trimmed [`label`](mod@super::label).
 pub(super) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
@@ -300,7 +300,7 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// caller's `radius`:
 ///
 /// - At a grip's own 2pt the notch is a sliver at the extreme corners of a grip
-///   drawn 3pt shy of a 20pt row, well outside a Body galley's ink.
+///   drawn 3pt shy of a 19pt row, well outside a Body galley's ink.
 /// - A [`RangeBar::fade_span`] bar hands in the BAR's radius instead, so its
 ///   thumb is a 4pt-wide pill (epaint holds a corner to half the width, so 5
 ///   becomes 2) and the notch is the whole of the top and bottom 2pt. A

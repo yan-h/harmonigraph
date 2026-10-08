@@ -35,7 +35,7 @@ use harmonigraph_scene::SEVENS_SIZE_RANGE;
 /// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
 /// so the field shrinks with the row on its own and a narrow column caps it
 /// well under this.
-const PRESET_NAME_WIDTH: f32 = 110.0;
+pub(crate) const PRESET_NAME_WIDTH: f32 = 110.0;
 
 /// Camera framing: projection, angle, and saved angles.
 pub(super) fn camera(
