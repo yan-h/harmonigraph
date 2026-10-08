@@ -204,6 +204,7 @@ unsafe extern "C" fn size(events: *const clap_input_events) -> u32 {
 unsafe extern "C" fn get(events: *const clap_input_events, index: u32) -> *const clap_event_header {
     (unsafe { &*((*events).ctx.cast::<Vec<Input>>()) })[index as usize].header()
 }
+#[derive(Default)]
 struct Sink {
     values: Vec<(u32, Event)>,
     rejected: Vec<(u32, Event)>,
@@ -317,7 +318,34 @@ impl Device {
         assert!(!plugin.is_null());
         stats.plugin.store(plugin.cast_mut(), Ordering::Relaxed);
         assert!(unsafe { (*plugin).init.unwrap()(plugin) });
-        Self { plugin, _host: host, _stats: stats, tuner, active: false }
+        let device = Self { plugin, _host: host, _stats: stats, tuner, active: false };
+        if !tuner {
+            device.select_adaptive();
+        }
+        device
+    }
+    /// Note retuning defaults to Pass through; these fixtures are about the
+    /// adaptive correction, so the Hub starts with it selected.
+    fn select_adaptive(&self) {
+        let events = vec![Input::Param(clap_event_param_value {
+            header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, 0),
+            param_id: nice_plug::wrapper::hash_param_id("tuning-engine"),
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 1.0,
+        })];
+        let input = clap_input_events {
+            ctx: (&events as *const Vec<Input>).cast_mut().cast(),
+            size: Some(size),
+            get: Some(get),
+        };
+        let mut sink = Sink::default();
+        let output =
+            clap_output_events { ctx: (&mut sink as *mut Sink).cast(), try_push: Some(push) };
+        unsafe { (self.params().flush.unwrap())(self.plugin, &input, &output) };
     }
     /// D is `multiplier x max_frames`, so the format a fixture activates at is
     /// also the delay it plays against: 512 frames at the default 1x is the

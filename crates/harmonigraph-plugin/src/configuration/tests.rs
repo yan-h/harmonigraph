@@ -685,11 +685,10 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     device.wrapper().test_inspect_plugin(|plugin| {
         plugin.aggregation.as_ref().unwrap().shared.set_retune(retune)
     });
-    if pass_through {
-        let mut state = device.wrapper().get_state_object();
-        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(0));
-        device.load(state, false);
-    }
+    let mut state = device.wrapper().get_state_object();
+    let engine = if pass_through { 0 } else { 1 };
+    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
+    device.load(state, false);
     device.activate();
     let mailbox = device.mailbox();
     mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
@@ -2254,6 +2253,24 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     let clamped: MusicalSettings =
         serde_json::from_str(r#"{"adaptive":{"pitch_flexibility":65535}}"#).unwrap();
     assert_eq!(PolicyConfig::from(clamped.adaptive).pitch_flexibility, 100);
+}
+
+/// A fresh Hub leaves player pitch alone until someone picks a retuning
+/// engine: the saved param and what the audio thread adopts both say so.
+#[test]
+fn a_fresh_hub_passes_note_pitch_through() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    device.run(0, vec![], false);
+    let (param, engine) = device.wrapper().test_inspect_plugin(|plugin| {
+        (
+            plugin.params.tuning_engine.value(),
+            crate::lattice_maps::view(&plugin.params).playback.engine,
+        )
+    });
+    assert_eq!(param, 0);
+    assert_eq!(engine, harmonigraph_core::lattice_map::TuningEngine::Off);
 }
 
 #[test]
