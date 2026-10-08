@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 fn engine(value: i32) -> TuningEngine {
     match value {
-        0 => TuningEngine::Off,
+        1 => TuningEngine::Adaptive,
         2 => TuningEngine::LatticeMap,
-        _ => TuningEngine::Adaptive,
+        _ => TuningEngine::Off,
     }
 }
 
@@ -304,7 +304,7 @@ impl AudioMaps {
             },
             adopted: false,
             engine_revision: 0,
-            seed_mode: 1,
+            seed_mode: params.tuning_engine.value(),
             seed_map: 0,
             seed_offset: MapOffsets::default(),
             seed_follow: 0,

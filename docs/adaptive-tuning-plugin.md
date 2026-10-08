@@ -134,7 +134,7 @@ The learned third and seventh are not used, because on a Pythagorean-side keyboa
 The Tuning pane shows the three sizes, still editable, in a collapsed group under the Learn toggle,
 with a **Derive from fifth** button that does from the fifth shown what Learn does from the fifth it hears.
 
-Pass through lets Learn update the lattice axes even when a source has Retune checked.
+Pass through, the default, lets Learn update the lattice axes even when a source has Retune checked.
 The lattice is then a picture of unchanged input.
 While the engine actively retunes a source,
 the lattice is its fixed target and Learn moves only the shared C offset and keyboard tuning.

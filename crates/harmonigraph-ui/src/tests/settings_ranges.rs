@@ -209,6 +209,10 @@ impl ParamBackend for Backend {
     fn configuration(&self) -> Option<params::ConfigurationView> {
         Some(self.config)
     }
+    // Adaptive, so the inventory reaches the adaptive policy's bars.
+    fn lattice_maps(&self) -> Option<crate::lattice_maps::MapView> {
+        Some(super::harness::engine_view(harmonigraph_core::lattice_map::TuningEngine::Adaptive))
+    }
 }
 fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
     let mut policy = PolicyConfig::default();

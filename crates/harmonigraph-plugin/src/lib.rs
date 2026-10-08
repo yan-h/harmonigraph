@@ -333,7 +333,7 @@ impl Default for HarmonigraphParams {
                 let steps: i32 = text.trim().parse().ok()?;
                 (steps % 10 == 0).then_some(steps / 10)
             })),
-            tuning_engine: IntParam::new("Note Retuning", 1, IntRange::Linear { min: 0, max: 2 })
+            tuning_engine: IntParam::new("Note Retuning", 0, IntRange::Linear { min: 0, max: 2 })
                 .with_value_to_string(Arc::new(|value| {
                     ["Pass through", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
                 }))

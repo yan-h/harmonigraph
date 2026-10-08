@@ -3,18 +3,6 @@ use super::*;
 use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
 use harmonigraph_core::{LatticePos, Tuning};
 
-fn parameter(id: &str, value: f64, time: u32) -> Input {
-    Input::Param(clap_event_param_value {
-        header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-        param_id: nice_plug::wrapper::hash_param_id(id),
-        cookie: ptr::null_mut(),
-        note_id: -1,
-        port_index: -1,
-        channel: -1,
-        key: -1,
-        value,
-    })
-}
 fn install(hub: &Device) -> (LatticeMap, LatticeMap) {
     musical_tests::configure(hub, Tuning::just());
     hub.shared().set_retune(true);

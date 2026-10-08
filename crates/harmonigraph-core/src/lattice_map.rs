@@ -7,8 +7,8 @@ pub const COORDINATE_LIMIT: i32 = 4096;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TuningEngine {
-    Off,
     #[default]
+    Off,
     Adaptive,
     LatticeMap,
 }

@@ -8,7 +8,7 @@ Pass through preserves player pitch,
 Adaptive uses the existing policy,
 and Lattice Map assigns each incoming note from explicit geometry,
 choosing its slot by the 12-TET key the note actually sounds.
-Adaptive remains the default.
+Pass through is the default.
 Mode is saved but is not automatable in this prototype.
 
 ## Compose passages

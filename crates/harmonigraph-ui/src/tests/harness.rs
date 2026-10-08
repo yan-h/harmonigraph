@@ -25,6 +25,9 @@ pub(super) fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::R
 #[derive(Default)]
 pub(super) struct RecordingBackend {
     pub(super) sets: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
+    /// The Hub's note retuning engine, or `None` for a backend with no engine
+    /// selector, which the Tuning pane reads as Pass through.
+    pub(super) engine: Option<harmonigraph_core::lattice_map::TuningEngine>,
 }
 
 impl ParamBackend for RecordingBackend {
@@ -33,6 +36,26 @@ impl ParamBackend for RecordingBackend {
     }
     fn set(&self, key: params::ParamKey, value: f32) {
         self.sets.borrow_mut().push((key, value));
+    }
+    fn lattice_maps(&self) -> Option<crate::lattice_maps::MapView> {
+        self.engine.map(engine_view)
+    }
+}
+
+/// A Hub's map view with `engine` selected and no maps saved: what a fixture
+/// that draws one engine's controls hands the Tuning pane.
+pub(super) fn engine_view(
+    engine: harmonigraph_core::lattice_map::TuningEngine,
+) -> crate::lattice_maps::MapView {
+    crate::lattice_maps::MapView {
+        playback: crate::lattice_maps::MapPlayback { engine, ..Default::default() },
+        offsets: Default::default(),
+        followed: harmonigraph_core::LatticePos::ORIGIN,
+        pending: false,
+        names: crate::lattice_maps::MapDocument::default().names(),
+        edit_shape: false,
+        can_undo: false,
+        full: false,
     }
 }
 
@@ -285,6 +308,21 @@ pub(super) fn tab_body(
     tab_body_on(&super::probe::themed(), state, tab, width, height, 0.0)
 }
 
+/// The same with the Hub's note retuning set to Adaptive, for a fixture that
+/// measures the adaptive controls.
+pub(super) fn adaptive_tab_body(
+    state: &mut SharedState,
+    tab: panes::Tab,
+    width: f32,
+    height: f32,
+) -> egui::FullOutput {
+    let backend = RecordingBackend {
+        engine: Some(harmonigraph_core::lattice_map::TuningEngine::Adaptive),
+        ..Default::default()
+    };
+    tab_body_with(&super::probe::themed(), state, tab, (width, height), 0.0, &backend)
+}
+
 /// The same on a caller's context and clock — for a fixture that drives many
 /// frames and wants one context across them.
 pub(super) fn tab_body_on(
@@ -295,7 +333,17 @@ pub(super) fn tab_body_on(
     height: f32,
     now: f64,
 ) -> egui::FullOutput {
-    let backend = RecordingBackend::default();
+    tab_body_with(ctx, state, tab, (width, height), now, &RecordingBackend::default())
+}
+
+fn tab_body_with(
+    ctx: &egui::Context,
+    state: &mut SharedState,
+    tab: panes::Tab,
+    (width, height): (f32, f32),
+    now: f64,
+    backend: &RecordingBackend,
+) -> egui::FullOutput {
     // The inset at the CONTEXT's chrome scale rather than at the design size,
     // so a fixture that scales the chrome measures the pane the dock would
     // actually give it — the margin scales with everything else.
@@ -312,7 +360,7 @@ pub(super) fn tab_body_on(
             let mut viewer = panes::Viewer {
                 state: &mut state.picture,
                 interaction: &mut state.workspace.interaction,
-                params: &backend,
+                params: backend,
                 now,
             };
             viewer.ui(&mut body_ui, &mut tab);

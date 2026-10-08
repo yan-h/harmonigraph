@@ -869,7 +869,7 @@ fn map_controls(
     };
     use harmonigraph_core::lattice_map::{Follow, TuningEngine};
     let Some(view) = params.lattice_maps() else {
-        return TuningEngine::Adaptive;
+        return TuningEngine::Off;
     };
     // Stored first and read back by reference: this pane and the rest of the
     // editor want the same view.
