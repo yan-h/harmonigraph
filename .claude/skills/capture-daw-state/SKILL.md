@@ -5,7 +5,7 @@ description: Recover the plugin's live settings out of a Bitwig project — came
 
 # Reading the plugin's live settings back out of Bitwig
 
-When Yan has dialed in a look in the DAW and wants it captured (new fresh-look defaults, a bug reproduced against real state), don't guess and don't read numbers off a screenshot —
+Don't guess and don't read numbers off a screenshot —
 the settings are spread across the Settings column's tabs (Tuning, Lattice, Analyzer, Mappings, Video, System), and bar positions don't give you floats.
 The analyzer's own knobs are the Settings column's Analyzer tab, not the Analyzer section's tab of the same name, which is the picture.
 The exact values are recoverable:
@@ -18,12 +18,11 @@ The exact values are recoverable:
 
 The UI state (`layout` and `folded_sections`, static camera geometry, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
 Camera movement belongs to the five `camera-*` host parameters;
-the camera snapshot in `ui-state` can lag automation while the editor is closed.
-The script overlays those saved host parameters in every output, splitting absolute pan into the lattice center and camera target just as the live editor does.
+the camera snapshot in `ui-state` can lag automation while the editor is closed, so the script overlays the saved host parameters in every output, as the live editor does.
 A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
 if the numbers look stale, ask Yan to save it again from a current build.
-Host-automatable params (tuning, fade, color range, camera movement) were never affected —
-they live in the param system, which is why such a project can show fresh params next to a stale or missing `ui-state`.
+Host-automatable params (tuning, fade, color range, camera movement) were never affected,
+which is why such a project can show fresh params next to a stale or missing `ui-state`.
 
 ## Where the projects live
 
@@ -45,24 +44,17 @@ An output showing only Tune instances means the scan stopped short, not that the
 and the video block's `RenderConfig` and `RenderFrame` (`crates/harmonigraph-take/src/render.rs`).
 A capture edits each group's `impl Default`, not only `ViewConfig`'s —
 `--rust` prints the view fields alone, so read the other groups off `--appearance`.
-Each group carries a container-level `#[serde(default)]`, so its `impl Default` is also every field's serde fallback.
-There is no second set of values to keep in step, and no `default_*` block to leave alone —
-retuning the look here is free.
-- What that costs is worth knowing before you retune: a saved blob MISSING a
-key now picks the new value up.
-That is the intended trade (backwards compatibility is not a constraint —
-see CLAUDE.md), not an accident, but it means "restyle the fresh view" and "restyle an under-specified saved view" are the same edit.
+That `impl Default` is also every field's serde fallback (the `persistence-contract` skill), so there is no `default_*` block to keep in step.
+- A saved blob MISSING a
+key therefore picks the new value up, so "restyle the fresh view" and "restyle an under-specified saved view" are the same edit.
+That is the intended trade, not an accident.
 - Camera zoom, `layout` and `folded_sections` are navigation state, deliberately not baked into
 defaults.
 
-## Container format, if the script ever needs fixing
+## Using `--appearance`
 
-`.bwproject` is a "BtWg" tagged binary.
-Plugin state sits in a raw-DEFLATE section (wbits=-15, no zlib header) as nice-plug's plain JSON `{"version","params","fields"}`, and `fields["ui-state"]` is the RON from `SharedState::save_persist`.
+The script's header documents the `.bwproject` container format, for when the script itself needs fixing.
 The version-7 editor save nests camera, view, spectrum and the whole video configuration under `appearance`;
-the Spiral's framing is a top-level editor key beside it.
-`--appearance` extracts that document and applies the saved host camera parameters for `harmonigraph-offline --appearance FILE`, requiring exactly one editor appearance in the project.
-Takes with recorded camera channels override the corresponding movement in a replacement appearance during replay.
-The take carries that appearance independently of the editor layout and its folds.
-nice-plug can also zstd the JSON.
-The script's own header documents this too.
+the Spiral's framing is a top-level editor key beside it, so `--appearance` leaves it out.
+`--appearance` writes that document, with the saved host camera parameters applied, for `harmonigraph-offline --appearance FILE`, and requires exactly one editor appearance in the project.
+During replay, a take's recorded camera channels override the corresponding movement in a replacement appearance.

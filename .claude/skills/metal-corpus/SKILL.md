@@ -5,34 +5,23 @@ description: When a change owes a regenerated Metal shader corpus, how to check 
 
 # A shader-affecting edit owes a regenerated Metal corpus
 
-The always-loaded rule and the gate command are in `CLAUDE.md`;
+The rule and the gate command are in `CLAUDE.md`;
 this file is why the key is wider than `.wgsl`, what not to use as the signal, and how to regenerate.
 
-`crates/harmonigraph-metal-assets/assets` holds precompiled Metal libraries keyed on the **generated MSL** and the compiler options, not the `.wgsl` text —
-so **a `.wgsl` edit is the common case that invalidates it, but treating `.wgsl` as the whole key is this repo's own too-narrow-key mistake written in prose, and the edit is not finished until the corpus is regenerated in the SAME commit**.
-
+Treating `.wgsl` as the whole key is this repo's own too-narrow-key mistake written in prose.
 The compiler options carry `hal::BACKEND_VERSION`,
 so a bind-group or pipeline-layout change in Rust, a `vendor/wgpu-hal` bump or a `Cargo.lock` move invalidates the corpus with no `.wgsl` anywhere in the diff.
 The workflow's own `paths:` filter already names the real set (`crates/harmonigraph-render/**`, `Cargo.lock`, `vendor/wgpu-hal/**`, `crates/harmonigraph-offline/**` and more);
 read that, not the file extension.
 `232d750e..24952475` is the worked example of the gap: 665 insertions across eight `harmonigraph-render` files, zero `.wgsl`, and by a `.wgsl`-only rule none of it owed anything.
 
-It is also too coarse the other way: a COMMENT-only `.wgsl` edit owes nothing at all, because naga strips comments and the generated MSL is byte-identical.
+It is also too coarse the other way: a comment-only `.wgsl` edit owes nothing, because naga strips comments and the generated MSL is byte-identical.
 `916c2429` is the worked example — it edited a comment in `spectrogram.wgsl` with no asset commit, and the corpus stayed valid.
 So `git log -- crates/harmonigraph-metal-assets/assets` is a cheap check rather than the definition:
 a shader PR absent from that log is a question, not yet a verdict.
 
-The definition is the corpus itself, it is a `ci.sh` gate, and it answers locally in about fifteen seconds:
-
-```
-HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
-  --features shader-assets-tools -- --ignored --exact \
-  shader_assets::catalog::production_metal_asset_catalog
-```
-
-On macOS only:
-the catalog module is `cfg(target_os = "macos")`, so on Linux the same command reports `running 0 tests` and exits 0.
-Read for `1 passed`, as `ci.sh` does;
+The definition is the strict-catalog gate in `CLAUDE.md`, which `ci.sh` also runs.
+Its catalog module is `cfg(target_os = "macos")`, so on Linux the command reports `running 0 tests` and exits 0, and `ci.sh` skips it there;
 off macOS, dispatch the `Metal shader assets` workflow instead.
 
 `strict` drops the compile-from-source fallback, so a missing library fails the pipeline that wanted it and names its key.
@@ -50,11 +39,9 @@ That is an `eprintln!`, and libtest replays a test's captured output only when t
 a whole batch of sessions read that silence as a pass (#947).
 `cargo test -p harmonigraph-render golden -- --nocapture` is what makes it visible, and is worth reading once the gate is already red, because it names every key that run missed where the gate stops at the first.
 
-`cargo test --workspace`, `cargo fmt --all --check` and `cargo clippy` still pass against a stale corpus.
-The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on one now —
+The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on a stale corpus —
 but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the corpus's recorded compiler flags and fallback controls, and still arrives as a separate workflow.
-A branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable;
-read `mergeStateStatus` rather than the one workflow whose name sounds like it covers everything.
+So a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable.
 
 Regenerate on the runner, not here:
 
@@ -62,7 +49,7 @@ Regenerate on the runner, not here:
 gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
 ```
 
-then `tools/shader-assets.py import` the `production-metal-assets` artifact.
+then download its `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on the artifact's `generated-metal-assets` directory.
 `tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —
 it rebuilds the renderer eight times over, against the production corpus and then against three deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
 PR #918 is the worked example, and it cost a full CI cycle on a diff whose own tests were green the whole time.

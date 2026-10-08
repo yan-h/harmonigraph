@@ -5,25 +5,17 @@ description: How to load a branch's build into the DAW, how the build tag identi
 
 # Loading a build, and knowing which build you loaded
 
-The always-loaded contract is in `CLAUDE.md`:
-sessions build before they pause and do NOT swap the shared slot.
-This file is the mechanics.
-
 ## Why the slot is pulled, not pushed
 
 Bitwig loads exactly ONE plugin build:
 the main checkout's `target/bundled/Harmonigraph.clap`.
 A branch or worktree build is invisible in the DAW until its binary is swapped into that slot.
-With parallel sessions that slot is shared, so sessions do NOT fight over it:
-every session builds into its own worktree, and Yan chooses which build goes live.
-Yan assumes a paused session's change is *built and loadable*, not that it is already live in the DAW —
-so the build is the contract, and touching the shared slot yourself would just evict whatever he is currently testing.
+With parallel sessions that slot is shared, so every session builds into its own worktree and Yan chooses which build goes live;
+a session touching the slot itself would evict whatever he is currently testing.
 
-**Push before you build, not after.** CI reads the pushed commit and never reads `target/`, so the release build and the checks are independent and can overlap.
+**Push before you build, not after.** CI reads the pushed commit and never reads `target/`, so the release build and the checks can overlap.
 Building first serializes them for no reason:
 a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing first is seven.
-Commit, push, open the draft PR, then run `./session-lifecycle.sh handoff` while the checks run —
-the handover message still goes out when the build lands.
 
 **Don't use `cargo xtask bundle` from a nested Claude worktree** —
 nice-plug-xtask's `chdir_workspace_root()` takes the *topmost* ancestor with a `Cargo.toml` (`ancestors().filter(has Cargo.toml).last()`), which for a nested worktree is the main repo root, so it silently builds main.
@@ -40,25 +32,15 @@ substring is fine).
 - `./load-plugin.sh --list` — just print the table, load nothing.
 
 It copies only, never builds;
-a build must already exist in a registered worktree or a verified lifecycle handoff.
-The handoff includes both the plugin and offline renderer and remains loadable after source cleanup.
+a build must already exist in a registered worktree or a verified lifecycle handoff, which holds both the plugin and the offline renderer and stays loadable after source cleanup.
 Stale builds (dylib older than the branch's HEAD) are flagged but still loadable.
-After installing a build,
-deactivate and reactivate Bitwig's audio engine.
-The loader signs a staging bundle and atomically installs a fresh executable inode;
-existing host processes deliberately keep their old mapped code until they exit.
-An individual device toggle,
-editor reopen or rescan alone may leave that process alive.
-After installing, the loader reports observed old/current executable identities in Bitwig plug-in hosts and the audio engine, with PID and start time when it can recheck them.
-It compares mapped device/inode pairs with the replaced and installed files;
-a pathname alone or unavailable process information is reported as uncertain.
-This is one process snapshot, not a check of the running build tag or a guarantee about the next instantiation.
-Bitwig closed adds no output, and a failed diagnostic never fails an otherwise successful install.
+After installing, the loader reports which Bitwig plug-in hosts and audio engine still map the old or the new executable;
+that is one process snapshot, not a check of the running build tag.
+A failed diagnostic never fails an otherwise successful install.
 
-The loader discovers registered Git worktrees, not one hard-coded parent directory, so a Codex-managed worktree appears on the same menu without any loader configuration.
+The loader discovers registered Git worktrees, so a Codex-managed worktree appears on the same menu without configuration.
 It does need a branch:
-Codex creates a managed worktree detached, and the root contract requires the task to create its `codex/<slug>` branch before editing.
-A detached build appears as `(detached)`, cannot be selected uniquely by branch, and cannot carry a useful overlay tag.
+a detached build appears as `(detached)`, cannot be selected uniquely by branch, and cannot carry a useful overlay tag.
 
 - Both `load-plugin.sh` and `update-plugin.sh` record the live build in
 `target/bundled/.loaded`, so "what's loaded?" is answerable without guessing.
@@ -73,19 +55,13 @@ Video export does not run in the plugin.
 The Render pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary from the same worktree it takes the dylib from —
 so a load is really two swaps, and only the first one is guaranteed to be current.
 
-The renderer draws through `harmonigraph-ui` and `harmonigraph-render` exactly as the editor does, so it goes out of date on any change to the picture, not only on changes under `crates/harmonigraph-offline/`.
-But nothing rebuilds it unless a session names `-p harmonigraph-offline`, and `load-plugin.sh` copies whatever is in `target/release` without minding its age.
-A session that builds only the plugin therefore hands over a matched editor and a renderer from some earlier commit, and the pair is indistinguishable from a matched one until an export comes back drawn the old way.
-PR #340's lead is the worked example:
-it was live in the editor within minutes and absent from every mp4 for hours.
-
-Which is why the build line in `CLAUDE.md` names both packages.
-It is not a second full build either —
+Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, and `load-plugin.sh` copies whatever is in `target/release` without minding its age, so a plugin-only build hands over a renderer from some earlier commit (`CLAUDE.md` has the rule and PR #340).
+Naming both is not a second full build either:
 the two share every dependency and the whole UI, so the renderer costs a link on top of a plugin build that is already done.
 `load-plugin.sh` warns when the renderer it installs predates the branch's HEAD —
 the same "matches the last commit" test the table applies to the dylib, and NOT a comparison against the plugin beside it, which flags matched pairs as often as mismatched ones —
 and prints the age of the one it is leaving in place when a worktree built no renderer at all.
-But a warning during a load is a backstop for a build that should have happened.
+That warning is a backstop for a build that should have happened.
 
 To check the live pair directly, without a render:
 
@@ -106,18 +82,14 @@ It is stamped at compile time by `build/build_tag.rs`, which each leaf binary's 
 The overlay carrying it ships OFF, so reading the tag takes one tick first:
 **System tab → Performance → Performance overlay**.
 System is a tab of the Settings column, and may sit in that strip's overflow menu when the column is narrow.
-It opens in the editor's bottom-left corner and is DRAGGED from there, so wherever it was last left is where it is —
-no session can say which corner to look in.
+It opens in the editor's bottom-left corner and is DRAGGED from there, so no session can say which corner to look in.
 
-A session handing over a build should say what the tag will read rather than say "look at the overlay", because a HUD that says nothing new is exactly what a swap that did not happen also looks like.
-
-This exists because a swap can silently not have happened:
+A swap can silently not have happened:
 a surviving host process, a build that landed in a different worktree, the wrong branch named, or a build that never finished.
-Two builds are otherwise indistinguishable from inside the DAW, and a look that is judged against the wrong binary costs a whole round trip to discover.
+Two builds are otherwise indistinguishable from inside the DAW, and a HUD that says nothing new is exactly what a failed swap looks like.
 
 **Sessions, when you hand over a build:
-say what tag it will show, and READ it out of your dylib.** Not "loadable via `./load-plugin.sh <branch>`" alone —
-name the tag too, so the first thing Yan can do is confirm the swap took.
+say what tag it will show, and READ it out of your dylib**, so the first thing Yan can do is confirm the swap took.
 This matters most when you hand over MORE THAN ONE build to compare (variants of a look, an A/B of a fix):
 with several near-identical builds in play, "which one am I looking at?" is the whole question, and the tag is the only answer that cannot be fooled.
 
@@ -131,16 +103,11 @@ Don't hand-roll the `strings` pattern:
 the literals are laid out end to end in the binary, so an unanchored match returns whatever was linked in front of the tag (`avgseventh-node-occlusion @39a1325`).
 `--tag` anchors on the branch name.
 
-**Do NOT derive the tag from a log.** Quoting `git log --oneline -1` is how a handover names a commit the binary has never heard of, and it is wrong in the ordinary case rather than the exotic one:
-the session order is edit → build → commit → hand over, so the commit lands AFTER the build it is supposed to describe and the binary carries its PARENT.
+**Do NOT derive the tag from a log.** The tag names the COMMIT the build sat on, not the working tree, so a build made before the commit it is reported as carries that commit's PARENT, and quoting `git log --oneline -1` names a commit the binary has never heard of.
 Measured on a real handover, the dylib was written at 20:06:46 and the commit it was reported as arrived at 20:07:42 —
 56 seconds too late to be in it.
 An amend or a rebase breaks the prediction the other way, leaving a stamped sha that is not an object on the branch at all (`--list` says `gone from branch` for that one).
-
-The tag names the COMMIT the build sat on, not the working tree —
-a build made with uncommitted edits carries the commit under it.
-So commit BEFORE you build if you want the tag to distinguish your work;
-if you build first, the tag is still the truth about the binary, and it is the branch HEAD that is ahead.
+So commit BEFORE you build if you want the tag to distinguish your work.
 
 ## Reload a build through the audio engine
 
@@ -148,6 +115,7 @@ The installed executable is re-read when Bitwig replaces the process that mapped
 After the loader finishes,
 deactivate and reactivate Bitwig's audio engine;
 that is the supported reload gesture in the tested setup.
+An individual device toggle, editor reopen or rescan alone may leave that process alive.
 
 Individual device deactivation is a narrower lifecycle.
 Its behaviour depends on **Settings → Plug-ins → "Create a plug-in sandbox for:"**:
@@ -159,7 +127,6 @@ A second plug-in of Yan's in the same project can therefore keep the old Harmoni
 `with Bitwig` maps it in the audio engine itself,
 making the engine cycle the relevant lifecycle boundary.
 
-Use the audio-engine cycle for the handoff rather than relying on an individual device toggle.
 The symptom of a surviving process is a HUD whose tag does not change after a successful installation.
 If that happens,
 read the loader's process diagnostic and fall back to a full Bitwig restart.
@@ -168,11 +135,8 @@ The loader intentionally preserves that process's old file instead of changing m
 ## Recovering a build someone else's swap evicted
 
 Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
-Completed `session-lifecycle` handoffs preserve both binaries outside the checkout;
-`./load-plugin.sh <branch>` finds the latest preserved build when no local binary remains.
-Preserved builds live in the common Git directory's `agent-lifecycle/builds/`;
-the shared tool owns their checksums, retention and loader lock.
-Install agent-config's session-lifecycle skill before using them.
+Completed `session-lifecycle` handoffs are preserved under the common Git directory's `agent-lifecycle/builds/`, and `./load-plugin.sh <branch>` finds the latest one when no local binary remains;
+reading them needs agent-config's `session-lifecycle` skill installed.
 Match the dylib's mtime to the branch's last commit time to identify it, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
 To rebuild one without cd'ing into the branch's own worktree:
@@ -180,13 +144,9 @@ To rebuild one without cd'ing into the branch's own worktree:
 
 Use the loader rather than overwriting an installed executable by hand.
 Two consecutive ordinary installs produced macOS `CODESIGNING Invalid Page` scanner kills while the on-disk signature still verified ([#705](https://github.com/yan-h/harmonigraph/issues/705)).
-The loader now copies the signed executable to a new sibling file on the destination filesystem and renames it atomically into place.
-The bundle path, resource seal and refreshed discovery timestamp stay intact;
-the executable inode changes on purpose.
+The loader instead signs a staging bundle and renames a fresh sibling executable atomically into place, so the executable inode changes on purpose.
 
 Do NOT compare shasums against the source dylib to check a swap took:
 `codesign --force` re-signs the bundled binary, so its hash legitimately differs from the file just copied (the two bundle binaries match each OTHER).
-`load-plugin.sh` signs and verifies a staging bundle before installing its finished executable through the fresh sibling inode.
-Its regression loads both successive installed dylibs in fresh processes and checks that old open descriptors retain their original bytes.
 Confirm the new code is present instead, e.g. `strings -a "<bundle>/Contents/MacOS/Harmonigraph" | grep -c "<new symbol>"` —
 WGSL shader edits are embedded via `include_str!`, so a new const or comment name greps cleanly.
