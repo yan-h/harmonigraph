@@ -440,9 +440,9 @@ fn numeric_entries_use_display_units_and_reject_non_finite_input() {
 }
 
 #[test]
-fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
+fn compact_values_fit_beside_the_picture() {
     for scale in [0.7, 1.0, 1.5] {
-        for width in [120.0, 219.0, 220.0, 240.0, 320.0] {
+        for width in [crate::theme::SETTINGS_MIN_CONTENT, 240.0, 320.0] {
             let ctx = crate::tests::probe::themed_scaled(scale);
             let screen = egui::vec2(800.0, 500.0);
             let pane =
@@ -476,14 +476,12 @@ fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
                     });
                     let after = ui.label("Next setting").rect;
                     assert!(after.top() >= plot.response.rect.bottom());
-                    if width >= 220.0 {
-                        let three_rows = crate::theme::row_height(scale) * 3.0
-                            + ui.spacing().item_spacing.y * 2.0;
-                        assert!(
-                            (plot.response.rect.height() - three_rows).abs() < 0.1,
-                            "compact control must be three rows tall"
-                        );
-                    }
+                    let three_rows =
+                        crate::theme::row_height(scale) * 3.0 + ui.spacing().item_spacing.y * 2.0;
+                    assert!(
+                        (plot.response.rect.height() - three_rows).abs() < 0.1,
+                        "compact control must be three rows tall"
+                    );
                 });
             }
         }

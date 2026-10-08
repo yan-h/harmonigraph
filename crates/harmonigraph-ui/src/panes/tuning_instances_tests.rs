@@ -61,7 +61,7 @@ impl ParamBackend for Instances {
 
 #[test]
 fn mixed_global_controls_enable_every_instance_then_disable_independently() {
-    for width in [88.0, 104.0, 300.0] {
+    for width in [crate::theme::SETTINGS_MIN_CONTENT, 300.0] {
         let params = Instances::new();
         let state = fresh_picture();
         let ctx = themed();
@@ -77,12 +77,7 @@ fn mixed_global_controls_enable_every_instance_then_disable_independently() {
         };
         frame(vec![]);
         for retune in [true, false] {
-            let label = match (width < 220.0, retune) {
-                (true, true) => "Retune all",
-                (true, false) => "Show all",
-                (false, true) => "Retune",
-                (false, false) => "Show",
-            };
+            let label = if retune { "Retune" } else { "Show" };
             for enabled in [true, false] {
                 let output = frame(vec![]);
                 let at = output
@@ -124,7 +119,7 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
         let params = Instances::new();
         let state = fresh_picture();
         params.0.borrow_mut().rotate_left(selected);
-        for width in [88.0, 104.0, 120.0, 160.0, 240.0, 300.0, 420.0] {
+        for width in [crate::theme::SETTINGS_MIN_CONTENT, 240.0, 300.0, 420.0] {
             let ctx = themed();
             let size = egui::vec2(width, 2400.0);
             let mut used = 0.0;
@@ -256,53 +251,8 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
 }
 
 #[test]
-fn an_individual_show_flag_remains_reachable_in_a_narrow_column() {
-    for width in [88.0, 104.0, 120.0] {
-        let params = Instances::new();
-        let state = fresh_picture();
-        let ctx = themed();
-        let size = egui::vec2(width, 900.0);
-        let frame = |events| {
-            events_into(
-                &ctx,
-                size,
-                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
-                events,
-                |ui| instance_section(ui, &state, &params),
-            )
-        };
-        frame(vec![]);
-        let output = frame(vec![]);
-        let labels: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Show" => Some(text.pos),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(labels.len(), 3, "each live instance must identify its own Show action");
-        let at = labels[1] + egui::vec2(4.0, 4.0);
-        assert!(at.x < width, "the Bass Show control was clipped out of reach");
-        let before = params.0.borrow().clone();
-        frame(vec![egui::Event::PointerMoved(at)]);
-        frame(vec![press(at, true)]);
-        frame(vec![press(at, false)]);
-        let after = params.0.borrow();
-        for (old, new) in before.iter().zip(after.iter()) {
-            assert_eq!(new.retune, old.retune, "Show edited the independent Retune flag");
-            assert_eq!(
-                new.show,
-                if old.id == 1 { !old.show } else { old.show },
-                "the individual Show control did not edit just Bass at width {width}"
-            );
-        }
-    }
-}
-
-#[test]
 fn instance_voice_dots_fit_below_names_without_moving_them() {
-    for width in [120.0, 300.0] {
+    for width in [crate::theme::SETTINGS_MIN_CONTENT, 300.0] {
         let params = Instances::new();
         let state = fresh_picture();
         let ctx = themed();
