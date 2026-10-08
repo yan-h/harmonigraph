@@ -48,13 +48,13 @@ PR #85 is what it catches:
 
 **When Yan says "merge it", he can say it while CI is still running:** the session waits and merges once `mergeStateStatus` is clean, so he is not coming back at green to press a button.
 `/review-and-merge` in Claude, or `$review-and-merge` in Codex, is the same ask with a review in front of it, and this file is the project contract it reads:
-its review tool here is `code-review` through the Skill tool against `origin/main...HEAD`, its merge method is this section's, and its checks are `mergeStateStatus` `CLEAN` with `Full CI` actually reported.
+its review tool here is `code-review` through the Skill tool against `origin/main...HEAD`, its merge method is the global squash default, judged as below, and its checks are `mergeStateStatus` `CLEAN` with `Full CI` actually reported.
 Codex has no `code-review`, so there the review is a fresh subagent briefed with the diff and `AGENTS.md`.
 Not `gh pr merge --auto --squash`:
 `main` carries no branch protection and no rulesets, so no check is *required*, and GitHub's auto-merge waits on required checks alone, so it would merge a mergeable PR at once rather than at green (#943).
 `mergeStateStatus` is the better gate regardless, because it accounts for every check, including `Metal shader assets`, whose `paths:` filter keeps it off most PRs and therefore out of any required-checks scheme.
 
-**Squash a PR unless its commits are separable.** The question is not how many there are —
+**The global default is to squash unless the commits are separable; what makes them separable here:** not how many there are —
 #97 had eight and was squashed, #95 had about seven and took a merge commit.
 It is whether the commits *supersede one another*.
 
