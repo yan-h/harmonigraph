@@ -231,11 +231,10 @@ pub(crate) fn ui_scale(ctx: &egui::Context) -> f32 {
 /// moved, which is a caller's cue that a `Ui` built from the old style is now
 /// a frame behind.
 ///
-/// Cheap to call every frame, and meant to be: the factor is stored the same
-/// per-frame way as [`crate::panes::pane_content_right`], so a context that
-/// stops being told falls back to the design size rather than keeping a stale
-/// one, and one that loses the value gets it (and its style) back on the next
-/// frame.
+/// Cheap to call every frame, and meant to be: the factor is stored in the
+/// context's per-frame temp data, so a context that stops being told falls back
+/// to the design size rather than keeping a stale one, and one that loses the
+/// value gets it (and its style) back on the next frame.
 pub fn set_ui_scale(ctx: &egui::Context, scale: f32) -> bool {
     let scale = sane_ui_scale(scale);
     let previous = ctx.data(|d| d.get_temp::<f32>(ui_scale_id()));

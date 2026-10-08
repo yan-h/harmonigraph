@@ -360,11 +360,9 @@ fn spectrum_buttons_form_a_compact_rectangle_and_select_each_edge() {
 }
 
 #[test]
-fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
+fn color_popup_edits_its_real_skin_coordinates() {
     let ctx = crate::tests::probe::themed_at(1.0);
     let (mut hue, mut amount) = (180.0, 0.3);
-    let key = crate::panes::pane_content_right();
-    ctx.data_mut(|d| d.insert_temp(key, 120.0f32));
     let mut draw = |ui: &mut Ui| {
         ui.set_max_width(120.0);
         skin_color(ui, "Accent", &mut hue, &mut amount, ["Hue", "Amount"], |h, s| {
@@ -391,7 +389,6 @@ fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
     frame(&ctx, vec![Event::PointerMoved(handle + egui::vec2(30.0, -10.0))], &mut draw);
     frame(&ctx, vec![press(handle + egui::vec2(30.0, -10.0), false)], &mut draw);
     assert!(hue > 180.0 && amount > 0.3);
-    assert_eq!(ctx.data(|d| d.get_temp::<f32>(key)), Some(120.0));
 }
 
 #[test]
