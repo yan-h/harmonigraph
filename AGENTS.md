@@ -57,6 +57,9 @@ A plain `handoff` records the work as complete and trims `target/`,
 so a pause mid-iteration runs `handoff --keep-cache` instead, or the build above while source is still uncommitted.
 End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show, read with `./load-plugin.sh --tag`.
 A session on a remote machine (a cloud session) has no local worktree for the loader to find, so it hands over `./build-pr.sh --load <PR>` instead.
+It skips `handoff` as well:
+the preserved artifact is the macOS `.dylib`, so on Linux `handoff` refuses after a successful build,
+and a Linux `.so` has no DAW to load it (#1425).
 
 ## A shader-affecting edit owes a regenerated Metal corpus in the SAME commit
 
