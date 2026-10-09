@@ -302,8 +302,8 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 /// exceeding it, because those are two different questions and only the first
 /// is what a reader sees. A control shorter than its row is inset in it — the
 /// switch's track is 15 points in a 19-point row deliberately, and a text field
-/// lands up to a point under at most scales because egui stores its margin as whole
-/// points. A control TALLER than its row takes the row with it, which is the
+/// lands up to two points under at most scales because egui stores its margin as
+/// whole points, floored on each side. A control TALLER than its row takes the row with it, which is the
 /// misalignment this is here about.
 ///
 /// What holds the row is the `interact_size` FLOOR rather than any of the
@@ -415,13 +415,16 @@ fn every_bar_has_its_declared_height() {
                 }
                 // A text field is held to its row as every control in a row
                 // is (see `every_settings_row_is_one_row_high`): never taller,
-                // and free to sit up to a point inside it, which is where
-                // `widgets::row_field` rounds its whole-point margin to.
+                // and short of it by less than two points. `widgets::row_field`
+                // floors its margin to whole points on EACH side, so each side
+                // can lose up to a point: measured, 1.95pt short at 1.05 and
+                // 1.93 at 0.85. Shorter than that is a field that lost its
+                // margin, not one that rounded it.
                 if fields.iter().any(|&field| r.rect.contains(field)) {
+                    let height = r.rect.height();
                     assert!(
-                        r.rect.height() <= want + ROUNDING,
-                        "{case:?} at scale {scale} drew a {}pt text field in a {want}pt row",
-                        r.rect.height(),
+                        want - 2.0 < height && height <= want + ROUNDING,
+                        "{case:?} at scale {scale} drew a {height}pt text field in a {want}pt row",
                     );
                     continue;
                 }

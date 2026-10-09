@@ -246,7 +246,8 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 /// margin as whole points, so a field can only land on its text plus an even
 /// number and the row need not be one of them; rounding up puts the field back over the
 /// row and takes the row up with it, which is the whole defect. Rounding down
-/// leaves it a point inside a row that the button beside it holds open, where
+/// leaves it up to two points inside a row (under a point on each side) that the
+/// button beside it holds open, where
 /// it reads as an inset field rather than as a row out of line.
 /// Takes the `Ui` it will be added to, because the margin is measured against
 /// the type that `Ui` is carrying; everything else about the field — its hint,
