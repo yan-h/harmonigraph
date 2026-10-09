@@ -422,9 +422,10 @@ fn draw_map_overlay(
     let label = if let Some(maps) =
         maps.filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
     {
-        if let Some(destination) = state.surfaces.hovered.filter(|_| maps.edit_shape) {
+        if let Some((destination, mut map)) =
+            state.surfaces.hovered.zip(maps.playback.map).filter(|_| maps.editing())
+        {
             let midi = harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
-            let mut map = maps.playback.map.unwrap_or_default();
             let old = map.correction(midi, state.runtime.tuning);
             map.replace(destination);
             let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
@@ -1020,6 +1021,50 @@ mod tests {
             "map dots must name the requested ordinary nodes in scene order"
         );
         assert_eq!(positions(12.0), [hovered], "hover must find its actual scene node");
+    }
+
+    /// Edit shape ticked with no saved map selected — a deleted slot, or one
+    /// automation picked that was never captured — has nothing a click could
+    /// edit, so hovering says the map is missing rather than previewing an
+    /// edit of the built-in shape.
+    #[test]
+    fn hover_with_no_selected_map_says_so_instead_of_previewing_an_edit() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use harmonigraph_core::lattice_map::TuningEngine;
+        use harmonigraph_core::LatticePos;
+        let mut state = fresh();
+        let window = state.appearance.view.reach();
+        let scene = compose_scene(&mut state, &window, 1.0, None, 0, 0.0);
+        state.surfaces.hovered = Some(LatticePos::ORIGIN);
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback {
+                engine: TuningEngine::LatticeMap,
+                map: None,
+                selected: 3,
+                offset: LatticePos::ORIGIN,
+                follow: Default::default(),
+            },
+            offsets: Default::default(),
+            followed: LatticePos::ORIGIN,
+            pending: false,
+            names: Default::default(),
+            edit_shape: true,
+            can_undo: false,
+            full: false,
+        });
+        let screen = egui::vec2(512.0, 512.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+        let output =
+            frame_full(&themed(), screen, |ui| draw_map_overlay(ui, rect, &scene, &window, &state));
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["Map unavailable · new attacks pass through"]);
     }
 
     #[test]
