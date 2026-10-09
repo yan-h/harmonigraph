@@ -204,8 +204,11 @@ fn right_clicking_again_moves_the_open_menu() {
     let mut state = fresh();
     let mut h = DockHarness::new();
     h.settle(&mut state);
+    // The second click lands well clear of the first: the menu opens below and
+    // right of the pointer, and a right-click on its own frame closes it, so a
+    // second click within a point of the first tests nothing about moving.
     let first = h.spectral_grab_at(&state, 0.8);
-    let second = h.spectral_grab_at(&state, 0.6) + egui::vec2(40.0, 0.0);
+    let second = first - egui::vec2(40.0, 0.0);
     right_click(&mut h, &mut state, first);
     let before = texts(&h.frame(&mut state, vec![]), "Analyzer settings");
     right_click(&mut h, &mut state, second);
