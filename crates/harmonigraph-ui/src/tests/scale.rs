@@ -168,7 +168,7 @@ const CONTROLS: [Control; 6] = [
 ///
 /// The row is reported alongside the controls because it is the thing a reader
 /// of a settings pane actually sees the height of. A control is free to be
-/// shorter than the row it sits in — the switch's pill is, and a text field is
+/// shorter than the row it sits in — the switch's track is, and a text field is
 /// at most scales — and only a control that OVERSHOOTS moves the row.
 ///
 /// Several frames because a widget's visual state comes from the PREVIOUS
@@ -295,7 +295,7 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 /// The ROW is what is pinned to the number, and the controls only to not
 /// exceeding it, because those are two different questions and only the first
 /// is what a reader sees. A control shorter than its row is inset in it — the
-/// switch's pill is 15 points in a 19-point row deliberately, and a text field
+/// switch's track is 15 points in a 19-point row deliberately, and a text field
 /// lands up to a point under at most scales because egui stores its margin as whole
 /// points. A control TALLER than its row takes the row with it, which is the
 /// misalignment this is here about.

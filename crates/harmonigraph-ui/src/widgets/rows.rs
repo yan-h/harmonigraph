@@ -6,7 +6,7 @@ use egui::{CornerRadius, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use crate::theme;
 
-/// Track size of a [`toggle_switch`] pill.
+/// Track size of a [`toggle_switch`].
 const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
 
 /// Side of a [`checkbox`]'s box, and of the check mark inside it.
@@ -66,8 +66,11 @@ pub(crate) fn checkbox_box(ui: &mut Ui, checked: &mut bool) -> Response {
 
 /// A labeled sliding-knob switch for boolean *modes* (Meantone, Learn).
 /// Buttons with a `selected` fill read exactly like the momentary preset
-/// buttons they sit next to (Just, 12-TET); the pill-and-knob shape is
-/// unmistakably persistent state.
+/// buttons they sit next to (Just, 12-TET); the track-and-knob shape is
+/// unmistakably persistent state. It wears the shared
+/// [`CONTROL_RADIUS`](theme::CONTROL_RADIUS) like every other framed control:
+/// what tells it from a button is the knob sliding in its track, not the
+/// roundness, and a pill was the one round shape in a pane of rectangles.
 ///
 /// Toggle vs checkbox, the house rule: a switch means "this mode is
 /// ENGAGED" — an ongoing behavior with side effects (Learn keeps
@@ -95,7 +98,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
     let gap = 6.0 * scale;
-    // As tall as the pill, not a row: every box in a column sits where its ink
+    // As tall as the track, not a row: every box in a column sits where its ink
     // is (see `widgets::label`), so a switch reads the row gap from a bar the
     // way a bar does. The label is trimmed to its capitals to fit, and the
     // target reaches half a row gap further each way, so it is still a row's
@@ -122,7 +125,13 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             egui::pos2(rect.left(), rect.center().y - switch.y / 2.0),
             switch,
         );
-        let radius = track.height() / 2.0;
+        let radius = f32::from(theme::control_radius(scale));
+        // The knob stands this far in from the track on every side, and its
+        // corners are the track's less the inset, so the two round about one
+        // centre. A full square block, not a bar's thin grip, so the switch
+        // does not read as a slider to drag.
+        let inset = 2.5 * scale;
+        let knob = track.height() - 2.0 * inset;
         let mix = |a: egui::Color32, b: egui::Color32| -> egui::Color32 {
             egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
         };
@@ -133,10 +142,10 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             mix(theme::well(), theme::accent_active())
         };
         painter.rect_filled(track, radius, track_fill);
-        let knob_x = egui::lerp((track.left() + radius)..=(track.right() - radius), t);
-        painter.circle_filled(
-            egui::pos2(knob_x, track.center().y),
-            radius - 2.5 * scale,
+        let knob_x = egui::lerp((track.left() + inset)..=(track.right() - inset - knob), t);
+        painter.rect_filled(
+            egui::Rect::from_min_size(egui::pos2(knob_x, track.top() + inset), Vec2::splat(knob)),
+            (radius - inset).max(0.0),
             theme::text(),
         );
         painter.galley(
