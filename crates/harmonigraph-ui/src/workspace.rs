@@ -672,7 +672,7 @@ fn section_ui(
     if rail > 0.0 {
         // Align the header controls' right edge with the settings content gutter.
         let scale = theme::ui_scale(ui.ctx());
-        let gutter = theme::pane_inner_margin(scale);
+        let gutter = theme::pane_gutter(scale);
         let header_rect =
             Rect::from_min_max(rect.min, pos2(rect.right() - gutter, rect.top() + rail));
         // The header is chrome, not the first row of the page: its own fill,
