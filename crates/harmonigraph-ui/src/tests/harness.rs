@@ -25,9 +25,10 @@ pub(super) fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::R
 #[derive(Default)]
 pub(super) struct RecordingBackend {
     pub(super) sets: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
-    /// The Hub's note retuning engine, or `None` for a backend with no engine
-    /// selector, which the Tuning pane reads as Pass through.
-    pub(super) engine: Option<harmonigraph_core::lattice_map::TuningEngine>,
+    /// The Hub's map view — which note retuning engine it runs, and the map
+    /// it plays — or `None` for a backend with no engine selector, which the
+    /// Tuning pane reads as Pass through.
+    pub(super) maps: Option<crate::lattice_maps::MapView>,
 }
 
 impl ParamBackend for RecordingBackend {
@@ -38,7 +39,7 @@ impl ParamBackend for RecordingBackend {
         self.sets.borrow_mut().push((key, value));
     }
     fn lattice_maps(&self) -> Option<crate::lattice_maps::MapView> {
-        self.engine.map(engine_view)
+        self.maps.clone()
     }
 }
 
@@ -57,6 +58,25 @@ pub(super) fn engine_view(
         can_undo: false,
         full: false,
     }
+}
+
+/// A Hub playing Lattice Map with every control under it live: a saved map
+/// selected and sounding, following moved off the offsets, Edit shape on with
+/// an edit to undo, offsets off zero, every slot used, and the whole still
+/// pending adoption — so each conditional row of `map_controls` is drawn.
+pub(super) fn lattice_map_view() -> crate::lattice_maps::MapView {
+    use harmonigraph_core::{lattice_map::Follow, LatticePos};
+    let mut view = engine_view(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
+    view.playback.map = Some(Default::default());
+    view.playback.follow = Follow::ThirdsAndFifths;
+    view.followed = LatticePos { threes: -2, fives: 1, sevens: 0 };
+    view.offsets.fine = LatticePos { threes: -7, fives: 3, sevens: -1 };
+    view.offsets.extension = LatticePos { threes: -1, fives: 0, sevens: 2 };
+    view.pending = true;
+    view.edit_shape = true;
+    view.can_undo = true;
+    view.full = true;
+    view
 }
 
 /// A harness that runs the REAL dock — `root_ui`, the workspace, tab bodies and
@@ -253,10 +273,138 @@ pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
 /// Every settings tab, in the column's own order.
 pub(super) const SETTINGS_PANES: &[panes::Tab] = crate::workspace::Section::Settings.tabs();
 
-/// One settings pane whose content box is `width` points wide, as the shapes it
-/// emitted. Driven through [`panes::Viewer`] rather than the dock, so a sweep
-/// over widths costs one pane each instead of a whole window, and the width
-/// under test is the pane's own rather than a window size minus chrome.
+/// What one settings sweep case changes from a fresh state: one choice that
+/// swaps which controls a page draws, with everything else left fresh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Variant {
+    Fresh,
+    /// The Lattice page's Camera block (see [`PROJECTIONS`]).
+    Projection(harmonigraph_scene::Projection),
+    /// The spectrogram's texture, whose own controls the Analyzer page draws.
+    Texture(harmonigraph_scene::CloudStyle),
+    /// The lattice glow's material, whose own controls the Lattice page draws.
+    Material(harmonigraph_scene::LatticeMaterial),
+    /// The Hub's note retuning on a backend that has an engine selector;
+    /// Lattice Map plays [`lattice_map_view`].
+    Engine(harmonigraph_core::lattice_map::TuningEngine),
+}
+
+/// One settings page drawn one way: what the layout sweeps iterate.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SettingsCase {
+    pub(super) pane: panes::Tab,
+    pub(super) variant: Variant,
+}
+
+impl SettingsCase {
+    pub(super) fn fresh(pane: panes::Tab) -> Self {
+        SettingsCase { pane, variant: Variant::Fresh }
+    }
+
+    /// The state the case draws, which is the fresh one with the take
+    /// controls switched on — and a render in flight — so the Video tab draws
+    /// the record button, the Options field, and the progress bar a real
+    /// session has, and a saved camera angle, so the Angle row has the button
+    /// a real session gives it.
+    pub(super) fn state(self) -> SharedState {
+        let mut state = fresh();
+        state.workspace.interaction.take.supported = true;
+        state.workspace.interaction.take.last_take = Some("music.take".into());
+        state.workspace.interaction.take.exports = vec![fixture_export()];
+        state.workspace.interaction.camera_presets.push(CameraPreset {
+            name: "Front".into(),
+            yaw: 0.0,
+            pitch: 0.0,
+        });
+        let appearance = &mut state.picture.appearance;
+        match self.variant {
+            Variant::Fresh | Variant::Engine(_) => {}
+            Variant::Projection(projection) => appearance.camera.projection = projection,
+            Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
+            Variant::Material(material) => appearance.view.atmosphere.material_style = material,
+        }
+        state
+    }
+
+    pub(super) fn backend(self) -> RecordingBackend {
+        use harmonigraph_core::lattice_map::TuningEngine;
+        let maps = match self.variant {
+            Variant::Engine(TuningEngine::LatticeMap) => Some(lattice_map_view()),
+            Variant::Engine(engine) => Some(engine_view(engine)),
+            _ => None,
+        };
+        RecordingBackend { maps, ..Default::default() }
+    }
+}
+
+/// Every way of drawing every settings page that changes which controls are
+/// on it: each page fresh, then every texture on the Analyzer page, every
+/// material and projection on the Lattice page, and every retuning engine on
+/// the Tuning page.
+///
+/// Every variant rather than every one that differs from today's defaults,
+/// because a default moving is how the sweeps lost the Stars editor, Scales
+/// and the Adaptive section without a line of them changing (#1484). The
+/// matches are exhaustive so a new texture, material or engine does not
+/// compile until it is listed here.
+pub(super) fn settings_cases() -> Vec<SettingsCase> {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    use harmonigraph_scene::{CloudStyle, LatticeMaterial};
+    use panes::Tab;
+    let textures = [CloudStyle::Watercolor, CloudStyle::Stars, CloudStyle::VelvetScales];
+    let materials = [
+        LatticeMaterial::None,
+        LatticeMaterial::Watercolor,
+        LatticeMaterial::Stars,
+        LatticeMaterial::VelvetScales,
+    ];
+    let engines = [TuningEngine::Off, TuningEngine::Adaptive, TuningEngine::LatticeMap];
+    for texture in textures {
+        match texture {
+            CloudStyle::Watercolor | CloudStyle::Stars | CloudStyle::VelvetScales => {}
+        }
+    }
+    for material in materials {
+        match material {
+            LatticeMaterial::None
+            | LatticeMaterial::Watercolor
+            | LatticeMaterial::Stars
+            | LatticeMaterial::VelvetScales => {}
+        }
+    }
+    for engine in engines {
+        match engine {
+            TuningEngine::Off | TuningEngine::Adaptive | TuningEngine::LatticeMap => {}
+        }
+    }
+    let mut cases = Vec::new();
+    for &pane in SETTINGS_PANES {
+        let variants: Vec<Variant> = match pane {
+            Tab::AnalyzerSettings => textures.map(Variant::Texture).to_vec(),
+            // Every material at the fresh projection, then every other
+            // projection at the fresh material: the Camera block and the
+            // glow's material are independent blocks of the page.
+            Tab::LatticeSettings => materials
+                .map(Variant::Material)
+                .into_iter()
+                .chain(PROJECTIONS[1..].iter().map(|&p| Variant::Projection(p)))
+                .collect(),
+            // No engine selector at all, then each engine behind one.
+            Tab::Tuning => {
+                std::iter::once(Variant::Fresh).chain(engines.map(Variant::Engine)).collect()
+            }
+            _ => vec![Variant::Fresh],
+        };
+        cases.extend(variants.into_iter().map(|variant| SettingsCase { pane, variant }));
+    }
+    cases
+}
+
+/// One settings page whose content box is `width` points wide, as the shapes it
+/// emitted, with every fold on it open (see [`open_settings_pane`]). Driven
+/// through [`panes::Viewer`] rather than the dock, so a sweep over widths costs
+/// one pane each instead of a whole window, and the width under test is the
+/// pane's own rather than a window size minus chrome.
 ///
 /// The dock's nesting IS reproduced, though, because the one thing it does that
 /// a bare `Ui` does not is the thing these tests are about: the workspace clips the
@@ -266,28 +414,81 @@ pub(super) const SETTINGS_PANES: &[panes::Tab] = crate::workspace::Section::Sett
 /// the margin cannot tell a control clamped to the content box from one clamped
 /// to the painted edge — they are the same number there.
 ///
-/// Tall on purpose (a pane's controls are a column, and the point here is the
-/// other axis) and with the take controls switched on — and a render in
-/// flight — so the Video tab draws the record button, the Options field, and
-/// the progress bar a real session has.
+/// Tall on purpose: a pane's controls are a column, and the point here is the
+/// other axis.
 pub(super) fn settings_pane_at_width(
-    pane: panes::Tab,
+    case: SettingsCase,
     width: f32,
-    projection: harmonigraph_scene::Projection,
 ) -> Vec<egui::epaint::ClippedShape> {
-    let mut state = fresh();
-    state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_take = Some("music.take".into());
-    state.workspace.interaction.take.exports = vec![fixture_export()];
-    state.picture.appearance.camera.projection = projection;
-    // A saved angle, so the Angle row has the button a real session gives it.
-    state.workspace.interaction.camera_presets.push(CameraPreset {
-        name: "Front".into(),
-        yaw: 0.0,
-        pitch: 0.0,
-    });
-    let tab = pane;
-    tab_body(&mut state, tab, width, PANE_HEIGHT).shapes
+    open_settings_pane(&super::probe::themed(), case, &mut case.state(), width)
+}
+
+/// `case`'s page drawn on `ctx` into a content box `width` across, after
+/// opening every fold on it, as the shapes the last frame emitted.
+///
+/// Opened the way a person opens them — a click on each closed chevron in
+/// turn, until none is left — because a subsection's fold lives in egui's
+/// memory under an id only the pane can name, and the one switch that opens
+/// every fold at once (`Memory::set_everything_is_visible`) also shows every
+/// tooltip on the page, which is exactly what a geometry sweep must not draw.
+/// The pointer leaves before the last frame for the same reason.
+pub(super) fn open_settings_pane(
+    ctx: &egui::Context,
+    case: SettingsCase,
+    state: &mut SharedState,
+    width: f32,
+) -> Vec<egui::epaint::ClippedShape> {
+    let backend = case.backend();
+    let mut now = 0.0;
+    let frame = |state: &mut SharedState, now: f64, events: Vec<egui::Event>| {
+        tab_body_with(ctx, state, case.pane, (width, PANE_HEIGHT), now, &backend, events).shapes
+    };
+    let mut shapes = frame(state, now, vec![]);
+    // More than any page holds; a fold that will not stay open would
+    // otherwise loop here for ever.
+    for _ in 0..16 {
+        let Some(at) = closed_fold(&shapes) else { return shapes };
+        // egui resolves the widget under the pointer from the previous pass,
+        // so the pointer arrives a frame before the press.
+        for events in [
+            vec![egui::Event::PointerMoved(at)],
+            vec![egui::Event::PointerMoved(at), press(at, true)],
+            vec![press(at, false)],
+        ] {
+            now += 1.0 / 60.0;
+            frame(state, now, events);
+        }
+        // A second on, past the fold's opening animation.
+        now += 1.0;
+        shapes = frame(state, now, vec![egui::Event::PointerGone]);
+    }
+    panic!("{case:?} still has a closed fold after opening sixteen");
+}
+
+/// How far a subsection indents its body on `ctx`, whose chrome scale it
+/// follows: a bar in an open subsection is the page's column less this.
+pub(super) fn fold_indent(ctx: &egui::Context) -> f32 {
+    let mut indent = 0.0;
+    let _ = ctx.run_ui(Default::default(), |ui| indent = ui.spacing().indent);
+    indent
+}
+
+/// The centre of the first closed fold's chevron in `shapes`: the
+/// right-pointing one `widgets::paint_chevron` draws for a folded section or
+/// subsection, told by its shape rather than its colour.
+fn closed_fold(shapes: &[egui::epaint::ClippedShape]) -> Option<egui::Pos2> {
+    shapes.iter().find_map(|cs| match &cs.shape {
+        egui::Shape::Path(path) if path.points.len() == 3 && !path.closed => {
+            let [tail, tip, other] = [path.points[0], path.points[1], path.points[2]];
+            let reach = tip.x - tail.x;
+            let pointing_right = reach > 0.0
+                && (tail.x - other.x).abs() < 0.01
+                && (tip.y - (tail.y + other.y) / 2.0).abs() < 0.01
+                && ((tail.y - other.y).abs() - 2.0 * reach).abs() < 0.01;
+            pointing_right.then(|| egui::pos2((tail.x + tip.x) / 2.0, tip.y))
+        }
+        _ => None,
+    })
 }
 
 /// The height every pane fixture is drawn at: taller than any settings pane's
@@ -317,10 +518,10 @@ pub(super) fn adaptive_tab_body(
     height: f32,
 ) -> egui::FullOutput {
     let backend = RecordingBackend {
-        engine: Some(harmonigraph_core::lattice_map::TuningEngine::Adaptive),
+        maps: Some(engine_view(harmonigraph_core::lattice_map::TuningEngine::Adaptive)),
         ..Default::default()
     };
-    tab_body_with(&super::probe::themed(), state, tab, (width, height), 0.0, &backend)
+    tab_body_with(&super::probe::themed(), state, tab, (width, height), 0.0, &backend, vec![])
 }
 
 /// The same on a caller's context and clock — for a fixture that drives many
@@ -333,7 +534,7 @@ pub(super) fn tab_body_on(
     height: f32,
     now: f64,
 ) -> egui::FullOutput {
-    tab_body_with(ctx, state, tab, (width, height), now, &RecordingBackend::default())
+    tab_body_with(ctx, state, tab, (width, height), now, &RecordingBackend::default(), vec![])
 }
 
 fn tab_body_with(
@@ -343,6 +544,7 @@ fn tab_body_with(
     (width, height): (f32, f32),
     now: f64,
     backend: &RecordingBackend,
+    events: Vec<egui::Event>,
 ) -> egui::FullOutput {
     // The inset at the CONTEXT's chrome scale rather than at the design size,
     // so a fixture that scales the chrome measures the pane the dock would
@@ -351,7 +553,7 @@ fn tab_body_with(
     let body =
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + margin.sum().x, height));
     ctx.run_ui(
-        egui::RawInput { screen_rect: Some(body), time: Some(now), ..Default::default() },
+        egui::RawInput { screen_rect: Some(body), time: Some(now), events, ..Default::default() },
         |ui| {
             // The body ui's clip is the whole body (the screen here); the pane
             // ui inside it is inset, exactly as the dock's Frame leaves it.
@@ -374,17 +576,6 @@ fn tab_body_with(
             }
         },
     )
-}
-
-/// The projections worth drawing `pane` at: all of them for the Lattice page,
-/// whose Camera block depends on it (see [`PROJECTIONS`]), and the default
-/// alone for the panes that draw the same thing either way.
-pub(super) fn projections_for(pane: panes::Tab) -> &'static [harmonigraph_scene::Projection] {
-    if pane == panes::Tab::LatticeSettings {
-        &PROJECTIONS
-    } else {
-        &PROJECTIONS[..1]
-    }
 }
 
 /// The render the pane fixtures have in flight, so the Video pane's progress

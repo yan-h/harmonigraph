@@ -191,14 +191,11 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 /// is a false value just as surely as a bar printing the wrong number.
 #[test]
 fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
-    let shapes: Vec<egui::Shape> = settings_pane_at_width(
-        panes::Tab::LatticeSettings,
-        320.0,
-        harmonigraph_scene::Projection::default(),
-    )
-    .into_iter()
-    .map(|cs| cs.shape)
-    .collect();
+    let shapes: Vec<egui::Shape> =
+        settings_pane_at_width(SettingsCase::fresh(panes::Tab::LatticeSettings), 320.0)
+            .into_iter()
+            .map(|cs| cs.shape)
+            .collect();
     let paths = crate::widgets::curve_paths(&shapes);
     let descending: Vec<&Vec<egui::Pos2>> =
         paths.iter().filter(|path| path.first().unwrap().y < path.last().unwrap().y).collect();
@@ -436,10 +433,18 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
             _ => None,
         })
         .collect();
+    // What the fixtures' text fields hold: the empty camera preset name's
+    // hint, and the selected saved map's name in its Rename field. Named
+    // rather than sniffed, so a field nobody listed reads as a mis-sized bar
+    // and fails, where a looser rule would quietly drop real bars instead.
+    let map_name = lattice_map_view().names.first().map(|(_, name)| name.clone());
     let fields: Vec<egui::Pos2> = shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == crate::panes::view::PRESET_NAME_HINT => {
+            egui::Shape::Text(t)
+                if t.galley.text() == crate::panes::view::PRESET_NAME_HINT
+                    || Some(t.galley.text()) == map_name.as_deref() =>
+            {
                 Some(t.visual_bounding_rect().center())
             }
             _ => None,
@@ -448,9 +453,9 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
-            // The camera preset's name field is a row-high well too, told from
-            // a bar by the hint it holds, as the record panel is by its dot —
-            // not by its width, which the column clamps at the narrow end.
+            // A text field is a row-high well too, told from a bar by what it
+            // holds, as the record panel is by its dot — not by its width,
+            // which the column clamps at the narrow end.
             egui::Shape::Rect(r)
                 if r.fill == well
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
@@ -508,77 +513,97 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
+    // A bar under an open subsection fills THAT column, which is the page's
+    // less the fold's indent. Counted per case, and held to the same count at
+    // every width, for the reason the weight bars are.
+    let indent = fold_indent(&super::probe::themed());
+    let cases = settings_cases();
+    let mut nested_per_case: Vec<Option<usize>> = vec![None; cases.len()];
     for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
-        for &pane in SETTINGS_PANES {
-            for &projection in projections_for(pane) {
-                let widths = bar_track_widths(&settings_pane_at_width(pane, width, projection));
-                // One bar per gradient is deliberately shorter: the spectrum
-                // track, which gives the right end of its row to the flip
-                // button. It still narrows with the column, which is what this
-                // is about, so it is allowed its own length rather than excused
-                // from the sweep.
-                //
-                // COUNTED, not merely permitted. A sweep that accepts either
-                // length from any bar accepts a spectrum track that never
-                // reserved the button's width at all — it comes out at the
-                // column's own length and passes on the first alternative,
-                // with the button painted over its left end. So the count is
-                // exact: TWO on the Mappings page, which carries both gradients
-                // — the lattice's pitch table and the heatmap's level table, on
-                // the same three bars over the same type — and none anywhere
-                // else.
-                let track = crate::widgets::spectrum_track_width(width, 1.0);
-                // A mapping's weight bar gives the right end of its row to its
-                // Delete button, and is counted the same way: one per mapping
-                // the fresh settings carry, all of them on the Mappings page. How
-                // wide the button is is the button's business; what is held is
-                // that the bar is short of the column by the SAME amount at
-                // every width, which is the bar narrowing with the column.
-                let mappings = if pane == panes::Tab::Mappings { fresh_mappings() } else { 0 };
-                let mut short = 0;
-                let mut weights = 0;
-                let mut links = Vec::new();
-                for bar in &widths {
-                    if (bar - width).abs() < 1.0 {
-                        continue;
-                    }
-                    if (bar - track).abs() < 1.0 {
-                        short += 1;
-                        continue;
-                    }
-                    // At this sweep's wide width both temperament switches sit
-                    // inline. At the smaller widths they wrap under full bars.
-                    if pane == panes::Tab::Tuning && width == 400.0 {
-                        links.push(*bar);
-                        continue;
-                    }
-                    weights += 1;
-                    let by = width - bar;
-                    let first = *weight_short_by.get_or_insert(by);
-                    assert!(
-                        by > 0.0 && (by - first).abs() < 1.0,
-                        "{pane:?}/{projection:?} at {width}pt drew a {bar}pt bar: not the \
-                         column, not the spectrum track's {track}pt, and not a weight bar \
-                         {first}pt short of the column like the others (all of {widths:?})"
-                    );
+        for (index, &case) in cases.iter().enumerate() {
+            let pane = case.pane;
+            let widths = bar_track_widths(&settings_pane_at_width(case, width));
+            // One bar per gradient is deliberately shorter: the spectrum
+            // track, which gives the right end of its row to the flip
+            // button. It still narrows with the column, which is what this
+            // is about, so it is allowed its own length rather than excused
+            // from the sweep.
+            //
+            // COUNTED, not merely permitted. A sweep that accepts either
+            // length from any bar accepts a spectrum track that never
+            // reserved the button's width at all — it comes out at the
+            // column's own length and passes on the first alternative,
+            // with the button painted over its left end. So the count is
+            // exact: TWO on the Mappings page, which carries both gradients
+            // — the lattice's pitch table and the heatmap's level table, on
+            // the same three bars over the same type — and none anywhere
+            // else.
+            let track = crate::widgets::spectrum_track_width(width, 1.0);
+            // A mapping's weight bar gives the right end of its row to its
+            // Delete button, and is counted the same way: one per mapping
+            // the fresh settings carry, all of them on the Mappings page. How
+            // wide the button is is the button's business; what is held is
+            // that the bar is short of the column by the SAME amount at
+            // every width, which is the bar narrowing with the column.
+            let mappings = if pane == panes::Tab::Mappings { fresh_mappings() } else { 0 };
+            let mut short = 0;
+            let mut weights = 0;
+            let mut nested = 0;
+            let mut links = Vec::new();
+            for bar in &widths {
+                if (bar - width).abs() < 1.0 {
+                    continue;
                 }
+                if (bar - track).abs() < 1.0 {
+                    short += 1;
+                    continue;
+                }
+                if (bar - (width - indent)).abs() < 1.0 {
+                    nested += 1;
+                    continue;
+                }
+                // At this sweep's wide width both temperament switches sit
+                // inline. At the smaller widths they wrap under full bars.
                 if pane == panes::Tab::Tuning && width == 400.0 {
-                    assert_eq!(links.len(), 2, "one shortened bar per link");
-                    assert!((links[0] - links[1]).abs() < 1.0, "interval columns align");
-                    assert!(links[0] > width / 2.0 && links[0] < width);
+                    links.push(*bar);
+                    continue;
                 }
-                let want = if pane == panes::Tab::Mappings { 2 } else { 0 };
-                assert_eq!(
-                    short, want,
-                    "{pane:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
-                     (all of {widths:?})"
-                );
-                assert_eq!(
-                    weights, mappings,
-                    "{pane:?}/{projection:?} at {width}pt drew {weights} weight bars, not \
-                     {mappings} (all of {widths:?})"
+                weights += 1;
+                let by = width - bar;
+                let first = *weight_short_by.get_or_insert(by);
+                assert!(
+                    by > 0.0 && (by - first).abs() < 1.0,
+                    "{case:?} at {width}pt drew a {bar}pt bar: not the \
+                     column, not the spectrum track's {track}pt, and not a weight bar \
+                     {first}pt short of the column like the others (all of {widths:?})"
                 );
             }
+            if pane == panes::Tab::Tuning && width == 400.0 {
+                assert_eq!(
+                    links.len(),
+                    2,
+                    "{case:?}: one shortened bar per link, not {links:?} (all of {widths:?})"
+                );
+                assert!((links[0] - links[1]).abs() < 1.0, "interval columns align");
+                assert!(links[0] > width / 2.0 && links[0] < width);
+            }
+            let want = if pane == panes::Tab::Mappings { 2 } else { 0 };
+            assert_eq!(
+                short, want,
+                "{case:?} at {width}pt drew {short} short bars, not {want} \
+                 (all of {widths:?})"
+            );
+            assert_eq!(
+                weights, mappings,
+                "{case:?} at {width}pt drew {weights} weight bars, not \
+                 {mappings} (all of {widths:?})"
+            );
+            let first = *nested_per_case[index].get_or_insert(nested);
+            assert_eq!(
+                nested, first,
+                "{case:?} at {width}pt drew {nested} bars in a subsection's column, against \
+                 {first} at the first width (all of {widths:?})"
+            );
         }
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
@@ -596,9 +621,8 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // every bar at once; a control coming, going or greying is not what it is
     // asking about.
     let bars = bar_track_widths(&settings_pane_at_width(
-        panes::Tab::LatticeSettings,
+        SettingsCase::fresh(panes::Tab::LatticeSettings),
         400.0,
-        PROJECTIONS[0],
     ))
     .len();
     assert!(bars >= 12, "only found {bars} bar tracks on the Lattice page; has the paint changed?");
@@ -658,7 +682,7 @@ fn each_settings_tab_draws_its_own_body_and_only_that() {
 #[test]
 fn every_gradient_group_previews_itself_above_its_bars() {
     const WIDTH: f32 = 400.0;
-    let shapes = settings_pane_at_width(panes::Tab::Mappings, WIDTH, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(SettingsCase::fresh(panes::Tab::Mappings), WIDTH);
     // A preview is a full-column band of color: a spectrum's circle is the
     // track's width and a fade ramp is a row high, so the pair of measurements
     // tells all three apart.
@@ -735,7 +759,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
 #[test]
 fn the_render_bar_fills_to_the_share_of_frames_done() {
     const WIDTH: f32 = 400.0;
-    let shapes = settings_pane_at_width(panes::Tab::Video, WIDTH, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(SettingsCase::fresh(panes::Tab::Video), WIDTH);
     let share = FIXTURE_RENDER.fraction().expect("the fixture render knows its total");
     // A polygon rather than a rect: a fill is the part of its track left of
     // the frontier (`filled_part`), so what is measured is the reach of the
@@ -890,12 +914,8 @@ fn no_settings_pane_overruns_a_narrow_column() {
         // The pane's own clip is the tab body, the gutter wider than the
         // content box on the right.
         let body_right = edge + crate::theme::PANE_GUTTER;
-        let panes = SETTINGS_PANES
-            .iter()
-            .copied()
-            .flat_map(|pane| projections_for(pane).iter().map(move |&p| (pane, p)));
-        for (pane, projection) in panes {
-            let shapes = settings_pane_at_width(pane, width, projection);
+        for case in settings_cases() {
+            let shapes = settings_pane_at_width(case, width);
             let over_edge = |cs: &egui::epaint::ClippedShape| {
                 let rect = cs.shape.visual_bounding_rect();
                 // Shapes that carry no geometry answer with an inverted or
@@ -927,7 +947,7 @@ fn no_settings_pane_overruns_a_narrow_column() {
                 });
             assert!(
                 worst.is_none(),
-                "{pane:?}/{projection:?} at {width}pt ran {:?} past the pane edge",
+                "{case:?} at {width}pt ran {:?} past the pane edge",
                 worst.unwrap()
             );
         }
@@ -1208,7 +1228,7 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
 /// Links sit beside the intervals they control; no separate Auto table remains.
 #[test]
 fn temperament_switches_sit_beside_their_intervals() {
-    let shapes = settings_pane_at_width(panes::Tab::Tuning, 423.0, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(SettingsCase::fresh(panes::Tab::Tuning), 423.0);
     let at = |needle: &str| {
         shapes
             .iter()
@@ -1500,7 +1520,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
 /// A narrow pane keeps each link visible below its own interval.
 #[test]
 fn temperament_switches_wrap_under_their_intervals() {
-    let shapes = settings_pane_at_width(panes::Tab::Tuning, 230.0, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(SettingsCase::fresh(panes::Tab::Tuning), 230.0);
     let find = |needle: &str| {
         shapes
             .iter()
