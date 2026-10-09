@@ -197,7 +197,8 @@ pub struct VideoOptions<'a> {
     pub frames: u64,
     /// The take's recorded audio to mux in, if any.
     pub audio: Option<&'a std::path::Path>,
-    /// Which encoder ffmpeg runs; see [`video_args`].
+    /// Which encoder the export asked for; [`VideoOptions::encoder`] is the
+    /// one ffmpeg runs.
     pub encoder: VideoEncoder,
     /// x264 constant-rate-factor: lower is better and bigger. The hardware
     /// encoder has no CRF and ignores it.
@@ -262,10 +263,13 @@ impl Sink {
                 "note: video duration is at or below AAC priming (21.333 ms); exporting video only"
             );
         }
+        // `warning:`, not `note:`: the Video pane's status line keeps the first
+        // warning of a render that succeeds, and the Encoder row still reads
+        // Hardware.
         if options.encoder() != options.encoder {
             eprintln!(
-                "note: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
-                 exporting {w}x{h} through x264"
+                "warning: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
+                 exported {w}x{h} through x264"
             );
         }
         let ffmpeg = find_ffmpeg(options.ffmpeg)?;
