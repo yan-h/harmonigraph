@@ -12,7 +12,8 @@
 //! beginning-of-pass write — lands before the scene's fragment work and leaves
 //! it out (#1113, and the spectrogram probe's own history in
 //! `docs/spectrogram-cloud-performance.md`). Every "prepare's encoder" figure
-//! printed before that fix undercounts the scene passes.
+//! printed before that fix undercounts the scene passes. The bracket is
+//! `crate::frame_timer`'s, shared with the roll's and spectrogram's probes.
 //!
 //! Two settings, because the Shadow bar's two ends cost differently: a
 //! caster's shadow is its group's width in node radii, so the top of the bar is
@@ -379,25 +380,8 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let occlusion = std::env::var("PROBE_OCCLUSION")
         .map(|value| value.parse::<f32>().expect("PROBE_OCCLUSION is a strength"))
         .unwrap_or(1.0);
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter; nothing timed");
-        return;
-    };
-    eprintln!("adapter: {:?}", adapter.get_info());
-    let features = wgpu::Features::TIMESTAMP_QUERY;
-    if !adapter.features().contains(features) {
-        eprintln!("the adapter carries no timestamps; nothing timed");
-        return;
-    }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_limits: crate::device_limits(&adapter),
-        required_features: features,
-        ..Default::default()
-    }))
-    .expect("a device with timestamps");
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let Some(timer) = frame_timer::FrameTimer::new(format) else { return };
 
     let ppp: f32 = std::env::var("PROBE_PPP")
         .map(|v| v.parse().expect("PROBE_PPP is pixels per point"))
@@ -431,85 +415,18 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         .collect();
     let named = runs.len();
 
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    // Slot 0 opens the bracket and slot 1 closes it.
-    const STAMPS: u32 = 2;
-    let set = device.create_query_set(&wgpu::QuerySetDescriptor {
-        label: Some("timing_probe"),
-        ty: wgpu::QueryType::Timestamp,
-        count: STAMPS,
-    });
-    let buffer = |label, usage| {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: u64::from(STAMPS) * 8,
-            usage,
-            mapped_at_creation: false,
-        })
-    };
-    let resolve =
-        buffer("timing_resolve", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC);
-    let staging =
-        buffer("timing_staging", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
-    let target = |label, size: [u32; 2]| {
-        device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&Default::default())
-    };
-    // The opening pass's target, and the pane `paint` composites into — held
-    // across frames, as a swapchain's is.
-    let stamp_view = target("timing_stamp", [1, 1]);
-    let pane_view = target("timing_pane", size);
-    let stamped_pass = |encoder: &mut wgpu::CommandEncoder,
-                        view: &wgpu::TextureView,
-                        begin: Option<u32>,
-                        end: Option<u32>| {
-        encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("timing_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
-                    query_set: &set,
-                    beginning_of_pass_write_index: begin,
-                    end_of_pass_write_index: end,
-                }),
-                occlusion_query_set: None,
-                multiview_mask: None,
-            })
-            .forget_lifetime()
-    };
-    let period = f64::from(queue.get_timestamp_period());
+    // The pane `paint` composites into. Its closing stamp is on a pass that
+    // samples the scene target, so its end is ordered after every pass that
+    // wrote it.
+    let target = timer.pane(size, ppp);
     let mut resources = CallbackResources::default();
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pane.x, pane.y));
-    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
-    let mut samples = Vec::with_capacity(frames);
-    let mut completion_samples = Vec::with_capacity(frames);
     let mut callback_samples = Vec::with_capacity(frames);
-    let mut cpu_samples = Vec::with_capacity(frames);
     let stats = (std::env::var("PROBE_TIMER").as_deref() == Ok("1"))
         .then(|| std::sync::Arc::new(LatticeStats::default()));
     let mut preparation_samples = Vec::new();
-    for frame in 0..frames + 10 {
+    let timed = timer.time_frames(frames, |frame| {
         if let Some(clock) = &mut scene.glow_timing {
             clock.now = 1.0 + frame as f64 / 60.0;
         }
@@ -535,65 +452,44 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             eprintln!("{what}: target {target:?}, {} shipped instances, {lit} lit halo instances, {landed} casters landed", cb.instances.len());
         }
         cb.uniforms.geometry_shadow.occlusion = occlusion;
-        let mut encoder = device.create_command_encoder(&Default::default());
-        drop(stamped_pass(&mut encoder, &stamp_view, Some(0), None));
         if let Some(stats) = &stats {
             // A failed/invalid readback must not recount a stale publication.
             stats.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
         }
-        let cpu_start = std::time::Instant::now();
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
+        let sample = timer.frame(
+            &target,
+            &mut resources,
+            frame_timer::Opening::AheadOfPrepare,
+            |encoder, resources| {
+                cb.prepare(&timer.device, &timer.queue, &target.screen, encoder, resources)
+            },
+            |pass, resources| cb.paint(target.paint_info(), pass, resources),
+        );
         if frame == 0 {
-            eprintln!("{what}: cold prepare CPU {cpu_ms:.3} ms (includes pipeline/target creation), bloom {}", scene.view.note_bloom);
-        }
-        {
-            // The closing stamp: this pass samples the scene target, so its
-            // end is ordered after every pass that wrote it.
-            let mut pass = stamped_pass(&mut encoder, &pane_view, None, Some(1));
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: ppp,
-                    screen_size_px: size,
-                },
-                &mut pass,
-                &resources,
+            eprintln!(
+                "{what}: cold prepare CPU {:.3} ms (includes pipeline/target creation), bloom {}",
+                sample.prepare_cpu_ms, scene.view.note_bloom
             );
         }
-        encoder.resolve_query_set(&set, 0..STAMPS, &resolve, 0);
-        encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, u64::from(STAMPS) * 8);
-        let completion_start = std::time::Instant::now();
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let slice = staging.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let completion_ms = completion_start.elapsed().as_secs_f64() * 1000.0;
-        let ticks: Vec<u64> = {
-            let view = slice.get_mapped_range();
-            bytemuck::cast_slice::<u8, u64>(&view).to_vec()
-        };
-        staging.unmap();
-        assert!(ticks[0] > 0 && ticks[1] >= ticks[0], "unsupported timestamp pair: {ticks:?}");
-        let ms = (ticks[1] - ticks[0]) as f64 * period / 1.0e6;
-        if frame >= 10 {
-            samples.push(ms);
-            completion_samples.push(completion_ms);
-            cpu_samples.push(cpu_ms);
+        if frame >= frame_timer::WARM_UP {
             callback_samples.push(callback_ms);
             if let Some(stats) = &stats {
-                let timer = resources.get::<LatticeResources>().unwrap().timer.as_ref().unwrap();
+                let production =
+                    resources.get::<LatticeResources>().unwrap().timer.as_ref().unwrap();
                 let reading =
                     f32::from_bits(stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed));
                 // Recorded means a completed map just allowed a new bracket;
                 // do not count the old published value again while mapping.
-                if timer.state == TimerState::Recorded && reading.is_finite() {
+                if production.state == TimerState::Recorded && reading.is_finite() {
                     preparation_samples.push(reading);
                 }
             }
         }
-    }
+        sample
+    });
+    let mut samples: Vec<f64> = timed.iter().map(|s| s.gpu_ms).collect();
+    let mut completion_samples: Vec<f64> = timed.iter().map(|s| s.completion_ms).collect();
+    let mut cpu_samples: Vec<f64> = timed.iter().map(|s| s.prepare_cpu_ms).collect();
     if stats.is_some() {
         assert!(!preparation_samples.is_empty(), "production timer never published a sample");
         preparation_samples.sort_by(f32::total_cmp);

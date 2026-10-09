@@ -3305,4 +3305,6 @@ mod gpu_harness;
 #[doc(hidden)]
 pub use gpu_harness::{headless_device as test_gpu_device, test_gpu_adapter};
 #[cfg(test)]
+mod frame_timer;
+#[cfg(test)]
 mod lattice_tests;
