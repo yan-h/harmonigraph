@@ -393,6 +393,7 @@ fn every_bar_has_its_declared_height() {
             // starting one indent in from the column's left edge.
             let indent = fold_indent(&super::probe::themed_scaled(scale));
             let nested_left = crate::theme::dock_pane_margin(scale).left_top().x + indent;
+            let fields = SettingsCase::text_fields(&shapes);
             let mut found = 0;
             for cs in &shapes {
                 let egui::Shape::Rect(r) = &cs.shape else { continue };
@@ -410,6 +411,18 @@ fn every_bar_has_its_declared_height() {
                     || (r.rect.height() - crate::widgets::direct_plot_height(scale)).abs()
                         < ROUNDING
                 {
+                    continue;
+                }
+                // A text field is held to its row as every control in a row
+                // is (see `every_settings_row_is_one_row_high`): never taller,
+                // and free to sit up to a point inside it, which is where
+                // `widgets::row_field` rounds its whole-point margin to.
+                if fields.iter().any(|&field| r.rect.contains(field)) {
+                    assert!(
+                        r.rect.height() <= want + ROUNDING,
+                        "{case:?} at scale {scale} drew a {}pt text field in a {want}pt row",
+                        r.rect.height(),
+                    );
                     continue;
                 }
                 found += 1;

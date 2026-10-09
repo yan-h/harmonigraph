@@ -29,6 +29,10 @@ pub(super) struct RecordingBackend {
     /// it plays — or `None` for a backend with no engine selector, which the
     /// Tuning pane reads as Pass through.
     pub(super) maps: Option<crate::lattice_maps::MapView>,
+    /// The live tuning instances the Tuning pane's Sources table lists.
+    pub(super) instances: Vec<params::TuningInstance>,
+    /// The live analysis input, or `None` for a shell with no choice of one.
+    pub(super) input: Option<params::AnalysisInput>,
 }
 
 impl ParamBackend for RecordingBackend {
@@ -40,6 +44,12 @@ impl ParamBackend for RecordingBackend {
     }
     fn lattice_maps(&self) -> Option<crate::lattice_maps::MapView> {
         self.maps.clone()
+    }
+    fn tuning_instances(&self) -> Vec<params::TuningInstance> {
+        self.instances.clone()
+    }
+    fn analysis_input(&self) -> Option<params::AnalysisInput> {
+        self.input
     }
 }
 
@@ -333,21 +343,58 @@ impl SettingsCase {
             Variant::Engine(engine) => Some(engine_view(engine)),
             _ => None,
         };
-        RecordingBackend { maps, ..Default::default() }
+        // A plugin's backend, so the controls only a live host offers are
+        // drawn too: the Sources table with its Source details and Tuning
+        // delay folds, and the Analyzer's Audio input row.
+        RecordingBackend {
+            maps,
+            instances: super::probe::tuning_instances(),
+            input: Some(params::AnalysisInput::Main),
+            ..Default::default()
+        }
     }
 
     /// How many closed folds the page draws, which [`open_settings_pane`]
-    /// has to open: Keyboard and Context under Adaptive tuning; Map offsets,
-    /// Manage selected saved map and Assignments under Lattice Map; the
-    /// Video page's Exports.
+    /// has to open: the Sources table's Source details and Tuning delay on
+    /// every Tuning page, then Keyboard and Context under Adaptive tuning, or
+    /// Map offsets, Manage selected saved map and Assignments under Lattice
+    /// Map; the Video page's Exports.
     pub(super) fn folds(self) -> usize {
         use harmonigraph_core::lattice_map::TuningEngine;
         match (self.pane, self.variant) {
-            (panes::Tab::Tuning, Variant::Engine(TuningEngine::Adaptive)) => 2,
-            (panes::Tab::Tuning, Variant::Engine(TuningEngine::LatticeMap)) => 3,
+            (panes::Tab::Tuning, Variant::Engine(TuningEngine::Adaptive)) => 2 + 2,
+            (panes::Tab::Tuning, Variant::Engine(TuningEngine::LatticeMap)) => 2 + 3,
+            (panes::Tab::Tuning, _) => 2,
             (panes::Tab::Video, _) => 1,
             _ => 0,
         }
+    }
+
+    /// Where the page's text fields are, by what the fixture puts in them:
+    /// the empty camera preset name's hint, the saved map's name in its
+    /// Rename field, and the selected source's name in Source details.
+    ///
+    /// A field is a well a row high or less, like a bar, and is told from one
+    /// by what it holds rather than by its size, which is exactly what a
+    /// sweep measures; named rather than sniffed, so a field nobody listed
+    /// reads as a mis-sized bar and fails, where a looser rule (any well
+    /// holding clipped text) was found to drop real bars instead.
+    pub(super) fn text_fields(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Pos2> {
+        let map_name = lattice_map_view().names.first().map(|(_, name)| name.clone());
+        let source = super::probe::tuning_instances().swap_remove(0).name;
+        shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t)
+                    if t.galley.text() == crate::panes::view::PRESET_NAME_HINT
+                        || Some(t.galley.text()) == map_name.as_deref()
+                        || t.galley.text() == source =>
+                {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 

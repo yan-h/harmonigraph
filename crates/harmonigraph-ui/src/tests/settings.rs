@@ -434,29 +434,14 @@ fn bar_tracks(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
             _ => None,
         })
         .collect();
-    // What the fixtures' text fields hold: the empty camera preset name's
-    // hint, and the selected saved map's name in its Rename field. Named
-    // rather than sniffed, so a field nobody listed reads as a mis-sized bar
-    // and fails, where a looser rule would quietly drop real bars instead.
-    let map_name = lattice_map_view().names.first().map(|(_, name)| name.clone());
-    let fields: Vec<egui::Pos2> = shapes
-        .iter()
-        .filter_map(|cs| match &cs.shape {
-            egui::Shape::Text(t)
-                if t.galley.text() == crate::panes::view::PRESET_NAME_HINT
-                    || Some(t.galley.text()) == map_name.as_deref() =>
-            {
-                Some(t.visual_bounding_rect().center())
-            }
-            _ => None,
-        })
-        .collect();
+    let fields = SettingsCase::text_fields(shapes);
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
             // A text field is a row-high well too, told from a bar by what it
-            // holds, as the record panel is by its dot — not by its width,
-            // which the column clamps at the narrow end.
+            // holds (`SettingsCase::text_fields`), as the record panel is by
+            // its dot — not by its width, which the column clamps at the
+            // narrow end.
             egui::Shape::Rect(r)
                 if r.fill == well
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
