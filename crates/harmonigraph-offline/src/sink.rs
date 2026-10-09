@@ -197,7 +197,8 @@ pub struct VideoOptions<'a> {
     pub frames: u64,
     /// The take's recorded audio to mux in, if any.
     pub audio: Option<&'a std::path::Path>,
-    /// Which encoder ffmpeg runs; see [`video_args`].
+    /// Which encoder the export asked for; [`VideoOptions::encoder`] is the
+    /// one ffmpeg runs.
     pub encoder: VideoEncoder,
     /// x264 constant-rate-factor: lower is better and bigger. The hardware
     /// encoder has no CRF and ignores it.
@@ -210,6 +211,18 @@ pub struct VideoOptions<'a> {
 }
 
 impl VideoOptions<'_> {
+    /// The encoder this export runs: the one asked for, except a frame too
+    /// big for VideoToolbox, which goes through x264 rather than failing at
+    /// its first frame. The Video pane's 21:9 at 2160 is 5040 wide.
+    fn encoder(&self) -> VideoEncoder {
+        match self.encoder {
+            VideoEncoder::Hardware if self.size.into_iter().max() > Some(HARDWARE_MAX_SIDE) => {
+                VideoEncoder::X264
+            }
+            encoder => encoder,
+        }
+    }
+
     /// Samples available after reserving AAC priming within the video duration.
     fn audio_samples(&self) -> u64 {
         ((self.frames as f64 / self.fps * 48_000.0).floor() as u64).saturating_sub(1024)
@@ -250,6 +263,15 @@ impl Sink {
                 "note: video duration is at or below AAC priming (21.333 ms); exporting video only"
             );
         }
+        // `warning:`, not `note:`: the Video pane's status line keeps the first
+        // warning of a render that succeeds, and the Encoder row still reads
+        // Hardware.
+        if options.encoder() != options.encoder {
+            eprintln!(
+                "warning: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
+                 exported {w}x{h} through x264"
+            );
+        }
         let ffmpeg = find_ffmpeg(options.ffmpeg)?;
         let mut command = Command::new(&ffmpeg);
         command.args(video_args(options, path)).stdin(Stdio::piped()).stdout(Stdio::piped());
@@ -267,7 +289,7 @@ impl Sink {
             writer: Writer::spawn(stdin),
             encoded: Encoded::spawn(stdout),
             frames: options.frames,
-            encoder: options.encoder,
+            encoder: options.encoder(),
         })
     }
 
@@ -371,6 +393,11 @@ impl Sink {
 /// same density is about 34 Mb/s at 1080p60 and 134 Mb/s at 4K60.
 const HARDWARE_BITS_PER_PIXEL: f64 = 60e6 / (2560.0 * 1440.0 * 60.0);
 
+/// The longest side VideoToolbox's H.264 encoder takes, either way round: on
+/// an M1 Pro under ffmpeg 7.1, 4096x2160 and 2160x4096 encode while 4098x2160
+/// and 5040x2160 refuse to open a compression session (-12903).
+const HARDWARE_MAX_SIDE: u32 = 4096;
+
 /// The hardware encoder's bitrate for this output, in kb/s.
 fn hardware_kbps(options: &VideoOptions) -> u64 {
     let [w, h] = options.size;
@@ -417,7 +444,7 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // B-frames, a closed GOP of half the frame rate (x264 closes its GOPs
     // by default), 4:2:0, BT.709.
     let gop = ((options.fps / 2.0).round() as u32).max(1);
-    match options.encoder {
+    match options.encoder() {
         VideoEncoder::X264 => {
             // `medium`, not `slow`: the encoder, not the picture, is what an
             // export waits on. One second of a real take at 2560x1440@60
@@ -954,11 +981,10 @@ mod tests {
         )
     }
 
-    /// The default encoder is x264 with exactly the arguments it had before
-    /// there was a choice: every export made since is reproducible.
+    /// x264 runs with exactly the arguments it had before there was a choice
+    /// of encoder: every export made through it since is reproducible.
     #[test]
-    fn the_default_export_is_x264_with_its_arguments_unchanged() {
-        assert_eq!(VideoEncoder::default(), VideoEncoder::X264);
+    fn the_x264_export_keeps_its_arguments() {
         let expected = "-hide_banner -loglevel warning -y -progress pipe:1 -f rawvideo \
              -pix_fmt rgba -s 2560x1440 -r 60 -i - -ss 0.021333 -i /takes/take.wav \
              -c:v libx264 -preset medium -profile:v high -crf 10 -tune grain -bf 2 -g 30 \
@@ -1005,6 +1031,31 @@ mod tests {
         assert_eq!(kbps([1920, 1080], 60.0), 33_750);
         assert_eq!(kbps([3840, 2160], 60.0), 135_000);
         assert_eq!(kbps([2560, 1440], 30.0), 30_000);
+    }
+
+    /// VideoToolbox's H.264 encoder refuses a frame over 4096 px on either
+    /// side, and the Video pane's 21:9 at 2160 is 5040 wide: that export runs
+    /// through x264 rather than failing at its first frame.
+    #[test]
+    fn a_frame_too_big_for_the_hardware_encoder_exports_through_x264() {
+        let encoder_at = |size| {
+            let options = VideoOptions {
+                size,
+                fps: 60.0,
+                frames: 1,
+                audio: None,
+                encoder: VideoEncoder::Hardware,
+                crf: 10,
+                ffmpeg: None,
+                audio_offset: 0.0,
+            };
+            let args = video_args(&options, std::path::Path::new("/takes/take.mp4"));
+            args[args.iter().position(|a| a == "-c:v").unwrap() + 1].clone()
+        };
+        assert_eq!(encoder_at([4096, 2160]), "h264_videotoolbox");
+        assert_eq!(encoder_at([2160, 4096]), "h264_videotoolbox");
+        assert_eq!(encoder_at([5040, 2160]), "libx264");
+        assert_eq!(encoder_at([2160, 5040]), "libx264");
     }
 
     #[test]

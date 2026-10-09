@@ -52,7 +52,7 @@ Run it from the main checkout and it rebuilds main, not your branch.
 ## The renderer is a SECOND slot, and it goes stale on its own
 
 Video export does not run in the plugin.
-The Render pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary from the same worktree it takes the dylib from —
+The Video pane spawns `~/Library/Application Support/Harmonigraph/harmonigraph-offline` (`harmonigraph-record`'s default path), and `load-plugin.sh` installs that binary from the same worktree it takes the dylib from —
 so a load is really two swaps, and only the first one is guaranteed to be current.
 
 Nothing rebuilds the renderer unless a session names `-p harmonigraph-offline`, and `load-plugin.sh` copies whatever is in `target/release` without minding its age, so a plugin-only build hands over a renderer from some earlier commit (`CLAUDE.md` has the rule and PR #340).
@@ -76,7 +76,7 @@ the serde field names are in the binary, so `roll_lead` answers "does this rende
 ## Every build says which build it is
 
 The performance overlay's bottom line reads `build  <branch> @<sha>` —
-a Claude branch has its `worktree-` prefix stripped, while a Codex branch keeps its `codex/` prefix.
+the branch as git names it, `claude/<name>` or `codex/<slug>` (only a legacy `worktree-` prefix is stripped).
 The result is exactly the argument `./load-plugin.sh <branch>` takes.
 It is stamped at compile time by `build/build_tag.rs`, which each leaf binary's own `build.rs` includes (plugin, offline, standalone).
 The overlay carrying it ships OFF, so reading the tag takes one tick first:

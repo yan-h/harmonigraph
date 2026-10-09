@@ -70,7 +70,8 @@ OPTIONS:
                            at 1440p, a larger file at a bitrate scaled to the
                            frame, and no grain tuning; it fails rather than
                            falling back where there is no hardware encoder.
-                           [default: the appearance's Encoder (x264 fresh)]
+                           A frame over 4096 px a side goes through x264.
+                           [default: the appearance's Encoder (hardware fresh)]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
                            720p; at 4K, lower it to get there. x264 only:

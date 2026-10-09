@@ -53,6 +53,8 @@ skipping it leaves exports drawn by an old binary with nothing on screen saying 
 Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
 
 Push and open the draft PR first, then run `./session-lifecycle.sh handoff`, which builds both packages while CI runs.
+A plain `handoff` records the work as complete and trims `target/`,
+so a pause mid-iteration runs `handoff --keep-cache` instead, or the build above while source is still uncommitted.
 End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show, read with `./load-plugin.sh --tag`.
 A session on a remote machine (a cloud session) has no local worktree for the loader to find, so it hands over `./build-pr.sh --load <PR>` instead.
 
