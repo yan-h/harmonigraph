@@ -48,10 +48,6 @@ pub(crate) fn render_pane(
     render_controls(ui, state, interaction);
 
     section(ui, "Preview", |ui| {
-        crate::widgets::weak(
-            ui,
-            "Drag the lattice to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
-        );
         let frame = state.appearance.render.frame;
         let avail = ui.available_size();
         if avail.x < 20.0 {
@@ -168,7 +164,7 @@ fn preview_layout_controls(
         .on_hover_text(if navigation_held {
             "Pan the lattice"
         } else {
-            "Drag the lattice to the left, right, top or bottom edge · Hold Shift and drag to pan"
+            "Drag the lattice to the left, right, top or bottom edge · Hold Shift and drag to pan · Scroll or pinch to zoom"
         });
     let resizing = ui
         .interact(handle, ui.id().with("preview_lattice_resize"), Sense::drag())
@@ -410,9 +406,6 @@ fn render_controls(
                 ),
             ],
         );
-        if state.appearance.render.spectrogram == SpectrogramRender::WholeVideo {
-            crate::widgets::weak(ui, "The preview still uses live History duration; export fits the take up to 10 minutes.");
-        }
         // Here rather than beside Finish recording: a render choice like Output
         // size, which a Re-render takes from the current look. Always shown,
         // because whether it applies turns on the trigger a take was RECORDED
@@ -631,6 +624,11 @@ fn record_controls(
     });
 }
 
+/// What both Queue buttons answer a hover with: what a queued job carries,
+/// and what the queue survives.
+const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings; recorded camera movement wins during replay. \
+     The queue survives closing this editor, but removing the plugin or closing the project cancels unfinished jobs, and there is no resume after a crash.";
+
 /// Captured export requests and instance-owned job controls. The builder is
 /// folded independently of the jobs so progress and failures remain visible.
 fn export_queue(
@@ -651,8 +649,8 @@ fn export_queue(
         interaction.take.export_actions.push(ExportAction::OpenTakeFolder);
     }
     egui::CollapsingHeader::new("Exports").show(ui, |ui| {
-        crate::widgets::weak(ui, "One take path per line. Videos are saved beside each take; existing videos get a numbered variant.");
-        ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"));
+        ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"))
+            .on_hover_text("One take path per line. Each video is saved beside its take; an existing video gets a numbered variant.");
         ui.checkbox(&mut interaction.take.export_recorded, "Use each take's recorded appearance");
         if !interaction.take.export_recorded {
             let selected = interaction.take.export_look.map_or("Current appearance".into(), slot_name);
@@ -663,13 +661,12 @@ fn export_queue(
                 }
             });
         }
-        crate::widgets::weak(ui, "Every job captures the selected look and current Video settings. Recorded camera movement wins during replay.");
         let mut paths = Vec::new();
         button_row(ui, |ui| {
-            if ui.add_enabled(interaction.take.last_take.is_some(), egui::Button::new("Queue last take")).clicked() {
+            if ui.add_enabled(interaction.take.last_take.is_some(), egui::Button::new("Queue last take")).on_hover_text(QUEUE_HINT).clicked() {
                 paths.extend(interaction.take.last_take.clone());
             }
-            if ui.button("Queue paths").clicked() {
+            if ui.button("Queue paths").on_hover_text(QUEUE_HINT).clicked() {
                 paths.extend(interaction.take.export_paths.lines().map(str::trim).filter(|line| !line.is_empty()).map(std::path::PathBuf::from));
             }
         });
@@ -684,7 +681,6 @@ fn export_queue(
             }
         }
         if !interaction.take.export_error.is_empty() { crate::widgets::label(ui, &interaction.take.export_error); }
-        crate::widgets::weak(ui, "Queue survives closing this editor. Removing the plugin or closing the project cancels unfinished jobs. No crash resume.");
     });
     for job in &interaction.take.exports {
         ui.push_id(job.id, |ui| {

@@ -526,7 +526,20 @@ pub(super) fn section<R>(
     title: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
-    folding_section(ui, title, None, body)
+    folding_section(ui, title, "", None, body)
+}
+
+/// A [`section`] whose heading answers a hover with `hint`: what the whole
+/// section is scoped to, where no one control under it owns the statement
+/// (the Analysis settings feed every audio view). A note one control owns
+/// goes on that control's own tooltip instead.
+pub(super) fn hinted_section<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    folding_section(ui, title, hint, None, body)
 }
 
 /// A [`section`] for a feature that can be switched off, with its switch
@@ -545,12 +558,13 @@ pub(super) fn switched_section<R>(
     (on, hint): (&mut bool, &str),
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
-    folding_section(ui, title, Some((on, hint)), body)
+    folding_section(ui, title, "", Some((on, hint)), body)
 }
 
 fn folding_section<R>(
     ui: &mut egui::Ui,
     title: &str,
+    hint: &str,
     mut switch: Option<(&mut bool, &str)>,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
@@ -571,7 +585,10 @@ fn folding_section<R>(
         0.0
     };
     let live = switch.as_ref().is_none_or(|(on, _)| **on);
-    let header = section_header(ui, title, open, lead, live);
+    let mut header = section_header(ui, title, open, lead, live);
+    if !hint.is_empty() {
+        header = header.on_hover_text(hint);
+    }
     // Off, there is no chevron and nothing under the heading to fold.
     let clicked = header.clicked() && live;
     if let Some((on, hint)) = switch.as_mut() {

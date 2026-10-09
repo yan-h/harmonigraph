@@ -1684,8 +1684,10 @@ fn hidden_audio_ring_keeps_restoration_instructions() {
             );
         }
         assert_eq!(text_ys(&hidden, "AUDIO RING").len(), 1);
-        assert_eq!(text_ys(&hidden, "Audio ring — hidden").len(), 1);
-        assert_eq!(text_ys(&hidden, "Increase Audio width in Note layers to show it.").len(), 1);
+        assert_eq!(
+            text_ys(&hidden, "Hidden. Increase Audio width in Note layers to show it.").len(),
+            1
+        );
         for setting in ["Ring display", "Ring threshold", "Band", "Pitch tolerance", "Pitch span"] {
             assert!(
                 text_ys(&hidden, setting).is_empty(),

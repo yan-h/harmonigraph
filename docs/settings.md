@@ -25,8 +25,12 @@ Every section heading folds its section, and folds are remembered.
 A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries the switch in front of its name;
 off, the section is its heading alone, dimmed and with no fold arrow.
 Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
-Each tab keeps a single owner for its controls;
-shared settings name their scope in the help text.
+Each tab keeps a single owner for its controls.
+Explanation lives in tooltips rather than in lines between the controls:
+hover a bar, a choice or a button for what it does and what else it reaches,
+and a section heading (Analysis, Audio level colors) for the scope every control under it shares.
+The only text left inline is state the controls cannot show on their own:
+a hidden audio ring's restoration instruction, a pending tuning change, a disabled glow effect's reason, a live readout.
 
 ## Finding a control
 
