@@ -619,7 +619,8 @@ pub(crate) fn spectral_pane(
     // The divider, over the plots so it stays findable against a loud
     // spectrogram. Nothing at rest — the roll's now-line already marks where
     // it is, and the offline render (which has no pointer) must keep emitting
-    // exactly the shapes it always did.
+    // exactly the shapes it always did. Lit at the now-line's own width, so a
+    // hover recolours the line rather than swelling it.
     if let Some(divider) = &divider {
         let lit = if divider.dragged() {
             Some(theme::accent())
@@ -629,7 +630,7 @@ pub(crate) fn spectral_pane(
             None
         };
         if let Some(color) = lit {
-            painter.line_segment(axes.across_pitch(split), egui::Stroke::new(2.0, color));
+            painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, color));
         }
     }
     if let Some(drag) = orientation_drag {

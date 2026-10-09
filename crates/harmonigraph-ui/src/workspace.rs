@@ -524,7 +524,9 @@ pub(crate) fn show(
     }
     let scale = theme::ui_scale(ui.ctx());
     let rail = if frameless { 0.0 } else { theme::tab_bar_height(scale) };
-    let gap = 3.0 * scale;
+    // The gap between sections is the divider itself, so it is drawn a
+    // hairline; `dividers` widens the band a hand can grab around it.
+    let gap = 1.0 * scale;
     let floor = theme::min_settings(scale);
     let resized = runtime.area.is_none_or(|last| (last - area.size()).length_sq() > 0.25);
     // A request is answered before the next plugin frame. Keep the guard
@@ -834,7 +836,7 @@ fn dividers(
         let horizontal = below && index == 0;
         let id = ui.id().with(("section-divider", index));
         let hit =
-            if horizontal { bar.expand2(vec2(0.0, 3.0)) } else { bar.expand2(vec2(3.0, 0.0)) };
+            if horizontal { bar.expand2(vec2(0.0, 4.0)) } else { bar.expand2(vec2(4.0, 0.0)) };
         let response = ui.interact(
             hit,
             id,
