@@ -119,9 +119,9 @@ pub fn picture_off_scale() -> Color32 {
 }
 
 /// The one corner radius every framed control wears — buttons, checkboxes,
-/// the value/range bars, the record button. Shared so they read as one family
-/// instead of each rounding to its own taste. (Pill-shaped things — the toggle
-/// switch, a bar's own handle — are their own shape and don't use it.)
+/// the value/range bars, the toggle switch, the record button. Shared so they
+/// read as one family instead of each rounding to its own taste. (A bar's own
+/// handle is its own shape and doesn't use it.)
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`control_radius`].
