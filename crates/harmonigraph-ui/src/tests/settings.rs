@@ -249,7 +249,7 @@ fn video_pane_shapes(supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui:
 /// Where a pane's content box ends, in the coordinates
 /// [`settings_pane_at_width`] lays it out at.
 fn pane_content_right(width: f32) -> f32 {
-    crate::theme::PANE_INNER_MARGIN + width
+    crate::theme::PANE_INSET + width
 }
 
 /// The y a named text run was painted at in `shapes`, or `None`.
@@ -887,9 +887,9 @@ fn a_render_that_has_not_announced_its_total_has_no_fraction() {
 fn no_settings_pane_overruns_a_narrow_column() {
     for width in [400.0f32, 300.0, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
         let edge = pane_content_right(width);
-        // The pane's own clip is the tab body, a margin wider than the content
-        // box on each side.
-        let body_right = edge + crate::theme::PANE_INNER_MARGIN;
+        // The pane's own clip is the tab body, the gutter wider than the
+        // content box on the right.
+        let body_right = edge + crate::theme::PANE_GUTTER;
         let panes = SETTINGS_PANES
             .iter()
             .copied()
@@ -1352,7 +1352,7 @@ fn scrolling_settings_pane(
     let mut h = DockHarness::scaled(SCROLLING_PANE * scale, scale, &mut state);
     let screen = h.screen;
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    let margin = crate::theme::pane_inner_margin(scale);
+    let margin = crate::theme::pane_gutter(scale);
     let inside = egui::pos2(screen.right() - 2.0 * margin, screen.center().y);
     frame(&mut state, vec![egui::Event::PointerMoved(inside)]);
     let mut out = frame(&mut state, vec![]);
@@ -1374,7 +1374,7 @@ fn scroll_bar_width(scale: f32) -> f32 {
 ///
 /// A floating bar is painted OVER the content instead of beside it, so the only
 /// place it fits without covering a control is air the pane already leaves: the
-/// [`theme::PANE_INNER_MARGIN`] gutter down the right of the tab body. Two
+/// [`theme::PANE_GUTTER`] down the right of the tab body. Two
 /// things put it there, and neither is visible from the pane that depends on
 /// it — the bar is sized to the gutter (`theme::style_at`), and a pane that
 /// scrolls in an area of its OWN starts at the content box, where there is no
@@ -1392,7 +1392,7 @@ fn scroll_bar_width(scale: f32) -> f32 {
 #[test]
 fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
     for scale in SCALES {
-        let margin = f32::from(crate::theme::dock_pane_margin(scale));
+        let margin = f32::from(crate::theme::dock_pane_margin(scale).right);
         let bar = scroll_bar_width(scale);
         assert!(
             bar <= margin + 0.01,

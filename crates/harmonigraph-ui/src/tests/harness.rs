@@ -347,15 +347,15 @@ fn tab_body_with(
     // The inset at the CONTEXT's chrome scale rather than at the design size,
     // so a fixture that scales the chrome measures the pane the dock would
     // actually give it — the margin scales with everything else.
-    let margin = crate::theme::pane_inner_margin(crate::theme::ui_scale(ctx));
+    let margin = crate::theme::dock_pane_margin(crate::theme::ui_scale(ctx));
     let body =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 2.0 * margin, height));
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + margin.sum().x, height));
     ctx.run_ui(
         egui::RawInput { screen_rect: Some(body), time: Some(now), ..Default::default() },
         |ui| {
             // The body ui's clip is the whole body (the screen here); the pane
             // ui inside it is inset, exactly as the dock's Frame leaves it.
-            let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+            let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body - margin));
             let mut tab = tab;
             let mut viewer = panes::Viewer {
                 state: &mut state.picture,

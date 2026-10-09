@@ -129,8 +129,13 @@ pub(crate) const CONTROL_RADIUS: u8 = 5;
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 
-/// Padding between a settings pane's controls and the edge of its tab body —
-/// what stops the bars and labels running into the pane edge.
+/// Padding between a settings pane's controls and the left, top and bottom
+/// edges of its tab body — what stops the bars and labels running into the
+/// pane edge. The right edge keeps the wider [`PANE_GUTTER`].
+///
+/// The gap every group in the column already keeps ([`GROUP_GAP`](crate::widgets::GROUP_GAP)),
+/// so the pane edge reads as one more group boundary rather than a measure of
+/// its own.
 ///
 /// Named because the geometry around it is easy to get wrong: the workspace clips
 /// the tab body to the WHOLE body rect and only then insets it by this margin
@@ -138,15 +143,20 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// far OUTSIDE the content box. Anything asking "where does the pane end"
 /// wants the content box, not the clip.
 ///
-/// It is also the width of every scroll bar in the panel, which is a second job
-/// worth knowing before retuning it: a floating bar is drawn over the content,
-/// and this gutter is the only air it has to sit in ([`style_at`]). Narrow the
-/// margin and the bars narrow with it; widen the bar past it on its own and it
-/// goes back to standing on the controls.
+/// The design size, at [scale](ui_scale) 1.0; the dock insets by
+/// [`dock_pane_margin`].
+pub(crate) const PANE_INSET: f32 = crate::widgets::GROUP_GAP;
+
+/// The margin down the right of a settings pane, wider than [`PANE_INSET`]
+/// because it has a second job: it is the width of every scroll bar in the
+/// panel. A floating bar is drawn over the content, and this gutter is the
+/// only air it has to sit in ([`style_at`]). Narrow the gutter and the bars
+/// narrow with it; widen the bar past it on its own and it goes back to
+/// standing on the controls.
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
-/// [`pane_inner_margin`].
-pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
+/// [`pane_gutter`].
+pub(crate) const PANE_GUTTER: f32 = 8.0;
 
 /// The gap between two rows of a settings pane, egui's `item_spacing.y`.
 ///
@@ -270,9 +280,9 @@ pub(crate) fn control_radius(scale: f32) -> u8 {
     scaled_points(CONTROL_RADIUS, scale)
 }
 
-/// [`PANE_INNER_MARGIN`] at this scale.
-pub(crate) fn pane_inner_margin(scale: f32) -> f32 {
-    PANE_INNER_MARGIN * scale
+/// [`PANE_GUTTER`] at this scale.
+pub(crate) fn pane_gutter(scale: f32) -> f32 {
+    PANE_GUTTER * scale
 }
 
 /// The gap between two buttons side by side, at this scale: the tab bar's
@@ -283,9 +293,12 @@ pub(crate) fn button_gap(scale: f32) -> f32 {
     (TAB_BAR_HEIGHT - ROW_HEIGHT) * 0.5 * scale
 }
 
-/// Whole-point pane inset, shared with the floating scroll bar gutter.
-pub(crate) fn dock_pane_margin(scale: f32) -> i8 {
-    pane_inner_margin(scale) as i8
+/// The margin the dock insets a settings pane's content by, in the whole
+/// points egui stores a `Margin` in: [`PANE_INSET`] left, top and bottom, and
+/// [`PANE_GUTTER`] on the right, which the floating scroll bar is sized to.
+pub(crate) fn dock_pane_margin(scale: f32) -> egui::Margin {
+    let inset = (PANE_INSET * scale) as i8;
+    egui::Margin { left: inset, right: pane_gutter(scale) as i8, top: inset, bottom: inset }
 }
 
 /// [`ROW_HEIGHT`] at this scale.
@@ -321,10 +334,10 @@ pub(crate) fn min_pane(scale: f32) -> f32 {
 pub(crate) const SETTINGS_MIN_CONTENT: f32 = 220.0;
 
 /// The narrowest the settings column is dragged or fitted to, at this scale:
-/// [`SETTINGS_MIN_CONTENT`] plus the pane margin either side of it. Only a
+/// [`SETTINGS_MIN_CONTENT`] plus the pane margins either side of it. Only a
 /// window too narrow to hold it at all draws the column any narrower.
 pub(crate) fn min_settings(scale: f32) -> f32 {
-    SETTINGS_MIN_CONTENT * scale + 2.0 * f32::from(dock_pane_margin(scale))
+    SETTINGS_MIN_CONTENT * scale + dock_pane_margin(scale).sum().x
 }
 
 /// Give a scroll area built INSIDE a pane a lane of its own to draw its bar in.
@@ -558,7 +571,7 @@ fn style_at(scale: f32) -> egui::Style {
 
     // A floating scroll bar is drawn OVER the content rather than beside it, so
     // its width is only free where the pane already leaves air: the
-    // [`PANE_INNER_MARGIN`] gutter down the right of every settings pane. egui's
+    // [`PANE_GUTTER`] down the right of every settings pane. egui's
     // default bar is 10pt against that 8pt gutter, and the 2pt of overhang lands
     // on the right end of every bar in the column, which is where the value
     // readouts are. Sized to the gutter it fills the air that is there and
@@ -576,7 +589,7 @@ fn style_at(scale: f32) -> egui::Style {
     // that has no gutter to sit in (see [`reserve_scroll_gutter`]), wrong here,
     // where it would inset the column a second time and reflow the whole pane
     // the moment its content grew past the bottom.
-    style.spacing.scroll.bar_width = f32::from(dock_pane_margin(scale));
+    style.spacing.scroll.bar_width = f32::from(dock_pane_margin(scale).right);
     style
 }
 
