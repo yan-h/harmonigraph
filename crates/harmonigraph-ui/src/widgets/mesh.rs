@@ -52,9 +52,9 @@ pub(super) const CORNER_SAMPLES: usize = 8;
 /// square band inside a rounded well.** A well showing round an inset mesh is
 /// the ordinary way to round colors that a quad strip cannot round itself, and
 /// it costs a ring of the well's own color drawn around the content — a border
-/// no other control in a settings pane wears, and at the shared
-/// [`CONTROL_RADIUS`](crate::theme::CONTROL_RADIUS) of 5 a one-point inset does not
-/// even cover the arc, so the band's square corners poke out through it.
+/// no other control in a settings pane wears, and unless the inset is as deep as
+/// the shared [`CONTROL_RADIUS`](crate::theme::CONTROL_RADIUS) it does not even
+/// cover the arc, so the band's square corners poke out through it.
 /// Pinching the columns to the corner circle instead lets the colors go edge to
 /// edge and round about like the fill of a [`ValueBar`] beside them.
 ///

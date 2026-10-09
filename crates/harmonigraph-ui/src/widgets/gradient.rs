@@ -1776,11 +1776,9 @@ mod tests {
         let (preview, circle) = spectrum_bands(&shapes);
         let radius = f32::from(bar_radius(1.0));
         for (which, mesh) in [("preview", &preview), ("circle", &circle)] {
-            // The preview is 14pt against a radius of 5, so its ends are all
-            // but semicircular and its straight run is a few points tall. That
-            // is a shape, not a limit — what the radius may not do is eat the
-            // band's LENGTH, which the straight-run count below is what
-            // catches.
+            // How round the 14pt preview's ends are is a shape, not a limit —
+            // what the radius may not do is eat the band's LENGTH, which the
+            // straight-run count below is what catches.
             let box_ = band_bounds(mesh);
             let (mut near, mut far, mut full_height) = (0, 0, 0);
             for (top, bottom, _) in band_columns(mesh) {
