@@ -4,6 +4,8 @@
 //! plain case), and ends on the final composite. Historical
 //! `end/full`, `begin/full`, light and paint columns used independent stamp
 //! passes and are not comparable to this `source/full` interval (#1203).
+//! The stamps, the pane and the readback are `crate::frame_timer`'s, shared
+//! with the lattice's and roll's probes; only this opening is its own.
 //! Memory is off except in explicitly named memory cases; Watercolor is
 //! selected explicitly because the production default style can change.
 //!
@@ -60,6 +62,7 @@
 //! right to bound nothing. At `PROBE_FILLS=1` the two are the same number.
 
 use super::*;
+use crate::frame_timer::{FrameTimer, Opening, WARM_UP};
 use harmonigraph_scene::{CloudStyle, SpectralAtmosphere};
 
 type Turn = fn(&mut SpectralAtmosphere);
@@ -172,26 +175,7 @@ fn cloud_costs_by_style_and_dial() {
     let blur_time_step = dial("PROBE_BLUR_TIME_STEP");
     let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
     let time_softness = dial("PROBE_TIME_SOFTNESS");
-    crate::shader_assets::initialize();
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter; nothing timed");
-        return;
-    };
-    eprintln!("adapter: {:?}", adapter.get_info());
-    let features = wgpu::Features::TIMESTAMP_QUERY;
-    if !adapter.features().contains(features) {
-        eprintln!("the adapter carries no timestamps; nothing timed");
-        return;
-    }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_limits: crate::device_limits(&adapter),
-        required_features: features,
-        ..Default::default()
-    }))
-    .expect("a device with timestamps");
+    let Some(timer) = FrameTimer::new(FORMAT) else { return };
 
     // A full-size live ring: 1024 slabs plus eight of retention headroom,
     // read over eight octaves. Smaller runs keep the same allocation.
@@ -208,72 +192,14 @@ fn cloud_costs_by_style_and_dial() {
     let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
     let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
     read.level_per_step = 1.0 / 255.0;
-    let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+    let pane = timer.pane(size, ppp);
+    let (rect, points) = (pane.rect, pane.rect.size());
     let quad = |fill: f32| {
         let (w, h, n) = (points.x * fill, points.y, slabs as f32);
         let v = |x: f32, y: f32| SpectrogramVertex { pos: [x, y], slab: x / w * n, t: 1.0 - y / h };
         vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
     };
 
-    let set = device.create_query_set(&wgpu::QuerySetDescriptor {
-        label: Some("timing_probe"),
-        ty: wgpu::QueryType::Timestamp,
-        count: 2,
-    });
-    let buffer = |label, usage| {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: 16,
-            usage,
-            mapped_at_creation: false,
-        })
-    };
-    let resolve =
-        buffer("timing_resolve", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC);
-    let staging =
-        buffer("timing_staging", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
-    let target = |label, size: [u32; 2]| {
-        device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-            .create_view(&Default::default())
-    };
-    // Held across frames, as a swapchain's is: allocating 33 MB per frame would
-    // be the larger half of what a wall clock read.
-    let pane_view = target("timing_pane", size);
-    let stamped_pass = |encoder: &mut wgpu::CommandEncoder, source_stamped: bool| {
-        encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("timing_paint"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &pane_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
-                    query_set: &set,
-                    beginning_of_pass_write_index: (!source_stamped).then_some(0),
-                    end_of_pass_write_index: Some(1),
-                }),
-                ..Default::default()
-            })
-            .forget_lifetime()
-    };
-    let period = f64::from(queue.get_timestamp_period());
-    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
     eprintln!("pane {}x{} px at {ppp} px/pt, {slabs} slabs of {bins} buckets", size[0], size[1]);
 
     let mut cases: Vec<Case> = CASES
@@ -316,7 +242,7 @@ fn cloud_costs_by_style_and_dial() {
     // INTERLEAVED: one frame of every case per round, so a GPU that another
     // process is also drawing on, or one that changes its clock mid-run, moves
     // every case together rather than whichever ran last.
-    for frame in 0..frames + 10 {
+    for frame in 0..frames + WARM_UP {
         for case in &mut cases {
             let Case {
                 turn,
@@ -325,7 +251,6 @@ fn cloud_costs_by_style_and_dial() {
                 wall,
                 gpu_total,
                 cpu_prepare,
-                name,
                 history_seconds,
                 fill,
                 ..
@@ -367,44 +292,24 @@ fn cloud_costs_by_style_and_dial() {
                     history_epoch: 0,
                 }
             });
-            let mut encoder = device.create_command_encoder(&Default::default());
-            SOURCE_QUERY.with_borrow_mut(|query| *query = Some(set.clone()));
-            let prepare_start = std::time::Instant::now();
-            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
-            let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
-            // The source consumes the query when it actually encodes a pass.
-            // With no source (plain), paint owns both stamps.
-            let source_stamped = SOURCE_QUERY.with_borrow_mut(|query| query.take().is_none());
-            {
-                let mut pass = stamped_pass(&mut encoder, source_stamped);
-                cb.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: ppp,
-                        screen_size_px: size,
-                    },
-                    &mut pass,
-                    resources,
-                );
-            }
-            encoder.resolve_query_set(&set, 0..2, &resolve, 0);
-            encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
-            let start = std::time::Instant::now();
-            queue.submit(bufs.into_iter().chain([encoder.finish()]));
-            let slice = staging.slice(..);
-            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
-            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-            let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let ticks: Vec<u64> =
-                bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
-            staging.unmap();
-            if frame >= 10 {
-                assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
-                    "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
-                wall.push(wall_ms);
-                gpu_total.push((ticks[1] - ticks[0]) as f64 * period / 1.0e6);
-                cpu_prepare.push(prepare_ms);
+            let cb = &*cb;
+            // The source pass consumes the query when it actually encodes.
+            // With no source (plain), the closing pass opens the frame too.
+            let source_stamped = || SOURCE_QUERY.with_borrow_mut(|query| query.take().is_none());
+            let sample = timer.frame(
+                &pane,
+                resources,
+                Opening::InPrepare(&source_stamped),
+                |encoder, resources| {
+                    SOURCE_QUERY.with_borrow_mut(|query| *query = Some(timer.query_set().clone()));
+                    cb.prepare(&timer.device, &timer.queue, &pane.screen, encoder, resources)
+                },
+                |pass, resources| cb.paint(pane.paint_info(), pass, resources),
+            );
+            if frame >= WARM_UP {
+                wall.push(sample.completion_ms);
+                gpu_total.push(sample.gpu_ms);
+                cpu_prepare.push(sample.prepare_cpu_ms);
             }
         }
     }
