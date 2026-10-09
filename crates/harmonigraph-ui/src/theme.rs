@@ -124,12 +124,14 @@ pub fn picture_off_scale() -> Color32 {
 /// handle is its own shape and doesn't use it.)
 ///
 /// Sized against the row rhythm, not on its own: at [`ROW_GAP`] apart, a radius
-/// larger than the gap cuts a notch between two stacked bars wider than the gap
-/// itself, and the column reads as a stack of pills rather than a grid of rows.
+/// well past the gap cuts a notch between two stacked bars wider than the gap
+/// itself, and the column reads as a stack of pills rather than a grid of rows
+/// (5 did, at a 3pt gap). At the gap itself (3) they read as hard-edged boxes,
+/// so the radius sits a point above it.
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`control_radius`].
-pub(crate) const CONTROL_RADIUS: u8 = 3;
+pub(crate) const CONTROL_RADIUS: u8 = 4;
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 

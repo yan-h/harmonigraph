@@ -270,7 +270,7 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// - At a grip's own 2pt the notch is a sliver at the extreme corners of a grip
 ///   drawn 3pt shy of a 19pt row, well outside a Body galley's ink.
 /// - A [`RangeBar::fade_span`] bar hands in the BAR's radius instead, so its
-///   thumb is a 4pt-wide pill (epaint holds a corner to half the width, so 3
+///   thumb is a 4pt-wide pill (epaint holds a corner to half the width, so 4
 ///   becomes 2) and the notch is the whole of the top and bottom 2pt. A
 ///   descender reaches into that band.
 ///
