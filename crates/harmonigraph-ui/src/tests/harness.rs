@@ -70,10 +70,13 @@ pub(super) fn engine_view(
     }
 }
 
-/// A Hub playing Lattice Map with every control under it live: a saved map
-/// selected and sounding, following moved off the offsets, Edit shape on with
-/// an edit to undo, offsets off zero, every slot used, and the whole still
-/// pending adoption — so each conditional row of `map_controls` is drawn.
+/// A Hub playing Lattice Map: a saved map selected and sounding, following
+/// moved off the offsets, Edit shape on with an edit to undo, offsets off
+/// zero, every slot used, and the whole still pending adoption. With Learn
+/// held on (which the case's state does, [`SettingsCase::state`]) that draws
+/// every conditional row of `map_controls` but two: "Map unavailable", which
+/// a sounding map excludes, and the Assignments fold's interval lines, which
+/// need held voices.
 pub(super) fn lattice_map_view() -> crate::lattice_maps::MapView {
     use harmonigraph_core::{lattice_map::Follow, LatticePos};
     let mut view = engine_view(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
@@ -356,6 +359,9 @@ impl SettingsCase {
     /// a real session gives it.
     pub(super) fn state(self) -> SharedState {
         let mut state = fresh();
+        // Learn on under Lattice Map, which says it is suspended there.
+        state.picture.runtime.learn_active = self.variant
+            == Variant::Engine(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
         state.workspace.interaction.take.supported = true;
         state.workspace.interaction.take.last_take = Some("music.take".into());
         state.workspace.interaction.take.exports = vec![fixture_export()];
@@ -442,12 +448,21 @@ impl SettingsCase {
     }
 }
 
-/// Every way of drawing every settings page that changes which controls are
-/// on it: each page fresh, then every texture on the Analyzer page, every
-/// material and projection on the Lattice page, and every retuning engine on
-/// the Tuning page.
+/// The cases the layout sweeps draw: each page fresh, then every texture on
+/// the Analyzer page, every material and projection on the Lattice page,
+/// every retuning engine on the Tuning page, and [`Variant::Lit`] on the
+/// Lattice, Analyzer and System pages — all against a plugin's backend
+/// ([`SettingsCase::backend`]), with every fold open.
 ///
-/// Every variant rather than every one that differs from today's defaults,
+/// Not every state a page can be in. Left out, among others: a greyed
+/// control's lit form (Texture mix or the glow at 0 grey the controls under
+/// them, and the width sweep skips a greyed track); the Mappings page with
+/// other than its fresh mappings; a tuner selected in the Sources table,
+/// whose Source details adds a delay row the Hub's lacks; a configuration
+/// view (the range guard draws one, at 600 pt) or a status notice; and held
+/// voices.
+///
+/// Every texture, material and engine rather than every one that differs from today's defaults,
 /// because a default moving is how the sweeps lost the Stars editor, Scales
 /// and the Adaptive section without a line of them changing (#1484). The
 /// matches are exhaustive so a new texture, material or engine does not
@@ -510,7 +525,8 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
 }
 
 /// One settings page whose content box is `width` points wide, as the shapes it
-/// emitted, with every fold on it open (see [`open_settings_pane`]). Driven
+/// emitted, with every fold it draws closed opened and counted (see
+/// [`open_settings_pane`]). Driven
 /// through [`panes::Viewer`] rather than the dock, so a sweep over widths costs
 /// one pane each instead of a whole window, and the width under test is the
 /// pane's own rather than a window size minus chrome.
