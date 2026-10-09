@@ -335,6 +335,20 @@ impl SettingsCase {
         };
         RecordingBackend { maps, ..Default::default() }
     }
+
+    /// How many closed folds the page draws, which [`open_settings_pane`]
+    /// has to open: Keyboard and Context under Adaptive tuning; Map offsets,
+    /// Manage selected saved map and Assignments under Lattice Map; the
+    /// Video page's Exports.
+    pub(super) fn folds(self) -> usize {
+        use harmonigraph_core::lattice_map::TuningEngine;
+        match (self.pane, self.variant) {
+            (panes::Tab::Tuning, Variant::Engine(TuningEngine::Adaptive)) => 2,
+            (panes::Tab::Tuning, Variant::Engine(TuningEngine::LatticeMap)) => 3,
+            (panes::Tab::Video, _) => 1,
+            _ => 0,
+        }
+    }
 }
 
 /// Every way of drawing every settings page that changes which controls are
@@ -426,12 +440,19 @@ pub(super) fn settings_pane_at_width(
 /// `case`'s page drawn on `ctx` into a content box `width` across, after
 /// opening every fold on it, as the shapes the last frame emitted.
 ///
-/// Opened the way a person opens them — a click on each closed chevron in
-/// turn, until none is left — because a subsection's fold lives in egui's
+/// Opened the way a person opens them — a click on each closed fold's arrow
+/// in turn, until none is left — because a subsection's fold lives in egui's
 /// memory under an id only the pane can name, and the one switch that opens
 /// every fold at once (`Memory::set_everything_is_visible`) also shows every
 /// tooltip on the page, which is exactly what a geometry sweep must not draw.
 /// The pointer leaves before the last frame for the same reason.
+///
+/// The arrows are found by their paint, which nothing else reports: egui
+/// records a widget's kind only for AccessKit, where a fold header is a
+/// `Button` like any other. So the count opened is held to
+/// [`SettingsCase::folds`]: an arrow restyled past [`closed_fold`]'s reading
+/// opens nothing, and that must fail here rather than leave every sweep
+/// measuring a folded page.
 pub(super) fn open_settings_pane(
     ctx: &egui::Context,
     case: SettingsCase,
@@ -444,10 +465,11 @@ pub(super) fn open_settings_pane(
         tab_body_with(ctx, state, case.pane, (width, PANE_HEIGHT), now, &backend, events).shapes
     };
     let mut shapes = frame(state, now, vec![]);
-    // More than any page holds; a fold that will not stay open would
-    // otherwise loop here for ever.
-    for _ in 0..16 {
-        let Some(at) = closed_fold(&shapes) else { return shapes };
+    let mut opened = 0;
+    while let Some(at) = closed_fold(&shapes) {
+        // More than any page holds; a fold that will not stay open would
+        // otherwise loop here for ever.
+        assert!(opened < 16, "{case:?} still has a closed fold after opening sixteen");
         // egui resolves the widget under the pointer from the previous pass,
         // so the pointer arrives a frame before the press.
         for events in [
@@ -461,8 +483,10 @@ pub(super) fn open_settings_pane(
         // A second on, past the fold's opening animation.
         now += 1.0;
         shapes = frame(state, now, vec![egui::Event::PointerGone]);
+        opened += 1;
     }
-    panic!("{case:?} still has a closed fold after opening sixteen");
+    assert_eq!(opened, case.folds(), "{case:?} opened {opened} folds at {width}pt");
+    shapes
 }
 
 /// How far a subsection indents its body on `ctx`, whose chrome scale it
@@ -473,19 +497,28 @@ pub(super) fn fold_indent(ctx: &egui::Context) -> f32 {
     indent
 }
 
-/// The centre of the first closed fold's chevron in `shapes`: the
-/// right-pointing one `widgets::paint_chevron` draws for a folded section or
-/// subsection, told by its shape rather than its colour.
+/// The centre of the first closed fold's arrow in `shapes`: a three-point
+/// path pointing right — two points one above the other and the third out to
+/// their right, level with their middle — in the exact proportions of one of
+/// the two painters that draw a fold's arrow. `widgets::paint_chevron`
+/// strokes an open chevron twice as tall as it reaches, for our sections and
+/// subsections; egui's `paint_default_icon` fills a triangle as tall as it
+/// reaches, for its own `CollapsingHeader`. Exact, because other right-pointing
+/// triangles share the page (a gradient's flip button); a restyled arrow
+/// then fails [`open_settings_pane`]'s count rather than going unopened.
 fn closed_fold(shapes: &[egui::epaint::ClippedShape]) -> Option<egui::Pos2> {
     shapes.iter().find_map(|cs| match &cs.shape {
-        egui::Shape::Path(path) if path.points.len() == 3 && !path.closed => {
-            let [tail, tip, other] = [path.points[0], path.points[1], path.points[2]];
-            let reach = tip.x - tail.x;
-            let pointing_right = reach > 0.0
-                && (tail.x - other.x).abs() < 0.01
-                && (tip.y - (tail.y + other.y) / 2.0).abs() < 0.01
-                && ((tail.y - other.y).abs() - 2.0 * reach).abs() < 0.01;
-            pointing_right.then(|| egui::pos2((tail.x + tip.x) / 2.0, tip.y))
+        egui::Shape::Path(path) if path.points.len() == 3 => {
+            let mut points = [path.points[0], path.points[1], path.points[2]];
+            points.sort_by(|a, b| a.x.total_cmp(&b.x));
+            let [a, b, tip] = points;
+            let (reach, span) = (tip.x - a.x, (a.y - b.y).abs());
+            let shape = if path.closed { reach } else { 2.0 * reach };
+            let pointing_right = reach > 0.5
+                && (a.x - b.x).abs() < 0.01
+                && (tip.y - (a.y + b.y) / 2.0).abs() < 0.01
+                && (span - shape).abs() < 0.01;
+            pointing_right.then(|| egui::pos2((a.x + tip.x) / 2.0, tip.y))
         }
         _ => None,
     })
