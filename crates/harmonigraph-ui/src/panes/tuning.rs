@@ -704,7 +704,7 @@ fn instance_controls(
                 let mut name = row.name.clone();
                 if ui
                     .add(
-                        egui::TextEdit::singleline(&mut name)
+                        crate::widgets::row_field(ui, &mut name)
                             .hint_text(&row.display_name)
                             .desired_width(ui.available_width()),
                     )
