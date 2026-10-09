@@ -13,31 +13,7 @@ fn fresh_picture() -> PictureState {
 struct Instances(RefCell<Vec<TuningInstance>>);
 impl Instances {
     fn new() -> Self {
-        Self(RefCell::new(
-            (0..3)
-                .map(|id| TuningInstance {
-                    id,
-                    name: ["Harmonigraph input", "Bass", "Reference keyboard"][id as usize]
-                        .to_owned(),
-                    display_name: ["Harmonigraph input", "Bass", "Reference keyboard"][id as usize]
-                        .to_owned(),
-                    is_hub: id == 0,
-                    retune: id == 0,
-                    show: id == 1,
-                    voices: (0..=id)
-                        .map(|n| TuningVoice { key: n as u16, pitch: 48.0 + n as f32 * 12.0 })
-                        .collect(),
-                    notes_in: 34,
-                    notes_out: 34,
-                    misses: 0,
-                    delay: 1,
-                    max_delay: if id == 0 { 1 } else { 16 },
-                    delay_text: "Tuning delay 1x buffer - 512 samples / 10.67 ms".to_owned(),
-                    status: "No faults".to_owned(),
-                    last_pitch: Some((6000.0, 5986.3)),
-                })
-                .collect(),
-        ))
+        Self(RefCell::new(crate::tests::probe::tuning_instances()))
     }
 }
 impl ParamBackend for Instances {

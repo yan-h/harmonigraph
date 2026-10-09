@@ -8,12 +8,12 @@
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
 
-use super::harness::SETTINGS_PANES;
+use super::harness::{set_optional_sections, SETTINGS_PANES};
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::collect;
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
-use harmonigraph_scene::{Projection, ShadowKernel, SpectralReading, SEVENS_LAYER_LIMIT};
+use harmonigraph_scene::{Projection, SEVENS_LAYER_LIMIT};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Edge {
@@ -556,14 +556,9 @@ fn check(edge: Edge) {
         state.picture.runtime.observe_configuration(&mut state.picture.appearance, &backend);
         assert_eq!(state.picture.appearance.view.meantone, scenario.meantone);
         assert_eq!(state.picture.appearance.view.marvel, scenario.marvel);
+        set_optional_sections(&mut state, scenario.enabled);
         let a = &mut state.picture.appearance;
         a.camera.projection = scenario.projection;
-        a.view.spectral_reading =
-            if scenario.enabled { SpectralReading::Spectrum } else { SpectralReading::Fold };
-        a.view.spectral_ring_width = if scenario.enabled { 0.1 } else { 0.0 };
-        a.spectrum.show_roll = scenario.enabled;
-        a.spectrum.show_spectrogram = scenario.enabled;
-        a.spectrum.note_names = scenario.enabled;
         if scenario.pane == panes::Tab::Mappings {
             for source in [
                 &mut a.view.intensity.velocity,
@@ -577,22 +572,8 @@ fn check(edge: Edge) {
                 }
             }
         }
-        // Strength 0 is the backdrop's off. On, a strength the load clamped up
-        // to the bar's top stays there for the bar to be held to.
-        a.spectrum.backdrop_strength =
-            if scenario.enabled { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
         a.spectrum.atmosphere.cloud_style = scenario.style;
-        if !scenario.enabled {
-            a.view.atmosphere.texture_depth = 0.0;
-        }
         a.view.atmosphere.material_style = scenario.material;
-        for style in a.view.shadow.groups_mut() {
-            style.kernel =
-                if scenario.enabled { ShadowKernel::Distance } else { ShadowKernel::Gaussian };
-        }
-        state.workspace.interaction.show_perf = scenario.enabled;
-        state.workspace.interaction.take.supported = scenario.enabled;
-        state.workspace.interaction.take.last_take = scenario.enabled.then(|| "music.take".into());
         let mut tab = scenario.pane;
         let ctx = themed();
         // Observe the first load frame once, before any discarded egui pass

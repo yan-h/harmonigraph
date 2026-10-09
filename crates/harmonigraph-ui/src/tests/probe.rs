@@ -172,6 +172,37 @@ pub(crate) fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
     }
 }
 
+/// Three live tuning instances: Harmonigraph's own input (the Hub, one
+/// buffer of delay at most) and two tuners, each holding one more voice than
+/// the last — the Sources table a session with a couple of tracks shows.
+pub(crate) fn tuning_instances() -> Vec<crate::params::TuningInstance> {
+    let names = ["Harmonigraph input", "Bass", "Reference keyboard"];
+    (0..3)
+        .map(|id| crate::params::TuningInstance {
+            id,
+            name: names[id as usize].to_owned(),
+            display_name: names[id as usize].to_owned(),
+            is_hub: id == 0,
+            retune: id == 0,
+            show: id == 1,
+            voices: (0..=id)
+                .map(|n| crate::params::TuningVoice {
+                    key: n as u16,
+                    pitch: 48.0 + n as f32 * 12.0,
+                })
+                .collect(),
+            notes_in: 34,
+            notes_out: 34,
+            misses: 0,
+            delay: 1,
+            max_delay: if id == 0 { 1 } else { 16 },
+            delay_text: "Tuning delay 1x buffer - 512 samples / 10.67 ms".to_owned(),
+            status: "No faults".to_owned(),
+            last_pitch: Some((6000.0, 5986.3)),
+        })
+        .collect()
+}
+
 pub(crate) fn fresh_picture() -> crate::PictureState {
     fresh().picture
 }

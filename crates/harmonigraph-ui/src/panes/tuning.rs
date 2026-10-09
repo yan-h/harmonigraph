@@ -704,7 +704,7 @@ fn instance_controls(
                 let mut name = row.name.clone();
                 if ui
                     .add(
-                        egui::TextEdit::singleline(&mut name)
+                        crate::widgets::row_field(ui, &mut name)
                             .hint_text(&row.display_name)
                             .desired_width(ui.available_width()),
                     )
@@ -990,6 +990,10 @@ fn map_controls(
         subsection(ui, "Map offsets", |ui| {
         let mut fine = view.offsets.fine;
         let mut extension = view.offsets.extension;
+        // A grid does not wrap, so under the narrowest column the dock can
+        // still draw it scrolls on its own rather than running off the pane.
+        theme::reserve_scroll_gutter(ui);
+        egui::ScrollArea::horizontal().id_salt("map-offsets-scroll").show(ui, |ui| {
         egui::Grid::new("map-offsets").show(ui, |ui| {
             for heading in ["Axis", "Fine", "Coarse", "Total"] {
                 crate::widgets::weak(ui, heading);
@@ -998,7 +1002,7 @@ fn map_controls(
             for (label, fine, extension, axis) in [
                 ("Fifths", &mut fine.threes, &mut extension.threes, MapAxis::Fifths),
                 ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
-                ("Harmonic sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
+                ("Sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
             ] {
                 crate::widgets::label(ui, label);
                 for (lane, value, scale) in [
@@ -1033,6 +1037,7 @@ fn map_controls(
                 ui.end_row();
             }
         });
+        });
         })
         .on_hover_text(
             "Maps save shape only; these move it. Automate Fine for single steps and Coarse \
@@ -1041,8 +1046,12 @@ fn map_controls(
         subsection(ui, "Manage selected saved map", |ui| {
             let key = ui.id().with(("rename-map", selected));
             let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut renamed).desired_width(140.0));
+            // Wrapping, so a narrow column puts Rename under the field
+            // rather than past the pane edge.
+            crate::widgets::button_row(ui, |ui| {
+                let field = crate::widgets::row_field(ui, &mut renamed)
+                    .desired_width(140.0 * theme::ui_scale(ui.ctx()));
+                ui.add(field);
                 if ui.button("Rename").clicked() { params.edit_lattice_map(MapEdit::Rename(selected, renamed.clone())); }
             });
             ui.data_mut(|data| data.insert_temp(key, renamed));
