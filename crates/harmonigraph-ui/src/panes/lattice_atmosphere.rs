@@ -11,7 +11,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
     use crate::widgets::{choice_row, ValueBar};
 
     super::section(ui, "Glow pattern", |ui| {
-        crate::widgets::weak(ui, "Pattern varies the glow; material reshapes the result.");
         if !glow_enabled {
             crate::widgets::weak(
                 ui,

@@ -165,8 +165,8 @@ fn derived_key(comma: tuning::Comma) -> ParamKey {
 fn tuning_hint(key: ParamKey) -> &'static str {
     match key {
         ParamKey::COffset => {
-            "Where C sits, in cents from standard. Moves every node's pitch \
-             together."
+            "Where C sits, in cents from standard (100¢ is a semitone). Moves \
+             every node's pitch together."
         }
         ParamKey::Three => {
             "The fifths axis: one step, in cents. 701.96 is just (3:2), 700 is \
@@ -210,10 +210,6 @@ pub(super) fn tuning_pane(
     now: f64,
 ) {
     section(ui, "Tuning", |ui| {
-        crate::widgets::weak(
-            ui,
-            "Set the pitch of each lattice step. 100 cents (¢) equals one semitone.",
-        );
         param_bar(ui, params, ParamKey::COffset).on_hover_text(tuning_hint(ParamKey::COffset));
         interval_bar(ui, state, params, ParamKey::Three);
         for comma in tuning::Comma::ALL {
@@ -351,11 +347,16 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢", "")
                     as i32;
         }
-        if ui.button("Derive from fifth").on_hover_text("Set the input keyboard's third and seventh from its fifth.").clicked() {
+        let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
+        if ui
+            .button("Derive from fifth")
+            .on_hover_text(format!(
+                "Set the input keyboard's third and seventh from its fifth: {third} and {seventh}."
+            ))
+            .clicked()
+        {
             derive_keyboard = true;
         }
-        let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
-        crate::widgets::weak(ui, format!("From the fifth: third is {third}, seventh is {seventh}."));
     })
     .on_hover_text(
         "Tuning of the incoming keyboard. A key may only become a lattice node this keyboard would play at the pitch the key \
@@ -562,6 +563,13 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
     }
 }
 
+/// What a source's Retune and Show boxes answer a hover with, the bulk
+/// boxes included: off, Retune passes notes through without influencing
+/// tuning, and Show only ever affects the picture.
+const RETUNE_HINT: &str =
+    "Tune new notes with the selected engine. Off, notes pass through without influencing tuning.";
+const SHOW_HINT: &str = "Show this instance's output notes. Only affects the picture.";
+
 fn instance_controls(
     ui: &mut egui::Ui,
     state: &PictureState,
@@ -576,7 +584,7 @@ fn instance_controls(
         let mut all = enabled == instances.len();
         let mixed = enabled != 0 && !all;
         if crate::widgets::checkbox_indeterminate(ui, &mut all, label, mixed)
-            .on_hover_text(if retune { "Retune all sources" } else { "Show all sources" })
+            .on_hover_text(if retune { RETUNE_HINT } else { SHOW_HINT })
             .clicked()
         {
             let value = enabled != instances.len();
@@ -659,17 +667,11 @@ fn instance_controls(
     };
     let flags = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let mut retune = row.retune;
-        if crate::widgets::checkbox(ui, &mut retune, "")
-            .on_hover_text("Tune new notes with the selected engine")
-            .changed()
-        {
+        if crate::widgets::checkbox(ui, &mut retune, "").on_hover_text(RETUNE_HINT).changed() {
             params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
         }
         let mut show = row.show;
-        if crate::widgets::checkbox(ui, &mut show, "")
-            .on_hover_text("Show this instance's output notes")
-            .changed()
-        {
+        if crate::widgets::checkbox(ui, &mut show, "").on_hover_text(SHOW_HINT).changed() {
             params.edit_tuning_instance(row.id, InstanceEdit::Show(show));
         }
     };
@@ -732,7 +734,7 @@ fn instance_controls(
                         egui::RichText::new(format!("Correction: {:+.1}¢", output - input)).small(),
                     );
                 }
-                crate::widgets::label(ui, &row.delay_text);
+                let delay_text = crate::widgets::label(ui, &row.delay_text);
                 if row.max_delay > 1 {
                     let id = ui.id().with("delay-draft");
                     let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
@@ -758,7 +760,7 @@ fn instance_controls(
                         }
                     });
                 } else {
-                    crate::widgets::weak(ui, "Harmonigraph's own input needs one buffer.");
+                    delay_text.on_hover_text("Harmonigraph's own input needs one buffer.");
                 }
             });
         });
@@ -770,7 +772,14 @@ fn instance_controls(
             ui.horizontal_wrapped(|ui| {
                 crate::widgets::label(ui, "Buffers");
                 ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
-                if ui.button("Apply to all tuners").clicked() {
+                if ui
+                    .button("Apply to all tuners")
+                    .on_hover_text(
+                        "Each tuner reports its own latency; Source details overrides one. \
+                         Harmonigraph's own input stays at one buffer.",
+                    )
+                    .clicked()
+                {
                     for row in instances {
                         if !row.is_hub {
                             params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
@@ -779,11 +788,6 @@ fn instance_controls(
                 }
             });
             ui.data_mut(|data| data.insert_temp(id, delay));
-            crate::widgets::weak(
-                ui,
-                "Each tuner reports its own latency. Individual overrides are in Source details.",
-            );
-            crate::widgets::weak(ui, "Harmonigraph's own input stays at one buffer.");
         });
     }
     if ui
@@ -793,10 +797,6 @@ fn instance_controls(
     {
         params.edit_tuning_instance(instances[0].id, InstanceEdit::Reset);
     }
-    crate::widgets::weak(
-        ui,
-        "Retune off: pass notes through without influencing tuning. Show only affects the picture.",
-    );
 }
 
 fn monitor_pitch(cents: f64) -> String {
@@ -884,7 +884,6 @@ fn map_controls(
         if mode != TuningEngine::LatticeMap {
             return mode;
         }
-        crate::widgets::weak(ui, "Map changes affect new attacks. Held notes keep their onset tuning.");
         if state.runtime.learn_active {
             crate::widgets::label(ui, egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()));
         }
@@ -912,6 +911,11 @@ fn map_controls(
                     }
                 }
             },
+        )
+        .response
+        .on_hover_text(
+            "The map new notes are tuned by. Map changes affect new attacks; held notes keep \
+             their onset tuning.",
         );
         if view.playback.map.is_none() {
             crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
@@ -980,7 +984,6 @@ fn map_controls(
             crate::widgets::label(ui, egui::RichText::new("All 128 stable map identities have been used.").color(theme::armed()));
         }
         subsection(ui, "Map offsets", |ui| {
-        crate::widgets::weak(ui, "Maps save shape only; these move it. Automate Fine for single steps and Coarse for steps of 10. The two lanes add together.");
         let mut fine = view.offsets.fine;
         let mut extension = view.offsets.extension;
         egui::Grid::new("map-offsets").show(ui, |ui| {
@@ -1026,7 +1029,11 @@ fn map_controls(
                 ui.end_row();
             }
         });
-        });
+        })
+        .on_hover_text(
+            "Maps save shape only; these move it. Automate Fine for single steps and Coarse \
+             for steps of 10. The two lanes add together.",
+        );
         subsection(ui, "Manage selected saved map", |ui| {
             let key = ui.id().with(("rename-map", selected));
             let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());

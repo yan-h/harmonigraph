@@ -83,7 +83,6 @@ pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
             "Soft halos around bright notes. Shared by the Lattice and MIDI ribbons in the Analyzer. \
              Changing this control updates both pictures. 0 turns bloom off; 1× is the reference strength.",
         );
-    crate::widgets::weak(ui, "Shared by Lattice and Analyzer MIDI ribbons.");
 }
 
 /// The background glow: its reach, strength, colour, wash and clock.

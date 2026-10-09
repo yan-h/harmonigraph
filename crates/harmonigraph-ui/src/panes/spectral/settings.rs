@@ -3,7 +3,7 @@
 //! [`super::super::color`].
 
 use crate::config::BALLISTICS_MAX;
-use crate::panes::{block, edge_bar, section, switched_section};
+use crate::panes::{block, edge_bar, hinted_section, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::PictureState;
@@ -332,6 +332,11 @@ pub(crate) fn view_section(
     });
 }
 
+/// What the Analysis heading answers a hover with: the scope every control
+/// under it shares, which none of them owns.
+const ANALYSIS_HINT: &str = "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings. \
+     Nothing here changes the pass-through audio.";
+
 /// Measurement controls shared by every audio view: the input and its
 /// resolution, how levels map to height, and how fast the live picture moves.
 /// Set once and left, in every saved project, so the section is one place to
@@ -343,11 +348,7 @@ pub(crate) fn analysis_section(
 ) {
     use crate::{SpectrumTapers, SpectrumWindow};
 
-    section(ui, "Analysis", |ui| {
-        crate::widgets::weak(
-            ui,
-            "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings. These settings do not change pass-through audio.",
-        );
+    hinted_section(ui, "Analysis", ANALYSIS_HINT, |ui| {
         if let Some(mut input) = params.analysis_input() {
             let before = input;
             choice_row(

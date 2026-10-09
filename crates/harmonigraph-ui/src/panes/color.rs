@@ -40,12 +40,16 @@ pub(super) fn color_pane(
                      Drag an end to resize, or the middle to shift both.",
         );
     });
-    section(ui, "Audio level colors", |ui| {
-        crate::widgets::weak(ui, "Shared by the audio views. Lattice rings use Silent slice brightness and gray at the quiet end.");
+    super::hinted_section(ui, "Audio level colors", LEVEL_COLORS_HINT, |ui| {
         spectrogram_gradient_group(ui, &mut appearance.spectrum);
     });
     section(ui, "MIDI note intensity", |ui| intensity::show(ui, &mut appearance.view.intensity));
 }
+
+/// What the Audio level colors heading answers a hover with: the scope of the
+/// one table every audio view reads.
+const LEVEL_COLORS_HINT: &str =
+    "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings.";
 
 /// The tooltip both groups' curve plots carry.
 const BEND_HINT: &str = "Where along the range the selected color components spend their change. \
@@ -144,7 +148,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     );
     SpreadBar::brightness(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
         "Brightness at the low and high audio levels: 0% is black, 100% is white. \
-                 A black low end blends into the spectrogram background. \
+                 A black low end blends into the spectrogram background; \
+                 lattice rings swap it for gray at Silent slice brightness. \
                  Double-click resets.",
     );
     SpreadBar::chroma(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(

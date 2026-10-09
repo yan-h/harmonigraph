@@ -29,7 +29,6 @@ pub(super) fn labels(ui: &mut egui::Ui, state: &mut PictureState) {
             "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom. \
              Also sets how thick the idle crosses are drawn.",
         );
-    crate::widgets::weak(ui, "Also controls cross thickness.");
     clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
 }
 

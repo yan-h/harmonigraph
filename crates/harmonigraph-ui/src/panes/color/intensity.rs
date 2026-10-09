@@ -85,8 +85,6 @@ fn limits(settings: &IntensitySettings, target: IntensityTarget) -> (f32, f32) {
 }
 
 pub(super) fn show(ui: &mut Ui, settings: &mut IntensitySettings) {
-    widgets::weak(ui, "Start at the base, add each mapped contribution, then limit the result.");
-    widgets::weak(ui, "Bands show possible reach. Stripes mark clipping; dashes mark gain boosts.");
     // Apply additions/removals after drawing so rows keep stable geometry this frame.
     let mut route = None;
     for target in IntensityTarget::ALL {
@@ -135,13 +133,10 @@ fn group(
     let mut overlay = None;
     let base = match target {
         IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, 0.0..=1.0, "Opacity base")
-            .overlay_slot(&mut overlay).show(ui).on_hover_text("Starting opacity, even with no mappings. Only timbre can reduce it. A base of 1 leaves no room for positive additions."),
+            .overlay_slot(&mut overlay).show(ui).on_hover_text("Starting opacity, even with no mappings. Each mapping adds its weighted contribution, and the sum is limited to 1; only timbre can reduce it, and a base of 1 leaves no room for the others to add. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost."),
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
-            .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
+            .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. Each mapping adds its weighted contribution in those same widths, and the sum is limited to Thickness max; a hidden layer remains hidden. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost."),
     };
-    if target == IntensityTarget::Opacity && settings.opacity_rest == 1.0 {
-        widgets::weak(ui, "Lower the base to let velocity, pressure or gain increase opacity.");
-    }
     for &source in &sources {
         ui.push_id(source.name(), |ui| {
             ui.horizontal(|ui| {
