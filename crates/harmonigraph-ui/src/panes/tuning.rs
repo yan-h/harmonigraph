@@ -279,10 +279,14 @@ pub(super) fn tuning_pane(
                 );
             }
             if state.runtime.learn_active {
-                // Pulsing armed ring so the engaged mode can't be missed.
+                // Pulsing armed ring so the engaged mode can't be missed. It
+                // stands `pad` out from the switch, so its corners are the
+                // switch's radius plus `pad` and the two round about one centre.
+                let scale = theme::ui_scale(ui.ctx());
+                let pad = theme::scaled_points(2, scale);
                 ui.painter().rect_stroke(
-                    learn.rect.expand(2.0),
-                    egui::CornerRadius::same(6),
+                    learn.rect.expand(f32::from(pad)),
+                    egui::CornerRadius::same(theme::control_radius(scale) + pad),
                     egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
                     egui::StrokeKind::Outside,
                 );
