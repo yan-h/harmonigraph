@@ -283,6 +283,40 @@ pub(super) const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
 /// Every settings tab, in the column's own order.
 pub(super) const SETTINGS_PANES: &[panes::Tab] = crate::workspace::Section::Settings.tabs();
 
+/// Switch on (or off) every section a fresh state hides behind a setting:
+/// the lattice's audio ring, read as a spectrum; the roll, the spectrogram
+/// and the note names; the backdrop, whose strength 0 is its off; the
+/// shadows on the Distance kernel, whose Falloff bar the Gaussian's Spread
+/// replaces; the perf overlay's Frame breakdown; and the take controls.
+/// Off also zeroes the glow pattern's contrast.
+///
+/// One door for both fixtures that light a page: the range guard's
+/// `enabled` scenarios and the sweeps' [`Variant::Lit`]. It moves no value a
+/// bar shows beyond the switches, and the backdrop's strength only up to
+/// where its bar is lit, so a poisoned load keeps everything else.
+pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
+    use harmonigraph_scene::{ShadowKernel, SpectralReading};
+    let a = &mut state.picture.appearance;
+    a.view.spectral_reading = if on { SpectralReading::Spectrum } else { SpectralReading::Fold };
+    a.view.spectral_ring_width = if on { 0.1 } else { 0.0 };
+    a.spectrum.show_roll = on;
+    a.spectrum.show_spectrogram = on;
+    a.spectrum.note_names = on;
+    // Strength 0 is the backdrop's off. On, a strength the load clamped up
+    // to the bar's top stays there for the bar to be held to.
+    a.spectrum.backdrop_strength = if on { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
+    if !on {
+        a.view.atmosphere.texture_depth = 0.0;
+    }
+    for style in a.view.shadow.groups_mut() {
+        style.kernel = if on { ShadowKernel::Distance } else { ShadowKernel::Gaussian };
+    }
+    let interaction = &mut state.workspace.interaction;
+    interaction.show_perf = on;
+    interaction.take.supported = on;
+    interaction.take.last_take = on.then(|| "music.take".into());
+}
+
 /// What one settings sweep case changes from a fresh state: one choice that
 /// swaps which controls a page draws, with everything else left fresh.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -294,6 +328,10 @@ pub(super) enum Variant {
     Texture(harmonigraph_scene::CloudStyle),
     /// The lattice glow's material, whose own controls the Lattice page draws.
     Material(harmonigraph_scene::LatticeMaterial),
+    /// Every section a fresh state hides switched on
+    /// ([`set_optional_sections`]), with a ring middle that leaves the audio
+    /// ring room to draw.
+    Lit,
     /// The Hub's note retuning on a backend that has an engine selector;
     /// Lattice Map plays [`lattice_map_view`].
     Engine(harmonigraph_core::lattice_map::TuningEngine),
@@ -332,6 +370,12 @@ impl SettingsCase {
             Variant::Projection(projection) => appearance.camera.projection = projection,
             Variant::Texture(style) => appearance.spectrum.atmosphere.cloud_style = style,
             Variant::Material(material) => appearance.view.atmosphere.material_style = material,
+            Variant::Lit => {
+                set_optional_sections(&mut state, true);
+                // The fresh middle is a look and free to grow, and a ring
+                // refused for room greys every bar that sizes it.
+                state.picture.appearance.view.ring_inner = 0.3;
+            }
         }
         state
     }
@@ -441,7 +485,9 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
         let variants: Vec<Variant> = match pane {
-            Tab::AnalyzerSettings => textures.map(Variant::Texture).to_vec(),
+            Tab::AnalyzerSettings => {
+                textures.map(Variant::Texture).into_iter().chain([Variant::Lit]).collect()
+            }
             // Every material at the fresh projection, then every other
             // projection at the fresh material: the Camera block and the
             // glow's material are independent blocks of the page.
@@ -449,7 +495,9 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
                 .map(Variant::Material)
                 .into_iter()
                 .chain(PROJECTIONS[1..].iter().map(|&p| Variant::Projection(p)))
+                .chain([Variant::Lit])
                 .collect(),
+            Tab::System => vec![Variant::Fresh, Variant::Lit],
             // No engine selector at all, then each engine behind one.
             Tab::Tuning => {
                 std::iter::once(Variant::Fresh).chain(engines.map(Variant::Engine)).collect()
