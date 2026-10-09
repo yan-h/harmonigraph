@@ -389,8 +389,10 @@ fn every_bar_has_its_declared_height() {
             // mis-sized bar out of the sweep rather than failing on it, which
             // is a test that passes by finding nothing.
             let track = crate::widgets::spectrum_track_width(PANE_WIDTH, scale);
-            // A bar in an open subsection fills that fold's column instead.
-            let nested = PANE_WIDTH - fold_indent(&super::probe::themed_scaled(scale));
+            // A bar in an open subsection fills that fold's column instead,
+            // starting one indent in from the column's left edge.
+            let indent = fold_indent(&super::probe::themed_scaled(scale));
+            let nested_left = crate::theme::dock_pane_margin(scale).left_top().x + indent;
             let mut found = 0;
             for cs in &shapes {
                 let egui::Shape::Rect(r) = &cs.shape else { continue };
@@ -400,7 +402,10 @@ fn every_bar_has_its_declared_height() {
                 let plot = crate::widgets::bend_plot_height(scale);
                 if r.fill != crate::theme::well()
                     || !r.rect.is_finite()
-                    || [PANE_WIDTH, track, nested].iter().all(|w| (width - w).abs() > 1.0)
+                    || ((width - PANE_WIDTH).abs() > 1.0
+                        && (width - track).abs() > 1.0
+                        && ((width - (PANE_WIDTH - indent)).abs() > 1.0
+                            || (r.rect.left() - nested_left).abs() > 1.0))
                     || (r.rect.height() - plot).abs() < ROUNDING
                     || (r.rect.height() - crate::widgets::direct_plot_height(scale)).abs()
                         < ROUNDING

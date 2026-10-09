@@ -397,7 +397,8 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
     assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
 
-/// The bar tracks a pane drew, including any companion picture in their width.
+/// The bar tracks a pane drew, each as the span it covers: the track, and any
+/// companion picture before it.
 ///
 /// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
 /// which the accent fill over it does not answer to — that is the same height in
@@ -407,7 +408,7 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
 /// apart, and it is read out of the paint rather than the panel being skipped
 /// for having an odd width — a width is exactly what is under test here, so
 /// excusing a rect for being an odd length would excuse the bug.
-fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
+fn bar_tracks(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
     let well = crate::theme::well();
     let pictures: Vec<_> = shapes
         .iter()
@@ -471,9 +472,12 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
                     // slider starts immediately after its actual picture,
                     // rather than being excused for any arbitrary short width.
                     assert!((r.rect.left() - picture.right() - crate::theme::ROW_GAP).abs() < 0.6);
-                    Some(r.rect.right() - picture.left())
+                    Some(egui::Rect::from_x_y_ranges(
+                        picture.left()..=r.rect.right(),
+                        r.rect.y_range(),
+                    ))
                 } else {
-                    Some(r.rect.width())
+                    Some(r.rect)
                 }
             }
             _ => None,
@@ -522,7 +526,8 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
         for (index, &case) in cases.iter().enumerate() {
             let pane = case.pane;
-            let widths = bar_track_widths(&settings_pane_at_width(case, width));
+            let tracks = bar_tracks(&settings_pane_at_width(case, width));
+            let widths: Vec<f32> = tracks.iter().map(egui::Rect::width).collect();
             // One bar per gradient is deliberately shorter: the spectrum
             // track, which gives the right end of its row to the flip
             // button. It still narrows with the column, which is what this
@@ -550,7 +555,7 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
             let mut weights = 0;
             let mut nested = 0;
             let mut links = Vec::new();
-            for bar in &widths {
+            for (track_rect, bar) in tracks.iter().zip(&widths) {
                 if (bar - width).abs() < 1.0 {
                     continue;
                 }
@@ -558,7 +563,12 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                     short += 1;
                     continue;
                 }
-                if (bar - (width - indent)).abs() < 1.0 {
+                // Placed as well as sized: a top-level bar one indent short
+                // has the nested width too, but starts at the column's edge.
+                let nested_left = crate::theme::PANE_INSET + indent;
+                if (bar - (width - indent)).abs() < 1.0
+                    && (track_rect.left() - nested_left).abs() < 1.0
+                {
                     nested += 1;
                     continue;
                 }
@@ -613,14 +623,14 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // whether bars are still being painted at all.
     //
     // The floor is a count of the bars a fresh view draws LIVE, and a gated bar
-    // is not in it: [`bar_track_widths`] finds a track by the well's own fill,
+    // is not in it: [`bar_tracks`] finds a track by the well's own fill,
     // and a disabled `Ui` fades its painter, so a greyed track is no longer
     // that color. Sheet size is inert with Sheets at its fresh 0, and
     // half the node layers gate on something — hence a floor well under the
     // count. What the floor watches for is the paint going away, which takes
     // every bar at once; a control coming, going or greying is not what it is
     // asking about.
-    let bars = bar_track_widths(&settings_pane_at_width(
+    let bars = bar_tracks(&settings_pane_at_width(
         SettingsCase::fresh(panes::Tab::LatticeSettings),
         400.0,
     ))
