@@ -1035,9 +1035,7 @@ struct CompiledLatticeResources {
 struct LatticeResources {
     compiled: CompiledLatticeResources,
     /// This renderer's bindings for the sheets a glyph can be cut from — egui's
-    /// shared font texture, the drawn marks' private texture, and the identity
-    /// of the shared distance sheet, whose allocation is stored once in
-    /// `CallbackResources` and is also used by the standalone text renderer.
+    /// shared font texture and the drawn marks' private texture.
     sheets: text::Sheets,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't

@@ -2438,7 +2438,7 @@ pub(crate) mod tests {
     /// No shadow, which is deliberate and is the whole of what this fixture
     /// isolates: the FILL read through the filter, with nothing else in the
     /// frame. The shadow's own sampling has
-    /// `a_sliding_hairline_keeps_its_shadow_in_a_coarse_cell`, so this test
+    /// `a_stem_casts_the_same_shadow_anywhere_in_a_coarse_cell`, so this test
     /// stays about visible ink reconstruction alone.
     ///
     /// BOTH axes, because the filter is one-dimensional and separable, so a

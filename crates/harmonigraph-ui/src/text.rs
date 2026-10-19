@@ -2,9 +2,9 @@
 //! `harmonigraph_render`'s own text module.
 //!
 //! Text on either picture pane needs to be lifted off what it lands on — note
-//! names over lit nodes, pitch labels over the spectrogram. Each glyph maps a
-//! fixed signed-distance patch onto its laid-out rect, so the shadow
-//! is derived from the same letterform while the visible ink stays egui's.
+//! names over lit nodes, pitch labels over the spectrogram. A name's shadow
+//! is blurred from the same coverage egui rasterized for its visible ink, so
+//! the two are one letterform.
 //!
 //! egui still lays the text out. A [`TextBatch`] collects the glyphs of
 //! however many pieces of text a pane draws, and hands them over in one
@@ -335,11 +335,6 @@ impl Magnify {
 #[derive(Default)]
 pub(crate) struct TextBatch {
     glyphs: Vec<GlyphInstance>,
-    /// The union of the glyphs' ink since the batch was last handed over:
-    /// each letter's quad, and each mark's without the clear texel its bitmap
-    /// carries on every side ([`MARK_BITMAP_PAD`](crate::marks::MARK_BITMAP_PAD)).
-    /// `None` while it holds no glyph. See [`Self::bounds`].
-    ink: Option<egui::Rect>,
     /// End of each complete shadow/fill layer; ungrouped text stays in one layer.
     layer_ends: Vec<u32>,
     /// Which node each of those glyphs names, for a batch whose text is going
@@ -409,12 +404,25 @@ pub(crate) struct TextPiece {
 
 impl TextBatch {
     /// Bounds of the letterforms already laid out, excluding mark bitmap padding.
+    ///
+    /// A mark's bitmap carries one clear texel on every side
+    /// ([`MARK_BITMAP_PAD`](crate::marks::MARK_BITMAP_PAD)), which is no part of
+    /// its ink. Its quad spans its patch, so that texel is the quad's width over
+    /// the patch's.
     pub(crate) fn bounds(&self) -> egui::Rect {
-        self.ink.unwrap_or(egui::Rect::NOTHING)
-    }
-
-    fn add_ink(&mut self, ink: egui::Rect) {
-        self.ink = Some(self.ink.map_or(ink, |bounds| bounds.union(ink)));
+        self.glyphs.iter().fold(egui::Rect::NOTHING, |bounds, glyph| {
+            let [x, y, w, h] = glyph.rect;
+            let inset = if glyph.atlas == GlyphInstance::MARK {
+                crate::marks::MARK_BITMAP_PAD as f32 * w / (glyph.uv[2] - glyph.uv[0]).max(1.0)
+            } else {
+                0.0
+            };
+            let ink = egui::Rect::from_min_size(
+                egui::pos2(x + inset, y + inset),
+                egui::vec2((w - 2.0 * inset).max(0.0), (h - 2.0 * inset).max(0.0)),
+            );
+            bounds.union(ink)
+        })
     }
 
     /// Close one layer after all its letters and marks have been collected.
@@ -567,7 +575,6 @@ impl TextBatch {
                 if probe {
                     self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
                 }
-                self.add_ink(egui::Rect::from_min_size(min, egui::vec2(rect[2], rect[3])));
                 self.glyphs.push(GlyphInstance {
                     rect,
                     uv: [
@@ -640,12 +647,7 @@ impl TextBatch {
         let min = center - size / 2.0;
         let min = self.magnify.map_or(min, |m| m.point(min));
         let [x, y] = patch.at.map(|n| n as f32);
-        let inset = crate::marks::MARK_BITMAP_PAD as f32 / ppp * k;
         let rect = [min.x, min.y, size.x * k, size.y * k];
-        self.add_ink(egui::Rect::from_min_size(
-            egui::pos2(rect[0] + inset, rect[1] + inset),
-            egui::vec2((rect[2] - 2.0 * inset).max(0.0), (rect[3] - 2.0 * inset).max(0.0)),
-        ));
         self.glyphs.push(GlyphInstance {
             rect,
             uv: [x, y, x + patch.size[0] as f32, y + patch.size[1] as f32],
@@ -719,7 +721,6 @@ impl TextBatch {
             self.pieces.clear();
             self.marks.clear();
         }
-        self.ink = None;
         let atlas = if self.publishes_font_texture(painter.ctx()) {
             None
         } else {
@@ -798,7 +799,6 @@ impl TextBatch {
             glyph.rect[0] -= rect.min.x;
             glyph.rect[1] -= rect.min.y;
         }
-        self.ink = None;
         harmonigraph_render::LatticeLabels {
             glyphs,
             labels: std::mem::take(&mut self.labels),

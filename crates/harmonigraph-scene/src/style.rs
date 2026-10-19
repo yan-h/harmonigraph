@@ -673,8 +673,14 @@ impl Default for ShadowStyle {
 
 /// The stops a text group's full Spread lifts its blurred shadow by
 /// ([`ShadowStyle::text_spread_stops`]). With the renderer's own gain of 2.5,
-/// thirty-two times more keeps a half-plane's blur saturated out to 2.24σ,
+/// thirty-two times more keeps a half-plane's blur saturated out to about 2.1σ,
 /// against 0.25σ with no Spread.
+///
+/// Coupled to the blur's reach. The kernel is lowered onto zero at three σ
+/// (`REACH` in shadow.wgsl) and a text caster's box does not grow with its
+/// stops, so the lifted plate's edge is that cut-off tail: about 0.9σ from
+/// saturated to nothing, harder than a dilated shadow's Gaussian edge. Raising
+/// this moves the plate further onto the cut.
 pub const TEXT_SPREAD_STOPS: f32 = 5.0;
 
 impl ShadowStyle {
@@ -707,9 +713,9 @@ impl ShadowStyle {
     /// Text does not grow its ink by [`Self::gaussian_spread_points`]: a stroke
     /// of type is thin against σ, and growing a thin stroke mostly scales its
     /// blur, which this does directly. Exponential so each step of the bar is
-    /// the same ratio. The top, [`TEXT_SPREAD_STOPS`], is where the lifted blur
-    /// of ink wide against σ stays saturated about 2σ out, the distance a full
-    /// Spread grows geometry by.
+    /// the same ratio. At the top, [`TEXT_SPREAD_STOPS`], the lifted blur of
+    /// ink wide against σ stays saturated about 2σ out, close to the distance a
+    /// full Spread grows geometry by, with a harder edge.
     pub fn text_spread_stops(self) -> f32 {
         TEXT_SPREAD_STOPS * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
     }

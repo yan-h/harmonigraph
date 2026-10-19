@@ -467,7 +467,11 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
 @fragment
 fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
     let footprint = fwidth(in.texel);
-    let taps = vec2<i32>(clamp(ceil(footprint), vec2<f32>(1.0), vec2<f32>(CELL_FOOTPRINT_TAPS)));
+    // Less a 64th, so float noise on a cell at the target's own resolution,
+    // whose footprint is one texel, does not round it up into the box.
+    let taps = vec2<i32>(
+        clamp(ceil(footprint - 1.0 / 64.0), vec2<f32>(1.0), vec2<f32>(CELL_FOOTPRINT_TAPS)),
+    );
     if all(taps == vec2<i32>(1)) {
         return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
     }
