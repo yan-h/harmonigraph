@@ -1303,8 +1303,6 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
-    /// Reused upload staging for coefficients resolved against encoded GPU history.
-    ink_instances: Vec<GpuInstance>,
     plus_buffer: wgpu::Buffer,
     plus_capacity: usize,
     plus_count: u32,
@@ -3117,7 +3115,6 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
-                ink_instances: Vec::new(),
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_pluses",
@@ -3298,22 +3295,25 @@ fn create_vertex_buffer<T>(device: &wgpu::Device, label: &str, capacity: usize) 
 /// Fill native staging directly; dropping the view schedules its copy. Byte
 /// arrays require no typed alignment, and `write_iter` enforces the exact row
 /// count. wgpu still allocates its staging buffer for each nonempty write.
-fn write_shadow_boxes(
+/// `BYTES` is `T`'s size, which a generic cannot name as an array length.
+fn write_rows<T: bytemuck::Pod, const BYTES: usize>(
     queue: &wgpu::Queue,
     buffer: &wgpu::Buffer,
     count: usize,
-    boxes: impl Iterator<Item = shadow::ShadowBox>,
+    rows: impl Iterator<Item = T>,
 ) {
-    const CELL_BYTES: usize = std::mem::size_of::<shadow::ShadowBox>();
-    let Some(size) = wgpu::BufferSize::new((count * CELL_BYTES) as u64) else {
-        assert_eq!(boxes.count(), 0, "empty shadow upload must have no cells");
+    const { assert!(std::mem::size_of::<T>() == BYTES) };
+    let Some(size) = wgpu::BufferSize::new((count * BYTES) as u64) else {
+        assert_eq!(rows.count(), 0, "empty upload must have no rows");
         return;
     };
-    let mut view = queue.write_buffer_with(buffer, 0, size).expect("valid shadow upload");
-    let (rows, tail) = view.slice(..).into_chunks::<CELL_BYTES>();
+    let mut view = queue.write_buffer_with(buffer, 0, size).expect("valid row upload");
+    let (chunks, tail) = view.slice(..).into_chunks::<BYTES>();
     debug_assert!(tail.is_empty());
-    rows.write_iter(boxes.map(bytemuck::cast::<_, [u8; CELL_BYTES]>));
+    chunks.write_iter(rows.map(bytemuck::cast::<_, [u8; BYTES]>));
 }
+const BOX_BYTES: usize = std::mem::size_of::<shadow::ShadowBox>();
+const INSTANCE_BYTES: usize = std::mem::size_of::<GpuInstance>();
 
 mod gpu_harness;
 // Dependent crates exercise the same GPU requirement as this crate's tests.

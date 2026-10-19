@@ -303,22 +303,29 @@ impl LatticeCallback {
             // Only an encoded ink pass consumes its clock and row ownership.
             // Layout callbacks discarded by egui never reach this point.
             let encodes_ink = pane.offscreen.as_ref().is_some_and(|o| o.glow.is_some());
-            let instances = if encodes_ink {
+            let mut mixes = None;
+            if encodes_ink {
                 let strip = pane.ink_history.as_mut().expect("glow target has pane history");
                 strip.parity ^= 1;
                 if let Some(timing) = self.glow_timing {
-                    pane.ink_instances.clear();
-                    pane.ink_instances.extend_from_slice(&self.instances);
-                    strip.history.encode(timing, &mut pane.ink_instances, &self.glow_owners);
-                    &pane.ink_instances
+                    mixes = Some(strip.history.encode(timing, &self.instances, &self.glow_owners));
                 } else {
                     strip.history.clear();
-                    &self.instances
                 }
+            }
+            if let Some(mixes) = mixes {
+                // Each instance with its history coefficient in place of the
+                // seed, written straight into staging rather than into a
+                // patched copy of the frame.
+                let mixed = self.instances.iter().zip(mixes).map(|(&instance, &mix)| {
+                    let [level, row, _, breath] = instance.glow;
+                    GpuInstance { glow: [level, row, mix, breath], ..instance }
+                });
+                let count = self.instances.len();
+                write_rows::<_, INSTANCE_BYTES>(queue, &pane.instance_buffer, count, mixed);
             } else {
-                &self.instances
-            };
-            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(instances));
+                queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
+            }
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -375,7 +382,7 @@ impl LatticeCallback {
                 .iter()
                 .map(|&i| all.get(i as usize).copied().unwrap_or(shadow::NO_CELL));
             debug_assert_eq!(boxes.len(), self.instances.len(), "one box per node instance");
-            write_shadow_boxes(queue, &pane.node_cell_buffer, self.instances.len(), boxes);
+            write_rows::<_, BOX_BYTES>(queue, &pane.node_cell_buffer, self.instances.len(), boxes);
         }
 
         // The labels. With no atlas there is nothing to sample, so the pass
@@ -412,7 +419,7 @@ impl LatticeCallback {
                         _ => None,
                     })
                     .flat_map(|(n, b)| std::iter::repeat_n(b, n as usize));
-                write_shadow_boxes(queue, &pane.cell_buffer, self.glyphs.len(), cells);
+                write_rows::<_, BOX_BYTES>(queue, &pane.cell_buffer, self.glyphs.len(), cells);
             }
             if !self.glyphs.is_empty() {
                 queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
