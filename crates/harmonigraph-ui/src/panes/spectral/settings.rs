@@ -49,86 +49,95 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
              Uses the shared History duration under View and the Audio level colors on Mappings.",
         ),
         |ui| {
-            block(ui, "Softness");
-            // No style selector. The retired Plain/Blur/Lava styles were presets over
-            // independent effects, and each surviving one — the blur and the cloud —
-            // now has a dial whose zero is off. The measured picture is both at zero,
-            // and the renderer takes its plain path there, so nothing is paid
-            // for an effect that is not drawn. A row whose effect is off is greyed
-            // rather than hidden, like every other section of this page, so the page's
-            // inventory does not move under a drag.
-            crate::widgets::softness(
-                ui,
-                &mut atmosphere.pitch_softness,
-                &mut atmosphere.time_softness,
-            );
-            block(ui, "Texture");
-            use harmonigraph_scene::CloudStyle;
-            choice_row(
-                ui,
-                "Style",
-                &mut atmosphere.cloud_style,
-                &[
-                    (
-                        CloudStyle::Stars,
-                        "Stars",
-                        "Pinpoint stars at several depths, each taking the color and brightness \
-                             of the sound under it as it drifts. Nearer stars are fewer, bigger, \
-                             brighter and faster",
-                    ),
-                    (
-                        CloudStyle::Watercolor,
-                        "Watercolor",
-                        "A field of overlapping patches, each reading the sound near its own \
-                             centre. Fine layer mix blends their levels before the palette",
-                    ),
-                    (
-                        CloudStyle::VelvetScales,
-                        "Scales",
-                        "Soft overlapping scallops, each carrying the light sampled at its center",
-                    ),
-                ],
-            );
-            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
-                .percent().show(ui).on_hover_text(
-                    "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
+            block(ui, "Softness", |ui| {
+                // No style selector. The retired Plain/Blur/Lava styles were presets over
+                // independent effects, and each surviving one — the blur and the cloud —
+                // now has a dial whose zero is off. The measured picture is both at zero,
+                // and the renderer takes its plain path there, so nothing is paid
+                // for an effect that is not drawn. A row whose effect is off is greyed
+                // rather than hidden, like every other section of this page, so the page's
+                // inventory does not move under a drag.
+                crate::widgets::softness(
+                    ui,
+                    &mut atmosphere.pitch_softness,
+                    &mut atmosphere.time_softness,
                 );
+            });
+            use harmonigraph_scene::CloudStyle;
+            block(ui, "Texture", |ui| {
+                choice_row(
+                    ui,
+                    "Style",
+                    &mut atmosphere.cloud_style,
+                    &[
+                        (
+                            CloudStyle::Stars,
+                            "Stars",
+                            "Pinpoint stars at several depths, each taking the color and brightness \
+                                 of the sound under it as it drifts. Nearer stars are fewer, bigger, \
+                                 brighter and faster",
+                        ),
+                        (
+                            CloudStyle::Watercolor,
+                            "Watercolor",
+                            "A field of overlapping patches, each reading the sound near its own \
+                                 centre. Fine layer mix blends their levels before the palette",
+                        ),
+                        (
+                            CloudStyle::VelvetScales,
+                            "Scales",
+                            "Soft overlapping scallops, each carrying the light sampled at its center",
+                        ),
+                    ],
+                );
+                ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
+                    .percent().show(ui).on_hover_text(
+                        "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
+                    );
+            });
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
                 // Stars put their resolution first, a choice made once, then
                 // their look: size and spacing matter more than how they drift.
                 let stars = atmosphere.cloud_style == CloudStyle::Stars;
                 if stars {
                     super::super::material::stars_resolution(ui, &mut atmosphere.stars);
-                    block(ui, "Appearance");
-                    super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
+                    block(ui, "Appearance", |ui| {
+                        super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
+                    });
                 }
-                block(ui, "Motion");
-                if stars {
-                    super::super::material::stars_motion(ui, &mut atmosphere.stars);
-                }
-                let speed = (!stars).then_some(&mut atmosphere.cloud_speed);
-                crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
+                block(ui, "Motion", |ui| {
+                    if stars {
+                        super::super::material::stars_motion(ui, &mut atmosphere.stars);
+                    }
+                    let speed = (!stars).then_some(&mut atmosphere.cloud_speed);
+                    crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
+                });
                 // Each style has its own controls: nothing a wash carries means
                 // anything to a scallop, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
                 if !stars {
-                    block(ui, "Appearance");
-                    if atmosphere.cloud_style == CloudStyle::Watercolor {
-                        super::super::material::watercolor(ui, &mut atmosphere.material_settings);
-                        super::super::material::edge_pooling(ui, atmosphere);
-                    } else {
-                        super::super::material::velvet(ui, &mut atmosphere.material_settings);
-                    }
+                    block(ui, "Appearance", |ui| {
+                        if atmosphere.cloud_style == CloudStyle::Watercolor {
+                            super::super::material::watercolor(
+                                ui,
+                                &mut atmosphere.material_settings,
+                            );
+                            super::super::material::edge_pooling(ui, atmosphere);
+                        } else {
+                            super::super::material::velvet(ui, &mut atmosphere.material_settings);
+                        }
+                    });
                 }
-                block(ui, "Color response");
-                crate::widgets::response(
-                    ui,
-                    &mut atmosphere.color_pickup,
-                    &mut atmosphere.color_release,
-                    harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX,
-                    ["Color pickup", "Color release"],
-                    1.0,
-                );
+                block(ui, "Color response", |ui| {
+                    crate::widgets::response(
+                        ui,
+                        &mut atmosphere.color_pickup,
+                        &mut atmosphere.color_release,
+                        harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX,
+                        ["Color pickup", "Color release"],
+                        1.0,
+                    );
+                });
             });
         },
     );
@@ -302,33 +311,34 @@ pub(crate) fn view_section(
                 state.runtime.spectrum.clear_history();
             }
         });
-        block(ui, "Spectrum");
-        ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").percent().show(ui).on_hover_text(
-            "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
-                 and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
-                 100% is a white line, 0% is exactly the color under it.",
-        );
-        ValueBar::new(&mut cfg.backdrop_strength, 0.0..=1.0, "Backdrop strength").percent().show(ui).on_hover_text(
-            "How bright the grey backdrop above the spectrum is at the floor; it fades out upward and stops at the spectrum's edge. \
-                 0% is no backdrop. Faint backdrops read as a flat wash; about 70% and up keep dark fills visible.",
-        );
-        // Below the strength, so hiding them does not move the bar just dragged.
-        if cfg.backdrop_strength > 0.0 {
-            ValueBar::new(&mut cfg.backdrop_height, crate::config::BACKDROP_HEIGHT_RANGE, "Backdrop height")
-                .percent()
-                .show(ui)
-                .on_hover_text("How far up the level axis the backdrop reaches before it has faded out: 100% is the ceiling.");
-            ValueBar::new(&mut cfg.backdrop_gap, crate::config::BACKDROP_GAP_RANGE, "Stripe spacing")
-                .integer()
-                .unit(1.0, " pt")
-                .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} pt") })
-                .show(ui)
-                .on_hover_text(
-                    "Logical points between the backdrop’s one-point stripes. The dark gaps are what let even a fill as dark as the background \
-                         show as a break in the stripes; wider spacing is calmer but can miss a partial one pixel wide. \
-                         0 is a smooth gradient: softer, but a fill as bright as the glow at its own height blends into it.",
-                );
-        }
+        block(ui, "Spectrum", |ui| {
+            ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").percent().show(ui).on_hover_text(
+                "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
+                     and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
+                     100% is a white line, 0% is exactly the color under it.",
+            );
+            ValueBar::new(&mut cfg.backdrop_strength, 0.0..=1.0, "Backdrop strength").percent().show(ui).on_hover_text(
+                "How bright the grey backdrop above the spectrum is at the floor; it fades out upward and stops at the spectrum's edge. \
+                     0% is no backdrop. Faint backdrops read as a flat wash; about 70% and up keep dark fills visible.",
+            );
+            // Below the strength, so hiding them does not move the bar just dragged.
+            if cfg.backdrop_strength > 0.0 {
+                ValueBar::new(&mut cfg.backdrop_height, crate::config::BACKDROP_HEIGHT_RANGE, "Backdrop height")
+                    .percent()
+                    .show(ui)
+                    .on_hover_text("How far up the level axis the backdrop reaches before it has faded out: 100% is the ceiling.");
+                ValueBar::new(&mut cfg.backdrop_gap, crate::config::BACKDROP_GAP_RANGE, "Stripe spacing")
+                    .integer()
+                    .unit(1.0, " pt")
+                    .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} pt") })
+                    .show(ui)
+                    .on_hover_text(
+                        "Logical points between the backdrop’s one-point stripes. The dark gaps are what let even a fill as dark as the background \
+                             show as a break in the stripes; wider spacing is calmer but can miss a partial one pixel wide. \
+                             0 is a smooth gradient: softer, but a fill as bright as the glow at its own height blends into it.",
+                    );
+            }
+        });
     });
 }
 
@@ -392,37 +402,40 @@ pub(crate) fn analysis_section(
             (SpectrumTapers::Three, "3", "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."),
             (SpectrumTapers::Five, "5", "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."),
         ]);
-        block(ui, "Level mapping");
-        // Both ends of the height scale on one control, like the pitch range: the
-        // window on the spectrum's dynamics rather than just where it bottoms out.
-        RangeBar::new(
-            &mut cfg.floor_db,
-            &mut cfg.ceiling_db,
-            crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
-            "Spectrum level range",
-        )
-        .min_span(crate::LEVEL_RANGE_MIN_SPAN)
-        .display(db_readout)
-        .show(ui)
-        .on_hover_text(
-            "Levels mapped to zero and full height in the Analyzer, also used by lattice audio rings. \
-                     Lower the upper end to enlarge quiet signals. \
-                     Audio colors, including the Spiral's, have their own Level color range on Mappings.",
-        );
-        let labels: Vec<_> = crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
-        let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
-            (step, label.as_str(), "Reference slope in dB/oct, pivoting at 1 kHz. 0 shows raw power; -3 makes pink noise appear flat; more negative values lower the bass as much as they lift the treble. Affects every audio view, in height and in color: the curve, spectrogram, Spiral and lattice audio rings.")
-        ).collect();
-        choice_row(ui, "Tilt (dB/oct)", &mut cfg.tilt, &options);
-        block(ui, "Live response");
-        crate::widgets::response(
-            ui,
-            &mut cfg.attack,
-            &mut cfg.release,
-            BALLISTICS_MAX,
-            ["Live attack", "Live release"],
-            1000.0,
-        );
+        block(ui, "Level mapping", |ui| {
+            // Both ends of the height scale on one control, like the pitch range: the
+            // window on the spectrum's dynamics rather than just where it bottoms out.
+            RangeBar::new(
+                &mut cfg.floor_db,
+                &mut cfg.ceiling_db,
+                crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB,
+                "Spectrum level range",
+            )
+            .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+            .display(db_readout)
+            .show(ui)
+            .on_hover_text(
+                "Levels mapped to zero and full height in the Analyzer, also used by lattice audio rings. \
+                         Lower the upper end to enlarge quiet signals. \
+                         Audio colors, including the Spiral's, have their own Level color range on Mappings.",
+            );
+            let labels: Vec<_> =
+                crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
+            let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
+                (step, label.as_str(), "Reference slope in dB/oct, pivoting at 1 kHz. 0 shows raw power; -3 makes pink noise appear flat; more negative values lower the bass as much as they lift the treble. Affects every audio view, in height and in color: the curve, spectrogram, Spiral and lattice audio rings.")
+            ).collect();
+            choice_row(ui, "Tilt (dB/oct)", &mut cfg.tilt, &options);
+        });
+        block(ui, "Live response", |ui| {
+            crate::widgets::response(
+                ui,
+                &mut cfg.attack,
+                &mut cfg.release,
+                BALLISTICS_MAX,
+                ["Live attack", "Live release"],
+                1000.0,
+            );
+        });
     });
 }
 

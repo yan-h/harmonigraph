@@ -153,6 +153,20 @@ pub(crate) fn group_space(ui: &mut Ui) {
     }
 }
 
+/// Room over a group that stands `gap` points off whatever is over it, at
+/// scale 1, rather than [`GROUP_GAP`] — counting the room a [`mark_spaced`]
+/// already left there, and marked, so the group's own [`group_space`] adds
+/// none on top.
+pub(crate) fn group_space_of(ui: &mut Ui, gap: f32) {
+    if !ui.layout().is_vertical() {
+        return;
+    }
+    let scale = crate::theme::ui_scale(ui.ctx());
+    let have = if spaced(ui) { GROUP_GAP * scale } else { ui.spacing().item_spacing.y };
+    ui.add_space((gap * scale - have).max(0.0));
+    mark_spaced(ui);
+}
+
 /// Room under a group that is not a [`label`] (a fold), the same as
 /// [`group_space`] put over it, marked so that a group right after it does not
 /// add its own on top. Nothing when the group ended with a label, which

@@ -67,23 +67,27 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             // how they drift.
             let stars = settings.material_style == LatticeMaterial::Stars;
             if stars {
-                super::block(ui, "Appearance");
-                super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
+                super::block(ui, "Appearance", |ui| {
+                    super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
+                });
             }
-            super::block(ui, "Motion");
-            if stars {
-                super::material::stars_motion(ui, &mut settings.stars);
-            }
-            let speed = (!stars).then_some(&mut settings.material_speed);
-            crate::widgets::drift(ui, &mut settings.material_direction, speed);
+            super::block(ui, "Motion", |ui| {
+                if stars {
+                    super::material::stars_motion(ui, &mut settings.stars);
+                }
+                let speed = (!stars).then_some(&mut settings.material_speed);
+                crate::widgets::drift(ui, &mut settings.material_direction, speed);
+            });
             match settings.material_style {
                 LatticeMaterial::Watercolor => {
-                    super::block(ui, "Appearance");
-                    super::material::watercolor(ui, &mut settings.material_settings);
+                    super::block(ui, "Appearance", |ui| {
+                        super::material::watercolor(ui, &mut settings.material_settings);
+                    });
                 }
                 LatticeMaterial::VelvetScales => {
-                    super::block(ui, "Appearance");
-                    super::material::velvet(ui, &mut settings.material_settings);
+                    super::block(ui, "Appearance", |ui| {
+                        super::material::velvet(ui, &mut settings.material_settings);
+                    });
                 }
                 LatticeMaterial::Stars | LatticeMaterial::None => {},
             }

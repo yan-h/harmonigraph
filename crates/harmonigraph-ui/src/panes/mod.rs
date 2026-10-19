@@ -595,6 +595,8 @@ fn folding_section<R>(
         heading_switch(ui, header.rect, on, title).on_hover_text(*hint);
     }
     crate::widgets::mark_spaced(ui);
+    let top = ui.cursor().min;
+    ui.data_mut(|d| d.insert_temp(section_top_id(), top));
     // Outside a [`Viewer`] body there is nowhere to keep a fold, so the header
     // stays put rather than hiding its body for the one frame of the click.
     let open = match key {
@@ -774,13 +776,79 @@ pub(super) fn subsection<R>(
     header
 }
 
+/// How far a [`block`]'s title stands from whatever is over it, ink to ink, at
+/// scale 1: twice a group's gap, so a title reads as its own rows' and not as
+/// the end of the rows before it.
+const BLOCK_GAP: f32 = 2.0 * crate::widgets::GROUP_GAP;
+
+/// Where the cursor stood under the last [`section`] heading, so a [`block`]
+/// opening the section knows the heading's gap is already over it.
+fn section_top_id() -> egui::Id {
+    egui::Id::new("section-top")
+}
+
 /// A labelled run of rows inside a section: its name in the heading weight,
-/// then the rows under it at the section's own indent. Not a fold — a section
-/// is the thing that folds, and a block is only the name of a few of its rows,
-/// so a section reads as its blocks without a click on each.
+/// [`BLOCK_GAP`] under what is over it, then `rows` indented under it as a
+/// [`subsection`]'s body is. Not a fold — a section is the thing that folds,
+/// and a block is only the name of a few of its rows, so a section reads as
+/// its blocks without a click on each.
+///
+/// Weight alone did not tell a title from the rows under it; the gap and the
+/// indent say whose rows they are without a second colour of text.
 ///
 /// Loose rows in a section come before its blocks, so that a row after a
-/// block is never read as the block's.
-pub(super) fn block(ui: &mut egui::Ui, title: &str) -> egui::Response {
-    crate::widgets::label(ui, egui::RichText::new(title).heading())
+/// block is never read as the block's. Returns the title, for a hover.
+pub(super) fn block<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    rows: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let at = ui.cursor().min;
+    let top = ui.data(|d| d.get_temp::<egui::Pos2>(section_top_id()));
+    if !top.is_some_and(|top| (top.y - at.y).abs() < 0.5 && top.x > at.x - 0.5) {
+        crate::widgets::group_space_of(ui, BLOCK_GAP);
+    }
+    let heading = crate::widgets::label(ui, egui::RichText::new(title).heading());
+    let out = ui.indent(title, rows).inner;
+    crate::widgets::group_end(ui);
+    egui::InnerResponse::new(out, heading)
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::{block, section, BLOCK_GAP};
+
+    fn row(ui: &mut egui::Ui) -> egui::Rect {
+        ui.allocate_exact_size(egui::vec2(100.0, 20.0), egui::Sense::hover()).0
+    }
+
+    /// A block's title stands [`BLOCK_GAP`] under the row over it, whether a
+    /// loose row or the last of the block before, and its rows stand one indent
+    /// in from it. Opening its section, it stands where a line of text would:
+    /// the heading's gap is already over it.
+    #[test]
+    fn a_block_stands_clear_of_the_rows_over_it_and_indents_its_own() {
+        let ctx = crate::tests::probe::themed();
+        let mut opening = [0.0; 2];
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            section(ui, "Plain", |ui| opening[0] = crate::widgets::label(ui, "First").rect.top());
+        });
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            section(ui, "Blocks", |ui| {
+                let first = block(ui, "First", row);
+                opening[1] = first.response.rect.top();
+                let loose = row(ui);
+                let second = block(ui, "Second", row);
+                let third = block(ui, "Third", row);
+                for (over, title) in [(loose, &second), (second.inner, &third)] {
+                    let gap = title.response.rect.top() - over.bottom();
+                    assert!((gap - BLOCK_GAP).abs() < 0.5, "a title {gap}pt under its row");
+                }
+                let indent = third.inner.left() - third.response.rect.left();
+                assert!((indent - ui.spacing().indent).abs() < 0.5, "rows {indent}pt in");
+            });
+        });
+        let [plain, block] = opening;
+        assert!((block - plain).abs() < 0.5, "an opening block at {block}, a line at {plain}");
+    }
 }

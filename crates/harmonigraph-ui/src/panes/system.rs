@@ -28,72 +28,74 @@ pub(super) fn system_pane(
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     section(ui, "Performance", |ui| {
-        super::block(ui, "Editor and exports");
-        ValueBar::new(&mut appearance.view.render_scale, LATTICE_RENDER_SCALE_RANGE, "Lattice resolution")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Lattice render dimensions relative to native resolution. \
-                     100% is native; \
-                     50% uses a quarter of the pixels; \
-                     200% uses four times as many. \
-                     Lower values reduce GPU load and detail in the editor, preview and exported lattice. Video output size is set separately.",
-            );
-        let atmosphere = &mut appearance.spectrum.atmosphere;
-        ui.add_enabled_ui(atmosphere.effects().light(), |ui| {
-            ValueBar::new(
-                &mut atmosphere.blur_time_step,
-                0.0..=harmonigraph_scene::BLUR_TIME_STEP_MAX,
-                "Spectrogram time step",
-            )
-            .unit(1.0, "×")
-            .decimals(1)
-            .step(0.5)
-            .show(ui)
-            .on_hover_text(
-                "Sample spacing along time for spectrogram softness and cloud effects, as a multiple of one displayed history column. \
-                 Higher values reduce GPU cost at long history durations, with extra softening along time. \
-                 0 disables this additional reduction; 1 is the default. Pitch detail and MIDI ribbons are unaffected. \
-                 Requires spectrogram softness or cloud texture.",
-            );
+        super::block(ui, "Editor and exports", |ui| {
+            ValueBar::new(&mut appearance.view.render_scale, LATTICE_RENDER_SCALE_RANGE, "Lattice resolution")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "Lattice render dimensions relative to native resolution. \
+                         100% is native; \
+                         50% uses a quarter of the pixels; \
+                         200% uses four times as many. \
+                         Lower values reduce GPU load and detail in the editor, preview and exported lattice. Video output size is set separately.",
+                );
+            let atmosphere = &mut appearance.spectrum.atmosphere;
+            ui.add_enabled_ui(atmosphere.effects().light(), |ui| {
+                ValueBar::new(
+                    &mut atmosphere.blur_time_step,
+                    0.0..=harmonigraph_scene::BLUR_TIME_STEP_MAX,
+                    "Spectrogram time step",
+                )
+                .unit(1.0, "×")
+                .decimals(1)
+                .step(0.5)
+                .show(ui)
+                .on_hover_text(
+                    "Sample spacing along time for spectrogram softness and cloud effects, as a multiple of one displayed history column. \
+                     Higher values reduce GPU cost at long history durations, with extra softening along time. \
+                     0 disables this additional reduction; 1 is the default. Pitch detail and MIDI ribbons are unaffected. \
+                     Requires spectrogram softness or cloud texture.",
+                );
+            });
         });
         // The other half of the cost dial: render scale sets what each frame
         // costs, this sets how many of them there are. Presented as a ceiling
         // rather than a target — the shell decides the actual cadence, and a
         // ceiling above what it can offer simply doesn't bind.
-        super::block(ui, "Editor only");
-        choice_row(
-            ui,
-            "Editor frame limit (fps)",
-            &mut interaction.fps_cap,
-            &[
-                (None, "Uncapped", "Repaint as often as the host window allows."),
-                (
-                    Some(30.0),
-                    "30",
-                    "Limit redraws to 30 frames per second to reduce display processing cost.",
-                ),
-                (
-                    Some(60.0),
-                    "60",
-                    "Limit editor redraws to 60 frames per second. Video exports always use 60 fps.",
-                ),
-                (Some(120.0), "120", "For a high-refresh display."),
-                (Some(144.0), "144", "For a high-refresh display."),
-            ],
-        );
-        crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")
-            .on_hover_text(
-                "A draggable HUD: frame rate, worst recent frame, memory, and the \
-             voice/node workload.",
+        super::block(ui, "Editor only", |ui| {
+            choice_row(
+                ui,
+                "Editor frame limit (fps)",
+                &mut interaction.fps_cap,
+                &[
+                    (None, "Uncapped", "Repaint as often as the host window allows."),
+                    (
+                        Some(30.0),
+                        "30",
+                        "Limit redraws to 30 frames per second to reduce display processing cost.",
+                    ),
+                    (
+                        Some(60.0),
+                        "60",
+                        "Limit editor redraws to 60 frames per second. Video exports always use 60 fps.",
+                    ),
+                    (Some(120.0), "120", "For a high-refresh display."),
+                    (Some(144.0), "144", "For a high-refresh display."),
+                ],
             );
-        if interaction.show_perf {
-            crate::widgets::checkbox(ui, &mut interaction.show_perf_detail, "Frame breakdown")
+            crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")
                 .on_hover_text(
-                    "Expands the overlay into every stage of the frame, to see which \
-                 one is costing you.",
+                    "A draggable HUD: frame rate, worst recent frame, memory, and the \
+                 voice/node workload.",
                 );
-        }
+            if interaction.show_perf {
+                crate::widgets::checkbox(ui, &mut interaction.show_perf_detail, "Frame breakdown")
+                    .on_hover_text(
+                        "Expands the overlay into every stage of the frame, to see which \
+                     one is costing you.",
+                    );
+            }
+        });
     });
 
     // Layout: how big the chrome draws, then the pane arrangement itself.
