@@ -6,21 +6,33 @@
 //! `lattice_tests::golden` and `harmonigraph-offline`'s `golden` each carry
 //! their own set and their own reading of one.
 //!
-//! There is one gate rather than one per crate because the bless protocol is a
-//! CONTRACT with whoever is holding the branch: `HARMONIGRAPH_BLESS=1 cargo
-//! test --workspace golden` re-baselines every set in one run, and the
-//! amplified sheet it names is what a re-baseline is read from. A second
-//! implementation of that would be free to drift — a tolerance here, a
-//! different environment variable there — and the drift would show up as a
-//! session blessing one crate's frames and silently not the other's.
+//! The frames on record are the ones the CI runner draws. A Mac on another
+//! macOS draws them apart: on 2026-10-18 the owner's drew every frame of both
+//! sets 1-3/255 off a `main` CI passed. So a failed comparison writes the frame
+//! it drew under `target/golden-diff/actual/`, laid out as `crates/` is, CI
+//! uploads that directory beside the amplified sheets when a group fails, and
+//! a picture change is re-baselined from the run's `golden-diff-<group>`
+//! artifacts: read the sheets, copy `actual/*` over `crates/`, push, and repeat
+//! until green — a test that checks two frames stops at the first that moved,
+//! and a failing test binary skips the ones after it.
+//! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` re-baselines to the
+//! machine it runs on, which is the record only where that machine draws what
+//! CI does.
+//!
+//! There is one gate rather than one per crate because that protocol is a
+//! CONTRACT with whoever is holding the branch. A second implementation of it
+//! would be free to drift — a tolerance here, a different environment variable
+//! there — and the drift would show up as a session re-baselining one crate's
+//! frames and silently not the other's.
 
 use std::path::{Path, PathBuf};
 
 /// How far a channel may drift before the frame counts as changed.
 ///
-/// Zero: one machine, one driver, one backend, so a difference is the shader's
-/// or the scene's and not the platform's. A tolerance would have to be wider
-/// than #453's mean of 3.3/255 to be worth having, and that is the signal
+/// Zero: the record is one machine, CI's runner, so there a difference is the
+/// shader's or the scene's and not the platform's. Another machine's 1-3/255
+/// is not a reason for one: a tolerance wide enough for it would pass a uniform
+/// two-level shift, which is #453's shape (a mean of 3.3/255) and the signal
 /// rather than the noise.
 const TOLERANCE: u8 = 0;
 
@@ -45,6 +57,10 @@ pub struct Gate {
     /// Where a failing comparison writes its contact sheet — under `target/`,
     /// so the working tree stays clean while the gate is passing.
     diffs: PathBuf,
+    /// Where it writes the frame it actually drew, laid out as the repository
+    /// is (`actual/<crate>/golden/<name>.png`), so a frame CI drew is a copy
+    /// into `crates/` away from being the one on record.
+    actual: PathBuf,
 }
 
 impl Gate {
@@ -59,7 +75,9 @@ impl Gate {
         // is written on failure and read once, and `cargo clean` is the right
         // way to be rid of it.
         let diffs = manifest.join("../../target/golden-diff");
-        Gate { dir: manifest.join("golden"), diffs }
+        let krate = manifest.file_name().expect("a crate directory").to_owned();
+        let actual = diffs.join("actual").join(krate).join("golden");
+        Gate { dir: manifest.join("golden"), diffs, actual }
     }
 
     /// `frame` is byte-identical to the PNG on record under `name`, or the
@@ -107,23 +125,42 @@ impl Gate {
             return;
         }
 
+        // A new frame and a resized one have nothing to compare against, and
+        // are written out for the same reason a moved one is: the record
+        // comes from what CI drew.
+        let actual = self.actual.join(format!("{name}.png"));
         let Some((expected, on_record)) = read_png(&path) else {
+            write_png(&actual, size, frame);
             panic!(
-                "no golden frame at {}\nrun: {BLESS}=1 cargo test --workspace golden",
+                "no golden frame at {}\nthe frame drawn: {}\nre-baseline it from CI's \
+                 golden-diff-<group> artifact (see this crate's docs)",
                 path.display(),
+                actual.display(),
             );
         };
-        assert_eq!(on_record, size, "{name}: golden was written at a different size");
+        if on_record != size {
+            write_png(&actual, size, frame);
+            panic!(
+                "{name}: golden was written at a different size; the frame drawn: {}",
+                actual.display()
+            );
+        }
 
         let (mean, max) = drift(&expected, frame);
         if max > TOLERANCE {
             let sheet = self.write_contact_sheet(name, size, &expected, frame);
+            write_png(&actual, size, frame);
             panic!(
                 "{name} moved: mean {mean:.3}/255, max {max}/255\n\
                  expected | actual | difference at 8x: {}\n\
-                 If the change is intended, re-baseline and say what moved in the PR body:\n\
-                 {BLESS}=1 cargo test --workspace golden",
-                sheet.display()
+                 the frame drawn: {}\n\
+                 If the change is intended, say what moved in the PR body and re-baseline \
+                 from the frames CI drew: download the failed run's golden-diff-<group> \
+                 artifacts and copy actual/* over crates/ (see this crate's docs). \
+                 {BLESS}=1 cargo test --workspace golden re-baselines to THIS machine, \
+                 which is the record only if it draws what CI does.",
+                sheet.display(),
+                actual.display(),
             );
         }
     }
@@ -219,7 +256,7 @@ mod tests {
     #[test]
     fn golden_requires_a_complete_frame_even_when_the_prefix_matches() {
         let dir = std::env::temp_dir().join(format!("harmonigraph-golden-{}", std::process::id()));
-        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs") };
+        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
         let frame: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
         write_png(&dir.join("complete.png"), [8, 8], &frame);
         gate.check("complete", [8, 8], &frame);
@@ -231,6 +268,20 @@ mod tests {
                 "accepted {len} bytes for a 256-byte frame",
             );
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A frame that moved is left on disk exactly as drawn, alpha included,
+    /// which is what re-baselining from CI's uploaded frames rests on.
+    #[test]
+    fn a_moved_frame_is_written_out_as_drawn() {
+        let dir = std::env::temp_dir().join(format!("harmonigraph-moved-{}", std::process::id()));
+        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
+        let on_record: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
+        write_png(&dir.join("moved.png"), [8, 8], &on_record);
+        let drawn: Vec<u8> = (0..64).flat_map(|x| [x, 1, 0, 128 + x]).collect();
+        assert!(std::panic::catch_unwind(|| gate.check("moved", [8, 8], &drawn)).is_err());
+        assert_eq!(read_png(&dir.join("actual/moved.png")), Some((drawn, [8, 8])));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
