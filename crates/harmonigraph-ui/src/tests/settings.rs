@@ -388,12 +388,14 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
 /// Scrolling names the span it scrolls, read live off the Analyzer's History
 /// duration, so it reads as the alternative to Fit video without the Analyzer
 /// page open. Dialled off the default so a label frozen at the fresh value fails.
+/// Wide enough for the row to stand open rather than fold into its dropdown,
+/// where the choice not taken is not drawn.
 #[test]
 fn the_scrolling_spectrogram_choice_names_its_span() {
     let mut state = fresh();
     state.picture.appearance.spectrum.roll_seconds = 42.0;
     state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
-    let shapes = DockHarness::at(egui::vec2(420.0, 1200.0)).frame(&mut state, vec![]).shapes;
+    let shapes = DockHarness::at(egui::vec2(520.0, 1200.0)).frame(&mut state, vec![]).shapes;
     assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
 

@@ -572,7 +572,7 @@ fn record_controls(
             "Record notes, automation, the current look and the selected audio input for video export. Press again to finish, or choose an automatic ending below. Finishing starts the video render.",
         );
         if !interaction.take.status.is_empty() {
-            crate::widgets::weak(ui, &interaction.take.status);
+            crate::widgets::label(ui, &interaction.take.status);
         }
         // When a take finishes and turns into a video.
         choice_row(
@@ -694,7 +694,7 @@ fn export_queue(
                     job.take.file_name().unwrap_or_default().to_string_lossy()
                 ),
             );
-            crate::widgets::weak(ui, job.output.display().to_string());
+            crate::widgets::label(ui, job.output.display().to_string());
             if matches!(job.state, ExportStatus::Running | ExportStatus::Cancelling) {
                 let progress = job.progress;
                 let value = progress.fraction().map_or_else(

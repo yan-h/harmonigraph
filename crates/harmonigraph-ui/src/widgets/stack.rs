@@ -9,8 +9,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    bar_radius, bar_width, drag, grip_radius, name_color, paint_thumbs, poised, track_fill,
-    BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
+    bar_radius, bar_width, drag, grip_radius, paint_thumbs, poised, track_fill, BAR_TEXT_PAD,
+    HANDLE_INSET, HANDLE_W,
 };
 use super::text_at;
 use crate::theme;
@@ -573,7 +573,7 @@ impl<'a> StackBar<'a> {
         // ellipsis costs most of the room a four-letter name needs, and a layer
         // dialled down to a sliver would spend its whole cell saying nothing.
         // What the bar always shows is the picture.
-        let text_color = name_color(&response);
+        let text_color = theme::text();
         let thumbs = thumbs_of(&rings);
         let body = TextStyle::Body.resolve(ui.style());
         let mut runs: Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)> = Vec::new();
@@ -615,7 +615,7 @@ impl<'a> StackBar<'a> {
                 None
             };
             if let Some(x) = placed.filter(|x| x + w <= rect.right()) {
-                let pos = text_at(ui, rect, &name, x);
+                let pos = text_at(rect, &name, x);
                 painter.galley(pos, name.clone(), text_color);
                 runs.push((pos, name));
                 cursor = x + w;
@@ -1283,7 +1283,7 @@ mod tests {
     ///
     /// An upper bound, not a measurement: placement that names them narrower
     /// still passes, and only one that loses a name above it fails.
-    const ALL_NAMED: f32 = 178.0;
+    const ALL_NAMED: f32 = 184.0;
 
     /// And one thumb per layer, four of them, on the boundaries.
     #[test]

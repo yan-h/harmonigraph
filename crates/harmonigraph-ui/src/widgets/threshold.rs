@@ -34,7 +34,7 @@ pub(crate) fn threshold(ui: &mut Ui, gate: &mut f32, hysteresis: &mut f32) -> eg
         } else {
             format!("Off < {:.2}%", off * 100.0)
         };
-        ui.add(egui::Label::new(egui::RichText::new(status.clone()).weak()).truncate())
+        ui.add(egui::Label::new(egui::RichText::new(status.clone())).truncate())
             .on_hover_text(status);
     });
     ui.painter().rect_filled(

@@ -532,7 +532,7 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
         rect.left_top() + egui::vec2(10.0, 8.0),
         egui::Align2::LEFT_TOP,
         "LEARN".to_string(),
-        egui::FontId::monospace(12.0),
+        crate::theme::picture_font(12.0),
         theme::armed().gamma_multiply(learn_pulse(now)),
         theme::picture().gamma_multiply(learn_pulse(now)),
     );
@@ -751,7 +751,7 @@ pub(crate) fn draw_node_labels(
             // under the name, and stacking a second one would bury the node.
             if view.show_cents && (node.on_home || sevens == SevensLabel::Name) {
                 let text = format!("{:.2}", node.cents);
-                let font = egui::FontId::monospace(CENTS_SIZE * scale);
+                let font = crate::theme::picture_font(CENTS_SIZE * scale);
                 // Hang the readout off the name's INK, not its galley box: a
                 // monospace box carries enough leading above and below the glyphs
                 // that box-to-box spacing left the two floating far apart.
@@ -786,7 +786,7 @@ fn draw_assignment_dot(
     size: crate::marks::NameSize,
     ink: egui::Color32,
 ) {
-    let font = egui::FontId::monospace(NAME_SIZE * size.scale);
+    let font = crate::theme::picture_font(NAME_SIZE * size.scale);
     // Capital height fixes the anchor even when no name is being drawn.
     let cap = painter.layout_no_wrap("H".into(), font.clone(), egui::Color32::PLACEHOLDER);
     let cap_top = cap.mesh_bounds.min.y - cap.size().y / 2.0;
@@ -1116,7 +1116,16 @@ mod tests {
         state.appearance.view.label_scale *= 2.0;
         let larger = draw(&scene, &state.appearance.view);
         let large_dot = larger.pieces().iter().find(|p| p.text == ".").unwrap();
-        assert!(large_dot.ink.width() > lit_dot.ink.width() * 1.7, "dot must follow label size");
+        // Under double: a piece's ink is the glyph's atlas cell, which carries a
+        // fixed pixel of padding round a dot only a few points across (5.0pt
+        // growing to 7.8pt in Curly Medium). A dot held at one size would not
+        // grow at all.
+        assert!(
+            large_dot.ink.width() > lit_dot.ink.width() * 1.5,
+            "dot must follow label size: {} at twice the scale of {}",
+            large_dot.ink.width(),
+            lit_dot.ink.width()
+        );
     }
 
     /// Draw the labels for a chord, with the camera at `distance`, and
@@ -1165,7 +1174,7 @@ mod tests {
                 egui::pos2(100.0, 50.0),
                 egui::Align2::CENTER_CENTER,
                 "C440".to_owned(),
-                egui::FontId::monospace(15.0),
+                crate::theme::picture_font(15.0),
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
             );

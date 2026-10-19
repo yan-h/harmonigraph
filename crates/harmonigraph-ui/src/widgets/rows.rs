@@ -18,11 +18,11 @@ const CHECKBOX_CHECK: f32 = 9.0;
 /// it.
 ///
 /// Every other control fills its row edge to edge, so the row gap is the gap
-/// a reader sees between them. egui's box is 14 points, and in a 19-point row
-/// it stands 2.5 points in from each edge — two checkboxes in a row read 8
-/// points apart where two bars read 3, the column's loosest joint. Here the
-/// row is the line (17 at the design size) and the box 16, so the joint is the
-/// row gap plus a point.
+/// a reader sees between them. egui's box is 14 points, and in a 22-point row
+/// it stands 4 points in from each edge — two checkboxes in a row read 12
+/// points apart where two bars read 4, the column's loosest joint. Here the
+/// row is the line and the box 16, so the joint is the row gap plus the
+/// little the line is taller than the box.
 ///
 /// Its own rows are therefore shorter than a row, the one control whose are:
 /// the evenness a pane is meant to have is in what it draws, not in its
@@ -148,11 +148,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             (radius - inset).max(0.0),
             theme::text(),
         );
-        painter.galley(
-            super::text_at(ui, rect, &galley, track.right() + gap),
-            galley,
-            theme::text(),
-        );
+        painter.galley(super::text_at(rect, &galley, track.right() + gap), galley, theme::text());
     }
     response
 }
@@ -221,7 +217,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             );
         }
         painter.galley(
-            super::text_at(ui, rect, &galley, rect.left() + pad_x + dot_r * 2.0 + gap),
+            super::text_at(rect, &galley, rect.left() + pad_x + dot_r * 2.0 + gap),
             galley,
             theme::text(),
         );
@@ -324,38 +320,10 @@ pub(crate) fn preset_row(
     }
 }
 
-/// A selectable option's label, set in MONOSPACE when the label is a bare
-/// number ("1080", "16:9", "-1.5") and left alone when it is a word.
-///
-/// Numbers are monospace everywhere else in this UI — every bar readout, the
-/// perf HUD, the lattice text — for the reason digits always want it: one
-/// width per glyph, so a column of them lines up and none of them wiggles as
-/// it changes. A row of number buttons is the same picture sideways. Set in
-/// the proportional face, "1080" and "1440" come out different widths and the
-/// row reads as four unrelated words rather than as a scale.
-///
-/// The FAMILY only, not [`TextStyle::Monospace`], which would also drop the
-/// label to the monospace size and leave a number sitting smaller than the
-/// words beside it.
-///
-/// Decided per label rather than per row, because rows mix: the frame-rate row
-/// is "Uncapped" beside four numbers, and only the numbers want this.
-pub fn option_label(label: &str) -> egui::RichText {
-    let text = egui::RichText::new(label);
-    // A digit, and nothing but digits and the punctuation numbers wear.
-    let numeric = label.chars().any(|c| c.is_ascii_digit())
-        && label.chars().all(|c| c.is_ascii_digit() || "+-±.,:/× ".contains(c));
-    if numeric {
-        text.family(egui::FontFamily::Monospace)
-    } else {
-        text
-    }
-}
-
 /// Natural width of a selectable option, using the same font and padding as
 /// the button. Width decisions are recomputed from this frame's theme.
 pub(crate) fn option_width(ui: &Ui, label: &str) -> f32 {
-    let galley = egui::WidgetText::from(option_label(label)).into_galley(
+    let galley = egui::WidgetText::from(label).into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,
@@ -377,7 +345,7 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
         ui.horizontal(|ui| {
             tighten(ui);
             for &(choice, label, hint) in options {
-                let response = ui.selectable_value(value, choice, option_label(label));
+                let response = ui.selectable_value(value, choice, label);
                 if !hint.is_empty() {
                     response.on_hover_text(hint).on_disabled_hover_text(hint);
                 }
@@ -406,12 +374,12 @@ fn choice_menu<T: Copy + PartialEq>(
         .map_or("Custom", |(_, label, _)| *label);
     let title = label.to_owned();
     let combo = egui::ComboBox::from_id_salt((id, ui.next_auto_id()))
-        .selected_text(option_label(&title))
+        .selected_text(&title)
         .width(ui.available_width())
         .truncate();
     selected_combo(ui, combo, |ui| {
         for &(choice, label, hint) in options {
-            let response = ui.selectable_value(value, choice, option_label(label));
+            let response = ui.selectable_value(value, choice, label);
             if !hint.is_empty() {
                 response.on_hover_text(hint).on_disabled_hover_text(hint);
             }
@@ -500,58 +468,7 @@ pub fn choice_row<T: Copy + PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::probe::{painted, painted_in};
-
-    /// Every text run a `choice_row` of these options paints, as
-    /// `text -> (family, size)`.
-    fn choice_row_fonts(options: &[(u32, &str, &str)]) -> Vec<(String, egui::FontId)> {
-        let mut value = 0u32;
-        painted(400.0, |ui| choice_row(ui, "Row", &mut value, options))
-            .iter()
-            .filter_map(|cs| match &cs.shape {
-                egui::Shape::Text(t) => Some((
-                    t.galley.text().to_owned(),
-                    t.galley.job.sections[0].format.font_id.clone(),
-                )),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// An option label that is a bare number is set in the monospace face, and
-    /// one that is a word is not — decided per label, since a row can hold
-    /// both. The size is the row's own either way: taking the whole monospace
-    /// TEXT STYLE would shrink the numbers, leaving "30" visibly smaller than
-    /// the "Uncapped" beside it.
-    #[test]
-    fn number_option_labels_are_monospace_at_the_rows_own_size() {
-        let painted = choice_row_fonts(&[
-            (0, "Uncapped", ""),
-            (1, "30", ""),
-            (2, "144", ""),
-            (3, "16:9", ""),
-            (4, "-1.5", ""),
-            (5, "12-TET", ""),
-        ]);
-        let numbers = ["30", "144", "16:9", "-1.5"];
-        let words = ["Row", "Uncapped", "12-TET"];
-        let row_size = painted
-            .iter()
-            .find(|(text, _)| text == "Uncapped")
-            .map(|(_, font)| font.size)
-            .expect("the row painted no 'Uncapped'");
-        for (text, font) in &painted {
-            let wanted = if numbers.contains(&text.as_str()) {
-                egui::FontFamily::Monospace
-            } else {
-                assert!(words.contains(&text.as_str()), "unexpected run {text:?}");
-                egui::FontFamily::Proportional
-            };
-            assert_eq!(font.family, wanted, "{text:?} was painted in {:?}", font.family);
-            assert_eq!(font.size, row_size, "{text:?} was painted at {}pt", font.size);
-        }
-        assert_eq!(painted.len(), numbers.len() + words.len(), "a label went unpainted");
-    }
+    use crate::widgets::probe::painted_in;
 
     /// A row-builder: lays out a control row, calling back to add its label
     /// and button. Aliased so clippy doesn't flag the nested `dyn FnMut`.

@@ -12,7 +12,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
 
     super::section(ui, "Glow pattern", |ui| {
         if !glow_enabled {
-            crate::widgets::weak(
+            crate::widgets::label(
                 ui,
                 "Set Background glow reach and gain above zero to see these effects.",
             );
@@ -39,7 +39,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
     });
     super::section(ui, "Glow material", |ui| {
         if !glow_enabled {
-            crate::widgets::weak(
+            crate::widgets::label(
                 ui,
                 "Set Background glow reach and gain above zero to see these effects.",
             );

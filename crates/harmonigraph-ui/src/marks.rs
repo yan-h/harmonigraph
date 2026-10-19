@@ -100,8 +100,12 @@ pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
 /// | 0.9  | 2.3pt            | 0.25pt           |
 /// | 1.0  | 4.0pt            | 1.95pt           |
 ///
-/// 0.9 is the tightest that keeps the rows from interleaving at all.
-const MARK_RISE: f32 = 0.9;
+/// 0.9 was the tightest that kept the rows from interleaving at all, in
+/// Iosevka Fixed Regular, where the table was measured. Curly Medium's taller
+/// `♯` (0.89 em against 0.878) and heavier digits interleave by 0.3pt there,
+/// so the rise is 0.95, half a step looser; `the_two_mark_rows_set_alike_and_
+/// clear_each_other` holds it.
+const MARK_RISE: f32 = 0.95;
 
 /// Iosevka Fixed's advance, as a fraction of the em: every cell is half an
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
@@ -123,17 +127,27 @@ pub(crate) const MARK_ADVANCE: f32 = 0.5;
 /// narrower glyph ([`FLAT_INK_W`]) and opens 0.022em wider, which is the air
 /// the face itself gives it.
 pub(crate) const MARK_TRACK: f32 = 0.06;
-/// Iosevka's own stroke weight, measured off its outlines: 70/1000 em, as a
-/// fraction of the mark's font size.
+/// The marks' stroke weight, as a fraction of the mark's font size: 0.07 em,
+/// Iosevka Fixed Regular's, a hundredth of an em under the Medium the labels
+/// are now set in.
 ///
-/// A constant rather than a setting, because the face gives no other answer
-/// to weigh it against. It uses ONE weight for everything STRAIGHT — `♯`'s
-/// verticals are 69 and its bars 70, the hyphen is 70, `+` is about 70, and
-/// `♭`'s stem is 69 — and it does that across a glyph 878 units tall (`♯`)
-/// and one 70 units tall (`-`) alike. So the typeface's own answer to
-/// "should a smaller mark be drawn heavier?" is no, and an optical-sizing
-/// argument for 0.10 or 0.12 is an argument against the face these marks sit
-/// in.
+/// The face uses about ONE weight for everything STRAIGHT. Medium's, read off
+/// its glyphs rasterized 400 pixels to the em (to a quarter of a hundredth of
+/// an em, as are the ink boxes below): `♯`'s verticals are 0.078 and its bars
+/// 0.080, the hyphen is 0.080, `+` is 0.075 to 0.085, and `♭`'s stem is 0.080,
+/// across a glyph 0.89 em tall (`♯`) and one 0.08 em tall (`-`) alike. So the
+/// typeface's own answer to "should a smaller mark be drawn heavier?" is no,
+/// and an optical-sizing argument for 0.10 or 0.12 is an argument against the
+/// face these marks sit in.
+///
+/// Why not Medium's 0.08, then: two of the marks were fitted at 0.07, and at
+/// 0.08 both fail what they were fitted for. The `♭`'s bowl ([`FLAT_BOWL`])
+/// overshoots its box and its foot breaks in two at large sizes, and the drawn
+/// `♯` at the analyzer's name size breathes 53.7% of its ink against the
+/// Medium glyph's 45.4%, where it is drawn at all only to breathe less. At
+/// 0.07 both hold (`a_drawn_accidental_breathes_less_than_the_type_it_replaced`
+/// and the `♭` tests). A refit of the bowl, and a look at the `♯`'s breathing,
+/// at 0.08 is what would close the hundredth of an em.
 ///
 /// The one curve in the set is the one exception, and it is a fraction of
 /// this rather than a weight of its own: see [`FLAT_BOWL_WEIGHT`].
@@ -141,29 +155,34 @@ pub(crate) const MARK_TRACK: f32 = 0.06;
 /// Heavier weights were also compensating for something since fixed: while
 /// the marks were composited shapes their feathered joins read heavier than
 /// the geometry measured, and while they were typeset a bar this thin really
-/// did smear. Rasterized with a whole-pixel floor (see [`mark_key`]), 0.07 is
-/// a clean line — and it is the line the rest of the label is drawn with.
+/// did smear. Rasterized with a whole-pixel floor (see [`mark_key`]), it is a
+/// clean line.
 pub(crate) const MARK_WEIGHT: f32 = 0.07;
 
-/// The ink width Iosevka gives `+`, `-` and `♯` alike within that cell
-/// (372/1000 em). Matching it is what keeps a drawn sign from reading as a
+/// The ink width the face gives `+`, `-` and `♯` alike within that cell
+/// (0.375 em). Matching it is what keeps a drawn sign from reading as a
 /// different size of mark than the one stacked over it.
-pub(crate) const MARK_INK_W: f32 = 0.372;
-/// And the height of `+`'s upright (386/1000 em).
-const PLUS_INK_H: f32 = 0.386;
+pub(crate) const MARK_INK_W: f32 = 0.375;
+/// And the height of `+`'s upright (0.395 em).
+const PLUS_INK_H: f32 = 0.395;
 
-/// `♯`'s ink height (878/1000 em), in the width `+` has.
+/// `♯`'s ink height (0.89 em), in the width `+` has.
 ///
 /// An accidental is a tall mark -- more than twice the `+`'s height -- and
 /// it is the size the same glyph sets at, so drawing it changes what the
 /// column is made OF and not what it measures.
-const SHARP_INK_H: f32 = 0.878;
-/// `♭`'s ink box (328 x 818/1000 em). Narrower than `♯`, as the face has it.
-const FLAT_INK_W: f32 = 0.328;
-const FLAT_INK_H: f32 = 0.818;
+const SHARP_INK_H: f32 = 0.89;
+/// `♭`'s ink box (0.3325 x 0.8275 em). Narrower than `♯`, as the face has it.
+const FLAT_INK_W: f32 = 0.3325;
+const FLAT_INK_H: f32 = 0.8275;
 
 /// `♯`'s uprights, as a fraction of its ink width either side of the centre:
 /// Iosevka centres them on 133.5 and 366.5 of a box running 64..436.
+///
+/// This and the three below, like the `♭`'s bowl, are PROPORTIONS of the ink
+/// box, read off Iosevka Fixed Regular's outlines in font units. Curly
+/// Medium's glyphs, rasterized, match each of them to within the read's
+/// resolution, so only the weight and the boxes above moved with the face.
 const SHARP_STEM_X: f32 = 0.313;
 /// How much of the ink height one upright covers (818 of 878). Both are that
 /// length, and they are OFFSET -- the left flush with the bottom of the box,
@@ -802,14 +821,14 @@ fn paint_mark(
 pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
     let size_px = (size * ppp).round().max(2.0);
     // Floored at a whole physical pixel: the whole reason these marks are
-    // not type is that Iosevka's own bars are 70/1000 em, which is 0.58px
+    // not type is that the face's own bars are 0.08 em, which is 0.66px
     // at MARK_SIZE, and a stroke thinner than a pixel spends all of its
     // contrast on partial coverage.
     //
     // That is a claim about the STROKE and not about the glyph, which is why
-    // it reaches the accidentals too. `♯` and `♭` carry 878 and 818 units of
-    // ink against the hyphen's 70, and being tall buys them nothing: every
-    // line in them is the same 69-70 units the hyphen is, so at the size this
+    // it reaches the accidentals too. `♯` and `♭` carry 0.89 and 0.83 em of
+    // ink against the hyphen's 0.08, and being tall buys them nothing: every
+    // line in them is about the hyphen's weight, so at the size this
     // column sets they are the same sub-pixel stroke (issue #292).
     //
     // What the floor buys is worth stating exactly, because it is less than
@@ -837,8 +856,8 @@ pub(crate) fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> Mark
 /// so a name deep in the lattice -- or five modulations out along the sevens
 /// axis -- stays a couple of characters wide instead of sprawling off its node.
 ///
-/// Every sign in the column is DRAWN and only the counts are type: Iosevka
-/// has no line thicker than 70/1000 em anywhere -- in the hyphen, in the
+/// Every sign in the column is DRAWN and only the counts are type: the face
+/// has no line much thicker than 0.08 em anywhere -- in the hyphen, in the
 /// `+`, or in the accidentals -- and at the size this column sets, that is
 /// a stroke narrower than a pixel. Digits are not lines and keep a core of
 /// their own, so they stay typeset. See [`mark_geometry`] and [`mark_key`].
@@ -983,8 +1002,8 @@ fn stacked_name(
     scale: f32,
     lead: NameLead,
 ) -> f32 {
-    let name_font = egui::FontId::monospace(NAME_SIZE * scale);
-    let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
+    let name_font = crate::theme::picture_font(NAME_SIZE * scale);
+    let mark_font = crate::theme::picture_font(MARK_SIZE * scale);
     let mark_size = MARK_SIZE * scale;
     let ppp = painter.ctx().pixels_per_point();
     let measure = |text: &str, font: &egui::FontId| {
@@ -1160,7 +1179,7 @@ pub(crate) fn draw_plain_name(
     ink: NameInk,
     size: NameSize,
 ) -> f32 {
-    let font = egui::FontId::monospace(NAME_SIZE * size.scale);
+    let font = crate::theme::picture_font(NAME_SIZE * size.scale);
     let galley =
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size();
     batch.magnified(anchor, size.magnify, |batch| {
@@ -1321,14 +1340,13 @@ mod tests {
     /// Every drawn mark is one stroke weight, and it is the one the font
     /// draws with.
     ///
-    /// Iosevka uses a single weight across its whole set -- `♯`'s verticals
-    /// are 69 units, its bars 70, the hyphen 70 -- and it does that over a
-    /// glyph 878 units tall and one 70 units tall alike. These marks sit in
-    /// that set, so they are drawn at 70/1000 em too, and the `-` and the
-    /// `+`'s bar have to come out identical.
+    /// The face uses about one weight across its whole set (see
+    /// [`MARK_WEIGHT`]), over a glyph 0.89 em tall and one 0.08 em tall
+    /// alike. These marks sit in that set, so they are drawn at its weight
+    /// too, and the `-` and the `+`'s bar have to come out identical.
     #[test]
     fn every_drawn_mark_is_the_fonts_one_stroke_weight() {
-        const WEIGHT: f32 = 0.07;
+        const WEIGHT: f32 = MARK_WEIGHT;
         let size = 24.0;
         let ppp = 2.0;
         let minus = rasterize_mark(mark_key(MarkKind::Minus, size, WEIGHT, ppp));
@@ -1340,9 +1358,9 @@ mod tests {
             (0..img.size[1]).filter(|&y| coverage(img, x, y) > 127).count()
         };
         assert_eq!(bar(&minus), bar(&plus), "the - and the +'s bar disagree");
-        // And that thickness is the font's own 0.07 em, to the pixel.
+        // And that thickness is the font's own weight, to the pixel.
         let want = (WEIGHT * size * ppp).round() as usize;
-        assert_eq!(bar(&minus), want, "{} px drawn, {want} px is 0.07 em", bar(&minus));
+        assert_eq!(bar(&minus), want, "{} px drawn, {want} px is {WEIGHT} em", bar(&minus));
     }
 
     /// The stroke floor is one PHYSICAL pixel, not one point -- a point is
@@ -1779,7 +1797,7 @@ mod tests {
         let ctx = crate::tests::probe::themed_at(ppp);
         let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
         let galley = ctx.fonts_mut(|f| {
-            f.layout_no_wrap(ch.to_string(), egui::FontId::monospace(size), egui::Color32::WHITE)
+            f.layout_no_wrap(ch.to_string(), crate::theme::picture_font(size), egui::Color32::WHITE)
         });
         let cell = galley.rows[0].glyphs[0].uv_rect;
         ctx.fonts(|f| {

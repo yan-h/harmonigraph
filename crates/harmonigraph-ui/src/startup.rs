@@ -81,8 +81,8 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
         center + egui::vec2(0.0, 10.0),
         egui::Align2::CENTER_CENTER,
         message,
-        egui::FontId::proportional(14.0),
-        theme::text_dim(),
+        egui::FontId::proportional(15.0),
+        theme::text(),
     );
     if matches!(status, Status::Preparing(_)) {
         ui.painter().add(loading.progress.callback(

@@ -5,8 +5,8 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{ViewConfig, SEVENS_LAYER_LIMIT};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    track_fill, BAR_TEXT_PAD, HANDLE_W,
+    bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
+    BAR_TEXT_PAD, HANDLE_W,
 };
 use super::text_at;
 use crate::theme;
@@ -309,7 +309,7 @@ impl<'a> LayerStrip<'a> {
 
         // Name and readout as a ValueBar wears them, ahead of the handles so a
         // thumb standing on a letter can knock it out.
-        let text_color = name_color(&response);
+        let text_color = theme::text();
         let mono = TextStyle::Monospace.resolve(ui.style());
         // A stack of one sheet reads out that sheet alone, the way the octave
         // strip drops its fringe from the readout: three copies of one number
@@ -331,7 +331,7 @@ impl<'a> LayerStrip<'a> {
         job.append("Layers", 0.0, egui::TextFormat::simple(body, text_color));
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
+        let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
         let name_at = centered(&label, rect.left() + text_pad);
         painter.galley(name_at, label.clone(), text_color);
         painter.galley(

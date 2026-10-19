@@ -53,7 +53,9 @@ pub(crate) struct SdfSheet {
 impl SdfSheet {
     pub(crate) fn type_patch(&self, family: &egui::FontFamily, ch: char) -> Option<SdfPatch> {
         match family {
-            egui::FontFamily::Monospace => self.type_patches.get(&ch).copied(),
+            family if *family == crate::theme::picture_family() => {
+                self.type_patches.get(&ch).copied()
+            }
             _ => None,
         }
     }
@@ -289,7 +291,7 @@ fn type_sources() -> Vec<(char, SourceGlyph)> {
     let raw = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
     let _ = ctx.run_ui(raw, |ui| {
         placed.clear();
-        let family = egui::FontFamily::Monospace;
+        let family = crate::theme::picture_family();
         for ch in shadowed_type_characters() {
             let galley = ui.painter().layout_no_wrap(
                 ch.to_string(),

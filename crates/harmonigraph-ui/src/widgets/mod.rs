@@ -35,14 +35,12 @@ pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
 pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
+pub use label::label;
 pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, text_at, GROUP_GAP};
-pub use label::{label, weak};
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
 pub use range::RangeBar;
-pub use rows::{
-    button_row, checkbox, choice_row, option_label, record_button, row_field, toggle_switch,
-};
+pub use rows::{button_row, checkbox, choice_row, record_button, row_field, toggle_switch};
 pub(crate) use rows::{
     checkbox_box, checkbox_indeterminate, choice_buttons, preset_row, selected_combo,
     toggle_switch_width, CHECKBOX_BOX,
