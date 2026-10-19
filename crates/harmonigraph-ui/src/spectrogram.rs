@@ -625,7 +625,7 @@ fn aggregate_slabs<'a>(
 
 /// The same accumulator serves incremental and batch aggregation.
 /// f64 summation avoids accumulating rounding error during a long live slab.
-/// History sums remain f32 (at most 64 samples per group), so regrouping can
+/// History sums are bfloat16 (at most 64 samples per group), so regrouping can
 /// still differ by a final byte right at a quantization boundary.
 #[derive(Clone)]
 struct PowerMean {
@@ -641,7 +641,7 @@ impl Default for PowerMean {
 
 impl PowerMean {
     fn add(&mut self, col: &crate::SpectrogramColumn) {
-        for (sum, &fresh) in self.sum.iter_mut().zip(col.power_sum.iter()) {
+        for (sum, fresh) in self.sum.iter_mut().zip(col.power_sum()) {
             *sum += fresh as f64;
         }
         self.count += col.count as u64;
