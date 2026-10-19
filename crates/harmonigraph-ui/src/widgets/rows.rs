@@ -330,7 +330,15 @@ pub(crate) fn option_width(ui: &Ui, label: impl Into<egui::WidgetText>) -> f32 {
         f32::INFINITY,
         TextStyle::Button,
     );
-    (galley.size().x + 2.0 * ui.spacing().button_padding.x).max(ui.spacing().interact_size.x)
+    (galley.size().x + 2.0 * button_margin_x(ui)).max(ui.spacing().interact_size.x)
+}
+
+/// A button's margin each side of its content as egui draws it: the padding
+/// rounded, because egui keeps a frame's margin in whole points. At a
+/// fractional scale the unrounded padding measured three options a few points
+/// short, and a row judged to fit drew past its column.
+pub(crate) fn button_margin_x(ui: &Ui) -> f32 {
+    ui.spacing().button_padding.x.round()
 }
 
 /// A single-line choice group. Narrow groups become a current-value dropdown,
@@ -545,5 +553,23 @@ mod tests {
             rects[2].top() > rects[0].top(),
             "three wide buttons stayed on one line: {rects:?}"
         );
+    }
+
+    const OPTIONS: [(u8, &str, &str); 3] =
+        [(0, "Perspective", ""), (1, "Orthographic", ""), (2, "Cabinet", "")];
+
+    /// The width a choice group is judged by is the width it draws, at a
+    /// fractional scale too, where egui rounds each button's margin to whole
+    /// points: a group judged to fit and drawn wider overruns its column.
+    #[test]
+    fn a_choice_group_draws_the_width_it_was_judged_by() {
+        let ctx = crate::tests::probe::themed_scaled(1.1);
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let judged = choice_buttons_width(ui, &OPTIONS);
+            let mut value = 0;
+            let drawn = ui.scope(|ui| choice_buttons(ui, "group", &mut value, &OPTIONS)).response;
+            let drawn = drawn.rect.width();
+            assert!((drawn - judged).abs() < 0.5, "judged {judged}pt, drew {drawn}pt");
+        });
     }
 }

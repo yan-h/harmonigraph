@@ -69,7 +69,7 @@ fn overflow_width(ui: &Ui, label: Option<&str>) -> f32 {
     let icon = ui.spacing().icon_width;
     match label {
         Some(label) => option_width(ui, tab_label(label)) + ui.spacing().icon_spacing + icon,
-        None => (icon + 2.0 * ui.spacing().button_padding.x).max(ui.spacing().interact_size.y),
+        None => (icon + 2.0 * super::rows::button_margin_x(ui)).max(ui.spacing().interact_size.y),
     }
 }
 
