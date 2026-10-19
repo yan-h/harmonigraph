@@ -30,8 +30,9 @@ pub(super) fn statistics(
     size: [u32; 2],
 ) -> ([wgpu::TextureView; 3], wgpu::BindGroup) {
     let views = FORMATS.map(|format| {
-        device
-            .create_texture(&wgpu::TextureDescriptor {
+        crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
                 label: Some("glow_statistics"),
                 size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -41,8 +42,9 @@ pub(super) fn statistics(
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
-            })
-            .create_view(&Default::default())
+            },
+        )
+        .create_view(&Default::default())
     });
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("glow_statistics_bind_group"),

@@ -193,12 +193,15 @@ impl Resources {
     fn pane(&mut self, device: &wgpu::Device) -> &mut Pane {
         let locals_layout = &self.locals_layout;
         self.pane.get_or_insert_with(|| {
-            let locals = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("spiral_dot_shadow_locals"),
-                size: std::mem::size_of::<Locals>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let locals = crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("spiral_dot_shadow_locals"),
+                    size: std::mem::size_of::<Locals>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            );
             let locals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spiral_dot_shadow_locals_bind"),
                 layout: locals_layout,

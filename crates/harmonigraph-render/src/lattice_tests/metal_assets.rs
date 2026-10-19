@@ -2,7 +2,6 @@
 //! gives this synthetic shader a separate temporary corpus, never shipping it.
 
 use crate::wgpu;
-use wgpu::util::DeviceExt;
 
 /// The same storage buffer is bound at two different lengths. The result
 /// depends on the actual binding range, arrayLength, and a generated bounds
@@ -46,17 +45,23 @@ fn main() {
     let mut contents = vec![0u32; 64 + values.len()];
     contents[..values.len()].copy_from_slice(&values);
     contents[64..].copy_from_slice(&values);
-    let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(&contents),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
-    let output = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: 16,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
+    let input = crate::gpu_memory::buffer_init(
+        &device,
+        &wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&contents),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
+    );
+    let output = crate::gpu_memory::buffer(
+        &device,
+        &wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        },
+    );
     // The vec4 prefix makes this struct's minimum binding size 32 bytes.
     // Both ranges reach the shader, including a nonzero aligned buffer offset.
     for (offset, count) in [(0, 4u64), (0, 7), (256, 4), (256, 7)] {
@@ -75,12 +80,15 @@ fn main() {
                 wgpu::BindGroupEntry { binding: 1, resource: output.as_entire_binding() },
             ],
         });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let readback = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: None,
+                size: 16,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());

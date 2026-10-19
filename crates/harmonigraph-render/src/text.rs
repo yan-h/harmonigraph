@@ -559,16 +559,23 @@ impl AtlasTexture {
         let size = [atlas.image.width() as u32, atlas.image.height() as u32];
         let recreated = self.shared || self.texture.is_none() || self.size != size;
         if recreated {
-            self.texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("text_font_atlas"),
-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            }));
+            self.texture = Some(crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some("text_font_atlas"),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+            ));
             self.size = size;
             self.binding_key = self.binding_key.wrapping_add(1);
         }
@@ -608,20 +615,23 @@ impl SdfTexture {
         if self.key == Some(atlas.key) {
             return false;
         }
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("text_sdf_atlas"),
-            size: wgpu::Extent3d {
-                width: atlas.size[0].max(1),
-                height: atlas.size[1].max(1),
-                depth_or_array_layers: 1,
+        let texture = crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some("text_sdf_atlas"),
+                size: wgpu::Extent3d {
+                    width: atlas.size[0].max(1),
+                    height: atlas.size[1].max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        );
         queue.write_texture(
             texture.as_image_copy(),
             bytemuck::cast_slice(atlas.image.as_slice()),
@@ -1171,16 +1181,19 @@ pub(crate) fn bind_group(
 /// batch cut FROM that sheet, and its callback receives that sheet before it
 /// prepares the draw.
 pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("text_blank_atlas"),
-        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+    let texture = crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some("text_blank_atlas"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+    );
     // Written rather than left as allocated: a texture's initial contents are
     // undefined, and "nothing samples it" is an argument about this code
     // rather than a promise the driver makes.
@@ -1195,16 +1208,19 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
 
 /// A typed stand-in for the fixed R32Float signed-distance sheet.
 pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("text_blank_sdf_atlas"),
-        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+    let texture = crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some("text_blank_sdf_atlas"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+    );
     queue.write_texture(
         texture.as_image_copy(),
         bytemuck::bytes_of(&0.0f32),
@@ -1358,12 +1374,15 @@ impl CallbackTrait for TextCallback {
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane =
             resources.panes.touched_or_insert_with(self.pane_id, self.pass_nr, || TextPane {
-                uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("text_uniforms"),
-                    size: std::mem::size_of::<TextUniforms>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
+                uniform_buffer: crate::gpu_memory::buffer(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some("text_uniforms"),
+                        size: std::mem::size_of::<TextUniforms>() as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                ),
                 bind_group: None,
                 instance_buffer: create_vertex_buffer::<GlyphInstance>(
                     device,
@@ -1784,16 +1803,19 @@ pub(crate) mod tests {
             "an in-place atlas patch keeps the same binding key",
         );
 
-        let replacement = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("same_size_rebuilt_font_atlas"),
-            size: shared.size(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+        let replacement = crate::gpu_memory::texture(
+            &device,
+            &wgpu::TextureDescriptor {
+                label: Some("same_size_rebuilt_font_atlas"),
+                size: shared.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+        );
         resources.insert(replacement.clone());
         let mut encoder = device.create_command_encoder(&Default::default());
         cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);

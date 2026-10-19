@@ -435,12 +435,15 @@ mod tests {
     use crate::gpu_harness::headless_device;
 
     fn submit(device: &wgpu::Device, resources: &mut CallbackResources, key: ProducerKey) {
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("spectral_shadow_schedule_test_uniform"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("spectral_shadow_schedule_test_uniform"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         register(
             device,
             resources,
@@ -477,12 +480,15 @@ mod tests {
         };
         let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
         let uniform = || {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("spectral_shadow_retention_test_uniform"),
-                size: 16,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            crate::gpu_memory::buffer(
+                &device,
+                &wgpu::BufferDescriptor {
+                    label: Some("spectral_shadow_retention_test_uniform"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            )
         };
         let register_at = |surface_id, pass_nr, resources: &mut CallbackResources| {
             register_for_pass(
@@ -552,12 +558,15 @@ mod tests {
         assert_eq!(stats(&resources, 7), ScheduleStats { blur_chains: 1, groups: 2 });
 
         for surface in [11, 12] {
-            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("spectral_shadow_second_surface_uniform"),
-                size: 16,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let uniform = crate::gpu_memory::buffer(
+                &device,
+                &wgpu::BufferDescriptor {
+                    label: Some("spectral_shadow_second_surface_uniform"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            );
             for key in [ProducerKey::Roll(1), ProducerKey::Text(2)] {
                 register(
                     &device,

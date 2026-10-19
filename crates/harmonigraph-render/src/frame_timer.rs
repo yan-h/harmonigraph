@@ -114,12 +114,15 @@ impl FrameTimer {
             count: STAMPS,
         });
         let buffer = |label, usage| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: u64::from(STAMPS) * 8,
-                usage,
-                mapped_at_creation: false,
-            })
+            crate::gpu_memory::buffer(
+                &device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: u64::from(STAMPS) * 8,
+                    usage,
+                    mapped_at_creation: false,
+                },
+            )
         };
         let resolve = buffer(
             "frame_timer_resolve",
@@ -282,8 +285,9 @@ fn target(
     label: &str,
     size: [u32; 2],
 ) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
+    crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -292,6 +296,7 @@ fn target(
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
-        })
-        .create_view(&Default::default())
+        },
+    )
+    .create_view(&Default::default())
 }

@@ -174,12 +174,15 @@ impl Targets {
         // A pass binds a stand-in for the target it renders into.
         let scratch = stars::image(device, "star_scratch", [1; 2], stars::STAR_IMAGE_FORMAT);
         let atlas_scratch = stars::image(device, "star_atlas_scratch", [1; 2], stars::STAR_FORMAT);
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("lattice_star_settings"),
-            size: std::mem::size_of::<Settings>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("lattice_star_settings"),
+                size: std::mem::size_of::<Settings>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         let source = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_star_source"),
             layout: &pipelines.source_layout,

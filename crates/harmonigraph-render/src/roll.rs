@@ -709,12 +709,15 @@ impl RollPane {
         pass_nr: u64,
     ) -> &'a mut RollPane {
         panes.touched_or_insert_with(pane_id, pass_nr, || {
-            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("roll_uniforms"),
-                size: std::mem::size_of::<RollUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let uniform_buffer = crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("roll_uniforms"),
+                    size: std::mem::size_of::<RollUniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            );
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("roll_bind_group"),
                 layout,
@@ -747,8 +750,9 @@ impl RollHoldout {
         read_layout: &wgpu::BindGroupLayout,
         size: [u32; 2],
     ) -> Self {
-        let view = device
-            .create_texture(&wgpu::TextureDescriptor {
+        let view = crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
                 label: Some("roll_holdout"),
                 size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -758,14 +762,18 @@ impl RollHoldout {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
-            })
-            .create_view(&Default::default());
-        let notes_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("roll_holdout_uniforms"),
-            size: std::mem::size_of::<RollUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+            },
+        )
+        .create_view(&Default::default());
+        let notes_uniform = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("roll_holdout_uniforms"),
+                size: std::mem::size_of::<RollUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         RollHoldout {
             notes_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("roll_holdout_notes_bind_group"),
@@ -796,8 +804,9 @@ impl RollBloom {
     /// screen size — the same rule the lattice's chain follows.
     fn new(device: &wgpu::Device, shared: &RollBloomShared<'_>, size: [u32; 2]) -> Self {
         let [hw, hh] = bloom_notes_size(size);
-        let notes_view = device
-            .create_texture(&wgpu::TextureDescriptor {
+        let notes_view = crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
                 label: Some("roll_bloom_notes"),
                 size: wgpu::Extent3d { width: hw, height: hh, depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -807,8 +816,9 @@ impl RollBloom {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
-            })
-            .create_view(&Default::default());
+            },
+        )
+        .create_view(&Default::default());
         let bloom = crate::BloomChain::new(
             device,
             "roll",
@@ -819,18 +829,24 @@ impl RollBloom {
             size,
         );
 
-        let notes_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("roll_bloom_notes_uniforms"),
-            size: std::mem::size_of::<RollUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let strength_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("roll_bloom_strength"),
-            size: std::mem::size_of::<BloomUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let notes_uniform = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("roll_bloom_notes_uniforms"),
+                size: std::mem::size_of::<RollUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
+        let strength_buffer = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("roll_bloom_strength"),
+                size: std::mem::size_of::<BloomUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         RollBloom {
             notes_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("roll_bloom_notes_bind_group"),

@@ -45,12 +45,15 @@ fn texels(
 ) -> Vec<[u32; 4]> {
     let [width, height] = extent;
     let stride = (width * 16).next_multiple_of(256);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("color_memory_readback"),
-        size: u64::from(stride * height),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let buffer = crate::gpu_memory::buffer(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("color_memory_readback"),
+            size: u64::from(stride * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        },
+    );
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),

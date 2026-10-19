@@ -32,6 +32,12 @@ pollster = "0.4"
 [target.'cfg(target_os = "macos")'.dependencies]
 harmonigraph-metal-assets = { workspace = true }
 
+# The GPU memory record (`gpu_memory`) reads liveness and sizes off the Metal
+# objects under wgpu: the same crates, at the same versions, as `wgpu-hal`.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6.4"
+objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLAllocation", "MTLBuffer", "MTLDevice", "MTLResource", "MTLTexture"] }
+
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.
 naga = { workspace = true, features = ["wgsl-in"] }
