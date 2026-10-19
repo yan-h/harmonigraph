@@ -781,6 +781,13 @@ pub(super) fn subsection<R>(
 /// the end of the rows before it.
 const BLOCK_GAP: f32 = 2.0 * crate::widgets::GROUP_GAP;
 
+/// How far a [`block`]'s rows stand in from its title, at scale 1: a third
+/// short of a fold's 18, which spent width on every row of the block for
+/// nothing. A fold's indent is the column its chevron is centred in, and its
+/// body lines up with the name after it; a block has no chevron, so its indent
+/// only has to read as one.
+pub(crate) const BLOCK_INDENT: f32 = 12.0;
+
 /// Where the cursor stood under the last [`section`] heading, so a [`block`]
 /// opening the section knows the heading's gap is already over it.
 fn section_top_id() -> egui::Id {
@@ -788,8 +795,8 @@ fn section_top_id() -> egui::Id {
 }
 
 /// A labelled run of rows inside a section: its name in the heading weight,
-/// [`BLOCK_GAP`] under what is over it, then `rows` indented under it as a
-/// [`subsection`]'s body is. Not a fold — a section is the thing that folds,
+/// [`BLOCK_GAP`] under what is over it, then `rows` [`BLOCK_INDENT`] in under
+/// it. Not a fold — a section is the thing that folds,
 /// and a block is only the name of a few of its rows, so a section reads as
 /// its blocks without a click on each.
 ///
@@ -809,14 +816,23 @@ pub(super) fn block<R>(
         crate::widgets::group_space_of(ui, BLOCK_GAP);
     }
     let heading = crate::widgets::label(ui, egui::RichText::new(title).heading());
-    let out = ui.indent(title, rows).inner;
+    // egui indents by the style's indent; a fold inside the rows keeps its own.
+    let fold = ui.spacing().indent;
+    ui.spacing_mut().indent = BLOCK_INDENT * crate::theme::ui_scale(ui.ctx());
+    let out = ui
+        .indent(title, |ui| {
+            ui.spacing_mut().indent = fold;
+            rows(ui)
+        })
+        .inner;
+    ui.spacing_mut().indent = fold;
     crate::widgets::group_end(ui);
     egui::InnerResponse::new(out, heading)
 }
 
 #[cfg(test)]
 mod block_tests {
-    use super::{block, section, BLOCK_GAP};
+    use super::{block, section, BLOCK_GAP, BLOCK_INDENT};
 
     fn row(ui: &mut egui::Ui) -> egui::Rect {
         ui.allocate_exact_size(egui::vec2(100.0, 20.0), egui::Sense::hover()).0
@@ -845,7 +861,7 @@ mod block_tests {
                     assert!((gap - BLOCK_GAP).abs() < 0.5, "a title {gap}pt under its row");
                 }
                 let indent = third.inner.left() - third.response.rect.left();
-                assert!((indent - ui.spacing().indent).abs() < 0.5, "rows {indent}pt in");
+                assert!((indent - BLOCK_INDENT).abs() < 0.5, "rows {indent}pt in");
             });
         });
         let [plain, block] = opening;

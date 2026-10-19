@@ -503,9 +503,9 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
-    // A bar under an open subsection fills THAT column, which is the page's
-    // less the fold's indent. Counted per case, and held to the same count at
-    // every width, for the reason the weight bars are.
+    // A bar under an open subsection or in a block fills THAT column, which is
+    // the page's less the fold's or the block's indent. Counted per case, and
+    // held to the same count at every width, for the reason the weight bars are.
     let indent = fold_indent(&super::probe::themed());
     let cases = settings_cases();
     let mut nested_per_case: Vec<Option<usize>> = vec![None; cases.len()];
@@ -551,10 +551,12 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                 }
                 // Placed as well as sized: a top-level bar one indent short
                 // has the nested width too, but starts at the column's edge.
-                let nested_left = crate::theme::PANE_INSET + indent;
-                if (bar - (width - indent)).abs() < 1.0
-                    && (track_rect.left() - nested_left).abs() < 1.0
-                {
+                // A block's rows stand in by its own, tighter indent.
+                let nested_by = |indent: f32| {
+                    (bar - (width - indent)).abs() < 1.0
+                        && (track_rect.left() - (crate::theme::PANE_INSET + indent)).abs() < 1.0
+                };
+                if nested_by(indent) || nested_by(crate::panes::BLOCK_INDENT) {
                     nested += 1;
                     continue;
                 }
