@@ -2,6 +2,11 @@ name: Full CI
 
 on:
   pull_request:
+  # The merge queue's candidate: the PR merged onto the main it will land on.
+  # `Full CI` is the queue's required check, so without this trigger nothing
+  # in the queue ever reports and nothing merges.
+  merge_group:
+  # Still run once a PR lands: rust-cache saves its archive only from main.
   push:
     branches:
       - main
