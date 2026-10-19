@@ -407,27 +407,53 @@ pub(crate) fn picture_font(size: f32) -> FontId {
     FontId::new(size, picture_family())
 }
 
-/// Install the product face, Iosevka Fixed Curly Medium, ahead of egui's
-/// bundled faces in both families: words, numbers, headings and the picture's
-/// own labels are one face, as otonal sets them. Medium rather than Regular
-/// because egui draws text thinner than macOS draws its own. The TTF is an OFL
-/// subset (Latin-1, punctuation, arrows, comparison and the music accidentals)
-/// with its license beside it in `fonts/`; egui's faces stay as per-glyph
+/// The family of the chrome text that marks where things are — section
+/// headings, tab labels, block titles — in Medium, where every other chrome
+/// text is Regular. Reached through `TextStyle::Heading`, the role all three
+/// take, rather than asked for by name at each.
+///
+/// A named family, which egui panics laying text out in where a context was
+/// never given the theme; the chrome is only drawn in one that was, unlike
+/// the picture (see [`picture_family`]).
+fn heading_family() -> egui::FontFamily {
+    egui::FontFamily::Name("ChromeMedium".into())
+}
+
+/// Install the product face, Iosevka Fixed Curly, ahead of egui's bundled
+/// faces: words, numbers, headings and the picture's own labels are one face,
+/// as otonal sets them. The TTFs are the same OFL subset of it in two weights
+/// (Latin-1, punctuation, arrows, comparison and the music accidentals), with
+/// the license beside them in `fonts/`; egui's faces stay as per-glyph
 /// fallbacks.
 ///
-/// The chrome's family, egui's proportional one, carries [`CAP_CENTRING`]; the
-/// picture's ([`picture_family`]) is the face without it.
+/// - The chrome, egui's proportional family, is Regular: Medium over every row
+///   of a pane was too heavy.
+/// - The chrome's headings ([`heading_family`]) are Medium, the weight otonal
+///   chose because egui draws text thinner than macOS draws its own, kept for
+///   the few runs one reads to find one's place.
+/// - The picture ([`picture_family`]) is Medium too: the drawn marks' stroke
+///   is fitted to its letters ([`crate::marks::MARK_WEIGHT`]).
+///
+/// The two weights share every advance and vertical metric, so which weight a
+/// text takes moves no row, width or elision. Both chrome families carry
+/// [`CAP_CENTRING`]; the picture's is the face without it.
 pub(crate) fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
 
-    const FACE: &[u8] = include_bytes!("../fonts/iosevka/IosevkaFixedCurly-Medium.ttf");
-    let chrome = FontData::from_static(FACE)
-        .tweak(egui::FontTweak { y_offset_factor: CAP_CENTRING, ..Default::default() });
+    const REGULAR: &[u8] = include_bytes!("../fonts/iosevka/IosevkaFixedCurly-Regular.ttf");
+    const MEDIUM: &[u8] = include_bytes!("../fonts/iosevka/IosevkaFixedCurly-Medium.ttf");
+    let centred = |face| {
+        FontData::from_static(face)
+            .tweak(egui::FontTweak { y_offset_factor: CAP_CENTRING, ..Default::default() })
+    };
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert("IosevkaChrome".to_owned(), std::sync::Arc::new(chrome));
-    fonts
-        .font_data
-        .insert("IosevkaPicture".to_owned(), std::sync::Arc::new(FontData::from_static(FACE)));
+    for (name, data) in [
+        ("IosevkaChrome", centred(REGULAR)),
+        ("IosevkaHeading", centred(MEDIUM)),
+        ("IosevkaPicture", FontData::from_static(MEDIUM)),
+    ] {
+        fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(data));
+    }
 
     // This runs inside the plugin's editor-open path, where a panic takes
     // the host down: if an egui upgrade ever drops the default families,
@@ -439,6 +465,11 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
             faces.insert(0, face.to_owned());
         }
     }
+    // The headings fall back as the chrome does, after their own face.
+    let fallbacks = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let headings = std::iter::once("IosevkaHeading".to_owned())
+        .chain(fallbacks.into_iter().filter(|face| face != "IosevkaChrome"));
+    fonts.families.insert(heading_family(), headings.collect());
     ctx.set_fonts(fonts);
 }
 
@@ -476,8 +507,12 @@ fn skin_id() -> egui::Id {
 /// dragged bar restyles every frame it moves and no other.
 pub fn set_skin(ctx: &egui::Context, dials: skin::SkinDials) -> bool {
     skin::set_active_skin(dials);
-    let built = ctx.data(|d| d.get_temp::<skin::SkinDials>(skin_id()));
-    if built == Some(dials) {
+    // Nothing built means the theme never reached this context, which keeps
+    // its stock style for the reason [`set_ui_scale`] gives.
+    let Some(built) = ctx.data(|d| d.get_temp::<skin::SkinDials>(skin_id())) else {
+        return false;
+    };
+    if built == dials {
         return false;
     }
     ctx.data_mut(|d| d.insert_temp(skin_id(), dials));
@@ -499,7 +534,7 @@ pub fn set_skin(ctx: &egui::Context, dials: skin::SkinDials) -> bool {
 /// specification of how the panel looks rather than as a spec with a factor
 /// threaded through every number.
 fn style_at(scale: f32) -> egui::Style {
-    // Type roles (both families are the one face; see install_fonts). Text side
+    // Type roles (every family is the one face; see install_fonts). Text side
     // by side is one size, a label, a button and a bar's readout alike, as
     // otonal sets its chrome; Small is for the few runs laid over something
     // else. In the initializer rather than assigned after it because clippy
@@ -507,9 +542,10 @@ fn style_at(scale: f32) -> egui::Style {
     // literal, and it is right.
     let mut style = egui::Style {
         text_styles: [
-            // egui's own titles (a window's), and settings section headings,
-            // set in spaced capitals (`panes::section_header`).
-            (TextStyle::Heading, FontId::proportional(15.0)),
+            // The one Medium role: egui's own titles (a window's), settings
+            // section headings in spaced capitals (`panes::section_header`),
+            // tab labels and block titles (`panes::block`).
+            (TextStyle::Heading, FontId::new(15.0, heading_family())),
             (TextStyle::Body, FontId::proportional(15.0)),
             (TextStyle::Button, FontId::proportional(15.0)),
             (TextStyle::Small, FontId::proportional(12.0)),

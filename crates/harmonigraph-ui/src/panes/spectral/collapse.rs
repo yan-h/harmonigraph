@@ -245,7 +245,7 @@ fn control(
     if rail {
         let galley = painter.layout_no_wrap(
             name.to_owned(),
-            egui::TextStyle::Button.resolve(ui.style()),
+            egui::TextStyle::Heading.resolve(ui.style()),
             theme::text(),
         );
         let available = if vertical { rect.width() } else { rect.height() };

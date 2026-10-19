@@ -172,15 +172,16 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      100% blends them into the surrounding light. \
                      Idle shapes always receive the full glow.",
             );
-        super::block(ui, "Glow response");
-        crate::widgets::response(
-            ui,
-            &mut view.glow_attack,
-            &mut view.glow_release,
-            GLOW_BALLISTICS_MAX,
-            ["Background glow attack", "Background glow release"],
-            1000.0,
-        );
+        super::block(ui, "Glow response", |ui| {
+            crate::widgets::response(
+                ui,
+                &mut view.glow_attack,
+                &mut view.glow_release,
+                GLOW_BALLISTICS_MAX,
+                ["Background glow attack", "Background glow release"],
+                1000.0,
+            );
+        });
     });
     ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
         ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
@@ -205,22 +206,25 @@ fn shadow_group(
     style: &mut ShadowStyle,
     hide_behind: Option<&mut f32>,
 ) {
-    crate::widgets::label(ui, egui::RichText::new(name).strong()).on_hover_text(casters);
-    let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
-    crate::widgets::shadow(ui, style, width_max, lattice);
-    // Under the diagram rather than in its value column: the preview draws the
-    // visible shadow, which this does not move, and the column holds three rows.
-    // Greyed at Width 0, which packs no field for it to spend.
-    if let Some(hide_behind) = hide_behind {
-        ui.add_enabled_ui(style.width > 0.0, |ui| {
-            ValueBar::new(hide_behind, HIDE_BEHIND_RANGE, "Hide behind")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "How much a ring in front hides the rings, marks, names and crosses \
-                     behind it, whatever the shadow's Darkness. 0% hides nothing; a Width of 0 \
-                     turns it off with the shadow.",
-                );
-        });
-    }
+    super::block(ui, name, |ui| {
+        let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
+        crate::widgets::shadow(ui, style, width_max, lattice);
+        // Under the diagram rather than in its value column: the preview draws
+        // the visible shadow, which this does not move, and the column holds
+        // three rows. Greyed at Width 0, which packs no field for it to spend.
+        if let Some(hide_behind) = hide_behind {
+            ui.add_enabled_ui(style.width > 0.0, |ui| {
+                ValueBar::new(hide_behind, HIDE_BEHIND_RANGE, "Hide behind")
+                    .percent()
+                    .show(ui)
+                    .on_hover_text(
+                        "How much a ring in front hides the rings, marks, names and crosses \
+                         behind it, whatever the shadow's Darkness. 0% hides nothing; a Width \
+                         of 0 turns it off with the shadow.",
+                    );
+            });
+        }
+    })
+    .response
+    .on_hover_text(casters);
 }
