@@ -2059,19 +2059,13 @@ impl Offscreen {
         want: Option<[u32; 2]>,
     ) {
         match want {
-            Some(size) => {
-                if self.shadow.as_ref().is_none_or(|s| !s.holds(size)) {
-                    // Dropped before its replacement is built, so a growth
-                    // never holds both.
-                    let held = self.shadow.take().map_or([0, 0], |s| s.size);
-                    self.shadow = Some(shadow::ShadowTarget::new(
-                        device,
-                        shared.shadow_layout,
-                        shared.sampler,
-                        [size[0].max(held[0]), size[1].max(held[1])],
-                    ));
-                }
-            }
+            Some(size) => shadow::ShadowTarget::ensure(
+                &mut self.shadow,
+                device,
+                shared.shadow_layout,
+                shared.sampler,
+                size,
+            ),
             None => self.shadow = None,
         }
     }

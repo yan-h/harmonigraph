@@ -571,8 +571,28 @@ impl ShadowTarget {
         ShadowTarget { size, atlas, half }
     }
 
+    /// Make `slot` hold an atlas a layout of `size` fits in: grown to demand,
+    /// never shrunk, and the old atlas dropped BEFORE its replacement is built,
+    /// so a growth never holds both (the resize test, #1508, found both callers
+    /// building first). Nothing carries across a rebuild: the ink pass clears
+    /// the atlas every frame it is used.
+    pub(crate) fn ensure(
+        slot: &mut Option<Self>,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        size: [u32; 2],
+    ) {
+        if slot.as_ref().is_some_and(|target| target.holds(size)) {
+            return;
+        }
+        let held = slot.take().map_or([0, 0], |target| target.size);
+        *slot =
+            Some(Self::new(device, layout, sampler, [size[0].max(held[0]), size[1].max(held[1])]));
+    }
+
     /// Whether this atlas can hold a layout of `size`.
-    pub(crate) fn holds(&self, size: [u32; 2]) -> bool {
+    fn holds(&self, size: [u32; 2]) -> bool {
         self.size[0] >= size[0] && self.size[1] >= size[1]
     }
 

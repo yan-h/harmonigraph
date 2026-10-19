@@ -306,17 +306,13 @@ fn finish_for_pass(
     };
 
     if has_cells {
-        if surface.target.as_ref().is_none_or(|target| !target.holds(packed.size)) {
-            // Dropped before its replacement is built, so a growth never holds
-            // both: nothing in it is carried over, as the ink pass clears it.
-            let held = surface.target.take().map_or([0, 0], |target| target.size);
-            surface.target = Some(shadow::ShadowTarget::new(
-                device,
-                &layouts.atlas,
-                &sampler,
-                [packed.size[0].max(held[0]), packed.size[1].max(held[1])],
-            ));
-        }
+        shadow::ShadowTarget::ensure(
+            &mut surface.target,
+            device,
+            &layouts.atlas,
+            &sampler,
+            packed.size,
+        );
     } else {
         surface.target = None;
     }
