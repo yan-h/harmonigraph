@@ -1116,7 +1116,16 @@ mod tests {
         state.appearance.view.label_scale *= 2.0;
         let larger = draw(&scene, &state.appearance.view);
         let large_dot = larger.pieces().iter().find(|p| p.text == ".").unwrap();
-        assert!(large_dot.ink.width() > lit_dot.ink.width() * 1.7, "dot must follow label size");
+        // Under double: a piece's ink is the glyph's atlas cell, which carries a
+        // fixed pixel of padding round a dot only a few points across (5.0pt
+        // growing to 7.8pt in Curly Medium). A dot held at one size would not
+        // grow at all.
+        assert!(
+            large_dot.ink.width() > lit_dot.ink.width() * 1.5,
+            "dot must follow label size: {} at twice the scale of {}",
+            large_dot.ink.width(),
+            lit_dot.ink.width()
+        );
     }
 
     /// Draw the labels for a chord, with the camera at `distance`, and

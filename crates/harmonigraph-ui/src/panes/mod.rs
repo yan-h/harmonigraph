@@ -624,16 +624,16 @@ fn folding_section<R>(
 
 /// Extra space between the letters of a [`section`] heading, at scale 1.
 /// Capitals set solid read as a block; a little air makes them a label.
-const HEADING_TRACKING: f32 = 1.2;
+const HEADING_TRACKING: f32 = 1.0;
 
 /// How far a [`section`] heading's capitals sit from the rule over them and
 /// from the first thing under them, ink to ink: the gap every group in a
 /// column keeps, so a heading is spaced as a line of text is.
 const HEADING_GAP: f32 = crate::widgets::GROUP_GAP;
 
-/// The heading row of a [`section`]: its name in spaced capitals at the full
-/// text size, in the primary text colour — told from the dim labels under it
-/// by case, height and brightness at once.
+/// The heading row of a [`section`]: its name in spaced capitals at the text
+/// size, in the text colour every label takes — told from the labels under it
+/// by its case and tracking and by the rule over it.
 /// `lead` is room left between the chevron and the name for a switch, and a
 /// heading that is not `live` is dimmed and drops its chevron.
 fn section_header(

@@ -6,9 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
-    TEXT_GAP,
+    bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
+    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, GRIP_TEXT_PAD, HANDLE_INSET, HANDLE_REACH_SHARE,
+    HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -297,7 +297,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// whole length, which is what makes it scannable.
 ///
 /// **Each end still reads out beside its own handle**, which is where a range's
-/// numbers mean the most, and three text runs fit a 19pt row because the name's
+/// numbers mean the most, and three text runs fit one row because the name's
 /// zone is taken OUT of the room the numbers roam in — see [`Self::show`] for
 /// the arithmetic that makes that provable rather than lucky.
 ///
@@ -640,7 +640,7 @@ impl<'a> RangeBar<'a> {
         // The name first, in the same place and the same faces a ValueBar puts
         // its own. Values in monospace: digits align and don't wiggle as they
         // change.
-        let text_color = name_color(&response);
+        let text_color = theme::text();
         let mono = TextStyle::Monospace.resolve(ui.style());
         let text_gap = TEXT_GAP * scale;
         let width_of =
@@ -663,10 +663,16 @@ impl<'a> RangeBar<'a> {
         let reserve = widest_end(*self.low) + text_gap + widest_end(*self.high);
         let body = TextStyle::Body.resolve(ui.style());
         let job = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), body, text_color);
-        let text_pad = BAR_TEXT_PAD * scale;
-        let label = elided_name(painter, job, rect.width(), scale, reserve);
+        let text_pad = GRIP_TEXT_PAD * scale;
+        let label = elided_name(
+            painter,
+            job,
+            rect.width() - (GRIP_TEXT_PAD - BAR_TEXT_PAD) * scale,
+            scale,
+            reserve,
+        );
         let label_width = label.size().x;
-        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
+        let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         painter.galley(label_pos, label.clone(), text_color);
 
@@ -1034,21 +1040,23 @@ mod tests {
         }
     }
 
-    /// The bar names itself on its own row: three text runs in a 19pt row,
+    /// The bar names itself on its own row: three text runs in one row,
     /// the name where a ValueBar puts one and each number beside the handle it
     /// belongs to. What this is worth is the row it saves: a control with no
     /// name of its own costs a label row above it, which is what a range with
     /// two of these bars a section would spend twice.
     #[test]
     fn a_range_bar_names_itself_on_the_bar() {
-        // Mid-axis, so there is empty track either side of the span to sit in.
-        let shapes = paint_range_bar(60.0, 72.0);
+        // Past the middle of the axis, so there is empty track either side of
+        // the span to sit in, and room for the name and the low number before
+        // the low handle.
+        let shapes = paint_range_bar(72.0, 84.0);
         let (texts, handles) = (text_boxes(&shapes), handles(&shapes));
         let bar = filled_rects(&shapes)[0].0;
         assert_eq!(texts.len(), 3, "a name and both ends, and nothing else: {texts:?}");
         assert_eq!(
             (texts[0].1.as_str(), texts[1].1.as_str(), texts[2].1.as_str()),
-            (NAME, "60.00", "72.00",)
+            (NAME, "72.00", "84.00",)
         );
         assert!(texts[0].0.right() <= texts[1].0.left(), "a number ran into the name");
         assert!(texts[1].0.right() <= handles[0].left(), "low value sits outside its handle");

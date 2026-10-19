@@ -11,9 +11,8 @@ use egui::{Color32, CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PITCH_LUT_N};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
-    TEXT_GAP,
+    bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
+    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -109,7 +108,7 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// It costs the track that much travel, which is the whole trade and a cheap
 /// one: the track stands for a whole turn at any length, so a shorter one is a
 /// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
-/// pixel. A row costs 19pt of a column that already scrolls.
+/// pixel. A row costs 22pt of a column that already scrolls.
 ///
 /// The far end from where the arc starts, so the button sits past the end of
 /// the reading rather than in front of it: the track is cut at the arc's own
@@ -424,20 +423,10 @@ impl<'a> SpectrumBar<'a> {
         // between a press off it and a gesture — see [`SpectrumGrab::Outside`]
         // for why the rectangle is not enough.
         let on_track = |p: &egui::Pos2| track_rect.contains(*p);
-        // Lit by a pointer ON the track, not merely by one egui has decided the
-        // track is nearest to, which reaches a row's spacing either side. A
-        // readout that brightens while the pointer is over the preview says the
-        // picture is the control.
-        //
-        // The READOUT alone answers the pointer. The name is one color at every
-        // state ([`span_name_color`]) because it is drawn to be read against the
-        // hue behind it, and dimming it means nothing but losing it.
-        let pointing = response.hover_pos().filter(on_track);
-        let text_color = if pointing.is_some() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        // The readout in full text at every state, as every text is; the name is
+        // one colour too, drawn to be read against the hue behind it
+        // ([`span_name_color`]).
+        let text_color = theme::text();
         let mono = TextStyle::Monospace.resolve(ui.style());
         let text_gap = TEXT_GAP * scale;
         // Room kept clear for the readout, measured from the widest string it
@@ -590,7 +579,7 @@ impl<'a> SpectrumBar<'a> {
                 scene_color(circle_at(&circle, g.hue_start + p * FULL_TURN * winding), alpha)
             },
         );
-        let centered = |galley: &egui::Galley, x: f32| text_at(ui, track_rect, galley, x);
+        let centered = |galley: &egui::Galley, x: f32| text_at(track_rect, galley, x);
         let label_pos = centered(&label, track_rect.left() + text_pad);
         painter.galley(label_pos, label.clone(), span_name_color());
 
@@ -1182,7 +1171,7 @@ impl<'a> SpreadBar<'a> {
         // is measured off a string that never changes rather than off the pair
         // currently in the bar, so the name cannot re-elide mid-drag. See
         // [`Spread::widest_readout`] for what that string is.
-        let text_color = name_color(&response);
+        let text_color = theme::text();
         let mono = TextStyle::Monospace.resolve(ui.style());
         let value = painter.layout_no_wrap(
             self.spread.readout((centre, spread)),
@@ -1199,7 +1188,7 @@ impl<'a> SpreadBar<'a> {
         );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
+        let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
         painter.galley(label_pos, label.clone(), text_color);

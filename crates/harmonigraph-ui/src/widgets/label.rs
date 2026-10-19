@@ -37,29 +37,14 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
 /// centred across the row. For every run drawn inside a control — a bar's
 /// name and readout, a switch's or the record button's label.
 ///
-/// How depends on the face. Atkinson's own metrics centre its capitals in its
-/// line box (3.81pt over them, 3.91pt under the baseline at 13.5pt), so its
-/// box is centred, exactly as egui centres a button's text: a bar's name then
-/// stands at the same height as the button beside it at every pixel density.
-/// Measuring the caps off the ink instead rounds them to the pixel grid, which
-/// at 2x stood a name one device pixel lower than a button's text (#1481).
-///
-/// Iosevka's capitals stand about 0.4pt above the middle of its box (3.1pt
-/// over them, 3.85pt under the baseline), so a monospace run — a readout — is
-/// centred on its measured caps instead,
-/// and descenders hang into the air below, as they do under a trimmed
-/// [`label`].
-pub(crate) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
-    let monospace = galley
-        .job
-        .sections
-        .first()
-        .is_some_and(|section| section.format.font_id.family == egui::FontFamily::Monospace);
-    if !monospace {
-        return egui::pos2(x, row.center().y - galley.size().y * 0.5);
-    }
-    let (top, bottom) = cap_trim(ui, galley);
-    egui::pos2(x, row.center().y - (top + galley.size().y - bottom) * 0.5)
+/// The face is installed with its capitals centred in its line box
+/// (`theme::install_fonts`), so the box is centred, exactly as egui centres a
+/// button's text: a bar's name and readout then stand at the same height as
+/// the button beside them at every pixel density. Measuring the caps off the
+/// ink instead rounds them to the pixel grid, which at 2x stood a name one
+/// device pixel lower than a button's text (#1481).
+pub(crate) fn text_at(row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
+    egui::pos2(x, row.center().y - galley.size().y * 0.5)
 }
 /// The height of a capital above the baseline in `font`, read off the ink of
 /// an "H". egui caches the layout, so asking every frame is a lookup.
@@ -103,14 +88,14 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
 
 /// Baseline to baseline down a wrapped [`label`], at scale 1.
 ///
-/// egui's own pitch is the font's, 17 points under 13.5-point type, which is
+/// egui's own pitch is the font's, about 1.25 times the type, which is
 /// leading for running prose. The text here is a sentence or two of help
-/// under a heading, and at 1.26 times the type its lines read as separate
-/// rows of a column rather than as one paragraph. 14 is 1.04 times, tight but
-/// clear of a descender meeting the capital under it; 13 brings the two
-/// within a pixel. A whole number of points, so every line lands on the same
+/// under a heading, and at that pitch its lines read as separate rows of a
+/// column rather than as one paragraph. 16 under 15-point type is 1.07 times,
+/// tight but clear of a descender meeting the capital under it, as 14 was
+/// under 13.5. A whole number of points, so every line lands on the same
 /// pixel phase at scale 1.
-const LINE_PITCH: f32 = 14.0;
+const LINE_PITCH: f32 = 16.0;
 
 /// `text` laid out the way `ui.label` would — `ui`'s wrap mode across the
 /// width it has, Body as the fallback face — at [`LINE_PITCH`] rather than the
@@ -134,7 +119,10 @@ fn wrapped(ui: &Ui, text: WidgetText) -> std::sync::Arc<egui::Galley> {
 /// Every box sits where its ink is (see the module docs), so the row gap alone
 /// would put a line of text as near a bar as two bars sit to each other, which
 /// reads cramped. Bars and buttons keep the row gap between themselves.
-pub(crate) const GROUP_GAP: f32 = 6.0;
+///
+/// 8 under 15-point text and a 4-point row gap; 6, under 13.5-point text and
+/// a 3-point gap, read tight beside otonal's panes.
+pub(crate) const GROUP_GAP: f32 = 8.0;
 
 fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")
@@ -185,11 +173,6 @@ fn spaced(ui: &Ui) -> bool {
 /// What a group adds to the row gap to stand [`GROUP_GAP`] off.
 fn extra(ui: &Ui) -> f32 {
     (GROUP_GAP * crate::theme::ui_scale(ui.ctx()) - ui.spacing().item_spacing.y).max(0.0)
-}
-
-/// [`label`] in the weak text colour, for `ui.weak`.
-pub fn weak(ui: &mut Ui, text: impl Into<egui::RichText>) -> Response {
-    label(ui, text.into().weak())
 }
 
 #[cfg(test)]

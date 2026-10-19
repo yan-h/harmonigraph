@@ -113,7 +113,7 @@ pub(super) fn camera(
         if appearance.camera.projection == Projection::Orthographic {
             let d = (appearance.camera.target - appearance.camera.eye()).normalize_or_zero();
             let f = |c: f32| (1.0 - c * c).max(0.0).sqrt();
-            crate::widgets::weak(
+            crate::widgets::label(
                 ui,
                 format!(
                     "Axis scale: thirds {:.2}× · fifths {:.2}× · sevenths {:.2}×",
