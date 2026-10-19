@@ -489,10 +489,11 @@ fn spectrum_history_reaches_the_retention_cap() {
         "history reaches {reach:.0} s, retention asks for {:.0} s — add a tier",
         AudioSpectrum::HISTORY_MAX_SECONDS,
     );
-    // Preserve linear sums through coarsening: four bytes per bin, without
-    // a redundant quantized history. The GPU and finalized slabs remain bytes.
+    // Preserve linear sums through coarsening: two bytes (a bfloat16) per bin,
+    // without a redundant quantized history. The GPU and finalized slabs
+    // remain bytes.
     let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
-    assert!(megabytes < 128.0, "the full store is {megabytes:.1} MiB");
+    assert!(megabytes < 64.0, "the full store is {megabytes:.1} MiB");
 }
 
 /// The bargain the tiers are struck on: a column of age `a` is only ever drawn

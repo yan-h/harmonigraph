@@ -625,7 +625,7 @@ fn aggregate_slabs<'a>(
 
 /// The same accumulator serves incremental and batch aggregation.
 /// f64 summation avoids accumulating rounding error during a long live slab.
-/// History sums remain f32 (at most 64 samples per group), so regrouping can
+/// History sums are bfloat16 (at most 64 samples per group), so regrouping can
 /// still differ by a final byte right at a quantization boundary.
 #[derive(Clone)]
 struct PowerMean {

@@ -259,7 +259,7 @@ impl SpectrumHistory {
     /// Bytes the columns themselves occupy when full (the per-column bookkeeping
     /// on top is a timestamp and a pointer).
     pub const fn max_bytes() -> usize {
-        Self::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<f32>()
+        Self::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<u16>()
     }
 
     /// Append a column (callers push in time order).
@@ -576,39 +576,55 @@ mod tests {
     /// tier, at every level the display reads, down to the floor that an IEEE
     /// half would flush to zero.
     ///
-    /// Columns alternate 1.3 and 0.7 of a level, so every merge adds two
-    /// different values and rounds (doubling one value never would), while any
-    /// merged run, being an even number of consecutive columns, still means
-    /// exactly the level.
+    /// Column `i` is the level times `1 ± SWING[k]` for each of its low bits
+    /// `k`, the sign set by that bit. Every merge at depth `k` therefore adds
+    /// two different values and rounds (doubling one value never would), while
+    /// an aligned run of `2^k` columns means exactly the level times the
+    /// factors of its higher bits.
     #[test]
     fn bfloat16_storage_stays_within_a_quarter_step_through_every_merge() {
         const INTERVAL: f64 = 0.008;
-        const SWING: [f32; 2] = [1.3, 0.7];
+        const SWING: [f32; SpectrumHistory::TIERS] = [0.3, 0.25, 0.2, 0.15, 0.1, 0.07, 0.05];
+        let swing = |start: usize, from_bit: usize| -> f32 {
+            (from_bit..SWING.len())
+                .map(|k| if start >> k & 1 == 0 { 1.0 + SWING[k] } else { 1.0 - SWING[k] })
+                .product()
+        };
         let db = |bin: usize| DB_FLOOR + 128.0 * bin as f32 / (SPECTRUM_BINS - 1) as f32;
         let level = |bin: usize| 10f32.powf(0.1 * db(bin));
         let mut history = SpectrumHistory::default();
         let pushes = (SpectrumHistory::reach(INTERVAL) / INTERVAL) as usize;
         for i in 0..pushes {
-            let power = std::array::from_fn(|bin| level(bin) * SWING[i % 2]);
+            let power = std::array::from_fn(|bin| level(bin) * swing(i, 0));
             history.push(SpectrogramColumn::from_power(i as f64 * INTERVAL, &power));
         }
         let deepest = 1 << (SpectrumHistory::TIERS - 1);
         assert_eq!(history.front().unwrap().count, deepest, "fixture reaches the deepest tier");
         for column in history.iter() {
-            let swing = match column.count {
-                1 => SWING[(column.time / INTERVAL).round() as usize % 2],
-                _ => 1.0,
-            };
+            let depth = column.count.ilog2() as usize;
+            let start =
+                (column.time / INTERVAL - f64::from(column.count - 1) / 2.0).round() as usize;
+            assert_eq!(start % column.count as usize, 0, "a merged run is aligned to its size");
+            let swing = swing(start, depth);
             for (bin, sum) in column.power_sum().enumerate() {
                 let held = 10.0 * (sum / column.count as f32 / swing).log10();
                 assert!(
                     (held - db(bin)).abs() < DB_STEP / 4.0,
-                    "bin {bin} at {} dB reads {held} dB after {} merges",
+                    "bin {bin} at {} dB reads {held} dB after {depth} merges",
                     db(bin),
-                    column.count.ilog2(),
                 );
             }
         }
+    }
+
+    /// Rounding is to nearest, ties to even: truncation would bias every
+    /// column dark by up to half a step after seven roundings.
+    #[test]
+    fn bfloat16_rounds_to_nearest_even() {
+        let step = 2f32.powi(-7);
+        assert_eq!(bf16(1.0 + step / 2.0), bf16(1.0), "a tie rounds down to the even neighbour");
+        assert_eq!(bf16(1.0 + 1.5 * step), bf16(1.0 + 2.0 * step), "a tie rounds up to even");
+        assert_eq!(bf16(1.0 + step * 0.51), bf16(1.0 + step), "past halfway rounds up");
     }
 
     /// A merged column stands for the interval it covers, so its timestamp must
