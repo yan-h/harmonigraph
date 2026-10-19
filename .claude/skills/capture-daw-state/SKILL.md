@@ -50,6 +50,9 @@ key therefore picks the new value up, so "restyle the fresh view" and "restyle a
 That is the intended trade, not an accident.
 - Camera zoom, `layout` and `folded_sections` are navigation state, deliberately not baked into
 defaults.
+- A capture moves no golden frame:
+both sets draw from the pinned `crates/harmonigraph-golden/look.ron`, not from these defaults.
+A golden that moves anyway is a fixture still reading a default, so pin that fixture rather than blessing (the `pr-hygiene` skill).
 
 ## Using `--appearance`
 

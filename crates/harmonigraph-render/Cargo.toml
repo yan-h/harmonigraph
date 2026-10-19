@@ -40,3 +40,6 @@ naga = { workspace = true, features = ["wgsl-in"] }
 harmonigraph-core = { path = "../harmonigraph-core" }
 # The byte-exact frame gate the golden set is measured by.
 harmonigraph-golden = { workspace = true }
+# Reads the view out of the golden set's pinned look, which is RON.
+ron = { workspace = true }
+serde = { workspace = true }
