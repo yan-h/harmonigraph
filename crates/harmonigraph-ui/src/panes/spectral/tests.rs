@@ -1328,8 +1328,11 @@ fn pane_label_room(rect: egui::Rect, cfg: &SpectrumConfig) -> f32 {
         // the range is degenerate.
         let span = cfg.high_midi.max(cfg.low_midi + crate::PITCH_RANGE_MIN_SPAN) - cfg.low_midi;
         let text = text_scales(cfg, &axes, span, painter.ctx().pixels_per_point());
-        room =
-            level_label_room(painter, &axes, &egui::FontId::monospace(MARKING_PT * text.markings));
+        room = level_label_room(
+            painter,
+            &axes,
+            &crate::theme::picture_font(MARKING_PT * text.markings),
+        );
     });
     room
 }
@@ -2630,7 +2633,7 @@ fn a_level_number_with_no_room_is_not_written() {
 #[test]
 fn level_label_room_answers_to_the_axis_the_depth_runs_on() {
     let ctx = egui::Context::default();
-    let font = egui::FontId::monospace(MARKING_PT);
+    let font = crate::theme::picture_font(MARKING_PT);
     let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
         let painter = ui.painter();
         let galley =

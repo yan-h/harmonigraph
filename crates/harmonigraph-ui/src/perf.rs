@@ -182,8 +182,8 @@ pub(crate) fn draw_overlay(
     // the picture but is not part of it: the offline renderer never reaches
     // here, so nothing recorded moves with this.
     let scale = crate::theme::ui_scale(ctx);
-    let mono = egui::FontId::monospace(11.0 * scale);
-    let head_font = egui::FontId::monospace(12.0 * scale);
+    let mono = egui::FontId::proportional(11.0 * scale);
+    let head_font = egui::FontId::proportional(12.0 * scale);
 
     let rows = overlay_rows(perf, detail);
 
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn the_build_tag_wraps_instead_of_widening_the_hud() {
         let ctx = crate::tests::probe::themed();
-        let font = egui::FontId::monospace(11.0);
+        let font = egui::FontId::proportional(11.0);
         let grid = 160.0;
         let long = "worktree-a-branch-name-nobody-would-type-but-git-will-take @0123456";
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {

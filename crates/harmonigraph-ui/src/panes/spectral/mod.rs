@@ -255,7 +255,7 @@ pub(crate) fn spectral_pane(
     // Settled here rather than where the labels are drawn, because the volume
     // grid asks how much room a number takes before it decides which of its
     // lines get one.
-    let marking_font = egui::FontId::monospace(MARKING_PT * text.markings);
+    let marking_font = crate::theme::picture_font(MARKING_PT * text.markings);
     // dB depth mapping: the Analyzer section's ceiling places the measured
     // contour near the pane edge (see `plot_budget`) and its floor sets the
     // bottom. Tilt is the conventional reference slope (negative), so the display

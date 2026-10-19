@@ -381,11 +381,31 @@ pub(crate) fn reserve_scroll_gutter(ui: &mut egui::Ui) {
 /// of a row. Visual only: egui lays the text out exactly as before, so no row,
 /// width or wrap moves, and every box-centred run comes out cap-centred.
 ///
-/// The chrome's alone, in the proportional family. The picture sets its text
-/// in the monospace family, untweaked, because it places every glyph by the
-/// ink egui measures for it, and a shift egui does not lay out would stand
-/// the ink off where the placement put it.
-const CAP_CENTRING: f32 = 0.031;
+/// The chrome's alone, in the proportional family, which every chrome text is
+/// set in (its `TextStyle::Monospace` included). The picture sets its text in
+/// [`picture_family`], untweaked, because it places every glyph by the ink
+/// egui measures for it, and a shift egui does not lay out would stand the ink
+/// off where the placement put it.
+pub(crate) const CAP_CENTRING: f32 = 0.031;
+
+/// The family every text the picture draws is set in — lattice and analyzer
+/// names, markings, the badge over the lattice — and so what the offline
+/// renderer draws too: the face without [`CAP_CENTRING`]. Picture code asks for
+/// it by this name, so text that is picture rather than chrome says so where it
+/// is laid out; chrome code never asks for egui's monospace family directly.
+///
+/// egui's monospace family rather than a named one of its own: egui panics
+/// laying text out in a named family a context was never given, and a context
+/// without the theme, which only the stock families survive, is one a picture
+/// must still draw in rather than take the host down from.
+pub(crate) fn picture_family() -> egui::FontFamily {
+    egui::FontFamily::Monospace
+}
+
+/// [`picture_family`] at `size` points.
+pub(crate) fn picture_font(size: f32) -> FontId {
+    FontId::new(size, picture_family())
+}
 
 /// Install the product face, Iosevka Fixed Curly Medium, ahead of egui's
 /// bundled faces in both families: words, numbers, headings and the picture's
@@ -395,9 +415,8 @@ const CAP_CENTRING: f32 = 0.031;
 /// with its license beside it in `fonts/`; egui's faces stay as per-glyph
 /// fallbacks.
 ///
-/// The two families differ only in [`CAP_CENTRING`]: the chrome, readouts
-/// included, sets everything in the proportional family, and the picture in
-/// the monospace one.
+/// The chrome's family, egui's proportional one, carries [`CAP_CENTRING`]; the
+/// picture's ([`picture_family`]) is the face without it.
 pub(crate) fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
 
@@ -414,7 +433,7 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
     // the host down: if an egui upgrade ever drops the default families,
     // degrade to egui's bundled fonts instead of crashing the DAW.
     for (family, face) in
-        [(FontFamily::Proportional, "IosevkaChrome"), (FontFamily::Monospace, "IosevkaPicture")]
+        [(FontFamily::Proportional, "IosevkaChrome"), (picture_family(), "IosevkaPicture")]
     {
         if let Some(faces) = fonts.families.get_mut(&family) {
             faces.insert(0, face.to_owned());
@@ -494,9 +513,8 @@ fn style_at(scale: f32) -> egui::Style {
             (TextStyle::Body, FontId::proportional(15.0)),
             (TextStyle::Button, FontId::proportional(15.0)),
             (TextStyle::Small, FontId::proportional(12.0)),
-            // egui's name for the role a readout and the console take. In the
-            // proportional family, which in this app is the same face with the
-            // chrome's centring (see `install_fonts`).
+            // egui's name for the role a readout and the console take, in the
+            // chrome's family like every other chrome text (see `install_fonts`).
             (TextStyle::Monospace, FontId::proportional(15.0)),
         ]
         .into(),

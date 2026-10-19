@@ -1002,8 +1002,8 @@ fn stacked_name(
     scale: f32,
     lead: NameLead,
 ) -> f32 {
-    let name_font = egui::FontId::monospace(NAME_SIZE * scale);
-    let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
+    let name_font = crate::theme::picture_font(NAME_SIZE * scale);
+    let mark_font = crate::theme::picture_font(MARK_SIZE * scale);
     let mark_size = MARK_SIZE * scale;
     let ppp = painter.ctx().pixels_per_point();
     let measure = |text: &str, font: &egui::FontId| {
@@ -1179,7 +1179,7 @@ pub(crate) fn draw_plain_name(
     ink: NameInk,
     size: NameSize,
 ) -> f32 {
-    let font = egui::FontId::monospace(NAME_SIZE * size.scale);
+    let font = crate::theme::picture_font(NAME_SIZE * size.scale);
     let galley =
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size();
     batch.magnified(anchor, size.magnify, |batch| {
@@ -1797,7 +1797,7 @@ mod tests {
         let ctx = crate::tests::probe::themed_at(ppp);
         let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
         let galley = ctx.fonts_mut(|f| {
-            f.layout_no_wrap(ch.to_string(), egui::FontId::monospace(size), egui::Color32::WHITE)
+            f.layout_no_wrap(ch.to_string(), crate::theme::picture_font(size), egui::Color32::WHITE)
         });
         let cell = galley.rows[0].glyphs[0].uv_rect;
         ctx.fonts(|f| {
