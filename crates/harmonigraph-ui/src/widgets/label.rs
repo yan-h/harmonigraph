@@ -202,11 +202,34 @@ pub(crate) fn group_end(ui: &mut Ui) {
     mark_spaced(ui);
 }
 
+/// A group laid out in a child of its own, `inset` points in from the column's
+/// left, whose box is allocated with the room under it inside, as a [`label`]'s
+/// is and for its reason: room added after a group that ends a child ui (an
+/// `add_enabled_ui`) would stand a row gap too far from what follows. Marked,
+/// so the next group adds none on top. Hands back what `add` did and the box
+/// of what it laid out, without the room.
+pub(crate) fn group_box<R>(
+    ui: &mut Ui,
+    id: &str,
+    inset: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> (R, egui::Rect) {
+    let mut region = ui.available_rect_before_wrap();
+    region.min.x += inset;
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(region));
+    let out = add(&mut child);
+    let content = child.min_rect();
+    let under = room_under(&child);
+    ui.allocate_rect(content.with_max_y(content.bottom() + under), Sense::hover());
+    if ui.layout().is_vertical() {
+        mark_spaced(ui);
+    }
+    (out, content)
+}
+
 /// What a group ending where `ui`'s cursor stands still owes under it: the room
 /// [`group_space`] put over it, or nothing when its last line carries its own.
-/// For a group that keeps the room inside its own box rather than adding it
-/// after, as [`label`] does and for its reason.
-pub(crate) fn room_under(ui: &Ui) -> f32 {
+fn room_under(ui: &Ui) -> f32 {
     if ui.layout().is_vertical() && spaced(ui).is_none() {
         extra(ui)
     } else {

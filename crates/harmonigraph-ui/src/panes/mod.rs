@@ -764,13 +764,15 @@ pub(super) fn subsection<R>(
         title.to_owned(),
         egui::TextFormat::simple(egui::TextStyle::Button.resolve(ui.style()), crate::theme::text()),
     );
-    let header = fold_header(ui, job, title, Some(fold.is_open()), 0.0, 0.0);
-    if header.clicked() {
-        fold.toggle(ui);
-    }
-    fold.show_body_indented(&header, ui, body);
-    // The fold, header and body both, is one group.
-    crate::widgets::group_end(ui);
+    // The fold, header and body both, is one group, in a box of its own.
+    let (header, _) = crate::widgets::group_box(ui, title, 0.0, |ui| {
+        let header = fold_header(ui, job, title, Some(fold.is_open()), 0.0, 0.0);
+        if header.clicked() {
+            fold.toggle(ui);
+        }
+        fold.show_body_indented(&header, ui, body);
+        header
+    });
     header
 }
 
@@ -805,11 +807,11 @@ const BLOCK_LINE_INSET: f32 = 1.5;
 /// Loose rows in a section come before its blocks, so that a row after a
 /// block is never read as the block's. Returns the title, for a hover.
 ///
-/// The rows' child is laid out here rather than by `ui.indent`, whose indent
-/// is the style's and whose guide line stands half of it in; nothing else of
-/// it is wanted. The room under the block is inside the box it allocates, as a
-/// [`label`](crate::widgets::label)'s is: room added after a block ending an
-/// `add_enabled_ui` would stand a row gap too far from what follows.
+/// The rows are a [`group_box`](crate::widgets::group_box) rather than a
+/// `ui.indent`, whose indent is the style's and whose guide line stands half of
+/// it in; nothing else of it is wanted, and the box keeps the room under the
+/// block inside it, so a block ending an `add_enabled_ui` (or another block)
+/// stands one group's gap over what follows.
 pub(super) fn block<R>(
     ui: &mut egui::Ui,
     title: &str,
@@ -818,11 +820,7 @@ pub(super) fn block<R>(
     crate::widgets::group_space_of(ui, BLOCK_GAP);
     let heading = crate::widgets::label(ui, egui::RichText::new(title).heading());
     let scale = crate::theme::ui_scale(ui.ctx());
-    let mut region = ui.available_rect_before_wrap();
-    region.min.x += BLOCK_INDENT * scale;
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(title).max_rect(region));
-    let out = rows(&mut child);
-    let body = child.min_rect();
+    let (out, body) = crate::widgets::group_box(ui, title, BLOCK_INDENT * scale, rows);
     if ui.visuals().indent_has_left_vline {
         // Down the rows to where egui stops its own, two points short.
         use egui::emath::GuiRounding as _;
@@ -831,15 +829,12 @@ pub(super) fn block<R>(
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
         ui.painter().vline(x, body.top()..=body.bottom() - 2.0, stroke);
     }
-    let under = crate::widgets::room_under(&child);
-    ui.allocate_rect(body.with_max_y(body.bottom() + under), egui::Sense::hover());
-    crate::widgets::mark_spaced(ui);
     egui::InnerResponse::new(out, heading)
 }
 
 #[cfg(test)]
 mod block_tests {
-    use super::{block, section, BLOCK_GAP, BLOCK_INDENT};
+    use super::{block, section, subsection, BLOCK_GAP, BLOCK_INDENT};
 
     fn row(ui: &mut egui::Ui) -> egui::Rect {
         ui.allocate_exact_size(egui::vec2(100.0, 20.0), egui::Sense::hover()).0
@@ -878,6 +873,12 @@ mod block_tests {
                 let gap = row(ui).top() - ending.bottom();
                 let want = crate::widgets::GROUP_GAP;
                 assert!((gap - want).abs() < 0.5, "a row {gap}pt under a scoped block");
+                // A subsection keeps its room in its box the same way.
+                // Its response is its click target, half a row gap past its row.
+                let fold = ui.scope(|ui| subsection(ui, "Fifth", row)).inner;
+                let header = fold.rect.bottom() - ui.spacing().item_spacing.y / 2.0;
+                let gap = row(ui).top() - header;
+                assert!((gap - want).abs() < 0.5, "a row {gap}pt under a scoped subsection");
             });
         });
         let (title, rows) = last.expect("no third block");
