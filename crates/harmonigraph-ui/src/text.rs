@@ -335,8 +335,14 @@ impl Magnify {
 #[derive(Default)]
 pub(crate) struct TextBatch {
     glyphs: Vec<GlyphInstance>,
-    /// End of each complete shadow/fill layer; ungrouped text stays in one layer.
-    layer_ends: Vec<u32>,
+    /// End of each complete name and of each shadow/fill layer
+    /// ([`harmonigraph_render::GlyphRuns`]). A name is one [`Self::name`]
+    /// scope, or one `text` or `mark` call outside one; ungrouped text stays
+    /// in one layer.
+    runs: harmonigraph_render::GlyphRuns,
+    /// Whether a [`Self::name`] scope is open, so the pieces drawn inside it
+    /// close one name between them rather than one each.
+    naming: bool,
     /// Which node each of those glyphs names, for a batch whose text is going
     /// to the LATTICE's own pass rather than over the finished picture. Filled
     /// by [`TextBatch::attached_to`] and empty for every other pane, which has
@@ -402,6 +408,14 @@ pub(crate) struct TextPiece {
     pub galley: egui::Rect,
 }
 
+/// End a run of glyphs at `end`, unless the last run already ends there.
+fn close_run(ends: &mut Vec<u32>, end: usize) {
+    let end = end as u32;
+    if end > ends.last().copied().unwrap_or(0) {
+        ends.push(end);
+    }
+}
+
 impl TextBatch {
     /// Bounds of the letterforms already laid out, excluding mark bitmap padding.
     ///
@@ -427,9 +441,28 @@ impl TextBatch {
 
     /// Close one layer after all its letters and marks have been collected.
     pub(crate) fn finish_layer(&mut self) {
-        let end = self.glyphs.len() as u32;
-        if end > self.layer_ends.last().copied().unwrap_or(0) {
-            self.layer_ends.push(end);
+        close_run(&mut self.runs.layers, self.glyphs.len());
+    }
+
+    /// Everything `f` draws is ONE name: its letters and marks cast one
+    /// shadow from one cell of the atlas, as a lattice name's do, and Spread
+    /// lifts the blur of the whole word rather than of each letter alone.
+    ///
+    /// A piece drawn outside a scope is a name of its own, which is what an
+    /// axis label is. Scopes nest into the outermost, so a caller may wrap a
+    /// name that already wraps itself.
+    pub(crate) fn name<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = std::mem::replace(&mut self.naming, true);
+        let out = f(self);
+        self.naming = outer;
+        self.end_piece();
+        out
+    }
+
+    /// A piece has been drawn: it closes a name unless a scope holds it open.
+    fn end_piece(&mut self) {
+        if !self.naming {
+            close_run(&mut self.runs.names, self.glyphs.len());
         }
     }
 
@@ -589,6 +622,7 @@ impl TextBatch {
                 });
             }
         }
+        self.end_piece();
         #[cfg(test)]
         {
             let ink = self.glyphs[first..]
@@ -655,6 +689,7 @@ impl TextBatch {
             rim: outline.to_array(),
             atlas: GlyphInstance::MARK,
         });
+        self.end_piece();
         #[cfg(test)]
         self.marks.push(egui::Rect::from_min_size(min, size * k));
         patch.size
@@ -734,7 +769,7 @@ impl TextBatch {
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
-            std::mem::take(&mut self.layer_ends),
+            std::mem::take(&mut self.runs),
             shadow,
             harmonigraph_render::SheetUploads { font: atlas, marks },
             slide,
@@ -795,6 +830,9 @@ impl TextBatch {
             (atlas, marks_snapshot(painter.ctx()))
         };
         let mut glyphs = std::mem::take(&mut self.glyphs);
+        // The lattice's names are its `labels`, so the runs go with the glyphs
+        // they counted.
+        self.runs = Default::default();
         for glyph in &mut glyphs {
             glyph.rect[0] -= rect.min.x;
             glyph.rect[1] -= rect.min.y;
@@ -1569,7 +1607,7 @@ mod tests {
                 drop(harmonigraph_render::text_paint_callback(
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
                     labels.glyphs,
-                    Vec::new(),
+                    harmonigraph_render::GlyphRuns::default(),
                     None,
                     harmonigraph_render::SheetUploads { font: labels.atlas, marks: labels.marks },
                     harmonigraph_render::SlideAxis::Both,
@@ -1915,6 +1953,50 @@ mod tests {
             });
         }
         assert_eq!(published, 0, "an empty batch publishes no atlas, on any frame");
+    }
+
+    /// A stacked name is ONE shadow caster however many pieces it is drawn
+    /// in, and a piece drawn on its own, as an axis label is, is one of its
+    /// own: the runs the renderer makes casters of end after the label and
+    /// after the whole name, and nowhere inside it.
+    #[test]
+    fn a_stacked_name_is_one_name_and_a_bare_label_another() {
+        let ctx = crate::tests::probe::themed_at(1.0);
+        let mut read = None;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut batch = TextBatch::default();
+            batch.text(
+                ui.painter(),
+                egui::pos2(20.0, 20.0),
+                egui::Align2::LEFT_TOP,
+                "100".to_owned(),
+                crate::theme::picture_font(13.0),
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+            );
+            let label = batch.len() as u32;
+            // A flat and a comma down: a letter and two marks.
+            let name = harmonigraph_core::NoteName {
+                letter: 'B',
+                sharps: -1,
+                syntonic_commas: -1,
+                septimal_commas: 0,
+            };
+            crate::marks::draw_stacked_name(
+                &mut batch,
+                ui.painter(),
+                egui::pos2(100.0, 100.0),
+                name,
+                crate::marks::NameInk { fill: egui::Color32::WHITE, outline: egui::Color32::BLACK },
+                crate::marks::NameSize { scale: 1.0, magnify: 1.0 },
+                crate::marks::NameLead::Centred,
+            );
+            read = Some((label, batch.len() as u32, batch.marks().len(), batch.runs.names.clone()));
+        });
+        let (label, total, marks, names) = read.expect("the frame ran");
+        assert_eq!(label, 3, "the label is three glyphs");
+        assert!(marks >= 2, "the name should be drawn in several pieces, got {marks} marks");
+        assert_eq!(names, vec![label, total], "one run for the label and one for the name");
     }
 
     /// A shell that installs egui's current GPU texture makes a CPU atlas

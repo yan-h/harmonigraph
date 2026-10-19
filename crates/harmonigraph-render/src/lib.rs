@@ -82,7 +82,9 @@ use lattice_node_glow::create_glow_pipelines;
 /// label costs is the rim, and the rim was the text drawn again once per
 /// stamp.
 mod text;
-pub use text::{text_paint_callback, FontAtlas, GlyphInstance, PaneIds, SheetUploads, SlideAxis};
+pub use text::{
+    text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, PaneIds, SheetUploads, SlideAxis,
+};
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
