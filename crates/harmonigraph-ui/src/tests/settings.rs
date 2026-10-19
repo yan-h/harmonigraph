@@ -1805,6 +1805,41 @@ fn heading_color(out: &egui::FullOutput, leaf: egui::Rect, heading: &str) -> egu
         .unwrap_or_else(|| panic!("no {heading} heading"))
 }
 
+/// Text that says where one is — a section's heading, a tab, a block's title —
+/// is set in the heading weight, and the rows under it in the body weight.
+#[test]
+fn headings_tabs_and_block_titles_alone_take_the_heading_weight() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::System);
+    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0));
+    h.settle(&mut state);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let out = h.frame(&mut state, vec![]);
+    let family = |needle: &str| {
+        out.shapes
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) if t.galley.text() == needle && leaf.contains(t.pos) => {
+                    Some(t.galley.job.sections[0].format.font_id.family.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {needle} drawn"))
+    };
+    let heading = egui::TextStyle::Heading.resolve(&h.ctx.global_style()).family;
+    assert_ne!(heading, egui::FontFamily::Proportional);
+    for text in ["PERFORMANCE", "System", "Editor and exports"] {
+        assert_eq!(family(text), heading, "{text} is not in the heading weight");
+    }
+    for text in ["Lattice resolution", "Editor frame limit (fps)", "Uncapped"] {
+        assert_eq!(
+            family(text),
+            egui::FontFamily::Proportional,
+            "{text} is not in the body weight"
+        );
+    }
+}
+
 /// A feature's switch in its section heading, in front of the name, turns the
 /// feature off and takes its rows with it, dimming the name, but leaves the
 /// section unfolded: the switch is the picture's and the fold is the reader's.

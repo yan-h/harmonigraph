@@ -205,7 +205,7 @@ fn shadow_group(
     style: &mut ShadowStyle,
     hide_behind: Option<&mut f32>,
 ) {
-    crate::widgets::label(ui, egui::RichText::new(name).strong()).on_hover_text(casters);
+    crate::widgets::label(ui, egui::RichText::new(name).heading()).on_hover_text(casters);
     let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
     crate::widgets::shadow(ui, style, width_max, lattice);
     // Under the diagram rather than in its value column: the preview draws the

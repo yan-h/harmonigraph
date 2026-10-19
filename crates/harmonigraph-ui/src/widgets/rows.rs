@@ -304,7 +304,7 @@ pub(crate) fn preset_row(
 ) {
     let gap = theme::button_gap(theme::ui_scale(ui.ctx()));
     let width = option_width(ui, name)
-        + labels.iter().map(|label| option_width(ui, label)).sum::<f32>()
+        + labels.iter().map(|label| option_width(ui, *label)).sum::<f32>()
         + ui.spacing().item_spacing.x
         + gap * labels.len().saturating_sub(1) as f32;
     if width <= ui.available_width() {
@@ -321,9 +321,10 @@ pub(crate) fn preset_row(
 }
 
 /// Natural width of a selectable option, using the same font and padding as
-/// the button. Width decisions are recomputed from this frame's theme.
-pub(crate) fn option_width(ui: &Ui, label: &str) -> f32 {
-    let galley = egui::WidgetText::from(label).into_galley(
+/// the button (or the style `label` carries of its own, as a tab's does). Width
+/// decisions are recomputed from this frame's theme.
+pub(crate) fn option_width(ui: &Ui, label: impl Into<egui::WidgetText>) -> f32 {
+    let galley = label.into().into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,
@@ -358,7 +359,7 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
 
 /// Natural width of `options` laid out as buttons by [`choice_buttons`].
 fn choice_buttons_width<T>(ui: &Ui, options: &[(T, &str, &str)]) -> f32 {
-    options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
+    options.iter().map(|(_, label, _)| option_width(ui, *label)).sum::<f32>()
         + theme::button_gap(theme::ui_scale(ui.ctx())) * options.len().saturating_sub(1) as f32
 }
 
@@ -448,7 +449,7 @@ pub fn choice_row<T: Copy + PartialEq>(
     } else {
         let selected_width = options
             .iter()
-            .map(|(_, label, _)| option_width(ui, label))
+            .map(|(_, label, _)| option_width(ui, *label))
             .reduce(f32::max)
             .unwrap_or(0.0)
             + ui.spacing().icon_width
