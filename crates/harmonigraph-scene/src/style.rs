@@ -597,131 +597,37 @@ pub enum NoteNames {
     Played,
 }
 
-/// How many σ out a blurred cell is padded, and how far its kernel reaches —
-/// `REACH` in shadow.wgsl and `REACH_SIGMAS` in `harmonigraph-render`'s
-/// `shadow.rs`, pinned to both by
-/// `the_blurs_reach_and_loop_bound_are_the_packers_own`.
+/// One GROUP of casters' shadow: how far it reaches, how far its caster grows
+/// first and how dark it lands.
 ///
-/// Here as well as there because a kernel's reach is what every QUAD is grown
-/// by, and which kernel a caster is drawn by is the scene's to say.
-pub const REACH_SIGMAS: f32 = 3.0;
-
-/// The distance profile ends at one Shadow width, independently of its bend.
-/// Kept in step with `SHADOW_STOP` in common.wgsl so cell padding covers it.
-pub const SHADOW_STOP: f32 = 1.0;
-
-/// Signed bend limits: early L-shaped decay through linear to late decay.
-/// Six gives a strong bend without making the outer drop a near-step.
-pub const SHADOW_FALLOFF_MIN: f32 = -6.0;
-pub const SHADOW_FALLOFF_MAX: f32 = 6.0;
-
-/// Coverage `u` Shadow widths from the ink. Negative falloff falls early,
-/// zero is linear, and positive falls late. The normalized exponential has
-/// one curvature sign throughout the width: no S curve or tail window.
-/// The Lighting preview uses this; `standoff_coverage` in common.wgsl is its
-/// shader counterpart, held together by the renderer's profile parity test.
-pub fn standoff_level(falloff: f32, u: f32) -> f32 {
-    let falloff =
-        finite_or(falloff, SHADOW_FALLOFF_MIN).clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX);
-    let u = finite_or(u, 0.0).clamp(0.0, SHADOW_STOP) / SHADOW_STOP;
-    let remaining = 1.0 - u;
-    let shape = -falloff;
-    // WGSL has no expm1. Match its stable series near zero so the preview
-    // and picture stay smooth as the bar crosses the straight line.
-    if shape.abs() < 0.05 {
-        return remaining * (1.0 - shape * u * 0.5 + shape * shape * u * (2.0 * u - 1.0) / 12.0);
-    }
-    (shape * remaining).exp_m1() / shape.exp_m1()
-}
-
-/// What a shadow is MADE of: which of the two renderers turns a caster's ink
-/// into the number its draw multiplies the frame by.
-///
-/// Two renderers and nothing between them. A caster is drawn by one or the
-/// other — there is no mixture, no weight and no second term — and a frame
-/// whose casters disagree schedules both paths rather than a third.
-///
-/// What parts them in the picture is FORM at a wide Shadow. A Gaussian of a
-/// hairline peaks at a fraction of 1 and its profile carries the stroke's
-/// WIDTH, which is why a blur needs a gain to reach the depth at all; a
-/// distance is the same at a hairline as at a slab, so a letterform's
-/// counters, a cross's arms and a corner's diagonal all survive the widest
-/// Shadow the bar reaches. What a distance gives up is the pocket a blur
-/// builds where two strokes stand close: the distance to the nearer of two
-/// strokes is the distance to one of them, so a crease reads no deeper than a
-/// lone edge — #490's crease, which is the model rather than a defect in it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum ShadowKernel {
-    /// The DISTANCE, in the pane's points, from a fragment to the caster's
-    /// nearest ink, supplied by that caster's exact field and read back through
-    /// the normalized profile ([`standoff_level`]).
-    #[default]
-    Distance,
-    /// The caster's coverage, convolved with one Gaussian at half the Shadow's
-    /// width — the conventional accumulation, kept beside the distance as the
-    /// alternative a group may be switched to rather than as a correction term
-    /// mixed into it.
-    ///
-    /// One fixed kernel. A straight edge keeps `erfc(d / (σ√2)) / 2` of the
-    /// light `d` out from its edge, which at one Shadow width is 2.3%.
-    /// Its tail ends at one and a half widths.
-    Gaussian,
-}
-
-impl ShadowKernel {
-    /// How far this kernel reaches past a caster's ink, in the picture's own σ.
-    ///
-    /// The Gaussian ends at [`REACH_SIGMAS`] σ; the distance profile ends at
-    /// one Shadow width (2σ), at every falloff. Quads and atlas cells use this
-    /// same reach so neither can clip a profile that is still standing.
-    pub fn reach_sigmas(self) -> f32 {
-        match self {
-            ShadowKernel::Gaussian => REACH_SIGMAS,
-            ShadowKernel::Distance => 2.0 * SHADOW_STOP,
-        }
-    }
-
-    /// Whether a caster drawn by this kernel puts a DISTANCE in its cell rather
-    /// than blurred ink — what the fill, the blur chain and the sampler each
-    /// branch on, and what `ShadowCaster::shade` carries to the shader.
-    pub fn is_distance(self) -> bool {
-        matches!(self, ShadowKernel::Distance)
-    }
-}
-
-/// One GROUP of casters' shadow: which renderer draws it, how far it reaches,
-/// how dark it lands and where inside that reach the darkness sits.
-///
-/// Which kernel a group is drawn by is a look; the other controls are what a
-/// person dials against that look. Anything that only
-/// calibrates a renderer — such as the Gaussian's gain — is a renderer
-/// constant and lives at the consumer, so
-/// switching a group's kernel does not move its bars.
+/// Every shadow is the caster's coverage convolved with one Gaussian at half
+/// the Shadow's width. A straight edge keeps `erfc(d / (σ√2)) / 2` of the
+/// light `d` out from its edge, which at one Shadow width is 2.3%; the tail
+/// ends at one and a half widths (`harmonigraph-render`'s `shadow::REACH_SIGMAS`). Anything that only
+/// calibrates that renderer — such as the Gaussian's gain — is a renderer
+/// constant and lives at the consumer, so the bars here are only what a
+/// person dials.
 ///
 /// The groups are explicit ([`ShadowSettings`]) rather than one style with
 /// per-group overrides: an override needs a sentinel for "not set", and a
-/// sentinel is a fourth value with no place on a bar. Four numbers written out
-/// twice cost less than one inheritance rule.
+/// sentinel is a fourth value with no place on a bar. Three numbers written out
+/// per group cost less than one inheritance rule.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ShadowStyle {
-    /// Which of the two renderers turns this group's ink into its shadow.
-    pub kernel: ShadowKernel,
     /// How wide the shadow is, as a share of the caster group's reference size.
     /// The upper limit is [`GLOW_SHADOW_MAX`](crate::GLOW_SHADOW_MAX) for lattice
     /// groups and [`SPECTRAL_SHADOW_MAX`](crate::SPECTRAL_SHADOW_MAX) for spectral
     /// groups. Lattice groups use a
     /// node radius; spectral groups use the renderer's fixed four-point edge
     /// unit so their shadows stay screen-constant across pitch zoom and pane
-    /// size. Half of that resolved width is the σ a Gaussian blurs at and the
-    /// resolved width is what a distance's decay is measured in.
+    /// size. Half of that resolved width is the σ the Gaussian blurs at.
     ///
     /// 0 is the picture with no shadow in it for this group, pixel for pixel:
     /// no cell is packed and every draw multiplies by 1.
     pub width: f32,
-    /// How far a Gaussian's caster grows before blur, as a fraction of the
-    /// resolved Shadow width. 0 keeps the original ink; 1 grows it by one
-    /// whole width. Contour shadows ignore this stored setting.
+    /// How far the caster grows before blur, as a fraction of the resolved
+    /// Shadow width. 0 keeps the original ink; 1 grows it by one whole width.
     pub spread: f32,
     /// How dark the shadow lands where it is whole, 0..=1. 1 takes the frame
     /// under wide ink to black; 0 is this group's second off switch — except
@@ -735,11 +641,6 @@ pub struct ShadowStyle {
     /// coverage by it (`local_shadow_transmittance`), so the kernel's shape and
     /// reach stay independent of how dark it is.
     pub depth: f32,
-    /// Signed bend in [`SHADOW_FALLOFF_MIN`]..=[`SHADOW_FALLOFF_MAX`].
-    /// Negative falls early, zero is linear, positive falls late. All profiles
-    /// begin at full coverage and reach zero at one width, with no inflection.
-    /// Only distance shadows consume this; the Gaussian keeps its own profile.
-    pub falloff: f32,
 }
 
 impl Default for ShadowStyle {
@@ -759,18 +660,13 @@ impl Default for ShadowStyle {
     /// persist tests holds it, beside the missing-group sweep.
     fn default() -> ShadowStyle {
         ShadowStyle {
-            // Distance keeps a caster's form at this broad shadow width, where
-            // a blur would inherit too much of the caster's own thickness.
-            kernel: ShadowKernel::Distance,
-            // A broad shadow preserves the form of the ring and marker across
-            // the wide light field.
+            // Numbers kept from when this default drew contour shadows, so
+            // the fixtures built on it measure the same widths.
             width: 0.418_517_17,
             spread: 0.0,
             // Just under half depth leaves the shadow legible without cutting
             // the shared field back to the ground.
             depth: 0.477_784_4,
-            // Early decay near the ink.
-            falloff: -4.0,
         }
     }
 }
@@ -796,35 +692,28 @@ impl ShadowStyle {
     /// Gaussian caster growth in screen points at the resolved blur sigma.
     /// A full spread is one Shadow width, or twice sigma.
     pub fn gaussian_spread_points(self, sigma_points: f32) -> f32 {
-        if self.kernel.is_distance() {
-            return 0.0;
-        }
         2.0 * finite_or(sigma_points, 0.0).max(0.0) * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
     }
 
     /// This style held to the ranges its bars name — the PICTURE's door, where
     /// [`ViewConfig::sanitize`](crate::ViewConfig::sanitize) is the blob's.
     ///
-    /// Nonfinite values land on each bar's low end here. Width and
-    /// depth then disable the group; falloff selects the earliest decay.
+    /// Nonfinite values land on each bar's low end here, where width and
+    /// depth disable the group.
     pub fn clamped(self, width_max: f32) -> ShadowStyle {
         ShadowStyle {
-            kernel: self.kernel,
             width: finite_or(self.width, 0.0).clamp(0.0, width_max),
             spread: finite_or(self.spread, 0.0).clamp(0.0, 1.0),
             depth: finite_or(self.depth, 0.0).clamp(0.0, 1.0),
-            falloff: finite_or(self.falloff, SHADOW_FALLOFF_MIN)
-                .clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX),
         }
     }
 }
 
 /// Every group of casters the picture dials its shadow separately.
 ///
-/// One implementation with a value per group, not a shadow per group: both
-/// renderers read one geometric field per caster and one profile, and a frame
-/// whose groups disagree schedules two paths rather than four. What a group
-/// buys is the pair of numbers, because the ink in it is a different KIND of
+/// One implementation with a value per group, not a shadow per group: every
+/// caster is blurred by the same renderer, whatever its group. What a group
+/// buys is its numbers, because the ink in it is a different KIND of
 /// ink. A node's layered geometry and the notation that names its positions
 /// want independent shadows, and the width that preserves a ring need not be
 /// the width that keeps a letterform or resting marker legible.
@@ -848,46 +737,30 @@ impl Default for ShadowSettings {
     /// a group PRESENT with one field missing fills that field from
     /// [`ShadowStyle::default`] instead, which is written out there.
     ///
-    /// The picture captured from the DAW on 2026-10-07: Gaussian shadows in
-    /// all four groups.
-    /// Falloff uses an early normalized exponential since the signed-curve
-    /// redesign.
+    /// The picture captured from the DAW on 2026-10-07.
     fn default() -> ShadowSettings {
         ShadowSettings {
-            // Shallow, with a gentler falloff than the notation's: the node's
-            // rings and marks stand in a shadow that stays light.
-            lattice_geometry: ShadowStyle {
-                kernel: ShadowKernel::Gaussian,
-                width: 0.568_847_66,
-                spread: 0.0,
-                depth: 0.284_129_17,
-                falloff: -2.130_040_2,
-            },
+            // Shallow: the node's rings and marks stand in a shadow that stays light.
+            lattice_geometry: ShadowStyle { width: 0.568_847_66, spread: 0.0, depth: 0.284_129_17 },
             // A light, slightly spread shadow under the lattice's notation.
             lattice_text: ShadowStyle {
-                kernel: ShadowKernel::Gaussian,
                 width: 0.185_866_79,
                 spread: 0.129_441_13,
                 depth: 0.261_179_95,
-                falloff: -4.0,
             },
             // Over four fifths deep under the roll's ribbons and the spiral's
             // dots, and wide enough to lift them off the heatmap.
             spectral_geometry: ShadowStyle {
-                kernel: ShadowKernel::Gaussian,
                 width: 1.873_678_9,
                 spread: 0.119_161_01,
                 depth: 0.825_221_84,
-                falloff: -2.619_324_2,
             },
             // About two thirds deep, slightly spread, under the spectral pane's
             // names and axis labels.
             spectral_text: ShadowStyle {
-                kernel: ShadowKernel::Gaussian,
                 width: 0.642_857_13,
                 spread: 0.135_809_54,
                 depth: 0.632_661,
-                falloff: -4.0,
             },
         }
     }

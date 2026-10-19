@@ -4,13 +4,6 @@
 use super::fixtures::*;
 use crate::*;
 
-fn with_shadow_kernel(mut scene: Scene, kernel: harmonigraph_scene::ShadowKernel) -> Scene {
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = kernel;
-    }
-    scene
-}
-
 /// Which pixels of `ground` the markers DARKEN, against the same frame with no
 /// marker in it.
 ///
@@ -194,52 +187,43 @@ fn a_markers_shadow_fades_out_with_the_taper_of_its_arm() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let ruler = with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, 1.0), kernel);
-        let centre = on_screen(&ruler, SIZE, glam::Vec3::new(LONE_OFFSET, 0.0, 0.0));
-        let tip = on_screen(&ruler, SIZE, glam::Vec3::new(LONE_OFFSET + ARM, 0.0, 0.0));
-        let arm = tip - centre;
-        let side = glam::Vec2::new(-arm.y, arm.x).normalize()
-            * (arm.length() * ruler.plus_half_width + 2.0);
-        let row = (centre + side).y.round() as usize;
-        let mid = centre.x.round() as usize;
-        let at = |buf: &[u8], x: usize| -> i64 {
-            let i = (row * SIZE[0] as usize + x) * 4;
-            brightness(&buf[i..i + 3])
-        };
+    let ruler = lone_tapered_marker(ARM, SHADOW, 0.0, 1.0);
+    let centre = on_screen(&ruler, SIZE, glam::Vec3::new(LONE_OFFSET, 0.0, 0.0));
+    let tip = on_screen(&ruler, SIZE, glam::Vec3::new(LONE_OFFSET + ARM, 0.0, 0.0));
+    let arm = tip - centre;
+    let side =
+        glam::Vec2::new(-arm.y, arm.x).normalize() * (arm.length() * ruler.plus_half_width + 2.0);
+    let row = (centre + side).y.round() as usize;
+    let mid = centre.x.round() as usize;
+    let at = |buf: &[u8], x: usize| -> i64 {
+        let i = (row * SIZE[0] as usize + x) * 4;
+        brightness(&buf[i..i + 3])
+    };
 
-        // The outermost column just outside the arm's side where the shadow
-        // reads darker than the same frame without one. Rightward because the
-        // node lighting the frame is to the LEFT: that half holds no other ink
-        // and no other shadow.
-        let reach = |shooter: &mut Shooter, arm: f32, taper: f32| -> usize {
-            let cold = shooter
-                .shot(&with_shadow_kernel(lone_tapered_marker(arm, SHADOW, 0.0, taper), kernel));
-            let hot = shooter
-                .shot(&with_shadow_kernel(lone_tapered_marker(arm, SHADOW, 1.0, taper), kernel));
-            let mut out = mid;
-            for x in mid..SIZE[0] as usize {
-                if at(&hot, x) < at(&cold, x) {
-                    out = x;
-                }
+    // The outermost column just outside the arm's side where the shadow
+    // reads darker than the same frame without one. Rightward because the
+    // node lighting the frame is to the LEFT: that half holds no other ink
+    // and no other shadow.
+    let reach = |shooter: &mut Shooter, arm: f32, taper: f32| -> usize {
+        let cold = shooter.shot(&lone_tapered_marker(arm, SHADOW, 0.0, taper));
+        let hot = shooter.shot(&lone_tapered_marker(arm, SHADOW, 1.0, taper));
+        let mut out = mid;
+        for x in mid..SIZE[0] as usize {
+            if at(&hot, x) < at(&cold, x) {
+                out = x;
             }
-            out
-        };
-        let square = reach(&mut shooter, ARM, 1.0);
-        let some = reach(&mut shooter, ARM, 0.6);
-        let most = reach(&mut shooter, ARM, 0.25);
-        assert!(
-            square > mid,
-            "{kernel:?}: the square-ended cross cast no shadow past its own crossing",
-        );
-        assert!(
-            square > some && some >= most && most > mid,
-            "{kernel:?}: arms fading over none, two fifths and three quarters of their length \
-             shadowed out to {square}, {some} and {most} from a crossing at {mid}",
-        );
-    }
+        }
+        out
+    };
+    let square = reach(&mut shooter, ARM, 1.0);
+    let some = reach(&mut shooter, ARM, 0.6);
+    let most = reach(&mut shooter, ARM, 0.25);
+    assert!(square > mid, "the square-ended cross cast no shadow past its own crossing",);
+    assert!(
+        square > some && some >= most && most > mid,
+        "arms fading over none, two fifths and three quarters of their length \
+         shadowed out to {square}, {some} and {most} from a crossing at {mid}",
+    );
 }
 
 /// A tapered arm gives up its shadow with its INK, and with nothing else: the
@@ -269,55 +253,45 @@ fn a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let bare = |shooter: &mut Shooter, depth: f32| {
-            shooter.shot(&{
-                let mut s =
-                    with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, depth, 1.0), kernel);
-                s.pluses.clear();
-                s
-            })
-        };
-        let flat_bare = bare(&mut shooter, 0.0);
-        let flat =
-            shooter.shot(&with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 0.0, 1.0), kernel));
-        let ground: Vec<usize> =
-            (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
-        assert!(
-            ground.len() > 1000,
-            "{kernel:?}: the fixture must leave halo for a bite to land in, not {}",
-            ground.len(),
-        );
-        let deep_bare = bare(&mut shooter, 1.0);
-        let taken = |shooter: &mut Shooter, taper: f32| -> i64 {
-            let frame = shooter
-                .shot(&with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, 1.0, taper), kernel));
-            ground
-                .iter()
-                .map(|&i| (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
-                .sum()
-        };
-        let square = taken(&mut shooter, 1.0);
-        let some = taken(&mut shooter, 0.6);
-        let most = taken(&mut shooter, 0.2);
-        assert!(
-            square > 0,
-            "{kernel:?}: a square-ended cross took no light off the halo it stands in",
-        );
-        assert!(
-            some * 10 < square * 9 && most * 10 < some * 9,
-            "{kernel:?}: an arm fading over none, two fifths and four fifths of its length took \
-             {square}, {some} and {most} of light off the halo, which is not one order by a \
-             tenth a step",
-        );
-        assert!(
-            most * 100 > square * 10,
-            "{kernel:?}: an arm fading from a fifth of its length took {most} against the square \
-             end's {square}, which leaves no measurable shadow from the visible inner cross",
-        );
-    }
+    let bare = |shooter: &mut Shooter, depth: f32| {
+        shooter.shot(&{
+            let mut s = lone_tapered_marker(ARM, SHADOW, depth, 1.0);
+            s.pluses.clear();
+            s
+        })
+    };
+    let flat_bare = bare(&mut shooter, 0.0);
+    let flat = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 0.0, 1.0));
+    let ground: Vec<usize> =
+        (0..flat.len()).step_by(4).filter(|&i| flat[i..i + 4] == flat_bare[i..i + 4]).collect();
+    assert!(
+        ground.len() > 1000,
+        "the fixture must leave halo for a bite to land in, not {}",
+        ground.len(),
+    );
+    let deep_bare = bare(&mut shooter, 1.0);
+    let taken = |shooter: &mut Shooter, taper: f32| -> i64 {
+        let frame = shooter.shot(&lone_tapered_marker(ARM, SHADOW, 1.0, taper));
+        ground
+            .iter()
+            .map(|&i| (brightness(&deep_bare[i..i + 3]) - brightness(&frame[i..i + 3])).max(0))
+            .sum()
+    };
+    let square = taken(&mut shooter, 1.0);
+    let some = taken(&mut shooter, 0.6);
+    let most = taken(&mut shooter, 0.2);
+    assert!(square > 0, "a square-ended cross took no light off the halo it stands in",);
+    assert!(
+        some * 10 < square * 9 && most * 10 < some * 9,
+        "an arm fading over none, two fifths and four fifths of its length took \
+         {square}, {some} and {most} of light off the halo, which is not one order by a \
+         tenth a step",
+    );
+    assert!(
+        most * 100 > square * 10,
+        "an arm fading from a fifth of its length took {most} against the square \
+         end's {square}, which leaves no measurable shadow from the visible inner cross",
+    );
 }
 
 /// A marker's shadow neither shows through nor outlines the share of its arm
@@ -340,120 +314,102 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let scene = |depth: f32, taper: f32| {
-            let mut scene =
-                with_shadow_kernel(lone_tapered_marker(ARM, SHADOW, depth, taper), kernel);
-            let marker = scene.pluses[0];
-            scene.nodes.clear();
-            scene.pluses = vec![standalone_marker(
-                &mut scene.nodes,
-                marker.pos,
-                marker.radius,
-                marker.color,
-                marker.strength,
-            )];
-            scene.view.glow_reach = 0.0;
-            scene
-        };
-        let bare = shooter.shot(&{
-            let mut scene = scene(0.0, 1.0);
-            scene.pluses.clear();
-            scene
-        });
-        let square = shooter.shot(&scene(0.0, 1.0));
-        let tapered = shooter.shot(&scene(0.0, TAPERED));
-        let body: std::collections::BTreeSet<usize> =
-            solid_inked(&bare, &square).into_iter().collect();
-        let row = SIZE[0] as usize * 4;
-        let fading: Vec<usize> = body
-            .iter()
-            .copied()
-            .filter(|&i| {
-                i >= row + 4
-                    && i + row + 4 < square.len()
-                    && body.contains(&(i - 4))
-                    && body.contains(&(i + 4))
-                    && body.contains(&(i - row))
-                    && body.contains(&(i + row))
-            })
-            .filter(|&i| tapered[i..i + 4] != square[i..i + 4])
-            .collect();
-        assert!(
-            fading.len() > 200,
-            "{kernel:?}: only {} fully covered arm pixels reach the taper",
-            fading.len(),
-        );
+    let scene = |depth: f32, taper: f32| {
+        let mut scene = lone_tapered_marker(ARM, SHADOW, depth, taper);
+        let marker = scene.pluses[0];
+        scene.nodes.clear();
+        scene.pluses = vec![standalone_marker(
+            &mut scene.nodes,
+            marker.pos,
+            marker.radius,
+            marker.color,
+            marker.strength,
+        )];
+        scene.view.glow_reach = 0.0;
+        scene
+    };
+    let bare = shooter.shot(&{
+        let mut scene = scene(0.0, 1.0);
+        scene.pluses.clear();
+        scene
+    });
+    let square = shooter.shot(&scene(0.0, 1.0));
+    let tapered = shooter.shot(&scene(0.0, TAPERED));
+    let body: std::collections::BTreeSet<usize> = solid_inked(&bare, &square).into_iter().collect();
+    let row = SIZE[0] as usize * 4;
+    let fading: Vec<usize> = body
+        .iter()
+        .copied()
+        .filter(|&i| {
+            i >= row + 4
+                && i + row + 4 < square.len()
+                && body.contains(&(i - 4))
+                && body.contains(&(i + 4))
+                && body.contains(&(i - row))
+                && body.contains(&(i + row))
+        })
+        .filter(|&i| tapered[i..i + 4] != square[i..i + 4])
+        .collect();
+    assert!(fading.len() > 200, "only {} fully covered arm pixels reach the taper", fading.len(),);
 
-        shooter.clear = wgpu::Color { r: GROUND, g: GROUND, b: GROUND, a: 1.0 };
-        let flat_bare = shooter.shot(&{
-            let mut scene = scene(0.0, 1.0);
-            scene.pluses.clear();
-            scene
-        });
-        let flat_square = shooter.shot(&scene(0.0, 1.0));
-        let flat = shooter.shot(&scene(0.0, TAPERED));
-        let deep = shooter.shot(&scene(1.0, TAPERED));
+    shooter.clear = wgpu::Color { r: GROUND, g: GROUND, b: GROUND, a: 1.0 };
+    let flat_bare = shooter.shot(&{
+        let mut scene = scene(0.0, 1.0);
+        scene.pluses.clear();
+        scene
+    });
+    let flat_square = shooter.shot(&scene(0.0, 1.0));
+    let flat = shooter.shot(&scene(0.0, TAPERED));
+    let deep = shooter.shot(&scene(1.0, TAPERED));
 
-        let moved = fading
-            .iter()
-            .filter(|&&i| (0..4).any(|c| deep[i + c].abs_diff(flat[i + c]) > 1))
-            .count();
-        let worst = fading
-            .iter()
-            .map(|&i| (0..4).map(|c| deep[i + c].abs_diff(flat[i + c])).max().unwrap())
-            .max()
-            .unwrap_or(0);
-        assert_eq!(
-            moved,
-            0,
-            "{kernel:?}: the Shadow depth moved {moved} of the marker's {} fading arm pixels, \
-             by up to {worst}",
-            fading.len(),
-        );
+    let moved =
+        fading.iter().filter(|&&i| (0..4).any(|c| deep[i + c].abs_diff(flat[i + c]) > 1)).count();
+    let worst = fading
+        .iter()
+        .map(|&i| (0..4).map(|c| deep[i + c].abs_diff(flat[i + c])).max().unwrap())
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        moved,
+        0,
+        "the Shadow depth moved {moved} of the marker's {} fading arm pixels, \
+         by up to {worst}",
+        fading.len(),
+    );
 
-        let measured = scene(0.0, TAPERED);
-        let centre = on_screen(&measured, SIZE, glam::Vec3::new(LONE_OFFSET, 0.0, 0.0));
-        let tip = on_screen(&measured, SIZE, glam::Vec3::new(LONE_OFFSET + ARM, 0.0, 0.0));
-        let arm = tip - centre;
-        let side = glam::Vec2::new(-arm.y, arm.x).normalize()
-            * (arm.length() * measured.plus_half_width + 2.0);
-        let loss_at = |along: f32| {
-            let p = centre + arm * along + side;
-            let i = ((p.y.round() as usize * SIZE[0] as usize + p.x.round() as usize) * 4) as usize;
-            brightness(&flat[i..i + 3]) - brightness(&deep[i..i + 3])
-        };
-        let body_loss = loss_at(0.45);
-        let tip_loss = loss_at(0.97);
-        assert!(
-            body_loss > 20,
-            "{kernel:?}: the shadow beside the fading arm took only {body_loss} of light",
-        );
-        assert!(
-            // At 97% of the arm the taper has not reached zero. Its surviving
-            // tail may now take one output code per channel; brightness sums
-            // all three. The old ink cutoff erased this part of the fade.
-            tip_loss <= 3,
-            "{kernel:?}: the shadow still outlines the transparent arm tip by {tip_loss}, \
-             against {body_loss} beside the visible arm",
-        );
+    let measured = scene(0.0, TAPERED);
+    let centre = on_screen(&measured, SIZE, glam::Vec3::new(LONE_OFFSET, 0.0, 0.0));
+    let tip = on_screen(&measured, SIZE, glam::Vec3::new(LONE_OFFSET + ARM, 0.0, 0.0));
+    let arm = tip - centre;
+    let side = glam::Vec2::new(-arm.y, arm.x).normalize()
+        * (arm.length() * measured.plus_half_width + 2.0);
+    let loss_at = |along: f32| {
+        let p = centre + arm * along + side;
+        let i = ((p.y.round() as usize * SIZE[0] as usize + p.x.round() as usize) * 4) as usize;
+        brightness(&flat[i..i + 3]) - brightness(&deep[i..i + 3])
+    };
+    let body_loss = loss_at(0.45);
+    let tip_loss = loss_at(0.97);
+    assert!(body_loss > 20, "the shadow beside the fading arm took only {body_loss} of light",);
+    assert!(
+        // At 97% of the arm the taper has not reached zero. Its surviving
+        // tail may now take one output code per channel; brightness sums
+        // all three. The old ink cutoff erased this part of the fade.
+        tip_loss <= 3,
+        "the shadow still outlines the transparent arm tip by {tip_loss}, \
+         against {body_loss} beside the visible arm",
+    );
 
-        let ground: Vec<usize> = (0..flat_square.len())
-            .step_by(4)
-            .filter(|&i| flat_square[i..i + 4] == flat_bare[i..i + 4])
-            .collect();
-        let dimmed = ground
-            .iter()
-            .filter(|&&i| brightness(&deep[i..i + 3]) < brightness(&flat[i..i + 3]))
-            .count();
-        assert!(
-            dimmed > 200,
-            "{kernel:?}: the marker darkened only {dimmed} pixels outside its arm",
-        );
-        shooter.clear = wgpu::Color::BLACK;
-    }
+    let ground: Vec<usize> = (0..flat_square.len())
+        .step_by(4)
+        .filter(|&i| flat_square[i..i + 4] == flat_bare[i..i + 4])
+        .collect();
+    let dimmed = ground
+        .iter()
+        .filter(|&&i| brightness(&deep[i..i + 3]) < brightness(&flat[i..i + 3]))
+        .count();
+    assert!(dimmed > 200, "the marker darkened only {dimmed} pixels outside its arm",);
+    shooter.clear = wgpu::Color::BLACK;
 }
 
 /// One Shadow is ONE distance: what a marker's shadow reaches past the ink casting

@@ -1,5 +1,5 @@
-//! The shadow a node's rings, a resting cross and a name cast: the selected
-//! kernel of the item's own ink, multiplied into everything already in the
+//! The shadow a node's rings, a resting cross and a name cast: the Gaussian
+//! blur of the item's own ink, multiplied into everything already in the
 //! frame under it by the item's own draw (`shadow_through` in lattice.wgsl).
 
 use super::fixtures::*;
@@ -79,260 +79,31 @@ fn on_ground(shadow: f32, depth: f32) -> Scene {
 fn node_shadow_darkness_scales_the_entire_profile() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     shooter.clear = over_ground();
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+    let mut scene = on_ground(1.0, 1.0);
+    scene.view.note_bloom = 0.0;
+    let mut shot = |depth| {
+        shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
+            cb.uniforms.geometry_shadow.depth = depth;
+        })
+    };
+    let (clear, quarter, half, full) = (shot(0.0), shot(0.25), shot(0.5), shot(1.0));
+    let (mut body, mut tail) = (0, 0);
+    for (((a, b), c), d) in clear
+        .chunks_exact(4)
+        .zip(quarter.chunks_exact(4))
+        .zip(half.chunks_exact(4))
+        .zip(full.chunks_exact(4))
     {
-        let mut scene = on_ground(1.0, 1.0);
-        scene.view.shadow.lattice_geometry.kernel = kernel;
-        scene.view.shadow.lattice_geometry.falloff = 1.0;
-        scene.view.note_bloom = 0.0;
-        let mut shot = |depth| {
-            shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
-                cb.uniforms.geometry_shadow.depth = depth;
-            })
-        };
-        let (clear, quarter, half, full) = (shot(0.0), shot(0.25), shot(0.5), shot(1.0));
-        let (mut body, mut tail) = (0, 0);
-        for (((a, b), c), d) in clear
-            .chunks_exact(4)
-            .zip(quarter.chunks_exact(4))
-            .zip(half.chunks_exact(4))
-            .zip(full.chunks_exact(4))
-        {
-            let removed = i32::from(a[0]) - i32::from(d[0]);
-            let at_quarter = i32::from(a[0]) - i32::from(b[0]);
-            let at_half = i32::from(a[0]) - i32::from(c[0]);
-            // Quantization after compositing permits one code per reading.
-            assert!(
-                (4 * at_quarter - removed).abs() <= 5,
-                "{kernel:?}: quarter depth changed shape"
-            );
-            assert!((2 * at_half - removed).abs() <= 3, "{kernel:?}: half depth changed shape");
-            body += usize::from(removed > 80);
-            tail += usize::from((6..=30).contains(&removed));
-        }
-        assert!(
-            body > 100 && tail > 100,
-            "{kernel:?}: fixture reached only {body} body and {tail} tail pixels"
-        );
+        let removed = i32::from(a[0]) - i32::from(d[0]);
+        let at_quarter = i32::from(a[0]) - i32::from(b[0]);
+        let at_half = i32::from(a[0]) - i32::from(c[0]);
+        // Quantization after compositing permits one code per reading.
+        assert!((4 * at_quarter - removed).abs() <= 5, "quarter depth changed shape");
+        assert!((2 * at_half - removed).abs() <= 3, "half depth changed shape");
+        body += usize::from(removed > 80);
+        tail += usize::from((6..=30).contains(&removed));
     }
-}
-
-/// A node's Distance cell evaluates the exact field of its ring layers, in pane
-/// points. This fixture has constant-width angular gaps and one marked sector,
-/// whose two diagonal sides continue into the outer strip. The CPU reference
-/// repeats the geometry from `OctaveLayout` to pin uv reconstruction, point
-/// scaling, storage and the atlas-copy path before the shadow curve can hide an
-/// error in a rendered picture.
-#[test]
-fn a_node_distance_profile_matches_the_cpu_reference() {
-    const SHADOW: f32 = 0.24;
-    const QUAD_MARGIN: f32 = 1.6;
-    let Some((device, queue)) = crate::gpu_harness::headless_device() else {
-        return;
-    };
-
-    let marked = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
-    let mut scene = on_ground(SHADOW, 1.0);
-    scene.nodes[0].melody_slots = marked;
-    scene.nodes[0].melody_level = 1.0;
-    scene.outer_inner = 0.42;
-    scene.outer_outer = 0.72;
-    scene.rings_outer = scene.outer_outer;
-    scene.octave_gap = 0.10;
-    scene.mark_inner = 0.84;
-    scene.view.mark_thickness = 0.16;
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-    }
-
-    let cb = LatticeCallback::from_scene(
-        &scene,
-        LatticeLabels::default(),
-        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
-        wgpu::TextureFormat::Rgba8Unorm,
-        41,
-        None,
-    );
-    assert_eq!(cb.instances.len(), 1, "the fixture must ship exactly one node");
-    assert_eq!(cb.casters.len(), 1, "the fixture must pack exactly one caster");
-    let packed =
-        shadow::pack(&cb.casters, cb.render_scale, device.limits().max_texture_dimension_2d);
-    let cell = packed.boxes[cb.node_cells[0] as usize];
-    assert_eq!(
-        cell.who[1],
-        shadow::DISTANCE_COVERAGE_KIND,
-        "the node did not pack a distance coverage cell"
-    );
-
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut encoder = device.create_command_encoder(&Default::default());
-    let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-    queue.submit(bufs.into_iter().chain([encoder.finish()]));
-    let res: &LatticeResources = resources.get().expect("prepare created resources");
-    let target = res
-        .panes
-        .get(&41)
-        .and_then(|pane| pane.offscreen.as_ref())
-        .and_then(|offscreen| offscreen.shadow.as_ref())
-        .expect("the node packed a shadow atlas");
-    let bytes = crate::gpu_harness::readback(&device, &queue, target.texture(), target.size);
-    let held = |x: u32, y: u32| {
-        let i = ((y * target.size[0] + x) * 4) as usize;
-        shadow::tests::half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
-    };
-
-    let node = &scene.nodes[0];
-    let centre = on_screen(&scene, SIZE, node.world_pos);
-    let (right, up) = scene.camera.right_up();
-    let uv_world = scene.node_radius * 1.8 * node.scale.max(0.05);
-    let screen_right = on_screen(&scene, SIZE, node.world_pos + right * uv_world) - centre;
-    let screen_up = on_screen(&scene, SIZE, node.world_pos + up * uv_world) - centre;
-    let to_uv = |point: glam::Vec2| {
-        let delta = point - centre;
-        glam::Vec2::new(
-            delta.dot(screen_right) / screen_right.length_squared(),
-            delta.dot(screen_up) / screen_up.length_squared(),
-        )
-    };
-
-    let layout = scene.octave_layout;
-    let ring = layout.ring(node.cents);
-    let sector = |slot: i32| {
-        let i = (slot - ring.base).clamp(0, layout.span as i32 - 1) as usize;
-        [layout.edge(ring, i), layout.edge(ring, i + 1)]
-    };
-    let fold = |uv: glam::Vec2, edges: [f32; 2]| {
-        let mid = 0.5 * (edges[0] + edges[1]);
-        let half = (0.5 * (edges[0] - edges[1])).clamp(0.0, std::f32::consts::PI);
-        let (s, c) = mid.sin_cos();
-        (
-            glam::Vec2::new((uv.y * c - uv.x * s).abs(), uv.x * c + uv.y * s),
-            glam::Vec2::new(half.sin(), half.cos()),
-        )
-    };
-    let sector_sd = |uv: glam::Vec2, inner: f32, outer: f32, edges: [f32; 2]| {
-        if outer <= inner {
-            return f32::MAX;
-        }
-        let (q, edge) = fold(uv, edges);
-        let side = edge.y * q.x - edge.x * q.y;
-        let arc = q.length() - outer;
-        let edge_distance = (q - edge * q.dot(edge).clamp(0.0, outer)).length();
-        let sign = if side < 0.0 {
-            -1.0
-        } else if side > 0.0 {
-            1.0
-        } else {
-            0.0
-        };
-        let pie = arc.max(edge_distance * sign);
-        let gap = if q.dot(edge) > 0.0 { scene.octave_gap * 0.5 } else { 0.0 };
-        let annulus = (uv.length() - 0.5 * (inner + outer)).abs() - 0.5 * (outer - inner);
-        if edges[0] - edges[1] > std::f32::consts::PI {
-            return annulus.max(pie).max(side + gap);
-        }
-
-        let gap = scene.octave_gap * 0.5;
-        let normal = glam::Vec2::new(edge.y, -edge.x);
-        let radius = q.length();
-        let axis_t = gap * edge.y / edge.x.max(1e-6);
-        let inner_t = (inner * inner - gap * gap).max(0.0).sqrt();
-        let outer_t = (outer * outer - gap * gap).max(0.0).sqrt();
-        let segment_start = axis_t.max(inner_t);
-        if segment_start > outer_t {
-            return f32::MAX;
-        }
-        let side_t = q.dot(edge).clamp(segment_start, outer_t);
-        let mut distance = (q - (side_t * edge - gap * normal)).length();
-        let direction = q / radius.max(1e-6);
-        let outer_at = direction * outer;
-        if normal.dot(outer_at) + gap <= 0.0 {
-            distance = distance.min((radius - outer).abs());
-        }
-        let inner_at = direction * inner;
-        if normal.dot(inner_at) + gap <= 0.0 {
-            distance = distance.min((radius - inner).abs());
-        }
-        if radius >= inner && radius <= outer && normal.dot(q) + gap <= 0.0 {
-            -distance
-        } else {
-            distance
-        }
-    };
-    let marked_slot = harmonigraph_scene::MIDDLE_C_SLOT as i32;
-    let marked_edges = sector(marked_slot);
-    assert!(
-        marked_edges.iter().all(|a| a.sin().abs() > 0.2 && a.cos().abs() > 0.2),
-        "the marked sector's edges are not diagonal: {marked_edges:?}",
-    );
-    let mark_in = scene.mark_inner.min(QUAD_MARGIN - 0.02);
-    let mark_out = (mark_in + scene.view.mark_thickness).min(QUAD_MARGIN - 0.02);
-    let truth = |uv: glam::Vec2| {
-        let mut sd = f32::MAX;
-        for i in 0..layout.span {
-            sd = sd.min(sector_sd(
-                uv,
-                scene.outer_inner,
-                scene.outer_outer,
-                sector(ring.base + i as i32),
-            ));
-        }
-        sd.min(sector_sd(uv, mark_in, mark_out, marked_edges))
-    };
-
-    let [x, y, w, h] = cell.cell.map(|v| v as u32);
-    let k = cell.cell_map[0];
-    let tolerance = 0.025;
-    let mut checked = 0usize;
-    let mut worst = 0.0f32;
-    let mut worst_at = (0u32, 0u32);
-    let mut saw_gap = false;
-    let mut saw_mark = false;
-    let mut saw_mark_corner = false;
-    for ty in y..y + h {
-        for tx in x..x + w {
-            let point = glam::Vec2::new(
-                cell.rect[0] + (tx as f32 + 0.5 - cell.cell[0]) / k,
-                cell.rect[1] + (ty as f32 + 0.5 - cell.cell[1]) / k,
-            );
-            let uv = to_uv(point);
-            let want = truth(uv);
-            let want_points = want * screen_right.length();
-            // The CPU geometry is unbounded, while the cell deliberately stops
-            // where the shadow curve reaches zero. Stay half a texel inside
-            // that support so the comparison is of the field, not its clip.
-            if want_points > cell.who[2] - 0.5 / k {
-                continue;
-            }
-            let want_coverage = harmonigraph_scene::standoff_level(
-                scene.view.shadow.lattice_geometry.falloff,
-                want_points.max(0.0) / (2.0 * sigma(&scene)),
-            );
-            let err = (held(tx, ty) - want_coverage).abs();
-            if err > worst {
-                worst = err;
-                worst_at = (tx, ty);
-            }
-            let radius = uv.length();
-            saw_gap |= want > 0.0 && radius > scene.outer_inner && radius < scene.outer_outer;
-            saw_mark |= want < 0.0 && radius > mark_in && radius < mark_out;
-            let (q, edge) = fold(uv, marked_edges);
-            let side = edge.y * q.x - edge.x * q.y + scene.octave_gap * 0.5;
-            saw_mark_corner |=
-                radius > mark_out && radius < mark_out + 0.15 && side > 0.0 && side < 0.15;
-            checked += 1;
-        }
-    }
-    assert!(checked > 2_000, "only {checked} texels reached the analytic comparison");
-    assert!(saw_gap, "the fixture never sampled between two ring strokes");
-    assert!(saw_mark, "the fixture never sampled inside its marked sector");
-    assert!(saw_mark_corner, "the fixture never sampled outside a marked sector's corner");
-    assert!(
-        worst <= tolerance,
-        "the node profile is off by {worst:.4} coverage at {worst_at:?}; tolerance is {tolerance:.4}",
-    );
+    assert!(body > 100 && tail > 100, "fixture reached only {body} body and {tail} tail pixels");
 }
 
 /// The grey a marker's ink is drawn in here — dark against [`GROUND`], so the
@@ -543,7 +314,7 @@ fn two_nodes_crossing_shadows_multiply_rather_than_take_the_deeper() {
     let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
     let gap = APART * points_per_world(&scene) - ink_radius(&scene);
     assert!(
-        gap > 0.0 && gap < harmonigraph_scene::REACH_SIGMAS * sigma(&scene),
+        gap > 0.0 && gap < crate::shadow::REACH_SIGMAS * sigma(&scene),
         "the probe stands {gap} px from each node's rings, which is not inside both blurs",
     );
 
@@ -832,99 +603,6 @@ fn a_crosss_shadow_is_its_own_share_of_the_one_cell_the_field_casts_from() {
     );
 }
 
-/// A markers-only Distance frame casts from the exact field in its scene draw
-/// and therefore needs no shadow atlas.
-#[test]
-fn a_distance_frame_of_markers_casts_without_an_atlas() {
-    const ARM: f32 = 0.5;
-    const SHADOW: f32 = 0.6;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = over_ground();
-    let scene = |depth| {
-        let mut scene =
-            crosses_on_ground(&[(-1.5, 1.0), (0.0, 0.6), (1.5, 0.3)], ARM, SHADOW, depth);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-        }
-        scene
-    };
-    let flat = shooter.shot(&scene(0.0));
-    let deep = shooter.shot(&scene(1.0));
-    let moved = differing_pixels(&flat, &deep);
-    assert!(moved > 200, "the direct marker field moved only {moved} pixels, which is no shadow");
-    assert_eq!(
-        atlas_of(&shooter),
-        None,
-        "a markers-only Distance frame allocated an atlas, so the direct field still schedules cells",
-    );
-}
-
-/// A direct marker distance is measured in the marker's own projected points,
-/// so perspective changes the cross's size without changing the shadow width
-/// past its ink.
-#[test]
-fn a_distance_markers_shadow_width_is_screen_constant_under_perspective() {
-    const ARM: f32 = 0.5;
-    const SHADOW: f32 = 0.8;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = over_ground();
-    let scene = |depth| {
-        let mut scene = crosses_on_ground(&[], ARM, SHADOW, depth);
-        scene.camera = harmonigraph_scene::Camera {
-            projection: harmonigraph_scene::Projection::Perspective,
-            yaw: 0.0,
-            pitch: 0.0,
-            ..Default::default()
-        };
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-        }
-        scene.pluses = vec![
-            standalone_marker(
-                &mut scene.nodes,
-                glam::Vec3::new(0.0, 1.5, 4.0),
-                ARM,
-                CROSS_INK,
-                1.0,
-            ),
-            standalone_marker(
-                &mut scene.nodes,
-                glam::Vec3::new(0.0, -1.5, -8.0),
-                ARM,
-                CROSS_INK,
-                1.0,
-            ),
-        ];
-        scene
-    };
-    let flat_scene = scene(0.0);
-    let deep_scene = scene(1.0);
-    let flat = shooter.shot(&flat_scene);
-    let deep = shooter.shot(&deep_scene);
-    let right = flat_scene.camera.right_up().0;
-    let reach = |position: glam::Vec3| {
-        let centre = on_screen(&flat_scene, SIZE, position);
-        let tip = on_screen(&flat_scene, SIZE, position + right * ARM);
-        let row = centre.y.round() as u32;
-        let start = tip.x.ceil() as u32 + 2;
-        let last = (start..SIZE[0])
-            .rfind(|&x| bright_at(&deep, x, row) < bright_at(&flat, x, row))
-            .expect("the marker casts past its ink");
-        last as f32 - tip.x
-    };
-    let near = reach(glam::Vec3::new(0.0, 1.5, 4.0));
-    let far = reach(glam::Vec3::new(0.0, -1.5, -8.0));
-    assert!(near > 3.0 && far > 3.0, "the markers reach only {near:.1} and {far:.1} px");
-    assert!(
-        (near - far).abs() < 2.0,
-        "perspective moved the marker shadow from {near:.1} px near the eye to {far:.1} px far away",
-    );
-}
-
 /// A node whose only ink is its audio ring: the ring's coverage rides
 /// `audio_ring` (`in.ring`), so one number moves the whole of what it draws.
 fn ringing_only(ring: f32, shadow: f32, depth: f32) -> Scene {
@@ -1016,60 +694,50 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
     assert_eq!(taken[3], 0.0, "a node with no ink left took {:.3} off the ground", taken[3]);
 }
 
-/// Both shadow kernels stay outside the caster while its note fades.
+/// A shadow stays outside the caster while its note fades.
 ///
 /// The blur cell already carries the ring's fading alpha. Feeding that value
 /// through the Gaussian's calibration gain can still leave a deep shadow under
 /// the translucent ring, where its own ink no longer covers it. The caster's
 /// footprint masks that self-shadow, without masking the blur just outside it.
-/// Distance cells retain an opacity-weighted profile, from which the visible
-/// ink coverage must be removed before the shadow is composited.
 #[test]
 fn a_fading_node_does_not_show_its_shadow_through_its_own_ring() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-
     const SHADOW: f32 = 0.6;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    for kernel in [Distance, Gaussian] {
-        for release in [0.3, 0.7, 1.0] {
-            shooter.clear = wgpu::Color::BLACK;
-            let scene = |ring: f32, depth: f32| {
-                let mut scene = ringing_only(ring, SHADOW, depth);
-                scene.view.shadow.lattice_geometry.kernel = kernel;
-                scene
-            };
-            let empty = shooter.shot(&scene(0.0, 0.0));
-            // White exposes fractional edge coverage that the dark probe's
-            // quantized color would otherwise round up to a full pixel.
-            let mut footprint = scene(1.0, 0.0);
-            footprint.spectral.lut.fill(glam::Vec4::ONE);
-            let full = shooter.shot(&footprint);
-            let body = fully_inked(&empty, &full);
-            assert!(body.len() > 30, "only {} pixels reach the ring's full coverage", body.len());
+    for release in [0.3, 0.7, 1.0] {
+        shooter.clear = wgpu::Color::BLACK;
+        let scene = |ring: f32, depth: f32| ringing_only(ring, SHADOW, depth);
+        let empty = shooter.shot(&scene(0.0, 0.0));
+        // White exposes fractional edge coverage that the dark probe's
+        // quantized color would otherwise round up to a full pixel.
+        let mut footprint = scene(1.0, 0.0);
+        footprint.spectral.lut.fill(glam::Vec4::ONE);
+        let full = shooter.shot(&footprint);
+        let body = fully_inked(&empty, &full);
+        assert!(body.len() > 30, "only {} pixels reach the ring's full coverage", body.len());
 
-            shooter.clear = over_ground();
-            let bare_scene = scene(release, 0.0);
-            let bare = shooter.shot(&bare_scene);
-            let cast = shooter.shot(&scene(release, 1.0));
-            let centre = on_screen(&bare_scene, SIZE, glam::Vec3::ZERO);
-            let inside_loss = body
-                .iter()
-                .map(|&i| brightness(&bare[i..i + 3]) - brightness(&cast[i..i + 3]))
-                .max()
-                .unwrap_or(0);
-            let row = centre.y.round() as u32;
-            let outside = (centre.x + ink_radius(&bare_scene)).round() as u32 + 5;
-            let outside_loss = bright_at(&bare, outside, row) - bright_at(&cast, outside, row);
-            // One final-output code in each colour channel is the dither/rounding
-            // boundary; anything past their sum is shadow showing through the ring.
-            assert!(
-                inside_loss.abs() <= 3,
-                "{kernel:?} at {release}: self-shadow removed {inside_loss} brightness levels",
-            );
-            assert!(outside_loss > 20, "{kernel:?} at {release}: outside loss only {outside_loss}",);
-        }
+        shooter.clear = over_ground();
+        let bare_scene = scene(release, 0.0);
+        let bare = shooter.shot(&bare_scene);
+        let cast = shooter.shot(&scene(release, 1.0));
+        let centre = on_screen(&bare_scene, SIZE, glam::Vec3::ZERO);
+        let inside_loss = body
+            .iter()
+            .map(|&i| brightness(&bare[i..i + 3]) - brightness(&cast[i..i + 3]))
+            .max()
+            .unwrap_or(0);
+        let row = centre.y.round() as u32;
+        let outside = (centre.x + ink_radius(&bare_scene)).round() as u32 + 5;
+        let outside_loss = bright_at(&bare, outside, row) - bright_at(&cast, outside, row);
+        // One final-output code in each colour channel is the dither/rounding
+        // boundary; anything past their sum is shadow showing through the ring.
+        assert!(
+            inside_loss.abs() <= 3,
+            "at {release}: self-shadow removed {inside_loss} brightness levels",
+        );
+        assert!(outside_loss > 20, "at {release}: outside loss only {outside_loss}",);
     }
 }
 
@@ -1084,8 +752,6 @@ fn a_fading_node_does_not_show_its_shadow_through_its_own_ring() {
 /// fade.
 #[test]
 fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
-    use harmonigraph_scene::ShadowKernel::Gaussian;
-
     const SHADOW: f32 = 0.6;
     const SUBFLOOR: f32 = 1.0 / 255.0;
     let ink_floor: f32 = shadow::tests::shader_const(SHADER_SRC, "INK_FLOOR")
@@ -1097,7 +763,6 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
     };
     let scene = |level: f32, depth: f32| {
         let mut scene = on_ground(SHADOW, depth);
-        scene.view.shadow.lattice_geometry.kernel = Gaussian;
         // Keep the caster bounds identical: changing the slot bit changes
         // atlas sampling even while its mark is invisible. This test isolates
         // mask leakage from that separate rasterization difference.
@@ -1185,46 +850,12 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
     assert!(moved > 500, "opening the Shadow moved {moved} pixels, so neither claim above bites");
 }
 
-/// The blur's intermediate is held for a frame that blurs and for no other.
-///
-/// A second plane the atlas's whole size, and the atlas is at its widest under
-/// Distance, whose cells are floored at `DISTANCE_TEXELS_PER_POINT` rather than
-/// shrinking with σ — so the frame that would carry it unread is the frame it
-/// costs the most in. Both shots pack a real cell, which is what keeps the
-/// Distance reading from passing on a frame that allocated no atlas at all.
-#[test]
-fn only_a_frame_that_blurs_holds_the_blurs_intermediate() {
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let mut shot = |kernel: harmonigraph_scene::ShadowKernel| -> (bool, bool) {
-        let mut scene = on_ground(0.4, 1.0);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = kernel;
-        }
-        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
-        shooter.shot_with(&scene, named);
-        let target = target_of(&shooter);
-        (target.is_some(), target.is_some_and(|t| t.holds_half()))
-    };
-    assert_eq!(
-        shot(harmonigraph_scene::ShadowKernel::Gaussian),
-        (true, true),
-        "a blurring frame is missing the plane its chain ping-pongs through",
-    );
-    assert_eq!(
-        shot(harmonigraph_scene::ShadowKernel::Distance),
-        (true, false),
-        "a frame with nothing to blur held a second atlas-sized plane",
-    );
-}
-
 /// At the top of the Shadow bar a caster's quad still holds the whole blur:
 /// the profile out from its ink falls all the way to nothing, with no step
 /// where the billboard ends.
 ///
 /// The trap the grown quad exists for. A node's billboard and a marker's are
-/// each sized to their ink plus `SHADOW_REACH_SIGMAS` σ (`shadow_reach_uv`),
+/// each sized to their ink plus `REACH_SIGMAS` σ (`shadow_reach_uv`),
 /// and one sized to the ink alone cuts the Gaussian off in a straight line at
 /// a value the eye reads as an edge — while every other reading in this suite,
 /// each monotone in the Shadow or a superset of a narrower one, goes on
@@ -1234,7 +865,7 @@ fn only_a_frame_that_blurs_holds_the_blurs_intermediate() {
 fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     const SHADOW: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
     const ARM: f32 = 0.5;
-    // Pull the camera back so every family's tail lands comfortably inside the
+    // Pull the camera back so every caster's tail lands comfortably inside the
     // pane. A caster's quad and the reach it has to hold are both sized in the
     // node's own uv (`shadow_reach_uv`), so this leaves the ratio under test
     // unchanged while keeping the pane's edge out of the measurement.
@@ -1255,34 +886,9 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0)),
         far(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
     );
-    // And a node on the DISTANCE row, whose quad is grown to a reach of its
-    // own: the distance profile ends at `SHADOW_STOP` widths where a Gaussian's pedestal lands at `REACH_SIGMAS` σ, so a quad
-    // sized off the wrong one of the two cuts a whole family's tail off in a
-    // straight line at the box.
-    let distant = |mut scene: Scene| -> Scene {
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-        }
-        far(scene)
-    };
-    let distance = (distant(on_ground(SHADOW, 1.0)), distant(on_ground(SHADOW, 0.0)));
-    let direct_cross = (
-        distant(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 1.0)),
-        distant(crosses_on_ground(&[(0.0, 1.0)], ARM, SHADOW, 0.0)),
-    );
     for (what, (deep_scene, flat_scene), edge) in [
         ("a node's rings", node, ink_radius(&far(on_ground(SHADOW, 1.0)))),
         ("a cross", cross, ARM * points_per_world(&far(crosses_on_ground(&[], ARM, SHADOW, 1.0)))),
-        (
-            "a node's rings on the distance row",
-            distance,
-            ink_radius(&distant(on_ground(SHADOW, 1.0))),
-        ),
-        (
-            "a cross on the distance row",
-            direct_cross,
-            ARM * points_per_world(&distant(crosses_on_ground(&[], ARM, SHADOW, 1.0))),
-        ),
     ] {
         let flat = shooter.shot(&flat_scene);
         let deep = shooter.shot(&deep_scene);
@@ -1312,11 +918,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // reaches the 8-bit floor sooner than the old power-law tail; the
         // final-step assertion below still rejects a visibly clipped quad.
         assert!(
-            profile[0] > 0.1
-                && reach
-                    > 0.65
-                        * deep_scene.view.shadow.lattice_geometry.kernel.reach_sigmas()
-                        * sigma(&deep_scene),
+            profile[0] > 0.1 && reach > 0.65 * crate::shadow::REACH_SIGMAS * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
@@ -1357,13 +959,9 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
 /// some node really does project many panes wide, so the projection is
 /// measured rather than assumed.
 ///
-/// Swept over every row of the kernel table and over two widths. The width
-/// matters because a distance row is the one that can run the atlas away —
-/// past its floor a distance cell stops shrinking as the shadow widens, while
-/// a blur's keeps shrinking — and at a narrow Shadow the two families are
-/// sized identically, so a single narrow reading would clear Distance on a
-/// cell that is a Gaussian's in all but name. The second reading asserts it is
-/// past that floor rather than assuming it.
+/// Read at two widths: at the fixture's own the kernel's reach is a rounding
+/// error on the pane, so only the wider reading says the bound below holds
+/// the reach as well as the pane ([`BOXES`]).
 #[test]
 fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     /// How many CLIPPED BOXES across the atlas may be — the pane plus the
@@ -1410,71 +1008,48 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     );
     let sigma = cb.casters.iter().map(|c| c.sigma_points).fold(0.0f32, f32::max);
     assert!(sigma > 0.0, "the fixture's Shadow is shut, so it packs no cell at all");
-    // At the fixture's own Shadow every cell is drawn at the target's own
-    // resolution, which is the regime a blur row and a distance row SHARE. A
-    // distance cell only parts from a blur's once its own floor binds, past
-    // `SIGMA_CELL_MAX / DISTANCE_TEXELS_PER_POINT` — which is where it stops
-    // shrinking with the width and its atlas runs away. Both are swept, so the
-    // Distance arm cannot pass on a cell sized exactly like a Gaussian's.
+    // The clip that keeps a near node's box on the pane is per caster and has
+    // to hold at either width (#505).
     let wide = sigma * 4.0;
-    assert!(
-        crate::shadow::SIGMA_CELL_MAX / wide < crate::shadow::DISTANCE_TEXELS_PER_POINT,
-        "the wide reading does not reach the distance floor, so it measures the shared regime a \
-         second time rather than the one where a distance cell is the expensive one",
-    );
-    // Under BOTH renderers: a distance cell stops shrinking at its quality
-    // floor where a blur cell keeps following σ, so the two reach the device's
-    // limit at different widths. The clip that keeps a near node's box on the
-    // pane is per caster and has to hold for either (#505).
     for (width, sigma) in [("the fixture's Shadow", sigma), ("a wide Shadow", wide)] {
-        for kernel in
-            [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-        {
-            let casters: Vec<crate::shadow::Caster> = cb
-                .casters
-                .iter()
-                .map(|c| crate::shadow::Caster { sigma_points: sigma, kernel, ..*c })
-                .collect();
-            let packed = crate::shadow::pack(&casters, 1.0, 16384);
-            // Read over the casters that darken something: one at level 0 is packed
-            // as no cell on purpose (`pack`), and most of this fixture's nodes
-            // project clean off the pane.
-            // A caster drawn analytically asks for no cell under Distance and
-            // holds its index with a zeroed one, so it is not a cell that went
-            // missing — `pack` makes the same exclusion where it shelves.
-            let casting: Vec<crate::shadow::ShadowBox> = cb
-                .casters
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.level > 0.0 && !(c.direct_distance && kernel.is_distance()))
-                .map(|(i, _)| packed.boxes[i])
-                .collect();
-            let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
-            assert_eq!(
-                unfit,
-                0,
-                "{kernel:?} at {width}: {unfit} of {} cells that darken something got none, and a \
-             zeroed cell is drawn at the atlas origin over the markers' own",
-                casting.len(),
-            );
-            // The widest a box can be after the clip, in points: the pane with
-            // this kernel's reach added at both edges. Distance profiles all
-            // stop at one width.
-            let reach = sigma * kernel.reach_sigmas();
-            let box_points = pane + 2.0 * reach;
-            // The allocator rounds both atlas dimensions to powers of two.
-            // Apply the same rounding to this continuous size bound.
-            let bound = box_points
-                .to_array()
-                .map(|v| (BOXES * v).ceil() as u32)
-                .map(u32::next_power_of_two);
-            assert!(
-                packed.size[0] <= bound[0] && packed.size[1] <= bound[1],
-                "{kernel:?} at {width}: the atlas came out {:?} for a clipped box of {box_points} \
-                 points: a caster's box is sized off a projection the pane cannot show",
-                packed.size,
-            );
-        }
+        let casters: Vec<crate::shadow::Caster> = cb
+            .casters
+            .iter()
+            .map(|c| crate::shadow::Caster { sigma_points: sigma, ..*c })
+            .collect();
+        let packed = crate::shadow::pack(&casters, 1.0, 16384);
+        // Read over the casters that darken something: one at level 0 is packed
+        // as no cell on purpose (`pack`), and most of this fixture's nodes
+        // project clean off the pane.
+        let casting: Vec<crate::shadow::ShadowBox> = cb
+            .casters
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.level > 0.0)
+            .map(|(i, _)| packed.boxes[i])
+            .collect();
+        let unfit = casting.iter().filter(|b| b.cell[2] <= 0.0 || b.cell[3] <= 0.0).count();
+        assert_eq!(
+            unfit,
+            0,
+            "at {width}: {unfit} of {} cells that darken something got none, and a \
+         zeroed cell is drawn at the atlas origin over the markers' own",
+            casting.len(),
+        );
+        // The widest a box can be after the clip, in points: the pane with
+        // the kernel's reach added at both edges.
+        let reach = sigma * crate::shadow::REACH_SIGMAS;
+        let box_points = pane + 2.0 * reach;
+        // The allocator rounds both atlas dimensions to powers of two.
+        // Apply the same rounding to this continuous size bound.
+        let bound =
+            box_points.to_array().map(|v| (BOXES * v).ceil() as u32).map(u32::next_power_of_two);
+        assert!(
+            packed.size[0] <= bound[0] && packed.size[1] <= bound[1],
+            "at {width}: the atlas came out {:?} for a clipped box of {box_points} \
+             points: a caster's box is sized off a projection the pane cannot show",
+            packed.size,
+        );
     }
 }
 
@@ -1493,36 +1068,26 @@ fn a_nodes_faintest_shadow_is_next_to_none_over_its_bloom() {
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let mut shot = |bloom: f32, depth: f32| -> Vec<u8> {
-            let mut scene = lit_node_and_a_name(1.6, SHADOW, depth);
-            scene.view.note_bloom = bloom;
-            for style in scene.view.shadow.groups_mut() {
-                style.kernel = kernel;
-            }
-            shooter.shot(&scene)
-        };
-        // The frame has to be carrying a bloom at all, or the reading below is
-        // taken on a picture with nothing in it for a shadow to darken.
-        let bloomed = differing_pixels(&shot(1.0, FAINTEST), &shot(0.0, FAINTEST));
-        assert!(bloomed > 1000, "{kernel:?}: opening the Bloom moved {bloomed} pixels");
-        let (faint, off) = (shot(1.0, FAINTEST), shot(1.0, 0.0));
-        let worst = faint.iter().zip(&off).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-        assert!(
-            worst <= 3,
-            "{kernel:?}: a 1% shadow moved a channel {worst} codes from no shadow at all",
-        );
-    }
+    let mut shot = |bloom: f32, depth: f32| -> Vec<u8> {
+        let mut scene = lit_node_and_a_name(1.6, SHADOW, depth);
+        scene.view.note_bloom = bloom;
+        shooter.shot(&scene)
+    };
+    // The frame has to be carrying a bloom at all, or the reading below is
+    // taken on a picture with nothing in it for a shadow to darken.
+    let bloomed = differing_pixels(&shot(1.0, FAINTEST), &shot(0.0, FAINTEST));
+    assert!(bloomed > 1000, "opening the Bloom moved {bloomed} pixels");
+    let (faint, off) = (shot(1.0, FAINTEST), shot(1.0, 0.0));
+    let worst = faint.iter().zip(&off).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 3, "a 1% shadow moved a channel {worst} codes from no shadow at all",);
 }
 
-/// A mark whose strip has no width casts no Distance shadow.
+/// A mark whose strip has no width casts no shadow.
 ///
 /// The collapsed radial pair remains the layer's off switch even while its
 /// slot and fade inputs would otherwise keep it live.
 #[test]
-fn a_zero_width_mark_casts_no_distance_shadow() {
+fn a_zero_width_mark_casts_no_shadow() {
     const SHADOW: f32 = 0.5;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
@@ -1531,9 +1096,6 @@ fn a_zero_width_mark_casts_no_distance_shadow() {
 
     let staged = |slots| {
         let mut scene = on_ground(SHADOW, 1.0);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-        }
         scene.view.mark_thickness = 0.0;
         scene.nodes[0].melody_slots = slots;
         scene.nodes[0].melody_level = f32::from(slots != 0);
@@ -1542,7 +1104,7 @@ fn a_zero_width_mark_casts_no_distance_shadow() {
     let absent = shooter.shot(&staged(0));
     let collapsed = shooter.shot(&staged(MIDDLE_C));
     let moved = differing_pixels(&collapsed, &absent);
-    assert_eq!(moved, 0, "a collapsed mark strip left ink or a Distance contour in the frame",);
+    assert_eq!(moved, 0, "a collapsed mark strip left ink or a shadow in the frame",);
 }
 
 /// How much further a MARKED node's shadow reaches than an unmarked one's is
@@ -1702,7 +1264,7 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
 }
 
 /// A resting marker inherits the WHOLE lattice-text shadow style and none of
-/// the node geometry's: renderer, width, reach and depth.
+/// the node geometry's: width, spread, reach and depth.
 ///
 /// The caster and uniform assertions pin the handoff on either side of the
 /// CPU/GPU boundary. The rendered controls then prove the shader spends that
@@ -1710,20 +1272,12 @@ fn the_text_groups_width_moves_a_names_shadow_and_no_other_casters() {
 /// every geometry term leaves a markers-only frame byte-identical.
 #[test]
 fn a_marker_inherits_the_text_groups_whole_shadow() {
-    use harmonigraph_scene::{ShadowKernel, ShadowStyle};
+    use harmonigraph_scene::ShadowStyle;
 
-    let geometry = ShadowStyle {
-        kernel: ShadowKernel::Gaussian,
-        width: 0.12,
-        depth: 0.2,
-        ..Default::default()
-    };
-    let text = ShadowStyle {
-        kernel: ShadowKernel::Distance,
-        width: 0.62,
-        depth: 0.85,
-        ..Default::default()
-    };
+    // A spread on the text group alone, so the reach the marker grows its quad
+    // by is a third term the two groups disagree on.
+    let geometry = ShadowStyle { width: 0.12, spread: 0.0, depth: 0.2 };
+    let text = ShadowStyle { width: 0.62, spread: 0.3, depth: 0.85 };
     let scene_of = |geometry: ShadowStyle, text: ShadowStyle| {
         let mut scene = crosses_on_ground(&[(0.0, 1.0)], 0.5, text.width, text.depth);
         scene.view.shadow.lattice_geometry = geometry;
@@ -1740,12 +1294,17 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
         None,
     );
     assert_eq!(callback.casters.len(), 1, "the marker fixture did not make its one caster");
-    assert_eq!(callback.casters[0].kernel, text.kernel, "the marker inherited the node renderer");
     let want_sigma = shadow::sigma_points(text.width, scene.node_radius * points_per_world(&scene));
     assert!(
         (callback.casters[0].sigma_points - want_sigma).abs() < 1e-4,
         "the marker's σ is {} rather than the text group's {want_sigma}",
         callback.casters[0].sigma_points,
+    );
+    let want_spread = text.gaussian_spread_points(want_sigma);
+    assert!(
+        (callback.casters[0].spread_points - want_spread).abs() < 1e-4,
+        "the marker's spread is {} points rather than the text group's {want_spread}",
+        callback.casters[0].spread_points,
     );
     assert_eq!(
         (
@@ -1753,7 +1312,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
             callback.uniforms.marker_shadow.reach_sigmas,
             callback.uniforms.marker_shadow.depth,
         ),
-        (text.width, text.kernel.reach_sigmas(), text.depth),
+        (text.width, crate::shadow::REACH_SIGMAS + text.gaussian_spread_points(1.0), text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 
@@ -1766,597 +1325,13 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
     let moved = differing_pixels(&inherited, &text_off);
     assert!(moved > 200, "the text group's depth moved only {moved} marker pixels");
 
-    let other_geometry = ShadowStyle {
-        kernel: ShadowKernel::Distance,
-        width: harmonigraph_scene::GLOW_SHADOW_MAX,
-        depth: 1.0,
-        ..Default::default()
-    };
+    let other_geometry =
+        ShadowStyle { width: harmonigraph_scene::GLOW_SHADOW_MAX, spread: 1.0, depth: 1.0 };
     let geometry_moved = shooter.shot(&scene_of(other_geometry, text));
     assert_eq!(
         differing_pixels(&inherited, &geometry_moved),
         0,
         "changing the node shadow moved a markers-only frame",
-    );
-}
-
-/// A frame whose two groups are drawn by DIFFERENT renderers draws each group
-/// by its OWN renderer, over the ground that group darkens.
-///
-/// The end-to-end half of `a_mixed_frame_packs_each_caster_at_its_own_style`:
-/// that one is about cells, and this is about the picture the two fills and the
-/// one blur chain come to. A kernel wired per FRAME anywhere past `pack` — the
-/// glyph fill's pipeline, the chain's own gate — draws one of the two uniform
-/// frames instead.
-///
-/// The load-bearing claim is the POSITIVE one. That the mixed frame merely
-/// differs from each uniform frame is satisfied by any breakage big enough:
-/// a chain that wipes the other renderer's cells clears that bar while drawing
-/// a solid box over every node. So each group is read against the frame its own
-/// renderer drew, over the ground that group and no other darkens — and where
-/// that ground IS comes off a shot with the group shut rather than a rect
-/// written down here, so the reading follows the fixture rather than pinning
-/// it.
-///
-/// The control is the same pair with the NAMES taken out: the text group's
-/// kernel reaches such a frame through no code path at all, so switching it has
-/// to leave the frame byte-identical.
-#[test]
-fn a_frame_whose_groups_disagree_draws_both_renderers() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = over_ground();
-    const WIDTH: f32 = 0.4;
-    let scene_of = |geometry, text, widths: [f32; 2]| -> Scene {
-        let mut scene = on_ground(WIDTH, 0.85);
-        scene.view.shadow.lattice_geometry.kernel = geometry;
-        scene.view.shadow.lattice_text.kernel = text;
-        scene.view.shadow.lattice_geometry.width = widths[0];
-        scene.view.shadow.lattice_text.width = widths[1];
-        scene
-    };
-    // The name clear of the node under it, so the two groups' shadows land on
-    // bare ground and neither reading is a sum of both.
-    let named = |scene: &Scene| name_at(scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
-    let mut shot = |geometry, text, widths| {
-        let scene = scene_of(geometry, text, widths);
-        let labels = named(&scene);
-        shooter.shot_with(&scene, labels)
-    };
-    let both = [WIDTH, WIDTH];
-    let all_distance = shot(Distance, Distance, both);
-    let all_gaussian = shot(Gaussian, Gaussian, both);
-    // BOTH orderings: the atlas holds the two kinds of cell together either
-    // way round, so a pass that serves one kind at the other's expense shows up
-    // in whichever group is holding the kind it drops.
-    let mixed = shot(Distance, Gaussian, both);
-    let flipped = shot(Gaussian, Distance, both);
-    // Each uniform frame with one group shut, which is what says where that
-    // group's shadow lands.
-    let no_geometry = shot(Distance, Distance, [0.0, WIDTH]);
-    let no_text = shot(Gaussian, Gaussian, [WIDTH, 0.0]);
-    let no_gaussian_geometry = shot(Gaussian, Gaussian, [0.0, WIDTH]);
-    let no_distance_text = shot(Distance, Distance, [WIDTH, 0.0]);
-    for (what, uniform) in [("all-Distance", &all_distance), ("all-Gaussian", &all_gaussian)] {
-        let moved = differing_pixels(&mixed, uniform);
-        assert!(
-            moved > 200,
-            "the mixed frame is {moved} pixels off the {what} one, so a kernel is being chosen \
-             once for the frame rather than once per group",
-        );
-    }
-
-    let darkened = |a: &[u8], b: &[u8]| -> Vec<bool> {
-        a.chunks(4).zip(b.chunks(4)).map(|(x, y)| x != y).collect()
-    };
-    let alone = |m: &[bool], other: &[bool]| -> Vec<bool> {
-        m.iter().zip(other).map(|(&a, &b)| a && !b).collect()
-    };
-    // Exclude the other group's support under BOTH kernels. The Gaussian
-    // reaches further than the distance profile, so a distance-only mask
-    // would mislabel some Gaussian geometry shadow as text-only ground.
-    let union = |a: Vec<bool>, b: Vec<bool>| -> Vec<bool> {
-        a.into_iter().zip(b).map(|(a, b)| a || b).collect()
-    };
-    let geometry_ground = union(
-        darkened(&all_distance, &no_geometry),
-        darkened(&all_gaussian, &no_gaussian_geometry),
-    );
-    let text_ground =
-        union(darkened(&all_gaussian, &no_text), darkened(&all_distance, &no_distance_text));
-    let geometry_only = alone(&geometry_ground, &text_ground);
-    let text_only = alone(&text_ground, &geometry_ground);
-    // The two readings are not fully independent: the bloom is ONE attachment
-    // over the whole pane and every group's shadow reaches it, so switching the
-    // other group's renderer moves this ground by a level or two even where
-    // nothing on it is drawn by that group. That is the whole of the coupling.
-    // The renderers themselves part by tens of levels over the same ground,
-    // which the second bound holds them to — so the first is a reading rather
-    // than a tolerance wide enough to swallow the difference it measures.
-    const COUPLED: i32 = 4;
-    for (how, frame, by_geometry, by_text) in [
-        ("a Distance geometry over a Gaussian text", &mixed, &all_distance, &all_gaussian),
-        ("a Gaussian geometry over a Distance text", &flipped, &all_gaussian, &all_distance),
-    ] {
-        for (whose, ground, own, other) in [
-            ("geometry", &geometry_only, by_geometry, by_text),
-            ("text", &text_only, by_text, by_geometry),
-        ] {
-            let held = ground.iter().filter(|&&on| on).count();
-            assert!(
-                held > 200,
-                "the {whose} group darkens {held} pixels no other group reaches, which is too \
-                 little ground for the reading below to cross",
-            );
-            let worst = |against: &[u8]| -> i32 {
-                (0..ground.len())
-                    .filter(|&i| ground[i])
-                    .map(|i| {
-                        (0..4)
-                            .map(|c| (frame[4 * i + c] as i32 - against[4 * i + c] as i32).abs())
-                            .max()
-                            .unwrap()
-                    })
-                    .max()
-                    .unwrap_or(0)
-            };
-            assert!(
-                worst(own) <= COUPLED,
-                "over the {whose} group's own ground {how} stands {} levels off the frame that \
-                 group's own renderer drew, so it is not being drawn by its own kernel there",
-                worst(own),
-            );
-            assert!(
-                worst(other) > 4 * COUPLED,
-                "the two renderers draw the {whose} group's own ground {} levels apart, which is \
-                 too close for the reading above to be measuring anything",
-                worst(other),
-            );
-        }
-    }
-
-    // The control, and the half that says the text group's kernel is really the
-    // TEXT's: with no name in the frame it reaches nothing.
-    let mut bare =
-        |geometry, text| shooter.shot_with(&scene_of(geometry, text, both), a_name(Vec::new()));
-    assert_eq!(
-        differing_pixels(&bare(Distance, Distance), &bare(Distance, Gaussian)),
-        0,
-        "the text group's kernel moved a frame with no name in it",
-    );
-}
-
-/// Switching renderers moves the picture and nothing else does: a Distance
-/// frame differs from the Gaussian's, and a frame with the Shadow SHUT is
-/// byte-identical under either.
-///
-/// The second half is the one worth having. A renderer costs cells, a pass over
-/// them and taps in every caster's draw, and all of that is supposed to be
-/// gone when the bar is at its bottom — the vacuity the whole atlas rests on
-/// (`neither_shadow_bar_at_its_bottom_casts_or_allocates`), asked of both
-/// because each is packed differently.
-#[test]
-fn a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = over_ground();
-    let mut shot = |kernel, shadow| {
-        let mut scene = on_ground(shadow, 0.85);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = kernel;
-        }
-        scene.pluses = vec![standalone_marker(
-            &mut scene.nodes,
-            glam::Vec3::new(1.6, 0.0, 0.0),
-            0.3,
-            CROSS_INK,
-            1.0,
-        )];
-        let named = name_at(&scene, SIZE, glam::Vec3::new(0.0, 1.2, 0.0));
-        shooter.shot_with(&scene, named)
-    };
-    let plain = shot(Gaussian, 0.4);
-    let moved = differing_pixels(&plain, &shot(Distance, 0.4));
-    assert!(moved > 200, "Distance moved {moved} pixels off a Gaussian, which is no renderer");
-    let shut = shot(Gaussian, 0.0);
-    assert_eq!(
-        differing_pixels(&shut, &shot(Distance, 0.0)),
-        0,
-        "Distance drew something with the Shadow shut, so a renderer is packing cells the bar \
-         said not to",
-    );
-}
-
-/// The GPU spends different darkness within the width but reaches bare
-/// ground at its edge for both ends of the falloff bar.
-#[test]
-fn the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge() {
-    use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
-    const SHADOW: f32 = 0.6;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = over_ground();
-    let mut shot = |falloff| {
-        let mut scene = on_ground(SHADOW, 1.0);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-            style.falloff = falloff;
-        }
-        shooter.shot(&scene)
-    };
-    let scene = on_ground(SHADOW, 1.0);
-    let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
-    let row = centre.y.round() as u32;
-    // One Shadow width is 2σ, and the ink's own edge is where `u` is 0.
-    let width = 2.0 * sigma(&scene);
-    let at = |u: f32| (centre.x + ink_radius(&scene) + u * width).round() as u32;
-    let (half, whole) = (at(0.5), at(1.0));
-    // The GROUND reading below is the widest of the three, and `bright_at`
-    // indexes a flat buffer: an x past the row wraps into the next row and
-    // reads a plausible number rather than panicking, so the guard is on the
-    // furthest sample and not on the pair.
-    assert!(at(1.9) < SIZE[0], "the readings run off the pane at {}", at(1.9));
-
-    let (sharp, plateau) = (shot(SHADOW_FALLOFF_MIN), shot(SHADOW_FALLOFF_MAX));
-    let ground = bright_at(&shot(SHADOW_FALLOFF_MIN), at(1.9), row);
-    assert!(ground > 40, "the fixture's ground reads {ground}, too dark to take a share of");
-
-    // Sample just beyond the edge to avoid pixel rounding straddling it.
-    let whole = whole + 2;
-    for pixels in [&sharp, &plateau] {
-        let level = bright_at(pixels, whole, row);
-        assert!((level - ground).abs() <= 2, "shadow persists past width: {level} vs {ground}");
-    }
-
-    // Half a width out: the whole travel of the bar. The plateau end holds the
-    // darkness out to here; the sharp end has spent it against the ink.
-    let (sharp_half, plateau_half) = (bright_at(&sharp, half, row), bright_at(&plateau, half, row));
-    // Compare removed light: the plateau must cast substantially more shadow,
-    // independently of how the transfer maps the remaining light to a ratio.
-    assert!(
-        ground - plateau_half > 3 * (ground - sharp_half).max(1),
-        "half a width out the whole falloff bar moves the ground from {sharp_half} to \
-         {plateau_half}, which is not a bar that redistributes anything",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// The distance family
-// ---------------------------------------------------------------------------
-
-/// A DISTANCE shadow stays one smooth annulus when its width projects to about
-/// a pixel at full depth.
-///
-/// At this scale, one atlas texel is most of the projected Shadow's σ, so
-/// grid-aligned sampling error appears as dark rays around otherwise
-/// continuous ink. The standard deviation around one radius is the rays'
-/// reading; it is bounded as a share of the mean, while the mean is bounded too
-/// so flattening the ring toward either rail cannot pass for smoothing it.
-#[test]
-fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear = over_ground();
-    let sample = |shot: &[u8], p: glam::Vec2| {
-        // Raster samples sit at pixel centers. Without this offset the probe
-        // circle is displaced by half a pixel on each axis, enough to mistake
-        // radial falloff for angular spikes at this subpixel shadow width.
-        let x = (p.x - 0.5).clamp(0.0, SIZE[0] as f32 - 2.0);
-        let y = (p.y - 0.5).clamp(0.0, SIZE[1] as f32 - 2.0);
-        let (x0, y0) = (x.floor() as u32, y.floor() as u32);
-        let (tx, ty) = (f64::from(x - x.floor()), f64::from(y - y.floor()));
-        let at = |x, y| bright_at(shot, x, y) as f64;
-        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
-        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
-        top * (1.0 - ty) + bottom * ty
-    };
-    let mut scene = ringing_only(1.0, 0.16, 1.0);
-    scene.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-    }
-    // Close the intentional gaps between the ring's wedges. Angular variation
-    // in the samples below is then the distance field's rather than the ink's.
-    scene.octave_gap = 0.0;
-    assert!(
-        sigma(&scene) < 1.25,
-        "the fixture's Shadow is not narrow enough for a cell texel to dominate it",
-    );
-    let deep = shooter.shot(&scene);
-    for style in scene.view.shadow.groups_mut() {
-        style.depth = 0.0;
-    }
-    let flat = shooter.shot(&scene);
-    let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
-    // Half a point past the ring's outer edge, where the deep profile still
-    // takes enough of the ground to measure and its cell-grid error is largest.
-    let radius = ink_radius(&scene) + 0.5;
-    let values: Vec<f64> = (0..720)
-        .map(|i| {
-            let a = std::f32::consts::TAU * i as f32 / 720.0;
-            let p = centre + radius * glam::Vec2::new(a.cos(), a.sin());
-            1.0 - sample(&deep, p) / sample(&flat, p)
-        })
-        .collect();
-    let mean = values.iter().sum::<f64>() / values.len() as f64;
-    let variance =
-        values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
-    let deviation = variance.sqrt();
-    // At this scale the samples overlap the ring's antialiased fringe, where
-    // ink coverage is removed from the shadow. Twenty percent still leaves more
-    // than forty output codes per channel to measure angular variation.
-    assert!(
-        mean > 0.2 && mean < 0.8,
-        "the ring takes {mean:.3} of the ground at the sampled radius, outside the range where \
-         angular variation measures its shape",
-    );
-    assert!(
-        deviation < 0.30 * mean,
-        "the ring's distance shadow varies by {deviation:.3} around a mean of {mean:.3}, so its \
-         profile has broken into angular spikes",
-    );
-}
-
-/// A block of ink standing on grey, well clear of the node the fixture's name
-/// belongs to: the square caster the two readings below are taken off.
-///
-/// A GLYPH and not a node, because a node is round and the claim is about a
-/// convex CORNER — and because a name is the one caster whose ink is a shape a
-/// fixture can choose.
-fn block_on_grey(
-    shooter: &mut Shooter,
-    kernel: harmonigraph_scene::ShadowKernel,
-    shadow: f32,
-    depth: f32,
-    side: f32,
-) -> (Vec<u8>, Vec<u8>, glam::Vec2) {
-    const GREY: f32 = 0.55;
-    let mut scene = lit_node_and_a_name(0.0, shadow, depth);
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = kernel;
-    }
-    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
-    shooter.clear =
-        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
-    // Off to the +x side, where the node's own shadow does not reach: the
-    // readings below are differences at two points, and a gradient common to
-    // neither would land on one of them alone.
-    let at = on_screen(&scene, SIZE, glam::Vec3::new(3.0, 0.0, 0.0));
-    let rect = [at.x - side / 2.0, at.y - side / 2.0, side, side];
-    let bare = shooter.shot(&scene);
-    let cast = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
-    (bare, cast, glam::Vec2::new(rect[0], rect[1]))
-}
-
-/// A convex CORNER's shadow hugs it on a distance row, where a blur retreats
-/// from it.
-///
-/// The reading is the RATIO between two points at the same distance from the
-/// ink — one diagonally off a corner, one square off the middle of an edge —
-/// and the claim is about how that ratio differs between the two rows. A blur
-/// of a quarter-plane is the product of two half-plane blurs, so a corner is
-/// systematically lighter than an edge at the same distance; a distance field
-/// knows only the distance, so the two are the same number. That difference IS
-/// the family, expressed at the one place a shape has curvature.
-///
-/// A ratio between rows and not a brightness bound, which is #524's lesson: an
-/// absolute bound on either point passes with the bug in place, because both
-/// move together with the depth, the gain and the ground.
-#[test]
-fn a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-    const SHADOW: f32 = 0.5;
-    const DEPTH: f32 = 0.85;
-    const SIDE: f32 = 26.0;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let mut ratio = |kernel| {
-        let (bare, cast, min) = block_on_grey(&mut shooter, kernel, SHADOW, DEPTH, SIDE);
-        // One σ out, which is half a Shadow width: far enough off the ink for
-        // the two geometries to have parted and well inside either row's reach.
-        let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = kernel;
-        }
-        let d = sigma(&scene);
-        let diag = d / std::f32::consts::SQRT_2;
-        let dark = |p: glam::Vec2| {
-            let (x, y) = (p.x.round() as u32, p.y.round() as u32);
-            bright_at(&bare, x, y) - bright_at(&cast, x, y)
-        };
-        let corner = dark(glam::Vec2::new(min.x + SIDE + diag, min.y + SIDE + diag));
-        let edge = dark(glam::Vec2::new(min.x + SIDE / 2.0, min.y + SIDE + d));
-        assert!(
-            edge > 20,
-            "{kernel:?} darkens the edge point by {edge}, which is too little to take a ratio of",
-        );
-        corner as f64 / edge as f64
-    };
-    let blurred = ratio(Gaussian);
-    let distance = ratio(Distance);
-    assert!(
-        blurred < 0.7,
-        "a Gaussian darkens the corner by {blurred:.2} of the edge, so the fixture's two points \
-         do not part the two geometries at all",
-    );
-    assert!(
-        distance > blurred + 0.2,
-        "the distance row darkens the corner by {distance:.2} of the edge against the Gaussian's \
-         {blurred:.2}, so it is retreating from the corner as a blur does",
-    );
-}
-
-/// A distance row's shadow still has the letterform's own STRUCTURE in it at a
-/// Shadow wide enough to erase it from a blur.
-///
-/// #521's form metric, which is what a distance row is in the tree for: how
-/// much more of the light the shadow takes beside a stroke than midway between
-/// two strokes, as a share of the first. The table there gives a Gaussian 100%
-/// at the fresh Shadow and 0% at the top of the bar — one slab under the whole
-/// word, which is where `SHADOW` stands the fixture below — and
-/// the reason is that a blur is a low-pass filter, so detail finer than σ is
-/// gone whatever the depth. A distance is not a filter and has no such scale.
-///
-/// The reading is beside a stroke rather than UNDER one, and it has to be: a
-/// caster's own ink is the one thing its shadow never darkens, so the shadow
-/// under a stem is covered by the stem. Two texels off the inner edge is what
-/// the eye reads as that stroke's shadow, and it is the same point on both
-/// rows.
-///
-/// The fixture stands the pair on a NODE's band and not on bare ground (#450):
-/// a shadow with nothing under it to darken is a green test measuring an empty
-/// frame.
-#[test]
-fn a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-    /// The TOP of the bar, which is where the table in the doc above puts a
-    /// Gaussian at 0% — the condition the control arm has to meet for the
-    /// distance arm's reading to say anything. Short of it the blur still
-    /// holds a tenth of the counter: 0.8 reads 0.11 and 0.7 reads 0.17.
-    const SHADOW: f32 = harmonigraph_scene::GLOW_SHADOW_MAX;
-    const DEPTH: f32 = 0.85;
-    /// Two strokes, and the counter between them, in points — a 30pt
-    /// monospace stem and the gap inside a letter, at the scale the fixture's
-    /// own glyphs are drawn.
-    const STROKE: [f32; 2] = [6.0, 24.0];
-    const GAP: f32 = 24.0;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    const GREY: f32 = 0.55;
-    shooter.clear =
-        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
-    let mut form = |kernel| {
-        let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
-        for style in scene.view.shadow.groups_mut() {
-            style.kernel = kernel;
-        }
-        // Grey under the whole counter, and the name still standing on the
-        // node's band: a shadow with nothing beneath it to darken measures an
-        // empty frame (#450), and a counter this wide runs past the band's own
-        // edge at one end.
-        scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
-        let at = on_screen(&scene, SIZE, name_on_the_band(&scene));
-        let stroke = |x: f32| name_glyph(&scene, [x, at.y - STROKE[1] / 2.0, STROKE[0], STROKE[1]]);
-        let (left, right) = (stroke(at.x - GAP / 2.0 - STROKE[0]), stroke(at.x + GAP / 2.0));
-        let bare = shooter.shot(&scene);
-        let cast = shooter.shot_with(&scene, a_name(vec![left, right]));
-        let row = at.y.round() as u32;
-        // What SHARE of the light standing at `x` the two strokes take away,
-        // not how many levels of it.
-        //
-        // A share because the two readings do not stand on equally bright
-        // ground — the counter runs past the band's own edge at one end, as
-        // the fixture says above. A shadow multiplies what is under it, so a
-        // count of removed levels carries that difference and reads the band's
-        // own gradient as the letterform's form; the share divides it back
-        // out. The count read the gradient with one sign while the fresh
-        // ground stood at `L*` 20 and the other at 11, which is a measurement
-        // of the ground and not of a kernel.
-        let covered = |x: f32| {
-            let x = x.round() as u32;
-            1.0 - bright_at(&cast, x, row) as f64 / bright_at(&bare, x, row) as f64
-        };
-        // Two points along the counter: hard against the left stroke's inner
-        // edge, and the middle of the gap.
-        let beside = covered(at.x - GAP / 2.0 + 2.0);
-        let middle = covered(at.x);
-        assert!(
-            beside > 0.2,
-            "{kernel:?} takes {beside:.2} of the light beside the stroke, which is too little to \
-             take a share of — the fixture is not reaching the shadow",
-        );
-        (beside - middle) / beside
-    };
-    let blurred = form(Gaussian);
-    let distance = form(Distance);
-    assert!(
-        blurred < 0.1,
-        "at Shadow {SHADOW} a Gaussian holds {blurred:.2} of the gap's form, so the fixture's \
-         Shadow is not wide enough for the claim to mean anything",
-    );
-    assert!(
-        distance > blurred + 0.2,
-        "the distance row holds {distance:.2} of the gap's form against the Gaussian's \
-         {blurred:.2}, so the counter has closed on both",
-    );
-}
-
-/// The CREASE: `Distance` darkens the gap between two slabs no more than it
-/// darkens the open side of one of them at the same distance.
-///
-/// What the distance family gives up, pinned as behaviour rather than left as
-/// prose. A distance field answers with the NEAREST ink and nothing else, so a
-/// crease reads exactly as a lone edge at the same distance does — and a row
-/// that had quietly started SUMMING its terms would read deeper there.
-///
-/// Two points in ONE frame rather than two frames, which is what makes the
-/// reading survive its own quantisation. A distance cell is drawn at a
-/// fraction of the target's pixels, so a texel is a couple of points and a
-/// reading carries up to that much of a phase error; two frames would carry two
-/// different cell origins and two different phases, where one frame carries
-/// one cell and the difference between two points in it.
-/// The bound below is set against a SUM — which is 2x — rather than against the
-/// quantisation, for the same reason.
-///
-/// SLABS and not hairlines: ink thin against σ casts too little for the open
-/// side's reading to be worth comparing a crease against, and the assertion on
-/// `edge` below is what holds the fixture to that.
-#[test]
-fn a_distance_rows_crease_is_no_deeper_than_a_lone_edge() {
-    use harmonigraph_scene::ShadowKernel::Distance;
-    /// Wide enough that the distance cell's own texel is a small share of the
-    /// Shadow's width: the cell's scale floors at `DISTANCE_SCALE_FLOOR`, so a
-    /// texel is a fixed 2.5 points here and what shrinks against it is σ.
-    const SHADOW: f32 = 2.0;
-    const DEPTH: f32 = 0.85;
-    const GREY: f32 = 0.55;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    shooter.clear =
-        wgpu::Color { r: f64::from(GREY), g: f64::from(GREY), b: f64::from(GREY), a: 1.0 };
-    // Two slabs facing each other across a gap of σ, each 2σ wide.
-    let mut scene = lit_node_and_a_name(0.0, SHADOW, DEPTH);
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = Distance;
-    }
-    scene.background = glam::Vec4::new(GREY, GREY, GREY, 1.0);
-    let s = sigma(&scene);
-    let (gap, wide, tall) = (s, 2.0 * s, 2.0 * s);
-    let at = on_screen(&scene, SIZE, name_on_the_band(&scene));
-    let (x, row) = (at.x.round() as u32, at.y.round() as u32);
-    let mid = x as f32 + 0.5;
-    let slab = |x: f32| name_glyph(&scene, [x, at.y - tall / 2.0, wide, tall]);
-    let left = mid - gap / 2.0 - wide;
-    let bare = shooter.shot(&scene);
-    let cast = shooter.shot_with(&scene, a_name(vec![slab(left), slab(mid + gap / 2.0)]));
-    let dark = |x: f32| {
-        let x = x.round() as u32;
-        bright_at(&bare, x, row) - bright_at(&cast, x, row)
-    };
-    // The CREASE, and the same distance on the pair's open side — half the gap
-    // out from the left slab's far edge, where the other slab is three and a
-    // half σ away and contributes nothing.
-    let (crease, edge) = (dark(mid), dark(left - gap / 2.0));
-    assert!(
-        edge > 20,
-        "the open side darkens by {edge}, which is too little to compare a crease against",
-    );
-    // A sum would be 2x. What stands between this bound and that is the cell's
-    // own texel, which is 9% of the Shadow's width here and so a fifth of a
-    // stop of the reading.
-    assert!(
-        (crease as f64) < 1.5 * edge as f64,
-        "the distance row leaves {crease} in the crease against {edge} at the same distance on \
-         the open side, so a distance term is summing rather than answering with the nearest ink",
     );
 }
 
@@ -2430,56 +1405,45 @@ fn rectangular_panes_and_atlases_preserve_shadow_coordinates() {
 /// spatial profile, including when Spread makes that profile fully dark.
 #[test]
 fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     shooter.clear = over_ground();
-    for kernel in [Distance, Gaussian] {
-        for spread in [0.0, 0.8] {
-            let mut scene = on_ground(0.6, 1.0);
-            scene.view.shadow.lattice_geometry.kernel = kernel;
-            scene.view.shadow.lattice_geometry.spread = spread;
-            scene.spectral.outer = 0.0;
-            scene.nodes[0].audio_ring = 0.0;
-            scene.nodes[0].melody_level = 0.0;
-            scene.nodes[0].bass_level = 0.0;
-            scene.nodes[0].octaves.fill(0.0);
-            scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
-            scene.nodes[0].activation = 1.0;
-            let full = shooter.shot(&scene);
-            scene.view.shadow.lattice_geometry.depth = 0.0;
-            let bare = shooter.shot(&scene);
-            let exterior: Vec<_> = bare
-                .chunks_exact(4)
-                .zip(full.chunks_exact(4))
-                .enumerate()
-                .filter_map(|(i, (a, b))| {
-                    (a[0] == 204 && a[1] == 204 && a[2] == 204 && a[0].saturating_sub(b[0]) > 30)
-                        .then_some(i * 4)
+    for spread in [0.0, 0.8] {
+        let mut scene = on_ground(0.6, 1.0);
+        scene.view.shadow.lattice_geometry.spread = spread;
+        scene.spectral.outer = 0.0;
+        scene.nodes[0].audio_ring = 0.0;
+        scene.nodes[0].melody_level = 0.0;
+        scene.nodes[0].bass_level = 0.0;
+        scene.nodes[0].octaves.fill(0.0);
+        scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+        scene.nodes[0].activation = 1.0;
+        let full = shooter.shot(&scene);
+        scene.view.shadow.lattice_geometry.depth = 0.0;
+        let bare = shooter.shot(&scene);
+        let exterior: Vec<_> = bare
+            .chunks_exact(4)
+            .zip(full.chunks_exact(4))
+            .enumerate()
+            .filter_map(|(i, (a, b))| {
+                (a[0] == 204 && a[1] == 204 && a[2] == 204 && a[0].saturating_sub(b[0]) > 30)
+                    .then_some(i * 4)
+            })
+            .collect();
+        assert!(exterior.len() > 40, "spread={spread}: only {} shadow pixels", exterior.len());
+        scene.view.shadow.lattice_geometry.depth = 1.0;
+        for level in [0.75, 0.5, 0.25, 0.05, 0.0] {
+            scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
+            scene.nodes[0].activation = level;
+            let faded = shooter.shot(&scene);
+            let worst = exterior
+                .iter()
+                .map(|&i| {
+                    let full_loss = 204.0 - full[i] as f32;
+                    let faded_loss = 204.0 - faded[i] as f32;
+                    (faded_loss - full_loss * level).abs()
                 })
-                .collect();
-            assert!(
-                exterior.len() > 40,
-                "{kernel:?}/{spread}: only {} shadow pixels",
-                exterior.len()
-            );
-            scene.view.shadow.lattice_geometry.depth = 1.0;
-            for level in [0.75, 0.5, 0.25, 0.05, 0.0] {
-                scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
-                scene.nodes[0].activation = level;
-                let faded = shooter.shot(&scene);
-                let worst = exterior
-                    .iter()
-                    .map(|&i| {
-                        let full_loss = 204.0 - full[i] as f32;
-                        let faded_loss = 204.0 - faded[i] as f32;
-                        (faded_loss - full_loss * level).abs()
-                    })
-                    .fold(0.0, f32::max);
-                assert!(
-                    worst <= 3.0,
-                    "{kernel:?} spread={spread} level={level}: fade error {worst}"
-                );
-            }
+                .fold(0.0, f32::max);
+            assert!(worst <= 3.0, "spread={spread} level={level}: fade error {worst}");
         }
     }
 }
@@ -2489,48 +1453,41 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
 /// rather than fading every layer of a node together.
 #[test]
 fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     shooter.clear = over_ground();
-    for kernel in [Distance, Gaussian] {
-        for level in [0.75, 0.25, 0.05] {
-            let mut scene = on_ground(0.6, 1.0);
-            scene.view.shadow.lattice_geometry.kernel = kernel;
-            scene.view.shadow.lattice_geometry.spread = 0.8;
-            scene.view.note_animation.radial_start = 0.0;
-            scene.spectral.outer = 0.0;
-            scene.nodes[0].audio_ring = 0.0;
-            scene.nodes[0].melody_level = 0.0;
-            scene.nodes[0].bass_level = 0.0;
-            scene.nodes[0].slice_progress.fill(0.0);
-            scene.nodes[0].slice_progress[0] = level;
-            let fading = shooter.shot(&scene);
-            scene.nodes[0].slice_progress[0] = 0.0;
-            scene.nodes[0].slice_progress[2] = 1.0;
-            let held = shooter.shot(&scene);
-            scene.nodes[0].slice_progress[0] = level;
-            let combined = shooter.shot(&scene);
-            scene.view.shadow.lattice_geometry.depth = 0.0;
-            let bare = shooter.shot(&scene);
-            let mut reached = 0;
-            let mut excess = 0;
-            for (i, pixel) in bare.chunks_exact(4).enumerate() {
-                if pixel[..3] != [204, 204, 204] || held[i * 4] < 203 {
-                    continue;
-                }
-                let i = i * 4;
-                reached += usize::from(fading[i] < 200);
-                // Where the held slice casts at most one code of shadow,
-                // it cannot amplify the fading slice beyond RGBA8 rounding.
-                // Visible overlapping shadows may combine nonlinearly.
-                excess = excess
-                    .max(i32::from(fading[i]) + i32::from(held[i]) - i32::from(combined[i]) - 204);
+    for level in [0.75, 0.25, 0.05] {
+        let mut scene = on_ground(0.6, 1.0);
+        scene.view.shadow.lattice_geometry.spread = 0.8;
+        scene.view.note_animation.radial_start = 0.0;
+        scene.spectral.outer = 0.0;
+        scene.nodes[0].audio_ring = 0.0;
+        scene.nodes[0].melody_level = 0.0;
+        scene.nodes[0].bass_level = 0.0;
+        scene.nodes[0].slice_progress.fill(0.0);
+        scene.nodes[0].slice_progress[0] = level;
+        let fading = shooter.shot(&scene);
+        scene.nodes[0].slice_progress[0] = 0.0;
+        scene.nodes[0].slice_progress[2] = 1.0;
+        let held = shooter.shot(&scene);
+        scene.nodes[0].slice_progress[0] = level;
+        let combined = shooter.shot(&scene);
+        scene.view.shadow.lattice_geometry.depth = 0.0;
+        let bare = shooter.shot(&scene);
+        let mut reached = 0;
+        let mut excess = 0;
+        for (i, pixel) in bare.chunks_exact(4).enumerate() {
+            if pixel[..3] != [204, 204, 204] || held[i * 4] < 203 {
+                continue;
             }
-            assert!(reached > 40, "{kernel:?}/{level}: only {reached} fading shadow pixels");
-            assert!(
-                excess <= 4,
-                "{kernel:?}/{level}: neighboring ink amplified the shadow by {excess}"
-            );
+            let i = i * 4;
+            reached += usize::from(fading[i] < 200);
+            // Where the held slice casts at most one code of shadow,
+            // it cannot amplify the fading slice beyond RGBA8 rounding.
+            // Visible overlapping shadows may combine nonlinearly.
+            excess = excess
+                .max(i32::from(fading[i]) + i32::from(held[i]) - i32::from(combined[i]) - 204);
         }
+        assert!(reached > 40, "level={level}: only {reached} fading shadow pixels");
+        assert!(excess <= 4, "level={level}: neighboring ink amplified the shadow by {excess}");
     }
 }

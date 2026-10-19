@@ -4,12 +4,12 @@
 //! ribbons it lights.
 
 use super::section;
-use crate::widgets::{choice_row, ValueBar};
+use crate::widgets::ValueBar;
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    AtmosphereSettings, GlowCurve, ShadowKernel, ShadowStyle, ViewConfig, BREATH_SPEED_MAX,
-    BREATH_SPEED_MIN, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
-    GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
+    AtmosphereSettings, GlowCurve, ShadowStyle, ViewConfig, BREATH_SPEED_MAX, BREATH_SPEED_MIN,
+    GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
+    GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
 use harmonigraph_scene::{
     GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
@@ -206,10 +206,6 @@ fn shadow_group(
     hide_behind: Option<&mut f32>,
 ) {
     crate::widgets::label(ui, egui::RichText::new(name).strong()).on_hover_text(casters);
-    choice_row(ui, "Shadow shape", &mut style.kernel, &[
-        (ShadowKernel::Distance, "Contour", "Follows the outline of each shape, keeping letters and thin strokes distinct even at large widths."),
-        (ShadowKernel::Gaussian, "Blur", "A soft blur of each shape. Thin strokes cast lighter shadows than thick shapes."),
-    ]);
     let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
     crate::widgets::shadow(ui, style, width_max, lattice);
     // Under the diagram rather than in its value column: the preview draws the

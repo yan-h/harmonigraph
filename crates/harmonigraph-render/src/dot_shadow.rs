@@ -55,10 +55,6 @@ struct Locals {
     screen_points: [f32; 2],
     shadow_atlas_size: [f32; 2],
     shadow: [f32; 4],
-    /// The group's Shadow falloff in x, read only on the distance path; the
-    /// rest is the 16 bytes a uniform block's row takes. Its own row because
-    /// `shadow` has no fifth component to spend.
-    falloff: [f32; 4],
 }
 
 struct Resources {
@@ -281,11 +277,7 @@ impl CallbackTrait for DotShadowCallback {
                 ],
                 level: 0.75 * f32::from(dot.color[3]) / 255.0,
                 sigma_points: sigma,
-                kernel: style.kernel,
-                falloff: style.falloff,
                 spread_points: style.gaussian_spread_points(sigma),
-                direct_distance: true,
-                distance_kind: crate::shadow::DistanceKind::Signed,
             })
             .collect();
         let locals = Locals {
@@ -294,13 +286,7 @@ impl CallbackTrait for DotShadowCallback {
                 screen.size_in_pixels[1] as f32 / ppp,
             ],
             shadow_atlas_size: [1.0; 2],
-            shadow: [
-                sigma,
-                style.depth,
-                if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
-                crate::spectral_shadow_reach(style, 1.0),
-            ],
-            falloff: [style.falloff, 0.0, 0.0, 0.0],
+            shadow: [sigma, style.depth, 0.0, crate::spectral_shadow_reach(style, 1.0)],
         };
         let coverage = resources.coverage.clone();
         let pane = resources.pane(device);
@@ -412,12 +398,8 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let casting = harmonigraph_scene::ShadowStyle {
-            width: 0.5,
-            depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..Default::default()
-        };
+        let casting =
+            harmonigraph_scene::ShadowStyle { width: 0.5, depth: 1.0, ..Default::default() };
         let dot = || crate::GlowDot { center: [32.0, 32.0], radius: 4.0, color: [255; 4] };
         let prepared = |dots: Vec<crate::GlowDot>, shadow| {
             let cb = DotShadowCallback {
@@ -469,18 +451,8 @@ mod tests {
             return;
         };
         for shadow in [
-            harmonigraph_scene::ShadowStyle {
-                width: 0.0,
-                depth: 1.0,
-                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                ..Default::default()
-            },
-            harmonigraph_scene::ShadowStyle {
-                width: 1.0,
-                depth: 0.0,
-                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                ..Default::default()
-            },
+            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
         ] {
             let cb = DotShadowCallback {
                 dots: vec![crate::GlowDot { center: [32.0, 32.0], radius: 4.0, color: [255; 4] }],
@@ -509,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn gaussian_spread_expands_dot_shadow_and_contour_ignores_it() {
+    fn gaussian_spread_expands_dot_shadow() {
         let Some((device, queue)) = headless_device() else { return };
         let size = [64, 64];
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
@@ -555,12 +527,8 @@ mod tests {
             );
             readback(&device, &queue, &texture, size)
         };
-        let style = harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-            width: 1.0,
-            depth: 1.0,
-            ..Default::default()
-        };
+        let style =
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
         let base = draw(style);
         let grown = draw(harmonigraph_scene::ShadowStyle { spread: 0.5, ..style });
         let i = (32 * 64 + 42) * 4;
@@ -569,85 +537,70 @@ mod tests {
             "spread did not reach beyond the old six-point Gaussian support"
         );
         assert_eq!(&grown[..4], &[255; 4], "spread escaped its cell");
-        let contour = harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..style
-        };
-        assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
     #[test]
-    fn both_spiral_geometry_kernels_hold_at_editor_and_export_scales() {
+    fn spiral_geometry_shadows_hold_at_editor_and_export_scales() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for kernel in
-            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-        {
-            for ppp in [1.0f32, 1.5, 2.0, 4.0] {
-                let side = (64.0 * ppp) as u32;
-                let size = [side.div_ceil(64) * 64, side];
-                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
-                let cb = DotShadowCallback {
-                    dots: vec![crate::GlowDot {
-                        center: [32.0, 32.0],
-                        radius: 4.0,
-                        color: [255; 4],
-                    }],
-                    shadow: harmonigraph_scene::ShadowStyle {
-                        width: 0.5,
-                        depth: 1.0,
-                        kernel,
-                        ..Default::default()
-                    },
-                    target_format: wgpu::TextureFormat::Rgba8Unorm,
-                    shadow_surface_id: 0,
-                    pass_nr: 0,
-                };
-                let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
-                let mut resources = CallbackResources::default();
-                let mut encoder = device.create_command_encoder(&Default::default());
-                let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-                crate::spectral_shadow::finish(
-                    &device,
-                    &queue,
-                    &screen,
-                    &mut encoder,
-                    &mut resources,
-                    0,
-                );
-                queue.submit(buffers.into_iter().chain([encoder.finish()]));
-                let texture = render_to_texture(
-                    &device,
-                    &queue,
-                    size,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    wgpu::Color::WHITE,
-                    |pass| {
-                        cb.paint(
-                            egui::PaintCallbackInfo {
-                                viewport: rect,
-                                clip_rect: rect,
-                                pixels_per_point: ppp,
-                                screen_size_px: size,
-                            },
-                            pass,
-                            &resources,
-                        );
-                    },
-                );
-                let frame = readback(&device, &queue, &texture, size);
-                let pixel = |x: f32, y: f32| {
-                    let x = (x * ppp) as u32;
-                    let y = (y * ppp) as u32;
-                    let i = ((y * size[0] + x) * 4) as usize;
-                    [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
-                };
-                // Distance ends two points outside the dot; Gaussian reaches three.
-                let edge_x = if kernel.is_distance() { 37.0 } else { 38.0 };
-                assert!(pixel(edge_x, 32.0)[0] < 250, "{kernel:?} at {ppp} ppp cast no edge");
-                assert_eq!(pixel(4.0, 4.0), [255; 4], "{kernel:?} at {ppp} ppp escaped");
-            }
+        for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+            let side = (64.0 * ppp) as u32;
+            let size = [side.div_ceil(64) * 64, side];
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+            let cb = DotShadowCallback {
+                dots: vec![crate::GlowDot { center: [32.0, 32.0], radius: 4.0, color: [255; 4] }],
+                shadow: harmonigraph_scene::ShadowStyle {
+                    width: 0.5,
+                    depth: 1.0,
+                    ..Default::default()
+                },
+                target_format: wgpu::TextureFormat::Rgba8Unorm,
+                shadow_surface_id: 0,
+                pass_nr: 0,
+            };
+            let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+            let mut resources = CallbackResources::default();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            crate::spectral_shadow::finish(
+                &device,
+                &queue,
+                &screen,
+                &mut encoder,
+                &mut resources,
+                0,
+            );
+            queue.submit(buffers.into_iter().chain([encoder.finish()]));
+            let texture = render_to_texture(
+                &device,
+                &queue,
+                size,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::Color::WHITE,
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: ppp,
+                            screen_size_px: size,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            let frame = readback(&device, &queue, &texture, size);
+            let pixel = |x: f32, y: f32| {
+                let x = (x * ppp) as u32;
+                let y = (y * ppp) as u32;
+                let i = ((y * size[0] + x) * 4) as usize;
+                [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+            };
+            // The Gaussian reaches three points outside the dot.
+            assert!(pixel(38.0, 32.0)[0] < 250, "at {ppp} ppp cast no edge");
+            assert_eq!(pixel(4.0, 4.0), [255; 4], "at {ppp} ppp escaped");
         }
     }
 }

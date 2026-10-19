@@ -289,17 +289,13 @@ impl LatticeCallback {
         // points — what a node's box is clipped to the pane by.
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
         let text_spread = text.gaussian_spread_points(text_sigma);
-        let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas() + geometry_spread;
+        let shadow_reach = geometry_sigma * shadow::reach_sigmas(geometry);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance, inked: bool| {
             let empty = shadow::Caster {
                 rect: [0.0; 4],
                 level: 0.0,
                 sigma_points: geometry_sigma,
-                kernel: geometry.kernel,
-                falloff: geometry.falloff,
                 spread_points: geometry_spread,
-                direct_distance: false,
-                distance_kind: crate::shadow::DistanceKind::Coverage,
             };
             // A node shipped for its light alone would fill its cell with
             // nothing: level 0 packs no cell and keeps it out of the
@@ -387,20 +383,14 @@ impl LatticeCallback {
         let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
         // The marker field's caster, ahead of everything the walk pushes. Its
         // style is the TEXT group's, which is what a marker turns into and out
-        // of as a name appears. A Gaussian gives it one shared cell centred on
-        // a crossing; a distance keeps only the profile metadata and evaluates
-        // the exact field in `plus_paint`.
+        // of as a name appears. It has one shared cell centred on a crossing.
         if marker_arm_points > 0.0 {
             let a = marker_arm_points;
             casters.push(shadow::Caster {
                 rect: [-a, -a, 2.0 * a, 2.0 * a],
                 level: 1.0,
                 sigma_points: text_sigma,
-                kernel: text.kernel,
-                falloff: text.falloff,
                 spread_points: text_spread,
-                direct_distance: true,
-                distance_kind: crate::shadow::DistanceKind::Signed,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -447,13 +437,7 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(
-                    run,
-                    text_sigma,
-                    text.kernel,
-                    text.falloff,
-                    text_spread,
-                ));
+                casters.push(shadow::caster_of(run, text_sigma, text_spread));
             }
             // The cross stands at this position under its node and name, so
             // what hides it is what stands past all three: every caster from
@@ -582,15 +566,13 @@ impl LatticeCallback {
                 // read under the receiver's own ink and needs no quad grown.
                 geometry_shadow: ShadowParams {
                     width: if geometry.casts() { geometry.width } else { 0.0 },
-                    reach_sigmas: geometry.kernel.reach_sigmas()
-                        + if geometry.casts() { geometry.gaussian_spread_points(1.0) } else { 0.0 },
+                    reach_sigmas: shadow::reach_sigmas(geometry),
                     depth: geometry.depth,
                     occlusion: hide_behind,
                 },
                 marker_shadow: ShadowParams {
                     width: if text.casts() { text.width } else { 0.0 },
-                    reach_sigmas: text.kernel.reach_sigmas()
-                        + if text.casts() { text.gaussian_spread_points(1.0) } else { 0.0 },
+                    reach_sigmas: shadow::reach_sigmas(text),
                     depth: text.depth,
                     occlusion: 0.0,
                 },

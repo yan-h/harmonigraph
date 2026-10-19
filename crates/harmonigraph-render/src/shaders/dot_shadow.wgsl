@@ -1,17 +1,12 @@
-// The spiral's sounding-note dots as shadow casters. Distance evaluates the
-// circle SDF in the surface pass; Gaussian rasterizes coverage from the same
-// field into the shared per-caster atlas and uses the common separable blur.
+// The spiral's sounding-note dots as shadow casters: coverage rasterized from
+// the circle SDF into the shared per-caster atlas, blurred by the common
+// separable blur, and composited in the surface pass.
 
 struct DotShadowLocals {
     screen_points: vec2<f32>,
     shadow_atlas_size: vec2<f32>,
-    // σ, depth, kernel kind (Distance = 1), and whole reach, in points.
+    // σ, depth, zero, and whole reach, in points.
     shadow: vec4<f32>,
-    // The group's Shadow falloff (`ShadowStyle::falloff`) in x, read only on
-    // the distance path; the rest is the 16 bytes a uniform block's row takes.
-    // Its own row rather than a fifth component of `shadow` above, which has
-    // none left.
-    falloff: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> dot_locals: DotShadowLocals;
@@ -75,7 +70,7 @@ fn vs_dot_shadow_cell(
     out.position = select(
         no_quad(),
         cell_clip(texel, dot_locals.shadow_atlas_size, 1.0),
-        cell_packed(box_cell) && box_who.y < 0.5 * DISTANCE_KIND,
+        cell_packed(box_cell),
     );
     out.local = point - center;
     out.radius = radius;
@@ -99,14 +94,7 @@ fn fs_dot_shadow_coverage(in: DotShadowOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_dot_shadow(in: DotShadowOut) -> @location(0) vec4<f32> {
-    var full = standoff_coverage(
-        dot_distance(in),
-        2.0 * dot_locals.shadow.x,
-        dot_locals.falloff.x,
-    );
-    if dot_locals.shadow.z < 0.5 * DISTANCE_KIND {
-        full = shadow_kernel(in.who, in.at);
-    }
+    let full = shadow_kernel(in.who, in.at);
     let level = shadow_casters[in.who].shade.x;
     let alpha = 1.0 - shadow_transmittance(full, dot_locals.shadow.y, level);
     return vec4<f32>(0.0, 0.0, 0.0, alpha);

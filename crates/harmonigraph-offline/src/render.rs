@@ -749,18 +749,13 @@ mod tests {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.show_roll = true;
         state.appearance.spectrum.roll_fraction = 0.7;
-        state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+        let style = harmonigraph_scene::ShadowStyle {
             width: 0.75,
             depth: f32::from(enabled),
             ..Default::default()
         };
-        state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            width: 0.75,
-            depth: f32::from(enabled),
-            ..Default::default()
-        };
+        state.appearance.view.shadow.spectral_geometry = style;
+        state.appearance.view.shadow.spectral_text = style;
         let mut take = take();
         take.header.appearance = Some(state.appearance.serialize());
         take
@@ -1033,7 +1028,7 @@ mod tests {
             assert_eq!(shadowed.len(), 1, "the fixture is one frame at {ppp} ppp");
             assert_ne!(
                 shadowed[0], bare[0],
-                "the mixed spectral shadow changed no export pixel at {ppp} ppp",
+                "the spectral shadow changed no export pixel at {ppp} ppp",
             );
         }
     }

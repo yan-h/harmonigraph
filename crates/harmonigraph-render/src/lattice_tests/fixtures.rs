@@ -35,12 +35,8 @@ pub(super) fn animated_snapshot(
 /// Most readings in this suite are about a caster's shape or a profile's
 /// falloff, and neither is a question about which group the ink belongs to. The
 /// tests that ARE about the groups build their two styles by hand.
-pub(super) fn one_shadow(
-    width: f32,
-    depth: f32,
-    kernel: harmonigraph_scene::ShadowKernel,
-) -> harmonigraph_scene::ShadowSettings {
-    let style = harmonigraph_scene::ShadowStyle { kernel, width, depth, ..Default::default() };
+pub(super) fn one_shadow(width: f32, depth: f32) -> harmonigraph_scene::ShadowSettings {
+    let style = harmonigraph_scene::ShadowStyle { width, depth, ..Default::default() };
     harmonigraph_scene::ShadowSettings {
         lattice_geometry: style,
         lattice_text: style,
@@ -183,9 +179,8 @@ pub(super) fn parity_scene() -> Scene {
             glow_curve: harmonigraph_scene::GlowCurve::default(),
             // BOTH groups alike, so a test that says nothing about the groups reads
             // one shadow across the picture — the shape it had before the groups
-            // existed — under the renderer every reading here is calibrated
-            // against.
-            shadow: one_shadow(0.16, 0.85, harmonigraph_scene::ShadowKernel::Gaussian),
+            // existed.
+            shadow: one_shadow(0.16, 0.85),
             // The share a lit slice's own ink takes of the light: the whole of it,
             // as idle ink always takes, rather than the fresh value (about 0.4), so
             // a test that says nothing about it reads one field over lit and idle

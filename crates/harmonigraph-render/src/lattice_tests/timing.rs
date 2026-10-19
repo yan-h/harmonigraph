@@ -27,11 +27,9 @@
 //! Compare with `PROBE_TIMER=0` to measure its overhead with no overlay drawn.
 //! `PROBE_OCTAVES=1` bounds the cost of the default seven-slot shader walks.
 //! `PROBE_PPP` is the pixels per point, 2 by default: the Retina displays the
-//! plugin runs on. Anything sized in points — a Distance cell's texel floor,
-//! the names, the pane the camera frames — is a quarter of the pixels at 2
-//! that it is at 1, so figures from before this default (#1458) were taken at
-//! 1 and overstate those costs: the Distance cell fill was 9.1 ms at 1 and
-//! 2.6 ms at 2 over the same 2048x2048 pixels.
+//! plugin runs on. Anything sized in points — the names, the pane the camera
+//! frames — is a quarter of the pixels at 2 that it is at 1, so figures from
+//! before this default (#1458) were taken at 1 and overstate those costs.
 //! Probe scenes now use `scrolled()` at the rendered default camera and square
 //! aspect. Historical `reach()` figures over-counted off-pane instances (#1182).
 //! Synthetic audio-ring and dense-animation grids remain explicitly synthetic.
@@ -47,10 +45,9 @@ const FRAMES: usize = 120;
 // at the camera actually rendered, through the same window as the live pane.
 fn the_live_view() -> Scene {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{Camera, FrameParams, ShadowKernel, ViewConfig};
+    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
     let mut view = ViewConfig { center_threes: 1, ..Default::default() };
     for style in view.shadow.groups_mut() {
-        style.kernel = ShadowKernel::Gaussian;
         style.width = 0.196_915_06;
         style.depth = 1.0;
     }
@@ -71,20 +68,10 @@ fn the_live_view() -> Scene {
     )
 }
 
-fn the_live_view_on_the_distance_row() -> Scene {
-    let mut scene = the_live_view();
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-    }
-    scene
-}
-
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_costs_this_much() {
-    // Keep the existing single-kernel workload on Distance independently of
-    // which kernel the Gaussian golden fixture selects.
-    time_a_frame_of_names(the_live_view_on_the_distance_row(), "the live view (Distance)");
+    time_a_frame_of_names(the_live_view(), "the live view");
 }
 
 /// The same view with the Shadow at the top of its bar.
@@ -95,40 +82,11 @@ fn a_frame_of_names_costs_this_much() {
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
-    let mut scene = the_live_view_on_the_distance_row();
+    let mut scene = the_live_view();
     for style in scene.view.shadow.groups_mut() {
         style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
     }
     time_a_frame_of_names(scene, "the top of the Shadow bar");
-}
-
-/// Both renderers, at both ends of the Shadow bar.
-///
-/// The two ends are here for the same reason the two probes above are: the
-/// atlas SHRINKS as the bar opens and the quads grow, so a renderer's cost is
-/// not one number.
-///
-/// DISTANCE is the expensive one to measure before a merge (#536). Its cell
-/// does not shrink past the renderer's quality floor, so its atlas stays finer
-/// as the bar opens; its fill is the whole node shader at that resolution, once
-/// per node (#507).
-#[test]
-#[ignore = "a probe: prints a timing and asserts nothing"]
-fn a_frame_of_names_at_each_kernel_costs_this_much() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-    for kernel in [Gaussian, Distance] {
-        for (shadow, where_) in [
-            (the_live_view().view.shadow.lattice_geometry.width, "the live view"),
-            (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),
-        ] {
-            let mut scene = the_live_view();
-            for style in scene.view.shadow.groups_mut() {
-                style.width = shadow;
-                style.kernel = kernel;
-            }
-            time_a_frame_of_names(scene, &format!("{kernel:?} at {where_}"));
-        }
-    }
 }
 
 /// The cull's workload: audio rings still ship nodes with no owned glow row.
@@ -285,13 +243,13 @@ fn atmosphere_costs_by_polyphony() {
 }
 
 /// Reusable cost comparison for the animation controls: real polyphony and
-/// a dense lattice, with both shadow kernels and fixed transient poses.
+/// a dense lattice, with fixed transient poses.
 #[test]
 #[ignore = "a probe: prints animation timing and asserts nothing"]
 fn animation_costs_by_pose_and_density() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
     use harmonigraph_scene::{
-        AnimationOrder, Camera, FrameParams, NoteAnimationConfig, ShadowKernel, ViewConfig,
+        AnimationOrder, Camera, FrameParams, NoteAnimationConfig, ViewConfig,
     };
     let mut tracker = NoteTracker::new();
     for note in 48..72 {
@@ -299,68 +257,61 @@ fn animation_costs_by_pose_and_density() {
     }
     let view = ViewConfig::default();
     for dense in [false, true] {
-        for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
-            for (name, config) in [
-                ("At rest", NoteAnimationConfig::default()),
-                ("Grow", NoteAnimationConfig { radial_start: -1.0, ..Default::default() }),
-                (
-                    "Circular",
-                    NoteAnimationConfig {
-                        order: AnimationOrder::Circular,
-                        radial_start: -1.0,
-                        ..Default::default()
-                    },
-                ),
-                ("Maximum", NoteAnimationConfig { radial_start: 1.0, ..Default::default() }),
-            ] {
-                let mut scene = animated_snapshot(
-                    &tracker,
-                    &Tuning::default(),
-                    &view,
-                    &view.scrolled(&Camera::default(), 1.0),
-                    &FrameParams { fade_time: 0.0, ..Default::default() },
-                    Camera::default(),
-                    None,
-                    1.0,
-                );
-                scene.view.note_animation = config;
-                scene.view.shadow.lattice_geometry.kernel = kernel;
-                scene.view.shadow.lattice_geometry.width = 0.6;
-                scene.view.shadow.lattice_geometry.depth = 0.8;
-                if dense {
-                    let mut node =
-                        scene.nodes.iter().find(|n| n.activation > 0.0).copied().unwrap();
-                    node.activation = 0.0;
-                    node.octaves = [1.0; 11];
-                    node.melody_level = 0.0;
-                    node.bass_level = 0.0;
-                    node.melody_slots = 0;
-                    node.bass_slots = 0;
-                    node.glow = Default::default();
-                    scene.nodes = (-7..=7)
-                        .flat_map(|y| {
-                            (-7..=7).map(move |x| {
-                                let mut n = node;
-                                n.world_pos = glam::vec3(x as f32 * 0.9, y as f32 * 0.9, 0.0);
-                                n
-                            })
+        for (name, config) in [
+            ("At rest", NoteAnimationConfig::default()),
+            ("Grow", NoteAnimationConfig { radial_start: -1.0, ..Default::default() }),
+            (
+                "Circular",
+                NoteAnimationConfig {
+                    order: AnimationOrder::Circular,
+                    radial_start: -1.0,
+                    ..Default::default()
+                },
+            ),
+            ("Maximum", NoteAnimationConfig { radial_start: 1.0, ..Default::default() }),
+        ] {
+            let mut scene = animated_snapshot(
+                &tracker,
+                &Tuning::default(),
+                &view,
+                &view.scrolled(&Camera::default(), 1.0),
+                &FrameParams { fade_time: 0.0, ..Default::default() },
+                Camera::default(),
+                None,
+                1.0,
+            );
+            scene.view.note_animation = config;
+            scene.view.shadow.lattice_geometry.width = 0.6;
+            scene.view.shadow.lattice_geometry.depth = 0.8;
+            if dense {
+                let mut node = scene.nodes.iter().find(|n| n.activation > 0.0).copied().unwrap();
+                node.activation = 0.0;
+                node.octaves = [1.0; 11];
+                node.melody_level = 0.0;
+                node.bass_level = 0.0;
+                node.melody_slots = 0;
+                node.bass_slots = 0;
+                node.glow = Default::default();
+                scene.nodes = (-7..=7)
+                    .flat_map(|y| {
+                        (-7..=7).map(move |x| {
+                            let mut n = node;
+                            n.world_pos = glam::vec3(x as f32 * 0.9, y as f32 * 0.9, 0.0);
+                            n
                         })
-                        .collect();
-                    scene.node_radius = 0.34;
-                }
-                for node in &mut scene.nodes {
-                    let delays = config.delays(&scene.octave_layout, node.cents, 42, 1.0);
-                    node.slice_progress =
-                        std::array::from_fn(|i| ((0.4 - delays[i]) / 0.72).clamp(0.0, 1.0));
-                }
-                time_a_frame_of_names(
-                    scene,
-                    &format!(
-                        "animation {} {kernel:?} {name}",
-                        if dense { "225 nodes" } else { "24 notes" }
-                    ),
-                );
+                    })
+                    .collect();
+                scene.node_radius = 0.34;
             }
+            for node in &mut scene.nodes {
+                let delays = config.delays(&scene.octave_layout, node.cents, 42, 1.0);
+                node.slice_progress =
+                    std::array::from_fn(|i| ((0.4 - delays[i]) / 0.72).clamp(0.0, 1.0));
+            }
+            time_a_frame_of_names(
+                scene,
+                &format!("animation {} {name}", if dense { "225 nodes" } else { "24 notes" }),
+            );
         }
     }
 }

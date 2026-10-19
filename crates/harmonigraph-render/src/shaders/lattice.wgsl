@@ -156,11 +156,6 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
 
-// How many σ out a shadow is drawn, which is how far the packer pads a cell
-// (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
-// reach. The two have to agree or a quad stops inside a cell that still holds
-// blur, and the shadow ends in a straight line.
-const SHADOW_REACH_SIGMAS: f32 = 3.0;
 // How many angles a node's own ink is read at — the width of the strip that
 // reading is kept in (`fs_ink_strip`), and the only rate at which anything
 // about the colour of that node's light is resolved.
@@ -226,7 +221,7 @@ fn glow_shadow() -> f32 {
     return max(u.geometry_shadow.width, 0.0);
 }
 
-// The amplitude of a node's shadow. Width and falloff shape the shared mask;
+// The amplitude of a node's shadow. Width and spread shape the shared mask;
 // darkness scales it without broadening its tail. At 0 every draw multiplies
 // by exactly 1, even where the CPU packs a cell for `node_occlusion` alone.
 fn glow_shadow_depth() -> f32 {
@@ -242,19 +237,12 @@ fn node_occlusion() -> f32 {
     return clamp(u.geometry_shadow.occlusion, 0.0, 1.0);
 }
 
-// How far this frame's renderer reaches past a caster's ink in the picture's own
-// σ (`u.geometry_shadow.reach_sigmas`, `ShadowKernel::reach_sigmas`), which is what every quad is
-// grown by.
-//
-// Floored at `SHADOW_REACH_SIGMAS`, which grows a distance quad to 3σ where its
-// profile ends at 2σ. That slack is load-bearing rather than discarded
-// fragments: σ is fixed in POINTS at the camera's focus (`sigma_points`) while
-// this reach is converted to a node's uv by its sheet scale alone, so a node
-// standing further from the camera holds the same points in more of its uv,
-// and without the floor its quad cuts the distance tail off in a straight line
-// (six lattice goldens moved by up to 7/255 when it was removed, #1310).
+// How far the blur reaches past a caster's ink in the picture's own σ
+// (`u.geometry_shadow.reach_sigmas`, `shadow::reach_sigmas`: `REACH_SIGMAS`
+// plus the group's spread), which is what every quad is grown by. It is how far the
+// packer pads a cell, so a quad and its cell agree on where a shadow stops.
 fn glow_shadow_reach() -> f32 {
-    return max(u.geometry_shadow.reach_sigmas, SHADOW_REACH_SIGMAS);
+    return u.geometry_shadow.reach_sigmas;
 }
 
 // The text-group counterparts used by a resting marker. Kept as one row in the
@@ -269,7 +257,7 @@ fn plus_shadow_depth() -> f32 {
 }
 
 fn plus_shadow_reach() -> f32 {
-    return max(u.marker_shadow.reach_sigmas, SHADOW_REACH_SIGMAS);
+    return u.marker_shadow.reach_sigmas;
 }
 
 // How far the blur reaches past a caster's ink, in the uv of a node whose sheet
@@ -321,42 +309,6 @@ fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> f32 {
     }
     let coverage = clamp(level, 0.0, 1.0) * node_shadow_kernel(u32(max(who, 0.0)), points);
     return 1.0 - glow_shadow_depth() * coverage;
-}
-
-// Whether this caster's shadow is a DISTANCE. A marker uses the answer to
-// choose its exact field instead of a cell; a node uses it to remove its ink
-// coverage from that profile while masking a Gaussian by its footprint.
-fn shadow_is_distance(who: f32) -> bool {
-    let caster = u32(max(who, 0.0));
-    if caster >= arrayLength(&shadow_casters) {
-        return false;
-    }
-    return shadow_casters[caster].shade.y >= 0.5 * DISTANCE_KIND;
-}
-
-// A marker's shadow, with a distance evaluated from the exact field its scene
-// draw already holds. A Gaussian keeps the shared cell and takes the path above
-// unchanged.
-fn plus_shadow_through(
-    who: f32,
-    d_points: f32,
-    points: vec2<f32>,
-    level: f32,
-    distance_level: f32,
-) -> f32 {
-    if level <= 0.0 {
-        return 1.0;
-    }
-    let caster = u32(max(who, 0.0));
-    if !shadow_is_distance(who) {
-        return shadow_through(who, points, level, plus_shadow_depth());
-    }
-    let full = standoff_coverage(
-        d_points,
-        2.0 * shadow_casters[caster].shade.z,
-        shadow_casters[caster].shade.w,
-    );
-    return local_shadow_transmittance(full, plus_shadow_depth(), distance_level);
 }
 
 // How much of the light a LIT slice washes over its own ink with
@@ -429,30 +381,17 @@ const EARLY_OUT: bool = true;
 //
 // The analytic early-outs are off (`node_geom`, `spectral_ring`, the band and
 // mark walks) because a cell texel outside every layer's INK is still inside
-// its shadow — but the shadow ends too. Both node cell kinds write only
-// `clamp(-sd, 0, 1)` of the layers' union (`layer_distance`), and a layer adds
-// nothing to it once its coverage is exactly 0:
-//
-//   - Distance coverage is `standoff_coverage(sd * uv_points, 2σ, falloff)`,
-//     exactly 0 at `u >= 1` for every falloff — `(e^0 - 1) / …` and the linear
-//     branch's `remaining = 0` are both 0 — that is, once
-//     `sd * uv_points >= max(2σ, 1e-6) * SHADOW_STOP`. The profile's own stop,
-//     inside the cell's pad (`ShadowKernel::reach_sigmas`).
-//   - Expanded Gaussian coverage is `aa_inside(spread, sd, aa)`, a smoothstep
-//     that is exactly 0 once `sd >= spread + aa`.
+// its grown shadow source — but that source ends too. The cell writes only
+// the layers' union (`spread_union`), and a layer adds
+// nothing to it once its expanded coverage `aa_inside(spread, sd, aa)`, a
+// smoothstep, is exactly 0: once `sd >= spread + aa`.
 //
 // An early-out like the others, so `EARLY_OUT` off is its reference too.
 fn cell_reach(in: VsOut) -> f32 {
     if !EARLY_OUT || in.shadow_at.z >= 0.0 {
         return -1.0;
     }
-    if in.params.w > GAUSSIAN_SPREAD_KIND - 0.5 {
-        return in.ink_carry + aa_width(in.strip_row, in.shadow_at.w);
-    }
-    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
-        return max(2.0 * in.strip_row, 1.0e-6) * SHADOW_STOP / abs(in.shadow_at.z);
-    }
-    return -1.0;
+    return in.ink_carry + aa_width(in.strip_row, in.shadow_at.w);
 }
 
 // Whether `bound`, a lower bound on a layer's signed distance, lies past
@@ -590,15 +529,13 @@ struct Instance {
 struct ShadowCell {
     @location(5) rect: vec4<f32>,
     @location(9) cell: vec4<f32>,
-    // x: points to cell texels; y: σ in those texels for blur, in pane points
-    // for evaluated Distance coverage; z: the caster's level;
+    // x: points to cell texels; y: σ in those texels; z: the caster's level;
     // w: the cell's share of the target's pixels, which is what a draw INTO
     // the cell is antialiased against (`aa_width`, `vs_node_cell`).
     @location(14) cell_map: vec4<f32>,
-    // x: this box's caster index in `shadow_casters`; y: 0 blur, 1 distance,
-    // 2 evaluated Distance coverage; z: padding in pane points; w: falloff
-    // for evaluated coverage. The scene draw
-    // reads x, while the cell and atlas passes read the rest.
+    // x: this box's caster index in `shadow_casters`; y: zero; z: padding in
+    // pane points; w: the source's spread in pane points. The scene draw reads
+    // x, while the cell and atlas passes read the rest.
     @location(13) who: vec4<f32>,
 };
 
@@ -648,8 +585,8 @@ struct VsOut {
     // caster's cell is mapped from (`shadow_kernel`) — and how coarse the surface
     // being rasterized ON is, as a share of the target's pixels (w). z is the
     // caster's level on the pane draw; on a cell draw its magnitude is one node
-    // uv in pane points and its sign selects coverage (+) or analytic distance
-    // (-). w is 1 on every draw that lands on the pane and `shadow::pack`'s own
+    // uv in pane points and its sign selects coverage (+) or the analytic
+    // spread source (-). w is 1 on every draw that lands on the pane and `shadow::pack`'s own
     // scale on a draw that fills a cell, which is the softness every shape edge
     // is cut with (`aa_width`).
     //
@@ -672,10 +609,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance, box: Shadow
 /// The same node, drawn into its own cell of the shadow atlas rather than onto
 /// the pane — [`fs_node_cell`]'s quad, and what its shadow is a blur of.
 ///
-/// A distance cell's own corners are mapped back into pane points, so every
-/// texel the packer reserved is written — including the one-texel sampling
-/// guard beyond the shadow's reach. A blur cell keeps the pane quad's mapping
-/// exactly, which is the coverage the Gaussian path convolves.
+/// An unspread cell keeps the pane quad's mapping exactly, which is the
+/// coverage the blur convolves. A spread cell grows its source analytically,
+/// so its own corners are mapped back into pane points and every texel the
+/// packer reserved is written — including the one-texel sampling guard beyond
+/// the shadow's reach.
 @vertex
 fn vs_node_cell(
     @builtin(vertex_index) vertex_index: u32,
@@ -690,7 +628,7 @@ fn vs_node_cell(
     let centre = pane_points(centre_clip);
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
-    if box.who.y < 0.5 && box.who.w <= 0.0 {
+    if box.who.w <= 0.0 {
         let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.cell_map.x);
         out.clip_pos =
             select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, out.clip_pos.w), cell_packed(box.cell));
@@ -723,21 +661,14 @@ fn vs_node_cell(
     out.clip_pos =
         select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, 1.0), cell_packed(box.cell));
     out.shadow_box = box.cell;
-    // The negative sign carries the distance kind without consuming another
-    // interpolator; coverage cells return above with the positive scale.
+    // The negative sign marks an analytic cell without consuming another
+    // interpolator; unspread cells return above with the positive scale.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.cell_map.w);
     // Cell-only readers: the ink strip is unused, so its fields carry the
-    // Distance profile's width and falloff without another buffer binding.
-    out.params.w = box.who.y;
-    out.strip_row = box.cell_map.y;
-    out.ink_carry = box.who.w;
-    if box.who.y < 0.5 {
-        // Expanded Gaussian coverage uses the existing layer fields and cell
-        // quad. The ordinary Gaussian above keeps its original rasterizer.
-        out.params.w = GAUSSIAN_SPREAD_KIND;
-        out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
-        out.ink_carry = box.who.w / max(uv_points, 1e-6);
-    }
+    // spread and the cell's texel in uv without another buffer binding. The
+    // ordinary cell above keeps its original rasterizer.
+    out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
+    out.ink_carry = box.who.w / max(uv_points, 1e-6);
     return out;
 }
 
@@ -787,7 +718,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // the same world distance either way, so nothing about the node's own
     // content moves.
     // The SHADOW's own reach is in every pane quad: a node multiplies the frame
-    // by its blurred ink out to `SHADOW_REACH_SIGMAS` σ past its rings
+    // by its blurred ink out to `glow_shadow_reach` σ past its rings
     // (`shadow_reach_uv`), and a quad that stopped at the ink would cut that
     // Gaussian off in a straight line. The cell draw writes the packer's
     // one-texel sampling guard too.
@@ -1092,40 +1023,31 @@ fn slice_gap_half() -> f32 {
 // One node layer's geometry and its two readouts: signed distance in node uv,
 // negative inside; the opacity the layer lands with; and the antialiased
 // coverage cached from the same radial and angular constraints. The cached
-// readout preserves the Gaussian control exactly while the distance path keeps
-// the unsoftened field — there is no `aa` in a distance cell.
+// readout is what an unspread cell and the scene draw spend; a spread cell
+// grows its source from the unsoftened field.
 struct NodeLayer {
     sd: f32,
     level: f32,
     coverage: f32,
 }
 
-// Expanded Gaussian cells evaluate coverage through the analytic layer walk.
-const GAUSSIAN_SPREAD_KIND: f32 = 3.0;
-// The contour threshold the exact field treats as ink. The marker uses the
-// same half-level in `plus_shadow_sd` below.
-const DISTANCE_LEVEL_FLOOR: f32 = 0.5;
 const EMPTY_DISTANCE: f32 = 65504.0;
 
 fn layer_coverage(layer: NodeLayer) -> f32 {
     return layer.coverage * layer.level;
 }
 
-fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
-    if in.params.w > GAUSSIAN_SPREAD_KIND - 0.5 {
+// A spread cell's union of each layer's grown, opacity-weighted coverage —
+// the cell whose `shadow_at.z` is negative (`vs_node_cell`); every other draw
+// leaves `grown` as it was.
+fn spread_union(grown: f32, layer: NodeLayer, in: VsOut) -> f32 {
+    if in.shadow_at.z < 0.0 {
         let aa = aa_width(in.strip_row, in.shadow_at.w);
         let coverage = clamp(layer.level, 0.0, 1.0)
             * aa_inside(in.ink_carry, layer.sd, aa);
-        return min(field, -coverage);
+        return max(grown, coverage);
     }
-    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
-        let coverage = clamp(layer.level, 0.0, 1.0) * standoff_coverage(
-            layer.sd * abs(in.shadow_at.z), 2.0 * in.strip_row, in.ink_carry,
-        );
-        // Negative coverage retains the distance union's min operation.
-        return min(field, -coverage);
-    }
-    return select(field, min(field, layer.sd), layer.level >= DISTANCE_LEVEL_FLOOR);
+    return grown;
 }
 
 // The signed distance to an annulus. A collapsed pair is the caller's to skip:
@@ -1329,8 +1251,8 @@ fn glyph_taper(d: f32, swells: bool) -> f32 {
 // edges are counted once, the same bargain the full slice makes. `ink` is the
 // colour and coverage together; `lit` the geometric coverage of the lit
 // slice, for the wash; `near` and `far` the zones' layers at their own
-// opacities (`far` the whole wedge out to its outer edge, which the Distance
-// union takes as the outer zone), and `rest` the outer zone's geometric
+// opacities (`far` the whole wedge out to its outer edge, which a spread
+// cell's union takes as the outer zone), and `rest` the outer zone's geometric
 // coverage, for the shadow's footprint.
 struct SliceZones {
     ink: vec4<f32>,
@@ -1381,7 +1303,7 @@ fn slice_zones(
 // this intersects it with the slot's pie and its constant-width side gaps.
 // The distance follows the finite side segments and constrained arcs: a `max`
 // of the radial and angular distances keeps the contour but carries its switch
-// line out past every corner, which a Distance shadow makes visible.
+// line out past every corner, which a spread shadow source makes visible.
 fn outer_glyph(
     s: i32, ring: OctRing,
     uv: vec2<f32>, band: NodeLayer, inner: f32, outer: f32, aa: f32,
@@ -1908,7 +1830,7 @@ fn sector_side(f: SectorFold) -> f32 {
 // In the folded frame the two angular edges are one line. Its finite boundary
 // runs between the inner and outer circles, while each circle contributes only
 // the arc on the inside of that line. Measuring against those three features
-// keeps the Euclidean corner a Distance shadow is defined by.
+// keeps the Euclidean corner a spread shadow source grows from.
 fn annular_sector_distance(f: SectorFold, inner: f32, outer: f32, gap: f32) -> f32 {
     if outer <= inner {
         return EMPTY_DISTANCE;
@@ -2063,9 +1985,9 @@ struct NodeInk {
     // ink appears. A Gaussian uses it to keep the caster's blurred alpha from
     // showing through that same caster during a release.
     mask: f32,
-    // The nearest opaque distance contour, or negative weighted coverage
-    // while filling a node's Distance coverage cell.
-    sd: f32,
+    // The grown, opacity-weighted coverage a spread cell holds
+    // (`spread_union`); zero on every other draw.
+    spread: f32,
 };
 
 /// How much of a layer's geometric footprint may mask its own shadow.
@@ -2077,8 +1999,8 @@ fn mask_level(level: f32) -> f32 {
     return clamp(level / INK_FLOOR, 0.0, 1.0);
 }
 
-/// What every node layer answers at this fragment: its visible ink and the
-/// nearest half-level signed field the Distance cell stores.
+/// What every node layer answers at this fragment: its visible ink and, in a
+/// spread cell, its grown coverage.
 ///
 /// Split from [`node_paint`] so that what the layers paint and what the
 /// fragment does with it are two readable pieces rather than one function of
@@ -2128,7 +2050,7 @@ fn base_node_ink(
     // thing in the picture that asks a node's ink what it is rather than only
     // how much of the pixel it covers.
     var glyph_lit = 0.0;
-    var node_sd = EMPTY_DISTANCE;
+    var node_spread = 0.0;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
@@ -2217,8 +2139,8 @@ fn base_node_ink(
         let reach = slice_reach(in, slot, band_in, band_out);
         if reach == band_out {
             glyph_mask = max(glyph_mask, shape_layer.coverage);
-            node_sd = layer_distance(
-                node_sd,
+            node_spread = spread_union(
+                node_spread,
                 NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
                 in,
             );
@@ -2234,8 +2156,8 @@ fn base_node_ink(
                 glyph_mask,
                 zones.near.coverage + zones.rest * mask_level(zones.far.level),
             );
-            node_sd = layer_distance(node_sd, zones.near, in);
-            node_sd = layer_distance(node_sd, zones.far, in);
+            node_spread = spread_union(node_spread, zones.near, in);
+            node_spread = spread_union(node_spread, zones.far, in);
         }
         if cov > glyph {
             glyph = cov;
@@ -2277,7 +2199,7 @@ fn base_node_ink(
             aa,
             analytic,
         );
-        node_sd = layer_distance(node_sd, audio.layer, in);
+        node_spread = spread_union(node_spread, audio.layer, in);
         glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
             / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
         // The wedge's own reading is its lit share, on the composite the coverage
@@ -2333,8 +2255,8 @@ fn base_node_ink(
     let bass_cov = layer_coverage(bass_layer);
     let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
     let bass_mask = bass_layer.coverage * mask_level(bass_layer.level);
-    node_sd = layer_distance(node_sd, melody_layer, in);
-    node_sd = layer_distance(node_sd, bass_layer, in);
+    node_spread = spread_union(node_spread, melody_layer, in);
+    node_spread = spread_union(node_spread, bass_layer, in);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2375,7 +2297,7 @@ fn base_node_ink(
         active_alpha,
         glyph_lit / max(active_alpha, 1e-4),
         glyph_mask,
-        node_sd,
+        node_spread,
     );
 }
 
@@ -2386,7 +2308,7 @@ fn slice_progress(in: VsOut, i: u32) -> f32 {
 }
 struct AnimatedInk { body: NodeInk, marks: NodeInk, }
 fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
-    var result = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, EMPTY_DISTANCE);
+    var result = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, 0.0);
     var marks = result;
     let band_in = u.node.band_inner;
     let band_out = u.node.band_outer;
@@ -2420,7 +2342,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
             var lit = level / max(ink.w, 1e-4);
             let reach = slice_reach(in, slot, band_in, band_out);
             if reach == band_out {
-                result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
+                result.spread = spread_union(result.spread, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
                 result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
             } else {
                 let zones = slice_zones(in, slot, oct, uv, d, shape, ink, band_in, band_out, reach, soft);
@@ -2429,8 +2351,8 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
                 lit = level * zones.lit / max(zones.ink.w, 1e-4);
                 let near = zones.near;
                 let far = zones.far;
-                result.sd = layer_distance(result.sd, NodeLayer(near.sd * scale, near.level * opacity, near.coverage), in);
-                result.sd = layer_distance(result.sd, NodeLayer(far.sd * scale, far.level * opacity, far.coverage), in);
+                result.spread = spread_union(result.spread, NodeLayer(near.sd * scale, near.level * opacity, near.coverage), in);
+                result.spread = spread_union(result.spread, NodeLayer(far.sd * scale, far.level * opacity, far.coverage), in);
                 let footprint = near.coverage * mask_level(near.level * opacity)
                     + zones.rest * mask_level(far.level * opacity);
                 result.mask = max(result.mask, footprint * taper);
@@ -2459,7 +2381,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
                 marks.lit = 1.0;
             }
             marks.mask = max(marks.mask, shape.coverage * taper * mask_level(level));
-            marks.sd = layer_distance(marks.sd, NodeLayer(shape.sd * scale, level, shape.coverage), in);
+            marks.spread = spread_union(marks.spread, NodeLayer(shape.sd * scale, level, shape.coverage), in);
         }
     }
     return AnimatedInk(result, marks);
@@ -2489,14 +2411,14 @@ fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeIn
     ink.lit = lit / max(ink.alpha, 1e-4);
     let mask = audio.layer.coverage * mask_level(src.ring);
     ink.mask = mask + ink.mask * (1.0 - mask);
-    ink.sd = layer_distance(ink.sd, audio.layer, src);
+    ink.spread = spread_union(ink.spread, audio.layer, src);
     // Marks keep their reference place above the independently sampled audio.
     let mark_lit = animated.marks.alpha + ink.lit * ink.alpha * (1.0 - animated.marks.alpha);
     ink.rgb = animated.marks.rgb + ink.rgb * (1.0 - animated.marks.alpha);
     ink.alpha = animated.marks.alpha + ink.alpha * (1.0 - animated.marks.alpha);
     ink.lit = mark_lit / max(ink.alpha, 1e-4);
     ink.mask = animated.marks.mask + ink.mask * (1.0 - animated.marks.mask);
-    ink.sd = min(ink.sd, animated.marks.sd);
+    ink.spread = max(ink.spread, animated.marks.spread);
     return ink;
 }
 
@@ -2543,26 +2465,17 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var ink = node_ink(in, g.d, g.aa, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.sd);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.spread);
     }
     var visibility = 1.0;
     if ink.alpha > 0.0 {
         visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, node_occlusion());
     }
     let visible_alpha = ink.alpha * visibility;
-    var final_alpha: f32;
-    if shadow_is_distance(in.shadow_box.x) {
-        // Distance stores an opacity-weighted profile that already includes
-        // the node's ink. Spend only the coverage beyond that ink as shadow,
-        // so a fading layer is not counted twice. This union also lets a new
-        // mark uncover a stronger ring's shadow continuously as it arrives.
-        final_alpha = visible_alpha + max(0.0, 1.0 - t - glow_shadow_depth() * ink.alpha);
-    } else {
-        // Gaussian's calibrated blur can exceed the ink's opacity. Its
-        // footprint keeps that amplified shadow outside the fading caster.
-        let seen_through = 1.0 - (1.0 - t) * (1.0 - ink.mask);
-        final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
-    }
+    // The calibrated blur can exceed the ink's opacity. Its footprint keeps
+    // that amplified shadow outside the fading caster.
+    let seen_through = 1.0 - (1.0 - t) * (1.0 - ink.mask);
+    let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
     if final_alpha <= 0.0 {
         discard;
     }
@@ -2589,10 +2502,9 @@ fn node_paint(in: VsOut) -> Painted {
     return Painted(washed * visibility, final_alpha, visible_alpha);
 }
 
-/// A node's shadow source, into its own cell of the atlas (`shadow.rs`). Under
-/// the Gaussian the cell stores the byte-identical coverage the blur convolves;
-/// under Distance nodes store the union of each layer's opacity-weighted
-/// Distance profile, retaining that representation through the opaque endpoint.
+/// A node's shadow source, into its own cell of the atlas (`shadow.rs`): the
+/// byte-identical coverage the blur convolves, or with Spread open the union
+/// of each layer's grown, opacity-weighted coverage.
 ///
 /// Drawn through [`vs_node_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, every length it is cut with being
@@ -2618,27 +2530,16 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     // Past where the node's ink stops (`paint_reach`, which every shape it
     // draws lies inside, moving or settled) by more than the shadow's reach
-    // (`cell_reach`), every layer is exactly 0 and both node coverage kinds
-    // write `clamp(-sd, 0, 1) = 0`: most of a cell, whose pad is the cell's
-    // reach and not the profile's.
+    // (`cell_reach`), every layer is exactly 0 and a spread cell writes
+    // `clamp(-sd, 0, 1) = 0`: most of a cell, whose pad is the blur's reach
+    // and not the source's.
     if beyond_reach(g.d - paint_reach(in, g.aa), cell_reach(in)) {
         return vec4<f32>(0.0);
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
-    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
-        let coverage = clamp(-ink.sd, 0.0, 1.0);
-        return vec4<f32>(coverage, coverage, 0.0, 0.0);
-    }
     if analytic {
-        // Stabilize the value before the half-float attachment rounds it. The fast
-        // and reference builds carry different dead coverage branches and a
-        // last f32 ulp may otherwise land on opposite sides of an f16 tie.
-        // 1/32 point is far below both the cell's texel and the numeric
-        // reference's tolerance, so this decides representation rather than
-        // geometry.
-        let points = clamp(ink.sd * abs(in.shadow_at.z), -EMPTY_DISTANCE, EMPTY_DISTANCE);
-        let stable = round(points * 32.0) / 32.0;
-        return vec4<f32>(stable, 0.0, 0.0, 0.0);
+        let coverage = clamp(ink.spread, 0.0, 1.0);
+        return vec4<f32>(coverage, coverage, 0.0, 0.0);
     }
     // The same floor the scene draw takes, so a cell holds the ink that draw
     // paints rather than a hair more of it.
@@ -2682,11 +2583,9 @@ struct PlusVsOut {
     // of the cross are read (`node_visibility`). Zero on the cell's draw.
     @location(2) @interpolate(linear) points: vec2<f32>,
     // x: which caster this marker's shadow is, in `shadow_casters` — 0, the
-    // marker field being one caster and the first the frame packs; y: one arm's
-    // on-screen length in points, which turns the exact field into the distance
-    // profile's units; z: the cross's place in the walk (`PlusInstance::place`).
-    // Zero on the draw that FILLS the cells, which reads no atlas and no array.
-    // w unused.
+    // marker field being one caster and the first the frame packs; z: the
+    // cross's place in the walk (`PlusInstance::place`). On the draw that FILLS
+    // the cell, x is the spread in arms and the rest zero. y and w unused.
     @location(3) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment reads that cell (xy, in atlas texels), how much of
     // the shadow this marker lands (z, its own opacity), and the surface this
@@ -2810,17 +2709,8 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // whatever the glow says, so this is the marker's own test and not the
     // light's.
     let arm = select(0.0, inst.pos_radius.w / marker_unit(), u.marker.world_unit > 0.0);
-    let centre_clip = u.camera.view_proj * vec4<f32>(inst.pos_radius.xyz, 1.0);
-    let arm_clip = u.camera.view_proj
-        * vec4<f32>(inst.pos_radius.xyz + u.camera.right.xyz * inst.pos_radius.w, 1.0);
-    let arm_points = distance(pane_points(centre_clip), pane_points(arm_clip));
-    // Grown to hold the SHADOW as well as the ink, in arms. The Gaussian's
-    // shared cell is measured at the focus plane and keeps the matching world
-    // ratio.
-    // A direct distance is measured in this marker's own screen points, so its
-    // quad takes the packed reach in those same points; under perspective the
-    // field and its window then scale together instead of the quad shrinking
-    // around a screen-constant shadow.
+    // Grown to hold the SHADOW as well as the ink, in arms. The shared cell is
+    // measured at the focus plane and keeps the matching world ratio.
     // The ink's own margin is the floor rather than a term — a marker at no
     // Shadow draws the quad it always did, and the band it caps is the same
     // width in pixels at either size (`plus_paint`).
@@ -2828,10 +2718,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     // Free of the Shadow DEPTH, which only says how DARK the shadow is: the
     // multiply is laid over the same quad at every depth.
     let plus_reach_uv = 0.5 * plus_shadow_width() * plus_shadow_reach() / 1.8;
-    var stand = select(0.0, plus_reach_uv / arm, arm > 0.0);
-    if shadow_is_distance(0.0) {
-        stand = plus_shadow_reach() * shadow_casters[0].shade.z / max(arm_points, 1e-6);
-    }
+    let stand = select(0.0, plus_reach_uv / arm, arm > 0.0);
     let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);
     // Camera-facing, like every other billboard here: a marker is a mark ON
     // the lattice rather than an object standing in it, so it keeps its shape
@@ -2846,12 +2733,11 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     out.color = inst.color;
     // The whole marker field is ONE caster, and it is the first the frame packs
     // (`from_scene`), so its entry sits at index 0 of the array.
-    out.shadow_box = vec4<f32>(0.0, arm_points, f32(inst.place), 0.0);
+    out.shadow_box = vec4<f32>(0.0, 0.0, f32(inst.place), 0.0);
     out.points = pane_points(out.clip_pos);
     // The Gaussian's shared cell is a picture of one cross CENTRED in its box,
     // so the "pane point" a marker reads it at is its own place on that cross
-    // rather than its place on the pane. A distance has no cell and uses the
-    // projected arm carried beside the caster index instead.
+    // rather than its place on the pane.
     let shared_arm_points = u.marker_cell.arm_points;
     // The marker's own opacity is the SHARE of the shadow it casts, which is
     // what makes a position handing itself back as a name fades off it grow its
@@ -2860,9 +2746,8 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     return out;
 }
 
-/// The one cross every resting marker's GAUSSIAN is taken from, drawn into the
-/// shared cell (`u.marker_cell`) rather than onto the pane. A distance
-/// collapses this draw because its exact field is evaluated in [`plus_paint`].
+/// The one cross every resting marker's shadow is taken from, drawn into the
+/// shared cell (`u.marker_cell`) rather than onto the pane.
 ///
 /// ONE INSTANCE for the whole field. What varies between markers — where each
 /// stands, how opaque it is — is spent where the cell is READ ([`plus_paint`]),
@@ -3733,29 +3618,19 @@ fn plus_paint(in: PlusVsOut) -> Painted {
         visibility = node_visibility(in.shadow_box.z, in.points, node_occlusion());
     }
     let visible_alpha = alpha * visibility;
-    // The SHADOW, multiplied into everything already in the frame under it. A
-    // Gaussian reads the field's shared cell; a distance spends this fragment's
-    // exact folded-box distance, measured by this marker's own arm on screen. A
-    // cross in front of a node darkens that node's rings wherever it reaches
+    // The SHADOW, multiplied into everything already in the frame under it,
+    // read off the field's shared cell. A cross in front of a node darkens that node's rings wherever it reaches
     // them, and a node drawn after it darkens the cross the same way
     // — the painter's order the pass already has is the whole of what decides
     // which.
-    let d_points = plus_sd(in.uv) * in.shadow_box.y;
-    let distance_level = in.shadow_at.z;
-    let t = plus_shadow_through(
-        in.shadow_box.x,
-        d_points,
-        in.shadow_at.xy,
-        in.shadow_at.z,
-        distance_level,
-    );
+    let t = shadow_through(in.shadow_box.x, in.shadow_at.xy, in.shadow_at.z, plus_shadow_depth());
     // The full arm box masks this marker's OWN shadow. Outside that surface the
     // shadow takes the ink's longitudinal taper too, so neither darkness under
     // a transparent tip nor a hollow outline around it survives the fade.
-    // Gaussian spread moves the source's taper outward; move this receiver
-    // mask with it so it cannot clip the expanded shadow at the old tips.
+    // Spread moves the source's taper outward; move this receiver mask with it
+    // so it cannot clip the expanded shadow at the old tips.
     var shadow_uv = in.uv;
-    if !shadow_is_distance(in.shadow_box.x) && u.marker_cell.spread_points > 0.0 {
+    if u.marker_cell.spread_points > 0.0 {
         let spread = u.marker_cell.spread_points / max(u.marker_cell.arm_points, 1e-6);
         shadow_uv = max(abs(in.uv) - vec2<f32>(spread), vec2<f32>(0.0));
     }

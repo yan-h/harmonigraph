@@ -1486,118 +1486,103 @@ fn a_name_casting_no_shadow_paints_its_ink_and_nothing_else() {
 #[test]
 fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow() {
     let Some(mut shooter) = Shooter::new(SCENE_SIZE) else { return };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-    {
-        let mut scene = one_node_behind_another();
-        scene.outer_inner = scene.outer_outer - 0.08;
-        for node in &mut scene.nodes {
-            node.melody_level = 0.0;
-            node.bass_level = 0.0;
-        }
-        scene.view.shadow = one_shadow(1.0, 0.18, kernel);
-        scene.view.shadow.lattice_text.width = 0.0;
-        scene.view.shadow.lattice_text.depth = 0.0;
-        scene.view.glow_reach = 0.0;
-        scene.view.note_bloom = 0.0;
-        let center = on_screen(&scene, SCENE_SIZE, scene.nodes[0].world_pos);
-        let rect = [center.x - 4.0, center.y - 6.0, 64.0, 12.0];
-        let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
-        let mut shot = |scene: &Scene, owner: Option<u32>, hide_behind: f32, depth: f32| {
-            let labels =
-                owner.map_or_else(LatticeLabels::default, |node| names(vec![(node, vec![glyph])]));
-            shooter.draw_modified(scene, labels, |cb| {
-                cb.uniforms.geometry_shadow.occlusion = hide_behind;
-                cb.uniforms.geometry_shadow.depth = depth;
-            })
-        };
-        // The reference is the same live field with Hide behind at 0, which
-        // hides nothing, and the reading is at the whole bar. The ordinary
-        // node shadow does not reach a name (the Darkness reading below holds
-        // it to that), so the two differ by occlusion alone.
-        let bare_old = shot(&scene, None, 0.0, 1.0);
-        let rear_old = shot(&scene, Some(1), 0.0, 1.0);
-        let bare = shot(&scene, None, 1.0, 1.0);
-        let rear = shot(&scene, Some(1), 1.0, 1.0);
-        let faded = (0..rear.len())
-            .step_by(4)
-            .filter(|&i| {
-                let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
-                let new = i32::from(rear[i]) - i32::from(bare[i]);
-                old > 32 && old - new > 6
-            })
-            .count();
-        assert!(faded > 30, "{kernel:?}: only {faded} rear-label pixels faded");
-        if kernel == harmonigraph_scene::ShadowKernel::Gaussian {
-            // Subtract the front-only contribution so foreground ink cannot
-            // count as a hidden label. A faint skirt alone is not occlusion.
-            let mostly_hidden = (0..rear.len())
-                .step_by(4)
-                .filter(|&i| {
-                    let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
-                    let new = i32::from(rear[i]) - i32::from(bare[i]);
-                    old > 32 && new >= 0 && new * 2 < old
-                })
-                .count();
-            assert!(
-                mostly_hidden > 30,
-                "a wide Gaussian hid most of only {mostly_hidden} rear-label pixels"
-            );
-        }
-        // A black clear with no glow or text shadows gives the ordinary node
-        // shadow nothing to darken except misplaced ink. The hiding followed
-        // Darkness after #1288 and is Hide behind's alone now, so at the whole
-        // bar Darkness moves no pixel of the rear name.
-        let (none, full) = (shot(&scene, Some(1), 1.0, 0.0), shot(&scene, Some(1), 1.0, 0.8));
-        let label = |i: usize| i32::from(rear_old[i * 4]) - i32::from(bare_old[i * 4]) > 32;
-        let probed = (0..none.len() / 4).filter(|&i| label(i)).count();
-        let moved = (0..none.len() / 4)
-            .filter(|&i| label(i) && (0..3).any(|k| none[i * 4 + k].abs_diff(full[i * 4 + k]) > 2))
-            .count();
-        assert!(probed > 30, "{kernel:?}: the rear name covers only {probed} pixels");
-        assert_eq!(
-            moved, 0,
-            "{kernel:?}: Darkness moved {moved} of the rear name's {probed} pixels, so its \
-             hiding still follows the shadow"
-        );
-        // And through the label-free bloom attachment, beside the light
-        // Darkness the fixture is dialled to: more Hide behind hides more of
-        // the rear name and never less.
-        for bloom in [0.0, 1.0] {
-            scene.view.note_bloom = bloom;
-            let faint = shot(&scene, Some(1), 0.18, 0.18);
-            let deep = shot(&scene, Some(1), 1.0, 0.18);
-            let pairs = || faint.chunks_exact(4).zip(deep.chunks_exact(4));
-            let hidden_more = pairs().filter(|(f, d)| brightness(f) - brightness(d) > 6).count();
-            let brighter = pairs().filter(|(f, d)| brightness(d) > brightness(f) + 1).count();
-            assert!(
-                hidden_more > 30,
-                "{kernel:?}, bloom={bloom}: more Hide behind hid only {hidden_more} more rear-label pixels"
-            );
-            assert_eq!(
-                brighter, 0,
-                "{kernel:?}, bloom={bloom}: more Hide behind left rear text brighter"
-            );
-        }
-        scene.view.note_bloom = 0.0;
-        let front_old = shot(&scene, Some(0), 0.0, 1.0);
-        let front = shot(&scene, Some(0), 1.0, 1.0);
-        let solid: Vec<_> = (0..front.len())
-            .step_by(4)
-            .filter(|&i| front_old[i] > 250 && bare_old[i] < 200)
-            .collect();
-        assert!(solid.len() > 100, "the foreground label must contain solid white ink");
-        for i in solid {
-            assert_eq!(
-                &front[i..i + 3],
-                &front_old[i..i + 3],
-                "{kernel:?}: a node occluded its own name"
-            );
-        }
-        // Reuse the pane after removing the foreground node. The label row
-        // has no shadow cell, but still must end its receiver link at zero.
-        scene.nodes.remove(0);
-        rows_per_node(&mut scene);
-        assert_eq!(shot(&scene, Some(0), 0.0, 1.0), shot(&scene, Some(0), 1.0, 1.0));
+    let mut scene = one_node_behind_another();
+    scene.outer_inner = scene.outer_outer - 0.08;
+    for node in &mut scene.nodes {
+        node.melody_level = 0.0;
+        node.bass_level = 0.0;
     }
+    scene.view.shadow = one_shadow(1.0, 0.18);
+    scene.view.shadow.lattice_text.width = 0.0;
+    scene.view.shadow.lattice_text.depth = 0.0;
+    scene.view.glow_reach = 0.0;
+    scene.view.note_bloom = 0.0;
+    let center = on_screen(&scene, SCENE_SIZE, scene.nodes[0].world_pos);
+    let rect = [center.x - 4.0, center.y - 6.0, 64.0, 12.0];
+    let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
+    let mut shot = |scene: &Scene, owner: Option<u32>, hide_behind: f32, depth: f32| {
+        let labels =
+            owner.map_or_else(LatticeLabels::default, |node| names(vec![(node, vec![glyph])]));
+        shooter.draw_modified(scene, labels, |cb| {
+            cb.uniforms.geometry_shadow.occlusion = hide_behind;
+            cb.uniforms.geometry_shadow.depth = depth;
+        })
+    };
+    // The reference is the same live field with Hide behind at 0, which
+    // hides nothing, and the reading is at the whole bar. The ordinary
+    // node shadow does not reach a name (the Darkness reading below holds
+    // it to that), so the two differ by occlusion alone.
+    let bare_old = shot(&scene, None, 0.0, 1.0);
+    let rear_old = shot(&scene, Some(1), 0.0, 1.0);
+    let bare = shot(&scene, None, 1.0, 1.0);
+    let rear = shot(&scene, Some(1), 1.0, 1.0);
+    let faded = (0..rear.len())
+        .step_by(4)
+        .filter(|&i| {
+            let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
+            let new = i32::from(rear[i]) - i32::from(bare[i]);
+            old > 32 && old - new > 6
+        })
+        .count();
+    assert!(faded > 30, "only {faded} rear-label pixels faded");
+    // Subtract the front-only contribution so foreground ink cannot
+    // count as a hidden label. A faint skirt alone is not occlusion.
+    let mostly_hidden = (0..rear.len())
+        .step_by(4)
+        .filter(|&i| {
+            let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
+            let new = i32::from(rear[i]) - i32::from(bare[i]);
+            old > 32 && new >= 0 && new * 2 < old
+        })
+        .count();
+    assert!(
+        mostly_hidden > 30,
+        "a wide Gaussian hid most of only {mostly_hidden} rear-label pixels"
+    );
+    // A black clear with no glow or text shadows gives the ordinary node
+    // shadow nothing to darken except misplaced ink. The hiding followed
+    // Darkness after #1288 and is Hide behind's alone now, so at the whole
+    // bar Darkness moves no pixel of the rear name.
+    let (none, full) = (shot(&scene, Some(1), 1.0, 0.0), shot(&scene, Some(1), 1.0, 0.8));
+    let label = |i: usize| i32::from(rear_old[i * 4]) - i32::from(bare_old[i * 4]) > 32;
+    let probed = (0..none.len() / 4).filter(|&i| label(i)).count();
+    let moved = (0..none.len() / 4)
+        .filter(|&i| label(i) && (0..3).any(|k| none[i * 4 + k].abs_diff(full[i * 4 + k]) > 2))
+        .count();
+    assert!(probed > 30, "the rear name covers only {probed} pixels");
+    assert_eq!(
+        moved, 0,
+        "Darkness moved {moved} of the rear name's {probed} pixels, so its \
+         hiding still follows the shadow"
+    );
+    // And through the label-free bloom attachment, beside the light
+    // Darkness the fixture is dialled to: more Hide behind hides more of
+    // the rear name and never less.
+    for bloom in [0.0, 1.0] {
+        scene.view.note_bloom = bloom;
+        let faint = shot(&scene, Some(1), 0.18, 0.18);
+        let deep = shot(&scene, Some(1), 1.0, 0.18);
+        let pairs = || faint.chunks_exact(4).zip(deep.chunks_exact(4));
+        let hidden_more = pairs().filter(|(f, d)| brightness(f) - brightness(d) > 6).count();
+        let brighter = pairs().filter(|(f, d)| brightness(d) > brightness(f) + 1).count();
+        assert!(
+            hidden_more > 30,
+            "bloom={bloom}: more Hide behind hid only {hidden_more} more rear-label pixels"
+        );
+        assert_eq!(brighter, 0, "bloom={bloom}: more Hide behind left rear text brighter");
+    }
+    scene.view.note_bloom = 0.0;
+    let front_old = shot(&scene, Some(0), 0.0, 1.0);
+    let front = shot(&scene, Some(0), 1.0, 1.0);
+    let solid: Vec<_> =
+        (0..front.len()).step_by(4).filter(|&i| front_old[i] > 250 && bare_old[i] < 200).collect();
+    assert!(solid.len() > 100, "the foreground label must contain solid white ink");
+    for i in solid {
+        assert_eq!(&front[i..i + 3], &front_old[i..i + 3], "a node occluded its own name");
+    }
+    // Reuse the pane after removing the foreground node. The label row
+    // has no shadow cell, but still must end its receiver link at zero.
+    scene.nodes.remove(0);
+    rows_per_node(&mut scene);
+    assert_eq!(shot(&scene, Some(0), 0.0, 1.0), shot(&scene, Some(0), 1.0, 1.0));
 }

@@ -142,32 +142,24 @@
         ),
         shadow: (
             lattice_geometry: (
-                kernel: Gaussian,
                 width: 0.56884766,
                 spread: 0.0,
                 depth: 0.28412917,
-                falloff: -2.1300402,
             ),
             lattice_text: (
-                kernel: Gaussian,
                 width: 0.18586679,
                 spread: 0.12944113,
                 depth: 0.26117995,
-                falloff: -4.0,
             ),
             spectral_geometry: (
-                kernel: Gaussian,
                 width: 1.8736789,
                 spread: 0.11916101,
                 depth: 0.82522184,
-                falloff: -2.6193242,
             ),
             spectral_text: (
-                kernel: Gaussian,
                 width: 0.64285713,
                 spread: 0.13580954,
                 depth: 0.632661,
-                falloff: -4.0,
             ),
         ),
         hide_behind: 1.0,

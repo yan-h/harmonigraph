@@ -47,13 +47,10 @@ pub(crate) enum CellDraw {
         count: u32,
     },
     Text {
-        coverage: wgpu::RenderPipeline,
-        distance: wgpu::RenderPipeline,
-        distance_pad: wgpu::RenderPipeline,
+        pipeline: wgpu::RenderPipeline,
         locals: wgpu::BindGroup,
         glyphs: wgpu::Buffer,
         count: u32,
-        kernel: harmonigraph_scene::ShadowKernel,
     },
     Dot {
         pipeline: wgpu::RenderPipeline,
@@ -84,8 +81,6 @@ struct ProducerRange {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ScheduleStats {
     pub blur_chains: u32,
-    /// Bit zero is Distance and bit one is Gaussian.
-    pub renderer_kinds: u8,
     pub groups: u32,
 }
 
@@ -263,10 +258,6 @@ fn finish_for_pass(
         device.limits().max_texture_dimension_2d,
     );
     let has_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
-    let has_gaussian = packed
-        .boxes
-        .iter()
-        .any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
 
     if packed.boxes.len() > surface.box_capacity {
         surface.box_capacity = packed.boxes.len().next_power_of_two();
@@ -287,22 +278,14 @@ fn finish_for_pass(
     }
 
     surface.ranges.clear();
-    let mut renderer_kinds = 0;
     for (submission, start) in surface.submissions.iter().zip(starts) {
         let count = submission.casters.len() as u32;
         let active = packed.casters[start as usize..(start + count) as usize]
             .iter()
             .any(|caster| caster.shade[0] > 0.0);
-        for caster in &packed.casters[start as usize..(start + count) as usize] {
-            if caster.shade[0] > 0.0 {
-                renderer_kinds |=
-                    if caster.shade[1] >= 0.5 * shadow::DISTANCE_KIND { 1 } else { 2 };
-            }
-        }
         surface.ranges.insert(submission.key, ProducerRange { start, count, active });
     }
-    surface.stats =
-        ScheduleStats { blur_chains: 0, renderer_kinds, groups: surface.submissions.len() as u32 };
+    surface.stats = ScheduleStats { blur_chains: 0, groups: surface.submissions.len() as u32 };
 
     if has_cells {
         if surface.target.as_ref().is_none_or(|target| !target.holds(packed.size)) {
@@ -314,8 +297,6 @@ fn finish_for_pass(
                 [packed.size[0].max(held[0]), packed.size[1].max(held[1])],
             ));
         }
-        let target = surface.target.as_mut().expect("created above");
-        target.ensure_half(device, &layouts.atlas, &sampler, has_gaussian);
     } else {
         surface.target = None;
     }
@@ -347,24 +328,9 @@ fn finish_for_pass(
                         pass.set_vertex_buffer(1, boxes);
                         pass.draw(0..4, 0..*count);
                     }
-                    CellDraw::Text {
-                        coverage,
-                        distance,
-                        distance_pad,
-                        locals,
-                        glyphs,
-                        count,
-                        kernel,
-                    } => {
+                    CellDraw::Text { pipeline, locals, glyphs, count } => {
+                        pass.set_pipeline(pipeline);
                         pass.set_bind_group(0, locals, &[]);
-                        if kernel.is_distance() {
-                            pass.set_pipeline(distance_pad);
-                            pass.set_vertex_buffer(0, boxes);
-                            pass.draw(0..4, 0..range.count);
-                            pass.set_pipeline(distance);
-                        } else {
-                            pass.set_pipeline(coverage);
-                        }
                         pass.set_vertex_buffer(0, glyphs.slice(..));
                         pass.set_vertex_buffer(1, boxes);
                         pass.draw(0..4, 0..*count);
@@ -381,10 +347,8 @@ fn finish_for_pass(
                 }
             }
         }
-        if has_gaussian {
-            target.blur(encoder, (&blur_x, &blur_y), &surface.boxes, packed.boxes.len() as u32);
-            surface.stats.blur_chains += 1;
-        }
+        target.blur(encoder, (&blur_x, &blur_y), &surface.boxes, packed.boxes.len() as u32);
+        surface.stats.blur_chains += 1;
     }
     surface.submissions.clear();
 }
@@ -470,12 +434,7 @@ mod tests {
     use super::*;
     use crate::gpu_harness::headless_device;
 
-    fn submit(
-        device: &wgpu::Device,
-        resources: &mut CallbackResources,
-        key: ProducerKey,
-        kernel: harmonigraph_scene::ShadowKernel,
-    ) {
+    fn submit(device: &wgpu::Device, resources: &mut CallbackResources, key: ProducerKey) {
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("spectral_shadow_schedule_test_uniform"),
             size: 16,
@@ -492,11 +451,7 @@ mod tests {
                     rect: [8.0, 8.0, 12.0, 12.0],
                     level: 1.0,
                     sigma_points: 2.0,
-                    kernel,
-                    falloff: 1.0,
                     spread_points: 0.0,
-                    direct_distance: false,
-                    distance_kind: crate::shadow::DistanceKind::Signed,
                 }],
                 draw: CellDraw::None,
                 atlas_uniform: uniform,
@@ -540,11 +495,7 @@ mod tests {
                         rect: [8.0, 8.0, 12.0, 12.0],
                         level: 1.0,
                         sigma_points: 2.0,
-                        kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                        falloff: 1.0,
                         spread_points: 0.0,
-                        direct_distance: false,
-                        distance_kind: crate::shadow::DistanceKind::Signed,
                     }],
                     draw: CellDraw::None,
                     atlas_uniform: uniform(),
@@ -586,52 +537,19 @@ mod tests {
     }
 
     #[test]
-    fn two_gaussian_groups_dispatch_one_blur_chain_and_mixed_dispatches_two_kinds() {
+    fn two_groups_dispatch_one_blur_chain() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
 
-        submit(
-            &device,
-            &mut resources,
-            ProducerKey::Roll(1),
-            harmonigraph_scene::ShadowKernel::Gaussian,
-        );
-        submit(
-            &device,
-            &mut resources,
-            ProducerKey::Text(2),
-            harmonigraph_scene::ShadowKernel::Gaussian,
-        );
+        submit(&device, &mut resources, ProducerKey::Roll(1));
+        submit(&device, &mut resources, ProducerKey::Text(2));
         let mut encoder = device.create_command_encoder(&Default::default());
         finish(&device, &queue, &screen, &mut encoder, &mut resources, 7);
         queue.submit([encoder.finish()]);
-        assert_eq!(
-            stats(&resources, 7),
-            ScheduleStats { blur_chains: 1, renderer_kinds: 2, groups: 2 }
-        );
-
-        submit(
-            &device,
-            &mut resources,
-            ProducerKey::Roll(1),
-            harmonigraph_scene::ShadowKernel::Distance,
-        );
-        submit(
-            &device,
-            &mut resources,
-            ProducerKey::Text(2),
-            harmonigraph_scene::ShadowKernel::Gaussian,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        finish(&device, &queue, &screen, &mut encoder, &mut resources, 7);
-        queue.submit([encoder.finish()]);
-        assert_eq!(
-            stats(&resources, 7),
-            ScheduleStats { blur_chains: 1, renderer_kinds: 3, groups: 2 }
-        );
+        assert_eq!(stats(&resources, 7), ScheduleStats { blur_chains: 1, groups: 2 });
 
         for surface in [11, 12] {
             let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -651,11 +569,7 @@ mod tests {
                             rect: [8.0, 8.0, 12.0, 12.0],
                             level: 1.0,
                             sigma_points: 2.0,
-                            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                            falloff: 1.0,
                             spread_points: 0.0,
-                            direct_distance: false,
-                            distance_kind: crate::shadow::DistanceKind::Signed,
                         }],
                         draw: CellDraw::None,
                         atlas_uniform: uniform.clone(),

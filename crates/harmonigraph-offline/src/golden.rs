@@ -440,12 +440,12 @@ fn pinned_stars_draw_the_reduced_frame_on_record() {
     check_take("spectrogram-starfield-reduced", shot, take);
 }
 
-/// A non-vacuous Step 7 frame: held roll notes use the Gaussian geometry
-/// route while their labels and the axis use the Distance text route. The
+/// A non-vacuous spectral-shadow frame: held roll notes cast the geometry
+/// group's shadow while their labels and the axis cast the text group's. The
 /// pair lands through separate pane compositors, so this is also the frame
 /// that catches either old under-body black or the skin knockout being lost.
 #[test]
-fn mixed_spectral_shadows_draw_the_frame_on_record() {
+fn spectral_shadows_draw_the_frame_on_record() {
     let shot = Shot { size: [320, 200], range: (48.0, 84.0) };
     let mut appearance = pinned_look();
     appearance.spectrum.atmosphere.color_pickup = 0.0;
@@ -455,18 +455,9 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
     appearance.spectrum.roll_seconds = WINDOW;
     appearance.render.spectrogram = SpectrogramRender::Scrolling;
     (appearance.spectrum.low_midi, appearance.spectrum.high_midi) = shot.range;
-    appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
-        kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-        width: 0.75,
-        depth: 0.85,
-        ..Default::default()
-    };
-    appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
-        kernel: harmonigraph_scene::ShadowKernel::Distance,
-        width: 0.75,
-        depth: 0.85,
-        ..Default::default()
-    };
+    let style = harmonigraph_scene::ShadowStyle { width: 0.75, depth: 0.85, ..Default::default() };
+    appearance.view.shadow.spectral_geometry = style;
+    appearance.view.shadow.spectral_text = style;
     let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()
         .map(|note| NoteRecord {
@@ -485,7 +476,7 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         truncated: false,
         incomplete: None,
     };
-    check_take("spectrogram-spectral-shadows-mixed", shot, take);
+    check_take("spectrogram-spectral-shadows", shot, take);
 }
 
 /// Frames per second the cost measurement renders at.
@@ -610,127 +601,6 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     );
     let span = last.zip(first).map_or(0.0, |(l, f)| l.duration_since(f).as_secs_f64() * 1000.0);
     Some((span / frames as f64, frames))
-}
-
-/// Milliseconds a mixed roll-and-label frame takes through one pair of
-/// spectral shadow routes. Device and pipeline startup sit before the clock;
-/// the timed span is the shipping render, submit and readback path.
-fn spectral_shadow_frame_ms(
-    geometry: harmonigraph_scene::ShadowKernel,
-    text: harmonigraph_scene::ShadowKernel,
-) -> Option<(f64, u64)> {
-    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
-    state.appearance.spectrum.atmosphere.color_pickup = 0.0;
-    state.appearance.spectrum.atmosphere.color_release = 0.0;
-    state.appearance.spectrum.show_roll = true;
-    state.appearance.spectrum.roll_fraction = 0.65;
-    state.appearance.spectrum.roll_seconds = WINDOW;
-    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
-    (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi) = (48.0, 84.0);
-    state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
-        kernel: geometry,
-        width: 0.75,
-        depth: 0.85,
-        ..Default::default()
-    };
-    state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
-        kernel: text,
-        width: 0.75,
-        depth: 0.85,
-        ..Default::default()
-    };
-    let notes: Vec<_> = [60u8, 64, 67, 72]
-        .into_iter()
-        .map(|note| NoteRecord {
-            source: 0,
-            t: 0.0,
-            channel: 0,
-            note,
-            kind: NoteKind::On { velocity: 0.85 },
-        })
-        .collect();
-    let take = Take {
-        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
-        events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
-        params: Vec::new(),
-        configurations: Vec::new(),
-        truncated: false,
-        incomplete: None,
-    };
-    let settings = Settings {
-        layout: crate::frames::single_pane(harmonigraph_ui::Pane::Spectral),
-        size: [640, 400],
-        pixels_per_point: 2.0,
-        fps: TIMING_FPS,
-        start: 0.0,
-        end: SECONDS,
-        audio_start: 0.0,
-    };
-    let mut audio = probe_audio();
-    let mut replay = Replay::new(take);
-    let mut seen = 0u64;
-    let mut first: Option<std::time::Instant> = None;
-    let mut last = None;
-    let mut frames = 0u64;
-    let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
-    match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
-        seen += 1;
-        if seen <= WARMUP {
-            return Ok(frame);
-        }
-        let now = std::time::Instant::now();
-        if first.is_none() {
-            first = Some(now);
-        } else {
-            frames += 1;
-        }
-        last = Some(now);
-        Ok(frame)
-    }) {
-        Ok(_) => {}
-        Err(e) if e.contains("no usable GPU adapter") => return None,
-        Err(e) => panic!("{e}"),
-    }
-    assert!(frames > 0, "the spectral timing fixture rendered no timed interval");
-    let span = last.zip(first).map_or(0.0, |(l, f)| l.duration_since(f).as_secs_f64() * 1000.0);
-    Some((span / frames as f64, frames))
-}
-
-/// End-to-end cost of the three routes Step 7 can schedule in one frame.
-///
-/// `#[ignore]`, and it asserts nothing: the numbers belong to the Metal device
-/// that ran them. Five interleaved rounds keep gradual machine drift from
-/// belonging to one route merely because it always ran last.
-#[test]
-#[ignore]
-fn what_the_spectral_shadow_routes_cost_a_frame() {
-    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
-
-    const ROUTES: [(&str, harmonigraph_scene::ShadowKernel, harmonigraph_scene::ShadowKernel); 3] = [
-        ("all Distance", Distance, Distance),
-        ("all Gaussian", Gaussian, Gaussian),
-        ("mixed G/D", Gaussian, Distance),
-    ];
-    const REPS: usize = 5;
-    let mut runs = [const { Vec::new() }; 3];
-    let mut frames = 0;
-    for rep in 0..REPS {
-        for step in 0..ROUTES.len() {
-            let slot = (rep + step) % ROUTES.len();
-            let (_, geometry, text) = ROUTES[slot];
-            let Some((ms, n)) = spectral_shadow_frame_ms(geometry, text) else {
-                eprintln!("no usable GPU adapter; spectral shadow timing skipped");
-                return;
-            };
-            runs[slot].push(ms);
-            frames = n;
-        }
-    }
-    eprintln!("\n== spectral shadow route cost at 640x400, 2 ppp ({frames} intervals) ==");
-    for (slot, (name, _, _)) in ROUTES.iter().enumerate() {
-        runs[slot].sort_by(f64::total_cmp);
-        eprintln!("{name:>12}: {:.3} ms/frame", runs[slot][REPS / 2]);
-    }
 }
 
 /// One size's readings: the three configurations' own medians, and the two

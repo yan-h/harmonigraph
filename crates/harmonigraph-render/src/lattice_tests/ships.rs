@@ -115,23 +115,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // idle branch does is now pinned by
     // `a_silent_lattice_ships_no_nodes_and_still_draws_its_markers` instead,
     // on the CPU side where the decision actually lives.
-    // The wide Shadow again on the DISTANCE row, which is the only way the
-    // kind branch reaches this comparison at all. `shadow_kernel` walks its
-    // terms inside the same fragment the early-outs guard, so a skip sized off
-    // a blur's reach and a row that reaches further is a shadow clipped flat in
-    // the fast pipeline alone — and #508's finding 3 is that `fs_node_cell` has
-    // an early-out of its own, which every fixture above compiles on one row.
-    let distance = |mut scene: Scene| {
-        for style in scene.view.shadow.groups_mut() {
-            style.width = 0.6;
-            style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-        }
-        scene
-    };
-    // The cell's OTHER analytic kind, a Gaussian grown before its blur
-    // (`GAUSSIAN_SPREAD_KIND`), at about the live picture's own spread.
+    // The wide Shadow again, grown before its blur (`spread_union`) at
+    // about the live picture's own spread. A spread cell is the only ANALYTIC
+    // one, which is the only way `cell_reach`'s skip reaches this comparison at
+    // all — and #508's finding 3 is that `fs_node_cell` has an early-out of
+    // its own, which every unspread fixture here compiles past.
     let spread = |mut scene: Scene| {
         for style in scene.view.shadow.groups_mut() {
+            style.width = 0.6;
             style.spread = 0.062;
         }
         scene
@@ -161,7 +152,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     };
     // Lit slices thinned and swelled (`slice_reach`), which the band's
     // early-out has to let run past the band's edge and the marks' per-slot
-    // strips skip on radii of their own (`drawn_marks`); on both rows.
+    // strips skip on radii of their own (`drawn_marks`); on both kinds of cell.
     let shaped = |mut scene: Scene| {
         for (i, node) in scene.nodes.iter_mut().enumerate() {
             for (slot, thickness) in node.thickness.iter_mut().enumerate() {
@@ -177,15 +168,14 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     for (name, scene, analytic) in [
         ("lit", parity_scene(), false),
         ("shaped slices", shaped(wide_shadow()), false),
-        ("shaped slices on a distance row", shaped(distance(parity_scene())), true),
-        ("shaped slices under a spread Gaussian", shaped(spread(wide_shadow())), true),
+        ("shaped slices under a spread Gaussian", shaped(spread(parity_scene())), true),
         ("ringing", ringing(), false),
-        ("a ring outside the band on a distance row", distance(ring_outside()), true),
+        ("a ring outside the band under a spread Gaussian", spread(ring_outside()), true),
         ("folded", folded(), false),
         ("a wide shadow", wide_shadow(), false),
         ("a lit field", lit_field(), false),
-        ("a distance row", distance(parity_scene()), true),
-        ("moving slices on a distance row", moving(distance(parity_scene())), true),
+        ("a spread Gaussian", spread(parity_scene()), true),
+        ("moving slices under a spread Gaussian", moving(spread(parity_scene())), true),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -354,7 +344,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             .collect();
         assert!(!cast.is_empty(), "the {name} fixture cast no node cell");
         assert_eq!(
-            cast.iter().all(|c| c.kernel.is_distance() || c.spread_points > 0.0),
+            cast.iter().all(|c| c.spread_points > 0.0),
             analytic,
             "the {name} fixture's node cells are not the kind it is listed with",
         );
@@ -1006,7 +996,7 @@ fn offscreen_halos_draw_only_where_their_footprint_reaches() {
         let mut scene = single_marked_node(0, 0);
         scene.view.glow_reach = 0.8;
         scene.view.glow_strength = 1.5;
-        scene.view.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+        scene.view.shadow = one_shadow(0.0, 0.0);
         let mut roamer = scene.nodes[0];
         roamer.world_pos = glam::Vec3::new((centre_x - scale.0) / scale.1, 0.0, 0.0);
         roamer.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);

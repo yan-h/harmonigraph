@@ -1251,7 +1251,6 @@ mod tests {
     #[test]
     fn preview_shadows_keep_the_exports_relative_reach_without_changing_the_dials() {
         use harmonigraph_render::spectral_shadow_reach;
-        use harmonigraph_scene::ShadowKernel;
 
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         // The split of 2026-09-26, whose seam the spectral pane's child Ui
@@ -1268,66 +1267,61 @@ mod tests {
                 let pixels = state.appearance.render.frame.pixels(short_edge);
                 let export_width =
                     pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
-                for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
-                    state.appearance.view.shadow.spectral_geometry.kernel = kernel;
-                    state.appearance.view.shadow.spectral_text.kernel = kernel;
-                    state.appearance.view.shadow.spectral_geometry.width =
-                        harmonigraph_scene::SPECTRAL_SHADOW_MAX;
-                    state.appearance.view.shadow.spectral_text.width =
-                        harmonigraph_scene::SPECTRAL_SHADOW_MAX;
-                    state.appearance.view.shadow.spectral_geometry.spread = 0.2;
-                    state.appearance.view.shadow.spectral_text.spread = 0.2;
-                    let saved = state.appearance.view.shadow;
-                    for ratio in [0.25, 1.0, 1.25, 2.0] {
-                        let width = export_width * ratio;
-                        let scale = preview_scale(width, &state.appearance.render);
-                        for style in [saved.spectral_geometry, saved.spectral_text] {
-                            let reach = spectral_shadow_reach(style, 1.0);
-                            assert!(reach > 0.0, "both shadow groups must cast");
-                            assert!(
-                                (spectral_shadow_reach(style, scale) / width
-                                    - reach / export_width)
-                                    .abs()
-                                    < 1e-6
-                            );
-                        }
+                state.appearance.view.shadow.spectral_geometry.width =
+                    harmonigraph_scene::SPECTRAL_SHADOW_MAX;
+                state.appearance.view.shadow.spectral_text.width =
+                    harmonigraph_scene::SPECTRAL_SHADOW_MAX;
+                state.appearance.view.shadow.spectral_geometry.spread = 0.2;
+                state.appearance.view.shadow.spectral_text.spread = 0.2;
+                let saved = state.appearance.view.shadow;
+                for ratio in [0.25, 1.0, 1.25, 2.0] {
+                    let width = export_width * ratio;
+                    let scale = preview_scale(width, &state.appearance.render);
+                    for style in [saved.spectral_geometry, saved.spectral_text] {
+                        let reach = spectral_shadow_reach(style, 1.0);
+                        assert!(reach > 0.0, "both shadow groups must cast");
+                        assert!(
+                            (spectral_shadow_reach(style, scale) / width - reach / export_width)
+                                .abs()
+                                < 1e-6
+                        );
                     }
-                    // Exercise the actual draw too: it must not change the
-                    // settings that the dock and a subsequent export will read.
-                    let ctx = egui::Context::default();
-                    crate::theme::apply_theme(&ctx);
-                    let output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(480.0, 1200.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| render_pane(ui, &mut state, &mut crate::Interaction::default(), 0.0),
-                    );
-                    let callback_rects: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|s| {
-                            if let egui::Shape::Callback(callback) = &s.shape {
-                                callback.rect.is_positive().then_some(callback.rect)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    // The lattice callback alone is not evidence that the
-                    // spectral arm ran. Both panes must emit callbacks in
-                    // their separate regions of the composed frame.
-                    assert!(
-                        callback_rects
-                            .iter()
-                            .any(|a| callback_rects.iter().any(|b| !a.intersect(*b).is_positive())),
-                        "fixture must reach both preview panes, got {callback_rects:?}"
-                    );
-                    assert_eq!(state.appearance.view.shadow, saved);
                 }
+                // Exercise the actual draw too: it must not change the
+                // settings that the dock and a subsequent export will read.
+                let ctx = egui::Context::default();
+                crate::theme::apply_theme(&ctx);
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(480.0, 1200.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| render_pane(ui, &mut state, &mut crate::Interaction::default(), 0.0),
+                );
+                let callback_rects: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| {
+                        if let egui::Shape::Callback(callback) = &s.shape {
+                            callback.rect.is_positive().then_some(callback.rect)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                // The lattice callback alone is not evidence that the
+                // spectral arm ran. Both panes must emit callbacks in
+                // their separate regions of the composed frame.
+                assert!(
+                    callback_rects
+                        .iter()
+                        .any(|a| callback_rects.iter().any(|b| !a.intersect(*b).is_positive())),
+                    "fixture must reach both preview panes, got {callback_rects:?}"
+                );
+                assert_eq!(state.appearance.view.shadow, saved);
             }
         }
     }

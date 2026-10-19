@@ -45,13 +45,7 @@ fn poisoned_view() -> ViewConfig {
         chroma_ramp: nan,
         bend: Bend { at: nan, share: nan, ..Bend::default() },
     };
-    let shadow = ShadowStyle {
-        kernel: base.shadow.lattice_geometry.kernel,
-        width: nan,
-        spread: nan,
-        depth: nan,
-        falloff: nan,
-    };
+    let shadow = ShadowStyle { width: nan, spread: nan, depth: nan };
     ViewConfig {
         extent_threes: 3,
         extent_fives: 3,
@@ -190,11 +184,10 @@ impl Floats {
     }
 
     fn shadow(&mut self, name: &str, style: &ShadowStyle) {
-        let ShadowStyle { kernel: _, width, spread, depth, falloff } = style;
+        let ShadowStyle { width, spread, depth } = style;
         self.one(format!("{name}.width"), *width);
         self.one(format!("{name}.spread"), *spread);
         self.one(format!("{name}.depth"), *depth);
-        self.one(format!("{name}.falloff"), *falloff);
     }
 }
 

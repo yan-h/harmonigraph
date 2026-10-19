@@ -12,26 +12,14 @@ use harmonigraph_core::{NoteTracker, Tuning};
 /// invisible at its declaration, and this is what sees it.
 #[test]
 fn the_shadow_controls_keep_one_range_at_both_doors() {
-    for (asked_width, widths, asked_spread, spread, asked_depth, depth, asked_falloff, falloff) in [
-        (-1.0, [0.0; 4], -0.5, 0.0, -0.5, 0.0, -9.0, SHADOW_FALLOFF_MIN),
-        (2.0, [1.0, 1.0, 2.0, 2.0], 0.17, 0.17, 0.8, 0.8, 1.0, 1.0),
-        (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
-        (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 3.0, 1.0, 9.0, SHADOW_FALLOFF_MAX),
+    for (asked_width, widths, asked_spread, spread, asked_depth, depth) in [
+        (-1.0, [0.0; 4], -0.5, 0.0, -0.5, 0.0),
+        (2.0, [1.0, 1.0, 2.0, 2.0], 0.17, 0.17, 0.8, 0.8),
+        (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0),
+        (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 3.0, 1.0),
     ] {
-        let asked = ShadowStyle {
-            width: asked_width,
-            spread: asked_spread,
-            depth: asked_depth,
-            falloff: asked_falloff,
-            ..ShadowStyle::default()
-        };
-        let want = widths.map(|width| ShadowStyle {
-            width,
-            spread,
-            depth,
-            falloff,
-            ..ShadowStyle::default()
-        });
+        let asked = ShadowStyle { width: asked_width, spread: asked_spread, depth: asked_depth };
+        let want = widths.map(|width| ShadowStyle { width, spread, depth });
         let mut view = ViewConfig {
             shadow: ShadowSettings {
                 lattice_geometry: asked,
@@ -55,13 +43,9 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
 }
 
 #[test]
-fn gaussian_spread_uses_resolved_width_and_contour_ignores_it() {
-    let style = ShadowStyle { kernel: ShadowKernel::Gaussian, spread: 0.17, ..Default::default() };
+fn gaussian_spread_uses_resolved_width() {
+    let style = ShadowStyle { spread: 0.17, ..Default::default() };
     assert!((style.gaussian_spread_points(6.0) - 2.04).abs() < 1e-6);
-    assert_eq!(
-        ShadowStyle { kernel: ShadowKernel::Distance, ..style }.gaussian_spread_points(6.0),
-        0.0
-    );
     assert_eq!(ShadowStyle { spread: f32::NAN, ..style }.gaussian_spread_points(6.0), 0.0);
     assert_eq!(ShadowStyle { spread: 2.0, ..style }.gaussian_spread_points(6.0), 12.0);
 }
@@ -92,43 +76,4 @@ fn a_group_with_either_bar_at_its_bottom_casts_nothing() {
     assert!(fresh.casts(), "the fresh style casts nothing");
     assert!(!ShadowStyle { width: 0.0, ..fresh }.casts(), "a group at no width still casts");
     assert!(!ShadowStyle { depth: 0.0, ..fresh }.casts(), "a group at no depth still casts");
-}
-
-/// The full slider range has fixed endpoints, decreases monotonically, and
-/// keeps one curvature sign. Include both sides of the near-linear series.
-#[test]
-fn falloff_runs_from_early_through_linear_to_late_without_inflections() {
-    for falloff in
-        (-60..=60).map(|i| i as f32 / 10.0).chain([-0.051, -0.049, -0.001, 0.001, 0.049, 0.051])
-    {
-        assert_eq!(standoff_level(falloff, 0.0), 1.0);
-        assert_eq!(standoff_level(falloff, 1.0), 0.0);
-        assert_eq!(standoff_level(falloff, 2.0), 0.0);
-        let samples: Vec<_> = (0..=64).map(|i| standoff_level(falloff, i as f32 / 64.0)).collect();
-        for pair in samples.windows(2) {
-            assert!(pair[0] >= pair[1], "falloff {falloff} rises: {pair:?}");
-        }
-        for triple in samples.windows(3) {
-            let curvature = triple[0] - 2.0 * triple[1] + triple[2];
-            assert!(
-                curvature * falloff.signum() <= 4.0e-7,
-                "falloff {falloff} inflects: {triple:?}"
-            );
-        }
-        for (i, &level) in samples.iter().enumerate() {
-            let u = i as f32 / 64.0;
-            let k = -f64::from(falloff);
-            let exact = if k == 0.0 {
-                1.0 - f64::from(u)
-            } else {
-                (k * (1.0 - f64::from(u))).exp_m1() / k.exp_m1()
-            };
-            assert!((f64::from(level) - exact).abs() < 2.0e-6);
-            if falloff == 0.0 {
-                assert_eq!(level, 1.0 - u);
-            }
-        }
-    }
-    assert!(standoff_level(SHADOW_FALLOFF_MIN, 0.5) < 0.05);
-    assert!(standoff_level(SHADOW_FALLOFF_MAX, 0.5) > 0.95);
 }
