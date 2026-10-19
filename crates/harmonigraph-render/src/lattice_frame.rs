@@ -36,7 +36,7 @@ pub(crate) struct FrameVecs {
     pub(super) walk: Walk,
 }
 
-/// What [`LatticeCallback::from_scene`] works in and nothing reads after it.
+/// What [`LatticeCallback::from_scene_in`] works in and nothing reads after it.
 #[derive(Default)]
 pub(crate) struct Walk {
     order: Vec<(f32, f32, usize, bool, bool)>,
