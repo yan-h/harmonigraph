@@ -192,6 +192,23 @@ mod tests {
         let (labels, dots) = drawn(room_for(2), 3);
         assert_eq!(labels.last().map(String::as_str), Some("Colors"), "{labels:?}");
         assert_eq!(dots, 0, "the named overflow button still drew dots");
+        // In the tabs' weight, being one of them.
+        let mut value = 3;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(room_for(2), 60.0), |ui| {
+            tab_strip(ui, "tabs", &mut value, &TABS)
+        })
+        .shapes;
+        let family = shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Colors" => {
+                Some(t.galley.job.sections[0].format.font_id.family.clone())
+            }
+            _ => None,
+        });
+        let heading = crate::tests::probe::themed().global_style().text_styles
+            [&egui::TextStyle::Heading]
+            .family
+            .clone();
+        assert_eq!(family, Some(heading), "the named overflow button is not in the tabs' weight");
     }
 
     /// Where not one tab fits, the strip is the named overflow button alone,
@@ -224,7 +241,7 @@ mod tests {
     /// next, so a label free to wrap would stay inside the first width.
     #[test]
     fn the_overflow_menu_grows_to_fit_a_longer_hidden_tab() {
-        const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Ab")];
+        const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Abc")];
         let ctx = crate::tests::probe::themed();
         let mut value = 0;
         let mut frame = |width: f32, events: Vec<egui::Event>| {

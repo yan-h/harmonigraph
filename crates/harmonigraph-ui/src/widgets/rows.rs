@@ -323,6 +323,11 @@ pub(crate) fn preset_row(
 /// Natural width of a selectable option, using the same font and padding as
 /// the button (or the style `label` carries of its own, as a tab's does). Width
 /// decisions are recomputed from this frame's theme.
+///
+/// No floor under it: egui floors a button's height at `interact_size`, never
+/// its width. Floored, a short option such as "30" was judged up to 22 points
+/// wider than it drew, and a row of them fell back to a dropdown with room to
+/// spare.
 pub(crate) fn option_width(ui: &Ui, label: impl Into<egui::WidgetText>) -> f32 {
     let galley = label.into().into_galley(
         ui,
@@ -330,7 +335,7 @@ pub(crate) fn option_width(ui: &Ui, label: impl Into<egui::WidgetText>) -> f32 {
         f32::INFINITY,
         TextStyle::Button,
     );
-    (galley.size().x + 2.0 * button_margin_x(ui)).max(ui.spacing().interact_size.x)
+    galley.size().x + 2.0 * button_margin_x(ui)
 }
 
 /// A button's margin each side of its content as egui draws it: the padding
@@ -567,7 +572,7 @@ mod tests {
     }
 
     const OPTIONS: [(u8, &str, &str); 3] =
-        [(0, "Perspective", ""), (1, "Orthographic", ""), (2, "Cabinet", "")];
+        [(0, "Perspective", ""), (1, "Orthographic", ""), (2, "30", "")];
 
     /// A choice row's options stand on one button fill spanning them all, so
     /// they read as the control beside the row's name rather than as more words
@@ -607,7 +612,9 @@ mod tests {
 
     /// The width a choice group is judged by is the width it draws, at a
     /// fractional scale too, where egui rounds each button's margin to whole
-    /// points: a group judged to fit and drawn wider overruns its column.
+    /// points, and with an option shorter than egui's interact width, which no
+    /// button is floored at: a group judged to fit and drawn wider overruns its
+    /// column, and one judged wider than it draws folds into a dropdown early.
     #[test]
     fn a_choice_group_draws_the_width_it_was_judged_by() {
         let ctx = crate::tests::probe::themed_scaled(1.1);
