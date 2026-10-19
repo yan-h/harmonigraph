@@ -594,9 +594,7 @@ fn folding_section<R>(
     if let Some((on, hint)) = switch.as_mut() {
         heading_switch(ui, header.rect, on, title).on_hover_text(*hint);
     }
-    crate::widgets::mark_spaced(ui);
-    let top = ui.cursor().min;
-    ui.data_mut(|d| d.insert_temp(section_top_id(), top));
+    crate::widgets::mark_heading(ui);
     // Outside a [`Viewer`] body there is nowhere to keep a fold, so the header
     // stays put rather than hiding its body for the one frame of the click.
     let open = match key {
@@ -795,12 +793,6 @@ pub(crate) const BLOCK_INDENT: f32 = 12.0;
 /// and read as a second indent.
 const BLOCK_LINE_INSET: f32 = 1.5;
 
-/// Where the cursor stood under the last [`section`] heading, so a [`block`]
-/// opening the section knows the heading's gap is already over it.
-fn section_top_id() -> egui::Id {
-    egui::Id::new("section-top")
-}
-
 /// A labelled run of rows inside a section: its name in the heading weight,
 /// [`BLOCK_GAP`] under what is over it, then `rows` [`BLOCK_INDENT`] in under
 /// it. Not a fold — a section is the thing that folds,
@@ -812,42 +804,36 @@ fn section_top_id() -> egui::Id {
 ///
 /// Loose rows in a section come before its blocks, so that a row after a
 /// block is never read as the block's. Returns the title, for a hover.
+///
+/// The rows' child is laid out here rather than by `ui.indent`, whose indent
+/// is the style's and whose guide line stands half of it in; nothing else of
+/// it is wanted. The room under the block is inside the box it allocates, as a
+/// [`label`](crate::widgets::label)'s is: room added after a block ending an
+/// `add_enabled_ui` would stand a row gap too far from what follows.
 pub(super) fn block<R>(
     ui: &mut egui::Ui,
     title: &str,
     rows: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    let at = ui.cursor().min;
-    let top = ui.data(|d| d.get_temp::<egui::Pos2>(section_top_id()));
-    if !top.is_some_and(|top| (top.y - at.y).abs() < 0.5 && top.x > at.x - 0.5) {
-        crate::widgets::group_space_of(ui, BLOCK_GAP);
-    }
+    crate::widgets::group_space_of(ui, BLOCK_GAP);
     let heading = crate::widgets::label(ui, egui::RichText::new(title).heading());
-    // egui indents by the style's indent and draws its line half of it in; the
-    // block draws its own, and a fold inside the rows keeps egui's.
     let scale = crate::theme::ui_scale(ui.ctx());
-    let fold = ui.spacing().indent;
-    let line = ui.visuals().indent_has_left_vline;
-    ui.spacing_mut().indent = BLOCK_INDENT * scale;
-    ui.visuals_mut().indent_has_left_vline = false;
-    let body = ui.indent(title, |ui| {
-        ui.spacing_mut().indent = fold;
-        ui.visuals_mut().indent_has_left_vline = line;
-        rows(ui)
-    });
-    ui.spacing_mut().indent = fold;
-    ui.visuals_mut().indent_has_left_vline = line;
-    if line {
+    let mut region = ui.available_rect_before_wrap();
+    region.min.x += BLOCK_INDENT * scale;
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(title).max_rect(region));
+    let out = rows(&mut child);
+    let body = child.min_rect();
+    if ui.visuals().indent_has_left_vline {
         // Down the rows to where egui stops its own, two points short.
         use egui::emath::GuiRounding as _;
         let x = (heading.rect.left() + BLOCK_LINE_INSET * scale)
             .round_to_pixel_center(ui.pixels_per_point());
-        let rows = body.response.rect;
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-        ui.painter().vline(x, rows.top()..=rows.bottom() - 2.0, stroke);
+        ui.painter().vline(x, body.top()..=body.bottom() - 2.0, stroke);
     }
-    let out = body.inner;
-    crate::widgets::group_end(ui);
+    let under = crate::widgets::room_under(&child);
+    ui.allocate_rect(body.with_max_y(body.bottom() + under), egui::Sense::hover());
+    crate::widgets::mark_spaced(ui);
     egui::InnerResponse::new(out, heading)
 }
 
@@ -886,6 +872,12 @@ mod block_tests {
                 let indent = third.inner.left() - third.response.rect.left();
                 assert!((indent - BLOCK_INDENT).abs() < 0.5, "rows {indent}pt in");
                 last = Some((third.response.rect, third.inner));
+                // Ending a child ui, as a block ending an `add_enabled_ui` does,
+                // it still stands one group's gap over what follows.
+                let ending = ui.scope(|ui| block(ui, "Fourth", row).inner).inner;
+                let gap = row(ui).top() - ending.bottom();
+                let want = crate::widgets::GROUP_GAP;
+                assert!((gap - want).abs() < 0.5, "a row {gap}pt under a scoped block");
             });
         });
         let (title, rows) = last.expect("no third block");

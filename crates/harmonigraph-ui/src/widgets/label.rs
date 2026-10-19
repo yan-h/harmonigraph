@@ -134,12 +134,32 @@ fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")
 }
 
-/// Record that the cursor where `ui` stands already has all the room over the
-/// next thing it should: a section heading's gap, or a [`group_end`].
-/// A [`group_space`] asked for right here adds nothing.
-pub(crate) fn mark_spaced(ui: &Ui) {
+/// What room a [`mark_spaced`] or [`mark_heading`] says is over the cursor.
+#[derive(Clone, Copy, PartialEq)]
+enum Room {
+    /// A group's: [`GROUP_GAP`].
+    Group,
+    /// A section heading's, which stands as far from the first thing under it
+    /// whatever that is: nothing over the cursor asks for more.
+    Heading,
+}
+
+fn mark(ui: &Ui, room: Room) {
     let at = ui.cursor().min;
-    ui.data_mut(|d| d.insert_temp(spaced_id(), at));
+    ui.data_mut(|d| d.insert_temp(spaced_id(), (at, room)));
+}
+
+/// Record that the cursor where `ui` stands already has a group's room over
+/// it: a [`group_end`], or a line of text's own. A [`group_space`] asked for
+/// right here adds nothing.
+pub(crate) fn mark_spaced(ui: &Ui) {
+    mark(ui, Room::Group);
+}
+
+/// Record that the cursor stands under a section heading, which no group's
+/// space adds to — not even a wider one ([`group_space_of`]).
+pub(crate) fn mark_heading(ui: &Ui) {
+    mark(ui, Room::Heading);
 }
 
 /// Room over a group in a column, bringing the row gap up to [`GROUP_GAP`] —
@@ -148,22 +168,25 @@ pub(crate) fn mark_spaced(ui: &Ui) {
 /// its section. Nothing in a row, where space would run sideways; a grid lays
 /// its cells out in rows, so nothing there either.
 pub(crate) fn group_space(ui: &mut Ui) {
-    if ui.layout().is_vertical() && !spaced(ui) {
+    if ui.layout().is_vertical() && spaced(ui).is_none() {
         ui.add_space(extra(ui));
     }
 }
 
 /// Room over a group that stands `gap` points off whatever is over it, at
-/// scale 1, rather than [`GROUP_GAP`] — counting the room a [`mark_spaced`]
-/// already left there, and marked, so the group's own [`group_space`] adds
-/// none on top.
+/// scale 1, rather than [`GROUP_GAP`] — counting the room a mark says is
+/// already there, and marked, so the group's own [`group_space`] adds none on
+/// top. Under a section heading, the heading's gap alone.
 pub(crate) fn group_space_of(ui: &mut Ui, gap: f32) {
     if !ui.layout().is_vertical() {
         return;
     }
-    let scale = crate::theme::ui_scale(ui.ctx());
-    let have = if spaced(ui) { GROUP_GAP * scale } else { ui.spacing().item_spacing.y };
-    ui.add_space((gap * scale - have).max(0.0));
+    let have = match spaced(ui) {
+        Some(Room::Heading) => return,
+        Some(Room::Group) => GROUP_GAP * crate::theme::ui_scale(ui.ctx()),
+        None => ui.spacing().item_spacing.y,
+    };
+    ui.add_space((gap * crate::theme::ui_scale(ui.ctx()) - have).max(0.0));
     mark_spaced(ui);
 }
 
@@ -175,19 +198,29 @@ pub(crate) fn group_end(ui: &mut Ui) {
     if !ui.layout().is_vertical() {
         return;
     }
-    if !spaced(ui) {
-        ui.add_space(extra(ui));
-    }
+    ui.add_space(room_under(ui));
     mark_spaced(ui);
 }
 
-/// Whether [`mark_spaced`] left its mark on the line the cursor stands on, at
-/// or inside its left edge — inside, when the mark was left at the foot of an
-/// indented child: a line ending an open subsection's body.
-fn spaced(ui: &Ui) -> bool {
+/// What a group ending where `ui`'s cursor stands still owes under it: the room
+/// [`group_space`] put over it, or nothing when its last line carries its own.
+/// For a group that keeps the room inside its own box rather than adding it
+/// after, as [`label`] does and for its reason.
+pub(crate) fn room_under(ui: &Ui) -> f32 {
+    if ui.layout().is_vertical() && spaced(ui).is_none() {
+        extra(ui)
+    } else {
+        0.0
+    }
+}
+
+/// The room a mark left on the line the cursor stands on, at or inside its left
+/// edge — inside, when the mark was left at the foot of an indented child: a
+/// line ending an open subsection's body.
+fn spaced(ui: &Ui) -> Option<Room> {
     let at = ui.cursor().min;
-    let mark = ui.data(|d| d.get_temp::<egui::Pos2>(spaced_id()));
-    mark.is_some_and(|m| (m.y - at.y).abs() < 0.5 && m.x > at.x - 0.5)
+    let mark = ui.data(|d| d.get_temp::<(egui::Pos2, Room)>(spaced_id()));
+    mark.filter(|(m, _)| (m.y - at.y).abs() < 0.5 && m.x > at.x - 0.5).map(|(_, room)| room)
 }
 
 /// What a group adds to the row gap to stand [`GROUP_GAP`] off.

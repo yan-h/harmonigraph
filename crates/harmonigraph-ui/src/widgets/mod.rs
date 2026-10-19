@@ -37,7 +37,8 @@ pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub use label::label;
 pub(crate) use label::{
-    cap_trim, group_end, group_space, group_space_of, mark_spaced, text_at, GROUP_GAP,
+    cap_trim, group_end, group_space, group_space_of, mark_heading, mark_spaced, room_under,
+    text_at, GROUP_GAP,
 };
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
