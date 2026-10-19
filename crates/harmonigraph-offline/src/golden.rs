@@ -49,6 +49,10 @@
 //! axis reaches, where this fixture is silent. `the_curve_and_the_heatmap_
 //! read_a_run_of_buckets_alike` is what holds that, and PR B keeps it.
 //!
+//! **Every shot starts from [`harmonigraph_golden::LOOK`]**, never from the
+//! fresh defaults, so a capture of a new DAW look moves none of these frames
+//! and a diff here is something a PR's own code did.
+//!
 //! **A changed golden is a stated picture change**: re-baseline with
 //! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden`, read the
 //! contact sheet it names, and say in the PR body what moved and why. The
@@ -81,7 +85,7 @@ const SECONDS: f64 = 2.0;
 /// short rather than of the heatmap.
 ///
 /// Every fixture that dials it in also pins the render's spectrogram to
-/// Scrolling. The fresh choice is "Fit video", which replaces the span with
+/// Scrolling. The pinned look's choice is "Fit video", which replaces the span with
 /// the render's own length — [`SECONDS`] — so this would be dead and the
 /// window's oldest part the bed.
 const WINDOW: f32 = 1.5;
@@ -262,8 +266,7 @@ impl Shot {
     /// The plain heatmap because that is what the bucket filter's claims were
     /// measured on: #514 predates every effect (#872 added the first). A blur
     /// or a texture over the frame would put a resample of their own
-    /// between the filter and the gate, and the fresh Stars paint a field of
-    /// their own over it.
+    /// between the filter and the gate, and the pinned look carries both.
     fn take(&self) -> Take {
         self.dialled(|a| {
             let atmosphere = &mut a.spectrum.atmosphere;
@@ -276,8 +279,8 @@ impl Shot {
     /// The same take with one further turn of the appearance, for a shot that
     /// is about a setting rather than about the pane.
     fn dialled(&self, tune: impl FnOnce(&mut harmonigraph_ui::AppearanceDocument)) -> Take {
-        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
-        let cfg = &mut state.appearance.spectrum;
+        let mut appearance = pinned_look();
+        let cfg = &mut appearance.spectrum;
         // These established goldens pin the immediate texture response.
         cfg.atmosphere.color_pickup = 0.0;
         cfg.atmosphere.color_release = 0.0;
@@ -288,10 +291,10 @@ impl Shot {
         cfg.roll_fraction = 1.0;
         cfg.roll_seconds = WINDOW;
         (cfg.low_midi, cfg.high_midi) = self.range;
-        state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
-        tune(&mut state.appearance);
+        appearance.render.spectrogram = SpectrogramRender::Scrolling;
+        tune(&mut appearance);
         Take {
-            header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
+            header: Header { appearance: Some(appearance.serialize()), ..Default::default() },
             events: Vec::new(),
             params: Vec::new(),
             configurations: Vec::new(),
@@ -311,6 +314,12 @@ impl Shot {
             audio_start: 0.0,
         }
     }
+}
+
+/// [`harmonigraph_golden::LOOK`], which every shot here is dialled from.
+fn pinned_look() -> harmonigraph_ui::AppearanceDocument {
+    harmonigraph_ui::AppearanceDocument::parse(harmonigraph_golden::LOOK)
+        .expect("the golden look parses")
 }
 
 /// Render `shot` and hold its LAST frame against the one on record.
@@ -383,8 +392,8 @@ fn a_zoomed_in_pane_draws_the_frame_on_record() {
 /// because nothing else
 /// committed here executes `wash_cloud_tone` end to end — the claim tests
 /// beside the shader each turn one dial and compare two frames, where this pins
-/// the whole construction, every constant in it, at the settings the page opens
-/// the texture at.
+/// the whole construction, every constant in it, at the pinned look's settings
+/// for the texture.
 #[test]
 fn the_watercolour_wash_draws_the_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
@@ -394,7 +403,7 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
     check_take("spectrogram-watercolour-wash", shot, take);
 }
 
-/// Scales draw the frame on record, at the settings the page opens them at.
+/// Scales draw the frame on record, at the pinned look's settings for them.
 ///
 /// The one texture with neither a tile nor a starfield: `fs_velvet_tone` into
 /// the tone target, then the composite's one tap. No other frame here reaches
@@ -420,9 +429,10 @@ fn full_resolution_stars_draw_the_frame_on_record() {
     check_take("spectrogram-starfield", shot, take);
 }
 
-/// Fresh Stars settings draw into a reduced image, filtered up into the pane.
+/// The pinned look's Stars settings draw into a reduced image, filtered up
+/// into the pane.
 #[test]
-fn default_stars_draw_the_reduced_frame_on_record() {
+fn pinned_stars_draw_the_reduced_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
@@ -437,21 +447,21 @@ fn default_stars_draw_the_reduced_frame_on_record() {
 #[test]
 fn mixed_spectral_shadows_draw_the_frame_on_record() {
     let shot = Shot { size: [320, 200], range: (48.0, 84.0) };
-    let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
-    state.appearance.spectrum.atmosphere.color_pickup = 0.0;
-    state.appearance.spectrum.atmosphere.color_release = 0.0;
-    state.appearance.spectrum.show_roll = true;
-    state.appearance.spectrum.roll_fraction = 0.65;
-    state.appearance.spectrum.roll_seconds = WINDOW;
-    state.appearance.render.spectrogram = SpectrogramRender::Scrolling;
-    (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi) = shot.range;
-    state.appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
+    let mut appearance = pinned_look();
+    appearance.spectrum.atmosphere.color_pickup = 0.0;
+    appearance.spectrum.atmosphere.color_release = 0.0;
+    appearance.spectrum.show_roll = true;
+    appearance.spectrum.roll_fraction = 0.65;
+    appearance.spectrum.roll_seconds = WINDOW;
+    appearance.render.spectrogram = SpectrogramRender::Scrolling;
+    (appearance.spectrum.low_midi, appearance.spectrum.high_midi) = shot.range;
+    appearance.view.shadow.spectral_geometry = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Gaussian,
         width: 0.75,
         depth: 0.85,
         ..Default::default()
     };
-    state.appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
+    appearance.view.shadow.spectral_text = harmonigraph_scene::ShadowStyle {
         kernel: harmonigraph_scene::ShadowKernel::Distance,
         width: 0.75,
         depth: 0.85,
@@ -468,7 +478,7 @@ fn mixed_spectral_shadows_draw_the_frame_on_record() {
         })
         .collect();
     let take = Take {
-        header: Header { appearance: Some(state.appearance.serialize()), ..Default::default() },
+        header: Header { appearance: Some(appearance.serialize()), ..Default::default() },
         events: notes.into_iter().map(harmonigraph_take::CanonicalRecord::Note).collect(),
         params: Vec::new(),
         configurations: Vec::new(),

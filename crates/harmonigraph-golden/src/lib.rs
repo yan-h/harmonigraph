@@ -13,8 +13,39 @@
 //! implementation of that would be free to drift — a tolerance here, a
 //! different environment variable there — and the drift would show up as a
 //! session blessing one crate's frames and silently not the other's.
+//!
+//! The one thing besides the mechanism that both sets share is [`LOOK`], the
+//! settings their frames are drawn at, for the same reason: two copies of it
+//! would drift.
 
 use std::path::{Path, PathBuf};
+
+/// The look every golden frame starts from: an `AppearanceDocument` in RON,
+/// pinned rather than read off the fresh defaults.
+///
+/// A golden is worth having for the PR that must not move the picture — a
+/// refactor, a frame saving, a cache — and is a formality on the PR that means
+/// to. Drawn at the defaults, a set is the second kind on every capture of a
+/// DAW look: #1475 re-blessed eighteen frames that way, and nobody learned
+/// anything from them. Pinned, a capture moves nothing here, and whether the
+/// fresh look is right is judged where it is seen, in the DAW.
+///
+/// Each crate parses what it draws from: the offline set the whole document,
+/// the lattice set only its `view`. Missing keys take the field's `Default`,
+/// as in any saved blob (the `persistence-contract` skill), so how it ages is
+/// worth knowing before a frame moves:
+///
+/// - A NEW field enters at its `Default`. A feature that ships on moves the
+///   frames that draw it, which is a picture change and stated as one.
+/// - A RENAMED or retyped field drops its pinned value for the new `Default`.
+///   If that moves a frame, carry the value over to the new key here rather
+///   than blessing.
+/// - An appearance version bump fails the offline parse; edit the number.
+///
+/// Re-pinning the whole look, say to a newer DAW capture through
+/// `./read-plugin-state.py --appearance`, re-baselines every frame. That goes
+/// in a PR of its own.
+pub const LOOK: &str = include_str!("../look.ron");
 
 /// How far a channel may drift before the frame counts as changed.
 ///
