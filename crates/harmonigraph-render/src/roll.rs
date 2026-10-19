@@ -669,7 +669,7 @@ impl RollResources {
             holdout_layout,
             layout,
             bright_pipeline: filter("fs_bright_coverage"),
-            downsample_pipeline: filter("fs_blit"),
+            downsample_pipeline: filter("fs_downsample"),
             blur_h_pipeline: filter("fs_blur_h"),
             blur_v_pipeline: filter("fs_blur_v"),
             bloom_pipeline: crate::create_post_pipeline(
@@ -2662,6 +2662,80 @@ mod tests {
         assert!(
             (hi - lo) / hi.max(1.0) < 0.04,
             "the two-pixel note's bloom energy pulsed across sub-pixel phases: {energy:?}",
+        );
+    }
+
+    /// The halo keeps its shape as a note crosses the quarter-size grid it is
+    /// blurred on, read in the note's own frame rather than as a total — a
+    /// halo can hold its energy while it swells and shrinks around the note.
+    ///
+    /// The chain shrinks the picture twice and stretches the blur back up, and
+    /// with a plain two-texel average down and a bilinear read back up, a two-
+    /// pixel note's halo changed shape by 18% of its peak every four pixels it
+    /// travelled — at a long Span, a pulse a few times a second at the end of
+    /// every note. Measured at the pane size the blur's profile is defined at.
+    #[test]
+    fn a_two_pixel_notes_halo_keeps_its_shape_as_it_scrolls() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let note = RollInstance {
+            half_extent: [12.0, 1.0],
+            core: [255, 255, 255, 255],
+            outline: [0; 4],
+            ..centered_note()
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let column = |bloom: f32, note: RollInstance| -> Vec<f64> {
+            let cb = RollCallback {
+                point_scale: 1.0,
+                rect,
+                pane_size: egui::vec2(1080.0, 1080.0),
+                instances: vec![note],
+                clipped_tail: None,
+                axes: TOP,
+                shadow: harmonigraph_scene::ShadowStyle { depth: 0.0, ..harness_shadow() },
+                bloom,
+                target_format: FORMAT,
+                pane_id: 0,
+                shadow_surface_id: 0,
+                pass_nr: 0,
+            };
+            let frame = draw_callback(&device, &queue, cb, wgpu::Color::BLACK).0;
+            (0..SIZE[1]).map(|y| f64::from(frame[((y * SIZE[0] + 128) * 4) as usize])).collect()
+        };
+        // Glow alone, from 4 to 30 px either side of the note — its own pixels
+        // are white and clip — at each eighth of a pixel across two
+        // quarter-size texels.
+        let profiles: Vec<Vec<f64>> = (0..64)
+            .map(|step| {
+                let centre = 120.0 + step as f32 / 8.0;
+                let note = RollInstance { center: [128.0, centre], ..note };
+                let (plain, lit) = (column(0.0, note), column(4.0, note));
+                let glow: Vec<f64> = lit.iter().zip(&plain).map(|(l, p)| l - p).collect();
+                (-30..=30)
+                    .filter(|d: &i32| d.abs() >= 4)
+                    .map(|d| {
+                        let y = f64::from(centre) + f64::from(d) - 0.5;
+                        let (i, t) = (y.floor() as usize, y - y.floor());
+                        glow[i] * (1.0 - t) + glow[i + 1] * t
+                    })
+                    .collect()
+            })
+            .collect();
+        let peak = profiles.iter().flatten().copied().fold(0.0, f64::max);
+        let swing = (0..profiles[0].len())
+            .map(|d| {
+                let at = profiles.iter().map(|p| p[d]);
+                at.clone().fold(0.0, f64::max) - at.fold(f64::MAX, f64::min)
+            })
+            .fold(0.0, f64::max);
+        assert!(peak > 50.0, "too little halo to measure: peak {peak}");
+        assert!(
+            swing / peak < 0.05,
+            "the halo changed shape by {:.1}% of its {peak} peak as the note slid",
+            100.0 * swing / peak,
         );
     }
 

@@ -284,7 +284,7 @@ impl GlowResources {
             disc_pipeline: create_disc_pipeline(device, target_format, &locals_layout),
             locals_layout,
             bright_pipeline: filter("fs_bright"),
-            downsample_pipeline: filter("fs_blit"),
+            downsample_pipeline: filter("fs_downsample"),
             blur_h_pipeline: filter("fs_blur_h"),
             blur_v_pipeline: filter("fs_blur_v"),
             add_pipeline: crate::create_post_pipeline(
