@@ -6,7 +6,8 @@
 // Every pass draws the same viewport-filling quad (vs_blit):
 //   fs_bright     scene -> half res, soft-knee luminance threshold
 //   fs_bright_coverage  premultiplied mark -> half res, threshold before coverage
-//   fs_blit       plain copy (half -> quarter downsample)
+//   fs_blit       plain copy, for reading a target back unfiltered
+//   fs_downsample half -> quarter, through a tent
 //   fs_blur_h/v   pane-relative separable blur over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
 //   fs_bloom_add  bloom * strength alone, over a picture already in the pass
@@ -96,11 +97,53 @@ fn vs_blit(@builtin(vertex_index) vi: u32) -> BlitOut {
     return out;
 }
 
-// Plain copy; used for the half -> quarter downsample (the linear sampler
-// does the filtering).
+// Plain copy, for reading a target back unfiltered: the glow tests' readback.
+// No production pipeline draws through it.
 @fragment
 fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
     return textureSample(scene_tex, scene_samp, in.uv);
+}
+
+// The half -> quarter downsample, through a [1 3 3 1]/8 tent on each axis
+// rather than the two-texel box one centred tap would take. A box keeps a
+// shape narrower than its texel at that texel's centre until it has crossed
+// out, so a short note's halo swelled and shrank with every four pixels it
+// travelled; the tent overlaps its neighbours and lets the shape slide. Four
+// bilinear taps, each three quarters of a source texel out on both axes,
+// weigh the 4x4 footprint exactly.
+@fragment
+fn fs_downsample(in: BlitOut) -> @location(0) vec4<f32> {
+    let reach = 0.75 / vec2<f32>(textureDimensions(scene_tex));
+    return 0.25 * (textureSample(scene_tex, scene_samp, in.uv + vec2<f32>(-reach.x, -reach.y))
+        + textureSample(scene_tex, scene_samp, in.uv + vec2<f32>(reach.x, -reach.y))
+        + textureSample(scene_tex, scene_samp, in.uv + vec2<f32>(-reach.x, reach.y))
+        + textureSample(scene_tex, scene_samp, in.uv + vec2<f32>(reach.x, reach.y)));
+}
+
+// The blurred quarter read back at screen size through a cubic B-spline
+// instead of bilinearly. A bilinear read is a tent one quarter texel wide, so a
+// halo's flanks bent at every texel centre and the bends moved with the grid,
+// not the note; the B-spline is smooth through them. It also widens the halo by
+// about a third of a quarter texel, against a blur two of them wide. Four
+// bilinear taps placed to weigh the 4x4 neighbourhood by the spline (Sigg &
+// Hadwiger, GPU Gems 2, ch. 20).
+fn bloom_sample(tex: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(tex));
+    let p = uv * size - 0.5;
+    let i = floor(p);
+    let f = p - i;
+    let w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+    let w1 = (4.0 - 6.0 * f * f + 3.0 * f * f * f) / 6.0;
+    let w3 = f * f * f / 6.0;
+    let w2 = 1.0 - w0 - w1 - w3;
+    let g0 = w0 + w1;
+    let g1 = w2 + w3;
+    let lo = (i + w1 / g0 - 0.5) / size;
+    let hi = (i + 1.5 + w3 / g1) / size;
+    return g0.y * (g0.x * textureSample(tex, scene_samp, vec2<f32>(lo.x, lo.y))
+            + g1.x * textureSample(tex, scene_samp, vec2<f32>(hi.x, lo.y)))
+        + g1.y * (g0.x * textureSample(tex, scene_samp, vec2<f32>(lo.x, hi.y))
+            + g1.x * textureSample(tex, scene_samp, vec2<f32>(hi.x, hi.y)));
 }
 
 // Luminance soft knee: keep what glows, drop the faint idle grid so the
@@ -204,7 +247,7 @@ fn fs_blur_v(in: BlitOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
-    let bloom = textureSample(bloom_tex, scene_samp, in.uv);
+    let bloom = bloom_sample(bloom_tex, in.uv);
     let ink = textureSample(ink_tex, scene_samp, in.uv);
     let t = clamp(textureSample(local_shadow_tex, scene_samp, in.uv).r, 0.0, 1.0);
     let light = scene.rgb + ink.rgb + bloom.rgb * bu.bloom_strength * t;
@@ -233,7 +276,7 @@ fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
 // halo exactly as the lattice's nodes are by theirs.
 @fragment
 fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
-    let bloom = textureSample(scene_tex, scene_samp, in.uv);
+    let bloom = bloom_sample(scene_tex, in.uv);
     return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
 }
 
