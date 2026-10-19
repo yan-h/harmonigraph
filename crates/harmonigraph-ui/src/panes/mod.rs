@@ -788,6 +788,13 @@ const BLOCK_GAP: f32 = 2.0 * crate::widgets::GROUP_GAP;
 /// only has to read as one.
 pub(crate) const BLOCK_INDENT: f32 = 12.0;
 
+/// Where a [`block`]'s guide line stands in from its title's left edge, at
+/// scale 1: under the title's first stroke, which the face's side bearing
+/// sets about a point in. egui's own line stands half the indent in, which
+/// under a 12-point indent left a gap before the line wider than the title's
+/// and read as a second indent.
+const BLOCK_LINE_INSET: f32 = 1.5;
+
 /// Where the cursor stood under the last [`section`] heading, so a [`block`]
 /// opening the section knows the heading's gap is already over it.
 fn section_top_id() -> egui::Id {
@@ -816,16 +823,30 @@ pub(super) fn block<R>(
         crate::widgets::group_space_of(ui, BLOCK_GAP);
     }
     let heading = crate::widgets::label(ui, egui::RichText::new(title).heading());
-    // egui indents by the style's indent; a fold inside the rows keeps its own.
+    // egui indents by the style's indent and draws its line half of it in; the
+    // block draws its own, and a fold inside the rows keeps egui's.
+    let scale = crate::theme::ui_scale(ui.ctx());
     let fold = ui.spacing().indent;
-    ui.spacing_mut().indent = BLOCK_INDENT * crate::theme::ui_scale(ui.ctx());
-    let out = ui
-        .indent(title, |ui| {
-            ui.spacing_mut().indent = fold;
-            rows(ui)
-        })
-        .inner;
+    let line = ui.visuals().indent_has_left_vline;
+    ui.spacing_mut().indent = BLOCK_INDENT * scale;
+    ui.visuals_mut().indent_has_left_vline = false;
+    let body = ui.indent(title, |ui| {
+        ui.spacing_mut().indent = fold;
+        ui.visuals_mut().indent_has_left_vline = line;
+        rows(ui)
+    });
     ui.spacing_mut().indent = fold;
+    ui.visuals_mut().indent_has_left_vline = line;
+    if line {
+        // Down the rows to where egui stops its own, two points short.
+        use egui::emath::GuiRounding as _;
+        let x = (heading.rect.left() + BLOCK_LINE_INSET * scale)
+            .round_to_pixel_center(ui.pixels_per_point());
+        let rows = body.response.rect;
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        ui.painter().vline(x, rows.top()..=rows.bottom() - 2.0, stroke);
+    }
+    let out = body.inner;
     crate::widgets::group_end(ui);
     egui::InnerResponse::new(out, heading)
 }
@@ -840,8 +861,9 @@ mod block_tests {
 
     /// A block's title stands [`BLOCK_GAP`] under the row over it, whether a
     /// loose row or the last of the block before, and its rows stand one indent
-    /// in from it. Opening its section, it stands where a line of text would:
-    /// the heading's gap is already over it.
+    /// in from it, with one guide line down them under the title's first
+    /// stroke. Opening its section, it stands where a line of text would: the
+    /// heading's gap is already over it.
     #[test]
     fn a_block_stands_clear_of_the_rows_over_it_and_indents_its_own() {
         let ctx = crate::tests::probe::themed();
@@ -849,7 +871,8 @@ mod block_tests {
         let _ = ctx.run_ui(Default::default(), |ui| {
             section(ui, "Plain", |ui| opening[0] = crate::widgets::label(ui, "First").rect.top());
         });
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let mut last = None;
+        let out = ctx.run_ui(Default::default(), |ui| {
             section(ui, "Blocks", |ui| {
                 let first = block(ui, "First", row);
                 opening[1] = first.response.rect.top();
@@ -862,8 +885,28 @@ mod block_tests {
                 }
                 let indent = third.inner.left() - third.response.rect.left();
                 assert!((indent - BLOCK_INDENT).abs() < 0.5, "rows {indent}pt in");
+                last = Some((third.response.rect, third.inner));
             });
         });
+        let (title, rows) = last.expect("no third block");
+        let lines: Vec<f32> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::LineSegment { points: [a, b], .. }
+                    if a.x == b.x
+                        && rows.center().y > a.y.min(b.y)
+                        && rows.center().y < a.y.max(b.y) =>
+                {
+                    Some(a.x - title.left())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(lines[..], [inset] if (0.5..=2.5).contains(&inset)),
+            "guide lines {lines:?}pt in from the title, not one under its first stroke"
+        );
         let [plain, block] = opening;
         assert!((block - plain).abs() < 0.5, "an opening block at {block}, a line at {plain}");
     }
