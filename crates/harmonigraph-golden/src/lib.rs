@@ -45,6 +45,10 @@ pub struct Gate {
     /// Where a failing comparison writes its contact sheet — under `target/`,
     /// so the working tree stays clean while the gate is passing.
     diffs: PathBuf,
+    /// Where it writes the frame it actually drew, laid out as the repository
+    /// is (`actual/<crate>/golden/<name>.png`), so a frame CI drew is a copy
+    /// into `crates/` away from being the one on record.
+    actual: PathBuf,
 }
 
 impl Gate {
@@ -59,7 +63,9 @@ impl Gate {
         // is written on failure and read once, and `cargo clean` is the right
         // way to be rid of it.
         let diffs = manifest.join("../../target/golden-diff");
-        Gate { dir: manifest.join("golden"), diffs }
+        let krate = manifest.file_name().expect("a crate directory").to_owned();
+        let actual = diffs.join("actual").join(krate).join("golden");
+        Gate { dir: manifest.join("golden"), diffs, actual }
     }
 
     /// `frame` is byte-identical to the PNG on record under `name`, or the
@@ -118,12 +124,16 @@ impl Gate {
         let (mean, max) = drift(&expected, frame);
         if max > TOLERANCE {
             let sheet = self.write_contact_sheet(name, size, &expected, frame);
+            let actual = self.actual.join(format!("{name}.png"));
+            write_png(&actual, size, frame);
             panic!(
                 "{name} moved: mean {mean:.3}/255, max {max}/255\n\
                  expected | actual | difference at 8x: {}\n\
+                 the frame drawn: {}\n\
                  If the change is intended, re-baseline and say what moved in the PR body:\n\
                  {BLESS}=1 cargo test --workspace golden",
-                sheet.display()
+                sheet.display(),
+                actual.display(),
             );
         }
     }
