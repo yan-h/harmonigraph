@@ -834,6 +834,10 @@ pub fn lattice_paint_callback(
 /// callback once egui has drawn and dropped it, and refilled by the next
 /// frame rather than allocated afresh: at the node cap they come to several
 /// megabytes a frame. One per window; each lattice pane on it takes a set.
+///
+/// A set keeps the largest frame it has held and is never shrunk: at most one
+/// frame at the node cap per pane, which is what each frame allocated anyway,
+/// and what the allocator went on holding once it was freed.
 #[derive(Default)]
 pub struct LatticeFrames(std::sync::Mutex<Vec<lattice_frame::FrameVecs>>);
 

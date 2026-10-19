@@ -61,6 +61,10 @@ pub struct NodeMotion {
     /// test holds a table that never drops one against this one, frame for
     /// frame.
     nodes: HashMap<LatticePos, Motion>,
+    /// The visible nodes holding nothing but an audio pose ([`Motion::POSED`]),
+    /// kept out of `nodes`. With the ring on at its floor every unlit node in
+    /// view wears one, which is the whole window again in full entries.
+    posed: HashSet<LatticePos>,
     /// The positions the last step drew, in the scene's lattice order: what
     /// tells a node scrolling into view from one that sat at rest in it, which
     /// was the absent entry's job while every visible node had one.
@@ -199,15 +203,26 @@ impl Motion {
         level_wait: [0.0; 11],
         audio_waiting: false,
     };
+    /// A node at rest that the audio ring has posed, settled and waiting for a
+    /// note. Nothing in `advance` moves it.
+    const POSED: Self = Self { progress: [1.0; 11], audio_waiting: true, ..Self::REST };
     /// Nothing held, nothing moving and nothing left to fade: `advance` would
     /// write back exactly what is here. Most visible nodes are this at once,
     /// and [`NodeMotion`] keeps no entry for one.
     fn at_rest(&self) -> bool {
+        self.still() && !self.audio_waiting && self.progress == [0.0; 11]
+    }
+    /// [`at_rest`](Self::at_rest) but for an audio pose: exactly [`Self::POSED`]
+    /// in everything that is read before it is written.
+    fn posed(&self) -> bool {
+        self.still() && self.audio_waiting && self.progress == [1.0; 11]
+    }
+    /// No gate, no mark, and nothing delayed, lit or fading.
+    fn still(&self) -> bool {
         !self.gate
-            && !self.audio_waiting
             && self.melody.target.is_none()
             && self.bass.target.is_none()
-            && [self.progress, self.delay, self.levels, self.targets]
+            && [self.delay, self.levels, self.targets]
                 .iter()
                 .chain([
                     &self.melody.levels,
@@ -271,6 +286,10 @@ impl Motion {
             self.delay = [0.0; 11];
         }
     }
+}
+/// Whether `pos` is among `visible`, a frame's positions in lattice order.
+fn shown(visible: &[LatticePos], pos: &LatticePos) -> bool {
+    visible.binary_search_by_key(&lattice_order(pos), lattice_order).is_ok()
 }
 /// The octave slot a held pitch lights on the node at `cents`, inside the
 /// node's `(lo, hi)` slots.
@@ -405,18 +424,25 @@ impl NodeMotion {
             let pos = node.lattice_pos;
             let (motion, vacant) = match self.nodes.entry(pos) {
                 Entry::Occupied(entry) => (entry.into_mut(), false),
-                // At rest, and nothing lights it or rings at it: every write
-                // below puts back what `REST` already holds.
-                Entry::Vacant(_) if !gate && !audio && !dense => continue,
-                Entry::Vacant(entry) => (entry.insert(Motion::REST), true),
+                Entry::Vacant(entry) => {
+                    let posed = self.posed.contains(&pos);
+                    // Nothing lights it, and the ring neither starts nor stops
+                    // ringing at it: every write below puts back what `REST`,
+                    // or the pose, already holds.
+                    if !gate && audio == posed && !dense {
+                        continue;
+                    }
+                    if posed {
+                        self.posed.remove(&pos);
+                    }
+                    (entry.insert(if posed { Motion::POSED } else { Motion::REST }), true)
+                }
             };
             // New to the view on the step's first pass alone, as it was while
             // every visible node had an entry: that pass entered every node,
             // so a later one found each already there. Past it, an absent
             // node is one at rest rather than one arriving.
-            let in_view = |visible: &[LatticePos]| {
-                visible.binary_search_by_key(&lattice_order(&pos), lattice_order).is_ok()
-            };
+            let in_view = |visible: &[LatticePos]| shown(visible, &pos);
             let newly_visible = |visible: &[LatticePos]| {
                 if dense {
                     vacant
@@ -781,18 +807,34 @@ impl NodeMotion {
         if !self.visible.is_sorted_by_key(lattice_order) {
             self.visible.sort_unstable_by_key(lattice_order);
         }
-        let (visible, dense) = (&self.visible, self.dense());
-        self.nodes.retain(|pos, motion| {
-            let shown = visible.binary_search_by_key(&lattice_order(pos), lattice_order).is_ok();
-            shown && (dense || !motion.at_rest())
+        let dense = self.dense();
+        let Self { nodes, posed, visible, .. } = self;
+        posed.retain(|pos| shown(visible, pos));
+        nodes.retain(|pos, motion| {
+            if !shown(visible, pos) {
+                return false;
+            }
+            if dense {
+                return true;
+            }
+            if motion.posed() {
+                posed.insert(*pos);
+                return false;
+            }
+            !motion.at_rest()
         });
         // Give back what a lattice-wide chord grew, once it has faded, and
         // with room either side so a held chord does not grow and shrink it.
-        if self.nodes.capacity() > 4 * (self.nodes.len() + 64) {
-            self.nodes.shrink_to(2 * self.nodes.len());
+        if nodes.capacity() > 4 * (nodes.len() + 64) {
+            nodes.shrink_to(2 * nodes.len());
+        }
+        if posed.capacity() > 4 * (posed.len() + 64) {
+            posed.shrink_to(2 * posed.len());
         }
         for node in &mut scene.nodes {
-            let motion = self.nodes.get(&node.lattice_pos).unwrap_or(&Motion::REST);
+            let pos = &node.lattice_pos;
+            let resting = if self.posed.contains(pos) { &Motion::POSED } else { &Motion::REST };
+            let motion = self.nodes.get(pos).unwrap_or(resting);
             node.slice_progress = motion.progress;
             // Opacity fades each slot's ink, and the node's presence with it,
             // while the envelope under it runs untouched. Thickness reshapes a
@@ -852,7 +894,8 @@ mod tests {
     impl NodeMotion {
         /// A position's motion, absent read as the rest it stands for.
         fn at(&self, pos: LatticePos) -> &Motion {
-            self.nodes.get(&pos).unwrap_or(&Motion::REST)
+            let resting = if self.posed.contains(&pos) { &Motion::POSED } else { &Motion::REST };
+            self.nodes.get(&pos).unwrap_or(resting)
         }
     }
 
@@ -1666,6 +1709,7 @@ mod tests {
             let (mut now, mut clock) = (0.0f64, 0.0f64);
             let mut held: Vec<u8> = Vec::new();
             let (mut fewest, mut most) = (usize::MAX, 0);
+            let (mut fewest_ringing, mut posed_most) = (usize::MAX, 0);
             for i in 0..900i32 {
                 let shown = now;
                 now += match i {
@@ -1773,12 +1817,24 @@ mod tests {
                 assert_eq!(dense.nodes.len(), visible);
                 fewest = fewest.min(sparse.nodes.len());
                 most = most.max(sparse.nodes.len());
+                if audio {
+                    fewest_ringing = fewest_ringing.min(sparse.nodes.len());
+                    posed_most = posed_most.max(sparse.posed.len());
+                }
+                assert!(sparse.nodes.values().all(|m| !m.posed()), "a pose kept a full entry");
             }
             let reached = sparse.reached;
-            eprintln!("{order:?}: {reached:?}, the table between {fewest} and {most} entries");
+            eprintln!(
+                "{order:?}: {reached:?}, the table between {fewest} and {most} entries, \
+                 up to {posed_most} poses"
+            );
             assert!(reached.revived > 0 && reached.scrolled_in > 0 && reached.lit_in_view > 0);
             assert!(reached.lit_after_entering > 0);
             assert_eq!(fewest, 0, "the table never emptied");
+            // The ring at its floor poses every unlit node in view, and those
+            // poses are what a full table of them would be.
+            assert_eq!(fewest_ringing, 0, "the table never emptied under the ring");
+            assert!(posed_most > 500, "the ring posed too little of the window: {posed_most}");
             assert!(most > 50, "nothing lit enough of the lattice to measure: {most}");
         }
     }
