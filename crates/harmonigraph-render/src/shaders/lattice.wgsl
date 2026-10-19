@@ -104,7 +104,7 @@ struct MarkerCellParams {
     points_to_texels: f32,
     aa_scale: f32,
     arm_points: f32,
-    spread_points: f32,
+    padding: f32,
 };
 
 struct Uniforms {
@@ -2584,8 +2584,8 @@ struct PlusVsOut {
     @location(2) @interpolate(linear) points: vec2<f32>,
     // x: which caster this marker's shadow is, in `shadow_casters` — 0, the
     // marker field being one caster and the first the frame packs; z: the
-    // cross's place in the walk (`PlusInstance::place`). On the draw that FILLS
-    // the cell, x is the spread in arms and the rest zero. y and w unused.
+    // cross's place in the walk (`PlusInstance::place`). Zero on the draw that
+    // FILLS the cell. y and w unused.
     @location(3) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment reads that cell (xy, in atlas texels), how much of
     // the shadow this marker lands (z, its own opacity), and the surface this
@@ -2771,7 +2771,7 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     // No caster to READ — this draw is the one that fills the cell — and the
     // cell's own scale, which is what the cross is cut with here rather than
     // the pane's.
-    out.shadow_box = vec4<f32>(u.marker_cell.spread_points / arm_points, 0.0, 0.0, 0.0);
+    out.shadow_box = vec4<f32>(0.0);
     out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.marker_cell.aa_scale);
     out.points = vec2<f32>(0.0);
     return out;
@@ -3627,14 +3627,9 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // The full arm box masks this marker's OWN shadow. Outside that surface the
     // shadow takes the ink's longitudinal taper too, so neither darkness under
     // a transparent tip nor a hollow outline around it survives the fade.
-    // Spread moves the source's taper outward; move this receiver mask with it
-    // so it cannot clip the expanded shadow at the old tips.
-    var shadow_uv = in.uv;
-    if u.marker_cell.spread_points > 0.0 {
-        let spread = u.marker_cell.spread_points / max(u.marker_cell.arm_points, 1e-6);
-        shadow_uv = max(abs(in.uv) - vec2<f32>(spread), vec2<f32>(0.0));
-    }
-    let shadow_exposure = (1.0 - body) * plus_shadow_taper(shadow_uv);
+    // The group's Spread lifts the cell's blur (`shadow_profile`) rather than
+    // growing the cross, so the taper stays where the ink's is.
+    let shadow_exposure = (1.0 - body) * plus_shadow_taper(in.uv);
     let seen_through = 1.0 - (1.0 - t) * shadow_exposure;
     let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
     if final_alpha <= 0.0 {
@@ -3672,12 +3667,6 @@ fn plus_paint(in: PlusVsOut) -> Painted {
 @fragment
 fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
-    if in.shadow_box.x > 0.0 {
-        let spread = in.shadow_box.x;
-        let body = aa_inside(spread, plus_sd(in.uv), aa);
-        let taper = plus_taper(max(abs(in.uv) - vec2<f32>(spread), vec2<f32>(0.0)));
-        return vec4<f32>(body * taper, 0.0, 0.0, 0.0);
-    }
     return vec4<f32>(plus_coverage(in.uv, aa), 0.0, 0.0, 0.0);
 }
 

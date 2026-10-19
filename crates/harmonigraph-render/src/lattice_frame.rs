@@ -288,9 +288,9 @@ impl LatticeCallback {
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
-        // The text group's Spread grows the marker cross by a distance and
-        // lifts a name's blur by stops: the cross is geometry, the name type.
-        let marker_spread = text.gaussian_spread_points(text_sigma);
+        // The text group's Spread lifts the blur of a name and of the marker
+        // cross alike by stops: both are strokes thin against σ.
+        let text_stops = text.text_spread_stops();
         let shadow_reach = geometry_sigma * shadow::reach_sigmas(geometry);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance, inked: bool| {
             let empty = shadow::Caster {
@@ -393,8 +393,8 @@ impl LatticeCallback {
                 rect: [-a, -a, 2.0 * a, 2.0 * a],
                 level: 1.0,
                 sigma_points: text_sigma,
-                spread_points: marker_spread,
-                stops: 0.0,
+                spread_points: 0.0,
+                stops: text_stops,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -441,7 +441,7 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(run, text_sigma, text.text_spread_stops()));
+                casters.push(shadow::caster_of(run, text_sigma, text_stops));
             }
             // The cross stands at this position under its node and name, so
             // what hides it is what stands past all three: every caster from
@@ -575,7 +575,8 @@ impl LatticeCallback {
                 },
                 marker_shadow: ShadowParams {
                     width: if text.casts() { text.width } else { 0.0 },
-                    reach_sigmas: shadow::reach_sigmas(text),
+                    // Text's Spread is stops, which grow no source.
+                    reach_sigmas: shadow::REACH_SIGMAS,
                     depth: text.depth,
                     occlusion: 0.0,
                 },

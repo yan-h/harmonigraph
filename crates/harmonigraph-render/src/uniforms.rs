@@ -191,7 +191,7 @@ uniform_group! {
         points_to_texels: f32,
         aa_scale: f32,
         arm_points: f32,
-        spread_points: f32,
+        padding: f32,
     }
 }
 uniform_group! {

@@ -216,16 +216,6 @@ fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
         let ordinary = shooter.shot_with(&scene, labels(&scene));
         style(&mut scene, group).spread = 0.5;
         let expanded = shooter.shot_with(&scene, labels(&scene));
-        if group == 2 {
-            // Past the original tapered tip, but inside the expanded source.
-            // An unchanged receiver taper would erase this shadow entirely.
-            let center = on_screen(&scene, SIZE, at);
-            let arm = 0.35 * scene.camera.points_per_world(SIZE[1] as f32);
-            let x = (center.x + arm + 2.0).ceil() as usize;
-            let y = center.y.floor() as usize;
-            let i = (y * SIZE[0] as usize + x) * 4;
-            assert!(expanded[i] < ordinary[i], "spread was clipped at the tapered tip");
-        }
         let darkness = |frame: &[u8]| -> u64 {
             ink.chunks_exact(4)
                 .zip(frame.chunks_exact(4))

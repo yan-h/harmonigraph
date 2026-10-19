@@ -350,15 +350,14 @@ and double-click to reset.
 
 Every shadow is a blur of its caster.
 **Shadow spread** strengthens a shadow without changing the visible ink.
-For rings, marks, crosses, ribbons and dots it expands the shadow caster before blurring.
+For rings, marks, ribbons and dots it expands the shadow caster before blurring.
 The percentage is a fraction of the resolved Shadow width:
 100% expands the caster by one Shadow width on each side.
-For text it brightens the blurred shadow by up to five stops before it is clamped,
+For the two label groups — names, axis labels and the idle crosses —
+it brightens the blurred shadow by up to five stops before it is clamped,
 so a name's shadow darkens first and then spreads into a solid plate around the word.
 At 100% that plate reaches about one Shadow width past wide ink, as for the other groups,
 but its edge is harder: it ends where the blur itself ends, at one and a half Shadow widths.
-The Label and cross shadows group spends its one Spread both ways:
-it grows the idle crosses and deepens the names.
 A Shadow width of zero still removes the shadow.
 
 Lattice text shadows use local darkness.

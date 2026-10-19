@@ -1300,11 +1300,10 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
         "the marker's σ is {} rather than the text group's {want_sigma}",
         callback.casters[0].sigma_points,
     );
-    let want_spread = text.gaussian_spread_points(want_sigma);
-    assert!(
-        (callback.casters[0].spread_points - want_spread).abs() < 1e-4,
-        "the marker's spread is {} points rather than the text group's {want_spread}",
-        callback.casters[0].spread_points,
+    assert_eq!(
+        (callback.casters[0].spread_points, callback.casters[0].stops),
+        (0.0, text.text_spread_stops()),
+        "the marker does not spend the text group's Spread as stops",
     );
     assert_eq!(
         (
@@ -1312,7 +1311,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
             callback.uniforms.marker_shadow.reach_sigmas,
             callback.uniforms.marker_shadow.depth,
         ),
-        (text.width, crate::shadow::REACH_SIGMAS + text.gaussian_spread_points(1.0), text.depth),
+        (text.width, crate::shadow::REACH_SIGMAS, text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 

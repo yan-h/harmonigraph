@@ -499,7 +499,7 @@ impl LatticeCallback {
                 points_to_texels: cell.cell_map[0],
                 aa_scale: cell.cell_map[3],
                 arm_points: self.marker_arm_points,
-                spread_points: cell.who[3],
+                padding: 0.0,
             };
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
