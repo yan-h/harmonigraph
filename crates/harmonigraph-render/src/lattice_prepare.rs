@@ -764,12 +764,11 @@ impl LatticeCallback {
                     store: wgpu::StoreOp::Store,
                 },
             }),
-            offscreen.bloom.as_ref().and_then(|b| attachment(&b.nodes_view)),
-            offscreen.bloom.as_ref().and_then(|b| attachment(&b.ink_view)),
+            offscreen.bloom.as_ref().and_then(|b| attachment(&b.input_view)),
         ];
         let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_scene_pass"),
-            color_attachments: &attachments[..if offscreen.bloom.is_some() { 5 } else { 3 }],
+            color_attachments: &attachments[..if offscreen.bloom.is_some() { 4 } else { 3 }],
             depth_stencil_attachment: None,
             timestamp_writes: end_stamp.map(|query_set| wgpu::RenderPassTimestampWrites {
                 query_set,
@@ -787,7 +786,7 @@ impl LatticeCallback {
         // (`node_paint`, `plus_paint`, text.wgsl's `fs_shadow_box`), and
         // the light is in the frame first.
         //
-        // With bloom on it writes both attachments, so the bloom's
+        // With bloom on it writes the picture and the bloom input, so the bloom's
         // bright pass reads the light exactly as it reads the nodes: it is
         // light the nodes emit, and it blooms with the rest of them.
         if let Some(glow) = offscreen.glow.as_ref().filter(|_| has_light) {

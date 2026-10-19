@@ -2806,8 +2806,8 @@ fn fs_main_split(in: VsOut) -> SplitOut {
 fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
     let seen = node_split(paint, paint.seen);
-    let bloom = node_split(paint, paint.ink_alpha);
-    return SceneOut(seen.other, seen.ink, seen.transmission, bloom.other, bloom.ink);
+    // The bloom takes the ink without the ordinary shadow's coverage.
+    return SceneOut(seen.other, seen.ink, seen.transmission, vec4<f32>(paint.rgb, paint.ink_alpha));
 }
 
 // Independent pigment behind the material, with no shadow-atlas dependency.
@@ -3698,6 +3698,6 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     return SceneOut(
         seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen),
         vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.seen),
-        vec4<f32>(paint.rgb, paint.ink_alpha), vec4<f32>(0.0, 0.0, 0.0, paint.ink_alpha),
+        vec4<f32>(paint.rgb, paint.ink_alpha),
     );
 }

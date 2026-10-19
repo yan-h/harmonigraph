@@ -698,7 +698,6 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0),
-        vec4<f32>(0.0),
     );
 }
 

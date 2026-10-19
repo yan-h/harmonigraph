@@ -21,8 +21,7 @@ struct SceneOut {
     metal::float4 other;
     metal::float4 ink;
     metal::float4 transmission;
-    metal::float4 bloom_other;
-    metal::float4 bloom_ink;
+    metal::float4 bloom;
 };
 struct CompositeParams {
     float darkest_pitch;
@@ -588,8 +587,7 @@ struct fs_plus_sceneOutput {
     metal::float4 other [[color(0)]];
     metal::float4 ink [[color(1)]];
     metal::float4 transmission [[color(2)]];
-    metal::float4 bloom_other [[color(3)]];
-    metal::float4 bloom_ink [[color(4)]];
+    metal::float4 bloom [[color(3)]];
 };
 fragment fs_plus_sceneOutput fs_plus_scene(
   fs_plus_sceneInput varyings [[stage_in]]
@@ -606,6 +604,6 @@ fragment fs_plus_sceneOutput fs_plus_scene(
     const PlusVsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.points, {}, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = plus_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, u, _buffer_sizes);
     metal::float4 _e2 = seen_of(_e1);
-    const auto _tmp = SceneOut {_e2, metal::float4(0.0, 0.0, 0.0, _e1.seen), metal::float4(_e1.ink_alpha, 0.0, 0.0, _e1.seen), metal::float4(_e1.rgb, _e1.ink_alpha), metal::float4(0.0, 0.0, 0.0, _e1.ink_alpha)};
-    return fs_plus_sceneOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom_other, _tmp.bloom_ink };
+    const auto _tmp = SceneOut {_e2, metal::float4(0.0, 0.0, 0.0, _e1.seen), metal::float4(_e1.ink_alpha, 0.0, 0.0, _e1.seen), metal::float4(_e1.rgb, _e1.ink_alpha)};
+    return fs_plus_sceneOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom };
 }

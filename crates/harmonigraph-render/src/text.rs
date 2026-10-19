@@ -1235,8 +1235,8 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// stamped version it replaces.
 ///
 /// `attachments` is one for ordinary text, three for the lattice's visible
-/// components and transmission, or five with its bloom pair. Glyph fill
-/// covers both visible components and writes nothing to either bloom target,
+/// components and transmission, or four with its bloom input. Glyph fill
+/// covers both visible components and writes nothing to the bloom input,
 /// so a name neither glows nor cuts a hole in the node halo it covers.
 ///
 /// `blend` is [`crate::EGUI_BLEND`]. Its alpha term is egui's own —
@@ -1267,7 +1267,7 @@ pub(crate) fn create_text_pipeline(
     attachments: usize,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
-    assert!(matches!(attachments, 1 | 3 | 5));
+    assert!(matches!(attachments, 1 | 3 | 4));
     let mut targets = if attachments == 1 {
         vec![Some(wgpu::ColorTargetState {
             format: target_format,
@@ -1275,7 +1275,7 @@ pub(crate) fn create_text_pipeline(
             write_mask: wgpu::ColorWrites::ALL,
         })]
     } else {
-        crate::scene_targets(target_format, attachments == 5)
+        crate::scene_targets(target_format, attachments == 4)
     };
     // Visible ink uses egui blending; transmission uses premultiplied
     // source-over to restore T only under visible ink.
