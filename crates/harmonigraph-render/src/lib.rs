@@ -803,6 +803,9 @@ impl Default for LatticeStats {
 /// overwrite the readings.
 /// `pipeline_cache` reuses compiled handles when the shell publishes its
 /// [`wgpu::Instance`] into `CallbackResources`; other shells build per window.
+/// `frames` lends the vectors the frame is built in and takes them back once
+/// it has drawn.
+#[allow(clippy::too_many_arguments)]
 pub fn lattice_paint_callback(
     rect: egui::Rect,
     scene: &Scene,
@@ -811,11 +814,44 @@ pub fn lattice_paint_callback(
     pane_id: u64,
     stats: Option<std::sync::Arc<LatticeStats>>,
     pipeline_cache: std::sync::Arc<LatticePipelineCache>,
+    frames: std::sync::Arc<LatticeFrames>,
 ) -> egui::PaintCallback {
-    let mut callback =
-        LatticeCallback::from_scene(scene, labels, rect.size(), target_format, pane_id, stats);
+    let mut callback = LatticeCallback::from_scene_in(
+        frames.lend(),
+        scene,
+        labels,
+        rect.size(),
+        target_format,
+        pane_id,
+        stats,
+    );
     callback.pipeline_cache = Some(pipeline_cache);
+    callback.frames = Some(frames);
     egui_wgpu::Callback::new_paint_callback(rect, callback)
+}
+
+/// The vectors lattice frames are built in, handed back by each frame's
+/// callback once egui has drawn and dropped it, and refilled by the next
+/// frame rather than allocated afresh: at the node cap they come to several
+/// megabytes a frame. One per window; each lattice pane on it takes a set.
+#[derive(Default)]
+pub struct LatticeFrames(std::sync::Mutex<Vec<lattice_frame::FrameVecs>>);
+
+impl LatticeFrames {
+    /// More sets than a window has lattice panes is memory nothing reuses.
+    const KEPT: usize = 4;
+
+    fn lend(&self) -> lattice_frame::FrameVecs {
+        self.0.lock().ok().and_then(|mut sets| sets.pop()).unwrap_or_default()
+    }
+
+    fn give_back(&self, set: lattice_frame::FrameVecs) {
+        if let Ok(mut sets) = self.0.lock() {
+            if sets.len() < Self::KEPT {
+                sets.push(set);
+            }
+        }
+    }
 }
 
 /// Per-frame, per-pane draw data, computed on the UI thread.
@@ -869,6 +905,27 @@ struct LatticeCallback {
     render_scale: f32,
     /// Where to publish this pane's own measurements.
     stats: Option<std::sync::Arc<LatticeStats>>,
+    /// Where this frame's vectors go back to once it is dropped, and the
+    /// walk's scratch, carried along so it goes back with them.
+    frames: Option<std::sync::Arc<LatticeFrames>>,
+    walk: lattice_frame::Walk,
+}
+
+impl Drop for LatticeCallback {
+    fn drop(&mut self) {
+        let Some(frames) = &self.frames else { return };
+        use std::mem::take;
+        frames.give_back(lattice_frame::FrameVecs {
+            instances: take(&mut self.instances),
+            glow_owners: take(&mut self.glow_owners),
+            glyphs: take(&mut self.glyphs),
+            casters: take(&mut self.casters),
+            node_cells: take(&mut self.node_cells),
+            draws: take(&mut self.draws),
+            pluses: take(&mut self.pluses),
+            walk: take(&mut self.walk),
+        });
+    }
 }
 
 /// One pass of the bloom chain: the pipeline to run, its bind group, and the
@@ -1052,6 +1109,8 @@ struct LatticeResources {
     /// which never asks for the feature) don't, and the readout says so
     /// rather than pretending.
     timer: Option<GpuTimer>,
+    /// Last frame's shadow packing, filled again by the next pane to prepare.
+    shadow_buffers: lattice_prepare::ShadowBuffers,
     #[cfg(feature = "hot-reload")]
     watcher: ShaderWatcher,
 }
@@ -3026,6 +3085,7 @@ impl LatticeResources {
             sheets: text::Sheets::new(device, queue),
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
+            shadow_buffers: Default::default(),
             #[cfg(feature = "hot-reload")]
             watcher: ShaderWatcher::new(),
         }

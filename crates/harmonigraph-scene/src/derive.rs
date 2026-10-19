@@ -35,7 +35,7 @@ pub fn derive_scene(
     camera: Camera,
     hovered: Option<LatticePos>,
 ) -> Scene {
-    derive_scene_with_extra(tracker, tuning, view, window, &[], frame, camera, hovered)
+    derive_scene_with_extra(tracker, tuning, view, window, &[], frame, camera, hovered, Vec::new())
 }
 
 /// The order a scene's nodes are laid out in, which `NodeMotion` searches its
@@ -48,6 +48,10 @@ pub(crate) fn lattice_order(p: &LatticePos) -> (i32, i32, i32) {
 /// Extra owners share the ordinary node derivation and animation path.
 /// The caller supplies unique positions outside `window`, within its remaining
 /// node budget; this constructor sorts them but does not deduplicate them.
+///
+/// `nodes` is emptied and the scene's nodes laid out in it: hand back the
+/// last frame's, and a window at the node cap reuses its five megabytes
+/// rather than allocating them again.
 #[allow(clippy::too_many_arguments)]
 pub fn derive_scene_with_extra(
     tracker: &NoteTracker,
@@ -58,11 +62,13 @@ pub fn derive_scene_with_extra(
     frame: &FrameParams,
     camera: Camera,
     hovered: Option<LatticePos>,
+    mut nodes: Vec<NodeInstance>,
 ) -> Scene {
     let mut normalized = view.clone();
     normalized.sanitize();
     let view = &normalized;
-    let mut nodes = Vec::with_capacity(window.count() + extra.len());
+    nodes.clear();
+    nodes.reserve(window.count() + extra.len());
     // Kept parallel to `nodes` for the trail, which matches remembered
     // pitches against every node afterwards and would otherwise have to
     // recompute each node's pitch class to do it.

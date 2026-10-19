@@ -1026,3 +1026,45 @@ fn offscreen_halos_draw_only_where_their_footprint_reaches() {
         "the near placement lights no pixel either; it is not the branch it claims",
     );
 }
+
+/// A frame built in the vectors a bigger frame gave back is the frame built in
+/// fresh ones: each is emptied before it is filled, so nothing the last frame
+/// left reaches this one.
+#[test]
+fn a_frame_built_in_lent_vectors_is_the_frame_built_fresh() {
+    let glyph = crate::text::tests::glyph();
+    let build = |scene: &Scene, labels: LatticeLabels, vecs| {
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let size = egui::vec2(256.0, 256.0);
+        LatticeCallback::from_scene_in(vecs, scene, labels, size, format, 7, None)
+    };
+    let frames = std::sync::Arc::new(LatticeFrames::default());
+    let big = parity_scene();
+    let every_name = names((0..big.nodes.len() as u32).map(|i| (i, vec![glyph; 3])).collect());
+    let mut first = build(&big, every_name, frames.lend());
+    first.frames = Some(frames.clone());
+    let left = (first.instances.len(), first.draws.len(), first.glyphs.len(), first.casters.len());
+    drop(first);
+
+    let small = idle_scene();
+    let a_name = || names(vec![(1, vec![glyph])]);
+    let reused = build(&small, a_name(), frames.lend());
+    let fresh = build(&small, a_name(), crate::lattice_frame::FrameVecs::default());
+    assert!(
+        left.0 > reused.instances.len()
+            && left.1 > reused.draws.len()
+            && left.2 > reused.glyphs.len()
+            && left.3 > reused.casters.len(),
+        "the first frame has to leave more behind than the second fills: {left:?}",
+    );
+    assert!(reused.instances.capacity() >= left.0, "not built in the first frame's vectors");
+    let bytes = |v: &[GpuInstance]| bytemuck::cast_slice::<_, u8>(v).to_vec();
+    assert_eq!(bytes(&reused.instances), bytes(&fresh.instances));
+    assert_eq!(reused.glow_owners, fresh.glow_owners);
+    assert_eq!(reused.glyphs, fresh.glyphs);
+    assert_eq!(reused.casters, fresh.casters);
+    assert_eq!(reused.node_cells, fresh.node_cells);
+    assert_eq!(reused.draws, fresh.draws);
+    let bytes = |v: &[GpuPlus]| bytemuck::cast_slice::<_, u8>(v).to_vec();
+    assert_eq!(bytes(&reused.pluses), bytes(&fresh.pluses));
+}
