@@ -26,19 +26,27 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
     value: &mut T,
     options: &[(T, &str)],
 ) {
-    let widths: Vec<f32> = options.iter().map(|(_, label)| option_width(ui, label)).collect();
+    let widths: Vec<f32> =
+        options.iter().map(|(_, label)| option_width(ui, tab_label(label))).collect();
     let selected = options.iter().position(|(choice, _)| *choice == *value);
     let shown = strip_fit(&widths, ui.spacing().item_spacing.x, ui.available_width(), |shown| {
         overflow_width(ui, selected.filter(|&at| at >= shown).map(|at| options[at].1))
     });
     ui.horizontal(|ui| {
         for &(choice, label) in &options[..shown] {
-            ui.selectable_value(value, choice, label);
+            ui.selectable_value(value, choice, tab_label(label));
         }
         if shown < options.len() {
             overflow(ui, id, value, &options[shown..]);
         }
     });
+}
+
+/// A tab's name on the strip, in the heading weight: the tabs say where one
+/// is, as a section's heading does. The overflow menu's entries are a menu's,
+/// and stay in the body weight.
+fn tab_label(label: &str) -> egui::RichText {
+    egui::RichText::new(label).heading()
 }
 
 /// How many leading tabs fit beside the overflow button they would need,
@@ -60,8 +68,8 @@ fn strip_fit(widths: &[f32], gap: f32, room: f32, overflow: impl Fn(usize) -> f3
 fn overflow_width(ui: &Ui, label: Option<&str>) -> f32 {
     let icon = ui.spacing().icon_width;
     match label {
-        Some(label) => option_width(ui, label) + ui.spacing().icon_spacing + icon,
-        None => (icon + 2.0 * ui.spacing().button_padding.x).max(ui.spacing().interact_size.y),
+        Some(label) => option_width(ui, tab_label(label)) + ui.spacing().icon_spacing + icon,
+        None => (icon + 2.0 * super::rows::button_margin_x(ui)).max(ui.spacing().interact_size.y),
     }
 }
 
@@ -70,7 +78,9 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
     let icon = ui.make_persistent_id((id, "overflow icon"));
     let size = Vec2::splat(ui.spacing().icon_width);
     let button = match current {
-        Some(label) => egui::Button::selectable(true, (label, Atom::custom(icon, size))).truncate(),
+        Some(label) => {
+            egui::Button::selectable(true, (tab_label(label), Atom::custom(icon, size))).truncate()
+        }
         None => egui::Button::selectable(false, Atom::custom(icon, size))
             .min_size(Vec2::splat(ui.spacing().interact_size.y)),
     };
@@ -127,7 +137,7 @@ fn paint_chevron(ui: &Ui, rect: Rect, color: egui::Color32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{option_width, overflow_width, strip_fit, tab_strip};
+    use super::{option_width, overflow_width, strip_fit, tab_label, tab_strip};
 
     const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Colors")];
 
@@ -139,7 +149,8 @@ mod tests {
         let ctx = crate::tests::probe::themed();
         crate::tests::probe::frame_full(&ctx, egui::vec2(600.0, 300.0), |ui| {
             let gap = ui.spacing().item_spacing.x;
-            let tabs: f32 = TABS[..count].iter().map(|(_, l)| option_width(ui, l) + gap).sum();
+            let tabs: f32 =
+                TABS[..count].iter().map(|(_, l)| option_width(ui, tab_label(l)) + gap).sum();
             room = tabs + overflow_width(ui, None) + 1.0;
         });
         room
@@ -181,6 +192,23 @@ mod tests {
         let (labels, dots) = drawn(room_for(2), 3);
         assert_eq!(labels.last().map(String::as_str), Some("Colors"), "{labels:?}");
         assert_eq!(dots, 0, "the named overflow button still drew dots");
+        // In the tabs' weight, being one of them.
+        let mut value = 3;
+        let shapes = crate::tests::probe::painted_full(egui::vec2(room_for(2), 60.0), |ui| {
+            tab_strip(ui, "tabs", &mut value, &TABS)
+        })
+        .shapes;
+        let family = shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Colors" => {
+                Some(t.galley.job.sections[0].format.font_id.family.clone())
+            }
+            _ => None,
+        });
+        let heading = crate::tests::probe::themed().global_style().text_styles
+            [&egui::TextStyle::Heading]
+            .family
+            .clone();
+        assert_eq!(family, Some(heading), "the named overflow button is not in the tabs' weight");
     }
 
     /// Where not one tab fits, the strip is the named overflow button alone,
@@ -213,7 +241,7 @@ mod tests {
     /// next, so a label free to wrap would stay inside the first width.
     #[test]
     fn the_overflow_menu_grows_to_fit_a_longer_hidden_tab() {
-        const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Ab")];
+        const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Abc")];
         let ctx = crate::tests::probe::themed();
         let mut value = 0;
         let mut frame = |width: f32, events: Vec<egui::Event>| {
@@ -227,7 +255,8 @@ mod tests {
         // Room for all but the last tab, then for all but the last two.
         let mut room = [0.0; 2];
         crate::tests::probe::frame_full(&ctx, egui::vec2(600.0, 300.0), |ui| {
-            let widths: Vec<f32> = TABS.iter().map(|(_, l)| option_width(ui, l)).collect();
+            let widths: Vec<f32> =
+                TABS.iter().map(|(_, l)| option_width(ui, tab_label(l))).collect();
             let gap = ui.spacing().item_spacing.x;
             let dots = overflow_width(ui, None);
             let run = |count: usize| widths[..count].iter().sum::<f32>() + gap * count as f32;

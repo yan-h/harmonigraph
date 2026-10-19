@@ -645,7 +645,7 @@ fn section_ui(
             );
             let galley = pane.painter().layout_no_wrap(
                 title.into(),
-                egui::TextStyle::Button.resolve(pane.style()),
+                egui::TextStyle::Heading.resolve(pane.style()),
                 theme::text(),
             );
             if vertical_rail {

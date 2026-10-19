@@ -503,9 +503,9 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
-    // A bar under an open subsection fills THAT column, which is the page's
-    // less the fold's indent. Counted per case, and held to the same count at
-    // every width, for the reason the weight bars are.
+    // A bar under an open subsection or in a block fills THAT column, which is
+    // the page's less the fold's or the block's indent. Counted per case, and
+    // held to the same count at every width, for the reason the weight bars are.
     let indent = fold_indent(&super::probe::themed());
     let cases = settings_cases();
     let mut nested_per_case: Vec<Option<usize>> = vec![None; cases.len()];
@@ -542,7 +542,12 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
             let mut nested = 0;
             let mut links = Vec::new();
             for (track_rect, bar) in tracks.iter().zip(&widths) {
-                if (bar - width).abs() < 1.0 {
+                // Placed too: a bar in a block or a fold sized to the whole
+                // column starts an indent in and overruns it, widening the
+                // column for every row under it.
+                if (bar - width).abs() < 1.0
+                    && (track_rect.left() - crate::theme::PANE_INSET).abs() < 1.0
+                {
                     continue;
                 }
                 if (bar - track).abs() < 1.0 {
@@ -551,10 +556,12 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                 }
                 // Placed as well as sized: a top-level bar one indent short
                 // has the nested width too, but starts at the column's edge.
-                let nested_left = crate::theme::PANE_INSET + indent;
-                if (bar - (width - indent)).abs() < 1.0
-                    && (track_rect.left() - nested_left).abs() < 1.0
-                {
+                // A block's rows stand in by its own, tighter indent.
+                let nested_by = |indent: f32| {
+                    (bar - (width - indent)).abs() < 1.0
+                        && (track_rect.left() - (crate::theme::PANE_INSET + indent)).abs() < 1.0
+                };
+                if nested_by(indent) || nested_by(crate::panes::BLOCK_INDENT) {
                     nested += 1;
                     continue;
                 }
@@ -1803,6 +1810,41 @@ fn heading_color(out: &egui::FullOutput, leaf: egui::Rect, heading: &str) -> egu
             _ => None,
         })
         .unwrap_or_else(|| panic!("no {heading} heading"))
+}
+
+/// Text that says where one is — a section's heading, a tab, a block's title —
+/// is set in the heading weight, and the rows under it in the body weight.
+#[test]
+fn headings_tabs_and_block_titles_alone_take_the_heading_weight() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::System);
+    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0));
+    h.settle(&mut state);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let out = h.frame(&mut state, vec![]);
+    let family = |needle: &str| {
+        out.shapes
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) if t.galley.text() == needle && leaf.contains(t.pos) => {
+                    Some(t.galley.job.sections[0].format.font_id.family.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {needle} drawn"))
+    };
+    let heading = egui::TextStyle::Heading.resolve(&h.ctx.global_style()).family;
+    assert_ne!(heading, egui::FontFamily::Proportional);
+    for text in ["PERFORMANCE", "System", "Editor and exports"] {
+        assert_eq!(family(text), heading, "{text} is not in the heading weight");
+    }
+    for text in ["Lattice resolution", "Editor frame limit (fps)", "Uncapped"] {
+        assert_eq!(
+            family(text),
+            egui::FontFamily::Proportional,
+            "{text} is not in the body weight"
+        );
+    }
 }
 
 /// A feature's switch in its section heading, in front of the name, turns the

@@ -46,7 +46,14 @@ pub(super) fn camera(
     appearance: &mut AppearanceDocument,
     interaction: &mut crate::Interaction,
 ) {
-    super::block(ui, "Camera");
+    super::block(ui, "Camera", |ui| camera_rows(ui, appearance, interaction));
+}
+
+fn camera_rows(
+    ui: &mut egui::Ui,
+    appearance: &mut AppearanceDocument,
+    interaction: &mut crate::Interaction,
+) {
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
@@ -239,7 +246,10 @@ pub(super) fn camera(
 pub(super) fn sevens(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     // Named, because the strip itself says only "Layers", and under View that
     // could as well be the note's.
-    super::block(ui, "Seventh layers");
+    super::block(ui, "Seventh layers", |ui| sevens_rows(ui, appearance));
+}
+
+fn sevens_rows(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     // Which sheets, and which of them is home, in lattice steps from C (v1's
     // Grid Z). One control because the three are one answer: an end means
     // nothing without knowing where home is, and home means nothing outside

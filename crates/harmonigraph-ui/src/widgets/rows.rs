@@ -304,7 +304,7 @@ pub(crate) fn preset_row(
 ) {
     let gap = theme::button_gap(theme::ui_scale(ui.ctx()));
     let width = option_width(ui, name)
-        + labels.iter().map(|label| option_width(ui, label)).sum::<f32>()
+        + labels.iter().map(|label| option_width(ui, *label)).sum::<f32>()
         + ui.spacing().item_spacing.x
         + gap * labels.len().saturating_sub(1) as f32;
     if width <= ui.available_width() {
@@ -321,15 +321,29 @@ pub(crate) fn preset_row(
 }
 
 /// Natural width of a selectable option, using the same font and padding as
-/// the button. Width decisions are recomputed from this frame's theme.
-pub(crate) fn option_width(ui: &Ui, label: &str) -> f32 {
-    let galley = egui::WidgetText::from(label).into_galley(
+/// the button (or the style `label` carries of its own, as a tab's does). Width
+/// decisions are recomputed from this frame's theme.
+///
+/// No floor under it: egui floors a button's height at `interact_size`, never
+/// its width. Floored, a short option such as "30" was judged up to 22 points
+/// wider than it drew, and a row of them fell back to a dropdown with room to
+/// spare.
+pub(crate) fn option_width(ui: &Ui, label: impl Into<egui::WidgetText>) -> f32 {
+    let galley = label.into().into_galley(
         ui,
         Some(egui::TextWrapMode::Extend),
         f32::INFINITY,
         TextStyle::Button,
     );
-    (galley.size().x + 2.0 * ui.spacing().button_padding.x).max(ui.spacing().interact_size.x)
+    galley.size().x + 2.0 * button_margin_x(ui)
+}
+
+/// A button's margin each side of its content as egui draws it: the padding
+/// rounded, because egui keeps a frame's margin in whole points. At a
+/// fractional scale the unrounded padding measured three options a few points
+/// short, and a row judged to fit drew past its column.
+pub(crate) fn button_margin_x(ui: &Ui) -> f32 {
+    ui.spacing().button_padding.x.round()
 }
 
 /// A single-line choice group. Narrow groups become a current-value dropdown,
@@ -344,12 +358,23 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
             tighten(ui);
+            // One button's fill under every option, laid down first and sized
+            // once they are: an unselected option draws no fill of its own, and
+            // without one the options read as more words after the row's name
+            // rather than as the control beside it. A button's fill rather than
+            // a value bar's well, which says "a range to drag" and is the one
+            // thing a bar is found by.
+            let fill = ui.painter().add(egui::Shape::Noop);
+            let mut span = egui::Rect::NOTHING;
             for &(choice, label, hint) in options {
                 let response = ui.selectable_value(value, choice, label);
+                span = span.union(response.rect);
                 if !hint.is_empty() {
                     response.on_hover_text(hint).on_disabled_hover_text(hint);
                 }
             }
+            let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
+            ui.painter().set(fill, egui::Shape::rect_filled(span, radius, theme::widget()));
         });
     } else {
         choice_menu(ui, id, value, options);
@@ -358,7 +383,7 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
 
 /// Natural width of `options` laid out as buttons by [`choice_buttons`].
 fn choice_buttons_width<T>(ui: &Ui, options: &[(T, &str, &str)]) -> f32 {
-    options.iter().map(|(_, label, _)| option_width(ui, label)).sum::<f32>()
+    options.iter().map(|(_, label, _)| option_width(ui, *label)).sum::<f32>()
         + theme::button_gap(theme::ui_scale(ui.ctx())) * options.len().saturating_sub(1) as f32
 }
 
@@ -448,7 +473,7 @@ pub fn choice_row<T: Copy + PartialEq>(
     } else {
         let selected_width = options
             .iter()
-            .map(|(_, label, _)| option_width(ui, label))
+            .map(|(_, label, _)| option_width(ui, *label))
             .reduce(f32::max)
             .unwrap_or(0.0)
             + ui.spacing().icon_width
@@ -544,5 +569,61 @@ mod tests {
             rects[2].top() > rects[0].top(),
             "three wide buttons stayed on one line: {rects:?}"
         );
+    }
+
+    const OPTIONS: [(u8, &str, &str); 3] =
+        [(0, "Perspective", ""), (1, "Orthographic", ""), (2, "30", "")];
+
+    /// A choice row's options stand on one button fill spanning them all, so
+    /// they read as the control beside the row's name rather than as more words
+    /// after it; the name stands on the page.
+    #[test]
+    fn a_choice_rows_options_share_one_fill_and_its_name_none() {
+        let mut value = 0;
+        let out = painted_in(egui::vec2(600.0, 100.0), |ui| {
+            choice_row(ui, "Projection", &mut value, &OPTIONS)
+        });
+        let fills: Vec<egui::Rect> = out
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r) if r.fill == theme::widget() => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        let under = |text: &str| -> Vec<egui::Rect> {
+            let at = out
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) if t.galley.text() == text => {
+                        Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {text} drawn"));
+            fills.iter().copied().filter(|fill| fill.contains(at)).collect()
+        };
+        assert_eq!(under("Projection"), [], "the name stands on a fill");
+        let fill = under("Perspective");
+        assert_eq!(fill.len(), 1, "the first option stands on {fill:?}");
+        for (_, option, _) in &OPTIONS[1..] {
+            assert_eq!(under(option), fill, "{option} is not on the first option's fill");
+        }
+    }
+
+    /// The width a choice group is judged by is the width it draws, at a
+    /// fractional scale too, where egui rounds each button's margin to whole
+    /// points, and with an option shorter than egui's interact width, which no
+    /// button is floored at: a group judged to fit and drawn wider overruns its
+    /// column, and one judged wider than it draws folds into a dropdown early.
+    #[test]
+    fn a_choice_group_draws_the_width_it_was_judged_by() {
+        let ctx = crate::tests::probe::themed_scaled(1.1);
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let judged = choice_buttons_width(ui, &OPTIONS);
+            let mut value = 0;
+            let drawn = ui.scope(|ui| choice_buttons(ui, "group", &mut value, &OPTIONS)).response;
+            let drawn = drawn.rect.width();
+            assert!((drawn - judged).abs() < 0.5, "judged {judged}pt, drew {drawn}pt");
+        });
     }
 }
