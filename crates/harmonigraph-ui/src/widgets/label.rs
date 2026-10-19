@@ -15,7 +15,7 @@
 use egui::{Response, Sense, Ui, WidgetText};
 
 /// How far below the top of its line box a galley's capitals start, and how
-/// far above its bottom its last baseline sits: the two lengths [`label`]
+/// far above its bottom its last baseline is drawn: the two lengths [`label`]
 /// trims off. Zero for a galley with no glyphs.
 pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     let (Some(first), Some(last)) = (galley.rows.first(), galley.rows.last()) else {
@@ -27,9 +27,9 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     let Some(font) = galley.job.sections.first().map(|s| s.format.font_id.clone()) else {
         return (0.0, 0.0);
     };
-    let cap = cap_height(ui, font);
+    let (cap, drop) = cap_ink(ui, font);
     let top = first.pos.y + first_glyph.pos.y - cap;
-    let bottom = galley.size().y - (last.pos.y + last_glyph.pos.y);
+    let bottom = galley.size().y - (last.pos.y + last_glyph.pos.y + drop);
     (top.max(0.0), bottom.max(0.0))
 }
 
@@ -46,13 +46,19 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
 pub(crate) fn text_at(row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
     egui::pos2(x, row.center().y - galley.size().y * 0.5)
 }
-/// The height of a capital above the baseline in `font`, read off the ink of
-/// an "H". egui caches the layout, so asking every frame is a lookup.
-fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
+/// Where an "H" in `font` is drawn against the baseline egui lays it on: how
+/// far its top stands above it, and how far its foot, the baseline as drawn,
+/// stands below it. Both off the ink, because the chrome's face is drawn below
+/// its layout by `theme::CAP_CENTRING`, so the drawn baseline is not the laid
+/// out one. egui caches the layout, so asking every frame is a lookup.
+fn cap_ink(ui: &Ui, font: egui::FontId) -> (f32, f32) {
     let h = ui.fonts_mut(|fonts| fonts.layout_no_wrap("H".into(), font, egui::Color32::WHITE));
     match h.rows.first().and_then(|row| Some((row, row.glyphs.first()?))) {
-        Some((row, glyph)) => row.pos.y + glyph.pos.y - h.mesh_bounds.min.y,
-        None => 0.0,
+        Some((row, glyph)) => {
+            let baseline = row.pos.y + glyph.pos.y;
+            (baseline - h.mesh_bounds.min.y, h.mesh_bounds.max.y - baseline)
+        }
+        None => (0.0, 0.0),
     }
 }
 
@@ -224,6 +230,40 @@ mod tests {
                     "{place}: a {next} stands {gap}pt under the line, not {GROUP_GAP}pt",
                 );
             }
+        }
+    }
+
+    /// A trimmed label's box is its capitals as DRAWN, top to baseline, at
+    /// 1x and 2x. The chrome's face is drawn a little below where egui lays it
+    /// out (`theme::CAP_CENTRING`), and a box trimmed to the laid-out baseline
+    /// would stop short of the ink and hang the text into the gap under it.
+    #[test]
+    fn a_trimmed_label_is_its_capitals_as_drawn() {
+        for ppp in [1.0, 2.0] {
+            let ctx = crate::tests::probe::themed_at(ppp);
+            let mut rect = egui::Rect::NOTHING;
+            let out = ctx.run_ui(Default::default(), |ui| {
+                rect = ui.horizontal(|ui| label(ui, "HEH").rect).inner;
+            });
+            let ink = out
+                .shapes
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) => Some(t.galley.mesh_bounds.translate(t.pos.to_vec2())),
+                    _ => None,
+                })
+                .expect("the label painted no text");
+            // Within the quarter point a 2x display rounds a glyph to.
+            let slack = 0.25;
+            assert!(
+                (ink.top() - rect.top()).abs() <= slack
+                    && (ink.bottom() - rect.bottom()).abs() <= slack,
+                "at ppp {ppp} the caps are drawn {}..{} in a box {}..{}",
+                ink.top(),
+                ink.bottom(),
+                rect.top(),
+                rect.bottom(),
+            );
         }
     }
 }
