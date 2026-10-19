@@ -542,7 +542,12 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
             let mut nested = 0;
             let mut links = Vec::new();
             for (track_rect, bar) in tracks.iter().zip(&widths) {
-                if (bar - width).abs() < 1.0 {
+                // Placed too: a bar in a block or a fold sized to the whole
+                // column starts an indent in and overruns it, widening the
+                // column for every row under it.
+                if (bar - width).abs() < 1.0
+                    && (track_rect.left() - crate::theme::PANE_INSET).abs() < 1.0
+                {
                     continue;
                 }
                 if (bar - track).abs() < 1.0 {
