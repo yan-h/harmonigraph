@@ -127,7 +127,7 @@ impl Resources {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let dummy = shadow::ShadowTarget::new(device, &atlas, &sampler, [1, 1], "spectral");
+        let dummy = shadow::ShadowTarget::new(device, &atlas, &sampler, [1, 1], "spectral_dummy");
         let cells = shadow::create_cell_pipelines(device, &atlas);
         Resources {
             layouts: Layouts { atlas, casters },

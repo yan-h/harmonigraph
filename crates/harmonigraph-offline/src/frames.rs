@@ -1274,8 +1274,8 @@ mod tests {
     /// A resize holds one size's targets at a time (#1508). Every target keyed
     /// on a pane's size — the lattice's offscreen set, the roll's, the spiral's
     /// glow chain and the spectral cloud's — is dropped before its replacement
-    /// is built, and so is the shadow atlas the lattice pane and the spectral
-    /// surface each grow. A rebuild that built first would hold two of the
+    /// is built, and so is the spectral surface's shadow atlas, which grows in
+    /// place (the lattice's is rebuilt with its offscreen set). A rebuild that built first would hold two of the
     /// target it rebuilds, so no texture's label may ever have had more copies
     /// alive at once than it holds at rest (#1518).
     ///
