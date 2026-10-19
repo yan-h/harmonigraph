@@ -50,13 +50,13 @@ uint unpackUint32_(uint b0, uint b1, uint b2, uint b3) {
 bool cell_packed(
     metal::float4 cell
 ) {
-    bool local = {};
+    bool local_1 = {};
     if (cell.z > 0.0) {
-        local = cell.w > 0.0;
+        local_1 = cell.w > 0.0;
     } else {
-        local = false;
+        local_1 = false;
     }
-    bool _e10 = local;
+    bool _e10 = local_1;
     return _e10;
 }
 
@@ -119,16 +119,23 @@ vertex vs_spectral_shadowOutput vs_spectral_shadow(
         box_who = unpackFloat32x4_(vb_14_elem.data[48], vb_14_elem.data[49], vb_14_elem.data[50], vb_14_elem.data[51], vb_14_elem.data[52], vb_14_elem.data[53], vb_14_elem.data[54], vb_14_elem.data[55], vb_14_elem.data[56], vb_14_elem.data[57], vb_14_elem.data[58], vb_14_elem.data[59], vb_14_elem.data[60], vb_14_elem.data[61], vb_14_elem.data[62], vb_14_elem.data[63]);
     }
     SpectralShadowOut out = {};
+    bool local = {};
     metal::float2 corner = metal::float2(((vertex_ & 1u) == 1u) ? 1.0 : 0.0, ((vertex_ & 2u) == 2u) ? 1.0 : 0.0);
     metal::float2 at = box_rect.xy + (corner * box_rect.zw);
     metal::float4 _e31 = no_quad();
     metal::float4 _e32 = on_screen(at, locals);
     bool _e33 = cell_packed(box_cell);
-    out.position = _e33 ? _e32 : _e31;
+    if (_e33) {
+        local = box_who.y > 0.5;
+    } else {
+        local = false;
+    }
+    bool _e40 = local;
+    out.position = _e40 ? _e32 : _e31;
     out.at = at;
     out.rim = rim;
     out.who = naga_f2u32(box_who.x + 0.5);
-    SpectralShadowOut _e42 = out;
-    const auto _tmp = _e42;
+    SpectralShadowOut _e49 = out;
+    const auto _tmp = _e49;
     return vs_spectral_shadowOutput { _tmp.position, _tmp.at, _tmp.rim, _tmp.who };
 }
