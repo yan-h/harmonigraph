@@ -1,8 +1,10 @@
 //! Linear-power spectrogram history with geometrically coarsened retention.
 //! Each FFT-center point sample contributes equally. Coarsening adds powers
-//! and represented sample counts without quantization; a display slab divides
-//! once and only then encodes dB. A coarse column loses within-group timing,
-//! so a later refold can differ at slab boundaries from the raw-arrival grid.
+//! and represented sample counts; a display slab divides once and only then
+//! encodes dB. Powers are stored as bfloat16 (see [`SpectrogramColumn`]),
+//! which rounds by far less than a dB step. A coarse column loses
+//! within-group timing, so a later refold can differ at slab boundaries from
+//! the raw-arrival grid.
 
 use std::collections::VecDeque;
 
@@ -120,29 +122,54 @@ pub fn db_of(bucket: BucketDb) -> f32 {
 
 /// A raw FFT-center point sample or a group of them. The count is essential:
 /// a coarse mean must not receive the same weight as one fine measurement.
+///
+/// Each power is held as a bfloat16: the top half of the f32, rounded to
+/// nearest even. That keeps f32's exponent, so the -120 dB floor (1e-12) is
+/// far inside its range where an IEEE half would flush it to zero, and gives
+/// up mantissa the display never reads: one rounding is at most 2^-8 of the
+/// value, about 0.017 dB, and a column's first rounding plus its six merges
+/// stay under a quarter of a [`DB_STEP`]. Only a power that already sat that
+/// close to a step boundary can change its byte. It halves the plugin's
+/// largest CPU-side structure, a full history, from about 125 MB to 63 MB.
 pub struct SpectrogramColumn {
     pub time: f64,
-    pub power_sum: Box<[f32; SPECTRUM_BINS]>,
+    power_sum: Box<[u16; SPECTRUM_BINS]>,
     pub count: u32,
+}
+
+/// Nonnegative finite f32 to bfloat16, rounding to nearest even.
+fn bf16(power: f32) -> u16 {
+    let bits = power.to_bits();
+    ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16) as u16
+}
+
+fn from_bf16(stored: u16) -> f32 {
+    f32::from_bits(u32::from(stored) << 16)
 }
 
 impl SpectrogramColumn {
     pub fn from_power(time: f64, power: &[f32; SPECTRUM_BINS]) -> Self {
         Self {
             time,
-            power_sum: Box::new(power.map(|p| if p.is_finite() { p.max(0.0) } else { 0.0 })),
+            power_sum: Box::new(power.map(|p| bf16(if p.is_finite() { p.max(0.0) } else { 0.0 }))),
             count: 1,
         }
     }
 
+    /// Each bin's power summed over the [`count`](Self::count) samples this
+    /// column stands for.
+    pub fn power_sum(&self) -> impl ExactSizeIterator<Item = f32> + '_ {
+        self.power_sum.iter().map(|&p| from_bf16(p))
+    }
+
     /// Diagnostic dB readout; aggregation never reads these quantized bytes.
     pub fn db(&self) -> Box<ColumnDb> {
-        Box::new(self.power_sum.map(|p| quantize(p / self.count as f32)))
+        Box::new(self.power_sum.map(|p| quantize(from_bf16(p) / self.count as f32)))
     }
 
     fn absorb(&mut self, older: &Self) {
         for (mine, &theirs) in self.power_sum.iter_mut().zip(older.power_sum.iter()) {
-            *mine += theirs;
+            *mine = bf16(from_bf16(*mine) + from_bf16(theirs));
         }
         self.time = (self.time * self.count as f64 + older.time * older.count as f64)
             / (self.count + older.count) as f64;
@@ -205,7 +232,7 @@ impl SpectrumHistory {
     /// Total tiers, the fine one included.
     pub const TIERS: usize = 7;
     /// The most columns ever held. At 8 ms per column this reaches ~17 minutes
-    /// (see [`reach`](Self::reach)) for about 120 MB.
+    /// (see [`reach`](Self::reach)) for about 63 MB.
     pub const MAX_COLUMNS: usize = Self::FINE_COLUMNS + (Self::TIERS - 1) * Self::COARSE_COLUMNS;
 
     /// How many columns tier `k` holds before it merges into the next.
@@ -526,21 +553,62 @@ mod tests {
         assert!((held - want).abs() < want * 0.05, "reaches back {held} s, advertised {want} s",);
     }
 
+    /// Small whole powers, so every coarse sum stays exact in bfloat16 and a
+    /// single column lost or counted twice shows as an inequality.
     #[test]
     fn coarse_tiers_conserve_linear_power_and_sample_count() {
         let mut history = SpectrumHistory::default();
         let n = SpectrumHistory::FINE_COLUMNS * 4;
         let mut expected = 0.0f64;
         for i in 0..n {
-            let p = if i % 7 == 0 { 1.0 } else { 1e-6 };
+            let p = if i % 7 == 0 { 2.0 } else { 1.0 };
             expected += p as f64;
             history.push(col(i as f64 * 0.008, p));
         }
         assert!(history.front().unwrap().count >= 4, "fixture reaches coarse tiers");
         assert_eq!(history.iter().map(|c| c.count as usize).sum::<usize>(), n);
-        let actual: f64 = history.iter().map(|c| c.power_sum[0] as f64).sum();
-        assert!((actual - expected).abs() < expected * 1e-6);
-        assert_eq!(history.iter().map(|c| c.power_sum[1]).sum::<f32>(), 0.0);
+        let bin = |b: usize| history.iter().map(move |c| c.power_sum().nth(b).unwrap() as f64);
+        assert_eq!(bin(0).sum::<f64>(), expected);
+        assert_eq!(bin(1).sum::<f64>(), 0.0);
+    }
+
+    /// Storage rounding stays under a quarter of a dB step through the deepest
+    /// tier, at every level the display reads, down to the floor that an IEEE
+    /// half would flush to zero.
+    ///
+    /// Columns alternate 1.3 and 0.7 of a level, so every merge adds two
+    /// different values and rounds (doubling one value never would), while any
+    /// merged run, being an even number of consecutive columns, still means
+    /// exactly the level.
+    #[test]
+    fn bfloat16_storage_stays_within_a_quarter_step_through_every_merge() {
+        const INTERVAL: f64 = 0.008;
+        const SWING: [f32; 2] = [1.3, 0.7];
+        let db = |bin: usize| DB_FLOOR + 128.0 * bin as f32 / (SPECTRUM_BINS - 1) as f32;
+        let level = |bin: usize| 10f32.powf(0.1 * db(bin));
+        let mut history = SpectrumHistory::default();
+        let pushes = (SpectrumHistory::reach(INTERVAL) / INTERVAL) as usize;
+        for i in 0..pushes {
+            let power = std::array::from_fn(|bin| level(bin) * SWING[i % 2]);
+            history.push(SpectrogramColumn::from_power(i as f64 * INTERVAL, &power));
+        }
+        let deepest = 1 << (SpectrumHistory::TIERS - 1);
+        assert_eq!(history.front().unwrap().count, deepest, "fixture reaches the deepest tier");
+        for column in history.iter() {
+            let swing = match column.count {
+                1 => SWING[(column.time / INTERVAL).round() as usize % 2],
+                _ => 1.0,
+            };
+            for (bin, sum) in column.power_sum().enumerate() {
+                let held = 10.0 * (sum / column.count as f32 / swing).log10();
+                assert!(
+                    (held - db(bin)).abs() < DB_STEP / 4.0,
+                    "bin {bin} at {} dB reads {held} dB after {} merges",
+                    db(bin),
+                    column.count.ilog2(),
+                );
+            }
+        }
     }
 
     /// A merged column stands for the interval it covers, so its timestamp must

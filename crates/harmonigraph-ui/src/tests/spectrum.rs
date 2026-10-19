@@ -27,8 +27,8 @@ fn display_recovers_after_nonfinite_audio() {
     let now = 1.0 + clean.len() as f64 / 48_000.0;
     spectrum.push_samples(&clean, 1, 48_000.0, now, &config);
     let last = spectrum.history().back().expect("clean input emitted columns");
-    assert!(last.power_sum.iter().all(|p| p.is_finite()));
-    assert!(last.power_sum.iter().any(|p| *p > 0.01), "latest FFT measures the clean tone");
+    assert!(last.power_sum().all(|p| p.is_finite()));
+    assert!(last.power_sum().any(|p| p > 0.01), "latest FFT measures the clean tone");
     let shown = spectrum.display(now).expect("clean input is flowing");
     assert!(shown.iter().all(|p| p.is_finite()));
     assert!(shown.iter().any(|p| *p > 0.01), "the curve recovers, not just the history");

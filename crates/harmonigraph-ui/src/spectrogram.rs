@@ -641,7 +641,7 @@ impl Default for PowerMean {
 
 impl PowerMean {
     fn add(&mut self, col: &crate::SpectrogramColumn) {
-        for (sum, &fresh) in self.sum.iter_mut().zip(col.power_sum.iter()) {
+        for (sum, fresh) in self.sum.iter_mut().zip(col.power_sum()) {
             *sum += fresh as f64;
         }
         self.count += col.count as u64;
