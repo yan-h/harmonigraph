@@ -1692,7 +1692,9 @@ impl BloomChain {
         })
     }
 
-    /// The blur's scale per axis, in units of its own nine-tap profile.
+    /// The blur's scale per axis, in units of its own nine-tap profile, and
+    /// then the half target's size, which the bright pass needs to know how
+    /// much of the picture each of its texels covers.
     ///
     /// Less the spread the tent downsample (1/8 of a quarter texel squared
     /// over the box it replaced) and the B-spline read (1/6 over bilinear) add
@@ -1711,7 +1713,8 @@ impl BloomChain {
             let scale = radius * (n.div_ceil(4).max(1) * 4) as f32 / n.max(1) as f32;
             (scale * scale - FIXED_SPREAD).max(0.25 * scale * scale).sqrt()
         };
-        [axis(screen[0]), axis(screen[1]), 0.0, 0.0]
+        let ([hw, hh], _) = bloom_sizes(screen);
+        [axis(screen[0]), axis(screen[1]), hw as f32, hh as f32]
     }
 
     fn set_owner_size(&self, queue: &wgpu::Queue, owner_pixels: egui::Vec2) {
@@ -1857,7 +1860,10 @@ impl BloomChain {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            if index >= 2 {
+            // Everything but the downsample reads it. The roll's
+            // `fs_bright_coverage` does not, and a group its layout lacks is
+            // simply not read.
+            if index != 1 {
                 pass.set_bind_group(1, &self.scale_bind_group, &[]);
             }
             pass.draw(0..4, 0..1);
@@ -2702,8 +2708,8 @@ fn create_post_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
-    let bloom_layout =
-        matches!(entry_point, "fs_blur_h" | "fs_blur_v").then(|| BloomChain::scale_layout(device));
+    let bloom_layout = matches!(entry_point, "fs_bright" | "fs_blur_h" | "fs_blur_v")
+        .then(|| BloomChain::scale_layout(device));
     let mut layouts = vec![Some(bind_group_layout)];
     if let Some(layout) = &bloom_layout {
         layouts.push(Some(layout));

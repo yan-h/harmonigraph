@@ -4,7 +4,7 @@
 // in lattice.wgsl.
 //
 // Every pass draws the same viewport-filling quad (vs_blit):
-//   fs_bright     scene -> half res, soft-knee luminance threshold
+//   fs_bright     scene -> half res, box-averaged, soft-knee luminance threshold
 //   fs_bright_coverage  premultiplied mark -> half res, threshold before coverage
 //   fs_blit       plain copy, for reading a target back unfiltered
 //   fs_downsample half -> quarter, through a tent
@@ -57,8 +57,11 @@ struct AddUniforms {
 // Ordered local-notation transmittance, with foreground ink coverage restored.
 @group(0) @binding(6) var local_shadow_tex: texture_2d<f32>;
 
-// Owning pane scale in quarter-target texels. Independent of cropped render
-// regions, screen clipping and supersampling. Only the blur pipelines bind it.
+// xy: the owning pane's scale in quarter-target texels. Independent of
+// cropped render regions, screen clipping and supersampling.
+// zw: the half target's size in texels, which the bright pass maps its box
+// into the scene through.
+// The bright pass and the blurs bind it.
 @group(1) @binding(0) var<uniform> bloom_scale: vec4<f32>;
 
 struct BlitOut {
@@ -152,10 +155,44 @@ fn bloom_sample(tex: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
 const BLOOM_THRESHOLD: f32 = 0.35;
 const BLOOM_KNEE: f32 = 0.25;
 
+// The scene -> half step, averaging the box each half texel covers in the
+// scene rather than taking one bilinear tap at its centre. One tap is that box
+// only when the scene is exactly twice the half; at any other ratio — a pane
+// side not a multiple of 4, or a render scale other than 1 — it drifts toward
+// a point sample, and a thin bright line's halo pulsed as it crossed the taps.
+// Adjacent texels go in pairs, each pair one bilinear tap placed by their
+// shares of the box, so the exact 2:1 case is still the one tap it was, and
+// the spiral's marks, drawn at half size already, one tap at a texel centre.
 @fragment
 fn fs_bright(in: BlitOut) -> @location(0) vec4<f32> {
-    let c = textureSample(scene_tex, scene_samp, in.uv);
+    let size = vec2<f32>(textureDimensions(scene_tex));
+    let ratio = size / bloom_scale.zw;
+    // The box in scene texels, texel i covering [i, i + 1]. From the
+    // fragment's position rather than its uv, because the position is exact
+    // and the box's ends must land on texel edges when the ratio is whole.
+    let lo = (in.pos.xy - 0.5) * ratio;
+    let hi = (in.pos.xy + 0.5) * ratio;
+    let first = floor(lo);
+    let texels = vec2<i32>(ceil(hi) - first);
+    var c = vec4<f32>(0.0);
+    for (var y = 0; y < texels.y; y += 2) {
+        let ty = box_pair(first.y + f32(y), lo.y, hi.y);
+        for (var x = 0; x < texels.x; x += 2) {
+            let tx = box_pair(first.x + f32(x), lo.x, hi.x);
+            let uv = vec2<f32>(tx.x, ty.x) / size;
+            c += (tx.y * ty.y) * textureSampleLevel(scene_tex, scene_samp, uv, 0.0);
+        }
+    }
     return bright(c.rgb);
+}
+
+// Texels a and a + 1's share of the box [lo, hi], as one bilinear tap: where
+// to sample between their centres (x), and the pair's weight in the box (y).
+fn box_pair(a: f32, lo: f32, hi: f32) -> vec2<f32> {
+    let w0 = max(min(hi, a + 1.0) - max(lo, a), 0.0);
+    let w1 = max(min(hi, a + 2.0) - max(lo, a + 1.0), 0.0);
+    let w = w0 + w1;
+    return vec2<f32>(a + 0.5 + w1 / w, w / (hi - lo));
 }
 
 // Marks rendered over transparency carry geometric coverage in alpha and
