@@ -97,7 +97,8 @@ fn vs_blit(@builtin(vertex_index) vi: u32) -> BlitOut {
     return out;
 }
 
-// Plain copy, for reading a target back unfiltered.
+// Plain copy, for reading a target back unfiltered: the glow tests' readback.
+// No production pipeline draws through it.
 @fragment
 fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
     return textureSample(scene_tex, scene_samp, in.uv);

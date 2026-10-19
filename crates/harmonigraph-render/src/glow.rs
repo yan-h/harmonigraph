@@ -320,7 +320,7 @@ impl GlowPane {
     /// screen size — the rule the lattice's chain follows, which is what makes
     /// one bloom strength mean the same thing in every picture that grows one.
     fn new(device: &wgpu::Device, resources: &GlowResources, size: [u32; 2]) -> Self {
-        let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
+        let ([hw, hh], _) = crate::bloom_sizes(size);
         let discs_view = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("glow_discs"),

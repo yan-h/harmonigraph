@@ -104,6 +104,8 @@ jobs:
           name: golden-diff-${{ matrix.group }}
           path: target/golden-diff/
           if-no-files-found: ignore
+          # A re-run attempt of the same job uploads under the same name.
+          overwrite: true
           retention-days: 14
 
   # One check to read, and the name a human already looks for, so that splitting

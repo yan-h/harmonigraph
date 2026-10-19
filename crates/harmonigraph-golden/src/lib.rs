@@ -125,18 +125,30 @@ impl Gate {
             return;
         }
 
+        // A new frame and a resized one have nothing to compare against, and
+        // are written out for the same reason a moved one is: the record
+        // comes from what CI drew.
+        let actual = self.actual.join(format!("{name}.png"));
         let Some((expected, on_record)) = read_png(&path) else {
+            write_png(&actual, size, frame);
             panic!(
-                "no golden frame at {}\nrun: {BLESS}=1 cargo test --workspace golden",
+                "no golden frame at {}\nthe frame drawn: {}\nre-baseline it from CI's \
+                 golden-diff-<group> artifact (see this crate's docs)",
                 path.display(),
+                actual.display(),
             );
         };
-        assert_eq!(on_record, size, "{name}: golden was written at a different size");
+        if on_record != size {
+            write_png(&actual, size, frame);
+            panic!(
+                "{name}: golden was written at a different size; the frame drawn: {}",
+                actual.display()
+            );
+        }
 
         let (mean, max) = drift(&expected, frame);
         if max > TOLERANCE {
             let sheet = self.write_contact_sheet(name, size, &expected, frame);
-            let actual = self.actual.join(format!("{name}.png"));
             write_png(&actual, size, frame);
             panic!(
                 "{name} moved: mean {mean:.3}/255, max {max}/255\n\
