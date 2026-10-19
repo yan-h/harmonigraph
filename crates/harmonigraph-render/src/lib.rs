@@ -2061,7 +2061,9 @@ impl Offscreen {
         match want {
             Some(size) => {
                 if self.shadow.as_ref().is_none_or(|s| !s.holds(size)) {
-                    let held = self.shadow.as_ref().map_or([0, 0], |s| s.size);
+                    // Dropped before its replacement is built, so a growth
+                    // never holds both.
+                    let held = self.shadow.take().map_or([0, 0], |s| s.size);
                     self.shadow = Some(shadow::ShadowTarget::new(
                         device,
                         shared.shadow_layout,
