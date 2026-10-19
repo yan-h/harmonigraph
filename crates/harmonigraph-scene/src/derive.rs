@@ -38,6 +38,12 @@ pub fn derive_scene(
     derive_scene_with_extra(tracker, tuning, view, window, &[], frame, camera, hovered)
 }
 
+/// The order a scene's nodes are laid out in, which `NodeMotion` searches its
+/// last frame's positions by.
+pub(crate) fn lattice_order(p: &LatticePos) -> (i32, i32, i32) {
+    (p.threes, p.fives, p.sevens)
+}
+
 /// Build the regular window and selected off-pane light owners in lattice order.
 /// Extra owners share the ordinary node derivation and animation path.
 /// The caller supplies unique positions outside `window`, within its remaining
@@ -72,7 +78,7 @@ pub fn derive_scene_with_extra(
 
     // Keep the rectangular window's canonical order. Equal-depth GPU draws
     // preserve it, and changing that order changes FP16 light accumulation.
-    let key = |p: &LatticePos| (p.threes, p.fives, p.sevens);
+    let key = lattice_order;
     let mut extra = extra.to_vec();
     extra.sort_unstable_by_key(key);
     let mut inside = window.positions().peekable();
