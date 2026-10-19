@@ -363,8 +363,9 @@ impl RollUniforms {
     /// f32, so every such target lands on the same bits for one surface
     /// pixel at any pixels-per-point, where a scale derived per target
     /// (`viewport_points / size`) rounds differently for each size unless
-    /// `ppp` is a power of two. The bloom's half-size target, each side rounded
-    /// up on its own, takes the per-axis scale its own pixels measure.
+    /// `ppp` is a power of two. The bloom's half-size target, twice the
+    /// chain's rounded-up quarter (`crate::bloom_sizes`), takes the per-axis
+    /// scale its own pixels measure.
     fn drawn_into(
         self,
         ppp: f32,
