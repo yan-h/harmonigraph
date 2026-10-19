@@ -68,22 +68,20 @@ PR #85 is what it catches:
 
 **When Yan says "merge it", he can say it while CI is still running:** the session waits and merges once `mergeStateStatus` is clean, so he is not coming back at green to press a button.
 `/review-and-merge` in Claude, or `$review-and-merge` in Codex, is the same ask with a review in front of it, and this file is the project contract it reads:
-its review tool here is `code-review` through the Skill tool against `origin/main...HEAD`, its merge method is the merge queue's squash, judged as below, and its checks are `mergeStateStatus` `CLEAN` with `Full CI` actually reported.
+its review tool here is `code-review` through the Skill tool against `origin/main...HEAD`, its merge method is the global squash default, judged as below, and its checks are `mergeStateStatus` `CLEAN` with `Full CI` actually reported.
 Codex has no `code-review`, so there the review is a fresh subagent briefed with the diff and `AGENTS.md`.
 
-**Merging is joining the merge queue:** `gh pr merge <PR>`, with no method flag, once `mergeStateStatus` reads `CLEAN`.
-The ruleset on `main` ("main: Full CI required") requires `Full CI` and a merge queue that squashes.
-The queue merges the PR onto the `main` it will land on, runs `Full CI` there (`merge_group` in `ci.yml`), and lands it only on green,
-so a PR `main` has moved past no longer has to merge `main` in and run again before it can go:
-that loop is what the queue replaced, after it cost #1507 two full rounds behind #1505 and #1510.
-A PR still reads `BEHIND` when `main` has moved; that blocks nothing now.
-The merge is done when the PR reads `MERGED`, not when `gh pr merge` returns: a group that goes red drops the PR out of the queue, and the session reads why and fixes it.
+A ruleset on `main` ("main: Full CI required") requires `Full CI` on the PR's head, and no longer that the branch be up to date with `main`.
+That requirement made every PR `main` had moved past merge `main` in and run `Full CI` again before it could go,
+which cost #1507 two full rounds behind #1505 and #1510.
+A merge queue keeps its guarantee without the loop, but GitHub offers one only on organization-owned repositories, and this one is Yan's own.
+What it guaranteed is now `main`'s own run, on every push:
+two PRs that each passed alone are first tested together there, and a red `main` is fixed before anything else merges.
+So a PR that touches code another PR has just landed merges `main` in and lets `Full CI` run anyway, because passing alone is all its check said;
+one that does not can merge as it stands.
 `Metal shader assets` is NOT required: its `paths:` filter keeps it off most PRs and therefore out of the required-checks scheme.
-The queue waits on required checks alone, as auto-merge does, so a PR joined before its own checks finish could land a shader-path change at `Full CI` green with the corpus job still running or red (#943);
-`mergeStateStatus` accounts for every check, which is why `CLEAN` comes before joining.
-
-The queue squashes every PR it lands, so the merge commit below is the one merge it cannot make:
-that is Yan's, by hand, bypassing the queue.
+GitHub's auto-merge waits on required checks alone, so `gh pr merge --auto --squash` would land a shader-path PR at `Full CI` green with the corpus job still running or red (#943);
+`mergeStateStatus` accounts for every check, which is why it is the gate.
 
 **The global default is to squash unless the commits are separable; what makes them separable here:** not how many there are —
 #97 had eight and was squashed, #95 had about seven and took a merge commit.
