@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn golden_requires_a_complete_frame_even_when_the_prefix_matches() {
         let dir = std::env::temp_dir().join(format!("harmonigraph-golden-{}", std::process::id()));
-        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs") };
+        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
         let frame: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
         write_png(&dir.join("complete.png"), [8, 8], &frame);
         gate.check("complete", [8, 8], &frame);
@@ -241,6 +241,20 @@ mod tests {
                 "accepted {len} bytes for a 256-byte frame",
             );
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A frame that moved is left on disk exactly as drawn, alpha included,
+    /// which is what re-baselining from CI's uploaded frames rests on.
+    #[test]
+    fn a_moved_frame_is_written_out_as_drawn() {
+        let dir = std::env::temp_dir().join(format!("harmonigraph-moved-{}", std::process::id()));
+        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
+        let on_record: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
+        write_png(&dir.join("moved.png"), [8, 8], &on_record);
+        let drawn: Vec<u8> = (0..64).flat_map(|x| [x, 1, 0, 128 + x]).collect();
+        assert!(std::panic::catch_unwind(|| gate.check("moved", [8, 8], &drawn)).is_err());
+        assert_eq!(read_png(&dir.join("actual/moved.png")), Some((drawn, [8, 8])));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
