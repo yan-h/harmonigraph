@@ -162,6 +162,9 @@ pub struct SurfaceState {
     /// Device-bound compiled pipelines outlive windows, while their pane
     /// buffers and textures remain in each window's callback resources.
     pub(crate) lattice_pipelines: std::sync::Arc<harmonigraph_render::LatticePipelineCache>,
+    /// The vectors the lattice panes' frames are built in, lent to each frame
+    /// and handed back once it has drawn.
+    pub(crate) lattice_frames: std::sync::Arc<harmonigraph_render::LatticeFrames>,
     /// The ground the lattice pane paints its rect with, which it also hands
     /// the scene (see [`harmonigraph_scene::Scene::background`]). Defaults to
     /// [`harmonigraph_scene::skin::picture_color`], the black every picture
@@ -192,6 +195,10 @@ pub struct SurfaceState {
     pub(crate) glow_fade: std::collections::HashMap<usize, crate::panes::glow_fade::GlowFade>,
     /// One entrance per visible node, independent of optional Glow. Runtime only.
     pub(crate) node_motion: std::collections::HashMap<usize, harmonigraph_scene::NodeMotion>,
+    /// The last lattice frame's nodes, handed back once it has drawn and laid
+    /// out again by the next (`derive_scene_with_extra`). One for every
+    /// surface, since they draw one after another.
+    pub(crate) spare_nodes: Vec<harmonigraph_scene::NodeInstance>,
     /// Where the analyzer's divider stands on the DOCKED pane as that pane is
     /// resized — the spectrum keeps its size and the spectrogram takes the
     /// difference. See [`panes::spectral::SpectrumHold`].
@@ -717,9 +724,11 @@ impl SurfaceState {
             drawn_this_frame: None,
             target_format,
             lattice_pipelines: Default::default(),
+            lattice_frames: Default::default(),
             background: harmonigraph_scene::skin::picture_color(),
             glow_fade: std::collections::HashMap::new(),
             node_motion: std::collections::HashMap::new(),
+            spare_nodes: Vec::new(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
         }
     }

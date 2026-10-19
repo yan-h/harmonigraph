@@ -208,6 +208,7 @@ pub(crate) fn compose_scene(
         &state.runtime.frame_params,
         state.appearance.camera,
         hovered,
+        std::mem::take(&mut state.surfaces.spare_nodes),
     );
     // What the AUDIO says, over a scene derived exactly as above: a ring of
     // measured octaves inside the octave band, carrying whichever of two
@@ -339,6 +340,7 @@ pub(crate) fn draw_lattice(
             pane_id(surface),
             stats,
             state.surfaces.lattice_pipelines.clone(),
+            state.surfaces.lattice_frames.clone(),
         ),
     );
     if response.is_some() {
@@ -347,6 +349,7 @@ pub(crate) fn draw_lattice(
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
     }
+    state.surfaces.spare_nodes = scene.nodes;
     window
 }
 
