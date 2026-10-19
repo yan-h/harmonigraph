@@ -94,13 +94,19 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     .percent().show(ui).on_hover_text(
                         "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
                     );
+                // Stars put their resolution first, a choice made once, with the
+                // texture's own rows rather than loose between its blocks.
+                if atmosphere.cloud_style == CloudStyle::Stars {
+                    ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+                        super::super::material::stars_resolution(ui, &mut atmosphere.stars);
+                    });
+                }
             });
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
-                // Stars put their resolution first, a choice made once, then
-                // their look: size and spacing matter more than how they drift.
+                // Then their look: size and spacing matter more than how they
+                // drift.
                 let stars = atmosphere.cloud_style == CloudStyle::Stars;
                 if stars {
-                    super::super::material::stars_resolution(ui, &mut atmosphere.stars);
                     block(ui, "Appearance", |ui| {
                         super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
                     });
