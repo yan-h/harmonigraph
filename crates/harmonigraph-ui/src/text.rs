@@ -2,9 +2,9 @@
 //! `harmonigraph_render`'s own text module.
 //!
 //! Text on either picture pane needs to be lifted off what it lands on — note
-//! names over lit nodes, pitch labels over the spectrogram. Each glyph maps a
-//! fixed signed-distance patch onto its laid-out rect, so the shadow
-//! is derived from the same letterform while the visible ink stays egui's.
+//! names over lit nodes, pitch labels over the spectrogram. A name's shadow
+//! is blurred from the same coverage egui rasterized for its visible ink, so
+//! the two are one letterform.
 //!
 //! egui still lays the text out. A [`TextBatch`] collects the glyphs of
 //! however many pieces of text a pane draws, and hands them over in one
@@ -23,7 +23,7 @@
 //! septimal chevron — are glyphs here too. They are rasterized by `marks`
 //! rather than by egui and packed into a sheet of their own
 //! ([`MarkAtlas`]), and from there everything is shared: one quad apiece, the
-//! shadow from the same fixed SDF rather than repeated bitmap stamps, and a place in
+//! shadow blurred from the same coverage rather than repeated bitmap stamps, and a place in
 //! whichever run of letters they were collected with. That last is what the
 //! move is for — a mark on the painter is drawn over the finished picture,
 //! where the node in front that just covered the name beside it cannot reach
@@ -404,10 +404,24 @@ pub(crate) struct TextPiece {
 
 impl TextBatch {
     /// Bounds of the letterforms already laid out, excluding mark bitmap padding.
+    ///
+    /// A mark's bitmap carries one clear texel on every side
+    /// ([`MARK_BITMAP_PAD`](crate::marks::MARK_BITMAP_PAD)), which is no part of
+    /// its ink. Its quad spans its patch, so that texel is the quad's width over
+    /// the patch's.
     pub(crate) fn bounds(&self) -> egui::Rect {
         self.glyphs.iter().fold(egui::Rect::NOTHING, |bounds, glyph| {
-            let [x, y, w, h] = glyph.sdf_rect;
-            bounds.union(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)))
+            let [x, y, w, h] = glyph.rect;
+            let inset = if glyph.atlas == GlyphInstance::MARK {
+                crate::marks::MARK_BITMAP_PAD as f32 * w / (glyph.uv[2] - glyph.uv[0]).max(1.0)
+            } else {
+                0.0
+            };
+            let ink = egui::Rect::from_min_size(
+                egui::pos2(x + inset, y + inset),
+                egui::vec2((w - 2.0 * inset).max(0.0), (h - 2.0 * inset).max(0.0)),
+            );
+            bounds.union(ink)
         })
     }
 
@@ -508,7 +522,6 @@ impl TextBatch {
         #[cfg(test)]
         let first = self.glyphs.len();
         let font_size_bits = font.size.to_bits();
-        let sdf_family = font.family.clone();
         let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
         // Placed at whatever position it is handed, NOT rounded onto a whole
         // physical pixel — for EVERY pane that draws through this batch, not
@@ -559,7 +572,6 @@ impl TextBatch {
                 let min = pos + row.pos.to_vec2() + left_top.to_vec2();
                 let min = self.magnify.map_or(min, |m| m.point(min));
                 let rect = [min.x, min.y, glyph.uv_rect.size.x * k, glyph.uv_rect.size.y * k];
-                let sdf = crate::text_sdf::sheet().type_patch(&sdf_family, glyph.chr);
                 if probe {
                     self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
                 }
@@ -571,9 +583,6 @@ impl TextBatch {
                         f32::from(glyph.uv_rect.max[0]),
                         f32::from(glyph.uv_rect.max[1]),
                     ],
-                    sdf_rect: rect,
-                    sdf_near: sdf.map_or([0.0; 4], |patch| patch.near),
-                    sdf_coarse: sdf.map_or([0.0; 4], |patch| patch.coarse),
                     fill: color.to_array(),
                     rim: outline.to_array(),
                     atlas: GlyphInstance::TYPE,
@@ -638,20 +647,10 @@ impl TextBatch {
         let min = center - size / 2.0;
         let min = self.magnify.map_or(min, |m| m.point(min));
         let [x, y] = patch.at.map(|n| n as f32);
-        let inset = crate::marks::MARK_BITMAP_PAD as f32 / ppp * k;
         let rect = [min.x, min.y, size.x * k, size.y * k];
-        let sdf = crate::text_sdf::sheet().mark_patch(key.kind());
         self.glyphs.push(GlyphInstance {
             rect,
             uv: [x, y, x + patch.size[0] as f32, y + patch.size[1] as f32],
-            sdf_rect: [
-                rect[0] + inset,
-                rect[1] + inset,
-                (rect[2] - 2.0 * inset).max(0.0),
-                (rect[3] - 2.0 * inset).max(0.0),
-            ],
-            sdf_near: sdf.near,
-            sdf_coarse: sdf.coarse,
             fill: color.to_array(),
             rim: outline.to_array(),
             atlas: GlyphInstance::MARK,
@@ -732,14 +731,12 @@ impl TextBatch {
             )
         };
         let marks = marks_snapshot(painter.ctx());
-        let sdf = shadow.map(|_| crate::text_sdf::sheet().atlas.clone());
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
             std::mem::take(&mut self.layer_ends),
             shadow,
             harmonigraph_render::SheetUploads { font: atlas, marks },
-            sdf,
             slide,
             state.surfaces.target_format,
             harmonigraph_render::PaneIds {
@@ -801,16 +798,12 @@ impl TextBatch {
         for glyph in &mut glyphs {
             glyph.rect[0] -= rect.min.x;
             glyph.rect[1] -= rect.min.y;
-            glyph.sdf_rect[0] -= rect.min.x;
-            glyph.sdf_rect[1] -= rect.min.y;
         }
-        let sdf = (!glyphs.is_empty()).then(|| crate::text_sdf::sheet().atlas.clone());
         harmonigraph_render::LatticeLabels {
             glyphs,
             labels: std::mem::take(&mut self.labels),
             atlas,
             marks,
-            sdf,
             // An orbiting camera carries a node name across the screen and up
             // it at once, so the lattice reconstructs both axes. See
             // `FILTER_TAP` in the glyph shader.
@@ -1579,7 +1572,6 @@ mod tests {
                     Vec::new(),
                     None,
                     harmonigraph_render::SheetUploads { font: labels.atlas, marks: labels.marks },
-                    None,
                     harmonigraph_render::SlideAxis::Both,
                     state.picture.surfaces.target_format,
                     harmonigraph_render::PaneIds { pane: 0, pass_nr: ctx.cumulative_pass_nr() },
@@ -1639,39 +1631,8 @@ mod tests {
         batch.drawn
     }
 
-    /// Editor and offline shells can render at any display scale. The visible
-    /// raster changes with that scale, while the fixed field patch does not;
-    /// mapping the same patch onto the visible rect is what keeps both shells
-    /// in point space without a device-scale correction of their own.
-    #[test]
-    fn a_lattice_glyph_maps_one_sdf_patch_at_every_display_scale() {
-        let mapped = |ppp: f32| {
-            let ctx = crate::tests::probe::themed_at(ppp);
-            let mut batch = TextBatch::default();
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-                batch.text(
-                    ui.painter(),
-                    egui::pos2(20.0, 20.0),
-                    egui::Align2::LEFT_TOP,
-                    "A".to_owned(),
-                    crate::theme::picture_font(30.0),
-                    egui::Color32::WHITE,
-                    egui::Color32::BLACK,
-                );
-            });
-            let glyph = batch.glyphs.into_iter().next().expect("A has one glyph");
-            assert_eq!(glyph.sdf_rect, glyph.rect, "the {ppp} ppp glyph maps another screen box");
-            glyph
-        };
-        let glyphs = [1.0, 1.5, 2.0, 4.0].map(mapped);
-        for glyph in &glyphs[1..] {
-            assert_eq!(glyph.sdf_near, glyphs[0].sdf_near);
-            assert_eq!(glyph.sdf_coarse, glyphs[0].sdf_coarse);
-        }
-    }
-
-    /// The `k` appended by the spectral frequency formatter reaches the fixed
-    /// field and the shipping renderer path. The batch is reduced to the
+    /// The `k` appended by the spectral frequency formatter reaches the
+    /// shipping renderer path and casts its own shadow. The batch is reduced to the
     /// formatter's `k` glyph before it is flushed, so no shadow from the
     /// preceding digit can make a missing suffix pass.
     #[test]
@@ -1731,8 +1692,6 @@ mod tests {
         state.appearance.view.shadow.spectral_text =
             harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
         let mut k_rect = None;
-        let mut batch_sdf_near = [0.0; 4];
-        let mut batch_sdf_coarse = [0.0; 4];
         let output = context.run_ui(
             egui::RawInput { screen_rect: Some(rect), ..Default::default() },
             |ui| {
@@ -1762,10 +1721,6 @@ mod tests {
                     .position(|glyph| glyph.chr == 'k')
                     .expect("the shipping formatter appends k");
                 let glyph = batch.glyphs[k];
-                assert_ne!(glyph.sdf_near, [0.0; 4], "k has no near field");
-                assert_ne!(glyph.sdf_coarse, [0.0; 4], "k has no coarse field");
-                batch_sdf_near = glyph.sdf_near;
-                batch_sdf_coarse = glyph.sdf_coarse;
                 batch.glyphs = vec![glyph];
                 k_rect = Some(egui::Rect::from_min_size(
                     egui::pos2(glyph.rect[0], glyph.rect[1]),
@@ -1873,10 +1828,7 @@ mod tests {
         assert!(
             red_shadow,
             "drew no k-colored shadow around the isolated k glyph {k:?}; \
-             max red {max_red}, dominance {max_red_dominance}; SDF near {:?}, coarse {:?}, sheet {:?}",
-            batch_sdf_near,
-            batch_sdf_coarse,
-            crate::text_sdf::sheet().atlas.size,
+             max red {max_red}, dominance {max_red_dominance}",
         );
         drop(frame);
         readback.unmap();

@@ -1034,7 +1034,6 @@ pub(super) fn name_glyph(scene: &Scene, rect: [f32; 4]) -> GlyphInstance {
     let ink = scene.lattice_ground;
     GlyphInstance {
         rect,
-        sdf_rect: rect,
         fill: [byte(ink.x), byte(ink.y), byte(ink.z), 255],
         // The shadow's strength, which is the whole of what the glow pass reads
         // off this colour (`fs_glyph_glow`).
@@ -1053,7 +1052,6 @@ pub(super) fn names(runs: Vec<(u32, Vec<GlyphInstance>)>) -> LatticeLabels {
         glyphs: runs.into_iter().flat_map(|(_, glyphs)| glyphs).collect(),
         atlas: Some(crate::text::tests::atlas()),
         marks: Some(crate::text::tests::mark_sheet()),
-        sdf: Some(crate::text::tests::sdf_atlas()),
         // The UI hands every lattice label the two-axis reconstruction its
         // orbiting camera needs. A name fixture using the default `Across`
         // path would leave every label golden blind to that shipping branch.

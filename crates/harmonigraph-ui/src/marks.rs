@@ -450,9 +450,9 @@ fn arm(a: egui::Pos2, b: egui::Pos2, thick: f32) -> MarkPiece {
 /// rasterized bitmap, and its place in the mark sheet
 /// ([`crate::text::MarkAtlas`]).
 ///
-/// Nothing about the shadow is in here: the fixed glyph SDF supplies it for
-/// marks and letters alike, so a bitmap remains a function of the mark's own
-/// design and nothing else.
+/// Nothing about the shadow is in here: it is blurred from this same coverage
+/// for marks and letters alike, so a bitmap remains a function of the mark's
+/// own design and nothing else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MarkKey {
     kind: MarkKind,
@@ -477,12 +477,6 @@ pub(crate) struct MarkKey {
     weight_16: u32,
 }
 
-impl MarkKey {
-    pub(crate) fn kind(self) -> MarkKind {
-        self.kind
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MarkKind {
     Minus,
@@ -502,8 +496,9 @@ pub(crate) enum MarkKind {
     Flat,
 }
 
+#[cfg(test)]
 impl MarkKind {
-    /// Every drawn shape a note name can emit, in stable atlas order.
+    /// Every drawn shape a note name can emit.
     pub(crate) const ALL: [Self; 6] = [
         Self::Minus,
         Self::Plus,
@@ -722,8 +717,8 @@ fn curve_arms(p: [egui::Pos2; 4], thick: f32) -> Vec<MarkPiece> {
 /// and a staircase.
 ///
 /// What it costs is the mark's own area, once per size the camera asks for —
-/// the whole of it and no more, since the shadow comes from the shared glyph
-/// SDF rather than a second bitmap read off this grid. At the
+/// the whole of it and no more, since the shadow is blurred from this same
+/// bitmap rather than a second one read off this grid. At the
 /// largest size a zoom can reach that is a couple of milliseconds for a `♭`,
 /// paid on the frame that size is first asked for.
 const MARK_SUPERSAMPLE: usize = 4;
@@ -779,8 +774,8 @@ pub(crate) fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
 ///     scene pass at its node's place in the back-to-front order, so a node in
 ///     front covers a name and its marks together instead of cutting the name
 ///     and leaving the sign floating on the disc that covered it (#207);
-///   - the shadow is the text renderer's SDF arithmetic rather than a bitmap
-///     of its own, so the order -- every shadow, then every fill -- holds ACROSS the
+///   - the shadow is the text renderer's blur of this coverage rather than a
+///     bitmap of its own, so the order -- every shadow, then every fill -- holds ACROSS the
 ///     seam between a sign and the count typeset beside it. On the painter
 ///     that order breaks at every such seam, and breaks the opposite way in
 ///     each pane, depending on when the batch flushes.

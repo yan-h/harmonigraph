@@ -82,10 +82,7 @@ use lattice_node_glow::create_glow_pipelines;
 /// label costs is the rim, and the rim was the text drawn again once per
 /// stamp.
 mod text;
-pub use text::{
-    text_paint_callback, FontAtlas, GlyphInstance, GlyphSdfAtlas, PaneIds, SheetUploads, SlideAxis,
-    GLYPH_SDF_COARSE_PAD, GLYPH_SDF_NEAR_BLEND, GLYPH_SDF_NEAR_PAD,
-};
+pub use text::{text_paint_callback, FontAtlas, GlyphInstance, PaneIds, SheetUploads, SlideAxis};
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
@@ -129,10 +126,6 @@ pub struct LatticeLabels {
     pub atlas: Option<FontAtlas>,
     /// And the drawn marks' own sheet, on the frames it has moved.
     pub marks: Option<FontAtlas>,
-    /// The fixed distance sheet every glyph's `sdf_*` rectangles address.
-    /// Published with a non-empty batch; unlike the coverage sheets it never
-    /// changes after startup.
-    pub sdf: Option<GlyphSdfAtlas>,
     /// The axes these names travel along, for the reconstruction filter — see
     /// [`SlideAxis`]. An orbiting camera moves a node name both ways at once,
     /// so the UI hands lattice labels [`SlideAxis::Both`].
@@ -895,7 +888,6 @@ struct LatticeCallback {
     draws: Vec<Draw>,
     /// The fallback font sheet and drawn-mark sheet, on their publication frames.
     sheets: text::SheetUploads,
-    sdf: Option<GlyphSdfAtlas>,
     /// Which way these names travel, for the glyph shader's filter.
     slide: SlideAxis,
     pluses: Vec<GpuPlus>,
@@ -1103,9 +1095,7 @@ struct CompiledLatticeResources {
 struct LatticeResources {
     compiled: CompiledLatticeResources,
     /// This renderer's bindings for the sheets a glyph can be cut from — egui's
-    /// shared font texture, the drawn marks' private texture, and the identity
-    /// of the shared distance sheet, whose allocation is stored once in
-    /// `CallbackResources` and is also used by the standalone text renderer.
+    /// shared font texture and the drawn marks' private texture.
     sheets: text::Sheets,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
@@ -1422,7 +1412,7 @@ struct PaneBuffers {
     /// Names both sampled sheets, so it is rebuilt whenever either allocation
     /// is replaced — and `glyph_sheet_keys` is which bindings it names.
     glyph_bind_group: Option<wgpu::BindGroup>,
-    glyph_sheet_keys: (u64, u64, u64),
+    glyph_sheet_keys: (u64, u64),
     /// GPU colour history, keyed on this pane's identity and row capacity,
     /// independently of the viewport targets. A release can have no current
     /// ink, so resizing must retain these rows rather than reseeding them.
@@ -2763,8 +2753,7 @@ struct ShaderPipelines {
     source_shadow_pipeline: wgpu::RenderPipeline,
     ink_strip_pipeline: wgpu::RenderPipeline,
     ink_blur_pipeline: wgpu::RenderPipeline,
-    glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
-    glyph_spread_cell_pipeline: wgpu::RenderPipeline,
+    glyph_cell_pipeline: wgpu::RenderPipeline,
     node_cell_pipeline: wgpu::RenderPipeline,
     plus_cell_pipeline: wgpu::RenderPipeline,
 }
@@ -2804,10 +2793,7 @@ impl ShaderPipelines {
         let scenes =
             create_scene_pipelines(device, lattice, blit, glyph, layouts.scene, layouts.glyph);
         progress(startup::Stage::Labels);
-        let glyph_coverage_cell_pipeline =
-            text::create_glyph_coverage_cell_pipeline(device, glyph, layouts.glyph);
-        let glyph_spread_cell_pipeline =
-            text::create_glyph_sdf_coverage_pipeline(device, glyph, layouts.glyph);
+        let glyph_cell_pipeline = text::create_glyph_cell_pipeline(device, glyph, layouts.glyph);
         Self {
             scenes,
             node_cell_pipeline,
@@ -2817,8 +2803,7 @@ impl ShaderPipelines {
             source_shadow_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
-            glyph_coverage_cell_pipeline,
-            glyph_spread_cell_pipeline,
+            glyph_cell_pipeline,
         }
     }
 }
@@ -3099,7 +3084,6 @@ impl LatticeResources {
         offscreen_size: Option<[u32; 2]>,
         screen_size: [u32; 2],
         wants: PaneTargets,
-        sdf: Option<&wgpu::Texture>,
     ) -> &mut PaneBuffers {
         let layout = &self.compiled.bind_group_layout;
         let caster_layout = &self.compiled.caster_layout;
@@ -3115,7 +3099,7 @@ impl LatticeResources {
         // built off that rebuild's own predicate rather than beside the rest
         // of the frame's setup, and holding one IS the decision to rebuild.
         // #907 did this for the text callback and left this copy, which is the
-        // same three views in the same shape.
+        // same views in the same shape.
         //
         // The font atlas decides on its own account: the first frames of a
         // session arrive before one exists, and a pane cannot be bound against
@@ -3125,7 +3109,7 @@ impl LatticeResources {
                 .panes
                 .get(&pane_id)
                 .is_none_or(|p| p.glyph_bind_group.is_none() || p.glyph_sheet_keys != sheet_keys);
-        let views = wants_views.then(|| self.sheets.views(sdf));
+        let views = wants_views.then(|| self.sheets.views());
         let shared = OffscreenShared {
             format: LATTICE_COLOR_FORMAT,
             composite_layout: &self.compiled.composite_layout,
@@ -3220,7 +3204,7 @@ impl LatticeResources {
                     },
                 ),
                 glyph_bind_group: None,
-                glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
+                glyph_sheet_keys: (u64::MAX, u64::MAX),
                 ink_history: None,
                 ink_kernel: Default::default(),
                 material_tile: None,
@@ -3237,14 +3221,13 @@ impl LatticeResources {
         // Holding views is exactly that condition, taken before the entry
         // above: a pane that entry has just created was absent when the
         // question was asked, and an absent pane reads as unbound.
-        if let Some((atlas_view, mark_view, sdf_view)) = views {
+        if let Some((atlas_view, mark_view)) = views {
             pane.glyph_bind_group = Some(text::bind_group(
                 device,
                 glyph_layout,
                 glyph_sampler,
                 &atlas_view,
                 &mark_view,
-                &sdf_view,
                 &pane.glyph_uniform_buffer,
             ));
             pane.glyph_sheet_keys = sheet_keys;

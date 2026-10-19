@@ -116,23 +116,25 @@ pub(crate) struct Caster {
     /// as it is in the bar.
     pub sigma_points: f32,
     /// Source expansion in pane points before the blur
-    /// ([`harmonigraph_scene::ShadowStyle::gaussian_spread_points`]).
+    /// ([`harmonigraph_scene::ShadowStyle::gaussian_spread_points`]). Zero for
+    /// text, whose Spread is [`Self::stops`] instead.
     pub spread_points: f32,
+    /// How many stops the blurred cell is lifted by where it is read, before
+    /// the clamp ([`harmonigraph_scene::ShadowStyle::text_spread_stops`]).
+    /// Text's Spread; zero for every other caster.
+    pub stops: f32,
 }
 
 /// The caster a name's glyphs make: the box round every glyph's rect, the
 /// strength the name's rim colour carries — the one number a lattice name's
 /// `rim` holds (`LABEL_SHADOW` in harmonigraph_ui), so a name easing in as the
 /// marker under it eases out grows its shadow on the clock its ink arrives on —
-/// and the style its group is dialled to (`ShadowSettings::lattice_text`).
+/// and the style its group is dialled to (`ShadowSettings::lattice_text`): its
+/// σ, and its Spread as [`Caster::stops`].
 ///
 /// A run with no ink in it — every rect empty — is a caster of nothing, with
 /// its level zeroed rather than a box of infinities for the packer to size.
-pub(crate) fn caster_of(
-    glyphs: &[crate::GlyphInstance],
-    sigma_points: f32,
-    spread_points: f32,
-) -> Caster {
+pub(crate) fn caster_of(glyphs: &[crate::GlyphInstance], sigma_points: f32, stops: f32) -> Caster {
     let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     for g in glyphs {
         for axis in 0..2 {
@@ -140,7 +142,7 @@ pub(crate) fn caster_of(
             max[axis] = max[axis].max(g.rect[axis] + g.rect[axis + 2]);
         }
     }
-    let empty = Caster { rect: [0.0; 4], level: 0.0, sigma_points, spread_points };
+    let empty = Caster { rect: [0.0; 4], level: 0.0, sigma_points, spread_points: 0.0, stops };
     if !(max[0] > min[0] && max[1] > min[1]) {
         return empty;
     }
@@ -192,13 +194,13 @@ impl ShadowBox {
         ],
     };
 
-    /// The same rows at the locations after a glyph's eight, for the draw that
+    /// The same rows at the locations after a glyph's five, for the draw that
     /// rasterizes a glyph into its cell alongside `GlyphInstance::LAYOUT`.
     pub(crate) const BESIDE_GLYPHS: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4
+            5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4
         ],
     };
 
@@ -289,9 +291,9 @@ pub(crate) struct ShadowCaster {
     /// What this caster SPENDS, none of it a coordinate.
     ///
     /// x: how much of its shadow lands, 0..=1 — zero where the atlas could not
-    /// hold its cell, which is a caster that darkens nothing. y, z and w are
-    /// zero: the row is a vec4 so the storage array's stride needs no padding
-    /// rule of its own.
+    /// hold its cell, which is a caster that darkens nothing. y: the stops its
+    /// blur is lifted by ([`Caster::stops`]). z and w are zero: the row is a
+    /// vec4 so the storage array's stride needs no padding rule of its own.
     pub shade: [f32; 4],
 }
 
@@ -460,7 +462,7 @@ pub(crate) fn pack_into(
             who: [c as f32, 0.0, pad, spread_of(caster)],
         });
         if whole {
-            entry.shade = [level, 0.0, 0.0, 0.0];
+            entry.shade = [level, caster.stops.max(0.0), 0.0, 0.0];
             entry.cell = cell;
             entry.map = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, 0.0];
             entry.rect = rect;
@@ -1059,7 +1061,7 @@ pub(crate) mod tests {
     /// A caster at the picture's own width, which is what every caster but a
     /// note name is. The tests that ask about the RATIO name it themselves.
     fn caster(x: f32, y: f32, w: f32, h: f32) -> Caster {
-        Caster { rect: [x, y, w, h], level: 1.0, sigma_points: 1.0, spread_points: 0.0 }
+        Caster { rect: [x, y, w, h], level: 1.0, sigma_points: 1.0, spread_points: 0.0, stops: 0.0 }
     }
 
     /// Packing into the buffers a bigger frame left is the packing done fresh,

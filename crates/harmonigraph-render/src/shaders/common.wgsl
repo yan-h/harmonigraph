@@ -102,7 +102,9 @@ struct ShadowCaster {
     // `xy + points * z`. w is unused and zero.
     map: vec4<f32>,
     // What this caster SPENDS, none of it a coordinate. x: how much of its
-    // shadow lands, 0..=1; y, z and w are zero.
+    // shadow lands, 0..=1; y: how many stops its blur is lifted by before the
+    // clamp (`shadow_profile`), zero for every caster but text; z and w are
+    // zero.
     shade: vec4<f32>,
 };
 
@@ -140,6 +142,14 @@ const GAUSSIAN_GAIN: f32 = 2.5;
 
 // Calibrated shadow coverage and a node's local opacity ceiling at `points`.
 //
+// A text caster's Spread multiplies GAUSSIAN_GAIN by `2^shade.y` before the
+// same clamp. A stroke of type is thin against σ, so its blur is close to a
+// Gaussian scaled by how much ink went in, and growing the ink by a distance
+// mostly scales that Gaussian up: this does so without growing the ink. Where
+// the lifted field saturates, the clamp flattens it into a plate around the
+// word, which is what a large dilation looked like too. Every other caster
+// carries 0 here and reads exactly what it did.
+//
 // One bilinear tap. A cell is drawn at a fraction of the target's pixels once
 // its σ is past `shadow::SIGMA_CELL_MAX`, and the tap is what makes a blur
 // wider than its own texels read smooth.
@@ -157,7 +167,8 @@ fn shadow_profile(who: u32, points: vec2<f32>) -> vec2<f32> {
     // that cell's own empty border rather than the neighbour packed beside it.
     let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
     let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).rg;
-    return vec2<f32>(min(GAUSSIAN_GAIN * clamp(held.r, 0.0, 1.0), 1.0), held.g);
+    let gain = GAUSSIAN_GAIN * exp2(shadow_casters[who].shade.y);
+    return vec2<f32>(min(gain * clamp(held.r, 0.0, 1.0), 1.0), held.g);
 }
 
 // Fixed casters carry their opacity separately from the calibrated profile.

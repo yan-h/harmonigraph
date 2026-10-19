@@ -2,9 +2,8 @@
 //! paint callback.
 //!
 //! **Why this exists.** A label used to be stamped around twenty offsets to
-//! make a rim. Each glyph now carries fixed near/coarse signed-distance
-//! patches. A spectral name's shadow turns that field into coverage and runs
-//! the common separable blur.
+//! make a rim. A name's shadow now draws its glyphs' coverage into a cell of
+//! the shared shadow atlas and runs the common separable blur over it.
 //!
 //! **What it does NOT do.** It does not render text. egui still owns the
 //! fonts, the shaping, the layout and the atlas — this takes the glyphs it
@@ -17,7 +16,7 @@
 //! note name carries, which the UI cuts and packs into a sheet of its own for
 //! the same reasons egui has an atlas. They arrive as instances like any
 //! other, naming that sheet in [`GlyphInstance::atlas`], and everything below
-//! treats them as glyphs: one quad, the shadow from the fixed SDF, and
+//! treats them as glyphs: one quad, the shadow from its coverage, and
 //! whatever place in the draw order the run they were collected with has.
 //!
 //! **Who else draws through it.** The pipelines, atlas binding and the
@@ -40,13 +39,6 @@ use crate::{create_vertex_buffer, wgpu};
 
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 
-/// Clear texels carried around a glyph's high-resolution distance patch.
-pub const GLYPH_SDF_NEAR_PAD: u32 = 32;
-/// Clear texels carried around a glyph's coarse distance patch.
-pub const GLYPH_SDF_COARSE_PAD: u32 = 48;
-/// Near-field texels over which sampling hands off to the coarse field.
-pub const GLYPH_SDF_NEAR_BLEND: u32 = 8;
-
 /// Entry points the text shader must provide.
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
@@ -58,8 +50,6 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "fs_fill_lit",
     "vs_glyph_cell",
     "fs_glyph_ink",
-    "vs_glyph_sdf_cell",
-    "fs_glyph_sdf_coverage",
     "vs_shadow_box",
     "fs_shadow_box",
     "fs_shadow_box_plain",
@@ -83,16 +73,6 @@ pub struct GlyphInstance {
     /// y]`. The shader reads nothing outside it — the neighbouring texels
     /// are a different letter.
     pub uv: [f32; 4],
-    /// Screen rect the fixed SDF's ink box maps onto: min, then size. The
-    /// typeset path is the visible [`Self::rect`]; a drawn mark uses this
-    /// second rect so the clear bitmap margin does not become part of its
-    /// letterform when the scale-free field is sampled.
-    pub sdf_rect: [f32; 4],
-    /// The near and coarse SDF texel rectangles corresponding to
-    /// [`Self::sdf_rect`], min then max. Zero rectangles mean this glyph has
-    /// no distance entry and contributes nothing to an SDF-filled cell.
-    pub sdf_near: [f32; 4],
-    pub sdf_coarse: [f32; 4],
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub fill: [u8; 4],
     /// The shadow's pane-specific color and strength. A fully transparent
@@ -119,12 +99,9 @@ impl GlyphInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x4, // rect
             1 => Float32x4, // uv
-            2 => Float32x4, // sdf_rect
-            3 => Float32x4, // sdf_near
-            4 => Float32x4, // sdf_coarse
-            5 => Unorm8x4,  // fill
-            6 => Unorm8x4,  // pane-specific shadow color
-            7 => Uint32,    // atlas
+            2 => Unorm8x4, // fill
+            3 => Unorm8x4, // pane-specific shadow color
+            4 => Uint32,   // atlas
         ],
     };
 }
@@ -138,16 +115,6 @@ impl GlyphInstance {
 #[derive(Clone)]
 pub struct FontAtlas {
     pub image: std::sync::Arc<egui::ColorImage>,
-    pub key: u64,
-}
-
-/// The process-stable signed-distance sheet used by lattice name shadows.
-/// Values are signed distances in atlas texels; each instance carries the
-/// mapping that turns them back into pane points.
-#[derive(Clone)]
-pub struct GlyphSdfAtlas {
-    pub image: std::sync::Arc<Vec<f32>>,
-    pub size: [u32; 2],
     pub key: u64,
 }
 
@@ -208,7 +175,6 @@ pub fn text_paint_callback(
     layer_ends: Vec<u32>,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
     sheets: SheetUploads,
-    sdf: Option<GlyphSdfAtlas>,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     ids: PaneIds,
@@ -223,7 +189,6 @@ pub fn text_paint_callback(
             layer_ends,
             shadow,
             sheets,
-            sdf,
             slide,
             target_format,
             pane_id: ids.pane,
@@ -239,7 +204,6 @@ struct TextCallback {
     layer_ends: Vec<u32>,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
     sheets: SheetUploads,
-    sdf: Option<GlyphSdfAtlas>,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -337,10 +301,11 @@ impl SlideAxis {
 }
 
 struct TextResources {
-    /// The SDF shadow composite and the visible glyph fill.
+    /// The shadow composite, the visible glyph fill, and the draw that fills
+    /// each glyph's shadow cell.
     shadow_pipeline: wgpu::RenderPipeline,
     fill_pipeline: wgpu::RenderPipeline,
-    glyph_sdf_coverage_pipeline: wgpu::RenderPipeline,
+    glyph_cell_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
     caster_layout: wgpu::BindGroupLayout,
@@ -364,15 +329,14 @@ struct TextResources {
     panes: PassAged<TextPane>,
 }
 
-/// The sheets one renderer binds a glyph pipeline against — the font atlas,
-/// the drawn marks', and the identity of the shared distance sheet — with the
-/// 1x1 stand-ins for whichever has not arrived.
+/// The sheets one renderer binds a glyph pipeline against — the font atlas
+/// and the drawn marks' — with the 1x1 stand-in for whichever has not arrived.
 ///
 /// Both glyph callbacks hold one: the text pass ([`TextResources`]) and the
 /// lattice's own (`crate::LatticeResources`). What each does with a
 /// REPLACEMENT differs and stays with each — see [`TextResources::bind_sheets`]
 /// and the note at its lattice counterpart's call site — but deciding whether
-/// anything moved, what the uniforms' sizes are, and which three views a bind
+/// anything moved, what the uniforms' sizes are, and which two views a bind
 /// group names is one question in both, and was written out twice.
 pub(crate) struct Sheets {
     /// The font atlas texture this renderer binds.
@@ -380,12 +344,7 @@ pub(crate) struct Sheets {
     /// And the drawn marks', which a session that never draws one leaves
     /// empty for its whole life.
     pub(crate) marks: AtlasTexture,
-    /// The process-shared SDF texture currently named by every pane's bind
-    /// group. The texture itself lives once in `CallbackResources` so lattice
-    /// labels and spectral text do not upload identical 2.7 MiB copies.
-    pub(crate) sdf_key: u64,
     blank: wgpu::Texture,
-    blank_sdf: wgpu::Texture,
 }
 
 impl Sheets {
@@ -393,9 +352,7 @@ impl Sheets {
         Sheets {
             atlas: AtlasTexture::default(),
             marks: AtlasTexture::default(),
-            sdf_key: 0,
             blank: blank_atlas(device, queue),
-            blank_sdf: blank_sdf_atlas(device, queue),
         }
     }
 
@@ -411,7 +368,6 @@ impl Sheets {
         queue: &wgpu::Queue,
         shared_atlas: Option<&wgpu::Texture>,
         uploads: &SheetUploads,
-        sdf: &SharedSdf,
     ) -> bool {
         let mut recreated = false;
         if let Some(atlas) = uploads.font.as_ref().filter(|a| !self.atlas.holds(a)) {
@@ -421,10 +377,6 @@ impl Sheets {
         }
         if let Some(marks) = uploads.marks.as_ref().filter(|a| !self.marks.holds(a)) {
             recreated |= self.marks.upload(device, queue, marks);
-        }
-        if self.sdf_key != sdf.key {
-            self.sdf_key = sdf.key;
-            recreated = true;
         }
         recreated
     }
@@ -442,29 +394,21 @@ impl Sheets {
         [a[0], a[1], m[0], m[1]].map(|n| n.max(1) as f32)
     }
 
-    /// Which three textures a bind group built right now would name — what a
+    /// Which two textures a bind group built right now would name — what a
     /// pane records beside its own bind group, so a later publication can be
     /// told from a re-upload of the same pixels.
-    pub(crate) fn keys(&self) -> (u64, u64, u64) {
-        (self.atlas.key(), self.marks.key(), self.sdf_key)
+    pub(crate) fn keys(&self) -> (u64, u64) {
+        (self.atlas.key(), self.marks.key())
     }
 
-    /// The three views [`bind_group`] takes, in its own order, each falling
+    /// The two views [`bind_group`] takes, in its own order, each falling
     /// back to the blank standing in for a sheet that has not arrived — a
-    /// binding cannot be left unfilled. `sdf` is the shared distance texture,
-    /// which lives in `CallbackResources` rather than here.
+    /// binding cannot be left unfilled.
     ///
     /// Each one of these mints a `wgpu::TextureView`, so callers ask only
     /// where a bind group is about to be built.
-    pub(crate) fn views(
-        &self,
-        sdf: Option<&wgpu::Texture>,
-    ) -> (wgpu::TextureView, wgpu::TextureView, wgpu::TextureView) {
-        (
-            self.atlas.view_or(&self.blank),
-            self.marks.view_or(&self.blank),
-            sdf.unwrap_or(&self.blank_sdf).create_view(&Default::default()),
-        )
+    pub(crate) fn views(&self) -> (wgpu::TextureView, wgpu::TextureView) {
+        (self.atlas.view_or(&self.blank), self.marks.view_or(&self.blank))
     }
 }
 
@@ -596,95 +540,6 @@ impl AtlasTexture {
     }
 }
 
-/// The lattice renderer's GPU copy of the fixed signed-distance sheet.
-/// Unlike egui's font atlas it never grows or moves; the key only keeps a
-/// recreated shell from mistaking another allocation for the one it bound.
-#[derive(Default)]
-pub(crate) struct SdfTexture {
-    texture: Option<wgpu::Texture>,
-    key: Option<u64>,
-}
-
-impl SdfTexture {
-    pub(crate) fn upload(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        atlas: &GlyphSdfAtlas,
-    ) -> bool {
-        if self.key == Some(atlas.key) {
-            return false;
-        }
-        let texture = crate::gpu_memory::texture(
-            device,
-            &wgpu::TextureDescriptor {
-                label: Some("text_sdf_atlas"),
-                size: wgpu::Extent3d {
-                    width: atlas.size[0].max(1),
-                    height: atlas.size[1].max(1),
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-        );
-        queue.write_texture(
-            texture.as_image_copy(),
-            bytemuck::cast_slice(atlas.image.as_slice()),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(atlas.size[0] * 4),
-                rows_per_image: Some(atlas.size[1]),
-            },
-            wgpu::Extent3d {
-                width: atlas.size[0],
-                height: atlas.size[1],
-                depth_or_array_layers: 1,
-            },
-        );
-        self.texture = Some(texture);
-        self.key = Some(atlas.key);
-        true
-    }
-
-    pub(crate) fn key(&self) -> u64 {
-        self.key.unwrap_or(0)
-    }
-}
-
-pub(crate) struct SharedSdf {
-    pub(crate) texture: Option<wgpu::Texture>,
-    pub(crate) key: u64,
-}
-
-/// Return the one GPU allocation shared by both callback resource families.
-/// A callback carrying no glyphs can still reuse an upload made earlier in the
-/// pass; it must not replace that binding with the blank texture.
-pub(crate) fn shared_sdf_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    resources: &mut CallbackResources,
-    atlas: Option<&GlyphSdfAtlas>,
-) -> SharedSdf {
-    if atlas.is_some() && resources.get::<SdfTexture>().is_none() {
-        resources.insert(SdfTexture::default());
-    }
-    if let Some(atlas) = atlas {
-        resources
-            .get_mut::<SdfTexture>()
-            .expect("inserted above when missing")
-            .upload(device, queue, atlas);
-    }
-    resources.get::<SdfTexture>().map_or(SharedSdf { texture: None, key: 0 }, |texture| SharedSdf {
-        texture: texture.texture.clone(),
-        key: texture.key(),
-    })
-}
-
 struct TextPane {
     uniform_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
@@ -732,16 +587,6 @@ pub(crate) fn glyph_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupL
                 count: None,
             },
             sheet(3),
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
         ],
     })
 }
@@ -759,9 +604,10 @@ pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderM
     })
 }
 
-/// The draw that fills a lattice name's shadow cell with its glyphs' coverage,
-/// MAX-blended so overlapping glyph quads cannot double-darken.
-pub(crate) fn create_glyph_coverage_cell_pipeline(
+/// The draw that fills a name's shadow cell with its glyphs' coverage,
+/// MAX-blended so overlapping glyph quads cannot double-darken. Lattice and
+/// spectral text both fill their cells through it.
+pub(crate) fn create_glyph_cell_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
@@ -777,35 +623,6 @@ pub(crate) fn create_glyph_coverage_cell_pipeline(
         "glyph_coverage_cell",
         &[Some(layout)],
         ("vs_glyph_cell", "fs_glyph_ink"),
-        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
-        &[Some(wgpu::ColorTargetState {
-            format: crate::shadow::ATLAS_FORMAT,
-            blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
-            write_mask: wgpu::ColorWrites::ALL,
-        })],
-    )
-}
-
-/// The SDF producer: coverage rasterized from the fixed glyph SDF, offset by
-/// the group's Spread. Every spectral name's cell is filled by it, and a
-/// lattice name's whenever its Spread is open — growing a letterform by a
-/// distance needs the distance, which egui's coverage atlas does not hold.
-pub(crate) fn create_glyph_sdf_coverage_pipeline(
-    device: &wgpu::Device,
-    shader: &wgpu::ShaderModule,
-    layout: &wgpu::BindGroupLayout,
-) -> wgpu::RenderPipeline {
-    const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Max,
-    };
-    glyph_pipeline(
-        device,
-        shader,
-        "glyph_sdf_coverage_cell",
-        &[Some(layout)],
-        ("vs_glyph_sdf_cell", "fs_glyph_sdf_coverage"),
         &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
         &[Some(wgpu::ColorTargetState {
             format: crate::shadow::ATLAS_FORMAT,
@@ -976,8 +793,8 @@ impl TextResources {
         self.target_format != target_format
     }
 
-    /// The spectral shadow, its two SDF producers, and the fill pass off one
-    /// read of the module. Split out
+    /// The spectral shadow, its cell producer, and the fill pass off one read
+    /// of the module. Split out
     /// because a reload owes exactly this pair and nothing else in the struct
     /// — see [`TextResources::rebuild_pipelines`].
     fn pipelines(
@@ -1006,8 +823,8 @@ impl TextResources {
             1,
             crate::EGUI_BLEND,
         );
-        let coverage = create_glyph_sdf_coverage_pipeline(device, &shader, layout);
-        (shadow_pipeline, fill_pipeline, coverage)
+        let cell = create_glyph_cell_pipeline(device, &shader, layout);
+        (shadow_pipeline, fill_pipeline, cell)
     }
 
     /// Swap in pipelines built for what the next frame is drawing, keeping the
@@ -1021,7 +838,7 @@ impl TextResources {
         // The source is read inside, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
-        let (shadow_pipeline, fill_pipeline, coverage) = Self::pipelines(
+        let (shadow_pipeline, fill_pipeline, cell) = Self::pipelines(
             device,
             &self.layout,
             &self.shadow_layout,
@@ -1034,7 +851,7 @@ impl TextResources {
         }
         self.shadow_pipeline = shadow_pipeline;
         self.fill_pipeline = fill_pipeline;
-        self.glyph_sdf_coverage_pipeline = coverage;
+        self.glyph_cell_pipeline = cell;
         self.target_format = target_format;
     }
 
@@ -1050,14 +867,14 @@ impl TextResources {
         // Read once for the pair, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
-        let (shadow_pipeline, fill_pipeline, coverage) =
+        let (shadow_pipeline, fill_pipeline, cell) =
             Self::pipelines(device, &layout, &shadow_layout, &caster_layout, target_format);
         #[cfg(feature = "hot-reload")]
         let generation = crate::reload::generation();
         TextResources {
             shadow_pipeline,
             fill_pipeline,
-            glyph_sdf_coverage_pipeline: coverage,
+            glyph_cell_pipeline: cell,
             layout,
             shadow_layout,
             caster_layout,
@@ -1104,13 +921,12 @@ impl TextResources {
         queue: &wgpu::Queue,
         shared_atlas: Option<&wgpu::Texture>,
         uploads: &SheetUploads,
-        sdf: &SharedSdf,
     ) {
-        if !self.sheets.bind(device, queue, shared_atlas, uploads, sdf) {
+        if !self.sheets.bind(device, queue, shared_atlas, uploads) {
             return;
         }
         let sizes = self.sheets.sizes();
-        let (view, mark_view, sdf_view) = self.sheets.views(sdf.texture.as_ref());
+        let (view, mark_view) = self.sheets.views();
         let (layout, sampler) = (&self.layout, &self.sampler);
         for pane in self.panes.values_mut() {
             // The sizes alone, not the whole struct: a pane that has already
@@ -1121,15 +937,8 @@ impl TextResources {
                 ATLAS_SIZES_OFFSET,
                 bytemuck::cast_slice(&sizes),
             );
-            pane.bind_group = Some(bind_group(
-                device,
-                layout,
-                sampler,
-                &view,
-                &mark_view,
-                &sdf_view,
-                &pane.uniform_buffer,
-            ));
+            pane.bind_group =
+                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
         }
     }
 }
@@ -1149,7 +958,6 @@ pub(crate) fn bind_group(
     sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
     mark_view: &wgpu::TextureView,
-    sdf_view: &wgpu::TextureView,
     uniforms: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1162,10 +970,6 @@ pub(crate) fn bind_group(
             wgpu::BindGroupEntry {
                 binding: 3,
                 resource: wgpu::BindingResource::TextureView(mark_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(sdf_view),
             },
         ],
     })
@@ -1200,30 +1004,6 @@ pub(crate) fn blank_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::T
     queue.write_texture(
         texture.as_image_copy(),
         &[0u8; 4],
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-    );
-    texture
-}
-
-/// A typed stand-in for the fixed R32Float signed-distance sheet.
-pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
-    let texture = crate::gpu_memory::texture(
-        device,
-        &wgpu::TextureDescriptor {
-            label: Some("text_blank_sdf_atlas"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        },
-    );
-    queue.write_texture(
-        texture.as_image_copy(),
-        bytemuck::bytes_of(&0.0f32),
         wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
         wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
     );
@@ -1315,7 +1095,6 @@ impl CallbackTrait for TextCallback {
         // The shell inserts the current egui font texture under its concrete
         // wgpu type. Cloning this handle does not copy texture data.
         let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
-        let shared_sdf = shared_sdf_texture(device, queue, callback_resources, self.sdf.as_ref());
         match callback_resources.get_mut::<TextResources>() {
             // Stale pipelines are the whole of what a reload or a format change
             // owes; the atlas binding beside them updates independently, so
@@ -1339,7 +1118,7 @@ impl CallbackTrait for TextCallback {
         // still retires the panes that stopped drawing.
         resources.panes.evict_unseen(self.pass_nr);
 
-        resources.bind_sheets(device, queue, shared_atlas.as_ref(), &self.sheets, &shared_sdf);
+        resources.bind_sheets(device, queue, shared_atlas.as_ref(), &self.sheets);
         // No atlas yet means the first frame arrived without one: nothing can
         // be drawn, and the next frame that sees a change will bring it.
         if resources.sheets.atlas.is_empty() {
@@ -1370,7 +1149,7 @@ impl CallbackTrait for TextCallback {
         // against a texture since replaced. So they are built where they are
         // used, not beside the rest of the frame's setup.
         let pane_views = resources.panes.get(self.pane_id).is_none_or(|p| p.bind_group.is_none());
-        let pane_views = pane_views.then(|| resources.sheets.views(shared_sdf.texture.as_ref()));
+        let pane_views = pane_views.then(|| resources.sheets.views());
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane =
             resources.panes.touched_or_insert_with(self.pane_id, self.pass_nr, || TextPane {
@@ -1393,16 +1172,9 @@ impl CallbackTrait for TextCallback {
                 count: 0,
             });
         if pane.bind_group.is_none() {
-            let (view, mark_view, sdf_view) = pane_views.expect("built above when unbound");
-            pane.bind_group = Some(bind_group(
-                device,
-                layout,
-                sampler,
-                &view,
-                &mark_view,
-                &sdf_view,
-                &pane.uniform_buffer,
-            ));
+            let (view, mark_view) = pane_views.expect("built above when unbound");
+            pane.bind_group =
+                Some(bind_group(device, layout, sampler, &view, &mark_view, &pane.uniform_buffer));
         }
 
         if self.glyphs.len() > pane.capacity {
@@ -1423,21 +1195,23 @@ impl CallbackTrait for TextCallback {
             let sigma = style
                 .filter(|style| style.casts())
                 .map_or(0.0, |style| crate::shadow::spectral_sigma_points(style, self.point_scale));
+            let stops = style.map_or(0.0, |s| s.text_spread_stops());
             let casters: Vec<crate::shadow::Caster> = self
                 .glyphs
                 .iter()
                 .map(|glyph| crate::shadow::Caster {
-                    rect: glyph.sdf_rect,
+                    rect: glyph.rect,
                     level: f32::from(glyph.rim[3] > 0),
                     sigma_points: sigma,
-                    spread_points: style.map_or(0.0, |s| s.gaussian_spread_points(sigma)),
+                    spread_points: 0.0,
+                    stops,
                 })
                 .collect();
             let submission = crate::spectral_shadow::Submission {
                 key: crate::spectral_shadow::ProducerKey::Text(self.pane_id),
                 casters,
                 draw: crate::spectral_shadow::CellDraw::Text {
-                    pipeline: resources.glyph_sdf_coverage_pipeline.clone(),
+                    pipeline: resources.glyph_cell_pipeline.clone(),
                     locals: pane.bind_group.as_ref().expect("bound above").clone(),
                     glyphs: pane.instance_buffer.clone(),
                     count: pane.count,
@@ -1532,50 +1306,10 @@ impl CallbackTrait for TextCallback {
 pub(crate) mod tests {
     use super::*;
 
-    /// The shader expands the ink rectangles back to the packed tile bounds,
-    /// so those constants must move with the generator's public contract.
-    #[test]
-    fn the_sdf_tile_padding_agrees_with_the_shader() {
-        let near: f32 =
-            crate::shadow::tests::shader_const(TEXT_SRC, "SDF_NEAR_PAD").parse().expect("a number");
-        let coarse: f32 = crate::shadow::tests::shader_const(TEXT_SRC, "SDF_COARSE_PAD")
-            .parse()
-            .expect("a number");
-        let blend: f32 = crate::shadow::tests::shader_const(TEXT_SRC, "SDF_NEAR_BLEND")
-            .parse()
-            .expect("a number");
-        assert_eq!(near, GLYPH_SDF_NEAR_PAD as f32);
-        assert_eq!(coarse, GLYPH_SDF_COARSE_PAD as f32);
-        assert_eq!(blend, GLYPH_SDF_NEAR_BLEND as f32);
-    }
     use crate::gpu_harness::{headless_device, readback, render_to_texture};
 
     const SIZE: [u32; 2] = [64, 64];
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-    #[test]
-    fn lattice_and_spectral_text_share_one_sdf_texture() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let mut resources = CallbackResources::default();
-        let atlas = sdf_atlas();
-        let lattice = shared_sdf_texture(&device, &queue, &mut resources, Some(&atlas));
-        let spectral = shared_sdf_texture(&device, &queue, &mut resources, Some(&atlas));
-        let empty_pane = shared_sdf_texture(&device, &queue, &mut resources, None);
-
-        assert_eq!(lattice.key, atlas.key);
-        assert_eq!(spectral.key, lattice.key);
-        assert_eq!(empty_pane.key, lattice.key);
-        assert_eq!(
-            spectral.texture, lattice.texture,
-            "the second consumer allocated a duplicate SDF texture"
-        );
-        assert_eq!(
-            empty_pane.texture, lattice.texture,
-            "an empty callback forgot the process-shared SDF texture"
-        );
-    }
 
     #[test]
     fn baked_text_shader_validates() {
@@ -1619,7 +1353,6 @@ pub(crate) mod tests {
                 glyphs: vec![glyph()],
                 shadow: Some(style),
                 sheets: SheetUploads { font: Some(atlas()), marks: None },
-                sdf: Some(sdf_atlas()),
                 slide: SlideAxis::default(),
                 target_format: FORMAT,
                 pane_id: 0,
@@ -1716,7 +1449,6 @@ pub(crate) mod tests {
             &queue,
             None,
             &SheetUploads { font: Some(atlas()), marks: Some(mark_sheet()) },
-            &SharedSdf { texture: None, key: 0 },
         );
         assert!(
             !resources.sheets.atlas.is_empty() && !resources.sheets.marks.is_empty(),
@@ -1774,7 +1506,6 @@ pub(crate) mod tests {
             glyphs: vec![glyph()],
             shadow: None,
             sheets: SheetUploads::default(),
-            sdf: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
@@ -1833,7 +1564,6 @@ pub(crate) mod tests {
             &queue,
             None,
             &SheetUploads { font: Some(sheet.clone()), marks: None },
-            &SharedSdf { texture: None, key: 0 },
         );
         let fallback = resources.get::<TextResources>().unwrap();
         assert!(!fallback.sheets.atlas.shared, "the CPU fallback must own its texture");
@@ -1937,7 +1667,6 @@ pub(crate) mod tests {
             glyphs: vec![glyph],
             shadow,
             sheets: SheetUploads { font: Some(sheet), marks: None },
-            sdf: Some(sdf_atlas()),
             slide,
             target_format: FORMAT,
             pane_id: 0,
@@ -1988,12 +1717,7 @@ pub(crate) mod tests {
             point_scale: 1.0,
             glyphs: vec![
                 glyph(),
-                GlyphInstance {
-                    rect: [28.0, 24.0, 8.0, 8.0],
-                    sdf_rect: [28.0, 24.0, 8.0, 8.0],
-                    fill: [0, 255, 0, 255],
-                    ..glyph()
-                },
+                GlyphInstance { rect: [28.0, 24.0, 8.0, 8.0], fill: [0, 255, 0, 255], ..glyph() },
             ],
             layer_ends: Vec::new(),
             shadow: Some(harmonigraph_scene::ShadowStyle {
@@ -2002,7 +1726,6 @@ pub(crate) mod tests {
                 ..Default::default()
             }),
             sheets: SheetUploads { font: Some(atlas()), marks: None },
-            sdf: Some(sdf_atlas()),
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
@@ -2031,33 +1754,13 @@ pub(crate) mod tests {
         GlyphInstance {
             rect: [24.0, 24.0, 8.0, 8.0],
             uv: [8.0, 8.0, 16.0, 16.0],
-            sdf_rect: [24.0, 24.0, 8.0, 8.0],
-            sdf_near: [60.0, 60.0, 68.0, 68.0],
-            sdf_coarse: [60.0, 60.0, 68.0, 68.0],
             fill: [255, 255, 255, 255],
             rim: [255, 0, 0, 255],
             atlas: GlyphInstance::TYPE,
         }
     }
 
-    /// A true signed field for [`glyph`]'s opaque square, with enough room for
-    /// both fixed sampling ranges around it.
-    pub(crate) fn sdf_atlas() -> GlyphSdfAtlas {
-        const SIDE: u32 = 128;
-        let mut image = Vec::with_capacity((SIDE * SIDE) as usize);
-        for y in 0..SIDE {
-            for x in 0..SIDE {
-                let p = glam::Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-                let q = (p - glam::Vec2::splat(64.0)).abs() - glam::Vec2::splat(4.0);
-                let outside = q.max(glam::Vec2::ZERO).length();
-                let inside = q.x.max(q.y).min(0.0);
-                image.push(outside + inside);
-            }
-        }
-        GlyphSdfAtlas { image: std::sync::Arc::new(image), size: [SIDE, SIDE], key: 1 }
-    }
-
-    /// The glyph lands where it was told to, in its own color, and the SDF
+    /// The glyph lands where it was told to, in its own color, and its
     /// shadow stands outside it in the pane's knockout color.
     ///
     /// The ink's own edge is soft by a quarter texel, which is `FILTER_TAP`'s
@@ -2066,7 +1769,7 @@ pub(crate) mod tests {
     /// exactly as wide as that constant and a fringe any wider is the filter
     /// reaching somewhere it must not.
     #[test]
-    fn a_glyph_paints_its_ink_and_the_sdf_shadow_stands_outside_it() {
+    fn a_glyph_paints_its_ink_and_its_shadow_stands_outside_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -2080,8 +1783,8 @@ pub(crate) mod tests {
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
     }
 
-    /// The enlarged range must reach past the old maximum on both paths,
-    /// including the coarse glyph field and downsampled Gaussian atlas.
+    /// The enlarged range must reach past the old maximum at every scale,
+    /// including a cell drawn below the target's resolution.
     #[test]
     fn spectral_text_can_cast_beyond_the_old_width_limit_at_every_scale() {
         use harmonigraph_scene::{ShadowStyle, SPECTRAL_SHADOW_MAX};
@@ -2177,7 +1880,6 @@ pub(crate) mod tests {
             glyphs: vec![glyph(), GlyphInstance { rect: [8.0, 24.0, 8.0, 8.0], ..mark() }],
             shadow: None,
             sheets: SheetUploads { font: Some(atlas()), marks: Some(mark_sheet()) },
-            sdf: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
@@ -2269,7 +1971,6 @@ pub(crate) mod tests {
                 font: Some(FontAtlas { image: std::sync::Arc::new(image), key: 1 }),
                 marks: None,
             },
-            sdf: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
@@ -2342,7 +2043,6 @@ pub(crate) mod tests {
             glyphs: vec![glyph()],
             shadow: None,
             sheets: SheetUploads { font: Some(atlas()), marks: None },
-            sdf: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
@@ -2441,7 +2141,6 @@ pub(crate) mod tests {
             } else {
                 SheetUploads { font: Some(fallback_font.clone()), marks: atlas }
             },
-            sdf: None,
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
@@ -2524,7 +2223,6 @@ pub(crate) mod tests {
                     glyphs: vec![reaching],
                     shadow: None,
                     sheets: SheetUploads::default(),
-                    sdf: None,
                     slide: SlideAxis::default(),
                     target_format: FORMAT,
                     pane_id: 0,
@@ -2546,10 +2244,10 @@ pub(crate) mod tests {
     /// atlas starts with, so only a texture of the grown size holds it.
     const GROWN_PATCH_TOP: usize = 40;
 
-    /// The spectral shadow derives a visible knockout from the glyph SDF and
-    /// leaves the glyph fill on top of it.
+    /// The spectral shadow derives a visible knockout from the glyph's
+    /// coverage and leaves the glyph fill on top of it.
     #[test]
-    fn spectral_text_shadow_draws_from_the_glyph_sdf() {
+    fn spectral_text_shadow_draws_from_the_glyph_coverage() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
@@ -2581,33 +2279,6 @@ pub(crate) mod tests {
             );
             assert_eq!(at(4.0, 4.0), [0, 0, 0, 0], "escaped its atlas cell at {ppp} ppp",);
         }
-    }
-
-    #[test]
-    fn gaussian_spread_expands_spectral_text_shadow_without_changing_fill() {
-        let Some((device, queue)) = headless_device() else { return };
-        let style =
-            harmonigraph_scene::ShadowStyle { width: 2.0, depth: 1.0, ..Default::default() };
-        let draw = |style| {
-            draw_from_scaled(
-                &device,
-                &queue,
-                glyph(),
-                Some(style),
-                atlas(),
-                SlideAxis::default(),
-                1.0,
-                1.0,
-            )
-            .0
-        };
-        let base = draw(style);
-        let grown = draw(harmonigraph_scene::ShadowStyle { spread: 0.5, ..style });
-        assert_eq!(pixel(&base, 28, 28), pixel(&grown, 28, 28), "visible glyph fill moved");
-        assert!(
-            pixel(&grown, 11, 28)[3] > pixel(&base, 11, 28)[3],
-            "expanded glyph footprint was clipped"
-        );
     }
 
     /// A spectral shadow is worth its color's alpha, which is the label's
@@ -2766,8 +2437,9 @@ pub(crate) mod tests {
     ///
     /// No shadow, which is deliberate and is the whole of what this fixture
     /// isolates: the FILL read through the filter, with nothing else in the
-    /// frame. The SDF shadow has its own kernel/scale coverage above, so this
-    /// test stays about visible ink reconstruction alone.
+    /// frame. The shadow's own sampling has
+    /// `a_stem_casts_the_same_shadow_anywhere_in_a_coarse_cell`, so this test
+    /// stays about visible ink reconstruction alone.
     ///
     /// BOTH axes, because the filter is one-dimensional and separable, so a
     /// pass on one says nothing at all about the other. A stroke sliding along
@@ -2783,9 +2455,6 @@ pub(crate) mod tests {
         let ink = |rect: [f32; 4], uv: [f32; 4]| GlyphInstance {
             rect,
             uv,
-            sdf_rect: rect,
-            sdf_near: [0.0; 4],
-            sdf_coarse: [0.0; 4],
             fill: [255, 255, 255, 255],
             rim: [0, 0, 0, 0],
             atlas: GlyphInstance::TYPE,
@@ -2842,6 +2511,93 @@ pub(crate) mod tests {
         }
     }
 
+    /// Every stem of a letter weighs the same in its shadow wherever it sits
+    /// inside the glyph, in a cell drawn at a fraction of the target's
+    /// resolution.
+    ///
+    /// At two pixels a point the widest spectral Shadow puts σ at twelve
+    /// pixels, four times the cell's own cap of three texels, so its cell is
+    /// drawn at a quarter resolution. The sheet holds two texels a point, as
+    /// egui's atlas does at that scale, so a cell texel spans four of them,
+    /// and one sample per cell texel lands on a
+    /// one-texel stem in some columns and misses it entirely in others: a
+    /// letter's stems would cast unequal shadows, and which ones would move as
+    /// the cell's scale follows a zoom or a Width drag. The footprint average
+    /// in `fs_glyph_ink` holds them equal.
+    ///
+    /// A cell is aligned to its own glyph, so sliding the GLYPH changes no
+    /// phase and would pass without the average: the stem moves inside a
+    /// glyph that stays put. Read as the shadow's total alpha, with the fill
+    /// transparent so only the shadow is drawn.
+    #[test]
+    fn a_stem_casts_the_same_shadow_anywhere_in_a_coarse_cell() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let shadow = harmonigraph_scene::ShadowStyle {
+            width: harmonigraph_scene::SPECTRAL_SHADOW_MAX,
+            depth: 0.3,
+            ..Default::default()
+        };
+        // Eight points wide over sixteen sheet texels.
+        let glyph = GlyphInstance { uv: [8.0, 8.0, 24.0, 16.0], fill: [0, 0, 0, 0], ..glyph() };
+        let weight: Vec<f32> = (8..24)
+            .map(|column| {
+                let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+                for y in 8..16 {
+                    image[(column, y)] = egui::Color32::WHITE;
+                }
+                let sheet = FontAtlas { image: std::sync::Arc::new(image), key: column as u64 };
+                let ppp = 2.0;
+                draw_from_scaled(
+                    &device,
+                    &queue,
+                    glyph,
+                    Some(shadow),
+                    sheet,
+                    SlideAxis::Across,
+                    ppp,
+                    1.0,
+                )
+                .0
+                .chunks(4)
+                .map(|px| f32::from(px[3]))
+                .sum()
+            })
+            .collect();
+        let hi = weight.iter().copied().fold(0.0f32, f32::max);
+        let lo = weight.iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(hi > 0.0, "the stem cast no shadow in any column");
+        let swing = (hi - lo) / hi;
+        assert!(
+            swing <= 0.02,
+            "a stem's shadow swings {:.1}% of itself across the glyph's columns \
+             ({lo:.0}..{hi:.0}): the coarse cell samples the stroke rather than averaging it",
+            100.0 * swing,
+        );
+    }
+
+    /// Spread deepens a spectral name's shadow where it falls and leaves both
+    /// the shadow's reach and the glyph's fill where they were: text spends it
+    /// as stops on the blur, not as a larger source.
+    #[test]
+    fn spread_deepens_a_text_shadow_without_widening_it() {
+        use harmonigraph_scene::ShadowStyle;
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let style = |spread| ShadowStyle { width: 1.0, depth: 0.5, spread };
+        let [plain, spread] = [0.0, 0.5].map(|s| draw(&device, &queue, glyph(), Some(style(s))));
+        assert_eq!(pixel(&plain, 28, 28), pixel(&spread, 28, 28), "the glyph's fill moved");
+        // Two points left of the glyph, inside the blur; σ is two points and
+        // the reach six, so fourteen points left is past either.
+        let near = (pixel(&plain, 22, 28)[3], pixel(&spread, 22, 28)[3]);
+        assert!(near.0 > 0, "the fixture casts no shadow two points out");
+        assert!(near.1 > near.0 + 20, "spread did not deepen the shadow: {near:?}");
+        assert_eq!(pixel(&plain, 10, 28), [0; 4], "the plain shadow reached 14 points out");
+        assert_eq!(pixel(&spread, 10, 28), [0; 4], "spread widened the shadow's reach");
+    }
+
     /// The lattice's four-tap mode reaches both axes, rather than quietly
     /// degenerating to either one of the two scrolling-pane filters.
     ///
@@ -2857,9 +2613,6 @@ pub(crate) mod tests {
         let ink = |rect: [f32; 4], uv: [f32; 4]| GlyphInstance {
             rect,
             uv,
-            sdf_rect: rect,
-            sdf_near: [0.0; 4],
-            sdf_coarse: [0.0; 4],
             fill: [255, 255, 255, 255],
             rim: [0, 0, 0, 0],
             atlas: GlyphInstance::TYPE,

@@ -248,11 +248,19 @@ fn the_star_range_bar_drags_level_layers_both_ways_and_ignores_a_double_click() 
     }
     assert_eq!(*values.borrow(), back);
 }
+/// Both kinds of group: Spread grows a geometry sample and deepens a text
+/// one, and the preview has to move for either.
 #[test]
 fn shadow_sliders_update_the_preview() {
+    for text in [false, true] {
+        shadow_sliders_update_the_preview_of(text);
+    }
+}
+
+fn shadow_sliders_update_the_preview_of(text: bool) {
     let mut s = harmonigraph_scene::ShadowStyle { width: 0.2, depth: 0.3, ..Default::default() };
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| shadow(ui, &mut s, 1.0, true);
+    let mut draw = |ui: &mut Ui| shadow(ui, &mut s, 1.0, true, text);
     let mut output = frame(&ctx, vec![], &mut draw);
     for row in 0..3 {
         let colors = |output: &egui::FullOutput| {
@@ -288,7 +296,7 @@ fn shadow_sliders_update_the_preview() {
         frame(&ctx, vec![press(from, true)], &mut draw);
         frame(&ctx, vec![Event::PointerMoved(to)], &mut draw);
         output = frame(&ctx, vec![press(to, false)], &mut draw);
-        assert_ne!(colors(&output), before, "row {row}");
+        assert_ne!(colors(&output), before, "row {row}, text {text}");
     }
     assert!(s.width > 0.2 && s.depth > 0.3);
 }

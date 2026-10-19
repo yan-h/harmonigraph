@@ -27,6 +27,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Ring and mark shadows",
         "Audio rings, MIDI rings, melody and bass marks",
         true,
+        false,
         &mut shadow.lattice_geometry,
         Some(&mut view.hide_behind),
     );
@@ -34,6 +35,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ui,
         "Label and cross shadows",
         "Note names, tuning marks and idle crosses",
+        true,
         true,
         &mut shadow.lattice_text,
         None,
@@ -60,6 +62,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             "Notes",
             "MIDI ribbons and Spiral note dots",
             false,
+            false,
             &mut shadow.spectral_geometry,
             None,
         );
@@ -68,6 +71,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             "Labels",
             "Analyzer note names and axis labels, and Spiral note names",
             false,
+            true,
             &mut shadow.spectral_text,
             None,
         );
@@ -203,12 +207,13 @@ fn shadow_group(
     name: &str,
     casters: &str,
     lattice: bool,
+    text: bool,
     style: &mut ShadowStyle,
     hide_behind: Option<&mut f32>,
 ) {
     super::block(ui, name, |ui| {
         let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
-        crate::widgets::shadow(ui, style, width_max, lattice);
+        crate::widgets::shadow(ui, style, width_max, lattice, text);
         // Under the diagram rather than in its value column: the preview draws
         // the visible shadow, which this does not move, and the column holds
         // three rows. Greyed at Width 0, which packs no field for it to spend.

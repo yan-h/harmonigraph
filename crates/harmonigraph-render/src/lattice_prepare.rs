@@ -45,8 +45,6 @@ impl CallbackTrait for LatticeCallback {
         // wgpu type before callbacks prepare. Clone the handle before taking a
         // mutable borrow from the resource map; its pixels remain shared.
         let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
-        let shared_sdf =
-            text::shared_sdf_texture(device, queue, callback_resources, self.sdf.as_ref());
         // Lazily (re)create shared resources. Recreate if the target format
         // changed (it can't today, but this keeps the invariant explicit).
         let recreate = callback_resources
@@ -96,8 +94,7 @@ impl CallbackTrait for LatticeCallback {
         // recorded against. Old texture, new size, which is exactly the
         // mismatch the text callback's version exists to prevent, arriving by
         // the other road.
-        let _ =
-            resources.sheets.bind(device, queue, shared_atlas.as_ref(), &self.sheets, &shared_sdf);
+        let _ = resources.sheets.bind(device, queue, shared_atlas.as_ref(), &self.sheets);
         // The first frames of a session can arrive before any pane has drawn a
         // glyph, and the labels wait for a font texture. Gated on the FONT
         // atlas alone: a mark is always drawn beside a letter, so a frame with
@@ -128,7 +125,6 @@ impl CallbackTrait for LatticeCallback {
                 casters: frame.packed.casters.len().max(1),
                 occluders: frame.occluders.len(),
             },
-            shared_sdf.texture.as_ref(),
         );
 
         lattice_material::prepare(device, queue, egui_encoder, &material, pane, self);
@@ -524,7 +520,7 @@ impl LatticeCallback {
                 points_to_texels: cell.cell_map[0],
                 aa_scale: cell.cell_map[3],
                 arm_points: self.marker_arm_points,
-                spread_points: cell.who[3],
+                padding: 0.0,
             };
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -640,13 +636,7 @@ impl LatticeCallback {
                 pass.set_bind_group(0, glyphs, &[]);
                 pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
                 pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
-                // Every name in a frame is one group, so the fill is one
-                // pipeline for the whole run.
-                pass.set_pipeline(if self.shadow.lattice_text.gaussian_spread_points(1.0) > 0.0 {
-                    &compiled.shaders.glyph_spread_cell_pipeline
-                } else {
-                    &compiled.shaders.glyph_coverage_cell_pipeline
-                });
+                pass.set_pipeline(&compiled.shaders.glyph_cell_pipeline);
                 pass.draw(0..4, 0..pane.glyph_count);
             }
             drop(pass);

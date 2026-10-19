@@ -1,0 +1,137 @@
+// language: metal3.2
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using metal::uint;
+
+struct _mslBufferSizes {
+    uint size2;
+};
+
+struct ShadowCaster {
+    metal::float4 rect;
+    metal::float4 cell;
+    metal::float4 map;
+    metal::float4 shade;
+};
+typedef ShadowCaster type_5[1];
+struct Locals {
+    metal::float2 screen_points;
+    metal::float2 atlas_size;
+    metal::float2 mark_atlas_size;
+    metal::float2 filter_axis;
+    float pixels_per_point;
+    float shadow_depth;
+    metal::float2 shadow_atlas_size;
+    float node_occlusion;
+    float _pad0_;
+    metal::float2 _pad1_;
+};
+struct SpectralShadowOut {
+    metal::float4 position;
+    metal::float2 at;
+    char _pad2[8];
+    metal::float4 rim;
+    uint who;
+    char _pad4[12];
+};
+constant uint OCCLUDER_HEADER = 5u;
+constant float GAUSSIAN_GAIN = 2.5;
+constant float SHADOW_KEEP_FLOOR = 0.0009765625;
+constant float GLOW_BASE = 0.8;
+constant uint SHEET_MARK = 1u;
+constant float PATCH_MARGIN = 0.5;
+constant float FILTER_TAP = 0.25;
+constant float CELL_FOOTPRINT_TAPS = 8.0;
+
+bool cell_packed(
+    metal::float4 cell
+) {
+    bool local = {};
+    if (cell.z > 0.0) {
+        local = cell.w > 0.0;
+    } else {
+        local = false;
+    }
+    bool _e10 = local;
+    return _e10;
+}
+
+metal::float2 shadow_profile(
+    uint who,
+    metal::float2 points,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_5 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    if (who >= (1 + (_buffer_sizes.size2 - 0 - 64) / 64)) {
+        return metal::float2(0.0);
+    }
+    metal::float4 cell_1 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].cell;
+    bool _e11 = cell_packed(cell_1);
+    if (!(_e11)) {
+        return metal::float2(0.0);
+    }
+    metal::float2 atlas = static_cast<metal::float2>(metal::uint2(shadow_atlas.get_width(), shadow_atlas.get_height()));
+    metal::float4 map = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].map;
+    metal::float2 texel = metal::clamp(map.xy + (points * map.z), cell_1.xy + metal::float2(0.5), (cell_1.xy + cell_1.zw) - metal::float2(0.5));
+    metal::float4 _e41 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
+    metal::float2 held = _e41.xy;
+    float _e48 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
+    float gain = GAUSSIAN_GAIN * metal::exp2(_e48);
+    return metal::float2(metal::min(gain * metal::clamp(held.x, 0.0, 1.0), 1.0), held.y);
+}
+
+float shadow_kernel(
+    uint who_1,
+    metal::float2 points_1,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_5 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    metal::float2 _e2 = shadow_profile(who_1, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    return _e2.x;
+}
+
+float shadow_transmittance(
+    float full,
+    float depth,
+    float level
+) {
+    float keep = metal::max(1.0 - metal::clamp(depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
+    float through = metal::pow(keep, metal::clamp(full, 0.0, 1.0));
+    return 1.0 - (metal::clamp(level, 0.0, 1.0) * (1.0 - through));
+}
+
+struct fs_spectral_shadowInput {
+    metal::float2 at [[user(loc0), center_perspective]];
+    metal::float4 rim [[user(loc1), flat]];
+    uint who [[user(loc2), flat]];
+};
+struct fs_spectral_shadowOutput {
+    metal::float4 member [[color(0)]];
+};
+fragment fs_spectral_shadowOutput fs_spectral_shadow(
+  fs_spectral_shadowInput varyings [[stage_in]]
+, metal::float4 position [[position]]
+, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(2)]]
+, metal::sampler shadow_sampler [[sampler(1)]]
+, device type_5 const& shadow_casters [[buffer(1)]]
+, constant Locals& locals [[buffer(0)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
+) {
+    const SpectralShadowOut in = { position, varyings.at, {}, varyings.rim, varyings.who };
+    if (in.rim.w <= 0.0) {
+        metal::discard_fragment();
+    }
+    float _e7 = shadow_kernel(in.who, in.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    float _e10 = locals.shadow_depth;
+    float _e12 = shadow_transmittance(_e7, _e10, 1.0);
+    float alpha = 1.0 - _e12;
+    if (alpha <= 0.0) {
+        metal::discard_fragment();
+    }
+    return fs_spectral_shadowOutput { in.rim * alpha };
+}
