@@ -664,13 +664,14 @@ impl<'a> RangeBar<'a> {
         let body = TextStyle::Body.resolve(ui.style());
         let job = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), body, text_color);
         let text_pad = GRIP_TEXT_PAD * scale;
-        let label = elided_name(
-            painter,
-            job,
-            rect.width() - (GRIP_TEXT_PAD - BAR_TEXT_PAD) * scale,
-            scale,
-            reserve,
-        );
+        // `elided_name` keeps BAR_TEXT_PAD clear at each end. This bar's name
+        // stands GRIP_TEXT_PAD in, and its readouts' region stops TEXT_GAP short
+        // of the right end, so the difference at each end comes off the width
+        // too, or the region below would hold less than `reserve` — and a point
+        // more, since egui rounds the elided galley's width up to the pixel,
+        // so the name can come out up to a point wider than it was allowed.
+        let insets = (GRIP_TEXT_PAD - BAR_TEXT_PAD) + (TEXT_GAP - BAR_TEXT_PAD).max(0.0);
+        let label = elided_name(painter, job, rect.width() - insets * scale - 1.0, scale, reserve);
         let label_width = label.size().x;
         let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
@@ -1064,6 +1065,50 @@ mod tests {
         for (t, _) in &texts {
             assert!(t.left() >= bar.left() && t.right() <= bar.right(), "text left the bar");
         }
+    }
+
+    /// Where the name has elided to all the width it is allowed and both thumbs
+    /// stand under it, what is left of the row still holds the two numbers a
+    /// text gap apart: the room the name is laid out against is what the
+    /// readouts' region keeps, at the name's own inset and the region's.
+    ///
+    /// Swept by quarter points: an elided name steps a whole glyph at a time,
+    /// so it reaches the full width it is allowed only at a few widths a glyph
+    /// apart, and a sweep by whole points can step over every one of them. The
+    /// numbers are padded to one width, so each is as wide as the room reserved
+    /// for it — a plain decimal at the low end of the axis is narrower than the
+    /// "132.00" its room is measured off, and would hide a short region.
+    #[test]
+    fn an_elided_name_leaves_the_numbers_their_whole_reserve() {
+        let paint = |width: f32| {
+            let (mut lo, mut hi) = (AXIS.0, AXIS.0 + OCTAVE);
+            let shapes = painted(width, |ui| {
+                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
+                    .min_span(OCTAVE)
+                    .display(|v| format!("{v:6.2}"))
+                    .show(ui);
+            });
+            text_boxes(&shapes.into_iter().map(|s| s.shape).collect::<Vec<_>>())
+        };
+        let full = paint(400.0)[0].0.width();
+        let mut elided = 0;
+        for quarter in 600..=880 {
+            let width = quarter as f32 / 4.0;
+            let texts = paint(width);
+            let [(name, _), (low, _), (high, _)] = texts[..] else {
+                panic!("{width}pt: {texts:?}")
+            };
+            if name.width() >= full - 0.01 {
+                continue;
+            }
+            elided += 1;
+            assert!(
+                high.left() - low.right() >= TEXT_GAP - 0.01,
+                "{width}pt: the numbers stand {}pt apart, not {TEXT_GAP}",
+                high.left() - low.right(),
+            );
+        }
+        assert!(elided > 0, "no width in the sweep elided the name");
     }
 
     /// The name is drawn THROUGH a thumb standing in it rather than under one:
