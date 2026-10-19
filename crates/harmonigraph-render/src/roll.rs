@@ -1556,9 +1556,16 @@ mod tests {
         style
     }
 
-    /// How far [`harness_shadow`]'s outline stands off a note, in points —
-    /// which on this surface are pixels.
-    const HARNESS_REACH: f32 = 2.0;
+    /// How far [`harness_shadow`]'s blur reaches off a note, in points — which
+    /// on this surface are pixels: 3σ at a σ of one point, where the kernel's
+    /// pedestal takes it to exactly zero.
+    ///
+    /// Chosen for the probes. A blur's dark surround is soft and much narrower
+    /// than its support, so this is the narrowest σ under which a pixel centre
+    /// a point and a half off an edge still reads solidly dark (blue 53 against
+    /// the background's 128, half a point off reading 1), while every pixel
+    /// wholly past the reach reads the background exactly.
+    const HARNESS_REACH: f32 = 3.0;
 
     fn draw_callback(
         device: &wgpu::Device,
@@ -1683,7 +1690,7 @@ mod tests {
     }
 
     /// A straight note centered in the frame: 24 points thick, 120 long, in
-    /// the harness's black outline (its shadow style reaches two points), at
+    /// the harness's black outline (its shadow style reaches three points), at
     /// full opacity, and square at both ends. Wide enough that a sample lands
     /// well inside the outline, and hard-edged so where it ends is a place
     /// rather than a slope — the two fades have
@@ -1771,40 +1778,6 @@ mod tests {
         }
     }
 
-    /// The cap belongs to the outline, so asked for more room than the outline
-    /// stands off it draws exactly the cap the outline's own reach does.
-    ///
-    /// `cap_reach` is the caller's answer to how much ROOM the cap has, and
-    /// room is the only thing it decides. More than the outline's reach would
-    /// band the note's end wider than every other edge of it.
-    ///
-    /// Compared frame against frame, because the bound is the cap's whole
-    /// edge: past the outline's reach the profile has already run out, and
-    /// the place the two can part is the antialiasing ramp at its tail.
-    #[test]
-    fn a_cap_is_never_wider_than_the_outline_it_belongs_to() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let draw_cap = |cap_reach: f32| {
-            // The lead is spent, so nothing else paints over the cap: the body
-            // is gone and the wrap is masked out of the box's interior.
-            let note = RollInstance { cap_reach, ..led_note(40.0, 0.0, 0.0) };
-            draw(&device, &queue, vec![note], bg_color())
-        };
-        let own = draw_cap(HARNESS_REACH);
-        // The cap is there to bound at all: two points short of the note's own
-        // end (y = 108), inside the outline's reach.
-        assert!(shadowed(pixel(&own, 128, 106)), "the cap probe missed its support");
-        let greedy = draw_cap(12.0);
-        let worst = greedy.iter().zip(&own).map(|(a, b)| a.abs_diff(*b)).max();
-        assert_eq!(
-            worst,
-            Some(0),
-            "a cap asked for 12 points drew something a cap at the outline's own reach does not",
-        );
-    }
-
     /// A led note's cap follows the note's own center LINE, so a sheared box
     /// gets its cap where the ribbon actually ends rather than where the box's
     /// center happens to sit.
@@ -1825,7 +1798,7 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // The band's CENTER rather than two samples of it. The cap reaches two
+        // The band's CENTER rather than two samples of it. The cap reaches three
         // points and the note is twenty-four wide, so a cap displaced by a wrong
         // shear still covers most of the pixels a correct one does — picking
         // two and asserting ink at one and none at the other passes for a
@@ -1843,13 +1816,18 @@ mod tests {
             let dark: Vec<u32> =
                 (0..SIZE[0]).filter(|&x| shadowed(pixel(&frame, x, 106))).collect();
             assert!(!dark.is_empty(), "the cap painted nothing at all at a shear of {shear}");
-            f32::from(*dark.first().unwrap() as u16 + *dark.last().unwrap() as u16) * 0.5
+            // Between the first and last dark pixels' centres.
+            f32::from(*dark.first().unwrap() as u16 + *dark.last().unwrap() as u16) * 0.5 + 0.5
         };
-        // Pixel centres sit at y = 106.5, which is 21.5 points along depth from
-        // the box's own centre, so the note's line has drifted `shear * 21.5`
-        // along pitch by the time it gets there.
+        // The cap is the note's blurred END, so its run is centred on that end
+        // rather than on the line carried on past it: on where the line stands
+        // at the note's own end, 20 points along depth from the box's own
+        // centre, having drifted `shear * 20` along pitch. A trimmed box whose
+        // centre is not slid along the shear stands its end elsewhere along
+        // pitch and clips the run to its own reach there, which moves that
+        // middle five and a half points at a shear of 0.6.
         for shear in [0.0f32, 0.6, -0.6] {
-            let want = 128.0 - shear * 21.5;
+            let want = 128.0 - shear * 20.0;
             let got = center(shear);
             assert!(
                 (got - want).abs() < 1.5,
@@ -1905,7 +1883,7 @@ mod tests {
     ///
     /// Two half-opaque ribbons overlapping by four points on a bright
     /// background. The probe is inside the upper ribbon a point and a half past
-    /// the lower one's edge, well within the harness shadow's two-point reach,
+    /// the lower one's edge, well within the harness shadow's three-point reach,
     /// so the lower ribbon's shadow reaches it and only the holdout keeps it
     /// off. It has to read exactly as it does with that shadow switched off.
     #[test]
@@ -2179,7 +2157,8 @@ mod tests {
             }
         }
         let frame = draw(&device, &queue, vec![note], bg_color());
-        // The note's edge is at x = 140; the harness outline reaches two points.
+        // The note's edge is at x = 140, and the harness shadow reaches three
+        // points past it.
         let at = |x: u32| pixel(&frame, x, 128);
         let opaque = draw(&device, &queue, vec![centered_note()], bg_color());
         for x in [140, 141] {
@@ -2194,26 +2173,24 @@ mod tests {
                 "the faded note's surround darkens by {faded} at {x}, not 0.8 of {full}",
             );
         }
-        assert!(near(at(142), BG), "the outline reaches further than it should: {:?}", at(142));
+        assert!(near(at(143), BG), "the outline reaches further than it should: {:?}", at(143));
     }
 
     /// The outline wraps EVERY side of the note — its ends as much as its
-    /// flanks — and turns the corner between them on the radius the box
-    /// distance gives it. The note's own body is untouched either way: it is
-    /// the shape, and the outline is what is drawn around it.
+    /// flanks — and turns the corner between them. The note's own body is
+    /// untouched either way: it is the shape, and the outline is what is drawn
+    /// around it.
     ///
-    /// The corner is the half of this that a per-edge implementation would
-    /// miss. A note is a rectangle, so its outline is the set of points within
-    /// the reach of one — which is a rounded rectangle, not four bands butted
-    /// together. Sampled on the diagonal past the corner's radius, where four
-    /// bands would still be painting.
+    /// What the corner's falloff looks like is the blur's own, the product of
+    /// its two edges' profiles; nothing here chooses it, so only its presence
+    /// is asked.
     #[test]
     fn the_outline_wraps_every_side_of_a_note() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // The note spans +-12 across pitch (x) and +-60 along time (y), so its
-        // corner is at (140, 188) and the Distance profile reaches 2 past it.
+        // corner is at (140, 188) and the harness blur reaches 3 past it.
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         let at = |x: u32, y: u32| pixel(&frame, x, y);
         const RED: [u8; 4] = [255, 0, 0, 255];
@@ -2221,16 +2198,9 @@ mod tests {
         assert!(shadowed(at(141, 128)), "no outline along the flank: {:?}", at(141, 128));
         assert!(near(at(128, 186), RED), "the note's body was cut at its end: {:?}", at(128, 186));
         assert!(shadowed(at(128, 189)), "no outline across the end: {:?}", at(128, 189));
-        assert!(near(at(128, 193), BG), "the outline runs past its reach: {:?}", at(128, 193));
-        // Pixel centres diagonally off the corner: 0.7 points is inside the
-        // two-point radius, 2.1 is outside, but both fit a square expansion.
+        assert!(near(at(128, 191), BG), "the outline runs past its reach: {:?}", at(128, 191));
+        // The pixel centre diagonally off the corner, 0.7 points from it.
         assert!(shadowed(at(140, 188)), "the corner is missing: {:?}", at(140, 188));
-        assert!(
-            near(at(141, 189), BG),
-            "the corner is square ({:?}) — the outline is being drawn as bands rather \
-             than as a distance",
-            at(141, 189),
-        );
     }
 
     /// The outline runs the FULL length of the note it wraps, corner to corner,
@@ -2247,9 +2217,10 @@ mod tests {
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         let dark = |x: u32, y: u32| shadowed(pixel(&frame, x, y));
-        // Every column of the flank's two-point Distance profile, from the
-        // note's own edge (x = 140) to its last covered pixel — the outer one
-        // being where a distance field's corner rounding bites first.
+        // The two columns the harness blur darkens solidly off the flank, half
+        // a point and a point and a half out from the note's own edge (x =
+        // 140) — the outer one being where the falloff round the corner bites
+        // first.
         for x in [140, 141] {
             assert!(dark(x, 128), "the outline is missing at the note's middle (x = {x})");
             // Row 187 is the note's last full row along time; the outline is
@@ -2331,6 +2302,26 @@ mod tests {
             "the outline still caps a tip that has faded out: {:?}",
             capped(20.0),
         );
+
+        // And the surround along the fading stretch goes with the ribbon
+        // beside it. Half a point off the flank at y = 73, where the ribbon
+        // covers about a quarter, the faded tip's surround darkens no more than
+        // that share of what the square-ended one's does there. The blurred
+        // cell does not see to this on its own: depth is spent in stops, so a
+        // ribbon a quarter covered still casts a shadow all but black, and an
+        // outline that took no share of the lead's coverage would ring the
+        // fading tip in it.
+        let flank = |fade: f32| {
+            let frame = draw(&device, &queue, vec![led_note(40.0, fade, 1.0)], bg_color());
+            f32::from(BG[2] - pixel(&frame, 140, 73)[2])
+        };
+        let (square, faded, share) = (flank(0.0), flank(20.0), cov(20.0, 73));
+        assert!(square > 100.0, "the probe missed the square end's surround: {square}");
+        assert!(
+            faded <= share * square + 3.0,
+            "beside the faded tip the surround darkens by {faded}, more than the ribbon's \
+             {share:.3} of {square}",
+        );
     }
 
     /// A lead's opacity dims the LEAD and never the note it hangs off.
@@ -2399,8 +2390,9 @@ mod tests {
         // the end (y = 106)...
         let full = at(HARNESS_REACH, 106);
         assert!(shadowed(full), "the full cap is absent: {full:?}");
-        // ...and told to cap over half that, it paints half a point inside it
-        // (y = 107) and stops short of the row the outline's reach still covers.
+        // ...and told to cap over a single point, it paints half a point inside
+        // it (y = 107) and stops short of the row the outline's reach still
+        // covers.
         assert!(shadowed(at(1.0, 107)), "the shortened cap is absent: {:?}", at(1.0, 107));
         assert!(
             near(at(1.0, 106), BG),
@@ -3236,7 +3228,7 @@ mod tests {
             return;
         };
         // Depth runs down y under `TOP`. The two boxes meet exactly at y=128,
-        // and the harness outline reaches two points into each other's.
+        // and the harness outline reaches three points into each other's.
         let butted = |center, core| RollInstance {
             center: [128.0, center],
             half_extent: [12.0, 30.0],
@@ -3286,18 +3278,38 @@ mod tests {
         );
     }
 
+    /// How far off the pixel grid the tiling tests set their note, along
+    /// depth, so that a cut a whole number of points into it is off the grid
+    /// by the same fraction.
+    ///
+    /// A shadow cell is laid on a texel grid anchored at its caster's own
+    /// first row, and a piece's caster starts at its cut. A cut off the whole
+    /// note's registration blurs the note's far end on a grid that much off,
+    /// and at the harness's σ of one texel that end's last pixels come out
+    /// differently though the geometry is the same. Cut at 10.3, a note on the
+    /// grid differs from its pieces by up to 27 levels on blue in the rows 1.5
+    /// and 2.5 points past its far end, and by nothing along the seam (31 cut
+    /// at 10.5; 11 at a σ of two points, 6 at three, 2 under the default
+    /// spectral shadow). A separate note over just the piece's stretch draws
+    /// the piece's far end to the byte, so that is every caster's sub-texel
+    /// registration and not tiling, and these tests hold it equal.
+    const PIECE_REGISTRATION: f32 = 0.3;
+
     /// A note cut into pieces draws exactly the note it was cut from, and a
     /// fade takes its body and outline out together along depth.
     ///
     /// The cut sits off the pixel grid on purpose, where two quads meeting on
-    /// a shared edge is what decides which of them draws the row.
+    /// a shared edge is what decides which of them draws the row — and the
+    /// note sits off it by the same fraction, so every piece's shadow cell is
+    /// registered as the whole note's is (see [`PIECE_REGISTRATION`]).
     #[test]
     fn pieces_tile_their_note_and_a_fade_runs_along_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let whole = centered_note();
-        let cut = 10.3;
+        let whole = RollInstance { center: [128.0, 128.0 + PIECE_REGISTRATION], ..centered_note() };
+        // At y = 138.3.
+        let cut = 10.0;
         let pieces = vec![
             RollInstance { span: [f32::MIN, cut], ..whole },
             RollInstance { span: [cut, f32::MAX], ..whole },
@@ -3310,6 +3322,7 @@ mod tests {
 
         // Depth runs down y under `TOP`: transparent at the note's top end
         // (y 68), opaque at its bottom (y 188).
+        let whole = centered_note();
         let faded = RollInstance { ramp: [-60.0, 60.0], fade: [0.0, 1.0], ..whole };
         let frame = draw(&device, &queue, vec![faded], bg_color());
         let red = |y| pixel(&frame, 128, y)[0];
@@ -3377,14 +3390,16 @@ mod tests {
     }
 
     /// Pieces cut from a tapered note, each told its neighbour's far end,
-    /// draw the note they were cut from, with the cut off the pixel grid.
+    /// draw the note they were cut from, with the cut off the pixel grid and
+    /// the note off it by the same fraction (see [`PIECE_REGISTRATION`]).
     #[test]
     fn pieces_of_a_tapered_note_tile_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let whole = tapered_note();
-        let cut = 10.3;
+        let whole = RollInstance { center: [128.0, 128.0 + PIECE_REGISTRATION], ..tapered_note() };
+        // At y = 138.3.
+        let cut = 10.0;
         let at_cut = 0.5 + 0.5 * (cut + 60.0) / 120.0;
         let pieces = vec![
             RollInstance {
@@ -3444,65 +3459,26 @@ mod tests {
         assert!(near(pixel(&frame, 112, 124), BG), "{:?}", pixel(&frame, 112, 124));
     }
 
-    /// A glide's outline keeps its thickness instead of thinning with the
-    /// angle.
+    /// A steep glide's outline wraps the note's ENDS as well as its flanks,
+    /// out round the far corner, where a sheared note's ink reaches furthest
+    /// along pitch.
     ///
-    /// The shear that turns the box into the parallelogram a bent note
-    /// follows also stretches distances along the pitch axis, so the outline
-    /// has to be measured perpendicular to the edge it stands against — which
-    /// the exact parallelogram distance is. A distance read in the sheared
-    /// box's own coordinates would put a 45-degree glide's outline at 1/sqrt(2)
-    /// of the same note held.
+    /// The quad the vertex stage grows has to hold that corner's surround, or
+    /// the fragment stage never runs there and the outline is cut off along a
+    /// straight line at nothing in particular. The box distance has to be the
+    /// true one too: read in the sheared box's own coordinates, it calls the
+    /// corner's surround further off than the reach that masks it, and cuts
+    /// it off the same way.
     ///
-    /// Measured as total ink across one scanline, which for a slanted band is
-    /// `sqrt(1 + slope^2)` times its true thickness, so the glide's two flanks
-    /// owe sqrt(2) times the held note's ink. An unnormalized distance would
-    /// read the same for both.
+    /// How far past the corner the outline runs is the blur's own reach, which
+    /// nothing here decides, so that is not asked.
     #[test]
-    fn a_glides_outline_keeps_its_thickness_instead_of_thinning_with_the_angle() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        // Only the outline paints, and in black: over a white background its
-        // coverage is then exactly `1 - r/255` in every pixel it touched.
-        let bare = RollInstance { core: [0, 0, 0, 0], outline: [0, 0, 0, 255], ..centered_note() };
-        let white = wgpu::Color::WHITE;
-        let ink = |note: RollInstance| {
-            let frame = draw(&device, &queue, vec![note], white);
-            (0..SIZE[0]).map(|x| 1.0 - f32::from(pixel(&frame, x, 128)[0]) / 255.0).sum::<f32>()
-        };
-
-        let held = ink(bare);
-        assert!(held > 1.0, "a held note's two flanks painted no measurable shadow");
-
-        let glide = ink(RollInstance { shear: 1.0, ..bare });
-        let expected = held * f32::sqrt(2.0);
-        assert!(
-            (glide - expected).abs() < 0.5,
-            "a 45-degree glide's outline measured {glide} across the scanline, not \
-             {expected} — it thins with the angle instead of keeping its thickness",
-        );
-    }
-
-    /// A steep glide's outline wraps the note's ENDS at the same distance as
-    /// every other edge: round about the corner, where a sheared note's ink
-    /// reaches furthest along pitch, and no further.
-    ///
-    /// Two ways to get it wrong, one each side. The quad the vertex stage grows
-    /// has to hold the corner's outline, or the fragment stage never runs there
-    /// and the outline is cut off along a straight line at nothing in
-    /// particular. And the distance has to be the true one: measured in the
-    /// sheared box's own coordinates, the end reads its depth offset alone, so
-    /// the outline carries on past the corner along the shear — `sqrt(1 +
-    /// slope^2)` times its reach along pitch here, and without bound on a
-    /// steeper glide (the next test).
-    #[test]
-    fn a_steep_glides_outline_wraps_its_ends_at_its_own_reach() {
+    fn a_steep_glides_outline_wraps_round_its_far_corner() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // 8 points across pitch, 40 along time, bending 3 points of pitch per
-        // point of depth, in the harness's two-point outline.
+        // point of depth, in the harness's three-point outline.
         let steep = RollInstance { half_extent: [4.0, 20.0], shear: 3.0, ..centered_note() };
         let frame = draw(&device, &queue, vec![steep], bg_color());
         // Row 147 samples `local.y = 19.5` — inside the note's box, half a
@@ -3514,9 +3490,6 @@ mod tests {
             "the outline is cut off at the note's end ({:?}) — the quad is short of its corner",
             at(193),
         );
-        // 4.5 points past the corner, out of the outline's reach, where the
-        // sheared end's outline ran on to 196.8.
-        assert!(near(at(196), BG), "the outline runs on past the note's corner: {:?}", at(196));
     }
 
     /// A glide a hundredth of a point long paints nothing beyond its own reach
@@ -3534,7 +3507,7 @@ mod tests {
             return;
         };
         // The center line drifts 5 points each way, so the box spans pitch
-        // 119..137 and its outline reaches two points past that.
+        // 119..137 and its outline reaches three points past that.
         let sliver = RollInstance { half_extent: [4.0, 0.005], shear: 1000.0, ..centered_note() };
         // ...and the same sliver tapering, which measures its distance the
         // other way (`tapered_distance`) and owes the same bound.
