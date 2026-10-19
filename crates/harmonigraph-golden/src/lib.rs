@@ -6,21 +6,33 @@
 //! `lattice_tests::golden` and `harmonigraph-offline`'s `golden` each carry
 //! their own set and their own reading of one.
 //!
-//! There is one gate rather than one per crate because the bless protocol is a
-//! CONTRACT with whoever is holding the branch: `HARMONIGRAPH_BLESS=1 cargo
-//! test --workspace golden` re-baselines every set in one run, and the
-//! amplified sheet it names is what a re-baseline is read from. A second
-//! implementation of that would be free to drift — a tolerance here, a
-//! different environment variable there — and the drift would show up as a
-//! session blessing one crate's frames and silently not the other's.
+//! The frames on record are the ones the CI runner draws. A Mac on another
+//! macOS draws them apart: on 2026-10-18 the owner's drew every frame of both
+//! sets 1-3/255 off a `main` CI passed. So a failed comparison writes the frame
+//! it drew under `target/golden-diff/actual/`, laid out as `crates/` is, CI
+//! uploads that directory beside the amplified sheets when a group fails, and
+//! a picture change is re-baselined from the run's `golden-diff-<group>`
+//! artifacts: read the sheets, copy `actual/*` over `crates/`, push, and repeat
+//! until green — a test that checks two frames stops at the first that moved,
+//! and a failing test binary skips the ones after it.
+//! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` re-baselines to the
+//! machine it runs on, which is the record only where that machine draws what
+//! CI does.
+//!
+//! There is one gate rather than one per crate because that protocol is a
+//! CONTRACT with whoever is holding the branch. A second implementation of it
+//! would be free to drift — a tolerance here, a different environment variable
+//! there — and the drift would show up as a session re-baselining one crate's
+//! frames and silently not the other's.
 
 use std::path::{Path, PathBuf};
 
 /// How far a channel may drift before the frame counts as changed.
 ///
-/// Zero: one machine, one driver, one backend, so a difference is the shader's
-/// or the scene's and not the platform's. A tolerance would have to be wider
-/// than #453's mean of 3.3/255 to be worth having, and that is the signal
+/// Zero: the record is one machine, CI's runner, so there a difference is the
+/// shader's or the scene's and not the platform's. Another machine's 1-3/255
+/// is not a reason for one: a tolerance wide enough for it would pass a uniform
+/// two-level shift, which is #453's shape (a mean of 3.3/255) and the signal
 /// rather than the noise.
 const TOLERANCE: u8 = 0;
 
@@ -130,8 +142,11 @@ impl Gate {
                 "{name} moved: mean {mean:.3}/255, max {max}/255\n\
                  expected | actual | difference at 8x: {}\n\
                  the frame drawn: {}\n\
-                 If the change is intended, re-baseline and say what moved in the PR body:\n\
-                 {BLESS}=1 cargo test --workspace golden",
+                 If the change is intended, say what moved in the PR body and re-baseline \
+                 from the frames CI drew: download the failed run's golden-diff-<group> \
+                 artifacts and copy actual/* over crates/ (see this crate's docs). \
+                 {BLESS}=1 cargo test --workspace golden re-baselines to THIS machine, \
+                 which is the record only if it draws what CI does.",
                 sheet.display(),
                 actual.display(),
             );

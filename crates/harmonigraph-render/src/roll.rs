@@ -2673,7 +2673,12 @@ mod tests {
     /// with a plain two-texel average down and a bilinear read back up, a two-
     /// pixel note's halo changed shape by 18% of its peak every four pixels it
     /// travelled — at a long Span, a pulse a few times a second at the end of
-    /// every note. Measured at the pane size the blur's profile is defined at.
+    /// every note. Measured on a 1080 px pane, the size the blur's profile is
+    /// defined at, which after `BloomChain::scales` gives back the filters'
+    /// spread runs the blur's sub-texel arm (scale 0.95); the integrating arm
+    /// above about 1130 px blurs wider and swings no more. The same reading
+    /// sweeps to 4.1% at 600 px and 10% at 400, where the halo is barely
+    /// wider than a quarter texel.
     #[test]
     fn a_two_pixel_notes_halo_keeps_its_shape_as_it_scrolls() {
         let Some((device, queue)) = headless_device() else {

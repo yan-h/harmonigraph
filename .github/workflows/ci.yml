@@ -91,11 +91,12 @@ jobs:
       - name: Run full CI
         run: ./ci.sh ${{ matrix.group }}
 
-      # The golden frames are byte-exact against THIS runner, and a local Mac a
-      # point release ahead of it draws every frame a level or so apart, so a
-      # picture change is re-baselined from what the runner drew. The gate
-      # writes each moved frame under actual/ laid out as crates/ is: copy
-      # `actual/*` over `crates/` and the frames on record are the runner's.
+      # The golden frames are byte-exact against THIS runner. The owner's Mac
+      # drew every frame of both sets 1-3/255 off a `main` this job passed
+      # (2026-10-18), so a picture change is re-baselined from what the runner
+      # drew. The gate writes each moved frame under actual/ laid out as
+      # crates/ is: copy `actual/*` over `crates/`, and the frames on record are
+      # the runner's. The protocol is in harmonigraph-golden's crate docs.
       - name: Upload golden frames that moved
         if: failure()
         uses: actions/upload-artifact@v4
