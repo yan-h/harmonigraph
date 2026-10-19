@@ -597,30 +597,21 @@ pub enum NoteNames {
     Played,
 }
 
-/// How many σ out a blurred cell is padded, and how far its kernel reaches —
-/// `REACH` in shadow.wgsl and `REACH_SIGMAS` in `harmonigraph-render`'s
-/// `shadow.rs`, pinned to both by
-/// `the_blurs_reach_and_loop_bound_are_the_packers_own`.
-///
-/// Here as well as there because the kernel's reach is what every QUAD is grown
-/// by, and quads are sized from the scene's styles.
-pub const REACH_SIGMAS: f32 = 3.0;
-
 /// One GROUP of casters' shadow: how far it reaches, how far its caster grows
 /// first and how dark it lands.
 ///
 /// Every shadow is the caster's coverage convolved with one Gaussian at half
 /// the Shadow's width. A straight edge keeps `erfc(d / (σ√2)) / 2` of the
 /// light `d` out from its edge, which at one Shadow width is 2.3%; the tail
-/// ends at one and a half widths ([`REACH_SIGMAS`]). Anything that only
+/// ends at one and a half widths (`harmonigraph-render`'s `shadow::REACH_SIGMAS`). Anything that only
 /// calibrates that renderer — such as the Gaussian's gain — is a renderer
 /// constant and lives at the consumer, so the bars here are only what a
 /// person dials.
 ///
 /// The groups are explicit ([`ShadowSettings`]) rather than one style with
 /// per-group overrides: an override needs a sentinel for "not set", and a
-/// sentinel is a fourth value with no place on a bar. Four numbers written out
-/// twice cost less than one inheritance rule.
+/// sentinel is a fourth value with no place on a bar. Three numbers written out
+/// per group cost less than one inheritance rule.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ShadowStyle {
@@ -669,8 +660,8 @@ impl Default for ShadowStyle {
     /// persist tests holds it, beside the missing-group sweep.
     fn default() -> ShadowStyle {
         ShadowStyle {
-            // A broad shadow preserves the form of the ring and marker across
-            // the wide light field.
+            // Numbers kept from when this default drew contour shadows, so
+            // the fixtures built on it measure the same widths.
             width: 0.418_517_17,
             spread: 0.0,
             // Just under half depth leaves the shadow legible without cutting

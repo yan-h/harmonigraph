@@ -289,7 +289,7 @@ impl LatticeCallback {
         // points — what a node's box is clipped to the pane by.
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
         let text_spread = text.gaussian_spread_points(text_sigma);
-        let shadow_reach = geometry_sigma * harmonigraph_scene::REACH_SIGMAS + geometry_spread;
+        let shadow_reach = geometry_sigma * shadow::reach_sigmas(geometry);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance, inked: bool| {
             let empty = shadow::Caster {
                 rect: [0.0; 4],
@@ -566,15 +566,13 @@ impl LatticeCallback {
                 // read under the receiver's own ink and needs no quad grown.
                 geometry_shadow: ShadowParams {
                     width: if geometry.casts() { geometry.width } else { 0.0 },
-                    reach_sigmas: harmonigraph_scene::REACH_SIGMAS
-                        + if geometry.casts() { geometry.gaussian_spread_points(1.0) } else { 0.0 },
+                    reach_sigmas: shadow::reach_sigmas(geometry),
                     depth: geometry.depth,
                     occlusion: hide_behind,
                 },
                 marker_shadow: ShadowParams {
                     width: if text.casts() { text.width } else { 0.0 },
-                    reach_sigmas: harmonigraph_scene::REACH_SIGMAS
-                        + if text.casts() { text.gaussian_spread_points(1.0) } else { 0.0 },
+                    reach_sigmas: shadow::reach_sigmas(text),
                     depth: text.depth,
                     occlusion: 0.0,
                 },

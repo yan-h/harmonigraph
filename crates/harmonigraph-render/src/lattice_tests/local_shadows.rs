@@ -45,7 +45,7 @@ fn notation_shadows_darken_saturated_light_without_changing_remote_pixels() {
         // Label boxes are world-positioned; the shared marker cell is local
         // to a cross, so bound that cross around its projected centre instead.
         let caster = if marker { &cb.casters[0] } else { cb.casters.last().unwrap() };
-        let pad = caster.sigma_points * harmonigraph_scene::REACH_SIGMAS + 3.0;
+        let pad = caster.sigma_points * crate::shadow::REACH_SIGMAS + 3.0;
         let centre = on_screen(&scene, SIZE, at);
         let radius = if marker {
             let edge = on_screen(&scene, SIZE, at + glam::vec3(0.35, 0.0, 0.0));

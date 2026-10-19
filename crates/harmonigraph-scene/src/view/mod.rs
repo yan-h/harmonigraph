@@ -719,9 +719,7 @@ pub struct ViewConfig {
     /// is where the marker STOPS; a cross faded along its sides as well is a
     /// blurred plus rather than one reaching out of its crossing.
     ///
-    /// A cross's blur shadow follows the coverage this fades. Its distance
-    /// shadow treats the half-alpha contour as the end of the exact field, the
-    /// same contour every other caster's distance cell holds.
+    /// A cross's shadow follows the coverage this fades.
     pub plus_taper: f32,
     /// Link the major third to four fifths and spell syntonic-comma equivalents
     /// identically. New tuning entries and fully evidenced Learn results

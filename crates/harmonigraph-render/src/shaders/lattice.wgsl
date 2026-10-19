@@ -238,8 +238,8 @@ fn node_occlusion() -> f32 {
 }
 
 // How far the blur reaches past a caster's ink in the picture's own σ
-// (`u.geometry_shadow.reach_sigmas`: `harmonigraph_scene::REACH_SIGMAS` plus
-// the group's spread), which is what every quad is grown by. It is how far the
+// (`u.geometry_shadow.reach_sigmas`, `shadow::reach_sigmas`: `REACH_SIGMAS`
+// plus the group's spread), which is what every quad is grown by. It is how far the
 // packer pads a cell, so a quad and its cell agree on where a shadow stops.
 fn glow_shadow_reach() -> f32 {
     return u.geometry_shadow.reach_sigmas;
@@ -382,7 +382,7 @@ const EARLY_OUT: bool = true;
 // The analytic early-outs are off (`node_geom`, `spectral_ring`, the band and
 // mark walks) because a cell texel outside every layer's INK is still inside
 // its grown shadow source — but that source ends too. The cell writes only
-// `clamp(-sd, 0, 1)` of the layers' union (`layer_distance`), and a layer adds
+// the layers' union (`spread_union`), and a layer adds
 // nothing to it once its expanded coverage `aa_inside(spread, sd, aa)`, a
 // smoothstep, is exactly 0: once `sd >= spread + aa`.
 //
@@ -667,7 +667,6 @@ fn vs_node_cell(
     // Cell-only readers: the ink strip is unused, so its fields carry the
     // spread and the cell's texel in uv without another buffer binding. The
     // ordinary cell above keeps its original rasterizer.
-    out.params.w = GAUSSIAN_SPREAD_KIND;
     out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
     out.ink_carry = box.who.w / max(uv_points, 1e-6);
     return out;
@@ -1032,25 +1031,23 @@ struct NodeLayer {
     coverage: f32,
 }
 
-// Spread cells evaluate coverage through the analytic layer walk.
-const GAUSSIAN_SPREAD_KIND: f32 = 3.0;
 const EMPTY_DISTANCE: f32 = 65504.0;
 
 fn layer_coverage(layer: NodeLayer) -> f32 {
     return layer.coverage * layer.level;
 }
 
-// A spread cell's union of each layer's grown, opacity-weighted coverage,
-// carried negative so the union is a `min`; every other draw leaves `field`
-// as it was.
-fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
-    if in.params.w > GAUSSIAN_SPREAD_KIND - 0.5 {
+// A spread cell's union of each layer's grown, opacity-weighted coverage —
+// the cell whose `shadow_at.z` is negative (`vs_node_cell`); every other draw
+// leaves `grown` as it was.
+fn spread_union(grown: f32, layer: NodeLayer, in: VsOut) -> f32 {
+    if in.shadow_at.z < 0.0 {
         let aa = aa_width(in.strip_row, in.shadow_at.w);
         let coverage = clamp(layer.level, 0.0, 1.0)
             * aa_inside(in.ink_carry, layer.sd, aa);
-        return min(field, -coverage);
+        return max(grown, coverage);
     }
-    return field;
+    return grown;
 }
 
 // The signed distance to an annulus. A collapsed pair is the caller's to skip:
@@ -1988,9 +1985,9 @@ struct NodeInk {
     // ink appears. A Gaussian uses it to keep the caster's blurred alpha from
     // showing through that same caster during a release.
     mask: f32,
-    // Negative weighted coverage while filling a spread cell
-    // (`layer_distance`).
-    sd: f32,
+    // The grown, opacity-weighted coverage a spread cell holds
+    // (`spread_union`); zero on every other draw.
+    spread: f32,
 };
 
 /// How much of a layer's geometric footprint may mask its own shadow.
@@ -2053,7 +2050,7 @@ fn base_node_ink(
     // thing in the picture that asks a node's ink what it is rather than only
     // how much of the pixel it covers.
     var glyph_lit = 0.0;
-    var node_sd = EMPTY_DISTANCE;
+    var node_spread = 0.0;
 
     // Melody/bass mark geometry: one strip outside the octave band, standing
     // off it by the node's RADIAL padding (already spent — the strip's inner
@@ -2142,8 +2139,8 @@ fn base_node_ink(
         let reach = slice_reach(in, slot, band_in, band_out);
         if reach == band_out {
             glyph_mask = max(glyph_mask, shape_layer.coverage);
-            node_sd = layer_distance(
-                node_sd,
+            node_spread = spread_union(
+                node_spread,
                 NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
                 in,
             );
@@ -2159,8 +2156,8 @@ fn base_node_ink(
                 glyph_mask,
                 zones.near.coverage + zones.rest * mask_level(zones.far.level),
             );
-            node_sd = layer_distance(node_sd, zones.near, in);
-            node_sd = layer_distance(node_sd, zones.far, in);
+            node_spread = spread_union(node_spread, zones.near, in);
+            node_spread = spread_union(node_spread, zones.far, in);
         }
         if cov > glyph {
             glyph = cov;
@@ -2202,7 +2199,7 @@ fn base_node_ink(
             aa,
             analytic,
         );
-        node_sd = layer_distance(node_sd, audio.layer, in);
+        node_spread = spread_union(node_spread, audio.layer, in);
         glyph_rgb = (audio.color * audio.cov + glyph_rgb * glyph * (1.0 - audio.cov))
             / max(audio.cov + glyph * (1.0 - audio.cov), 1e-4);
         // The wedge's own reading is its lit share, on the composite the coverage
@@ -2258,8 +2255,8 @@ fn base_node_ink(
     let bass_cov = layer_coverage(bass_layer);
     let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
     let bass_mask = bass_layer.coverage * mask_level(bass_layer.level);
-    node_sd = layer_distance(node_sd, melody_layer, in);
-    node_sd = layer_distance(node_sd, bass_layer, in);
+    node_spread = spread_union(node_spread, melody_layer, in);
+    node_spread = spread_union(node_spread, bass_layer, in);
     // The two ends share the strip, so where they name DIFFERENT slices they
     // are angularly disjoint and where they name the same one they are the
     // same wedge in the same color — either way the stronger owns the pixel,
@@ -2300,7 +2297,7 @@ fn base_node_ink(
         active_alpha,
         glyph_lit / max(active_alpha, 1e-4),
         glyph_mask,
-        node_sd,
+        node_spread,
     );
 }
 
@@ -2311,7 +2308,7 @@ fn slice_progress(in: VsOut, i: u32) -> f32 {
 }
 struct AnimatedInk { body: NodeInk, marks: NodeInk, }
 fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
-    var result = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, EMPTY_DISTANCE);
+    var result = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, 0.0);
     var marks = result;
     let band_in = u.node.band_inner;
     let band_out = u.node.band_outer;
@@ -2345,7 +2342,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
             var lit = level / max(ink.w, 1e-4);
             let reach = slice_reach(in, slot, band_in, band_out);
             if reach == band_out {
-                result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
+                result.spread = spread_union(result.spread, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
                 result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
             } else {
                 let zones = slice_zones(in, slot, oct, uv, d, shape, ink, band_in, band_out, reach, soft);
@@ -2354,8 +2351,8 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
                 lit = level * zones.lit / max(zones.ink.w, 1e-4);
                 let near = zones.near;
                 let far = zones.far;
-                result.sd = layer_distance(result.sd, NodeLayer(near.sd * scale, near.level * opacity, near.coverage), in);
-                result.sd = layer_distance(result.sd, NodeLayer(far.sd * scale, far.level * opacity, far.coverage), in);
+                result.spread = spread_union(result.spread, NodeLayer(near.sd * scale, near.level * opacity, near.coverage), in);
+                result.spread = spread_union(result.spread, NodeLayer(far.sd * scale, far.level * opacity, far.coverage), in);
                 let footprint = near.coverage * mask_level(near.level * opacity)
                     + zones.rest * mask_level(far.level * opacity);
                 result.mask = max(result.mask, footprint * taper);
@@ -2384,7 +2381,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
                 marks.lit = 1.0;
             }
             marks.mask = max(marks.mask, shape.coverage * taper * mask_level(level));
-            marks.sd = layer_distance(marks.sd, NodeLayer(shape.sd * scale, level, shape.coverage), in);
+            marks.spread = spread_union(marks.spread, NodeLayer(shape.sd * scale, level, shape.coverage), in);
         }
     }
     return AnimatedInk(result, marks);
@@ -2414,14 +2411,14 @@ fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeIn
     ink.lit = lit / max(ink.alpha, 1e-4);
     let mask = audio.layer.coverage * mask_level(src.ring);
     ink.mask = mask + ink.mask * (1.0 - mask);
-    ink.sd = layer_distance(ink.sd, audio.layer, src);
+    ink.spread = spread_union(ink.spread, audio.layer, src);
     // Marks keep their reference place above the independently sampled audio.
     let mark_lit = animated.marks.alpha + ink.lit * ink.alpha * (1.0 - animated.marks.alpha);
     ink.rgb = animated.marks.rgb + ink.rgb * (1.0 - animated.marks.alpha);
     ink.alpha = animated.marks.alpha + ink.alpha * (1.0 - animated.marks.alpha);
     ink.lit = mark_lit / max(ink.alpha, 1e-4);
     ink.mask = animated.marks.mask + ink.mask * (1.0 - animated.marks.mask);
-    ink.sd = min(ink.sd, animated.marks.sd);
+    ink.spread = max(ink.spread, animated.marks.spread);
     return ink;
 }
 
@@ -2468,7 +2465,7 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var ink = node_ink(in, g.d, g.aa, g.oct, false);
     if ink.alpha < INK_FLOOR {
-        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.sd);
+        ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.spread);
     }
     var visibility = 1.0;
     if ink.alpha > 0.0 {
@@ -2541,7 +2538,7 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
     if analytic {
-        let coverage = clamp(-ink.sd, 0.0, 1.0);
+        let coverage = clamp(ink.spread, 0.0, 1.0);
         return vec4<f32>(coverage, coverage, 0.0, 0.0);
     }
     // The same floor the scene draw takes, so a cell holds the ink that draw

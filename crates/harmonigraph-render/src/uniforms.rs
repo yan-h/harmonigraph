@@ -184,7 +184,7 @@ uniform_group! {
     }
 }
 uniform_group! {
-    /// One Gaussian cell serves all resting markers. Distance shadows leave it empty.
+    /// One shadow cell serves all resting markers.
     struct MarkerCellParams {
         rect: Float4,
         cell: Float4,

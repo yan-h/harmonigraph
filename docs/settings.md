@@ -352,14 +352,11 @@ Every shadow is a blur of its caster.
 **Shadow spread** expands the shadow caster before blurring without changing the visible ink.
 The percentage is a fraction of the resolved Shadow width:
 100% expands the caster by one Shadow width on each side.
-It defaults to 0% in new and existing saved settings;
-a Shadow width of zero still removes the shadow.
+A Shadow width of zero still removes the shadow.
 
 Lattice text shadows use local darkness.
 They attenuate bright slices and finished bloom only inside their footprint,
 with foreground ink covering shadows behind it.
-Darkness defaults to 100%;
-saved projects retain their existing setting.
 
 Drag a numeric bar to change its value, or double-click to type.
 Entry uses the displayed units:

@@ -33,6 +33,18 @@ pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Fl
 /// `MAX_RADIUS` in shadow.wgsl is the loop bound this implies.
 pub(crate) const SIGMA_CELL_MAX: f32 = 3.0;
 
+/// How many σ out a blurred cell is padded, and how far its kernel reaches —
+/// `REACH` in shadow.wgsl, pinned by
+/// `the_blurs_reach_and_loop_bound_are_the_packers_own`.
+pub(crate) const REACH_SIGMAS: f32 = 3.0;
+
+/// How many σ a style's shadow reaches past its caster's ink: the blur's own
+/// [`REACH_SIGMAS`] plus the source's spread, which is measured in σ too. What
+/// every quad and every cell's pad is grown by.
+pub(crate) fn reach_sigmas(style: harmonigraph_scene::ShadowStyle) -> f32 {
+    REACH_SIGMAS + style.gaussian_spread_points(1.0)
+}
+
 /// Screen-point reference behind the spectral groups' dimensionless Shadow
 /// width. One unit is four points; the bar's upper limit lives in the scene.
 /// Changing pane size or pitch zoom does not change it.
@@ -52,8 +64,7 @@ pub(crate) fn spectral_sigma_points(
 pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> f32 {
     let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     if style.casts() {
-        spectral_sigma_points(style, point_scale) * harmonigraph_scene::REACH_SIGMAS
-            + style.gaussian_spread_points(spectral_sigma_points(style, point_scale))
+        spectral_sigma_points(style, point_scale) * reach_sigmas(style)
     } else {
         0.0
     }
@@ -337,7 +348,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         let scale = (SIGMA_CELL_MAX / sigma).min(1.0);
         let k = scale * px_per_point;
         let texels = sigma * scale;
-        let pad = ((harmonigraph_scene::REACH_SIGMAS * texels).ceil() + 1.0) / k + spread_of(c);
+        let pad = ((REACH_SIGMAS * texels).ceil() + 1.0) / k + spread_of(c);
         (scale, k, texels, pad)
     };
     // What a caster comes to where it is spent. A level at zero, a NaN out of a
@@ -900,7 +911,6 @@ pub(crate) fn create_cell_pipelines(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use harmonigraph_scene::REACH_SIGMAS;
 
     /// The occluder grid holds, for every point, every later node caster whose
     /// box holds that point, in painter order — which is what makes
@@ -1082,11 +1092,7 @@ pub(crate) mod tests {
     #[test]
     fn the_blurs_reach_and_loop_bound_are_the_packers_own() {
         let reach: f32 = shader_const(SHADOW_SRC, "REACH").parse().expect("a number");
-        assert_eq!(
-            reach,
-            harmonigraph_scene::REACH_SIGMAS,
-            "the kernel reaches a different distance than the padding"
-        );
+        assert_eq!(reach, REACH_SIGMAS, "the kernel reaches a different distance than the padding");
         let radius: i32 = shader_const(SHADOW_SRC, "MAX_RADIUS").parse().expect("a number");
         assert_eq!(
             radius,

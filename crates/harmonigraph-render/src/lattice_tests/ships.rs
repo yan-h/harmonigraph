@@ -115,7 +115,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // idle branch does is now pinned by
     // `a_silent_lattice_ships_no_nodes_and_still_draws_its_markers` instead,
     // on the CPU side where the decision actually lives.
-    // The wide Shadow again, grown before its blur (`GAUSSIAN_SPREAD_KIND`) at
+    // The wide Shadow again, grown before its blur (`spread_union`) at
     // about the live picture's own spread. A spread cell is the only ANALYTIC
     // one, which is the only way `cell_reach`'s skip reaches this comparison at
     // all — and #508's finding 3 is that `fs_node_cell` has an early-out of

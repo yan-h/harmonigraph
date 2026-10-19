@@ -74,9 +74,7 @@ pub use spectral::{
     SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
     SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
 };
-pub use style::{
-    Bend, Gradient, NoteNames, SevensLabel, ShadowSettings, ShadowStyle, REACH_SIGMAS,
-};
+pub use style::{Bend, Gradient, NoteNames, SevensLabel, ShadowSettings, ShadowStyle};
 pub use view::{
     AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, RingStack,
     ViewConfig, GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,

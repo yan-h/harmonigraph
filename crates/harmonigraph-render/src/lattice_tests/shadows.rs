@@ -314,7 +314,7 @@ fn two_nodes_crossing_shadows_multiply_rather_than_take_the_deeper() {
     let centre = on_screen(&scene, SIZE, glam::Vec3::ZERO);
     let gap = APART * points_per_world(&scene) - ink_radius(&scene);
     assert!(
-        gap > 0.0 && gap < harmonigraph_scene::REACH_SIGMAS * sigma(&scene),
+        gap > 0.0 && gap < crate::shadow::REACH_SIGMAS * sigma(&scene),
         "the probe stands {gap} px from each node's rings, which is not inside both blurs",
     );
 
@@ -918,8 +918,7 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // reaches the 8-bit floor sooner than the old power-law tail; the
         // final-step assertion below still rejects a visibly clipped quad.
         assert!(
-            profile[0] > 0.1
-                && reach > 0.65 * harmonigraph_scene::REACH_SIGMAS * sigma(&deep_scene),
+            profile[0] > 0.1 && reach > 0.65 * crate::shadow::REACH_SIGMAS * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
             profile[0],
             sigma(&deep_scene),
@@ -1039,7 +1038,7 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
         );
         // The widest a box can be after the clip, in points: the pane with
         // the kernel's reach added at both edges.
-        let reach = sigma * harmonigraph_scene::REACH_SIGMAS;
+        let reach = sigma * crate::shadow::REACH_SIGMAS;
         let box_points = pane + 2.0 * reach;
         // The allocator rounds both atlas dimensions to powers of two.
         // Apply the same rounding to this continuous size bound.
@@ -1313,11 +1312,7 @@ fn a_marker_inherits_the_text_groups_whole_shadow() {
             callback.uniforms.marker_shadow.reach_sigmas,
             callback.uniforms.marker_shadow.depth,
         ),
-        (
-            text.width,
-            harmonigraph_scene::REACH_SIGMAS + text.gaussian_spread_points(1.0),
-            text.depth
-        ),
+        (text.width, crate::shadow::REACH_SIGMAS + text.gaussian_spread_points(1.0), text.depth),
         "the marker shader did not inherit the text group's whole style",
     );
 
