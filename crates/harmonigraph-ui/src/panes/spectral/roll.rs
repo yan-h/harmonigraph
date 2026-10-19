@@ -69,7 +69,7 @@ const MIN_RIBBON_PT: f32 = 1.5;
 /// Padding extends the onset pitch into the past without rescaling real bends.
 const MIN_LENGTH_PT: f32 = 1.0;
 
-/// The dark surround standing outside a note: its selected kernel's whole
+/// The dark surround standing outside a note: its whole
 /// reach in screen points and its pane-owned colour.
 ///
 /// BLACK, and not a setting. The outline's job is to give a note a boundary
@@ -1086,13 +1086,8 @@ mod tests {
     /// the spectral geometry shadow of 2026-09-26. Their notes are placed a
     /// set number of points from an edge, so a wider default outline would
     /// move them across the boundary they are there to stand either side of.
-    const OUTLINE: harmonigraph_scene::ShadowStyle = harmonigraph_scene::ShadowStyle {
-        kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-        width: 1.192_405_8,
-        spread: 0.0,
-        depth: 0.912_995_6,
-        falloff: -4.0,
-    };
+    const OUTLINE: harmonigraph_scene::ShadowStyle =
+        harmonigraph_scene::ShadowStyle { width: 1.192_405_8, spread: 0.0, depth: 0.912_995_6 };
 
     /// The roll's geometry for `state`, derived exactly the way
     /// [`spectral_pane`](super::super::spectral_pane) derives it
@@ -1136,13 +1131,11 @@ mod tests {
                         harmonigraph_scene::ShadowStyle {
                             width: 1.0,
                             depth: 1.0,
-                            kernel: harmonigraph_scene::ShadowKernel::Distance,
                             ..Default::default()
                         },
                         1.0,
                     ),
                 depth: 1.0,
-                kernel: harmonigraph_scene::ShadowKernel::Distance,
                 ..Default::default()
             },
             range,
@@ -1663,12 +1656,8 @@ mod tests {
     /// width-sized surround.
     #[test]
     fn zero_shadow_depth_adds_no_roll_instance_or_culling_reach() {
-        let style = |depth| harmonigraph_scene::ShadowStyle {
-            width: 1.0,
-            depth,
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..Default::default()
-        };
+        let style =
+            |depth| harmonigraph_scene::ShadowStyle { width: 1.0, depth, ..Default::default() };
         let shut = ribbon_with_style(style(0.0), 12.0);
         assert_eq!(one(&shut).outline[3], 0, "the instance kept transparent outline ink");
 

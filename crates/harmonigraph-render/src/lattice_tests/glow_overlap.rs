@@ -174,42 +174,34 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
 
 #[test]
 fn material_shadow_pickup_darkens_light_without_adding_coverage() {
-    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
     scene.view.atmosphere.breath_amount = 0.0;
     scene.view.atmosphere.material_speed = 0.0;
     scene.view.atmosphere.material_settings.wash_size = 2.0;
     scene.view.atmosphere.material_settings.wash_refract = 1.0;
-    for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
-        scene.view.shadow = one_shadow(0.8, 0.7, kernel);
-        for material in
-            [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
-        {
-            scene.view.atmosphere.material_style = material;
-            scene.view.atmosphere.material_shadow_pickup = 0.0;
-            let before = glow(&mut shooter, &scene);
-            scene.view.atmosphere.material_shadow_pickup = 1.0;
-            shooter.shot_again(&scene);
-            let after = read_glow(&shooter);
-            let mut changed = 0;
-            for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
-                // A star brighter than its light owns alpha to contain its
-                // colour; pigment dims that star and hands back a rounding step.
-                let slack = u8::from(material == LatticeMaterial::Stars);
-                assert!(
-                    a[3].abs_diff(b[3]) <= slack,
-                    "shadow pigment must preserve source coverage"
-                );
-                assert!(b[..3].iter().zip(a).all(|(b, a)| *b <= a.saturating_add(1)));
-                changed += usize::from(a[..3].iter().zip(b).any(|(a, b)| a.saturating_sub(*b) > 3));
-            }
-            assert!(
-                changed > 100,
-                "fixture must reach source shadows: {kernel:?} {material:?}: {changed}"
-            );
-            assert_eq!(after, glow(&mut shooter, &scene), "carried pane matches fresh rendering");
+    scene.view.shadow = one_shadow(0.8, 0.7);
+    for material in
+        [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
+    {
+        scene.view.atmosphere.material_style = material;
+        scene.view.atmosphere.material_shadow_pickup = 0.0;
+        let before = glow(&mut shooter, &scene);
+        scene.view.atmosphere.material_shadow_pickup = 1.0;
+        shooter.shot_again(&scene);
+        let after = read_glow(&shooter);
+        let mut changed = 0;
+        for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+            // A star brighter than its light owns alpha to contain its
+            // colour; pigment dims that star and hands back a rounding step.
+            let slack = u8::from(material == LatticeMaterial::Stars);
+            assert!(a[3].abs_diff(b[3]) <= slack, "shadow pigment must preserve source coverage");
+            assert!(b[..3].iter().zip(a).all(|(b, a)| *b <= a.saturating_add(1)));
+            changed += usize::from(a[..3].iter().zip(b).any(|(a, b)| a.saturating_sub(*b) > 3));
         }
+        assert!(changed > 100, "fixture must reach source shadows: {material:?}: {changed}");
+        assert_eq!(after, glow(&mut shooter, &scene), "carried pane matches fresh rendering");
     }
 }
 
@@ -404,12 +396,12 @@ fn shadow_pickup_bypasses_with_material_or_light_disabled() {
 
 #[test]
 fn pickup_and_ordinary_shadows_are_independent() {
-    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
     scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
     scene.view.atmosphere.breath_amount = 0.0;
-    scene.view.shadow = one_shadow(0.8, 0.7, ShadowKernel::Distance);
+    scene.view.shadow = one_shadow(0.8, 0.7);
     let scene_alpha = |shooter: &Shooter| {
         let resources = shooter.resources.get::<LatticeResources>().unwrap();
         let target = resources.panes[&shooter.pane].offscreen.as_ref().unwrap();
@@ -438,12 +430,8 @@ fn pickup_and_ordinary_shadows_are_independent() {
     let pigment = read_glow(&shooter);
     assert_ne!(plain, pigment, "fixture reaches the pigment source");
     assert_eq!(ordinary, scene_alpha(&shooter), "pickup must not suppress the actual shadow mask");
-    for (width, depth, kernel) in [
-        (0.0, 0.0, ShadowKernel::Distance),
-        (0.2, 1.0, ShadowKernel::Distance),
-        (1.0, 0.3, ShadowKernel::Gaussian),
-    ] {
-        scene.view.shadow = one_shadow(width, depth, kernel);
+    for (width, depth) in [(0.0, 0.0), (0.2, 1.0), (1.0, 0.3)] {
+        scene.view.shadow = one_shadow(width, depth);
         shooter.shot_again(&scene);
         assert_eq!(pigment, read_glow(&shooter), "actual shadow settings cannot change pickup");
         if width == 0.0 {
@@ -454,13 +442,13 @@ fn pickup_and_ordinary_shadows_are_independent() {
 
 #[test]
 fn pigment_reach_extends_beyond_the_ordinary_node_quad() {
-    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 1.0, false);
     scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
     scene.view.atmosphere.material_settings.wash_refract = 0.0;
     scene.view.atmosphere.breath_amount = 0.0;
-    scene.view.shadow = one_shadow(0.0, 0.0, ShadowKernel::Distance);
+    scene.view.shadow = one_shadow(0.0, 0.0);
     scene.view.glow_reach = 6.0;
     let plain = glow(&mut shooter, &scene);
     let (right, _) = scene.camera.right_up();

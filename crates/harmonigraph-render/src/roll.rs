@@ -334,11 +334,7 @@ struct RollUniforms {
     holdout_origin: Float2,
     shadow: Float4,
     shadow_atlas_size: Float2,
-    /// The group's Shadow falloff, in what was the block's own tail padding —
-    /// the distance path's only other per-group number, and one the vertex
-    /// stage never reads.
-    shadow_falloff: f32,
-    _shadow_pad: f32,
+    _shadow_pad: Float2,
     /// Where the target drawn into starts, in its own pixels, and how many
     /// points one of them measures, per axis: the fragment stage maps its own
     /// pixel back to the note through the pair (`surface_point` in
@@ -394,12 +390,7 @@ fn shadow_uniform(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> [
     let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     let sigma =
         if style.casts() { crate::shadow::spectral_sigma_points(style, point_scale) } else { 0.0 };
-    [
-        sigma,
-        style.depth,
-        if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
-        crate::shadow::spectral_shadow_reach(style, point_scale),
-    ]
+    [sigma, style.depth, 0.0, crate::shadow::spectral_shadow_reach(style, point_scale)]
 }
 
 /// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
@@ -1083,11 +1074,7 @@ impl CallbackTrait for RollCallback {
                     ],
                     level: 1.0,
                     sigma_points: sigma,
-                    kernel: style.kernel,
-                    falloff: style.falloff,
                     spread_points: style.gaussian_spread_points(sigma),
-                    direct_distance: true,
-                    distance_kind: crate::shadow::DistanceKind::Signed,
                 }
             })
             .collect();
@@ -1133,8 +1120,7 @@ impl CallbackTrait for RollCallback {
             // Patched with the shared target's actual retained allocation by
             // the surface finalizer after every spectral group has arrived.
             shadow_atlas_size: Float2([1.0; 2]),
-            shadow_falloff: style.falloff,
-            _shadow_pad: 0.0,
+            _shadow_pad: Float2([0.0; 2]),
         }
         .drawn_into(ppp, [0, 0], surface, surface);
 
@@ -1556,13 +1542,13 @@ mod tests {
         draw_callback(device, queue, cb, clear)
     }
 
-    /// The shadow style [`draw`] and its kin draw under: Distance, at full
-    /// darkness, reaching [`HARNESS_REACH`].
+    /// The shadow style [`draw`] and its kin draw under: full darkness, at the
+    /// width whose blur reaches exactly [`HARNESS_REACH`] (3σ, σ being half a
+    /// width of four-point units).
     fn harness_shadow() -> harmonigraph_scene::ShadowStyle {
         let style = harmonigraph_scene::ShadowStyle {
-            width: 0.5,
+            width: HARNESS_REACH / 6.0,
             depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
             ..Default::default()
         };
         let reach = crate::shadow::spectral_shadow_reach(style, 1.0);
@@ -1635,8 +1621,8 @@ mod tests {
     }
 
     /// One roll frame with an explicitly selected shadow style. Kept separate
-    /// from `draw_bloomed_resourced` so the ordinary shape tests retain their
-    /// fixed Distance fixture while Gaussian atlas tests exercise that path.
+    /// from `draw_bloomed_resourced` so the ordinary shape tests keep their
+    /// fixed [`harness_shadow`] fixture.
     fn draw_shadowed(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1994,18 +1980,8 @@ mod tests {
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         for shadow in [
-            harmonigraph_scene::ShadowStyle {
-                width: 0.0,
-                depth: 1.0,
-                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                ..Default::default()
-            },
-            harmonigraph_scene::ShadowStyle {
-                width: 1.0,
-                depth: 0.0,
-                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                ..Default::default()
-            },
+            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
         ] {
             let uniform = shadow_uniform(shadow, 1.0);
             assert_eq!(uniform[0], 0.0, "{shadow:?} uploaded a nonzero sigma");
@@ -2045,145 +2021,124 @@ mod tests {
 
     #[test]
     fn enlarged_preview_roll_shadows_extend_beyond_maximum_dial_reach() {
-        use harmonigraph_scene::{ShadowKernel, ShadowStyle, SPECTRAL_SHADOW_MAX};
+        use harmonigraph_scene::{ShadowStyle, SPECTRAL_SHADOW_MAX};
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
-            let style = ShadowStyle {
-                width: SPECTRAL_SHADOW_MAX,
-                spread: 0.2,
-                depth: 1.0,
-                kernel,
-                ..Default::default()
-            };
-            let frames = [1.0, 2.0].map(|point_scale| {
-                let mut note = centered_note();
-                note.center = [32.0, 32.0];
-                note.half_extent = [5.0, 12.0];
-                note.cap_reach = crate::spectral_shadow_reach(style, point_scale);
-                draw_shadowed(&device, &queue, vec![note], style, wgpu::Color::WHITE, point_scale)
-            });
-            // The caster starts at x=27. This sample is beyond the dial's
-            // maximum support and spread, but the 2x preview must reach it.
-            let at = ((32 * SIZE[0] + 3) * 4) as usize;
-            assert_eq!(&frames[0][at..at + 3], [255; 3], "{kernel:?}");
-            assert!(frames[1][at] < 253, "enlarged {kernel:?} shadow was capped");
-        }
+        let style = ShadowStyle { width: SPECTRAL_SHADOW_MAX, spread: 0.2, depth: 1.0 };
+        let frames = [1.0, 2.0].map(|point_scale| {
+            let mut note = centered_note();
+            note.center = [32.0, 32.0];
+            note.half_extent = [5.0, 12.0];
+            note.cap_reach = crate::spectral_shadow_reach(style, point_scale);
+            draw_shadowed(&device, &queue, vec![note], style, wgpu::Color::WHITE, point_scale)
+        });
+        // The caster starts at x=27. This sample is beyond the dial's
+        // maximum support and spread, but the 2x preview must reach it.
+        let at = ((32 * SIZE[0] + 3) * 4) as usize;
+        assert_eq!(&frames[0][at..at + 3], [255; 3]);
+        assert!(frames[1][at] < 253, "enlarged shadow was capped");
     }
 
     #[test]
-    fn both_roll_geometry_kernels_hold_at_editor_and_export_scales() {
+    fn roll_geometry_shadows_hold_at_editor_and_export_scales() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for kernel in
-            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-        {
-            for (ppp, width) in [1.0f32, 1.5, 2.0, 4.0].into_iter().flat_map(|ppp| {
-                [0.5, harmonigraph_scene::SPECTRAL_SHADOW_MAX].map(|width| (ppp, width))
-            }) {
-                // Probe inside each kernel's support. The wide readings still
-                // sit beyond the old eight-point limit at every pixel scale.
-                let shadow_x = match (kernel.is_distance(), width > 1.0) {
-                    (true, false) => 26.0,
-                    (false, false) => 25.0,
-                    (true, true) => 18.0,
-                    (false, true) => 17.0,
-                };
-                let clear = if width > 1.0 { [0.0, 0.0] } else { [12.0, 12.0] };
-                let physical = (64.0 * ppp).round() as u32;
-                let size = [physical.div_ceil(64) * 64, physical];
-                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
-                let shadow = harmonigraph_scene::ShadowStyle {
-                    width,
-                    depth: 1.0,
-                    kernel,
-                    ..Default::default()
-                };
-                let reach = crate::shadow::spectral_shadow_reach(shadow, 1.0);
-                let note = RollInstance {
-                    center: [32.0, 32.0],
-                    half_extent: [5.0, 12.0],
-                    shear: 0.0,
-                    lead: 0.0,
-                    lead_fade: 0.0,
-                    lead_alpha: 0.0,
-                    cap_reach: reach,
-                    core: [255, 0, 0, 255],
-                    outline: [0, 0, 0, 255],
-                    span: RollInstance::WHOLE,
-                    ramp: [0.0, 0.0],
-                    fade: [1.0, 1.0],
-                    taper_depth: [0.0; 4],
-                    taper: RollInstance::UNTAPERED,
-                    tremolo: [0.0; 2],
-                };
-                let cb = RollCallback {
-                    point_scale: 1.0,
-                    rect,
-                    pane_size: rect.size(),
-                    instances: vec![note],
-                    clipped_tail: None,
-                    axes: TOP,
-                    shadow,
-                    bloom: 0.0,
-                    target_format: FORMAT,
-                    pane_id: 0,
-                    shadow_surface_id: 0,
-                    pass_nr: 0,
-                };
-                let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
-                let mut resources = CallbackResources::default();
-                let mut encoder = device.create_command_encoder(&Default::default());
-                let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-                crate::spectral_shadow::finish(
-                    &device,
-                    &queue,
-                    &screen,
-                    &mut encoder,
-                    &mut resources,
-                    0,
-                );
-                queue.submit(buffers.into_iter().chain([encoder.finish()]));
-                let texture = render_to_texture(
-                    &device,
-                    &queue,
-                    size,
-                    FORMAT,
-                    wgpu::Color { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
-                    |pass| {
-                        cb.paint(
-                            egui::PaintCallbackInfo {
-                                viewport: rect,
-                                clip_rect: rect,
-                                pixels_per_point: ppp,
-                                screen_size_px: size,
-                            },
-                            pass,
-                            &resources,
-                        );
-                    },
-                );
-                let frame = readback(&device, &queue, &texture, size);
-                let pixel = |x: f32, y: f32| {
-                    let i = ((((y * ppp).floor() as u32) * size[0] + (x * ppp).floor() as u32) * 4)
-                        as usize;
-                    [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
-                };
-                // The widest fixture probes beyond the old 8-point support.
-                let shadow_pixel = pixel(shadow_x, 32.0);
-                assert!(
-                    shadow_pixel[0] < 118 && shadow_pixel[1] == shadow_pixel[0],
-                    "{kernel:?} at {ppp} ppp left no black under-body shadow: {shadow_pixel:?}",
-                );
-                assert_eq!(pixel(32.0, 32.0), [255, 0, 0, 255], "the body covers {kernel:?}");
-                assert_eq!(
-                    pixel(clear[0], clear[1]),
-                    [128, 128, 128, 255],
-                    "{kernel:?} reached beyond its atlas"
-                );
-            }
+        for (ppp, width) in [1.0f32, 1.5, 2.0, 4.0].into_iter().flat_map(|ppp| {
+            [0.5, harmonigraph_scene::SPECTRAL_SHADOW_MAX].map(|width| (ppp, width))
+        }) {
+            // Probe inside the support. The wide reading still sits beyond
+            // the old eight-point limit at every pixel scale.
+            let shadow_x = if width > 1.0 { 17.0 } else { 25.0 };
+            let clear = if width > 1.0 { [0.0, 0.0] } else { [12.0, 12.0] };
+            let physical = (64.0 * ppp).round() as u32;
+            let size = [physical.div_ceil(64) * 64, physical];
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+            let shadow =
+                harmonigraph_scene::ShadowStyle { width, depth: 1.0, ..Default::default() };
+            let reach = crate::shadow::spectral_shadow_reach(shadow, 1.0);
+            let note = RollInstance {
+                center: [32.0, 32.0],
+                half_extent: [5.0, 12.0],
+                shear: 0.0,
+                lead: 0.0,
+                lead_fade: 0.0,
+                lead_alpha: 0.0,
+                cap_reach: reach,
+                core: [255, 0, 0, 255],
+                outline: [0, 0, 0, 255],
+                span: RollInstance::WHOLE,
+                ramp: [0.0, 0.0],
+                fade: [1.0, 1.0],
+                taper_depth: [0.0; 4],
+                taper: RollInstance::UNTAPERED,
+                tremolo: [0.0; 2],
+            };
+            let cb = RollCallback {
+                point_scale: 1.0,
+                rect,
+                pane_size: rect.size(),
+                instances: vec![note],
+                clipped_tail: None,
+                axes: TOP,
+                shadow,
+                bloom: 0.0,
+                target_format: FORMAT,
+                pane_id: 0,
+                shadow_surface_id: 0,
+                pass_nr: 0,
+            };
+            let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+            let mut resources = CallbackResources::default();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            crate::spectral_shadow::finish(
+                &device,
+                &queue,
+                &screen,
+                &mut encoder,
+                &mut resources,
+                0,
+            );
+            queue.submit(buffers.into_iter().chain([encoder.finish()]));
+            let texture = render_to_texture(
+                &device,
+                &queue,
+                size,
+                FORMAT,
+                wgpu::Color { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: ppp,
+                            screen_size_px: size,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            let frame = readback(&device, &queue, &texture, size);
+            let pixel = |x: f32, y: f32| {
+                let i = ((((y * ppp).floor() as u32) * size[0] + (x * ppp).floor() as u32) * 4)
+                    as usize;
+                [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+            };
+            // The widest fixture probes beyond the old 8-point support.
+            let shadow_pixel = pixel(shadow_x, 32.0);
+            assert!(
+                shadow_pixel[0] < 118 && shadow_pixel[1] == shadow_pixel[0],
+                "at {ppp} ppp left no black under-body shadow: {shadow_pixel:?}",
+            );
+            assert_eq!(pixel(32.0, 32.0), [255, 0, 0, 255], "the body covers its shadow");
+            assert_eq!(
+                pixel(clear[0], clear[1]),
+                [128, 128, 128, 255],
+                "the shadow reached beyond its atlas"
+            );
         }
     }
 
@@ -2677,7 +2632,6 @@ mod tests {
         let shadow = harmonigraph_scene::ShadowStyle {
             width: harmonigraph_scene::SPECTRAL_SHADOW_MAX,
             depth: 0.85,
-            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             ..Default::default()
         };
         let plain = harmonigraph_scene::ShadowStyle { depth: 0.0, ..shadow };
@@ -2723,13 +2677,7 @@ mod tests {
     #[test]
     fn a_gaussian_shadow_behind_a_spent_lead_spreads_like_the_note_alone() {
         let Some((device, queue)) = headless_device() else { return };
-        let style = harmonigraph_scene::ShadowStyle {
-            width: 1.0,
-            depth: 1.0,
-            spread: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-            ..Default::default()
-        };
+        let style = harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, spread: 1.0 };
         assert!(
             style.gaussian_spread_points(crate::shadow::spectral_sigma_points(style, 1.0)) > 1.0
         );
@@ -2758,14 +2706,10 @@ mod tests {
     }
 
     #[test]
-    fn gaussian_spread_expands_roll_shadow_and_contour_ignores_it() {
+    fn gaussian_spread_expands_roll_shadow() {
         let Some((device, queue)) = headless_device() else { return };
-        let style = harmonigraph_scene::ShadowStyle {
-            width: 2.0,
-            depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-            ..Default::default()
-        };
+        let style =
+            harmonigraph_scene::ShadowStyle { width: 2.0, depth: 1.0, ..Default::default() };
         let note = RollInstance { core: [255; 4], ..centered_note() };
         let draw = |style| draw_shadowed(&device, &queue, vec![note], style, bg_color(), 1.0);
         let base = draw(style);
@@ -2776,11 +2720,6 @@ mod tests {
             pixel(&grown, 153, 128)[2] < pixel(&base, 153, 128)[2],
             "expanded footprint was clipped"
         );
-        let contour = harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..style
-        };
-        assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
     fn bloom_frame(
@@ -3390,23 +3329,15 @@ mod tests {
             return;
         };
         let absent = RollInstance { taper: [0.0; 4], ..centered_note() };
-        for kernel in
-            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-        {
-            let style = harmonigraph_scene::ShadowStyle {
-                kernel,
-                width: 8.0,
-                depth: 4.0,
-                ..Default::default()
-            };
-            let baseline = draw_shadowed(&device, &queue, vec![], style, bg_color(), 1.0);
-            let empty = draw_shadowed(&device, &queue, vec![absent], style, bg_color(), 1.0);
-            assert_eq!(empty, baseline, "{kernel:?}: invisible width left ink");
-            assert_ne!(
-                draw_shadowed(&device, &queue, vec![centered_note()], style, bg_color(), 1.0),
-                baseline
-            );
-        }
+        let style =
+            harmonigraph_scene::ShadowStyle { width: 8.0, depth: 4.0, ..Default::default() };
+        let baseline = draw_shadowed(&device, &queue, vec![], style, bg_color(), 1.0);
+        let empty = draw_shadowed(&device, &queue, vec![absent], style, bg_color(), 1.0);
+        assert_eq!(empty, baseline, "invisible width left ink");
+        assert_ne!(
+            draw_shadowed(&device, &queue, vec![centered_note()], style, bg_color(), 1.0),
+            baseline
+        );
         assert_eq!(
             draw_bloomed(&device, &queue, vec![absent], TOP, 2.0, bg_color()),
             draw_bloomed(&device, &queue, vec![], TOP, 2.0, bg_color())

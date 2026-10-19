@@ -1,7 +1,7 @@
-// Label text: one instanced quad per glyph. Spectral labels put their fixed
-// glyph SDF into the shared shadow atlas and read either its exact distance or
-// the Gaussian made from coverage of that same field; lattice labels reuse the
-// same producers inside the lattice scene pass.
+// Label text: one instanced quad per glyph. Spectral labels rasterize coverage
+// of their fixed glyph SDF into the shared shadow atlas and read the Gaussian
+// made from it; lattice labels reuse the same producers inside the lattice
+// scene pass.
 //
 // Glyphs come from egui: it lays the text out, rasterizes into its font
 // atlas, and hands over each glyph's screen rect and atlas rect. This
@@ -155,7 +155,7 @@ fn vs_glyph_cell(
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        cell_packed(box_cell) && box_who.y < 0.5,
+        cell_packed(box_cell),
     );
     return out;
 }
@@ -179,7 +179,7 @@ const SDF_COARSE_PAD: f32 = 48.0;
 const SDF_NEAR_BLEND: f32 = 8.0;
 
 @vertex
-fn vs_glyph_distance_cell(
+fn vs_glyph_sdf_cell(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) uv: vec4<f32>,
@@ -230,37 +230,6 @@ fn vs_glyph_distance_cell(
         0.5 * (sdf_rect.z / max(coarse_span.x, 1.0e-6)
             + sdf_rect.w / max(coarse_span.y, 1.0e-6)),
     );
-    return out;
-}
-
-struct PadOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) pad: f32,
-};
-
-/// Set every distance cell to its own finite far value before glyphs
-/// MIN-blend into it. Nodes overwrite the same initialization with their full
-/// analytic quad; blur cells stay on the render pass's zero clear.
-@vertex
-fn vs_distance_pad(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) box_rect: vec4<f32>,
-    @location(1) box_cell: vec4<f32>,
-    @location(2) box_meta: vec4<f32>,
-    @location(3) box_who: vec4<f32>,
-) -> PadOut {
-    let corner = vec2<f32>(
-        select(0.0, 1.0, (vertex & 1u) == 1u),
-        select(0.0, 1.0, (vertex & 2u) == 2u),
-    );
-    let texel = box_cell.xy + corner * box_cell.zw;
-    var out: PadOut;
-    out.position = select(
-        no_quad(),
-        cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        box_who.y >= 0.5 && cell_packed(box_cell),
-    );
-    out.pad = box_who.z;
     return out;
 }
 
@@ -356,10 +325,9 @@ const PATCH_MARGIN: f32 = 0.5;
 /// Measured on the visible fill at the size the spectral roll sets its names,
 /// as a share of each symbol's own ink: the current flat and sharp swing 4.1%
 /// and 3.8% along the named axis. They are the marks it is for — ink that is
-/// mostly vertical strokes, against a roll that scrolls sideways. A Distance
-/// shadow is produced separately from the fixed SDF; the lattice's Gaussian
-/// shadow cell reuses this reconstructed coverage and therefore pays the same
-/// tap count as its visible fill.
+/// mostly vertical strokes, against a roll that scrolls sideways. The lattice's
+/// unspread shadow cell reuses this reconstructed coverage and therefore pays
+/// the same tap count as its visible fill.
 ///
 /// ONE axis, and the caller's rather than x, because which way a label
 /// travels is a property of the pane and not of the filter. The roll's names
@@ -468,10 +436,9 @@ fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
 ///
 /// Two taps [`FILTER_TAP`] either side along a scrolling label's axis, or the
 /// four corners of their Cartesian product for lattice labels that can move
-/// along both. The visible fill and the lattice's retained Gaussian shadow-cell
-/// producer read through here. A Distance shadow instead comes from the fixed
-/// scale-free SDF, while spectral Gaussian shadows rasterize coverage from that
-/// same SDF rather than this sheet.
+/// along both. The visible fill and the lattice's unspread shadow-cell producer
+/// read through here. Spectral shadows, and lattice shadows with Spread open,
+/// rasterize coverage from the fixed scale-free SDF rather than this sheet.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
     // Along the pane's own travel axes, which the sheets' texels are square
     // with: a glyph's quad is axis-aligned and its atlas patch is upright, so
@@ -615,14 +582,8 @@ fn glyph_sdf_distance(in: SdfOut) -> f32 {
     return mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
 }
 
-@fragment
-fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(glyph_sdf_distance(in), 0.0, 0.0, 1.0);
-}
-
-/// Coverage of the exact same glyph field the Distance renderer stores. This
-/// is the Gaussian producer: one antialiased zero contour, followed by the
-/// shared separable blur.
+/// Coverage of the glyph's fixed field, grown by the group's Spread: one
+/// antialiased zero contour, followed by the shared separable blur.
 @fragment
 fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
     let d = glyph_sdf_distance(in) - in.expansion.x;
@@ -633,11 +594,6 @@ fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
         aa = max(aa, in.expansion.y);
     }
     return vec4<f32>(clamp(0.5 - d / aa, 0.0, 1.0), 0.0, 0.0, 1.0);
-}
-
-@fragment
-fn fs_distance_pad(in: PadOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.pad, 0.0, 0.0, 1.0);
 }
 
 struct SpectralShadowOut {

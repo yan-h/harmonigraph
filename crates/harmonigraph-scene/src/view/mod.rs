@@ -1250,12 +1250,10 @@ impl ViewConfig {
         // than by name, so a group added at step 7 arrives sanitized. The width
         // is what every caster's quad is grown by — a number from outside the
         // bar is a quad nothing can fill — and the depth is a SHARE of the
-        // frame, so the unit interval. Falloff is a signed bend around zero
-        // (linear), with the same fixed reach throughout its range.
+        // frame, so the unit interval.
         for (style, fresh) in self.shadow.groups_mut().into_iter().zip(fresh.shadow.groups()) {
             style.width = finite_or(style.width, fresh.width);
             style.depth = finite_or(style.depth, fresh.depth);
-            style.falloff = finite_or(style.falloff, fresh.falloff);
         }
         self.shadow = self.shadow.clamped();
         self.hide_behind = finite_or(self.hide_behind, fresh.hide_behind)

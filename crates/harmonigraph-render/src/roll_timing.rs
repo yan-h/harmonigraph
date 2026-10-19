@@ -186,33 +186,24 @@ fn a_frame_of_the_roll_costs_this_much() {
         "roll probe: {}x{} px at {ppp} ppp, {frames} frames, bloom {bloom}",
         size[0], size[1]
     );
-    let gaussian = harmonigraph_scene::ShadowSettings::default().spectral_geometry;
-    let shadows = [
-        gaussian,
-        harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..gaussian
-        },
-    ];
-    let (control, control_p10) = time(Vec::new(), gaussian);
+    let shadow = harmonigraph_scene::ShadowSettings::default().spectral_geometry;
+    let (control, control_p10) = time(Vec::new(), shadow);
     eprintln!("control (empty roll): median {control:.3} ms, p10 {control_p10:.3} ms");
     for work in &WORKLOADS {
-        for shadow in shadows {
-            let case = format!("{} / {:?}", work.name, shadow.kernel);
-            if filter.as_ref().is_some_and(|f| !case.contains(f.as_str())) {
-                continue;
-            }
-            let reach = crate::shadow::spectral_shadow_reach(shadow, 1.0);
-            let notes = instances(work, points, reach);
-            let count = notes.len();
-            let (median, p10) = time(notes, shadow);
-            eprintln!(
-                "{case}: {count} instances, reach {reach:.2} pt: median {median:.3} ms \
-                 (p10 {p10:.3}); the roll alone {:.3} ms (p10 {:.3})",
-                median - control,
-                p10 - control_p10,
-            );
+        let case = work.name;
+        if filter.as_ref().is_some_and(|f| !case.contains(f.as_str())) {
+            continue;
         }
+        let reach = crate::shadow::spectral_shadow_reach(shadow, 1.0);
+        let notes = instances(work, points, reach);
+        let count = notes.len();
+        let (median, p10) = time(notes, shadow);
+        eprintln!(
+            "{case}: {count} instances, reach {reach:.2} pt: median {median:.3} ms \
+             (p10 {p10:.3}); the roll alone {:.3} ms (p10 {:.3})",
+            median - control,
+            p10 - control_p10,
+        );
     }
     eprintln!("METAL_TIMING_ASSETS {:?}", crate::shader_assets::statistics());
 }

@@ -1968,7 +1968,6 @@ impl Offscreen {
         device: &wgpu::Device,
         shared: &OffscreenShared<'_>,
         want: Option<[u32; 2]>,
-        blurs: bool,
     ) {
         match want {
             Some(size) => {
@@ -1980,12 +1979,6 @@ impl Offscreen {
                         shared.sampler,
                         [size[0].max(held[0]), size[1].max(held[1])],
                     ));
-                }
-                // After the size check, so a target rebuilt just above and one
-                // kept from last frame arrive at the same answer: the
-                // intermediate is the atlas's own size and a rebuild drops it.
-                if let Some(atlas) = self.shadow.as_mut() {
-                    atlas.ensure_half(device, shared.shadow_layout, shared.sampler, blurs);
                 }
             }
             None => self.shadow = None,
@@ -2677,8 +2670,6 @@ struct ShaderPipelines {
     ink_blur_pipeline: wgpu::RenderPipeline,
     glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
     glyph_spread_cell_pipeline: wgpu::RenderPipeline,
-    glyph_distance_cell_pipeline: wgpu::RenderPipeline,
-    glyph_distance_pad_pipeline: wgpu::RenderPipeline,
     node_cell_pipeline: wgpu::RenderPipeline,
     plus_cell_pipeline: wgpu::RenderPipeline,
 }
@@ -2718,11 +2709,8 @@ impl ShaderPipelines {
         let scenes =
             create_scene_pipelines(device, lattice, blit, glyph, layouts.scene, layouts.glyph);
         progress(startup::Stage::Labels);
-        let (
-            glyph_coverage_cell_pipeline,
-            glyph_distance_cell_pipeline,
-            glyph_distance_pad_pipeline,
-        ) = text::create_glyph_cell_pipelines(device, glyph, layouts.glyph);
+        let glyph_coverage_cell_pipeline =
+            text::create_glyph_coverage_cell_pipeline(device, glyph, layouts.glyph);
         let glyph_spread_cell_pipeline =
             text::create_glyph_sdf_coverage_pipeline(device, glyph, layouts.glyph);
         Self {
@@ -2736,8 +2724,6 @@ impl ShaderPipelines {
             ink_blur_pipeline,
             glyph_coverage_cell_pipeline,
             glyph_spread_cell_pipeline,
-            glyph_distance_cell_pipeline,
-            glyph_distance_pad_pipeline,
         }
     }
 }
@@ -3190,7 +3176,7 @@ impl LatticeResources {
             pane.ensure_ink_history(device, &self.compiled.strip_layout, wants.glow, wants.rows);
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow);
-                offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
+                offscreen.ensure_shadow(device, &shared, wants.shadow);
             }
         }
         // Empty frames still retire disabled bloom, but keep enabled targets
@@ -3250,11 +3236,6 @@ struct PaneTargets {
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,
-    /// Whether any cell this frame packed holds COVERAGE, and so whether the
-    /// blur's intermediate is held beside the atlas
-    /// (`shadow::ShadowTarget::ensure_half`). A frame whose every group answers
-    /// a distance leaves it `false` and allocates one plane instead of two.
-    blurs: bool,
     /// The ink strip's height: the row map's own capacity.
     rows: u32,
     /// How many casters this frame's kernels are packed for — the storage

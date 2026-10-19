@@ -146,8 +146,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
-    // The one RISING preview: the glow's and the shadows' falloffs on the same
-    // page all descend.
+    // The one RISING preview: the glow's falloff on the same page descends.
     let paths = crate::widgets::curve_paths(&shapes);
     let rising: Vec<_> =
         paths.iter().filter(|path| path.first().unwrap().y > path.last().unwrap().y).collect();
@@ -1726,40 +1725,6 @@ fn hidden_audio_ring_keeps_restoration_instructions() {
             );
         }
     }
-}
-
-/// Falloff bends the distance field used by Contour shadows. Blur supplies its
-/// own Gaussian profile, so the four groups keep their common width and depth
-/// controls there without showing a falloff setting that cannot affect them.
-#[test]
-fn shadow_falloff_only_appears_for_contour_shadows() {
-    use harmonigraph_scene::ShadowKernel;
-
-    // Both pages that hold shadow groups, two groups each.
-    let shapes = |kernel| {
-        let mut state = fresh();
-        for style in state.picture.appearance.view.shadow.groups_mut() {
-            style.kernel = kernel;
-        }
-        [panes::Tab::LatticeSettings, panes::Tab::AnalyzerSettings]
-            .into_iter()
-            .flat_map(|tab| tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes)
-            .collect::<Vec<_>>()
-    };
-
-    let blurred = shapes(ShadowKernel::Gaussian);
-    assert!(text_ys(&blurred, "Falloff").is_empty());
-    assert_eq!(text_ys(&blurred, "Darkness").len(), 4, "Blur lost common shadow controls");
-    assert_eq!(text_ys(&blurred, "Spread").len(), 4, "Blur lost its spread control");
-
-    let contour = shapes(ShadowKernel::Distance);
-    assert_eq!(
-        text_ys(&contour, "Falloff").len(),
-        4,
-        "a Contour shadow group has no falloff control",
-    );
-    assert_eq!(text_ys(&contour, "Darkness").len(), 4, "Contour lost common shadow controls",);
-    assert!(text_ys(&contour, "Spread").is_empty());
 }
 
 /// No settings tab draws two sections under one heading. A fold is saved as

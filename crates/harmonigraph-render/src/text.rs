@@ -3,8 +3,8 @@
 //!
 //! **Why this exists.** A label used to be stamped around twenty offsets to
 //! make a rim. Each glyph now carries fixed near/coarse signed-distance
-//! patches. Distance stores that field in its caster cell; Gaussian turns the
-//! same field into coverage and runs the common separable blur.
+//! patches. A spectral name's shadow turns that field into coverage and runs
+//! the common separable blur.
 //!
 //! **What it does NOT do.** It does not render text. egui still owns the
 //! fonts, the shaping, the layout and the atlas — this takes the glyphs it
@@ -58,11 +58,8 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "fs_fill_lit",
     "vs_glyph_cell",
     "fs_glyph_ink",
-    "vs_glyph_distance_cell",
-    "fs_glyph_distance",
+    "vs_glyph_sdf_cell",
     "fs_glyph_sdf_coverage",
-    "vs_distance_pad",
-    "fs_distance_pad",
     "vs_shadow_box",
     "fs_shadow_box",
     "fs_shadow_box_plain",
@@ -93,7 +90,7 @@ pub struct GlyphInstance {
     pub sdf_rect: [f32; 4],
     /// The near and coarse SDF texel rectangles corresponding to
     /// [`Self::sdf_rect`], min then max. Zero rectangles mean this glyph has
-    /// no distance entry and contributes nothing to a distance cell.
+    /// no distance entry and contributes nothing to an SDF-filled cell.
     pub sdf_near: [f32; 4],
     pub sdf_coarse: [f32; 4],
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
@@ -344,8 +341,6 @@ struct TextResources {
     shadow_pipeline: wgpu::RenderPipeline,
     fill_pipeline: wgpu::RenderPipeline,
     glyph_sdf_coverage_pipeline: wgpu::RenderPipeline,
-    glyph_distance_pipeline: wgpu::RenderPipeline,
-    glyph_distance_pad_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
     caster_layout: wgpu::BindGroupLayout,
@@ -754,29 +749,19 @@ pub(crate) fn glyph_shader(device: &wgpu::Device, source: &str) -> wgpu::ShaderM
     })
 }
 
-/// The three draws that prepare a name's shadow cell.
-///
-/// Under the Gaussian a cell keeps the coverage union it already uses. Under
-/// Distance the pass first fills every analytic cell with its own pad, then
-/// MIN-blends each glyph's true signed field over that value. The latter is the
-/// exact union of the letterforms and cannot double-darken where two glyph
-/// quads overlap.
-pub(crate) fn create_glyph_cell_pipelines(
+/// The draw that fills a lattice name's shadow cell with its glyphs' coverage,
+/// MAX-blended so overlapping glyph quads cannot double-darken.
+pub(crate) fn create_glyph_coverage_cell_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> wgpu::RenderPipeline {
     const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::One,
         operation: wgpu::BlendOperation::Max,
     };
-    const MIN_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Min,
-    };
-    let coverage = glyph_pipeline(
+    glyph_pipeline(
         device,
         shader,
         "glyph_coverage_cell",
@@ -788,39 +773,13 @@ pub(crate) fn create_glyph_cell_pipelines(
             blend: Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
             write_mask: wgpu::ColorWrites::ALL,
         })],
-    );
-    let distance = glyph_pipeline(
-        device,
-        shader,
-        "glyph_distance_cell",
-        &[Some(layout)],
-        ("vs_glyph_distance_cell", "fs_glyph_distance"),
-        &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
-        &[Some(wgpu::ColorTargetState {
-            format: crate::shadow::ATLAS_FORMAT,
-            blend: Some(wgpu::BlendState { color: MIN_COMPONENT, alpha: MIN_COMPONENT }),
-            write_mask: wgpu::ColorWrites::ALL,
-        })],
-    );
-    let pad = glyph_pipeline(
-        device,
-        shader,
-        "glyph_distance_cell_pad",
-        &[Some(layout)],
-        ("vs_distance_pad", "fs_distance_pad"),
-        &[crate::shadow::ShadowBox::LAYOUT],
-        &[Some(wgpu::ColorTargetState {
-            format: crate::shadow::ATLAS_FORMAT,
-            blend: None,
-            write_mask: wgpu::ColorWrites::ALL,
-        })],
-    );
-    (coverage, distance, pad)
+    )
 }
 
-/// The spectral text group's Gaussian producer. Unlike the lattice's retained
-/// coverage control, this rasterizes coverage from the fixed glyph SDF, so the
-/// two spectral kernels share one zero contour.
+/// The SDF producer: coverage rasterized from the fixed glyph SDF, offset by
+/// the group's Spread. Every spectral name's cell is filled by it, and a
+/// lattice name's whenever its Spread is open — growing a letterform by a
+/// distance needs the distance, which egui's coverage atlas does not hold.
 pub(crate) fn create_glyph_sdf_coverage_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -836,7 +795,7 @@ pub(crate) fn create_glyph_sdf_coverage_pipeline(
         shader,
         "glyph_sdf_coverage_cell",
         &[Some(layout)],
-        ("vs_glyph_distance_cell", "fs_glyph_sdf_coverage"),
+        ("vs_glyph_sdf_cell", "fs_glyph_sdf_coverage"),
         &[GlyphInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_GLYPHS],
         &[Some(wgpu::ColorTargetState {
             format: crate::shadow::ATLAS_FORMAT,
@@ -1017,13 +976,7 @@ impl TextResources {
         shadow_layout: &wgpu::BindGroupLayout,
         caster_layout: &wgpu::BindGroupLayout,
         target_format: wgpu::TextureFormat,
-    ) -> (
-        wgpu::RenderPipeline,
-        wgpu::RenderPipeline,
-        wgpu::RenderPipeline,
-        wgpu::RenderPipeline,
-        wgpu::RenderPipeline,
-    ) {
+    ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
         let shader = glyph_shader(device, &crate::text_source());
         let shadow_pipeline = create_spectral_shadow_pipeline(
             device,
@@ -1043,9 +996,8 @@ impl TextResources {
             1,
             crate::EGUI_BLEND,
         );
-        let (_, distance, pad) = create_glyph_cell_pipelines(device, &shader, layout);
         let coverage = create_glyph_sdf_coverage_pipeline(device, &shader, layout);
-        (shadow_pipeline, fill_pipeline, coverage, distance, pad)
+        (shadow_pipeline, fill_pipeline, coverage)
     }
 
     /// Swap in pipelines built for what the next frame is drawing, keeping the
@@ -1059,7 +1011,7 @@ impl TextResources {
         // The source is read inside, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
-        let (shadow_pipeline, fill_pipeline, coverage, distance, pad) = Self::pipelines(
+        let (shadow_pipeline, fill_pipeline, coverage) = Self::pipelines(
             device,
             &self.layout,
             &self.shadow_layout,
@@ -1073,8 +1025,6 @@ impl TextResources {
         self.shadow_pipeline = shadow_pipeline;
         self.fill_pipeline = fill_pipeline;
         self.glyph_sdf_coverage_pipeline = coverage;
-        self.glyph_distance_pipeline = distance;
-        self.glyph_distance_pad_pipeline = pad;
         self.target_format = target_format;
     }
 
@@ -1090,7 +1040,7 @@ impl TextResources {
         // Read once for the pair, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
-        let (shadow_pipeline, fill_pipeline, coverage, distance, pad) =
+        let (shadow_pipeline, fill_pipeline, coverage) =
             Self::pipelines(device, &layout, &shadow_layout, &caster_layout, target_format);
         #[cfg(feature = "hot-reload")]
         let generation = crate::reload::generation();
@@ -1098,8 +1048,6 @@ impl TextResources {
             shadow_pipeline,
             fill_pipeline,
             glyph_sdf_coverage_pipeline: coverage,
-            glyph_distance_pipeline: distance,
-            glyph_distance_pad_pipeline: pad,
             layout,
             shadow_layout,
             caster_layout,
@@ -1384,7 +1332,6 @@ impl CallbackTrait for TextCallback {
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.map(|style| style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX));
-        let kernel = style.map_or(harmonigraph_scene::ShadowKernel::Distance, |s| s.kernel);
         let sizes = resources.sheets.sizes();
         let uniforms = TextUniforms {
             screen_points: [
@@ -1457,8 +1404,6 @@ impl CallbackTrait for TextCallback {
             let sigma = style
                 .filter(|style| style.casts())
                 .map_or(0.0, |style| crate::shadow::spectral_sigma_points(style, self.point_scale));
-            let falloff =
-                style.map_or(harmonigraph_scene::ShadowStyle::default().falloff, |s| s.falloff);
             let casters: Vec<crate::shadow::Caster> = self
                 .glyphs
                 .iter()
@@ -1466,24 +1411,17 @@ impl CallbackTrait for TextCallback {
                     rect: glyph.sdf_rect,
                     level: f32::from(glyph.rim[3] > 0),
                     sigma_points: sigma,
-                    kernel,
-                    falloff,
                     spread_points: style.map_or(0.0, |s| s.gaussian_spread_points(sigma)),
-                    direct_distance: false,
-                    distance_kind: crate::shadow::DistanceKind::Signed,
                 })
                 .collect();
             let submission = crate::spectral_shadow::Submission {
                 key: crate::spectral_shadow::ProducerKey::Text(self.pane_id),
                 casters,
                 draw: crate::spectral_shadow::CellDraw::Text {
-                    coverage: resources.glyph_sdf_coverage_pipeline.clone(),
-                    distance: resources.glyph_distance_pipeline.clone(),
-                    distance_pad: resources.glyph_distance_pad_pipeline.clone(),
+                    pipeline: resources.glyph_sdf_coverage_pipeline.clone(),
                     locals: pane.bind_group.as_ref().expect("bound above").clone(),
                     glyphs: pane.instance_buffer.clone(),
                     count: pane.count,
-                    kernel,
                 },
                 atlas_uniform: pane.uniform_buffer.clone(),
                 atlas_size_offset: std::mem::offset_of!(TextUniforms, shadow_atlas_size) as u64,
@@ -1653,18 +1591,8 @@ pub(crate) mod tests {
             return;
         };
         for style in [
-            harmonigraph_scene::ShadowStyle {
-                width: 0.0,
-                depth: 1.0,
-                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                ..Default::default()
-            },
-            harmonigraph_scene::ShadowStyle {
-                width: 1.0,
-                depth: 0.0,
-                kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-                ..Default::default()
-            },
+            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
         ] {
             let cb = TextCallback {
                 point_scale: 1.0,
@@ -2034,46 +1962,41 @@ pub(crate) mod tests {
     #[test]
     fn a_front_label_shadows_back_ink_but_not_its_own_letters() {
         let Some((device, queue)) = headless_device() else { return };
-        for kernel in
-            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-        {
-            let mut cb = TextCallback {
-                point_scale: 1.0,
-                glyphs: vec![
-                    glyph(),
-                    GlyphInstance {
-                        rect: [28.0, 24.0, 8.0, 8.0],
-                        sdf_rect: [28.0, 24.0, 8.0, 8.0],
-                        fill: [0, 255, 0, 255],
-                        ..glyph()
-                    },
-                ],
-                layer_ends: Vec::new(),
-                shadow: Some(harmonigraph_scene::ShadowStyle {
-                    width: 0.5,
-                    depth: 1.0,
-                    kernel,
-                    ..Default::default()
-                }),
-                sheets: SheetUploads { font: Some(atlas()), marks: None },
-                sdf: Some(sdf_atlas()),
-                slide: SlideAxis::default(),
-                target_format: FORMAT,
-                pane_id: 0,
-                shadow_surface_id: Some(0),
-                pass_nr: 0,
-            };
-            let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
-            cb.layer_ends = vec![1, 2];
-            let layered = draw_callback(&device, &queue, &cb, SIZE, 1.0);
-            // x=26 is back ink within the front glyph's shadow, but outside
-            // its fill. Keeping both glyphs in one name must preserve it.
-            assert_eq!(pixel(&together, 26, 28), [255; 4]);
-            let shaded = pixel(&layered, 26, 28);
-            assert!(shaded[1] < 250 && shaded[2] < 250, "{kernel:?}: {shaded:?}");
-            // The overlapping foreground fill covers the back glyph.
-            assert_eq!(pixel(&layered, 30, 28), [0, 255, 0, 255]);
-        }
+        let mut cb = TextCallback {
+            point_scale: 1.0,
+            glyphs: vec![
+                glyph(),
+                GlyphInstance {
+                    rect: [28.0, 24.0, 8.0, 8.0],
+                    sdf_rect: [28.0, 24.0, 8.0, 8.0],
+                    fill: [0, 255, 0, 255],
+                    ..glyph()
+                },
+            ],
+            layer_ends: Vec::new(),
+            shadow: Some(harmonigraph_scene::ShadowStyle {
+                width: 0.5,
+                depth: 1.0,
+                ..Default::default()
+            }),
+            sheets: SheetUploads { font: Some(atlas()), marks: None },
+            sdf: Some(sdf_atlas()),
+            slide: SlideAxis::default(),
+            target_format: FORMAT,
+            pane_id: 0,
+            shadow_surface_id: Some(0),
+            pass_nr: 0,
+        };
+        let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        cb.layer_ends = vec![1, 2];
+        let layered = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        // x=26 is back ink within the front glyph's shadow, but outside
+        // its fill. Keeping both glyphs in one name must preserve it.
+        assert_eq!(pixel(&together, 26, 28), [255; 4]);
+        let shaded = pixel(&layered, 26, 28);
+        assert!(shaded[1] < 250 && shaded[2] < 250, "{shaded:?}");
+        // The overlapping foreground fill covers the back glyph.
+        assert_eq!(pixel(&layered, 30, 28), [0, 255, 0, 255]);
     }
 
     fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -2125,20 +2048,13 @@ pub(crate) mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let shadow = harmonigraph_scene::ShadowStyle {
-            width: 0.5,
-            depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..Default::default()
-        };
+        let shadow =
+            harmonigraph_scene::ShadowStyle { width: 0.5, depth: 1.0, ..Default::default() };
         let frame = draw(&device, &queue, glyph(), Some(shadow));
         assert_eq!(pixel(&frame, 28, 28), [255, 255, 255, 255], "the glyph itself");
         let outer = pixel(&frame, 22, 28);
         assert_eq!([outer[1], outer[2]], [0, 0], "the knockout's own hue, got {outer:?}");
-        assert!(
-            outer[3] > 0,
-            "the Distance shadow did not reach two points past the glyph: {outer:?}",
-        );
+        assert!(outer[3] > 0, "the shadow did not reach two points past the glyph: {outer:?}",);
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
     }
 
@@ -2146,38 +2062,36 @@ pub(crate) mod tests {
     /// including the coarse glyph field and downsampled Gaussian atlas.
     #[test]
     fn spectral_text_can_cast_beyond_the_old_width_limit_at_every_scale() {
-        use harmonigraph_scene::{ShadowKernel, ShadowStyle, SPECTRAL_SHADOW_MAX};
+        use harmonigraph_scene::{ShadowStyle, SPECTRAL_SHADOW_MAX};
 
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
-            for ppp in [1.0f32, 1.5, 2.0, 4.0] {
-                for width in [1.0, SPECTRAL_SHADOW_MAX] {
-                    let shadow = ShadowStyle { width, depth: 1.0, kernel, ..Default::default() };
-                    let (frame, size) = draw_from_scaled(
-                        &device,
-                        &queue,
-                        glyph(),
-                        Some(shadow),
-                        atlas(),
-                        SlideAxis::default(),
-                        ppp,
-                        1.0,
+        for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+            for width in [1.0, SPECTRAL_SHADOW_MAX] {
+                let shadow = ShadowStyle { width, depth: 1.0, ..Default::default() };
+                let (frame, size) = draw_from_scaled(
+                    &device,
+                    &queue,
+                    glyph(),
+                    Some(shadow),
+                    atlas(),
+                    SlideAxis::default(),
+                    ppp,
+                    1.0,
+                );
+                // The glyph starts at x=24. This is over nine points out,
+                // beyond the old six-point support.
+                let at = (((28.0 * ppp) as u32 * size[0] + (14.0 * ppp) as u32) * 4) as usize;
+                let pixel = &frame[at..at + 4];
+                if width == 1.0 {
+                    assert_eq!(pixel, [0; 4], "old at {ppp} ppp");
+                } else {
+                    assert!(
+                        pixel[0] > 2 && pixel[3] > 2,
+                        "wide at {ppp} ppp was capped: {pixel:?}"
                     );
-                    // The glyph starts at x=24. This is over nine points out,
-                    // beyond the old distance support (8 pt) and Gaussian (6 pt).
-                    let at = (((28.0 * ppp) as u32 * size[0] + (14.0 * ppp) as u32) * 4) as usize;
-                    let pixel = &frame[at..at + 4];
-                    if width == 1.0 {
-                        assert_eq!(pixel, [0; 4], "old {kernel:?} at {ppp} ppp");
-                    } else {
-                        assert!(
-                            pixel[0] > 2 && pixel[3] > 2,
-                            "wide {kernel:?} at {ppp} ppp was capped: {pixel:?}"
-                        );
-                        assert_eq!(&pixel[1..3], [0, 0], "the shadow's own hue");
-                    }
+                    assert_eq!(&pixel[1..3], [0, 0], "the shadow's own hue");
                 }
             }
         }
@@ -2185,39 +2099,31 @@ pub(crate) mod tests {
 
     #[test]
     fn enlarged_preview_text_shadows_extend_beyond_maximum_dial_reach() {
-        use harmonigraph_scene::{ShadowKernel, ShadowStyle, SPECTRAL_SHADOW_MAX};
+        use harmonigraph_scene::{ShadowStyle, SPECTRAL_SHADOW_MAX};
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
-            let style = ShadowStyle {
-                width: SPECTRAL_SHADOW_MAX,
-                spread: 0.2,
-                depth: 1.0,
-                kernel,
-                ..Default::default()
-            };
-            let frames = [1.0, 2.0].map(|point_scale| {
-                draw_from_scaled(
-                    &device,
-                    &queue,
-                    glyph(),
-                    Some(style),
-                    atlas(),
-                    SlideAxis::default(),
-                    1.0,
-                    point_scale,
-                )
-            });
-            // The glyph starts at x=24: x=1 lies outside either unscaled
-            // kernel, including Gaussian spread, but inside the enlarged one.
-            for (i, (frame, size)) in frames.iter().enumerate() {
-                let at = ((28 * size[0] + 1) * 4) as usize;
-                if i == 0 {
-                    assert_eq!(&frame[at..at + 4], [0; 4], "{kernel:?}");
-                } else {
-                    assert!(frame[at + 3] > 2, "enlarged {kernel:?} shadow was capped");
-                }
+        let style = ShadowStyle { width: SPECTRAL_SHADOW_MAX, spread: 0.2, depth: 1.0 };
+        let frames = [1.0, 2.0].map(|point_scale| {
+            draw_from_scaled(
+                &device,
+                &queue,
+                glyph(),
+                Some(style),
+                atlas(),
+                SlideAxis::default(),
+                1.0,
+                point_scale,
+            )
+        });
+        // The glyph starts at x=24: x=1 lies outside the unscaled shadow,
+        // spread included, but inside the enlarged one.
+        for (i, (frame, size)) in frames.iter().enumerate() {
+            let at = ((28 * size[0] + 1) * 4) as usize;
+            if i == 0 {
+                assert_eq!(&frame[at..at + 4], [0; 4], "the unscaled shadow reached x=1");
+            } else {
+                assert!(frame[at + 3] > 2, "enlarged shadow was capped");
             }
         }
     }
@@ -2618,64 +2524,48 @@ pub(crate) mod tests {
     /// atlas starts with, so only a texture of the grown size holds it.
     const GROWN_PATCH_TOP: usize = 40;
 
-    /// Both explicit kernels derive a visible knockout from the same glyph
-    /// SDF and leave the glyph fill on top of it.
+    /// The spectral shadow derives a visible knockout from the glyph SDF and
+    /// leaves the glyph fill on top of it.
     #[test]
-    fn both_spectral_text_kernels_draw_from_the_glyph_sdf() {
+    fn spectral_text_shadow_draws_from_the_glyph_sdf() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for kernel in
-            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-        {
-            for ppp in [1.0f32, 1.5, 2.0, 4.0] {
-                let style = harmonigraph_scene::ShadowStyle {
-                    width: 1.0,
-                    depth: 1.0,
-                    kernel,
-                    ..Default::default()
-                };
-                let (frame, size) = draw_from_scaled(
-                    &device,
-                    &queue,
-                    glyph(),
-                    Some(style),
-                    atlas(),
-                    SlideAxis::default(),
-                    ppp,
-                    1.0,
-                );
-                let at = |x: f32, y: f32| {
-                    let x = (x * ppp).floor() as u32;
-                    let y = (y * ppp).floor() as u32;
-                    let i = ((y * size[0] + x) * 4) as usize;
-                    [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
-                };
-                assert_eq!(at(28.0, 28.0), [255, 255, 255, 255], "{kernel:?} fill at {ppp}");
-                let outer = at(22.0, 28.0);
-                assert!(
-                    outer[3] > 0 && outer[0] > outer[1] && outer[0] > outer[2],
-                    "{kernel:?} never drew the red shadow two points outside the glyph at {ppp} \
-                     ppp: {outer:?}",
-                );
-                assert_eq!(
-                    at(4.0, 4.0),
-                    [0, 0, 0, 0],
-                    "{kernel:?} escaped its atlas cell at {ppp} ppp",
-                );
-            }
+        for ppp in [1.0f32, 1.5, 2.0, 4.0] {
+            let style =
+                harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
+            let (frame, size) = draw_from_scaled(
+                &device,
+                &queue,
+                glyph(),
+                Some(style),
+                atlas(),
+                SlideAxis::default(),
+                ppp,
+                1.0,
+            );
+            let at = |x: f32, y: f32| {
+                let x = (x * ppp).floor() as u32;
+                let y = (y * ppp).floor() as u32;
+                let i = ((y * size[0] + x) * 4) as usize;
+                [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+            };
+            assert_eq!(at(28.0, 28.0), [255, 255, 255, 255], "fill at {ppp}");
+            let outer = at(22.0, 28.0);
+            assert!(
+                outer[3] > 0 && outer[0] > outer[1] && outer[0] > outer[2],
+                "never drew the red shadow two points outside the glyph at {ppp} \
+                 ppp: {outer:?}",
+            );
+            assert_eq!(at(4.0, 4.0), [0, 0, 0, 0], "escaped its atlas cell at {ppp} ppp",);
         }
     }
 
     #[test]
     fn gaussian_spread_expands_spectral_text_shadow_without_changing_fill() {
         let Some((device, queue)) = headless_device() else { return };
-        let style = harmonigraph_scene::ShadowStyle {
-            width: 2.0,
-            depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
-            ..Default::default()
-        };
+        let style =
+            harmonigraph_scene::ShadowStyle { width: 2.0, depth: 1.0, ..Default::default() };
         let draw = |style| {
             draw_from_scaled(
                 &device,
@@ -2696,11 +2586,6 @@ pub(crate) mod tests {
             pixel(&grown, 11, 28)[3] > pixel(&base, 11, 28)[3],
             "expanded glyph footprint was clipped"
         );
-        let contour = harmonigraph_scene::ShadowStyle {
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..style
-        };
-        assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
     /// A spectral shadow is worth its color's alpha, which is the label's
@@ -2718,14 +2603,10 @@ pub(crate) mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let shadow = harmonigraph_scene::ShadowStyle {
-            width: 0.5,
-            depth: 1.0,
-            kernel: harmonigraph_scene::ShadowKernel::Distance,
-            ..Default::default()
-        };
+        let shadow =
+            harmonigraph_scene::ShadowStyle { width: 0.5, depth: 1.0, ..Default::default() };
         // The shadow's own pass, with no fill over it: a pixel beside the
-        // letter reads only the Distance profile.
+        // letter reads only the shadow.
         let shadow_at = |strength: f32| {
             let a = (strength * 255.0).round() as u8;
             let faded = GlyphInstance { fill: [0, 0, 0, 0], rim: [a, 0, 0, a], ..glyph() };

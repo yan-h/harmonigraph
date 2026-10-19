@@ -284,28 +284,16 @@ pub(crate) fn shadow(
     max: f32,
     lattice: bool,
 ) {
-    use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
     let plot = Plot::without_label(ui, 3);
     let (unit, suffix) =
         if lattice { (100.0, "%") } else { (harmonigraph_render::SPECTRAL_WIDTH_POINTS, " pt") };
     plot.fields(ui, |ui| {
         value_bar(ui, &mut style.width, 0.0..=max, ["Shadow width", "Width"], unit, suffix);
         value_bar(ui, &mut style.depth, 0.0..=1.0, ["Shadow darkness", "Darkness"], 100.0, "%");
-        if style.kernel.is_distance() {
-            value_bar(
-                ui,
-                &mut style.falloff,
-                SHADOW_FALLOFF_MIN..=SHADOW_FALLOFF_MAX,
-                ["Shadow falloff", "Falloff"],
-                1.0,
-                "",
-            );
-        } else {
-            value_bar(ui, &mut style.spread, 0.0..=1.0, ["Shadow spread", "Spread"], 100.0, "%");
-        }
+        value_bar(ui, &mut style.spread, 0.0..=1.0, ["Shadow spread", "Spread"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
-        "Shadow around a sample shape. Adjust Width, Darkness, and Falloff or Spread to preview the result. The sample is scaled to fit; the shadow on each shape depends on its size and outline.",
+        "Shadow around a sample shape. Adjust Width, Darkness, and Spread to preview the result. The sample is scaled to fit; the shadow on each shape depends on its size and outline.",
     );
     shadow_preview(ui, plot.rect, style.clamped(max), max, lattice);
 }
@@ -350,15 +338,8 @@ fn shadow_preview(
                     egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32),
                     egui::lerp(rect.y_range(), y as f32 / ROWS as f32),
                 );
-                let coverage = if style.kernel.is_distance() {
-                    harmonigraph_scene::standoff_level(
-                        style.falloff,
-                        caster.distance_to_pos(p) / width,
-                    )
-                } else {
-                    // The renderer's GAUSSIAN_GAIN in common.wgsl.
-                    (2.5 * xs[x as usize] * ys[y as usize]).min(1.0)
-                };
+                // The renderer's GAUSSIAN_GAIN in common.wgsl.
+                let coverage = (2.5 * xs[x as usize] * ys[y as usize]).min(1.0);
                 let darkness = shadow_darkness(style.depth, coverage, lattice);
                 mesh.colored_vertex(
                     p,

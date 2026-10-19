@@ -257,16 +257,11 @@ fn persist_round_trips_camera_and_view() {
     {
         group.width = 0.1 + index as f32 * 0.1;
         group.depth = 0.2 + index as f32 * 0.1;
-        // Off the fresh 1.0 and different per group, on the rule the head of
-        // this test states: `groups()` compares whole styles, so a falloff left
+        // Off the default and different per group, on the rule the head of
+        // this test states: `groups()` compares whole styles, so a spread left
         // at its default would round-trip by matching the default rather than
         // by being carried.
-        group.falloff = 0.8 + index as f32 * 0.4;
-        group.kernel = if index % 2 == 0 {
-            harmonigraph_scene::ShadowKernel::Distance
-        } else {
-            harmonigraph_scene::ShadowKernel::Gaussian
-        };
+        group.spread = 0.1 + index as f32 * 0.2;
     }
     // Which nodes are named, and the fresh view keeps the past -- so either
     // other mode is a value a project has to keep, and the one a fresh view
@@ -1520,19 +1515,12 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
 /// field-level one is deliberate rather than residual.
 #[test]
 fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
-    use harmonigraph_scene::{ShadowKernel, ShadowStyle};
+    use harmonigraph_scene::ShadowStyle;
 
     let bare = ShadowStyle::default();
     // Every held field differs from the bare fallback. Width and depth also
-    // differ from the group defaults, distinguishing the two fallback sources;
-    // falloff deliberately shares the same early decay in both defaults.
-    let held = ShadowStyle {
-        kernel: ShadowKernel::Gaussian,
-        width: 0.55,
-        spread: 0.17,
-        depth: 0.66,
-        falloff: 1.2,
-    };
+    // differ from the group defaults, distinguishing the two fallback sources.
+    let held = ShadowStyle { width: 0.55, spread: 0.17, depth: 0.66 };
 
     let mut state = fresh();
     // A witness outside the section, so "the blob survived" is distinguishable
@@ -1543,15 +1531,13 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
 
     let whole = ron::to_string(&held).expect("a shadow style serializes");
     let pairs = top_level_pairs(&whole);
-    assert_eq!(pairs.len(), 5, "the probe must see the whole style, got {pairs:?}");
+    assert_eq!(pairs.len(), 3, "the probe must see the whole style, got {pairs:?}");
 
     for (key, _) in &pairs {
         let want = match key.as_str() {
             "width" => ShadowStyle { width: bare.width, ..held },
             "spread" => ShadowStyle { spread: bare.spread, ..held },
             "depth" => ShadowStyle { depth: bare.depth, ..held },
-            "falloff" => ShadowStyle { falloff: bare.falloff, ..held },
-            "kernel" => ShadowStyle { kernel: bare.kernel, ..held },
             other => panic!("a shadow style grew a {other:?} field this sweep does not name"),
         };
         assert_ne!(want, held, "dropping {key:?} must exercise a fallback");
@@ -1577,6 +1563,31 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
              or cost the fields beside it",
         );
     }
+}
+
+/// A project saved while Shadow shape was a choice still carries each group's
+/// `kernel` and `falloff`. Nothing reads them now, and what must not happen is
+/// the group failing to parse: `kernel:Distance` is a variant that no longer
+/// exists anywhere, so it is only ignorable because the key is.
+#[test]
+fn a_shadow_group_carrying_the_retired_kernel_and_falloff_loads_at_its_other_fields() {
+    use harmonigraph_scene::ShadowStyle;
+
+    let held = ShadowStyle { width: 0.55, spread: 0.17, depth: 0.66 };
+    let mut state = fresh();
+    state.picture.appearance.camera.yaw = 1.23;
+    state.picture.appearance.view.shadow.lattice_geometry = held;
+    let saved = state.save_persist();
+
+    let whole = ron::to_string(&held).expect("a shadow style serializes");
+    let old = whole.replacen('(', "(kernel:Distance,falloff:1.2,", 1);
+    let without = replace_pair(&saved, "lattice_geometry", &whole, &old);
+    assert_ne!(without, saved, "the group must be in the blob to rewrite");
+
+    let mut restored = fresh();
+    assert!(restored.load_persist(&without), "the retired keys sank the whole document");
+    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+    assert_eq!(restored.picture.appearance.view.shadow.lattice_geometry, held);
 }
 
 /// A missing shape inside the glow curve costs that field alone. The curve is

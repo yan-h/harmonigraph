@@ -48,166 +48,160 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
         })
     };
 
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
-    {
-        for lit in [false, true] {
-            let mut scene = a_node_behind_another(lit);
-            // Full Darkness, for the exposed glow it darkens below; the
-            // hiding itself is the Hide behind bar's alone.
-            scene.view.shadow = one_shadow(1.0, 1.0, kernel);
-            scene.view.note_bloom = 0.0;
-            scene.view.glow_reach = 0.0;
+    for lit in [false, true] {
+        let mut scene = a_node_behind_another(lit);
+        // Full Darkness, for the exposed glow it darkens below; the
+        // hiding itself is the Hide behind bar's alone.
+        scene.view.shadow = one_shadow(1.0, 1.0);
+        scene.view.note_bloom = 0.0;
+        scene.view.glow_reach = 0.0;
 
-            // Actual rasterized receiver coverage, not an assumed disc: the
-            // fixture needs rear ink inside the front shadow's exposed skirt.
-            // Keep its shadow width: that also sizes the rasterized quad.
-            let front = scene.nodes.pop().unwrap();
-            let ink = shot(&scene, 0.0);
-            scene.nodes.push(front);
-            for glow in [0.0, 2.0] {
-                scene.view.glow_reach = glow;
-                let before = shot(&scene, 0.0);
-                let after = shot(&scene, 1.0);
-                let mut changed_ink = 0;
-                let mut reached_ink = 0;
-                let mut mostly_hidden_ink = 0;
-                let mut unchanged_ground = 0;
-                let mut illuminated_ground = 0;
-                for ((old, new), mask) in
-                    before.chunks_exact(4).zip(after.chunks_exact(4)).zip(ink.chunks_exact(4))
-                {
-                    if mask[..3] == [0, 0, 0] {
-                        assert_eq!(old, new, "{kernel:?}, lit={lit}, glow={glow}: background or foreground ink moved");
-                        unchanged_ground += 1;
-                        if brightness(old) > 48 {
-                            illuminated_ground += 1;
-                        }
-                    } else if old != new {
-                        reached_ink += 1;
+        // Actual rasterized receiver coverage, not an assumed disc: the
+        // fixture needs rear ink inside the front shadow's exposed skirt.
+        // Keep its shadow width: that also sizes the rasterized quad.
+        let front = scene.nodes.pop().unwrap();
+        let ink = shot(&scene, 0.0);
+        scene.nodes.push(front);
+        for glow in [0.0, 2.0] {
+            scene.view.glow_reach = glow;
+            let before = shot(&scene, 0.0);
+            let after = shot(&scene, 1.0);
+            let mut changed_ink = 0;
+            let mut reached_ink = 0;
+            let mut mostly_hidden_ink = 0;
+            let mut unchanged_ground = 0;
+            let mut illuminated_ground = 0;
+            for ((old, new), mask) in
+                before.chunks_exact(4).zip(after.chunks_exact(4)).zip(ink.chunks_exact(4))
+            {
+                if mask[..3] == [0, 0, 0] {
+                    assert_eq!(
+                        old, new,
+                        "lit={lit}, glow={glow}: background or foreground ink moved"
+                    );
+                    unchanged_ground += 1;
+                    if brightness(old) > 48 {
+                        illuminated_ground += 1;
                     }
-                    if mask[..3] != [0, 0, 0] && brightness(old) - brightness(new) > 6 {
-                        changed_ink += 1;
-                        if brightness(old) > 32 && brightness(new) * 2 < brightness(old) {
-                            mostly_hidden_ink += 1;
-                        }
+                } else if old != new {
+                    reached_ink += 1;
+                }
+                if mask[..3] != [0, 0, 0] && brightness(old) - brightness(new) > 6 {
+                    changed_ink += 1;
+                    if brightness(old) > 32 && brightness(new) * 2 < brightness(old) {
+                        mostly_hidden_ink += 1;
                     }
-                }
-                // A Gaussian's occlusion spends its field through the
-                // full-depth transmittance, which hides far more rear ink than
-                // its linear coverage would. A distance spends its coverage
-                // linearly, so there the hiding is lighter: it must still be
-                // reached.
-                if kernel == harmonigraph_scene::ShadowKernel::Gaussian {
-                    assert!(
-                        changed_ink > 50,
-                        "{kernel:?}, lit={lit}, glow={glow}: only {changed_ink} rear pixels faded"
-                    );
-                }
-                assert!(
-                    reached_ink > 50,
-                    "{kernel:?}, lit={lit}, glow={glow}: occlusion reached only {reached_ink} rear pixels"
-                );
-                if kernel == harmonigraph_scene::ShadowKernel::Gaussian && lit && glow == 0.0 {
-                    assert!(
-                        mostly_hidden_ink > 50,
-                        "a wide Gaussian hid most of only {mostly_hidden_ink} rear-ink pixels"
-                    );
-                }
-                assert!(unchanged_ground > 10_000, "the fixture must contain exposed background");
-                if glow > 0.0 {
-                    assert!(
-                        illuminated_ground > 1_000,
-                        "the unchanged background must include actual glow"
-                    );
                 }
             }
-            // With no glow and a black clear, ordinary background shadows
-            // have no RGB to darken, and the ordinary shadow never darkens the
-            // ink of a node behind its caster (`node_split`) — so with the
-            // hiding at full strength, Darkness moves no rear ink at all. It
-            // followed Darkness after #1288; Hide behind is its own bar now.
-            // Light against deep rather than from 0, where the quads stop
-            // growing for a shadow and clip a few codes of faint ink at
-            // their edge whatever hides it; `a_node_at_no_darkness_still_hides_the_node_behind`
-            // reads 0.
-            scene.view.glow_reach = 0.0;
-            scene.view.note_bloom = 0.0;
-            let mut at = |depth: f32| {
-                scene.view.shadow.lattice_geometry.depth = depth;
-                shot(&scene, 1.0)
-            };
-            let (none, full) = (at(0.18), at(0.8));
-            let moved = none
-                .chunks_exact(4)
-                .zip(full.chunks_exact(4))
-                .zip(ink.chunks_exact(4))
-                .filter(|((a, b), mask)| {
-                    mask[..3] != [0, 0, 0] && (0..3).any(|k| a[k].abs_diff(b[k]) > 2)
-                })
-                .count();
-            assert_eq!(
-                moved, 0,
-                "{kernel:?}, lit={lit}: Darkness moved {moved} rear-ink pixels, so the hiding \
-                 still follows it"
-            );
-            // A front node at full Hide behind, beside a shadow as light as
-            // the fresh look's, hides much more of the rear ink than the same
-            // field at 0.28 — which is exactly what #1288's coupling left a
-            // 0.28 Darkness hiding. Through bloom too, which is not linear:
-            // more hides more and never less.
-            scene.view.shadow.lattice_geometry.depth = 0.28;
-            for bloom in [0.0, 1.0] {
-                scene.view.note_bloom = bloom;
-                let (coupled, whole) = (shot(&scene, 0.28), shot(&scene, 1.0));
-                let pairs = || coupled.chunks_exact(4).zip(whole.chunks_exact(4));
-                let hidden_more =
-                    pairs().filter(|(c, w)| brightness(c) - brightness(w) > 6).count();
-                let brighter = pairs().filter(|(c, w)| brightness(w) > brightness(c) + 1).count();
-                assert!(
-                    hidden_more > 50,
-                    "{kernel:?}, lit={lit}, bloom={bloom}: full Hide behind hid only {hidden_more} \
-                     more rear-ink pixels than 0.28"
-                );
-                assert_eq!(
-                    brighter, 0,
-                    "{kernel:?}, lit={lit}, bloom={bloom}: more Hide behind left node ink brighter"
-                );
-            }
-            scene.view.shadow.lattice_geometry.depth = 0.8;
-            // The same depth adjustment must still darken exposed glow,
-            // including the cloud texture in the pooled light.
-            scene.view.atmosphere.texture_depth = 0.85;
-            scene.view.note_bloom = 0.0;
-            scene.view.glow_reach = 2.0;
-            let deep_glow = shot(&scene, 1.0);
-            scene.view.shadow.lattice_geometry.depth = 0.18;
-            let faint_glow = shot(&scene, 1.0);
-            let changed_glow = faint_glow
-                .chunks_exact(4)
-                .zip(deep_glow.chunks_exact(4))
-                .zip(ink.chunks_exact(4))
-                .filter(|((faint, deep), mask)| {
-                    mask[..3] == [0, 0, 0] && brightness(faint) - brightness(deep) > 6
-                })
-                .count();
+            // The occlusion spends its field through the full-depth
+            // transmittance, which hides far more rear ink than its linear
+            // coverage would.
             assert!(
-                changed_glow > 50,
-                "{kernel:?}, lit={lit}: shadow darkness reached only {changed_glow} glow pixels"
+                changed_ink > 50,
+                "lit={lit}, glow={glow}: only {changed_ink} rear pixels faded"
             );
-
-            // The bloom path must also use the reduced coverage, and the
-            // final surviving foreground node must never occlude itself.
-            scene.view.note_bloom = 1.0;
-            assert!(differing_pixels(&shot(&scene, 0.0), &shot(&scene, 1.0)) > 50);
-            scene.nodes.remove(0);
-            rows_per_node(&mut scene);
+            assert!(
+                reached_ink > 50,
+                "lit={lit}, glow={glow}: occlusion reached only {reached_ink} rear pixels"
+            );
+            if lit && glow == 0.0 {
+                assert!(
+                    mostly_hidden_ink > 50,
+                    "a wide Gaussian hid most of only {mostly_hidden_ink} rear-ink pixels"
+                );
+            }
+            assert!(unchanged_ground > 10_000, "the fixture must contain exposed background");
+            if glow > 0.0 {
+                assert!(
+                    illuminated_ground > 1_000,
+                    "the unchanged background must include actual glow"
+                );
+            }
+        }
+        // With no glow and a black clear, ordinary background shadows
+        // have no RGB to darken, and the ordinary shadow never darkens the
+        // ink of a node behind its caster (`node_split`) — so with the
+        // hiding at full strength, Darkness moves no rear ink at all. It
+        // followed Darkness after #1288; Hide behind is its own bar now.
+        // Light against deep rather than from 0, where the quads stop
+        // growing for a shadow and clip a few codes of faint ink at
+        // their edge whatever hides it; `a_node_at_no_darkness_still_hides_the_node_behind`
+        // reads 0.
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        let mut at = |depth: f32| {
+            scene.view.shadow.lattice_geometry.depth = depth;
+            shot(&scene, 1.0)
+        };
+        let (none, full) = (at(0.18), at(0.8));
+        let moved = none
+            .chunks_exact(4)
+            .zip(full.chunks_exact(4))
+            .zip(ink.chunks_exact(4))
+            .filter(|((a, b), mask)| {
+                mask[..3] != [0, 0, 0] && (0..3).any(|k| a[k].abs_diff(b[k]) > 2)
+            })
+            .count();
+        assert_eq!(
+            moved, 0,
+            "lit={lit}: Darkness moved {moved} rear-ink pixels, so the hiding \
+             still follows it"
+        );
+        // A front node at full Hide behind, beside a shadow as light as
+        // the fresh look's, hides much more of the rear ink than the same
+        // field at 0.28 — which is exactly what #1288's coupling left a
+        // 0.28 Darkness hiding. Through bloom too, which is not linear:
+        // more hides more and never less.
+        scene.view.shadow.lattice_geometry.depth = 0.28;
+        for bloom in [0.0, 1.0] {
+            scene.view.note_bloom = bloom;
+            let (coupled, whole) = (shot(&scene, 0.28), shot(&scene, 1.0));
+            let pairs = || coupled.chunks_exact(4).zip(whole.chunks_exact(4));
+            let hidden_more = pairs().filter(|(c, w)| brightness(c) - brightness(w) > 6).count();
+            let brighter = pairs().filter(|(c, w)| brightness(w) > brightness(c) + 1).count();
+            assert!(
+                hidden_more > 50,
+                "lit={lit}, bloom={bloom}: full Hide behind hid only {hidden_more} \
+                 more rear-ink pixels than 0.28"
+            );
             assert_eq!(
-                shot(&scene, 0.0),
-                shot(&scene, 1.0),
-                "a lone node must remain unchanged after a larger frame"
+                brighter, 0,
+                "lit={lit}, bloom={bloom}: more Hide behind left node ink brighter"
             );
         }
+        scene.view.shadow.lattice_geometry.depth = 0.8;
+        // The same depth adjustment must still darken exposed glow,
+        // including the cloud texture in the pooled light.
+        scene.view.atmosphere.texture_depth = 0.85;
+        scene.view.note_bloom = 0.0;
+        scene.view.glow_reach = 2.0;
+        let deep_glow = shot(&scene, 1.0);
+        scene.view.shadow.lattice_geometry.depth = 0.18;
+        let faint_glow = shot(&scene, 1.0);
+        let changed_glow = faint_glow
+            .chunks_exact(4)
+            .zip(deep_glow.chunks_exact(4))
+            .zip(ink.chunks_exact(4))
+            .filter(|((faint, deep), mask)| {
+                mask[..3] == [0, 0, 0] && brightness(faint) - brightness(deep) > 6
+            })
+            .count();
+        assert!(
+            changed_glow > 50,
+            "lit={lit}: shadow darkness reached only {changed_glow} glow pixels"
+        );
+
+        // The bloom path must also use the reduced coverage, and the
+        // final surviving foreground node must never occlude itself.
+        scene.view.note_bloom = 1.0;
+        assert!(differing_pixels(&shot(&scene, 0.0), &shot(&scene, 1.0)) > 50);
+        scene.nodes.remove(0);
+        rows_per_node(&mut scene);
+        assert_eq!(
+            shot(&scene, 0.0),
+            shot(&scene, 1.0),
+            "a lone node must remain unchanged after a larger frame"
+        );
     }
 }
 
@@ -225,23 +219,19 @@ fn a_faint_hide_behind_hides_next_to_none_of_the_node_behind() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let mut shot = |hide_behind: f32| {
-            let mut scene = a_node_behind_another(true);
-            scene.view.shadow = one_shadow(1.0, 1.0, kernel);
-            scene.view.hide_behind = hide_behind;
-            scene.view.glow_reach = 0.0;
-            scene.view.note_bloom = 0.0;
-            shooter.draw(&scene, LatticeLabels::default())
-        };
-        let off = shot(0.0);
-        let reached = differing_pixels(&shot(1.0), &off);
-        assert!(reached > 50, "{kernel:?}: the whole bar moved only {reached} rear-ink pixels");
-        let worst = shot(FAINTEST).iter().zip(&off).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-        assert!(worst <= 3, "{kernel:?}: a 1% Hide behind moved a channel {worst} codes from 0");
-    }
+    let mut shot = |hide_behind: f32| {
+        let mut scene = a_node_behind_another(true);
+        scene.view.shadow = one_shadow(1.0, 1.0);
+        scene.view.hide_behind = hide_behind;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        shooter.draw(&scene, LatticeLabels::default())
+    };
+    let off = shot(0.0);
+    let reached = differing_pixels(&shot(1.0), &off);
+    assert!(reached > 50, "the whole bar moved only {reached} rear-ink pixels");
+    let worst = shot(FAINTEST).iter().zip(&off).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 3, "a 1% Hide behind moved a channel {worst} codes from 0");
 }
 
 /// A node with no visible shadow still hides the node behind it.
@@ -255,44 +245,34 @@ fn a_node_at_no_darkness_still_hides_the_node_behind() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let mut shot = |width: f32, hide_behind: f32, front: bool| {
-            let mut scene = a_node_behind_another(true);
-            scene.view.shadow = one_shadow(width, 0.0, kernel);
-            scene.view.hide_behind = hide_behind;
-            scene.view.glow_reach = 0.0;
-            scene.view.note_bloom = 0.0;
-            if !front {
-                scene.nodes.pop();
-            }
-            shooter.draw(&scene, LatticeLabels::default())
-        };
-        let ink = shot(1.0, 1.0, false);
-        let (hidden, shown, unfielded) =
-            (shot(1.0, 1.0, true), shot(1.0, 0.0, true), shot(0.0, 1.0, true));
-        let mut faded = 0;
-        for (((h, s), u), mask) in hidden
-            .chunks_exact(4)
-            .zip(shown.chunks_exact(4))
-            .zip(unfielded.chunks_exact(4))
-            .zip(ink.chunks_exact(4))
-        {
-            if mask[..3] == [0, 0, 0] {
-                assert_eq!(
-                    h, u,
-                    "{kernel:?}: a shadow at Darkness 0 moved a pixel off the rear ink"
-                );
-            } else if brightness(s) - brightness(h) > 6 {
-                faded += 1;
-            }
+    let mut shot = |width: f32, hide_behind: f32, front: bool| {
+        let mut scene = a_node_behind_another(true);
+        scene.view.shadow = one_shadow(width, 0.0);
+        scene.view.hide_behind = hide_behind;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        if !front {
+            scene.nodes.pop();
         }
-        assert!(
-            faded > 50,
-            "{kernel:?}: at Darkness 0 the front node hid only {faded} rear-ink pixels"
-        );
+        shooter.draw(&scene, LatticeLabels::default())
+    };
+    let ink = shot(1.0, 1.0, false);
+    let (hidden, shown, unfielded) =
+        (shot(1.0, 1.0, true), shot(1.0, 0.0, true), shot(0.0, 1.0, true));
+    let mut faded = 0;
+    for (((h, s), u), mask) in hidden
+        .chunks_exact(4)
+        .zip(shown.chunks_exact(4))
+        .zip(unfielded.chunks_exact(4))
+        .zip(ink.chunks_exact(4))
+    {
+        if mask[..3] == [0, 0, 0] {
+            assert_eq!(h, u, "a shadow at Darkness 0 moved a pixel off the rear ink");
+        } else if brightness(s) - brightness(h) > 6 {
+            faded += 1;
+        }
     }
+    assert!(faded > 50, "at Darkness 0 the front node hid only {faded} rear-ink pixels");
 }
 
 /// The rear ring of [`a_node_behind_another`] alone, lit, with nothing else in
@@ -363,54 +343,50 @@ fn a_ring_in_front_hides_a_cross_behind_it() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let mut shot = |ring: bool, hide_behind: f32| {
-            let mut scene = a_lone_ring();
-            scene.nodes[0].world_pos.z = 1.0;
-            let place = a_bare_place(&mut scene, -1.0);
-            let top = band_top(&scene, 0);
-            a_cross_on(&mut scene, place, top);
-            if !ring {
-                scene.nodes[0].activation = 0.0;
-                scene.nodes[0].octaves.fill(0.0);
-            }
-            scene.view.shadow = one_shadow(1.0, 0.0, kernel);
-            scene.view.hide_behind = hide_behind;
-            scene.view.glow_reach = 0.0;
-            scene.view.note_bloom = 0.0;
-            shooter.draw(&scene, LatticeLabels::default())
-        };
-        let alone = shot(false, 1.0);
-        let cross = inked(&alone);
-        let (shown, hidden) = (shot(true, 0.0), shot(true, 1.0));
-        let pairs = || shown.chunks_exact(4).zip(hidden.chunks_exact(4)).enumerate();
-        let faded =
-            pairs().filter(|(i, (s, h))| cross[*i] && brightness(s) - brightness(h) > 6).count();
-        let moved = pairs().filter(|(i, (s, h))| !cross[*i] && s != h).count();
-        assert!(faded > 30, "{kernel:?}: the ring hid only {faded} pixels of the cross behind it");
-        assert_eq!(moved, 0, "{kernel:?}: hiding the cross moved {moved} pixels off it");
+    let mut shot = |ring: bool, hide_behind: f32| {
+        let mut scene = a_lone_ring();
+        scene.nodes[0].world_pos.z = 1.0;
+        let place = a_bare_place(&mut scene, -1.0);
+        let top = band_top(&scene, 0);
+        a_cross_on(&mut scene, place, top);
+        if !ring {
+            scene.nodes[0].activation = 0.0;
+            scene.nodes[0].octaves.fill(0.0);
+        }
+        scene.view.shadow = one_shadow(1.0, 0.0);
+        scene.view.hide_behind = hide_behind;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        shooter.draw(&scene, LatticeLabels::default())
+    };
+    let alone = shot(false, 1.0);
+    let cross = inked(&alone);
+    let (shown, hidden) = (shot(true, 0.0), shot(true, 1.0));
+    let pairs = || shown.chunks_exact(4).zip(hidden.chunks_exact(4)).enumerate();
+    let faded =
+        pairs().filter(|(i, (s, h))| cross[*i] && brightness(s) - brightness(h) > 6).count();
+    let moved = pairs().filter(|(i, (s, h))| !cross[*i] && s != h).count();
+    assert!(faded > 30, "the ring hid only {faded} pixels of the cross behind it");
+    assert_eq!(moved, 0, "hiding the cross moved {moved} pixels off it");
 
-        let worst = shot(true, 0.01).iter().zip(&shown).map(|(a, b)| a.abs_diff(*b)).max();
-        assert!(worst <= Some(3), "{kernel:?}: a 1% Hide behind moved the cross {worst:?} codes");
-        let ring = inked(&{
-            let mut scene = a_lone_ring();
-            scene.nodes[0].world_pos.z = 1.0;
-            scene.view.shadow = one_shadow(1.0, 0.0, kernel);
-            scene.view.glow_reach = 0.0;
-            scene.view.note_bloom = 0.0;
-            shooter.draw(&scene, LatticeLabels::default())
-        });
-        let kept = shown
-            .chunks_exact(4)
-            .zip(alone.chunks_exact(4))
-            .enumerate()
-            .filter(|(i, _)| cross[*i] && !ring[*i])
-            .flat_map(|(_, (a, b))| (0..3).map(move |k| a[k].abs_diff(b[k])))
-            .max();
-        assert!(kept <= Some(1), "{kernel:?}: at 0 the ring hid the cross by {kept:?} codes");
-    }
+    let worst = shot(true, 0.01).iter().zip(&shown).map(|(a, b)| a.abs_diff(*b)).max();
+    assert!(worst <= Some(3), "a 1% Hide behind moved the cross {worst:?} codes");
+    let ring = inked(&{
+        let mut scene = a_lone_ring();
+        scene.nodes[0].world_pos.z = 1.0;
+        scene.view.shadow = one_shadow(1.0, 0.0);
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        shooter.draw(&scene, LatticeLabels::default())
+    });
+    let kept = shown
+        .chunks_exact(4)
+        .zip(alone.chunks_exact(4))
+        .enumerate()
+        .filter(|(i, _)| cross[*i] && !ring[*i])
+        .flat_map(|(_, (a, b))| (0..3).map(move |k| a[k].abs_diff(b[k])))
+        .max();
+    assert!(kept <= Some(1), "at 0 the ring hid the cross by {kept:?} codes");
 }
 
 /// A node never hides the cross it stands on or its own name: a lit node with
@@ -423,28 +399,24 @@ fn a_node_never_hides_its_own_cross_or_name() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        let mut moved = |own: bool| {
-            let mut shot = |hide_behind: f32| {
-                let mut scene = a_lone_ring();
-                let behind = a_bare_place(&mut scene, -2.0);
-                let place = if own { 0 } else { behind };
-                let top = band_top(&scene, 0);
-                a_cross_on(&mut scene, place, top);
-                scene.view.shadow = one_shadow(1.0, 0.5, kernel);
-                scene.view.hide_behind = hide_behind;
-                scene.view.glow_reach = 0.0;
-                scene.view.note_bloom = 0.0;
-                // Clear of the crossing, still over the band.
-                let name = a_name_on(&scene, place, top + glam::vec3(0.6, 0.0, 0.0), 6.0);
-                shooter.draw(&scene, name)
-            };
-            differing_pixels(&shot(0.0), &shot(1.0))
+    let mut moved = |own: bool| {
+        let mut shot = |hide_behind: f32| {
+            let mut scene = a_lone_ring();
+            let behind = a_bare_place(&mut scene, -2.0);
+            let place = if own { 0 } else { behind };
+            let top = band_top(&scene, 0);
+            a_cross_on(&mut scene, place, top);
+            scene.view.shadow = one_shadow(1.0, 0.5);
+            scene.view.hide_behind = hide_behind;
+            scene.view.glow_reach = 0.0;
+            scene.view.note_bloom = 0.0;
+            // Clear of the crossing, still over the band.
+            let name = a_name_on(&scene, place, top + glam::vec3(0.6, 0.0, 0.0), 6.0);
+            shooter.draw(&scene, name)
         };
-        let reached = moved(false);
-        assert!(reached > 50, "{kernel:?}: from behind they were hidden by only {reached} pixels");
-        assert_eq!(moved(true), 0, "{kernel:?}: a node hid part of its own cross or name");
-    }
+        differing_pixels(&shot(0.0), &shot(1.0))
+    };
+    let reached = moved(false);
+    assert!(reached > 50, "from behind they were hidden by only {reached} pixels");
+    assert_eq!(moved(true), 0, "a node hid part of its own cross or name");
 }

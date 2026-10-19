@@ -71,7 +71,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     a.view.center_sevens = n;
     a.view.octave_count = if matches!(edge, Edge::Low) { 0 } else { u32::MAX };
     for shadow in a.view.shadow.groups_mut() {
-        poison!(shadow; width, spread, depth, falloff);
+        poison!(shadow; width, spread, depth);
     }
     // `distance` is the zoom and has no bar of its own — navigation rather
     // than a dial — but it crosses this same door and `Camera::sanitize`
@@ -520,11 +520,7 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
     }
     if scenario.pane == Tab::LatticeSettings || scenario.pane == Tab::AnalyzerSettings {
         for _ in 0..2 {
-            labels.extend([
-                "Shadow width",
-                "Shadow darkness",
-                if scenario.enabled { "Shadow falloff" } else { "Shadow spread" },
-            ]);
+            labels.extend(["Shadow width", "Shadow darkness", "Shadow spread"]);
         }
     }
     let stars = (scenario.pane == Tab::LatticeSettings

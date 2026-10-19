@@ -2,162 +2,125 @@
 use super::fixtures::*;
 use harmonigraph_scene::{AnimationOrder, NoteAnimationConfig};
 
+/// Every layer's arrival casts a measurable shadow, and a mark's shadow rises
+/// over the held body it extends.
+///
+/// Mass only: unless the frames are being dumped this draws step 0 and the
+/// settled endpoint, where every slice, octave and ring is fully arrived,
+/// rather than 103 steps of two draws per case that nothing reads (#1181).
+/// `HARMONIGRAPH_SHADOW_FRAMES` dumps the whole sweep, with a per-step CSV of
+/// how far the shadow moved, for reading its continuity by eye.
 #[test]
-fn distance_shadows_fade_continuously_across_layers_and_settling() {
+fn each_arrival_casts_a_measurable_shadow() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     shooter.clear = crate::wgpu::Color { r: 0.8, g: 0.8, b: 0.8, a: 1.0 };
     let root = std::env::var_os("HARMONIGRAPH_SHADOW_FRAMES").map(std::path::PathBuf::from);
     if let Some(root) = &root {
         std::fs::create_dir_all(root).unwrap();
     }
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        // Distance asserts every step. Gaussian asserts only its mass — the
-        // peak, and for `marks` the rise over step 0 — so unless the frames are
-        // being dumped it draws step 0 and the settled endpoint, where every
-        // slice, octave and ring is fully arrived, rather than 103 steps of
-        // two draws per case that nothing reads (#1181).
-        let sweep = root.is_some() || kernel == harmonigraph_scene::ShadowKernel::Distance;
-        for (name, grow, order, spread) in [
-            ("plain", false, AnimationOrder::Circular, 0.0),
-            ("grow", true, AnimationOrder::Circular, 0.0),
-            ("ordered", true, AnimationOrder::Circular, 0.28),
-            ("wide", true, AnimationOrder::Circular, 0.9),
-            ("marks", false, AnimationOrder::Circular, 0.0),
-            ("audio", false, AnimationOrder::Circular, 0.0),
-        ] {
-            let mut scene = single_marked_node(MIDDLE_C, 0);
-            scene.pluses.clear();
-            scene.view.glow_strength = 0.0;
-            scene.view.note_bloom = 0.0;
-            scene.view.note_animation = NoteAnimationConfig {
-                order,
-                stagger_spread: spread,
-                radial_start: if grow { -1.0 } else { 0.0 },
-                ..Default::default()
+    let sweep = root.is_some();
+    for (name, grow, order, spread) in [
+        ("plain", false, AnimationOrder::Circular, 0.0),
+        ("grow", true, AnimationOrder::Circular, 0.0),
+        ("ordered", true, AnimationOrder::Circular, 0.28),
+        ("wide", true, AnimationOrder::Circular, 0.9),
+        ("marks", false, AnimationOrder::Circular, 0.0),
+        ("audio", false, AnimationOrder::Circular, 0.0),
+    ] {
+        let mut scene = single_marked_node(MIDDLE_C, 0);
+        scene.pluses.clear();
+        scene.view.glow_strength = 0.0;
+        scene.view.note_bloom = 0.0;
+        scene.view.note_animation = NoteAnimationConfig {
+            order,
+            stagger_spread: spread,
+            radial_start: if grow { -1.0 } else { 0.0 },
+            ..Default::default()
+        };
+        scene.view.shadow = one_shadow(0.6, 0.8);
+        if name == "audio" {
+            scene.outer_outer = 0.0;
+            scene.view.mark_thickness = 0.0;
+            scene.spectral.inner = 0.2;
+            scene.spectral.outer = 0.45;
+            *scene.spectral.levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
+            *scene.spectral.color_levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
+            scene.spectral.lut = [glam::Vec4::ONE; harmonigraph_scene::PITCH_LUT_N];
+        }
+        let delays =
+            scene.view.note_animation.delays(&scene.octave_layout, scene.nodes[0].cents, 42, 1.0);
+        // `p` sweeps the WHOLE arrival, which a stagger widens past one
+        // sector's own duration: every sector animates for 1.0 and the
+        // last one only starts at the widest delay.
+        let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
+        let mut previous = vec![0i16; 256 * 256];
+        let mut csv = String::from("time,mass,max_delta,mean_delta\n");
+        let mut peak_mass = 0i64;
+        let mut initial_mass = 0i64;
+        // The final substeps, in a dumped sweep, isolate the opaque endpoint
+        // from a full frame of geometry movement.
+        for step in (0..=102).filter(|&step| sweep || step == 0 || step == 102) {
+            let p = match step {
+                100 => 0.999,
+                101 => 0.99999,
+                102 => 1.0,
+                _ => step as f32 / 100.0,
             };
-            scene.view.shadow = one_shadow(0.6, 0.8, kernel);
+            scene.nodes[0].slice_progress =
+                std::array::from_fn(|i| (p * span - delays[i]).clamp(0.0, 1.0));
+            scene.nodes[0].activation = p;
+            scene.nodes[0].octaves = [p; 11];
+            scene.nodes[0].melody_level = p;
+            scene.nodes[0].bass_level = p;
             if name == "marks" {
-                scene.view.shadow.lattice_geometry.falloff = 1.8;
+                scene.nodes[0].slice_progress = [1.0; 11];
+                scene.nodes[0].activation = 1.0;
+                scene.nodes[0].octaves = [1.0; 11];
+                scene.nodes[0].melody_slots = if p > 0.0 { MIDDLE_C } else { 0 };
             }
             if name == "audio" {
-                scene.view.shadow.lattice_geometry.falloff = 0.6;
-                scene.outer_outer = 0.0;
-                scene.view.mark_thickness = 0.0;
-                scene.spectral.inner = 0.2;
-                scene.spectral.outer = 0.45;
-                *scene.spectral.levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
-                *scene.spectral.color_levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
-                scene.spectral.lut = [glam::Vec4::ONE; harmonigraph_scene::PITCH_LUT_N];
+                scene.nodes[0].slice_progress = [1.0; 11];
+                scene.nodes[0].activation = 0.0;
+                scene.nodes[0].octaves = [0.0; 11];
+                scene.nodes[0].audio_ring = p;
             }
-            let delays = scene.view.note_animation.delays(
-                &scene.octave_layout,
-                scene.nodes[0].cents,
-                42,
-                1.0,
-            );
-            // `p` sweeps the WHOLE arrival, which a stagger widens past one
-            // sector's own duration: every sector animates for 1.0 and the
-            // last one only starts at the widest delay.
-            let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
-            let mut previous = vec![0i16; 256 * 256];
-            let mut csv = String::from("time,mass,max_delta,mean_delta\n");
-            let mut peak_mass = 0i64;
-            let mut initial_mass = 0i64;
-            // The final substeps isolate the opaque endpoint from a full
-            // frame of geometry movement; the cell representation stays fixed.
-            for step in (0..=102).filter(|&step| sweep || step == 0 || step == 102) {
-                let p = match step {
-                    100 => 0.999,
-                    101 => 0.99999,
-                    102 => 1.0,
-                    _ => step as f32 / 100.0,
-                };
-                scene.nodes[0].slice_progress =
-                    std::array::from_fn(|i| (p * span - delays[i]).clamp(0.0, 1.0));
-                scene.nodes[0].activation = p;
-                scene.nodes[0].octaves = [p; 11];
-                scene.nodes[0].melody_level = p;
-                scene.nodes[0].bass_level = p;
-                if name == "marks" {
-                    scene.nodes[0].slice_progress = [1.0; 11];
-                    scene.nodes[0].activation = 1.0;
-                    scene.nodes[0].octaves = [1.0; 11];
-                    scene.nodes[0].melody_slots = if p > 0.0 { MIDDLE_C } else { 0 };
-                }
-                if name == "audio" {
-                    scene.nodes[0].slice_progress = [1.0; 11];
-                    scene.nodes[0].activation = 0.0;
-                    scene.nodes[0].octaves = [0.0; 11];
-                    scene.nodes[0].audio_ring = p;
-                }
-                let frame = shooter.shot_again(&scene);
-                let bare = shooter.draw_modified(&scene, crate::LatticeLabels::default(), |cb| {
-                    cb.uniforms.geometry_shadow.depth = 0.0
-                });
-                let shadow: Vec<i16> = bare
-                    .chunks_exact(4)
-                    .zip(frame.chunks_exact(4))
-                    .map(|(a, b)| i16::from(a[0]) - i16::from(b[0]))
-                    .collect();
-                let delta: Vec<i16> =
-                    shadow.iter().zip(&previous).map(|(a, b)| (a - b).abs()).collect();
-                let max = delta.iter().max().unwrap();
-                let mean = delta.iter().map(|&v| f64::from(v)).sum::<f64>() / 65536.0;
-                let mass = shadow.iter().map(|&v| i64::from(v)).sum::<i64>();
-                peak_mass = peak_mass.max(mass);
-                if step == 0 {
-                    initial_mass = mass;
-                }
-                if step > 0 && kernel == harmonigraph_scene::ShadowKernel::Distance {
-                    // A SNAP detector, not a bound calibrated to the sampling.
-                    // Measured peaks here are 8 (`wide`), 16 (`grow`) and 3-7
-                    // for the rest, so the 80 is an order of magnitude of slack
-                    // on purpose: it has to hold across whatever GPU CI gives
-                    // us, and `wide`'s own sampling is not fixed either -- a
-                    // spread now stretches the arrival it sweeps, so one step
-                    // moves a slice's reveal by 0.019 where the old compressed
-                    // timeline moved it by 0.1. Tightening this to bind on
-                    // `wide` would land within 25% of what `grow` already
-                    // measures, trading a loose test for a flaky one.
-                    assert!(
-                        *max < 80 && mean < 0.8,
-                        "{name} at {p}: shadow jumped {max} levels, mean {mean}"
-                    );
-                    if step == 102 {
-                        assert!(
-                            *max <= 1 && mean < 0.001,
-                            "{name}: opaque endpoint jumped {max}, mean {mean}"
-                        );
-                    } else if matches!(name, "plain" | "marks" | "audio") {
-                        assert!(*max <= 8, "{name} at {p}: fixed geometry snapped by {max}");
-                    }
-                }
-                csv.push_str(&format!(
-                    "{p},{},{max},{mean}\n",
-                    shadow.iter().map(|&v| i64::from(v)).sum::<i64>()
-                ));
-                if let Some(root) = &root {
-                    let mut ppm = b"P6\n256 256\n255\n".to_vec();
-                    for pixel in frame.chunks_exact(4) {
-                        ppm.extend_from_slice(&pixel[..3]);
-                    }
-                    std::fs::write(root.join(format!("{kernel:?}-{name}-{step}.ppm")), ppm)
-                        .unwrap();
-                }
-                previous = shadow;
+            let frame = shooter.shot_again(&scene);
+            let bare = shooter.draw_modified(&scene, crate::LatticeLabels::default(), |cb| {
+                cb.uniforms.geometry_shadow.depth = 0.0
+            });
+            let shadow: Vec<i16> = bare
+                .chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .map(|(a, b)| i16::from(a[0]) - i16::from(b[0]))
+                .collect();
+            let delta: Vec<i16> =
+                shadow.iter().zip(&previous).map(|(a, b)| (a - b).abs()).collect();
+            let max = delta.iter().max().unwrap();
+            let mean = delta.iter().map(|&v| f64::from(v)).sum::<f64>() / 65536.0;
+            let mass = shadow.iter().map(|&v| i64::from(v)).sum::<i64>();
+            peak_mass = peak_mass.max(mass);
+            if step == 0 {
+                initial_mass = mass;
             }
-            assert!(peak_mass > 10_000, "{kernel:?}/{name}: fixture cast no measurable shadow");
-            if name == "marks" {
-                assert!(
-                    peak_mass - initial_mass > 10_000,
-                    "mark shadow was hidden by the held body"
-                );
-            }
+            csv.push_str(&format!(
+                "{p},{},{max},{mean}\n",
+                shadow.iter().map(|&v| i64::from(v)).sum::<i64>()
+            ));
             if let Some(root) = &root {
-                std::fs::write(root.join(format!("{kernel:?}-{name}.csv")), csv).unwrap();
+                let mut ppm = b"P6\n256 256\n255\n".to_vec();
+                for pixel in frame.chunks_exact(4) {
+                    ppm.extend_from_slice(&pixel[..3]);
+                }
+                std::fs::write(root.join(format!("{name}-{step}.ppm")), ppm).unwrap();
             }
+            previous = shadow;
+        }
+        assert!(peak_mass > 10_000, "{name}: fixture cast no measurable shadow");
+        if name == "marks" {
+            assert!(peak_mass - initial_mass > 10_000, "mark shadow was hidden by the held body");
+        }
+        if let Some(root) = &root {
+            std::fs::write(root.join(format!("{name}.csv")), csv).unwrap();
         }
     }
 }
@@ -168,7 +131,7 @@ fn zero_spread_orders_draw_the_same_smooth_arrival() {
     let mut scene = single_marked_node(MIDDLE_C, 0);
     scene.view.glow_reach = 1.5;
     scene.view.glow_strength = 0.8;
-    scene.view.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+    scene.view.shadow = one_shadow(0.0, 0.0);
     let phases = [0.15f32, 0.4, 0.7, 1.0, -0.7, -0.4, -0.15];
     for phase in phases {
         let node = &mut scene.nodes[0];
@@ -224,7 +187,7 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
         scene.outer_inner = 0.0;
         scene.outer_outer = 0.0;
         scene.view.mark_thickness = 0.0;
-        scene.view.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+        scene.view.shadow = one_shadow(0.0, 0.0);
         // An actually visible independently gated audio annulus; silence at
         // the gate is deliberately not the fixture this test measures.
         scene.spectral.inner = 0.2;
@@ -270,55 +233,47 @@ fn smooth_grow_draws_complete_pieces_and_settles() {
     scene.nodes[0].bass_slots = 1 << low;
     scene.nodes[0].melody_level = 1.0;
     scene.nodes[0].bass_level = 1.0;
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    scene.view.shadow = one_shadow(0.6, 0.8);
+    scene.background = glam::Vec4::splat(0.2);
+    scene.background.w = 1.0;
+    shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
+    scene.view.note_animation = NoteAnimationConfig::default();
+    scene.nodes[0].slice_progress = [1.0; 11];
+    let reference = shooter.shot(&scene);
+    scene.view.note_animation = NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
+    for (step, phase) in
+        [0.08f32, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
     {
-        scene.view.shadow = one_shadow(0.6, 0.8, kernel);
-        scene.background = glam::Vec4::splat(0.2);
-        scene.background.w = 1.0;
-        shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
-        scene.view.note_animation = NoteAnimationConfig::default();
-        scene.nodes[0].slice_progress = [1.0; 11];
-        let reference = shooter.shot(&scene);
-        scene.view.note_animation =
-            NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
-        for (step, phase) in
-            [0.08f32, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
-        {
-            // Smooth progress reaches the shader after traversing the shared
-            // note envelope on the CPU. Keep this direct-render fixture on
-            // that production boundary.
-            let view = harmonigraph_scene::ViewConfig::default();
-            let progress = harmonigraph_core::Envelope {
-                attack_time: 1.0,
-                fade_time: 1.0,
-                shape: view.fade_shape,
+        // Smooth progress reaches the shader after traversing the shared
+        // note envelope on the CPU. Keep this direct-render fixture on
+        // that production boundary.
+        let view = harmonigraph_scene::ViewConfig::default();
+        let progress = harmonigraph_core::Envelope {
+            attack_time: 1.0,
+            fade_time: 1.0,
+            shape: view.fade_shape,
+        }
+        .attack(f64::from(phase.abs()), 0.0);
+        scene.nodes[0].slice_progress = [progress; 11];
+        let shot = shooter.shot(&scene);
+        if phase == 1.0 {
+            let (mean, worst) = harmonigraph_golden::drift(&reference, &shot);
+            // Fixed config bounds may round raster/atlas sampling by one
+            // level; resizing them at settlement would churn cells.
+            assert!(mean < 0.05 && worst <= 1, "settled mean {mean}, worst {worst}");
+        }
+        if phase == 0.99 {
+            let (mean, _) = harmonigraph_golden::drift(&reference, &shot);
+            assert!(mean < 0.5, "smooth motion stepped: {mean}/255");
+        }
+        if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
+            let root = std::path::PathBuf::from(root);
+            std::fs::create_dir_all(&root).unwrap();
+            let mut ppm = b"P6\n384 384\n255\n".to_vec();
+            for pixel in shot.chunks_exact(4) {
+                ppm.extend_from_slice(&pixel[..3]);
             }
-            .attack(f64::from(phase.abs()), 0.0);
-            scene.nodes[0].slice_progress = [progress; 11];
-            let shot = shooter.shot(&scene);
-            if phase == 1.0 {
-                let (mean, worst) = harmonigraph_golden::drift(&reference, &shot);
-                // Fixed config bounds may round raster/atlas sampling by one
-                // level; resizing them at settlement would churn cells.
-                assert!(
-                    mean < 0.05 && worst <= 1,
-                    "{kernel:?}: settled mean {mean}, worst {worst}"
-                );
-            }
-            if phase == 0.99 {
-                let (mean, _) = harmonigraph_golden::drift(&reference, &shot);
-                assert!(mean < 0.5, "smooth motion stepped under {kernel:?}: {mean}/255");
-            }
-            if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
-                let root = std::path::PathBuf::from(root);
-                std::fs::create_dir_all(&root).unwrap();
-                let mut ppm = b"P6\n384 384\n255\n".to_vec();
-                for pixel in shot.chunks_exact(4) {
-                    ppm.extend_from_slice(&pixel[..3]);
-                }
-                std::fs::write(root.join(format!("slices-{kernel:?}-{step}.ppm")), ppm).unwrap();
-            }
+            std::fs::write(root.join(format!("slices-{step}.ppm")), ppm).unwrap();
         }
     }
 }
@@ -337,50 +292,42 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
     scene.nodes[0].bass_slots = 1 << low;
     scene.nodes[0].melody_level = 1.0;
     scene.nodes[0].bass_level = 1.0;
-    for kernel in
-        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
-    {
-        scene.view.shadow = one_shadow(0.6, 0.8, kernel);
-        scene.background = glam::Vec4::new(0.2, 0.2, 0.2, 1.0);
-        shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
-        let mut arrivals = Vec::new();
-        for order in AnimationOrder::ALL {
-            scene.view.note_animation =
-                NoteAnimationConfig { order, radial_start: -1.0, ..Default::default() };
-            let delays = scene.view.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
-            let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
-            for (step, time) in
-                [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()
-            {
-                scene.nodes[0].slice_progress = std::array::from_fn(|i| {
-                    let p = (time.abs() * span - delays[i]).clamp(0.0, 1.0);
-                    if time < 0.0 {
-                        1.0 - p
-                    } else {
-                        p
-                    }
-                });
-                let shot = shooter.shot(&scene);
-                if time == 0.25 {
-                    arrivals.push(shot.clone());
+    scene.view.shadow = one_shadow(0.6, 0.8);
+    scene.background = glam::Vec4::new(0.2, 0.2, 0.2, 1.0);
+    shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
+    let mut arrivals = Vec::new();
+    for order in AnimationOrder::ALL {
+        scene.view.note_animation =
+            NoteAnimationConfig { order, radial_start: -1.0, ..Default::default() };
+        let delays = scene.view.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
+        let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
+        for (step, time) in
+            [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()
+        {
+            scene.nodes[0].slice_progress = std::array::from_fn(|i| {
+                let p = (time.abs() * span - delays[i]).clamp(0.0, 1.0);
+                if time < 0.0 {
+                    1.0 - p
+                } else {
+                    p
                 }
-                if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
-                    let root = std::path::PathBuf::from(root);
-                    std::fs::create_dir_all(&root).unwrap();
-                    let mut ppm = b"P6\n384 384\n255\n".to_vec();
-                    for pixel in shot.chunks_exact(4) {
-                        ppm.extend_from_slice(&pixel[..3]);
-                    }
-                    std::fs::write(
-                        root.join(format!("orders-{kernel:?}-{order:?}-{step}.ppm")),
-                        ppm,
-                    )
-                    .unwrap();
+            });
+            let shot = shooter.shot(&scene);
+            if time == 0.25 {
+                arrivals.push(shot.clone());
+            }
+            if let Some(root) = std::env::var_os("HARMONIGRAPH_TRANSITION_FRAMES") {
+                let root = std::path::PathBuf::from(root);
+                std::fs::create_dir_all(&root).unwrap();
+                let mut ppm = b"P6\n384 384\n255\n".to_vec();
+                for pixel in shot.chunks_exact(4) {
+                    ppm.extend_from_slice(&pixel[..3]);
                 }
+                std::fs::write(root.join(format!("orders-{order:?}-{step}.ppm")), ppm).unwrap();
             }
         }
-        for pair in arrivals.windows(2) {
-            assert!(differing_pixels(&pair[0], &pair[1]) > 40, "orders drew the same picture");
-        }
+    }
+    for pair in arrivals.windows(2) {
+        assert!(differing_pixels(&pair[0], &pair[1]) > 40, "orders drew the same picture");
     }
 }

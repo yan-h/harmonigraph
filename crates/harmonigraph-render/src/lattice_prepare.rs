@@ -14,7 +14,6 @@ struct PreparedFrame {
     /// (`shadow::node_occluders`), for the receivers' occlusion.
     occluders: Vec<u32>,
     shadow_wanted: Option<[u32; 2]>,
-    blurs: bool,
 }
 
 struct FrameSheets {
@@ -106,7 +105,6 @@ impl CallbackTrait for LatticeCallback {
                 bloom: self.uniforms.composite.bloom_strength > 0.0,
                 glow: frame.glow,
                 shadow: frame.shadow_wanted,
-                blurs: frame.blurs,
                 // The strip's height is the row map's CAPACITY, which the
                 // light's own clock hands out and which has nothing to do with
                 // how many nodes this frame draws (`Scene::glow_rows`).
@@ -562,19 +560,9 @@ impl LatticeCallback {
         // holds the point. Names immediately follow their owner, so that owner
         // can never occlude its own text.
         let occluders = shadow::node_occluders(&packed.casters, &self.node_cells);
-        // A placeholder box preserves the caster index for a distance field
-        // evaluated directly by its scene draw. Only a real cell asks for the
-        // atlas; a markers-only Distance frame therefore allocates no atlas.
+        // Only a real cell asks for the atlas.
         let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         let shadow_wanted = has_shadow_cells.then_some(packed.size);
-        // The blur chain runs, and its intermediate is held, when some cell in
-        // the atlas holds COVERAGE — which is what the chain convolves, a
-        // distance cell collapsing its own quad inside both passes (`vs_cell`
-        // in shadow.wgsl). Read off the boxes rather than off the settings, so
-        // a Gaussian group with nothing in the frame to cast costs neither the
-        // pass nor the plane.
-        let blurs =
-            packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
         PreparedFrame {
             offscreen_size,
             screen_size,
@@ -583,7 +571,6 @@ impl LatticeCallback {
             packed,
             occluders,
             shadow_wanted,
-            blurs,
         }
     }
 
@@ -594,7 +581,6 @@ impl LatticeCallback {
         offscreen: &Offscreen,
         egui_encoder: &mut wgpu::CommandEncoder,
         packed: &shadow::Packed,
-        blurs: bool,
     ) {
         // The shadow atlas, ahead of the scene pass that samples it: every
         // caster's own ink into its own cell, then the blur over the cells.
@@ -602,18 +588,12 @@ impl LatticeCallback {
         // (`PaneTargets::shadow`), so a frame with the Shadow shut pays
         // none of it and its draws multiply by 1.
         //
-        // THREE draws into one cleared target, in the order the buffers sit
+        // Up to three draws into one cleared target, in the order the buffers sit
         // in rather than the picture's. Their cells are disjoint, so this
         // order decides nothing.
         let atlas = offscreen.shadow.as_ref().filter(|_| pane.box_count > 0);
         if let Some(atlas) = atlas {
             let mut pass = atlas.ink_pass(egui_encoder);
-            if let Some(glyphs) = pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0) {
-                pass.set_pipeline(&compiled.shaders.glyph_distance_pad_pipeline);
-                pass.set_bind_group(0, glyphs, &[]);
-                pass.set_vertex_buffer(0, pane.box_buffer.slice(..));
-                pass.draw(0..4, 0..pane.box_count);
-            }
             if pane.instance_count > 0 {
                 pass.set_pipeline(&compiled.shaders.node_cell_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
@@ -636,11 +616,8 @@ impl LatticeCallback {
                 pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
                 pass.set_vertex_buffer(1, pane.cell_buffer.slice(..));
                 // Every name in a frame is one group, so the fill is one
-                // pipeline for the whole run — where a NODE's fill branches
-                // per box, its own cell draw serving both kinds.
-                pass.set_pipeline(if self.shadow.lattice_text.kernel.is_distance() {
-                    &compiled.shaders.glyph_distance_cell_pipeline
-                } else if self.shadow.lattice_text.gaussian_spread_points(1.0) > 0.0 {
+                // pipeline for the whole run.
+                pass.set_pipeline(if self.shadow.lattice_text.gaussian_spread_points(1.0) > 0.0 {
                     &compiled.shaders.glyph_spread_cell_pipeline
                 } else {
                     &compiled.shaders.glyph_coverage_cell_pipeline
@@ -648,17 +625,13 @@ impl LatticeCallback {
                 pass.draw(0..4, 0..pane.glyph_count);
             }
             drop(pass);
-            // The same answer the atlas was allocated on, so the chain and
-            // the plane it ping-pongs through can never disagree.
-            if blurs {
-                let cells = &compiled.shadow_cell_pipelines;
-                atlas.blur(
-                    egui_encoder,
-                    (&cells.blur_x, &cells.blur_y),
-                    &pane.box_buffer,
-                    pane.box_count,
-                );
-            }
+            let cells = &compiled.shadow_cell_pipelines;
+            atlas.blur(
+                egui_encoder,
+                (&cells.blur_x, &cells.blur_y),
+                &pane.box_buffer,
+                pane.box_count,
+            );
         }
     }
 
@@ -924,8 +897,7 @@ impl LatticeCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         frame: &PreparedFrame,
     ) {
-        let PreparedFrame { has_light, packed, blurs, .. } = frame;
-        let blurs = *blurs;
+        let PreparedFrame { has_light, packed, .. } = frame;
         // The scene pass: draw into the pane's offscreen target, on the
         // encoder egui-wgpu executes before its own render pass. paint()
         // then just composites the finished texture.
@@ -943,7 +915,7 @@ impl LatticeCallback {
                 resources.timer.as_ref().expect("armed timer").opening(egui_encoder);
             }
 
-            self.encode_shadows(&resources.compiled, pane, offscreen, egui_encoder, packed, blurs);
+            self.encode_shadows(&resources.compiled, pane, offscreen, egui_encoder, packed);
 
             self.encode_node_glow(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
 

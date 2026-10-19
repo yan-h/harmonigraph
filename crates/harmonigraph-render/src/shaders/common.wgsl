@@ -102,21 +102,9 @@ struct ShadowCaster {
     // `xy + points * z`. w is unused and zero.
     map: vec4<f32>,
     // What this caster SPENDS, none of it a coordinate. x: how much of its
-    // shadow lands, 0..=1; y: what its cell HOLDS, 0 blurred ink and
-    // `DISTANCE_KIND` a distance, or `DISTANCE_COVERAGE_KIND` an evaluated
-    // opacity-weighted Distance profile; z: its σ in the pane's POINTS, which is what
-    // a distance read out of the cell is measured against, one Shadow width
-    // being 2σ; w: its group's Shadow falloff, the signed bend of its
-    // distance profile (`standoff_coverage`), which a Gaussian row carries
-    // and never reads.
+    // shadow lands, 0..=1; y, z and w are zero.
     shade: vec4<f32>,
 };
-
-// What `ShadowCaster::shade`'s y holds for a cell that is a DISTANCE —
-// `shadow::DISTANCE_KIND`, and spelled again in shadow.wgsl because there is no
-// linkage between shader modules here.
-const DISTANCE_KIND: f32 = 1.0;
-const DISTANCE_COVERAGE_KIND: f32 = 2.0;
 
 // Every caster's shadow, indexed by the caster's own index in the frame
 // (`pack`'s order).
@@ -146,26 +134,15 @@ const OCCLUDER_HEADER: u32 = 5u;
 // FLOOR: ink wide against σ saturates rather than overshooting, so this only
 // ever deepens the thin.
 //
-// It calibrates ONE renderer against the other rather than shaping a picture —
-// what a person dials is the width and the depth, and those mean the same thing
-// under either kernel because of this number. The distance renderer needs none
-// of it: a distance already gives a hairline the whole depth at its own edge by
-// construction, and a gain on top of that is a plateau over the whole padded box.
+// It calibrates the renderer rather than shaping a picture — what a person
+// dials is the width and the depth.
 const GAUSSIAN_GAIN: f32 = 2.5;
 
 // Calibrated shadow coverage and a node's local opacity ceiling at `points`.
-// Distance profiles already carry opacity, so both components are identical.
 //
-// One bilinear tap, branching on what the cell holds. A cell is drawn at a
-// fraction of the target's pixels once its σ is past `shadow::SIGMA_CELL_MAX`,
-// and the tap is what makes a blur wider than its own texels read smooth. A tap
-// of a DISTANCE field is a valid interpolation for the same reason a tap of
-// coverage is — the field is smooth almost everywhere and its creases are where
-// two answers are equally right.
-//
-// The gain enters here rather than at the transmittance because whether it
-// applies is a property of the RENDERER, and a function taking the finished
-// exponent cannot tell the two apart.
+// One bilinear tap. A cell is drawn at a fraction of the target's pixels once
+// its σ is past `shadow::SIGMA_CELL_MAX`, and the tap is what makes a blur
+// wider than its own texels read smooth.
 fn shadow_profile(who: u32, points: vec2<f32>) -> vec2<f32> {
     if who >= arrayLength(&shadow_casters) {
         return vec2<f32>(0.0);
@@ -180,20 +157,6 @@ fn shadow_profile(who: u32, points: vec2<f32>) -> vec2<f32> {
     // that cell's own empty border rather than the neighbour packed beside it.
     let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
     let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).rg;
-    if shadow_casters[who].shade.y == DISTANCE_COVERAGE_KIND {
-        return vec2<f32>(clamp(held.r, 0.0, 1.0));
-    }
-    if shadow_casters[who].shade.y >= 0.5 * DISTANCE_KIND {
-        return vec2<f32>(clamp(
-            standoff_coverage(
-                held.r,
-                2.0 * shadow_casters[who].shade.z,
-                shadow_casters[who].shade.w,
-            ),
-            0.0,
-            1.0,
-        ));
-    }
     return vec2<f32>(min(GAUSSIAN_GAIN * clamp(held.r, 0.0, 1.0), 1.0), held.g);
 }
 
@@ -210,26 +173,6 @@ fn node_shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
     let profile = shadow_profile(who, points);
     return min(profile.x, profile.y);
 }
-
-// Normalized exponential over one Shadow width. Negative falls early,
-// zero is linear, positive falls late; no tail window changes the curvature.
-// `standoff_level` in harmonigraph_scene is the preview's matching profile.
-fn standoff_coverage(d: f32, w: f32, falloff: f32) -> f32 {
-    let u = clamp(max(d, 0.0) / max(w, 1.0e-6) / SHADOW_STOP, 0.0, 1.0);
-    let remaining = 1.0 - u;
-    let shape = -clamp(falloff, SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX);
-    // Stable around linear: subtracting nearly equal exponentials loses bits.
-    if abs(shape) < 0.05 {
-        return remaining
-            * (1.0 - shape * u * 0.5 + shape * shape * u * (2.0 * u - 1.0) / 12.0);
-    }
-    return (exp(shape * remaining) - 1.0) / (exp(shape) - 1.0);
-}
-
-// Pinned to the scene's range and the packer's fixed reach.
-const SHADOW_FALLOFF_MIN: f32 = -6.0;
-const SHADOW_FALLOFF_MAX: f32 = 6.0;
-const SHADOW_STOP: f32 = 1.0;
 
 // What the Shadow depth's own bar bottoms out at: the share of the frame left
 // under a caster's solid middle at the top of that bar.
@@ -253,10 +196,8 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // separate ribbons and labels from the spectrum. Lattice shadows use the
 // linear local_shadow_transmittance below. Each caller owns its kernel sample.
 //
-// `full` arrives already in 0..=1 and already spent through whatever its own
-// renderer owes — the gain on a Gaussian, the standoff's decay on a distance
-// (`shadow_kernel`). What is left here is the one thing both share: how dark the
-// shadow lands.
+// `full` arrives already in 0..=1 and already spent through the Gaussian's
+// gain (`shadow_kernel`). What is left here is how dark the shadow lands.
 //
 // The level is spent as a SHARE because `1 - level * (1 - T)` is a caster of
 // opacity `level` letting the rest of the light straight through: a marker a
@@ -384,16 +325,12 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
         if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
             let full = node_shadow_kernel(at, points);
             let level = clamp(caster.shade.x, 0.0, 1.0);
-            var hidden = level * full;
-            if caster.shade.y < 0.5 * DISTANCE_KIND {
-                // A wide Gaussian dilutes thin rings into fractional coverage.
-                // Spend that field at full depth to hide rear ink through its
-                // soft edge; linear coverage alone barely fades it. Hide
-                // behind then scales the result through `occlusion`, as
-                // Darkness scales the ordinary shadow's amplitude without
-                // reshaping it.
-                hidden = 1.0 - shadow_transmittance(full, 1.0, level);
-            }
+            // A wide Gaussian dilutes thin rings into fractional coverage.
+            // Spend that field at full depth to hide rear ink through its
+            // soft edge; linear coverage alone barely fades it. Hide behind
+            // then scales the result through `occlusion`, as Darkness scales
+            // the ordinary shadow's amplitude without reshaping it.
+            let hidden = 1.0 - shadow_transmittance(full, 1.0, level);
             visibility *= 1.0 - strength * hidden;
         }
         if visibility == 0.0 {

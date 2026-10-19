@@ -238,12 +238,11 @@ fn a_chord_at_a_wide_reach() -> Scene {
     lattice(&view, near_camera())
 }
 
-/// The captured live view, explicitly drawn with Gaussian shadows.
+/// The captured live view.
 ///
 /// Read out of a live Bitwig project with `./read-plugin-state.py` (the
 /// `capture-daw-state` skill) on 2026-08-28. It fixes the captured Shadow width,
-/// full depth and window centred one fifth along. The kernel is explicit so
-/// a change to the fresh view cannot collapse the two golden families.
+/// full depth and window centred one fifth along.
 ///
 /// Full shadow depth makes changes to reach and profile visible even when a
 /// shallower fresh view would hide them.
@@ -257,67 +256,10 @@ pub(super) fn the_live_view() -> Scene {
     // The capture's two Shadow numbers, on both groups: it was taken before the
     // groups existed, so one width and one depth is what it says.
     for style in view.shadow.groups_mut() {
-        style.kernel = harmonigraph_scene::ShadowKernel::Gaussian;
         style.width = 0.196_915_06;
         style.depth = 1.0;
     }
     lattice(&view, near_camera())
-}
-
-/// The same live view drawn by the DISTANCE row.
-///
-/// The frame the second family is judged on, and the reason it is the live view
-/// rather than a fixture: the two families are calibrated to the same reach and
-/// differ in SHAPE, so what a row is worth is a question about the picture Yan
-/// is actually looking at. A diff here on a later PR is the distance row moving
-/// — which is what a freeze PR is for — and the Gaussian frames beside it stay
-/// still, that being the contract this family arrived under.
-pub(super) fn the_live_view_on_the_distance_row() -> Scene {
-    let mut scene = the_live_view();
-    for style in scene.view.shadow.groups_mut() {
-        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
-    }
-    scene
-}
-
-#[test]
-fn the_live_view_goldens_exercise_both_shadow_kernels() {
-    for (scene, kernel) in [
-        (the_live_view(), harmonigraph_scene::ShadowKernel::Gaussian),
-        (the_live_view_on_the_distance_row(), harmonigraph_scene::ShadowKernel::Distance),
-    ] {
-        for style in scene.view.shadow.groups() {
-            assert_eq!(style.kernel, kernel);
-        }
-    }
-}
-
-/// The live view's DISTANCE row at the top of the Shadow bar.
-///
-/// Sigma-relative cell sizing is coarsest here: σ grows while its three-texel
-/// representation stays fixed. This frame holds the resulting contours and
-/// medial-axis softness at the end of the range where the performance gate is
-/// measured.
-fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
-    let mut scene = the_live_view_on_the_distance_row();
-    for style in scene.view.shadow.groups_mut() {
-        style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
-    }
-    scene
-}
-
-/// The distance row at the default camera distance and full Shadow depth.
-///
-/// This is the scale where a node's curved ink is only a few pixels wide on
-/// the pane. The frame holds whether its distance cell preserves that contour
-/// rather than turning the decay outside it into rays.
-fn the_zoomed_out_view_on_the_distance_row() -> Scene {
-    let view = harmonigraph_scene::ViewConfig {
-        center_threes: 1,
-        shadow: one_shadow(fresh_shadow(), 1.0, harmonigraph_scene::ShadowKernel::Distance),
-        ..Default::default()
-    };
-    lattice(&view, Camera::default())
 }
 
 /// A sevens sheet standing behind the home one.
@@ -618,30 +560,6 @@ fn a_chord_at_a_wide_reach_draws_the_frame_on_record() {
 #[test]
 fn the_live_view_draws_the_frame_on_record() {
     check("live-view", on_the_ground_it_clears_to(the_live_view()));
-}
-
-/// The same view drawn by the distance row.
-#[test]
-fn the_live_view_on_the_distance_row_draws_the_frame_on_record() {
-    check("live-view-distance", on_the_ground_it_clears_to(the_live_view_on_the_distance_row()));
-}
-
-/// The coarsest Distance grid at the top of the Shadow bar stays on record.
-#[test]
-fn the_live_view_at_the_top_of_the_distance_row_draws_the_frame_on_record() {
-    check(
-        "live-view-distance-top",
-        on_the_ground_it_clears_to(the_live_view_at_the_top_of_the_distance_row()),
-    );
-}
-
-/// The distance row stays smooth when its ink projects to a handful of pixels.
-#[test]
-fn the_zoomed_out_view_on_the_distance_row_draws_the_frame_on_record() {
-    check(
-        "zoomed-out-distance",
-        on_the_ground_it_clears_to(the_zoomed_out_view_on_the_distance_row()),
-    );
 }
 
 /// A sevens sheet behind the home one.

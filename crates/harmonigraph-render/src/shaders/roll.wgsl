@@ -67,13 +67,10 @@ struct Locals {
     /// Where `body_holdout`'s first texel stands on the surface, in device
     /// pixels: the roll's own rect, which is all the holdout covers.
     holdout_origin: vec2<f32>,
-    /// σ, depth, kernel kind (Distance = 1), and whole kernel reach, in points.
+    /// σ, depth, zero, and whole kernel reach, in points.
     shadow: vec4<f32>,
     shadow_atlas_size: vec2<f32>,
-    // The group's Shadow falloff (`ShadowStyle::falloff`), read only on the
-    // distance path, in what was the block's own tail padding.
-    shadow_falloff: f32,
-    _shadow_pad: f32,
+    _shadow_pad: vec2<f32>,
     /// Where the target being drawn into starts, in its own pixels, and how
     /// many points one of them measures, per axis. What takes a fragment's own
     /// pixel back to the surface point it stands on ([`surface_point`]); set
@@ -306,7 +303,7 @@ fn vs_shadow_cell(
     out.position = select(
         no_quad(),
         cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        cell_packed(box_cell) && box_who.y < 0.5 * DISTANCE_KIND,
+        cell_packed(box_cell),
     );
     out.local = vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
     out.half_extent = half_extent;
@@ -387,17 +384,13 @@ fn inside(in: VertexOut, d: f32, edge: f32) -> f32 {
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// The selected common shadow renderer at this fragment. Distance consumes the
-/// box SDF directly; Gaussian reads the one blurred coverage cell made from
-/// that same SDF. The pane keeps only the outside half as its dark surround.
+/// The common shadow at this fragment: the one blurred coverage cell made from
+/// the box SDF. The pane keeps only the outside half as its dark surround.
 fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
     if reach <= 0.0 || locals.shadow.y <= 0.0 {
         return 0.0;
     }
-    var full = standoff_coverage(d, 2.0 * locals.shadow.x, locals.shadow_falloff);
-    if locals.shadow.z < 0.5 * DISTANCE_KIND {
-        full = shadow_kernel(in.who, surface_point(in));
-    }
+    let full = shadow_kernel(in.who, surface_point(in));
     // The common style owns the profile, while `reach` may still shorten an
     // interior cap when the pane has less room before its now-line. Keep that
     // geometric bound hard: shortening a cap moves its end instead of dimming

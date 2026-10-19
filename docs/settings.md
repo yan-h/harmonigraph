@@ -75,7 +75,7 @@ drag a bar or double-click it to type in the displayed units.
 | Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
 | Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
 | Star layers (Per layer) | Choose Size, Spacing, Speed, Solid or Twinkle above the plot. Layers run left to right from the back, drawn underneath, to the front, drawn over it, and the Solo buttons count them the same way. Which one looks far is up to its values. Drag one layer's dot vertically, or press on the plot's empty space and drag a line across the layers to set every layer it spans onto it. The bar beside it spans the drawn layers: drag an end to stretch them all, or its middle to slide them. Size and spacing use a logarithmic vertical scale; the rest are linear. A layer that Star layers leaves out keeps its values. |
-| Shadows | Width, Darkness, and Falloff (Contour) or Spread (Blur) bars sit beside a rendered shadow around a sample shape. The sample is scaled to fit; the shadow on each drawn shape depends on its size and outline. |
+| Shadows | Width, Darkness and Spread bars sit beside a rendered shadow around a sample shape. The sample is scaled to fit; the shadow on each drawn shape depends on its size and outline. |
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
 
@@ -312,7 +312,7 @@ not evidence of how often a setting is used.
 | Candidate | Recommendation and tradeoff |
 | --- | --- |
 | Slice order, stagger, starting offset/scale | Best candidate for motion presets with an expandable custom section. Keep the current freedom until preferred presets are known. |
-| Four shadow groups, each with shape/width/darkness/falloff | Prefer basic width/darkness and expandable shape/falloff if the page still feels too long. Falloff is independent of width for Contour shadows. |
+| Four shadow groups, each with width/darkness/spread | Prefer basic width/darkness and an expandable spread if the page still feels too long. |
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
 | Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
 | Lattice resolution above 100% | Candidate for removing costly supersampling if visual comparison shows no useful improvement. Existing range is retained. |
@@ -348,18 +348,14 @@ and double-click to reset.
 - The background glow falloff curve keeps its signed shape value and a preview:
   zero is linear, positive fades early, and negative fades late.
 
-**Shadow falloff** runs from −6 (early decay) through 0 (linear) to +6 (late decay).
-Its preview shows the Contour shadow around the sample shape,
-which reaches zero at one Shadow width and never bends into an S curve.
-Blur shadows keep their Gaussian profile.
-**Shadow spread** appears for Blur shadows.
-It expands the shadow caster before blurring without changing the visible ink.
+Every shadow is a blur of its caster.
+**Shadow spread** expands the shadow caster before blurring without changing the visible ink.
 The percentage is a fraction of the resolved Shadow width:
 100% expands the caster by one Shadow width on each side.
 It defaults to 0% in new and existing saved settings;
 a Shadow width of zero still removes the shadow.
 
-Lattice text shadows use local darkness for both Contour and Blur.
+Lattice text shadows use local darkness.
 They attenuate bright slices and finished bloom only inside their footprint,
 with foreground ink covering shadows behind it.
 Darkness defaults to 100%;

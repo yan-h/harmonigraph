@@ -1,20 +1,15 @@
 // What turns every caster's ink, drawn into a cell of its own (`vs_glyph_cell`
-// in text.wgsl), into what that cell HOLDS — which is one of two things.
-//
-// A BLUR cell holds the ink convolved with a Gaussian of that cell's σ, once
-// along x into the atlas's second texture and once along y back into the first.
-// A DISTANCE cell holds how far each texel stands from the caster's nearest
-// ink, in pane points. Nodes write that field analytically and names MIN-blend
-// their fixed glyph SDFs.
-// Either way the scene pass samples one texel and spends it (`fs_shadow_box`).
+// in text.wgsl), into what that cell HOLDS: the ink convolved with a Gaussian
+// of that cell's σ, once along x into the atlas's second texture and once
+// along y back into the first. The scene pass samples one texel and spends it
+// (`fs_shadow_box`).
 //
 // A pass here is a draw over the CELLS rather than one quad over the atlas, and
-// that is what lets every cell carry its own σ, its own resolution and its own
-// kind: a cell's quad reads them off its instance, a tap that falls outside the
-// cell's own rect reads nothing, and a cell of the wrong kind collapses its
-// quad off the viewport. The padding a cell is packed with
-// (`pack` in shadow.rs) is what puts the whole of its blur — or the whole of
-// the reach its curve is windowed to — inside the rect the taps are clamped to.
+// that is what lets every cell carry its own σ and its own resolution: a
+// cell's quad reads them off its instance, and a tap that falls outside the
+// cell's own rect reads nothing. The padding a cell is packed with (`pack` in
+// shadow.rs) is what puts the whole of its blur inside the rect the taps are
+// clamped to.
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 // The layout's sampler slot, which the scene pass's one tap takes and nothing
@@ -22,35 +17,17 @@
 // (`textureLoad`).
 @group(0) @binding(1) var src_sampler: sampler;
 
-/// What `ShadowBox::who.y` holds for a cell that is a DISTANCE rather than
-/// blurred ink — `shadow::DISTANCE_KIND`, and spelled again in common.wgsl
-/// because there is no linkage between shader modules here.
-const DISTANCE_KIND: f32 = 1.0;
-
 struct CellOut {
     @builtin(position) position: vec4<f32>,
     /// The cell's own rect in atlas texels — min, then max, the max exclusive.
     @location(0) @interpolate(flat) bounds: vec4<f32>,
-    /// σ in atlas texels. Distance cells collapse before this is read.
+    /// σ in atlas texels.
     @location(1) @interpolate(flat) sigma: f32,
 };
 
-/// A quad with no area, off the viewport: what a pass emits for a cell of the
-/// other kind. `no_quad` in common.wgsl is the same value, spelled there for
-/// the draws that FILL a cell.
-fn no_quad() -> vec4<f32> {
-    return vec4<f32>(2.0, 2.0, 0.0, 1.0);
-}
-
-/// One cell's quad, over exactly the texels its packer gave it — or nothing at
-/// all where `draws` is false. The attributes are `ShadowBox`'s four rows
-/// (shadow.rs).
-fn cell_quad(
-    vertex: u32,
-    cell: vec4<f32>,
-    cell_map: vec4<f32>,
-    draws: bool,
-) -> CellOut {
+/// One cell's quad, over exactly the texels its packer gave it. The
+/// attributes are `ShadowBox`'s four rows (shadow.rs).
+fn cell_quad(vertex: u32, cell: vec4<f32>, cell_map: vec4<f32>) -> CellOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
         select(0.0, 1.0, (vertex & 2u) == 2u),
@@ -66,17 +43,12 @@ fn cell_quad(
         0.0,
         1.0,
     );
-    if !draws {
-        out.position = no_quad();
-    }
     out.bounds = vec4<f32>(cell.xy, cell.xy + cell.zw);
     out.sigma = cell_map.y;
     return out;
 }
 
-/// The BLUR cells alone, shared by both passes. A distance cell holds its final field in
-/// the target this reads and no draw here writes one, which is why the y pass
-/// LOADS the atlas rather than clearing it (`ShadowTarget::blur`).
+/// Every cell, shared by both passes.
 @vertex
 fn vs_cell(
     @builtin(vertex_index) vertex: u32,
@@ -85,7 +57,7 @@ fn vs_cell(
     @location(2) cell_map: vec4<f32>,
     @location(3) who: vec4<f32>,
 ) -> CellOut {
-    return cell_quad(vertex, cell, cell_map, who.y < 0.5 * DISTANCE_KIND);
+    return cell_quad(vertex, cell, cell_map);
 }
 
 /// How many σ out the kernel reaches. Three, where 0.3% of a Gaussian's mass is
