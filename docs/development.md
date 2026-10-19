@@ -270,11 +270,9 @@ an audit stays only while a contract document cites it, as `docs/adaptive-tuning
 Shared personal skills come from your local [agent-config](https://github.com/yan-h/agent-config) checkout,
 independently of this repository.
 Its install script links every shared skill for Claude and Codex,
-and installs `session-lifecycle`'s hourly sweep for this checkout.
-That sweep needs Python 3.11+ as `python3`, and macOS ships 3.9:
+and installs `session-lifecycle`'s hourly sweep for this checkout:
 
 ```sh
-brew install python
 ~/projects/agent-config/scripts/install.sh --repo ~/projects/harmonigraph
 ```
 
