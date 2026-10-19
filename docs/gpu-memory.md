@@ -10,6 +10,10 @@ The row reads `ours · dev · peak`.
 `dev` is Metal's `currentAllocatedSize` for the device: ours plus egui's textures, wgpu's internals and the swapchain's drawables.
 `peak` is the most `ours` has ever held;
 the table names what was alive at that moment, and which allocation tipped it over.
+All three are per process, not per plugin instance:
+a second Harmonigraph in the same host adds to `ours` and `peak`,
+another Metal plugin adds to `dev`,
+and `peak` covers the whole host session.
 
 ## Reading it against `footprint`
 
@@ -43,32 +47,13 @@ Facts measured on that machine, by probe tests run and then removed:
 
 ## Peaks
 
-A **resize** never holds two sets of targets at once.
-Every target keyed on a pane's size (the lattice's offscreen set, the roll's, the spiral glow's, the cloud's) is dropped before its replacement is built,
-and a resize reconfigures the surface, which waits for the GPU first,
-so wgpu frees the old set at the drop.
-A drag between 2324 and 2560 pixels wide never raised the record's peak above its startup value.
-Targets a dial rebuilds rather than a size (the lattice's star targets and material tile, the ink strip, a grown shadow atlas, the font atlas) are built before the old one drops;
-the largest, the lattice's star light and image, is about 30 MB at this size, and no dial drag was measured.
+To attribute a peak, read the table's last block:
+what was alive at the peak and has been freed since.
+Two things put old and new targets on the record together without any ordering of ours:
+wgpu keeps a texture until the frame that last used it has finished on the GPU,
+and one pane can build its new targets before another pane, preparing later in the frame, releases its old ones.
+A resize is the exception, because reconfiguring the surface waits for the GPU first.
+PR #1506 measured a resize, a style switch and the driver behaviour above.
 
-A **style switch** does hold both, for under a frame, through no ordering of ours.
-Watercolor to Stars peaked at 198 MB against 151 before and 160 after.
-The table at that peak held all of Watercolor's cloud,
-its 28 MB colour-memory pair included, while Stars' targets were being built.
-Two causes, measured apart:
+`phys_footprint_peak` counts the CPU heap as well, which nothing here measures.
 
-- wgpu keeps a texture until the frame that last used it has finished on the GPU,
-  so the old cloud outlives the drop by a frame.
-  Headless, with no frame in flight, the same switch peaks at exactly the Stars set.
-  A non-blocking `device.poll` at the rebuild changed nothing;
-  a blocking wait there cut the peak by 15 MB.
-- The lattice prepares before the spectrogram,
-  so it builds its Stars targets while the spectrogram pane still holds Watercolor's,
-  which it releases only in its own prepare later in the frame.
-
-Neither is worth a stall:
-`footprint` keeps the freed pages for a second or two anyway,
-so `phys_footprint_peak` would not move.
-
-A process's `phys_footprint_peak` is the CPU heap's as much as the GPU's,
-and nothing here measures the heap.

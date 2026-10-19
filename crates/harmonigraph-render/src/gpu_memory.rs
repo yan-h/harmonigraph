@@ -52,7 +52,9 @@ pub struct Totals {
     /// at an allocation and every allocation re-counts it.
     pub peak: u64,
     /// What every Metal device the record has seen holds in all — ours,
-    /// egui's and wgpu's own. `None` off Metal.
+    /// egui's and wgpu's own, and anything else in the process using the same
+    /// GPU, such as another plugin in the host. `None` until something is
+    /// recorded on Metal.
     pub device: Option<u64>,
 }
 
@@ -188,7 +190,7 @@ pub fn totals() -> Totals {
 
 /// What one device holds, and the most it has held. Tests share a process
 /// with other tests' devices, so they read their own.
-#[cfg(test)]
+#[cfg(all(test, target_vendor = "apple"))]
 pub(crate) fn snapshot_of(device: &wgpu::Device) -> GpuMemory {
     metal::snapshot(Some(device))
 }
@@ -264,12 +266,11 @@ mod metal {
             &mut self.peaks[at]
         }
 
-        fn device(&self) -> u64 {
-            self.devices
-                .iter()
-                .filter_map(|d| d.0.load())
-                .map(|d| d.currentAllocatedSize() as u64)
-                .sum()
+        /// `None` until a Metal resource is recorded, which on another backend
+        /// is never.
+        fn device(&self) -> Option<u64> {
+            let devices = self.devices.iter().filter_map(|d| d.0.load());
+            devices.map(|d| d.currentAllocatedSize() as u64).reduce(|a, b| a + b)
         }
     }
 
@@ -342,7 +343,7 @@ mod metal {
         let mut resources: Vec<Resource> = record.live(owner).cloned().collect();
         resources.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.label.cmp(&b.label)));
         let live = resources.iter().map(|r| r.bytes).sum();
-        let device = Some(record.device());
+        let device = record.device();
         let peak = record.peak(owner);
         let totals = Totals { live, peak: peak.bytes, device };
         GpuMemory { resources, totals, at_peak: peak.at.clone() }
@@ -352,7 +353,7 @@ mod metal {
         let mut record = RECORD.lock().unwrap_or_else(|e| e.into_inner());
         record.prune();
         let live = record.live(None).map(|r| r.bytes).sum();
-        let device = Some(record.device());
+        let device = record.device();
         Totals { live, peak: record.peak(None).bytes, device }
     }
 }
@@ -438,5 +439,33 @@ mod tests {
         let at_peak: Vec<_> = freed.at_peak.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(at_peak, ["probe", "second"]);
         assert!(freed.table().contains("which allocating second set"), "{}", freed.table());
+    }
+
+    /// A buffer is on the record while Metal holds it and off it once freed:
+    /// the path that reads the vendored `Buffer::raw_handle`.
+    #[test]
+    fn the_record_holds_a_buffer_while_metal_does() {
+        let Some((device, queue)) = crate::test_gpu_device() else { return };
+        let contents = vec![7u8; 65536];
+        let held = buffer_init(
+            &device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("probe_buffer"),
+                contents: &contents,
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        );
+        let record = snapshot_of(&device);
+        let probe: Vec<_> = record.resources.iter().filter(|r| r.label == "probe_buffer").collect();
+        assert_eq!(probe.len(), 1, "{}", record.table());
+        assert!(probe[0].bytes >= contents.len() as u64, "{}", record.table());
+
+        // Its contents reach a GPU-private buffer by a copy wgpu queues and
+        // flushes at the next submit, and until then that copy holds it.
+        drop(held);
+        queue.submit([]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let freed = snapshot_of(&device);
+        assert!(freed.resources.iter().all(|r| r.label != "probe_buffer"), "{}", freed.table());
     }
 }
