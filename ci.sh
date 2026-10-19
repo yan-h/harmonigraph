@@ -355,7 +355,7 @@ fi
 # A gate that guards a script rather than the crates: its subjects are Git's
 # registered worktree paths, an inode and an ad-hoc signature, all outside the
 # repo, so no cargo test can reach them. Getting any one wrong is silent in the worst way: a branch
-# build is absent from the menu, or every swap step reports success while the
+# build is absent from the table, or every swap step reports success while the
 # DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
 run .claude/tests/load-plugin-branch.sh

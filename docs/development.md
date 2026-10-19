@@ -107,8 +107,7 @@ building and loading it directly with no worktree session in between.
 # Load an existing worktree build without building. This is the normal path:
 # a session builds (see AGENTS.md), Yan loads.
 ./load-plugin.sh <branch>     # a unique branch substring is enough
-./load-plugin.sh --pick       # interactive worktree menu
-./load-plugin.sh --list       # show builds without loading one
+./load-plugin.sh --list       # every build, its freshness and which is live; loads nothing
 
 # Bring a pushed PR (e.g. from a cloud session) into a local worktree and build it.
 ./build-pr.sh 1079            # rerun after new pushes to fast-forward and rebuild

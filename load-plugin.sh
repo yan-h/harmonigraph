@@ -13,8 +13,7 @@
 # Usage:
 #   ./load-plugin.sh            # build THIS checkout (plugin + renderer) and load it
 #   ./load-plugin.sh <branch>   # load that branch's build (exact, else unique substring)
-#   ./load-plugin.sh --pick     # interactive menu of every worktree's build
-#   ./load-plugin.sh --list     # print the table only; load nothing
+#   ./load-plugin.sh --list     # every worktree's build and which is loaded; load nothing
 #   ./load-plugin.sh --tag      # print the overlay tag of THIS worktree's build
 #
 # Building here rather than with `cargo xtask bundle` sidesteps two footguns:
@@ -35,8 +34,9 @@ set -euo pipefail
 HERE_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
 
 # No argument: build the checkout this runs from, then load it by its branch.
-# Built before the lifecycle wrapper below takes its catalog lock, so a
-# minutes-long compile never holds off a retention sweep.
+# Built before the lifecycle wrapper below takes its catalog lock: that lock
+# is taken without waiting, so a minutes-long compile inside it would make
+# every concurrent handoff, sweep and load refuse as busy.
 #
 # Both packages, and the second is the easy half to skip. The offline renderer
 # draws through harmonigraph-ui and harmonigraph-render — the same crates the
@@ -51,7 +51,7 @@ if [[ -z "${1:-}" ]]; then
   if [[ -z "$BRANCH" ]]; then
     echo "ERROR: $HERE is on a detached HEAD, and builds are loaded by branch name." >&2
     echo "       Create or check out a branch here, then rerun. To load an existing" >&2
-    echo "       build instead: $0 --pick" >&2
+    echo "       build instead: $0 --list, then $0 <branch>" >&2
     exit 1
   fi
   echo "Building harmonigraph-plugin + harmonigraph-offline (release) from $HERE ..."
@@ -186,13 +186,13 @@ build_info() {
 }
 
 print_table() {
-  printf '\n  %-3s %-30s %-13s %-10s %-30s %s\n' '#' 'branch' 'built' 'overlay' 'vs HEAD' 'loaded'
-  local rule; rule="$(printf '%*s' 101 '')"; printf '  %s\n' "${rule// /-}"
+  printf '\n  %-30s %-13s %-10s %-30s %s\n' 'branch' 'built' 'overlay' 'vs HEAD' 'loaded'
+  local rule; rule="$(printf '%*s' 97 '')"; printf '  %s\n' "${rule// /-}"
   local i built overlay vshead marker
   for i in "${!WT_PATH[@]}"; do
     IFS=$'\t' read -r built overlay vshead marker <<<"$(build_info "$i")"
-    printf '  %-3s %-30s %-13s %-10s %-30s %s\n' \
-      "$((i + 1))" "${WT_BRANCH[$i]}" "$built" "$overlay" "$vshead" "$marker"
+    printf '  %-30s %-13s %-10s %-30s %s\n' \
+      "${WT_BRANCH[$i]}" "$built" "$overlay" "$vshead" "$marker"
   done
   echo
 }
@@ -490,18 +490,12 @@ case "${1:-}" in
     [[ -n "$tag_out" ]] || { echo "No build tag readable in $tag_dylib." >&2; exit 1; }
     echo "$tag_out"
     ;;
-  --pick|-p)
-    print_table
-    read -r -p "Pick # (empty to cancel): " choice
-    [[ -z "$choice" ]] && { echo "Cancelled."; exit 0; }
-    [[ "$choice" =~ ^[0-9]+$ ]] || { echo "Not a number: $choice" >&2; exit 1; }
-    idx=$(( choice - 1 ))
-    [[ -n "${WT_PATH[$idx]:-}" ]] || { echo "No build #$choice" >&2; exit 1; }
-    load_build "$idx"
+  --help|-h)
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
     ;;
   --*)
     echo "Unknown option: $1" >&2
-    echo "Usage: ./load-plugin.sh [<branch> | --pick | --list | --tag [branch]]" >&2
+    echo "Usage: ./load-plugin.sh [<branch> | --list | --tag [branch] | --help]" >&2
     exit 1
     ;;
   *)

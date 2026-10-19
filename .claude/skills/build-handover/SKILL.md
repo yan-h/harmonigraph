@@ -26,10 +26,7 @@ The bundle looks fresh and contains none of the branch's changes.
 
 - `./load-plugin.sh <branch>` — load that branch's build directly (unique
 substring is fine).
-- `./load-plugin.sh --pick` — menu of every worktree's build (freshness + which one
-is live now);
-pick a number to swap it in.
-- `./load-plugin.sh --list` — just print the table, load nothing.
+- `./load-plugin.sh --list` — every worktree's build (freshness + which one is live now), loading nothing.
 
 Loading a branch copies only, never builds;
 a build must already exist in a registered worktree or a verified lifecycle handoff, which holds both the plugin and the offline renderer and stays loadable after source cleanup.
@@ -38,7 +35,7 @@ After installing, the loader reports which Bitwig plug-in hosts and audio engine
 that is one process snapshot, not a check of the running build tag.
 A failed diagnostic never fails an otherwise successful install.
 
-The loader discovers registered Git worktrees, so a Codex-managed worktree appears on the same menu without configuration.
+The loader discovers registered Git worktrees, so a Codex-managed worktree appears in the same table without configuration.
 It does need a branch:
 a detached build appears as `(detached)`, cannot be selected uniquely by branch, and cannot carry a useful overlay tag.
 
