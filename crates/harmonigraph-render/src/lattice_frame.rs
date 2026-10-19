@@ -22,7 +22,38 @@ fn push_plus(draws: &mut Vec<Draw>, at: u32) {
     }
 }
 
+/// Every vector a frame is built in, lent by [`LatticeFrames`] and given back
+/// when its callback drops. Each is emptied before it is filled again.
+#[derive(Default)]
+pub(crate) struct FrameVecs {
+    pub(super) instances: Vec<GpuInstance>,
+    pub(super) glow_owners: Vec<u64>,
+    pub(super) glyphs: Vec<GlyphInstance>,
+    pub(super) casters: Vec<shadow::Caster>,
+    pub(super) node_cells: Vec<u32>,
+    pub(super) draws: Vec<Draw>,
+    pub(super) pluses: Vec<GpuPlus>,
+    pub(super) walk: Walk,
+}
+
+/// What [`LatticeCallback::from_scene_in`] works in and nothing reads after it.
+#[derive(Default)]
+pub(crate) struct Walk {
+    order: Vec<(f32, f32, usize, bool, bool)>,
+    plus_of: Vec<Option<usize>>,
+    glyphs_of: Vec<(u32, u32)>,
+}
+
+/// `vec`, emptied, with room for `len`.
+fn emptied<T>(mut vec: Vec<T>, len: usize) -> Vec<T> {
+    vec.clear();
+    vec.reserve(len);
+    vec
+}
+
 impl LatticeCallback {
+    /// A frame built in vectors of its own, which nothing takes back.
+    #[cfg(test)]
     pub(super) fn from_scene(
         scene: &Scene,
         labels: LatticeLabels,
@@ -31,6 +62,29 @@ impl LatticeCallback {
         pane_id: u64,
         stats: Option<std::sync::Arc<LatticeStats>>,
     ) -> Self {
+        let vecs = FrameVecs::default();
+        Self::from_scene_in(vecs, scene, labels, size_points, target_format, pane_id, stats)
+    }
+
+    pub(super) fn from_scene_in(
+        vecs: FrameVecs,
+        scene: &Scene,
+        labels: LatticeLabels,
+        size_points: egui::Vec2,
+        target_format: wgpu::TextureFormat,
+        pane_id: u64,
+        stats: Option<std::sync::Arc<LatticeStats>>,
+    ) -> Self {
+        let FrameVecs {
+            instances,
+            glow_owners,
+            glyphs,
+            casters,
+            node_cells,
+            draws,
+            pluses,
+            walk: Walk { order, plus_of, glyphs_of },
+        } = vecs;
         let aspect = size_points.x / size_points.y.max(1.0);
         let render_scale =
             scene.view.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
@@ -180,7 +234,8 @@ impl LatticeCallback {
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
         };
-        let mut plus_of = vec![None; scene.nodes.len()];
+        let mut plus_of = emptied(plus_of, scene.nodes.len());
+        plus_of.resize(scene.nodes.len(), None);
         for (p, plus) in scene.pluses.iter().enumerate() {
             debug_assert!(scene.nodes[plus.node].on_home, "markers belong to home nodes");
             debug_assert!(plus_of[plus.node].is_none(), "one marker per node");
@@ -200,7 +255,8 @@ impl LatticeCallback {
         // label naming a node that is not in the scene is dropped rather than
         // drawn somewhere arbitrary — the caller and the scene disagreeing
         // about how many nodes there are is a bug in the caller.
-        let mut glyphs_of = vec![(0u32, 0u32); scene.nodes.len()];
+        let mut glyphs_of = emptied(glyphs_of, scene.nodes.len());
+        glyphs_of.resize(scene.nodes.len(), (0u32, 0u32));
         let mut taken = 0u32;
         for label in &labels.labels {
             let start = taken;
@@ -220,18 +276,14 @@ impl LatticeCallback {
         // order they held in the full sort. Whether a node ships, and whether
         // with ink or for its light alone, is asked here, once, of its packed
         // instance.
-        let mut order: Vec<(f32, f32, usize, bool, bool)> = scene
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| {
-                let g = to_gpu(n);
-                let inked = inked(&g);
-                let ships = inked || (lights && g.glow[0] > 0.0);
-                (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
-                    .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked))
-            })
-            .collect();
+        let mut order = emptied(order, 0);
+        order.extend(scene.nodes.iter().enumerate().filter_map(|(i, n)| {
+            let g = to_gpu(n);
+            let inked = inked(&g);
+            let ships = inked || (lights && g.glow[0] > 0.0);
+            (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
+                .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked))
+        }));
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
         // The one walk: every draw the pass makes, emitted in the order it
@@ -377,13 +429,13 @@ impl LatticeCallback {
         let marker_arm_points =
             scene.pluses.first().map_or(0.0, |p| (p.radius * points_per_world).max(0.0));
 
-        let mut instances = Vec::with_capacity(order.len());
+        let mut instances = emptied(instances, order.len());
         let mut glow_owners =
-            Vec::with_capacity(if scene.glow_timing.is_some() { order.len() } else { 0 });
-        let mut pluses = Vec::with_capacity(scene.pluses.len());
-        let mut glyphs = Vec::with_capacity(labels.glyphs.len());
-        let mut casters: Vec<shadow::Caster> = Vec::new();
-        let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
+            emptied(glow_owners, if scene.glow_timing.is_some() { order.len() } else { 0 });
+        let mut pluses = emptied(pluses, scene.pluses.len());
+        let mut glyphs = emptied(glyphs, labels.glyphs.len());
+        let mut casters = emptied(casters, 0);
+        let mut node_cells = emptied(node_cells, order.len());
         // The marker field's caster, ahead of everything the walk pushes. Its
         // style is the TEXT group's, which is what a marker turns into and out
         // of as a name appears. It has one shared cell centred on a crossing.
@@ -397,7 +449,7 @@ impl LatticeCallback {
                 stops: text_stops,
             });
         }
-        let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
+        let mut draws = emptied(draws, order.len());
         let breathes = scene.glow_timing.is_some()
             && scene.view.glow_reach > 0.0
             && scene.view.glow_strength > 0.0
@@ -607,6 +659,8 @@ impl LatticeCallback {
             size_points: [size_points.x, size_points.y],
             render_scale,
             stats,
+            frames: None,
+            walk: Walk { order, plus_of, glyphs_of },
         }
     }
 }

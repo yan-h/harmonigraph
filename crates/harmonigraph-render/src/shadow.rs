@@ -323,11 +323,37 @@ pub(crate) const NO_CASTER: ShadowCaster =
 /// never learns what a group is: a mixed frame is one shelf of cells whose
 /// widths differ, packed in one pass.
 pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Packed {
+    let mut packed = Packed::default();
+    pack_into(casters, px_per_point, max_side, &mut packed, &mut PackScratch::default());
+    packed
+}
+
+/// What [`pack_into`] works in, kept between frames with the packing it fills.
+#[derive(Default)]
+pub(crate) struct PackScratch {
+    rects: Vec<[f32; 4]>,
+    sizes: Vec<[u32; 2]>,
+    placed: Vec<[u32; 2]>,
+}
+
+/// [`pack`], into last frame's buffers rather than new ones: at the node cap
+/// they come to a couple of megabytes a frame. Every one is emptied first, so
+/// the packing is still this frame's alone.
+pub(crate) fn pack_into(
+    casters: &[Caster],
+    px_per_point: f32,
+    max_side: u32,
+    packed: &mut Packed,
+    scratch: &mut PackScratch,
+) {
+    packed.boxes.clear();
+    packed.casters.clear();
+    packed.size = Packed::default().size;
     // A finite positive number, which a NaN or an infinity out of a corrupt
     // blob is not: either is no shadow rather than a kernel of nothing.
     let positive = |x: f32| x.is_finite() && x > 0.0;
     if casters.is_empty() || !positive(px_per_point) {
-        return Packed::default();
+        return;
     }
     let spread_of = |c: &Caster| c.spread_points.max(0.0);
     // One caster's σ in the target's pixels, which is where its cell is drawn.
@@ -360,8 +386,10 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
 
     // One entry per caster, in the order they arrived — the order every index
     // below is in.
-    let mut rects: Vec<[f32; 4]> = Vec::with_capacity(casters.len());
-    let mut sizes: Vec<[u32; 2]> = Vec::with_capacity(casters.len());
+    let PackScratch { rects, sizes, placed } = scratch;
+    rects.clear();
+    sizes.clear();
+    placed.clear();
     for caster in casters {
         // A caster that darkens nothing takes NO cell: a reader hands the
         // frame back whole at level 0, so the cell it would fill is one
@@ -389,8 +417,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
     let square = ((area as f64 * 4.0 / 3.0).sqrt().ceil() as u32).max(1);
     let width = widest.max(square).next_power_of_two().min(max_side);
     let (mut x, mut y, mut shelf) = (0u32, 0u32, 0u32);
-    let mut placed = Vec::with_capacity(sizes.len());
-    for &[w, h] in &sizes {
+    for &[w, h] in sizes.iter() {
         // A caster with no cell is not shelved, and holds its index with a
         // placement `fits` reads as no cell below.
         if w == 0 || h == 0 {
@@ -417,8 +444,8 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         let [x, y] = placed[i];
         w > 0 && h > 0 && x + w <= width && y + h <= height
     };
-    let mut boxes = Vec::with_capacity(rects.len());
-    let mut packed_casters = Vec::with_capacity(casters.len());
+    packed.boxes.reserve(rects.len());
+    packed.casters.reserve(casters.len());
     for (c, caster) in casters.iter().enumerate() {
         let whole = casts(caster) && fits(c);
         let level = if whole { caster.level.clamp(0.0, 1.0) } else { 0.0 };
@@ -428,7 +455,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         let [w, h] = sizes[c];
         let [x, y] = placed[c];
         let cell = if whole { [x as f32, y as f32, w as f32, h as f32] } else { [0.0; 4] };
-        boxes.push(ShadowBox {
+        packed.boxes.push(ShadowBox {
             rect,
             cell,
             cell_map: [k, sigma, level, scale],
@@ -440,9 +467,9 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
             entry.map = [cell[0] - rect[0] * k, cell[1] - rect[1] * k, k, 0.0];
             entry.rect = rect;
         }
-        packed_casters.push(entry);
+        packed.casters.push(entry);
     }
-    Packed { boxes, casters: packed_casters, size: [width, height] }
+    packed.size = [width, height];
 }
 
 /// One pane's atlas: the plane every cell is drawn into, and the blur's
@@ -773,7 +800,9 @@ const OCCLUDER_BINS: f32 = 32.0;
 /// in `u32` words: [`OCCLUDER_HEADER`], then `cols * rows + 1` absolute
 /// offsets, then the lists. A frame with no occluder is the header alone, a
 /// zero-column grid.
-pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32]) -> Vec<u32> {
+///
+/// Written into `out`, last frame's grid, emptied first.
+pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32], out: &mut Vec<u32>) {
     let mut occluders: Vec<u32> = node_cells
         .iter()
         .copied()
@@ -791,11 +820,12 @@ pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32]) -> Ve
         let (min, max) = rect(i);
         min.iter().chain(&max).all(|v| v.is_finite())
     });
-    let mut out = vec![0u32; OCCLUDER_HEADER];
+    out.clear();
+    out.resize(OCCLUDER_HEADER, 0);
     let Some((min, max)) = occluders.iter().map(|&i| rect(i)).reduce(|(a0, a1), (b0, b1)| {
         ([a0[0].min(b0[0]), a0[1].min(b0[1])], [a1[0].max(b1[0]), a1[1].max(b1[1])])
     }) else {
-        return out;
+        return;
     };
     let extent = [max[0] - min[0], max[1] - min[1]];
     let per_point = OCCLUDER_BINS / extent[0].max(extent[1]).max(1.0);
@@ -848,7 +878,6 @@ pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32]) -> Ve
             }
         }
     }
-    out
 }
 
 /// The two pipelines that sweep blur cells.
@@ -952,7 +981,7 @@ pub(crate) mod tests {
         ];
         casters.extend((0..20).map(|i| caster([200.0 + 20.0 * i as f32, 300.0, 15.0, 15.0], 1.0)));
         let node_cells: Vec<u32> = (1..casters.len() as u32).filter(|&i| i != 2).collect();
-        let grid = node_occluders(&casters, &node_cells);
+        let grid = occluders_of(&casters, &node_cells);
 
         // The shader's own arithmetic, in f32.
         let list = |p: [f32; 2]| -> &[u32] {
@@ -1005,7 +1034,7 @@ pub(crate) mod tests {
         let near = list([52.0, 30.0]);
         assert!(near.contains(&3) && near.contains(&4) && !near.contains(&5));
         assert!(near.iter().all(|&j| j < 7), "the far row reached the label: {near:?}");
-        assert_eq!(node_occluders(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
+        assert_eq!(occluders_of(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
     }
 
     /// A shader's `const NAME: T = value;`, as text.
@@ -1035,6 +1064,29 @@ pub(crate) mod tests {
         Caster { rect: [x, y, w, h], level: 1.0, sigma_points: 1.0, spread_points: 0.0, stops: 0.0 }
     }
 
+    /// Packing into the buffers a bigger frame left is the packing done fresh,
+    /// and so is the occluder grid built from it.
+    #[test]
+    fn packing_into_last_frames_buffers_is_packing_fresh() {
+        // A square field for the first, so its occluder grid is the square
+        // one; a wide thin pair for the second, whose grid is a few rows.
+        let big: Vec<Caster> = (0..42)
+            .map(|i| caster((i % 7) as f32 * 60.0, (i / 7) as f32 * 60.0, 50.0, 50.0))
+            .collect();
+        let small = [caster(10.0, 10.0, 200.0, 4.0), caster(100.0, 12.0, 50.0, 4.0)];
+        let (mut packed, mut scratch, mut grid) =
+            (Packed::default(), PackScratch::default(), vec![]);
+        pack_into(&big, 2.0, 16384, &mut packed, &mut scratch);
+        node_occluders(&packed.casters, &(0..42).collect::<Vec<_>>(), &mut grid);
+        let left = (packed.boxes.len(), grid.len());
+        pack_into(&small, 2.0, 16384, &mut packed, &mut scratch);
+        node_occluders(&packed.casters, &[0, 1], &mut grid);
+        assert!(left.0 > packed.boxes.len() && left.1 > grid.len(), "{left:?}");
+        assert_eq!(packed, pack(&small, 2.0, 16384));
+        assert_eq!(grid, occluders_of(&packed.casters, &[0, 1]));
+        assert!(grid.len() > OCCLUDER_HEADER, "the two boxes overlap and occlude");
+    }
+
     #[test]
     fn gaussian_spread_pads_the_source_without_changing_blur() {
         let base = Caster { sigma_points: 5.877344, ..caster(30.0, 30.0, 10.0, 2.0) };
@@ -1046,6 +1098,12 @@ pub(crate) mod tests {
         assert_eq!(b.boxes[0].rect[2], a.boxes[0].rect[2] + 4.0);
         assert_eq!(b.boxes[0].who[3], 2.0);
         assert!(b.boxes[0].cell[2] > a.boxes[0].cell[2]);
+    }
+
+    fn occluders_of(casters: &[ShadowCaster], node_cells: &[u32]) -> Vec<u32> {
+        let mut out = Vec::new();
+        node_occluders(casters, node_cells, &mut out);
+        out
     }
 
     /// A whole frame at ONE style: every caster at `sigma_px` in the target's

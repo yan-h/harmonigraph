@@ -1,5 +1,6 @@
 //! Lattice-only event-time animation. Core envelopes and the other panes keep
 //! their own timing. A checkpoint survives voice pruning and roll retention.
+use crate::derive::lattice_order;
 use crate::{IntensityReading, RingFade, Scene, ViewConfig};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
@@ -47,13 +48,55 @@ impl Edge {
 /// Event-time lattice animation, owned separately by each drawing surface.
 #[derive(Clone, Default)]
 pub struct NodeMotion {
+    /// The visible nodes whose motion is not at rest, and no others: an absent
+    /// position is exactly [`Motion::REST`]. A table of every visible node held
+    /// 20480 of these at the node cap, about 19 MB a surface, nearly all of it
+    /// identical rest.
+    ///
+    /// A node at rest can still differ from `REST` in what it last read
+    /// (`readings`, `order_seed`, `order_delay`, `level_wait`), and dropping it
+    /// forgets that. Each is written before it is next read: a slot's reading
+    /// before its level can leave 0, the order and its delays on the rise
+    /// that starts the next lifetime, the wait at a departure. The equivalence
+    /// test holds a table that never drops one against this one, frame for
+    /// frame.
     nodes: HashMap<LatticePos, Motion>,
+    /// The visible nodes holding nothing but an audio pose ([`Motion::POSED`]),
+    /// kept out of `nodes`. With the ring on at its floor every unlit node in
+    /// view wears one, which is the whole window again in full entries.
+    posed: HashSet<LatticePos>,
+    /// The positions the last step drew, in the scene's lattice order: what
+    /// tells a node scrolling into view from one that sat at rest in it, which
+    /// was the absent entry's job while every visible node had one.
+    visible: Vec<LatticePos>,
     held: HashMap<Identity, Held>,
     at: Option<f64>,
     boundary: HashSet<(Identity, u64, u32)>,
     seen: HashMap<Identity, FactualTip>,
     #[cfg(test)]
     replayed_edges: usize,
+    /// Keep an entry for every visible node, as the table did before it was
+    /// sparse: the reference the equivalence test holds this one against.
+    #[cfg(test)]
+    dense: bool,
+    #[cfg(test)]
+    reached: Reached,
+}
+/// How often a step took each branch the sparse table answers differently
+/// from a dense one, so the equivalence test can show its fixture got there.
+#[cfg(test)]
+#[derive(Clone, Copy, Default, Debug)]
+struct Reached {
+    /// An entry dropped at rest, lit or rung again while still in view.
+    revived: usize,
+    /// A held note's node scrolling into view, which seeds a settled pose.
+    scrolled_in: usize,
+    /// A held note lighting a node that was in view and at rest, which
+    /// arrives rather than settling.
+    lit_in_view: usize,
+    /// A held note lighting a node new to the view on a later pass of the
+    /// step than the first, which arrives as well.
+    lit_after_entering: usize,
 }
 #[derive(Clone)]
 struct Motion {
@@ -80,31 +123,14 @@ struct Motion {
     level_wait: [f32; 11],
     audio_waiting: bool,
 }
-impl Default for Motion {
-    fn default() -> Self {
-        Self {
-            progress: [0.0; 11],
-            delay: [0.0; 11],
-            levels: [0.0; 11],
-            targets: [0.0; 11],
-            readings: [IntensityReading::REST; 11],
-            gate: false,
-            melody: MarkMotion::default(),
-            bass: MarkMotion::default(),
-            order_delay: [0.0; 11],
-            order_seed: 0,
-            level_wait: [0.0; 11],
-            audio_waiting: false,
-        }
-    }
-}
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct MarkMotion {
     levels: [f32; 11],
     waits: [f32; 11],
     target: Option<usize>,
 }
 impl MarkMotion {
+    const REST: Self = Self { levels: [0.0; 11], waits: [0.0; 11], target: None };
     fn target(&mut self, target: Option<usize>, delay: f32) {
         if target != self.target {
             self.waits = [0.0; 11];
@@ -161,14 +187,42 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 impl Motion {
+    /// A node nothing has lit, and what every position [`NodeMotion`] holds no
+    /// entry for reads as.
+    const REST: Self = Self {
+        progress: [0.0; 11],
+        delay: [0.0; 11],
+        levels: [0.0; 11],
+        targets: [0.0; 11],
+        readings: [IntensityReading::REST; 11],
+        gate: false,
+        melody: MarkMotion::REST,
+        bass: MarkMotion::REST,
+        order_delay: [0.0; 11],
+        order_seed: 0,
+        level_wait: [0.0; 11],
+        audio_waiting: false,
+    };
+    /// A node at rest that the audio ring has posed, settled and waiting for a
+    /// note. Nothing in `advance` moves it.
+    const POSED: Self = Self { progress: [1.0; 11], audio_waiting: true, ..Self::REST };
     /// Nothing held, nothing moving and nothing left to fade: `advance` would
-    /// write back exactly what is here. Most visible nodes are this at once.
+    /// write back exactly what is here. Most visible nodes are this at once,
+    /// and [`NodeMotion`] keeps no entry for one.
     fn at_rest(&self) -> bool {
+        self.still() && !self.audio_waiting && self.progress == [0.0; 11]
+    }
+    /// [`at_rest`](Self::at_rest) but for an audio pose: exactly [`Self::POSED`]
+    /// in everything that is read before it is written.
+    fn posed(&self) -> bool {
+        self.still() && self.audio_waiting && self.progress == [1.0; 11]
+    }
+    /// No gate, no mark, and nothing delayed, lit or fading.
+    fn still(&self) -> bool {
         !self.gate
-            && !self.audio_waiting
             && self.melody.target.is_none()
             && self.bass.target.is_none()
-            && [self.progress, self.delay, self.levels, self.targets]
+            && [self.delay, self.levels, self.targets]
                 .iter()
                 .chain([
                     &self.melody.levels,
@@ -233,6 +287,10 @@ impl Motion {
         }
     }
 }
+/// Whether `pos` is among `visible`, a frame's positions in lattice order.
+fn shown(visible: &[LatticePos], pos: &LatticePos) -> bool {
+    visible.binary_search_by_key(&lattice_order(pos), lattice_order).is_ok()
+}
 /// The octave slot a held pitch lights on the node at `cents`, inside the
 /// node's `(lo, hi)` slots.
 fn slot_of(lo: i32, hi: i32, cents: f32, pitch: f32) -> usize {
@@ -257,6 +315,25 @@ impl SlotReadings {
     }
 }
 impl NodeMotion {
+    /// Start over from nothing, as a surface seen for the first time does.
+    fn reset(&mut self) {
+        *self = Self {
+            visible: std::mem::take(&mut self.visible),
+            #[cfg(test)]
+            dense: self.dense,
+            #[cfg(test)]
+            reached: self.reached,
+            ..Self::default()
+        };
+        self.visible.clear();
+    }
+    /// Whether the table keeps an entry for every visible node.
+    fn dense(&self) -> bool {
+        #[cfg(test)]
+        return self.dense;
+        #[cfg(not(test))]
+        false
+    }
     /// Whether a position has carried MIDI ink or marks. Audio poses emit no light.
     pub fn owns_light(&self, pos: LatticePos) -> bool {
         self.nodes.get(&pos).is_some_and(|motion| {
@@ -304,18 +381,16 @@ impl NodeMotion {
         tracker: &NoteTracker,
         now: f64,
         seed_settled: bool,
+        first: bool,
     ) {
         let duration = env.fade_time;
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
+        let dense = self.dense();
         for node in &scene.nodes {
             let node_class = PitchClass::from_cents(node.cents);
-            let (motion, newly_visible) = match self.nodes.entry(node.lattice_pos) {
-                Entry::Occupied(entry) => (entry.into_mut(), false),
-                Entry::Vacant(entry) => (entry.insert(Motion::default()), true),
-            };
             let (lo, hi) = scene.octave_layout.slots(node.cents);
-            motion.targets = [0.0; 11];
+            let mut targets = [0.0; 11];
             let mut melody = None;
             let mut bass = None;
             let mut preexisting = false;
@@ -334,7 +409,7 @@ impl NodeMotion {
                 first_onset = Some(first_onset.map_or(id.1, |first| first.min(id.1)));
                 let slot = slot_of(lo, hi, node.cents, held.pitch);
                 // Activation measures occupancy; intensity rides beside it.
-                motion.targets[slot] = 1.0;
+                targets[slot] = 1.0;
                 readings.add(slot, held.reading);
                 if Some(held.pitch) == high {
                     melody = Some(slot);
@@ -343,12 +418,46 @@ impl NodeMotion {
                     bass = Some(slot);
                 }
             }
+            let gate = targets.iter().any(|&v| v > 0.0);
+            let audio =
+                scene.spectral.ring_draws() && fade.level(&scene.octave_layout, node.cents) > 0.0;
+            let pos = node.lattice_pos;
+            let (motion, vacant) = match self.nodes.entry(pos) {
+                Entry::Occupied(entry) => (entry.into_mut(), false),
+                Entry::Vacant(entry) => {
+                    let posed = self.posed.contains(&pos);
+                    // Nothing lights it, and the ring neither starts nor stops
+                    // ringing at it: every write below puts back what `REST`,
+                    // or the pose, already holds.
+                    if !gate && audio == posed && !dense {
+                        continue;
+                    }
+                    if posed {
+                        self.posed.remove(&pos);
+                    }
+                    (entry.insert(if posed { Motion::POSED } else { Motion::REST }), true)
+                }
+            };
+            // New to the view on the step's first pass alone, as it was while
+            // every visible node had an entry: that pass entered every node,
+            // so a later one found each already there. Past it, an absent
+            // node is one at rest rather than one arriving.
+            let in_view = |visible: &[LatticePos]| shown(visible, &pos);
+            let newly_visible = |visible: &[LatticePos]| {
+                if dense {
+                    vacant
+                } else {
+                    vacant && first && !in_view(visible)
+                }
+            };
+            #[cfg(test)]
+            if vacant && !dense && in_view(&self.visible) {
+                self.reached.revived += 1;
+            }
+            motion.targets = targets;
             readings.apply(motion);
             motion.melody.target(melody, view.mark_delay);
             motion.bass.target(bass, view.mark_delay);
-            let gate = motion.targets.iter().any(|&v| v > 0.0);
-            let audio =
-                scene.spectral.ring_draws() && fade.level(&scene.octave_layout, node.cents) > 0.0;
             if !audio {
                 motion.audio_waiting = false;
             }
@@ -371,11 +480,19 @@ impl NodeMotion {
             if gate {
                 motion.audio_waiting = false;
             }
-            if gate && !motion.gate && motion.progress.iter().all(|&p| p == 0.0) {
+            // A gate rising on a node with no ink begins a lifetime, and the
+            // lifetime owns its order: an arrival's, and also a note's lit over
+            // an audio pose, which starts at full progress and so takes the
+            // reversal below. Seeded only on arrival, that note departed in
+            // whichever order the last note to ARRIVE here left behind.
+            let arriving = motion.progress.iter().all(|&p| p == 0.0);
+            if gate && !motion.gate && (arriving || motion.levels.iter().all(|&l| l == 0.0)) {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 node.lattice_pos.hash(&mut hash);
                 first_onset.hash(&mut hash);
                 motion.order_seed = hash.finish() as u32;
+            }
+            if gate && !motion.gate && arriving {
                 motion.order_delay = view.note_animation.delays(
                     &scene.octave_layout,
                     node.cents,
@@ -430,7 +547,18 @@ impl NodeMotion {
                 }
             }
             motion.gate = gate;
-            if (seed_settled || (newly_visible && preexisting)) && gate {
+            let settle = seed_settled || (gate && preexisting && newly_visible(&self.visible));
+            #[cfg(test)]
+            if gate && preexisting && vacant && !seed_settled && !dense {
+                if settle {
+                    self.reached.scrolled_in += 1;
+                } else if in_view(&self.visible) {
+                    self.reached.lit_in_view += 1;
+                } else {
+                    self.reached.lit_after_entering += 1;
+                }
+            }
+            if settle && gate {
                 motion.progress = [1.0; 11];
                 motion.delay = [0.0; 11];
                 motion.level_wait = [0.0; 11];
@@ -484,7 +612,7 @@ impl NodeMotion {
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
         if self.at.is_some_and(|at| now < at || now - at > horizon) {
-            *self = Self::default();
+            self.reset();
         }
         let floor = now - horizon;
         let intensity = view.intensity;
@@ -529,7 +657,7 @@ impl NodeMotion {
         // behind the checkpoint, rather than losing a complete short lifetime
         // or inventing a delayed key-down that current-state reconciliation ends.
         if late {
-            *self = Self::default();
+            self.reset();
         }
         self.seen = seen;
         let initial = self.at.is_none();
@@ -587,8 +715,19 @@ impl NodeMotion {
         }
         // The checkpoint already has the previous frame's targets. Recompute
         // them only for initial seeding, an event, or current-state reconciliation.
+        let mut first = true;
         if initial {
-            self.gates(scene, tuning, view, env, fade, tracker, now, true);
+            self.gates(
+                scene,
+                tuning,
+                view,
+                env,
+                fade,
+                tracker,
+                now,
+                true,
+                std::mem::take(&mut first),
+            );
         }
         // Each ended lifetime finishes absent, including an equal-time bend.
         // A replacement has a different identity and remains in the held union.
@@ -636,7 +775,17 @@ impl NodeMotion {
                 }
                 index += 1;
             }
-            self.gates(scene, tuning, view, env, fade, tracker, now, false);
+            self.gates(
+                scene,
+                tuning,
+                view,
+                env,
+                fade,
+                tracker,
+                now,
+                false,
+                std::mem::take(&mut first),
+            );
             at = time;
         }
         self.advance(now - at, env);
@@ -648,13 +797,44 @@ impl NodeMotion {
             self.held
                 .insert((voice.key(), voice.on_time.to_bits()), Held::new(voice.pitch, reading));
         }
-        self.gates(scene, tuning, view, env, fade, tracker, now, false);
+        self.gates(scene, tuning, view, env, fade, tracker, now, false, std::mem::take(&mut first));
         self.advance(0.0, env);
         self.at = Some(now);
-        let visible: HashSet<_> = scene.nodes.iter().map(|n| n.lattice_pos).collect();
-        self.nodes.retain(|pos, _| visible.contains(pos));
+        // The scene's nodes are in lattice order already (`derive_scene`), so
+        // this is a copy and a check.
+        self.visible.clear();
+        self.visible.extend(scene.nodes.iter().map(|n| n.lattice_pos));
+        if !self.visible.is_sorted_by_key(lattice_order) {
+            self.visible.sort_unstable_by_key(lattice_order);
+        }
+        let dense = self.dense();
+        let Self { nodes, posed, visible, .. } = self;
+        posed.retain(|pos| shown(visible, pos));
+        nodes.retain(|pos, motion| {
+            if !shown(visible, pos) {
+                return false;
+            }
+            if dense {
+                return true;
+            }
+            if motion.posed() {
+                posed.insert(*pos);
+                return false;
+            }
+            !motion.at_rest()
+        });
+        // Give back what a lattice-wide chord grew, once it has faded, and
+        // with room either side so a held chord does not grow and shrink it.
+        if nodes.capacity() > 4 * (nodes.len() + 64) {
+            nodes.shrink_to(2 * nodes.len());
+        }
+        if posed.capacity() > 4 * (posed.len() + 64) {
+            posed.shrink_to(2 * posed.len());
+        }
         for node in &mut scene.nodes {
-            let motion = &self.nodes[&node.lattice_pos];
+            let pos = &node.lattice_pos;
+            let resting = if self.posed.contains(pos) { &Motion::POSED } else { &Motion::REST };
+            let motion = self.nodes.get(pos).unwrap_or(resting);
             node.slice_progress = motion.progress;
             // Opacity fades each slot's ink, and the node's presence with it,
             // while the envelope under it runs untouched. Thickness reshapes a
@@ -710,6 +890,14 @@ impl NodeMotion {
 mod tests {
     use super::*;
     use crate::NoteAnimationConfig;
+
+    impl NodeMotion {
+        /// A position's motion, absent read as the rest it stands for.
+        fn at(&self, pos: LatticePos) -> &Motion {
+            let resting = if self.posed.contains(&pos) { &Motion::POSED } else { &Motion::REST };
+            self.nodes.get(&pos).unwrap_or(resting)
+        }
+    }
 
     #[test]
     fn halo_candidates_keep_between_frame_bends_after_voice_pruning() {
@@ -938,7 +1126,7 @@ mod tests {
         tracker.handle_event(on(now - 0.1, 60));
         draw(&mut motion, &mut tracker, &view, now, false);
         assert!(motion.replayed_edges < 200, "replayed {} old edges", motion.replayed_edges);
-        assert!(motion.nodes[&LatticePos::ORIGIN].gate);
+        assert!(motion.at(LatticePos::ORIGIN).gate);
     }
     #[test]
     fn held_nodes_reentering_the_visible_window_do_not_replay_an_entrance() {
@@ -1267,6 +1455,42 @@ mod tests {
         tracker.handle_event(off(1.8, 60));
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
     }
+    /// A note that lights a node the audio ring has posed starts its lifetime
+    /// from that pose rather than from an arrival, and departs in its own order
+    /// all the same: not in the order of whichever note last arrived there,
+    /// which is history the picture cannot show.
+    #[test]
+    fn a_note_lit_over_an_audio_pose_departs_in_its_own_order() {
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.order = AnimationOrder::RandomStagger;
+        view.note_animation.stagger_spread = 0.9;
+        let departure = |earlier: bool| {
+            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+            if earlier {
+                tracker.handle_event(on(0.0, 60));
+                draw(&mut motion, &mut tracker, &view, 0.0, false);
+                draw(&mut motion, &mut tracker, &view, 2.0, false);
+                tracker.handle_event(off(2.0, 60));
+            }
+            // Frames inside the replay horizon, so nothing resets the surface:
+            // the earlier note's arrival is still this node's history.
+            for now in [3.0, 4.0, 5.0] {
+                draw(&mut motion, &mut tracker, &view, now, false);
+            }
+            assert_eq!(motion.at(LatticePos::ORIGIN).levels[5], 0.0);
+            draw(&mut motion, &mut tracker, &view, 5.1, true);
+            assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11], "an audio pose");
+            tracker.handle_event(on(5.2, 60));
+            draw(&mut motion, &mut tracker, &view, 5.2, true);
+            draw(&mut motion, &mut tracker, &view, 7.0, true);
+            tracker.handle_event(off(7.0, 60));
+            draw(&mut motion, &mut tracker, &view, 7.0, true);
+            motion.at(LatticePos::ORIGIN).delay
+        };
+        let fresh = departure(false);
+        assert!(fresh.iter().any(|&d| d > 0.0), "an ordered departure: {fresh:?}");
+        assert_eq!(departure(true), fresh);
+    }
     #[test]
     fn stagger_spread_spans_starts_and_reverses_without_waiting() {
         let layout = crate::octave_layout(6, 60.0);
@@ -1285,26 +1509,26 @@ mod tests {
                 tracker.handle_event(on(0.0, 60));
                 draw(&mut motion, &mut tracker, &view, 0.0, false);
                 draw(&mut motion, &mut tracker, &view, 0.04, false);
-                let before = motion.nodes[&LatticePos::ORIGIN].progress;
+                let before = motion.at(LatticePos::ORIGIN).progress;
                 tracker.handle_event(off(0.04, 60));
                 draw(&mut motion, &mut tracker, &view, 0.05, false);
-                let m = &motion.nodes[&LatticePos::ORIGIN];
+                let m = motion.at(LatticePos::ORIGIN);
                 assert_eq!(m.delay, [0.0; 11]);
                 for (a, b) in before.into_iter().zip(m.progress) {
                     assert!(if a > 0.0 { b < a } else { b == 0.0 });
                 }
                 tracker.handle_event(on(0.05, 60));
                 draw(&mut motion, &mut tracker, &view, 0.06, false);
-                assert_eq!(motion.nodes[&LatticePos::ORIGIN].delay, [0.0; 11]);
+                assert_eq!(motion.at(LatticePos::ORIGIN).delay, [0.0; 11]);
                 draw(&mut motion, &mut tracker, &view, 1.1, false);
-                assert_eq!(motion.nodes[&LatticePos::ORIGIN].progress, [1.0; 11]);
+                assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11]);
                 // A held control edit governs the next settled departure.
                 view.note_animation.stagger_spread = 0.9 - spread;
                 tracker.handle_event(off(1.1, 60));
                 draw(&mut motion, &mut tracker, &view, 1.1, false);
                 let expected = 0.9 - spread;
                 assert!(
-                    (motion.nodes[&LatticePos::ORIGIN].delay.into_iter().fold(0.0, f32::max)
+                    (motion.at(LatticePos::ORIGIN).delay.into_iter().fold(0.0, f32::max)
                         - expected)
                         .abs()
                         < 1e-6
@@ -1314,7 +1538,7 @@ mod tests {
                 // longer buys its waiting out of each slice's own time.
                 let end = 1.1 + 1.0 + f64::from(0.9 - spread) + 1e-5;
                 draw(&mut motion, &mut tracker, &view, end, false);
-                assert_eq!(motion.nodes[&LatticePos::ORIGIN].progress, [0.0; 11]);
+                assert_eq!(motion.at(LatticePos::ORIGIN).progress, [0.0; 11]);
             }
         }
     }
@@ -1417,7 +1641,7 @@ mod tests {
             // the 0.9 spread. C5 is the seam's, already first.
             tracker.handle_event(on(0.0, 48));
             let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
-            let targets = motion.nodes[&LatticePos::ORIGIN].targets;
+            let targets = motion.at(LatticePos::ORIGIN).targets;
             let lit = targets.iter().position(|&t| t > 0.0).expect("lit slot");
             let span = first.octave_layout.span as usize;
             let mut frames = Vec::new();
@@ -1455,6 +1679,165 @@ mod tests {
             }
         }
     }
+    /// The table that drops a node at rest draws, frame for frame, what one
+    /// keeping every visible node draws, over a long run of what reaches
+    /// every branch where the two could part: chords at random velocities and
+    /// pressures, bends into nodes at rest, retriggers at one instant, notes
+    /// delivered after the frame that passed them, the view scrolling nodes
+    /// lit by held notes out and back in, the audio ring posing nodes between
+    /// notes, and a gap long enough to reset the surface.
+    #[test]
+    fn a_sparse_table_draws_what_a_dense_one_does() {
+        use harmonigraph_core::{Expression, NoteEventKind};
+        for (run, order) in (0i32..).zip(AnimationOrder::ALL) {
+            let mut view = ViewConfig::default();
+            view.note_animation.order = order;
+            view.note_animation.lit_first = run % 2 == 0;
+            view.note_animation.stagger_spread = 0.6;
+            view.mark_delay = 0.15;
+            view.intensity.pressure.thickness = Some(0.5);
+            let frame = FrameParams { fade_time: 0.35, ..Default::default() };
+            let env = view.envelope(&frame);
+            let mut seed = 0x9e37_79b9_7f4a_7c15u64 + run as u64;
+            let mut unit = move || {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                (seed >> 40) as f64 / f64::from(1u32 << 24)
+            };
+            let mut tracker = NoteTracker::new();
+            let mut dense = NodeMotion { dense: true, ..NodeMotion::default() };
+            let mut sparse = NodeMotion::default();
+            let (mut now, mut clock) = (0.0f64, 0.0f64);
+            let mut held: Vec<u8> = Vec::new();
+            let (mut fewest, mut most) = (usize::MAX, 0);
+            let (mut fewest_ringing, mut posed_most) = (usize::MAX, 0);
+            for i in 0..900i32 {
+                let shown = now;
+                now += match i {
+                    450 => 3.0,
+                    _ if unit() < 0.1 => 0.0,
+                    _ if unit() < 0.1 => 0.1,
+                    _ => 1.0 / 60.0,
+                };
+                // Delivered in time order, and now and then behind the frame
+                // already drawn past it: a late note replays the horizon.
+                let mut times: Vec<f64> = (0..(unit() * 4.0) as usize)
+                    .map(|_| {
+                        let from = if unit() < 0.05 { clock } else { clock.max(shown) };
+                        from + (now - from) * unit()
+                    })
+                    .collect();
+                times.sort_by(f64::total_cmp);
+                // Each note lights a twelfth of an equal-tempered lattice, so
+                // a quarter of the run is silence for that much to come to rest.
+                let silent = (i / 60) % 4 == 3;
+                for t in times {
+                    clock = t;
+                    if silent {
+                        if let Some(note) = held.pop() {
+                            tracker.handle_event(off(t, note));
+                        }
+                        continue;
+                    }
+                    let note = 36 + (unit() * 48.0) as u8;
+                    let pick = |unit: f64, held: &[u8]| held[(unit * held.len() as f64) as usize];
+                    let event = NoteEvent::on(t, SourceId::DIRECT, 0, note, unit() as f32);
+                    match unit() {
+                        _ if held.is_empty() => {
+                            tracker.handle_event(event);
+                            held.push(note);
+                        }
+                        x if x < 0.3 && held.len() < 3 && !held.contains(&note) => {
+                            tracker.handle_event(event);
+                            held.push(note);
+                        }
+                        x if x < 0.55 => {
+                            let note = held.remove((unit() * held.len() as f64) as usize);
+                            tracker.handle_event(off(t, note));
+                        }
+                        x if x < 0.65 => {
+                            let note = pick(unit(), &held);
+                            tracker.handle_event(off(t, note));
+                            tracker.handle_event(NoteEvent { note, ..event });
+                        }
+                        x if x < 0.85 => {
+                            let note = pick(unit(), &held);
+                            let semitones = (unit() * 6.0 - 3.0).round() as f32;
+                            let kind = NoteEventKind::Tuning { semitones };
+                            tracker.handle_event(NoteEvent { note, kind, ..event });
+                        }
+                        _ => {
+                            let note = pick(unit(), &held);
+                            let kind = NoteEventKind::Expression {
+                                expression: Expression::Pressure,
+                                value: unit() as f32,
+                            };
+                            tracker.handle_event(NoteEvent { note, kind, ..event });
+                        }
+                    }
+                }
+                tracker.prune(now, &env);
+                let audio = (i / 70) % 3 == 1;
+                let scene = || {
+                    let mut scene = derive_scene(
+                        &tracker,
+                        &Tuning::default(),
+                        &view,
+                        &view.reach(),
+                        &frame,
+                        Camera::default(),
+                        None,
+                    );
+                    // A seventh of the lattice out of view at a time, a
+                    // different seventh every five frames.
+                    let shift = i / 5;
+                    scene.nodes.retain(|n| {
+                        (n.lattice_pos.threes + 3 * n.lattice_pos.fives + shift).rem_euclid(7) != 0
+                    });
+                    if audio {
+                        scene.spectral.inner = 0.1;
+                        scene.spectral.outer = 0.4;
+                        scene.spectral.gate = 0.0;
+                    }
+                    scene
+                };
+                let mut fade = RingFade::default();
+                if audio {
+                    fade.advance(&crate::RingGate::new(&scene().spectral), &env, now);
+                }
+                let visible = scene().nodes.len();
+                let mut drawn = Vec::new();
+                for motion in [&mut dense, &mut sparse] {
+                    let mut scene = scene();
+                    motion.step(&mut scene, &tracker, &Tuning::default(), &view, &env, &fade, now);
+                    let lights: Vec<_> =
+                        scene.nodes.iter().map(|n| motion.owns_light(n.lattice_pos)).collect();
+                    drawn.push(format!("{:?} {:?} {lights:?}", scene.nodes, scene.pluses));
+                }
+                assert!(drawn[0] == drawn[1], "{order:?}: frame {i} at {now} drew differently");
+                assert_eq!(dense.nodes.len(), visible);
+                fewest = fewest.min(sparse.nodes.len());
+                most = most.max(sparse.nodes.len());
+                if audio {
+                    fewest_ringing = fewest_ringing.min(sparse.nodes.len());
+                    posed_most = posed_most.max(sparse.posed.len());
+                }
+                assert!(sparse.nodes.values().all(|m| !m.posed()), "a pose kept a full entry");
+            }
+            let reached = sparse.reached;
+            eprintln!(
+                "{order:?}: {reached:?}, the table between {fewest} and {most} entries, \
+                 up to {posed_most} poses"
+            );
+            assert!(reached.revived > 0 && reached.scrolled_in > 0 && reached.lit_in_view > 0);
+            assert!(reached.lit_after_entering > 0);
+            assert_eq!(fewest, 0, "the table never emptied");
+            // The ring at its floor poses every unlit node in view, and those
+            // poses are what a full table of them would be.
+            assert_eq!(fewest_ringing, 0, "the table never emptied under the ring");
+            assert!(posed_most > 500, "the ring posed too little of the window: {posed_most}");
+            assert!(most > 50, "nothing lit enough of the lattice to measure: {most}");
+        }
+    }
     #[test]
     fn lit_first_starts_a_slot_a_second_note_lights_mid_arrival() {
         let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
@@ -1463,13 +1846,13 @@ mod tests {
         let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
         tracker.handle_event(on(0.0, 48));
         draw(&mut motion, &mut tracker, &view, 0.0, false);
-        let early = motion.nodes[&LatticePos::ORIGIN].targets;
+        let early = motion.at(LatticePos::ORIGIN).targets;
         // C4 a rolled moment later, on the slot Bidirectional delays by 0.3:
         // the arrival is already running, so it is never scheduled afresh.
         tracker.handle_event(on(0.05, 60));
         draw(&mut motion, &mut tracker, &view, 0.05, false);
-        let order = motion.nodes[&LatticePos::ORIGIN].order_delay;
-        let late = motion.nodes[&LatticePos::ORIGIN].targets;
+        let order = motion.at(LatticePos::ORIGIN).order_delay;
+        let late = motion.at(LatticePos::ORIGIN).targets;
         let second = (0..11).find(|&i| late[i] > early[i]).expect("C4's slot");
         assert!(order[second] > 0.2, "C4's slot would start first anyway: {order:?}");
         let scene = draw(&mut motion, &mut tracker, &view, 0.1, false);

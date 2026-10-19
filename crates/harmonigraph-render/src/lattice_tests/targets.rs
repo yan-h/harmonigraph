@@ -382,7 +382,7 @@ fn glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level() {
     shooter.pane = 10;
     let delivered = shooter.shot_again(&scene);
     let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&10];
-    let mix = pane.ink_instances[0].glow[2];
+    let mix = pane.ink_history.as_ref().unwrap().history.mixes()[0];
     assert!(
         (mix - (1.0 - (-0.1f32).exp())).abs() < 1e-6,
         "attack uses the last encoded level: {mix}"
@@ -397,7 +397,7 @@ fn glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level() {
     scene.glow_timing.as_mut().unwrap().now = 0.5;
     assert!(total_light(&shooter.shot_again(&scene)) > 64);
     let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&20];
-    let mix = pane.ink_instances[0].glow[2];
+    let mix = pane.ink_history.as_ref().unwrap().history.mixes()[0];
     assert!(
         (mix - (1.0 - (-0.4f32 / 4.0).exp())).abs() < 1e-6,
         "falling targets use release: {mix}"
