@@ -353,12 +353,23 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
             tighten(ui);
+            // One button's fill under every option, laid down first and sized
+            // once they are: an unselected option draws no fill of its own, and
+            // without one the options read as more words after the row's name
+            // rather than as the control beside it. A button's fill rather than
+            // a value bar's well, which says "a range to drag" and is the one
+            // thing a bar is found by.
+            let fill = ui.painter().add(egui::Shape::Noop);
+            let mut span = egui::Rect::NOTHING;
             for &(choice, label, hint) in options {
                 let response = ui.selectable_value(value, choice, label);
+                span = span.union(response.rect);
                 if !hint.is_empty() {
                     response.on_hover_text(hint).on_disabled_hover_text(hint);
                 }
             }
+            let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
+            ui.painter().set(fill, egui::Shape::rect_filled(span, radius, theme::widget()));
         });
     } else {
         choice_menu(ui, id, value, options);
@@ -557,6 +568,42 @@ mod tests {
 
     const OPTIONS: [(u8, &str, &str); 3] =
         [(0, "Perspective", ""), (1, "Orthographic", ""), (2, "Cabinet", "")];
+
+    /// A choice row's options stand on one button fill spanning them all, so
+    /// they read as the control beside the row's name rather than as more words
+    /// after it; the name stands on the page.
+    #[test]
+    fn a_choice_rows_options_share_one_fill_and_its_name_none() {
+        let mut value = 0;
+        let out = painted_in(egui::vec2(600.0, 100.0), |ui| {
+            choice_row(ui, "Projection", &mut value, &OPTIONS)
+        });
+        let fills: Vec<egui::Rect> = out
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r) if r.fill == theme::widget() => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        let under = |text: &str| -> Vec<egui::Rect> {
+            let at = out
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) if t.galley.text() == text => {
+                        Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {text} drawn"));
+            fills.iter().copied().filter(|fill| fill.contains(at)).collect()
+        };
+        assert_eq!(under("Projection"), [], "the name stands on a fill");
+        let fill = under("Perspective");
+        assert_eq!(fill.len(), 1, "the first option stands on {fill:?}");
+        for (_, option, _) in &OPTIONS[1..] {
+            assert_eq!(under(option), fill, "{option} is not on the first option's fill");
+        }
+    }
 
     /// The width a choice group is judged by is the width it draws, at a
     /// fractional scale too, where egui rounds each button's margin to whole
