@@ -12,8 +12,7 @@ struct BlitOut {
 struct GlowOverOut {
     metal::float4 other;
     metal::float4 ink;
-    metal::float4 bloom_other;
-    metal::float4 bloom_ink;
+    metal::float4 bloom;
 };
 constant float BLOOM_THRESHOLD = 0.35;
 constant float BLOOM_KNEE = 0.25;
@@ -26,8 +25,7 @@ struct fs_glow_overInput {
 struct fs_glow_overOutput {
     metal::float4 other [[color(0)]];
     metal::float4 ink [[color(1)]];
-    metal::float4 bloom_other [[color(3)]];
-    metal::float4 bloom_ink [[color(4)]];
+    metal::float4 bloom [[color(3)]];
 };
 fragment fs_glow_overOutput fs_glow_over(
   fs_glow_overInput varyings [[stage_in]]
@@ -37,6 +35,6 @@ fragment fs_glow_overOutput fs_glow_over(
 ) {
     const BlitOut in = { pos, varyings.uv };
     metal::float4 light = scene_tex.sample(scene_samp, in.uv);
-    const auto _tmp = GlowOverOut {light, metal::float4(0.0), light, metal::float4(0.0)};
-    return fs_glow_overOutput { _tmp.other, _tmp.ink, _tmp.bloom_other, _tmp.bloom_ink };
+    const auto _tmp = GlowOverOut {light, metal::float4(0.0), light};
+    return fs_glow_overOutput { _tmp.other, _tmp.ink, _tmp.bloom };
 }

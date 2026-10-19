@@ -44,16 +44,14 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     let ink = target(&shooter).ink_view.clone();
     let glow = target(&shooter).glow.as_ref().unwrap().view.clone();
     let raw = history(&shooter).raw_views.clone();
-    let initial_bloom = target(&shooter).bloom.as_ref().unwrap().nodes_view.clone();
-    let initial_bloom_ink = target(&shooter).bloom.as_ref().unwrap().ink_view.clone();
+    let initial_bloom = target(&shooter).bloom.as_ref().unwrap().input_view.clone();
     let bytes = |view: &wgpu::TextureView| {
         let tex = view.texture();
         u64::from(tex.width()) * u64::from(tex.height()) * 8
     };
     let bloom = target(&shooter).bloom.as_ref().unwrap();
     let bloom_bytes = [
-        &bloom.nodes_view,
-        &bloom.ink_view,
+        &bloom.input_view,
         &bloom.chain.half_view,
         &bloom.chain.quarter_a_view,
         &bloom.chain.quarter_b_view,
@@ -62,8 +60,8 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     .map(bytes)
     .sum::<u64>();
     assert_eq!(
-        bloom_bytes, 1_245_184,
-        "256-square pane: bloom pair plus half and two quarters, RGBA16F"
+        bloom_bytes, 720_896,
+        "256-square pane: bloom input plus half and two quarters, RGBA16F"
     );
     assert_eq!(bytes(&color), 524_288);
     assert_eq!(bytes(&ink), 524_288);
@@ -71,8 +69,7 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     // Changing strength while enabled must keep the same allocation.
     scene.view.note_bloom = 0.5;
     shooter.shot_again(&scene);
-    assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, initial_bloom);
-    assert_eq!(target(&shooter).bloom.as_ref().unwrap().ink_view, initial_bloom_ink);
+    assert_eq!(target(&shooter).bloom.as_ref().unwrap().input_view, initial_bloom);
     scene.view.note_bloom = 0.0;
     let plain = shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none());
@@ -81,8 +78,7 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     for _ in 0..3 {
         scene.view.note_bloom = 1.0;
         assert_eq!(bloomed, shooter.shot_again(&scene), "on recovers identical pixels");
-        assert_ne!(target(&shooter).bloom.as_ref().unwrap().nodes_view, initial_bloom);
-        assert_ne!(target(&shooter).bloom.as_ref().unwrap().ink_view, initial_bloom_ink);
+        assert_ne!(target(&shooter).bloom.as_ref().unwrap().input_view, initial_bloom);
         scene.view.note_bloom = 0.0;
         assert_eq!(plain, shooter.shot_again(&scene), "off recovers identical pixels");
         let held = target(&shooter);
@@ -128,15 +124,15 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     assert_eq!(fresh, shooter.shot_again(&scene));
     // Silence while enabled retains the same bloom allocation for the next
     // note. Empty geometry gates allocation, not retention.
-    let held_bloom = target(&shooter).bloom.as_ref().unwrap().nodes_view.clone();
+    let held_bloom = target(&shooter).bloom.as_ref().unwrap().input_view.clone();
     let nodes = std::mem::take(&mut scene.nodes);
     let pluses = std::mem::take(&mut scene.pluses);
     shooter.shot_again(&scene);
-    assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, held_bloom);
+    assert_eq!(target(&shooter).bloom.as_ref().unwrap().input_view, held_bloom);
     scene.nodes = nodes;
     scene.pluses = pluses;
     shooter.shot_again(&scene);
-    assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, held_bloom);
+    assert_eq!(target(&shooter).bloom.as_ref().unwrap().input_view, held_bloom);
     scene.nodes.clear();
     scene.pluses.clear();
     // Switching off while empty still retires the allocation, and switching

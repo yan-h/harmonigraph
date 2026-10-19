@@ -19,8 +19,7 @@ struct SceneOut {
     metal::float4 other;
     metal::float4 ink;
     metal::float4 transmission;
-    metal::float4 bloom_other;
-    metal::float4 bloom_ink;
+    metal::float4 bloom;
 };
 struct Locals {
     metal::float2 screen_points;
@@ -117,8 +116,7 @@ struct fs_shadow_boxOutput {
     metal::float4 other [[color(0)]];
     metal::float4 ink [[color(1)]];
     metal::float4 transmission [[color(2)]];
-    metal::float4 bloom_other [[color(3)]];
-    metal::float4 bloom_ink [[color(4)]];
+    metal::float4 bloom [[color(3)]];
 };
 fragment fs_shadow_boxOutput fs_shadow_box(
   fs_shadow_boxInput varyings [[stage_in]]
@@ -133,6 +131,6 @@ fragment fs_shadow_boxOutput fs_shadow_box(
     float _e3 = shadow_kernel(in.who, in.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
     float _e6 = locals.shadow_depth;
     float _e8 = local_shadow_transmittance(_e3, _e6, in.level);
-    const auto _tmp = SceneOut {metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0), metal::float4(0.0)};
-    return fs_shadow_boxOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom_other, _tmp.bloom_ink };
+    const auto _tmp = SceneOut {metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0, 0.0, 0.0, 1.0 - _e8), metal::float4(0.0)};
+    return fs_shadow_boxOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom };
 }
