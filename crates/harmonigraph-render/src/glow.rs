@@ -321,8 +321,9 @@ impl GlowPane {
     /// one bloom strength mean the same thing in every picture that grows one.
     fn new(device: &wgpu::Device, resources: &GlowResources, size: [u32; 2]) -> Self {
         let ([hw, hh], _) = crate::bloom_sizes(size);
-        let discs_view = device
-            .create_texture(&wgpu::TextureDescriptor {
+        let discs_view = crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
                 label: Some("glow_discs"),
                 size: wgpu::Extent3d { width: hw, height: hh, depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -332,8 +333,9 @@ impl GlowPane {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
-            })
-            .create_view(&Default::default());
+            },
+        )
+        .create_view(&Default::default());
         let chain = crate::BloomChain::new(
             device,
             "glow",
@@ -343,18 +345,24 @@ impl GlowPane {
             &discs_view,
             size,
         );
-        let locals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("glow_locals"),
-            size: std::mem::size_of::<GlowUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let strength_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("glow_strength"),
-            size: std::mem::size_of::<StrengthUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let locals_buffer = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("glow_locals"),
+                size: std::mem::size_of::<GlowUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
+        let strength_buffer = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("glow_strength"),
+                size: std::mem::size_of::<StrengthUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         GlowPane {
             locals_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("glow_locals_bind_group"),

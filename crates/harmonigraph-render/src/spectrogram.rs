@@ -420,12 +420,15 @@ impl SpectrogramPane {
         pass_nr: u64,
     ) -> &'a mut SpectrogramPane {
         panes.touched_or_insert_with(pane_id, pass_nr, || SpectrogramPane {
-            uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("spectrogram_uniforms"),
-                size: std::mem::size_of::<SpectrogramUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            uniform_buffer: crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("spectrogram_uniforms"),
+                    size: std::mem::size_of::<SpectrogramUniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            ),
             vertex_buffer: create_vertex_buffer::<SpectrogramVertex>(
                 device,
                 "spectrogram_vertices",
@@ -570,12 +573,15 @@ impl CallbackTrait for SpectrogramCallback {
             let kept = pane.grid.take().filter(|g| g.fits(&self.grid));
             let buffer = match kept {
                 Some(held) => held.buffer,
-                None => device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("spectrogram_grid"),
-                    size,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
+                None => crate::gpu_memory::buffer(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some("spectrogram_grid"),
+                        size,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                ),
             };
             // Zero unoccupied ring slots too, so reusing a buffer is equivalent
             // to a fresh allocation. Bulk replacement avoids many scattered writes.
@@ -610,16 +616,19 @@ impl CallbackTrait for SpectrogramCallback {
 
         let fresh_lut = pane.lut.as_ref().is_none_or(|l| l.levels != levels);
         if fresh_lut {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("spectrogram_lut"),
-                size: wgpu::Extent3d { width: levels, height: 1, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            let texture = crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some("spectrogram_lut"),
+                    size: wgpu::Extent3d { width: levels, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+            );
             let view = texture.create_view(&Default::default());
             pane.lut = Some(LutTexture {
                 texture,
@@ -1773,12 +1782,15 @@ mod tests {
             );
             // One actual float pixel distinguishes linear 0.216 from an
             // erroneously gamma-encoded 0.502; an RGBA8 readback cannot.
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("float_palette_pixel"),
-                size: 8,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            let buffer = crate::gpu_memory::buffer(
+                &device,
+                &wgpu::BufferDescriptor {
+                    label: Some("float_palette_pixel"),
+                    size: 8,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                },
+            );
             let mut encoder = device.create_command_encoder(&Default::default());
             let mut source = texture.as_image_copy();
             source.origin = wgpu::Origin3d { x: 64, y: 64, z: 0 };
@@ -3147,23 +3159,29 @@ fn cs_wrap_probe() {
             cache: None,
         });
         let bytes = COUNT * 8;
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("spectral_cloud_wrap_probe_output"),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let output = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("spectral_cloud_wrap_probe_output"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        );
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("spectral_cloud_wrap_probe"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[wgpu::BindGroupEntry { binding: 3, resource: output.as_entire_binding() }],
         });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("spectral_cloud_wrap_probe_readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let readback = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("spectral_cloud_wrap_probe_readback"),
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -3748,28 +3766,34 @@ fn cs_rotation_probe() {
             cache: None,
         });
         let bytes = COUNT * 8;
-        let output = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("spectral_cloud_rotation_probe_output"),
-            size: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        let output = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("spectral_cloud_rotation_probe_output"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        );
         let output_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("spectral_cloud_rotation_probe"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[wgpu::BindGroupEntry { binding: 3, resource: output.as_entire_binding() }],
         });
         let make_tile = |label, rgba: [u8; 4]| {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            let texture = crate::gpu_memory::texture(
+                &device,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+            );
             queue.write_texture(
                 texture.as_image_copy(),
                 &rgba,
@@ -3788,12 +3812,15 @@ fn cs_rotation_probe() {
         let (_fine_texture, fine_view) =
             make_tile("spectral_cloud_rotation_fine", [0, 255, 128, 255]);
         let uniform_bytes = atmosphere::watercolor_tile_probe_uniform(true);
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("spectral_cloud_rotation_uniform"),
-            size: uniform_bytes.len() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("spectral_cloud_rotation_uniform"),
+                size: uniform_bytes.len() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         queue.write_buffer(&uniform, 0, &uniform_bytes);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("spectral_cloud_rotation_sampler"),
@@ -3827,12 +3854,15 @@ fn cs_rotation_probe() {
                 },
             ],
         });
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("spectral_cloud_rotation_probe_readback"),
-            size: bytes,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let readback = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("spectral_cloud_rotation_probe_readback"),
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());

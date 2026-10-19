@@ -457,8 +457,9 @@ pub(crate) fn image(
     size: [u32; 2],
     format: wgpu::TextureFormat,
 ) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
+    crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -473,6 +474,7 @@ pub(crate) fn image(
                     wgpu::TextureUsages::empty()
                 },
             view_formats: &[],
-        })
-        .create_view(&Default::default())
+        },
+    )
+    .create_view(&Default::default())
 }

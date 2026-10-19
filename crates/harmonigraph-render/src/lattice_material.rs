@@ -211,8 +211,9 @@ fn texture(
     size: [u32; 2],
     format: wgpu::TextureFormat,
 ) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
+    crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -221,8 +222,9 @@ fn texture(
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
-        })
-        .create_view(&Default::default())
+        },
+    )
+    .create_view(&Default::default())
 }
 fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
     Some(wgpu::RenderPassColorAttachment {
@@ -275,17 +277,20 @@ impl Tile {
                 },
             ],
         });
-        use wgpu::util::DeviceExt;
+
         let values = Geometry {
             fuzz: f32::from_bits(geometry[0]),
             lobe: f32::from_bits(geometry[1]),
             padding: Float2([0.0; 2]),
         };
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("material_geometry"),
-            contents: bytemuck::bytes_of(&values),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let buffer = crate::gpu_memory::buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("material_geometry"),
+                contents: bytemuck::bytes_of(&values),
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
         let bake_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material_geometry"),
             layout: &pipelines.bake_layout,
@@ -315,12 +320,15 @@ pub(super) struct Source {
 impl Source {
     fn new(device: &wgpu::Device, pipelines: &Pipelines, size: [u32; 2]) -> Self {
         let view = texture(device, "lattice_material_light_source", size, LATTICE_COLOR_FORMAT);
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("lattice_material_settings"),
-            size: size_of::<Settings>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let buffer = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("lattice_material_settings"),
+                size: size_of::<Settings>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material_source"),
             layout: &pipelines.source_layout,

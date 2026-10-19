@@ -1376,12 +1376,15 @@ impl Targets {
             })
         });
         let buffer = |label, size| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            )
         };
         let source_uniform = buffer(
             "spectral_cloud_source_uniform",

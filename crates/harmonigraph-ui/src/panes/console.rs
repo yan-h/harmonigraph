@@ -9,6 +9,16 @@ pub(super) fn console_pane(ui: &mut egui::Ui, runtime: &mut crate::VisualRuntime
         if ui.button("Clear").clicked() {
             runtime.console.clear();
         }
+        let gpu = ui.button("GPU memory").on_hover_text(
+            "Log every live GPU texture and buffer, largest first, and copy the table.",
+        );
+        if gpu.clicked() {
+            let table = crate::perf::gpu_memory_table(ui.ctx());
+            for line in table.lines() {
+                runtime.console.log(line.to_owned());
+            }
+            ui.ctx().copy_text(table);
+        }
     });
     // Its own area rather than the dock's, because it sticks to the bottom and
     // the Clear row above it does not scroll — so it needs the bar's lane
