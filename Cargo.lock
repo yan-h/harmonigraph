@@ -1469,6 +1469,8 @@ dependencies = [
  "harmonigraph-metal-assets",
  "harmonigraph-scene",
  "naga",
+ "objc2 0.6.4",
+ "objc2-metal 0.3.2",
  "pollster",
  "ron",
  "serde",

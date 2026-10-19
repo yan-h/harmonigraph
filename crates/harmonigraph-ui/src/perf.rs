@@ -116,6 +116,7 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         // milliseconds and megabytes and looks exactly like a correct picture.
         let (folds, uploads) = perf.spec_fallbacks;
         rows.push((1, "spec", format!("{folds:.0}/s refold · {uploads:.0}/s full"), None));
+        rows.push((0, "gpu mem", gpu_memory_row(&perf.gpu_memory), None));
     }
     rows.extend([
         (0, "memory", memory_readout(perf.rss_bytes), None),
@@ -128,6 +129,37 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         ),
     ]);
     rows
+}
+
+/// The GPU memory record's totals: what our targets and buffers hold, what
+/// the whole Metal device holds (egui's textures, wgpu's own and ours), and
+/// the most ours have held. The table behind them is the Console's.
+fn gpu_memory_row(totals: &harmonigraph_render::gpu_memory::Totals) -> String {
+    let mb = |bytes: u64| bytes.div_ceil(1024 * 1024);
+    match totals.device {
+        Some(device) => {
+            format!("{} MB · {} dev · {} peak", mb(totals.live), mb(device), mb(totals.peak))
+        }
+        None => "n/a".to_owned(),
+    }
+}
+
+/// The GPU memory record as a table, with egui's own textures under it:
+/// egui-wgpu allocates those, so they are on the device but not the record.
+pub(crate) fn gpu_memory_table(ctx: &egui::Context) -> String {
+    let mut table = harmonigraph_render::gpu_memory::snapshot().table();
+    let textures = ctx.tex_manager();
+    let textures = textures.read();
+    let bytes: usize = textures.allocated().map(|(_, meta)| meta.bytes_used()).sum();
+    table += &format!(
+        "egui textures (egui-wgpu's, not recorded): {} of them, {:.1} MB\n",
+        textures.num_allocated(),
+        bytes as f64 / (1024.0 * 1024.0),
+    );
+    for (_, meta) in textures.allocated() {
+        table += &format!("  {} {}×{}\n", meta.name, meta.size[0], meta.size[1]);
+    }
+    table
 }
 
 /// The build row, laid out to `width` — the HUD's own grid width, so naming
@@ -487,6 +519,8 @@ mod tests {
                 (0, "verts"),
                 (1, "roll"),
                 (1, "spec"),
+                // The GPU memory record's totals; the table is the Console's.
+                (0, "gpu mem"),
                 // The headline rows, which the breakdown keeps at the foot.
                 (0, "memory"),
                 (0, "voices"),

@@ -213,16 +213,23 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         // out of the comparison. Premultiplied, as the real target is, and well
         // under opaque so the ground still shows through it.
         let light = {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("parity_light"),
-                size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
+            let texture = crate::gpu_memory::texture(
+                &device,
+                &wgpu::TextureDescriptor {
+                    label: Some("parity_light"),
+                    size: wgpu::Extent3d {
+                        width: SIZE[0],
+                        height: SIZE[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+            );
             let texel = [96u8, 64, 32, 128];
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {

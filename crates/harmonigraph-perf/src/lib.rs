@@ -570,6 +570,9 @@ pub struct PerfStats {
     /// time — raw RSS simply wanders by megabytes between reads as the host
     /// and the GPU driver take memory and give it back.
     pub rss_bytes: u64,
+    /// The GPU memory record's totals, read with `rss_bytes`. Unsmoothed:
+    /// they move only when a target is allocated or freed.
+    pub gpu_memory: harmonigraph_render::gpu_memory::Totals,
     /// Shell-clock time of the last memory read, to throttle it.
     last_mem_read: f64,
     /// Shell-clock time of the previous frame, for measuring the interval.
@@ -602,6 +605,7 @@ impl Default for PerfStats {
             spec_fallbacks: (0.0, 0.0),
             last_fallbacks: (0, 0),
             rss_bytes: 0,
+            gpu_memory: Default::default(),
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
             last_readout: f64::NEG_INFINITY,
@@ -761,6 +765,7 @@ impl PerfStats {
                 let (from, to) = (self.rss_bytes as f64, sample as f64);
                 (from + (to - from) * MEM_SMOOTH) as u64
             };
+            self.gpu_memory = harmonigraph_render::gpu_memory::totals();
             self.last_mem_read = now;
         }
     }

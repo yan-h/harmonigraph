@@ -68,12 +68,15 @@ fn collected(cb: &LatticeCallback, has_atlas: bool, max_dim: u32) -> [Vec<shadow
 }
 
 fn read_cells(shooter: &Shooter, buffer: &wgpu::Buffer, bytes: usize) -> Vec<u8> {
-    let out = shooter.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("shadow_cell_readback"),
-        size: bytes as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let out = crate::gpu_memory::buffer(
+        &shooter.device,
+        &wgpu::BufferDescriptor {
+            label: Some("shadow_cell_readback"),
+            size: bytes as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        },
+    );
     let mut encoder = shooter.device.create_command_encoder(&Default::default());
     encoder.copy_buffer_to_buffer(buffer, 0, &out, 0, bytes as u64);
     shooter.queue.submit([encoder.finish()]);
@@ -149,14 +152,17 @@ fn prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes() {
             (&mut gpu_pane.cell_buffer, gpu_pane.glyph_capacity),
         ] {
             if !buffer.usage().contains(wgpu::BufferUsages::COPY_SRC) {
-                *buffer = shooter.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("readable_shadow_upload"),
-                    size: ((capacity + 1) * CELL_BYTES) as u64,
-                    usage: wgpu::BufferUsages::VERTEX
-                        | wgpu::BufferUsages::COPY_DST
-                        | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: false,
-                });
+                *buffer = crate::gpu_memory::buffer(
+                    &shooter.device,
+                    &wgpu::BufferDescriptor {
+                        label: Some("readable_shadow_upload"),
+                        size: ((capacity + 1) * CELL_BYTES) as u64,
+                        usage: wgpu::BufferUsages::VERTEX
+                            | wgpu::BufferUsages::COPY_DST
+                            | wgpu::BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    },
+                );
             }
             shooter.queue.write_buffer(buffer, 0, &vec![0xA5; buffer.size() as usize]);
         }

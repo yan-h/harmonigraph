@@ -1,0 +1,8 @@
+# Every texture and buffer goes through `gpu_memory`, so the GPU memory record
+# holds all of them; these are the calls it wraps.
+disallowed-methods = [
+    { path = "wgpu::Device::create_texture", reason = "use gpu_memory::texture, so the GPU memory record sees it" },
+    { path = "wgpu::Device::create_buffer", reason = "use gpu_memory::buffer, so the GPU memory record sees it" },
+    { path = "wgpu::util::DeviceExt::create_buffer_init", reason = "use gpu_memory::buffer_init, so the GPU memory record sees it" },
+    { path = "wgpu::util::DeviceExt::create_texture_with_data", reason = "add a recorded wrapper in gpu_memory" },
+]
