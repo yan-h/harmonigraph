@@ -17,6 +17,10 @@ doctest = false
 hot-reload = ["dep:naga"]
 # Export/strict validation of generated assets; no toolchain work during builds.
 shader-assets-tools = []
+# For other crates' tests: one device's own GPU memory peak
+# (`gpu_memory::snapshot_of`), since a test shares its process, and so the
+# record, with other tests' devices.
+test-support = []
 
 [dependencies]
 harmonigraph-scene = { workspace = true }
