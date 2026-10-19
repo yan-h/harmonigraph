@@ -43,7 +43,7 @@ HERE_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
 # editor does — so a change to what any pane looks like is a change to what an
 # mp4 looks like, and a worktree that built only the plugin hands the loader
 # whatever renderer it happens to be holding.
-if (( $# == 0 )); then
+if [[ -z "${1:-}" ]]; then
   HERE="$(git rev-parse --show-toplevel)"
   # A detached HEAD has no branch to load by, so say so before the build
   # rather than after it.

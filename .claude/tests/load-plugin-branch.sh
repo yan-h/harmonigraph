@@ -63,6 +63,24 @@ expect "(detached)" "'(detached)' matches multiple branches:
   (detached)  $TMP/detached-a
   (detached)  $TMP/detached-b"
 
+# Building with no argument (or an empty one) loads by branch, so a detached
+# checkout refuses before it builds rather than after.
+mkdir -p "$TMP/bin"
+printf '#!/bin/sh\ntouch "%s/cargo-ran"\n' "$TMP" > "$TMP/bin/cargo"
+chmod +x "$TMP/bin/cargo"
+for arg in none empty; do
+  if [ "$arg" = none ]; then set --; else set -- ""; fi
+  got=$(cd "$TMP/detached-a" && PATH="$TMP/bin:$PATH" ./load-plugin.sh "$@" 2>&1)
+  status=$?
+  if [ "$status" -ne 0 ] && [[ "$got" == *"detached HEAD"* ]] && [ ! -e "$TMP/cargo-ran" ]; then
+    echo "✓ detached build refuses ($arg)"
+  else
+    echo "✗ detached build ($arg): exit $status, cargo $([ -e "$TMP/cargo-ran" ] && echo ran || echo idle), got '$got'" >&2
+    failures=$((failures + 1))
+  fi
+done
+set --
+
 # A handoff record the loader cannot read prints '?' rather than ending the
 # loader partway through a load, whether or not the caller sets pipefail.
 mkdir -p "$TMP/unreadable" && echo '{}' > "$TMP/unreadable/handoff.json"
