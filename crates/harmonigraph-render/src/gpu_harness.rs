@@ -55,16 +55,19 @@ pub(crate) fn render_to_texture(
     clear: wgpu::Color,
     draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
 ) -> wgpu::Texture {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("parity_target"),
-        size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let texture = crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some("parity_target"),
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        },
+    );
     let view = texture.create_view(&Default::default());
     let mut encoder = device.create_command_encoder(&Default::default());
     {
@@ -100,12 +103,15 @@ pub(crate) fn readback(
 ) -> Vec<u8> {
     let row_bytes = size[0] * 4;
     let bytes_per_row = row_bytes.div_ceil(256) * 256;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("parity_readback"),
-        size: (bytes_per_row * size[1]) as u64,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let buffer = crate::gpu_memory::buffer(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("parity_readback"),
+            size: (bytes_per_row * size[1]) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        },
+    );
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),

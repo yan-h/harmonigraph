@@ -510,19 +510,22 @@ impl Plane {
         size: [u32; 2],
         label: &str,
     ) -> Plane {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: ATLAS_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let texture = crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: ATLAS_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+        );
         let view = texture.create_view(&Default::default());
         let read = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_shadow_atlas_read"),
@@ -736,12 +739,15 @@ pub(crate) fn caster_buffers(
     occluders: usize,
 ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup) {
     let buffer = |label, bytes: usize| {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: bytes as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
+        crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        )
     };
     let kernels =
         buffer("lattice_shadow_casters", std::mem::size_of::<ShadowCaster>() * casters.max(1));
@@ -1408,12 +1414,15 @@ pub(crate) mod tests {
             },
             wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
         );
-        let boxes = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("test_boxes"),
-            size: (2 * std::mem::size_of::<ShadowBox>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let boxes = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("test_boxes"),
+                size: (2 * std::mem::size_of::<ShadowBox>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
         queue.write_buffer(&boxes, 0, bytemuck::cast_slice(&packed.boxes));
         let mut encoder = device.create_command_encoder(&Default::default());
         target.blur(&mut encoder, (&pipelines.blur_x, &pipelines.blur_y), &boxes, 2);

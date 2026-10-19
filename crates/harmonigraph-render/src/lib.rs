@@ -44,6 +44,7 @@ mod lattice_frame;
 mod lattice_prepare;
 mod pass_aged;
 
+pub mod gpu_memory;
 pub mod shader_assets;
 /// Progress for interactive editor initialization; offline rendering remains synchronous.
 pub mod startup;
@@ -1231,18 +1232,22 @@ impl GpuTimer {
                 ty: wgpu::QueryType::Timestamp,
                 count: 2,
             }),
-            resolve: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("lattice_gpu_timer_resolve"),
-                size: TIMER_BYTES,
-                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            }),
+            resolve: crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("lattice_gpu_timer_resolve"),
+                    size: TIMER_BYTES,
+                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                },
+            ),
             staging: Self::staging(device),
             period: queue.get_timestamp_period(),
             state: TimerState::Idle,
             ready: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
-            head: device
-                .create_texture(&wgpu::TextureDescriptor {
+            head: crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
                     label: Some("lattice_gpu_timer_head"),
                     size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
                     mip_level_count: 1,
@@ -1251,18 +1256,22 @@ impl GpuTimer {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
-                })
-                .create_view(&Default::default()),
+                },
+            )
+            .create_view(&Default::default()),
         })
     }
 
     fn staging(device: &wgpu::Device) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("lattice_gpu_timer_staging"),
-            size: TIMER_BYTES,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
+        crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("lattice_gpu_timer_staging"),
+                size: TIMER_BYTES,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        )
     }
 
     /// Advance the readback cycle, returning a measurement in milliseconds on
@@ -1739,8 +1748,9 @@ impl BloomChain {
         screen_size: [u32; 2],
     ) -> Self {
         let tex = |label: String, w: u32, h: u32| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
+            crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
                     label: Some(&label),
                     size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                     mip_level_count: 1,
@@ -1750,8 +1760,9 @@ impl BloomChain {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
-                })
-                .create_view(&Default::default())
+                },
+            )
+            .create_view(&Default::default())
         };
         let ([hw, hh], [qw, qh]) = bloom_sizes(screen_size);
         let half_view = tex(format!("{label}_bloom_half"), hw, hh);
@@ -1773,15 +1784,18 @@ impl BloomChain {
                 ],
             })
         };
-        use wgpu::util::DeviceExt;
-        let scale_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("bloom_scale"),
-            contents: bytemuck::cast_slice(&Self::scales(
-                screen_size,
-                egui::vec2(screen_size[0] as f32, screen_size[1] as f32),
-            )),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+
+        let scale_buffer = crate::gpu_memory::buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("bloom_scale"),
+                contents: bytemuck::cast_slice(&Self::scales(
+                    screen_size,
+                    egui::vec2(screen_size[0] as f32, screen_size[1] as f32),
+                )),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        );
         let scale_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bloom_scale_binding"),
             layout: &Self::scale_layout(device),
@@ -1870,16 +1884,19 @@ impl Offscreen {
     ) -> Self {
         let OffscreenShared { format, .. } = *shared;
         let tex = |label, w: u32, h: u32, format, usage| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            })
+            crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                },
+            )
         };
         let attach_and_sample =
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -1974,8 +1991,9 @@ impl Offscreen {
         }
         self.bloom = want.then(|| {
             let tex = |label| {
-                device
-                    .create_texture(&wgpu::TextureDescriptor {
+                crate::gpu_memory::texture(
+                    device,
+                    &wgpu::TextureDescriptor {
                         label: Some(label),
                         size: wgpu::Extent3d {
                             width: self.size[0],
@@ -1989,8 +2007,9 @@ impl Offscreen {
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                             | wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
-                    })
-                    .create_view(&Default::default())
+                    },
+                )
+                .create_view(&Default::default())
             };
             let nodes_view = tex("lattice_bloom_other");
             let ink_view = tex("lattice_bloom_ink");
@@ -2095,8 +2114,9 @@ impl GlowTarget {
     fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, scene: [u32; 2]) -> Self {
         let size = scene.map(|n| n.div_ceil(GLOW_DIVISOR).max(1));
         let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
-        let view = device
-            .create_texture(&wgpu::TextureDescriptor {
+        let view = crate::gpu_memory::texture(
+            device,
+            &wgpu::TextureDescriptor {
                 label: Some("lattice_glow"),
                 size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -2106,8 +2126,9 @@ impl GlowTarget {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
-            })
-            .create_view(&Default::default());
+            },
+        )
+        .create_view(&Default::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_glow_bind_group"),
             layout: filter_layout,
@@ -2150,8 +2171,9 @@ impl InkStrip {
         #[cfg(test)]
         lattice_tests::INK_STRIP_CREATIONS.with(|count| count.set(count.get() + 1));
         let tex = |label: &str, width: u32| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
+            crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
                     label: Some(label),
                     size: wgpu::Extent3d { width, height: rows.max(1), depth_or_array_layers: 1 },
                     mip_level_count: 1,
@@ -2161,8 +2183,9 @@ impl InkStrip {
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
-                })
-                .create_view(&Default::default())
+                },
+            )
+            .create_view(&Default::default())
         };
         // One column wider than the reading it blurs: the extra one holds the
         // row's MEAN, which is the same convolution at no concentration and so
@@ -2996,8 +3019,9 @@ impl CompiledLatticeResources {
         // texture, and a zero it cannot write is a texel of whatever the
         // driver left there smeared under every node's ink.
         let stand_in = |label, format| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
+            crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
                     label: Some(label),
                     size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
                     mip_level_count: 1,
@@ -3007,8 +3031,9 @@ impl CompiledLatticeResources {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING
                         | wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
-                })
-                .create_view(&Default::default())
+                },
+            )
+            .create_view(&Default::default())
         };
         let glow_dummy = stand_in("lattice_glow_dummy", LATTICE_COLOR_FORMAT);
         let glow_dummy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3149,12 +3174,15 @@ impl LatticeResources {
         let want_casters = wants.casters;
         let want_occluders = wants.occluders;
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
-            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("lattice_uniforms"),
-                size: std::mem::size_of::<Uniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            let uniform_buffer = crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("lattice_uniforms"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            );
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("lattice_bind_group"),
                 layout,
@@ -3218,12 +3246,15 @@ impl LatticeResources {
                 occluder_capacity: INITIAL_OCCLUDER_CAPACITY,
                 caster_bind_group,
                 draws: Vec::new(),
-                glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("lattice_glyph_uniforms"),
-                    size: std::mem::size_of::<text::TextUniforms>() as u64,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
+                glyph_uniform_buffer: crate::gpu_memory::buffer(
+                    device,
+                    &wgpu::BufferDescriptor {
+                        label: Some("lattice_glyph_uniforms"),
+                        size: std::mem::size_of::<text::TextUniforms>() as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                ),
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
                 ink_history: None,
@@ -3348,12 +3379,15 @@ struct PaneTargets {
 /// Used for both the instance and marker buffers, which differ only in label
 /// and element type.
 fn create_vertex_buffer<T>(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (capacity * std::mem::size_of::<T>()) as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    crate::gpu_memory::buffer(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (capacity * std::mem::size_of::<T>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        },
+    )
 }
 
 /// Fill native staging directly; dropping the view schedules its copy. Byte
