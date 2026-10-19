@@ -178,7 +178,7 @@ fn group(
         ui.painter()
             .set(slot, egui::Shape::Vec(reach_shapes(rect, settings, target, &sources, scale)));
     } else if sources.is_empty() {
-        widgets::weak(ui, "No mappings");
+        widgets::label(ui, "No mappings");
     }
 }
 
@@ -435,7 +435,7 @@ mod tests {
             .unwrap();
         assert!(overlay_index < text_index, "bands must stay beneath the text");
         assert!(out.shapes.iter().any(|s| matches!(&s.shape,
-            egui::Shape::Text(t) if t.galley.text() == "Opacity base" && t.fallback_color == theme::text_dim())));
+            egui::Shape::Text(t) if t.galley.text() == "Opacity base" && t.fallback_color == theme::text())));
         for source in Source::ALL {
             assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Path(p) if p.fill == theme::well().lerp_to_gamma(source.color(), 0.5))));

@@ -1210,7 +1210,7 @@ mod tests {
         // edges facing back at it are its bottom and its left.
         let placed = |size: f32, facing: egui::Vec2| {
             let mut batch = TextBatch::default();
-            let font = egui::FontId::monospace(size);
+            let font = crate::theme::picture_font(size);
             let mut inset = 0.0;
             let _ = crate::tests::probe::painted_full(egui::vec2(400.0, 200.0), |ui| {
                 inset = ink_inset(ui.painter(), "500", &font, facing);
@@ -1260,7 +1260,7 @@ mod tests {
         // Nothing to measure reports nothing rather than a box's worth of
         // air: a label with no ink has no edge for a ruling to be near.
         let _ = crate::tests::probe::painted_full(egui::vec2(400.0, 200.0), |ui| {
-            assert_eq!(ink_inset(ui.painter(), "", &egui::FontId::monospace(20.0), down), 0.0);
+            assert_eq!(ink_inset(ui.painter(), "", &crate::theme::picture_font(20.0), down), 0.0);
         });
     }
 
@@ -1654,7 +1654,7 @@ mod tests {
                     egui::pos2(20.0, 20.0),
                     egui::Align2::LEFT_TOP,
                     "A".to_owned(),
-                    egui::FontId::monospace(30.0),
+                    crate::theme::picture_font(30.0),
                     egui::Color32::WHITE,
                     egui::Color32::BLACK,
                 );
@@ -1715,7 +1715,7 @@ mod tests {
                 |ui| {
                     let _ = ui.painter().layout_no_wrap(
                         crate::panes::spectral::frequency_label(1_000.0),
-                        egui::FontId::monospace(24.0),
+                        crate::theme::picture_font(24.0),
                         egui::Color32::WHITE,
                     );
                 },
@@ -1737,7 +1737,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(rect), ..Default::default() },
             |ui| {
                 let painter = ui.painter_at(rect);
-                let font = egui::FontId::monospace(24.0);
+                let font = crate::theme::picture_font(24.0);
                 let label = crate::panes::spectral::frequency_label(1_000.0);
                 let mut batch = TextBatch::default();
                 batch.text(
@@ -1986,7 +1986,7 @@ mod tests {
                 egui::pos2(20.0, 20.0),
                 egui::Align2::LEFT_TOP,
                 "C4".to_owned(),
-                egui::FontId::monospace(13.0),
+                crate::theme::picture_font(13.0),
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
             );
@@ -2012,7 +2012,7 @@ mod tests {
                 egui::pos2(20.0, 20.0),
                 egui::Align2::LEFT_TOP,
                 "C4".to_owned(),
-                egui::FontId::monospace(13.0),
+                crate::theme::picture_font(13.0),
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
             );
@@ -2024,7 +2024,7 @@ mod tests {
     #[test]
     fn a_glyph_at_a_new_texel_refreshes_the_mirror() {
         let ctx = egui::Context::default();
-        let font = egui::FontId::monospace(13.0);
+        let font = crate::theme::picture_font(13.0);
         for _ in 0..2 {
             batch_keys(&ctx, &font, "Ai");
             batch_keys(&ctx, &font, "iA");
@@ -2082,7 +2082,7 @@ mod tests {
     /// ratio and refreshes on that, which is why this survives casual use.
     #[test]
     fn a_fresh_context_is_shown_the_atlas_again() {
-        let font = egui::FontId::monospace(13.0);
+        let font = crate::theme::picture_font(13.0);
         let mut state = crate::tests::probe::fresh();
 
         // A window's worth of labels, settled: the second pass draws what the
@@ -2183,7 +2183,7 @@ mod tests {
         let frame = |want: f32, split: bool| -> (f32, u32) {
             let (raster, magnify) = ladder(want, base, ppp);
             let magnify = if split { magnify } else { 1.0 };
-            let font = egui::FontId::monospace(base * raster);
+            let font = crate::theme::picture_font(base * raster);
             let mut batch = TextBatch::default();
             let anchor = egui::pos2(100.0, 100.0);
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {

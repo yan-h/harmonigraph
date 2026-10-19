@@ -308,10 +308,10 @@ pub(super) fn tuning_pane(
         );
         true
     } else if state.runtime.configuration_status & 4 != 0 {
-        crate::widgets::weak(ui, "Tuning applied; host notification was rejected");
+        crate::widgets::label(ui, "Tuning applied; host notification was rejected");
         true
     } else if state.runtime.configuration_status & 8 != 0 {
-        crate::widgets::weak(ui, "Tuning change refused: pending command storage is full");
+        crate::widgets::label(ui, "Tuning change refused: pending command storage is full");
         true
     } else {
         false
@@ -328,7 +328,7 @@ pub(super) fn tuning_pane(
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
     if !configuration_notice && state.runtime.configuration_pending {
-        crate::widgets::weak(ui, "Tuning change pending audio adoption");
+        crate::widgets::label(ui, "Tuning change pending audio adoption");
     }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
@@ -561,7 +561,7 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
             ui.painter().circle_filled(
                 center + egui::vec2(offset * scale, 0.0),
                 0.6 * scale,
-                ui.visuals().weak_text_color().gamma_multiply(overflow_level),
+                crate::theme::text_dim().gamma_multiply(overflow_level),
             );
         }
     }
@@ -684,7 +684,7 @@ fn instance_controls(
         .min_row_height(0.0)
         .spacing(ui.spacing().item_spacing)
         .show(ui, |ui| {
-            crate::widgets::weak(ui, "Source");
+            crate::widgets::label(ui, "Source");
             bulk_control(ui, "Retune", true);
             bulk_control(ui, "Show", false);
             ui.end_row();
@@ -883,7 +883,7 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
         if view.pending {
-            crate::widgets::weak(ui, "Map state pending audio adoption");
+            crate::widgets::label(ui, "Map state pending audio adoption");
         }
         if mode != TuningEngine::LatticeMap {
             return mode;
@@ -951,7 +951,7 @@ fn map_controls(
             params.edit_lattice_map(MapEdit::Follow(follow));
         }
         if view.followed != harmonigraph_core::LatticePos::ORIGIN {
-            crate::widgets::weak(
+            crate::widgets::label(
                 ui,
                 format!(
                     "Following: fifths {:+}, thirds {:+} beyond the offsets",
@@ -996,7 +996,7 @@ fn map_controls(
         egui::ScrollArea::horizontal().id_salt("map-offsets-scroll").show(ui, |ui| {
         egui::Grid::new("map-offsets").show(ui, |ui| {
             for heading in ["Axis", "Fine", "Coarse", "Total"] {
-                crate::widgets::weak(ui, heading);
+                crate::widgets::label(ui, heading);
             }
             ui.end_row();
             for (label, fine, extension, axis) in [

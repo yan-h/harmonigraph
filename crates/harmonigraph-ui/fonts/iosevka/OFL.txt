@@ -110,7 +110,8 @@ not met.
     OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ---
-Note: this file is a glyph subset of Iosevka Fixed Regular (Latin,
-punctuation, arrows, and music accidentals), produced with fonttools
-pyftsubset for embedding in Harmonigraph. The complete font is
-available at https://github.com/be5invis/Iosevka.
+Note: IosevkaFixedCurly-Medium.ttf is a glyph subset of Iosevka Fixed
+Curly Medium 34.9.0, hinted (Latin-1, punctuation, arrows, comparison and
+music accidentals: the 277 characters of the earlier subset), produced
+with fonttools pyftsubset. The complete font is available at
+https://github.com/be5invis/Iosevka.

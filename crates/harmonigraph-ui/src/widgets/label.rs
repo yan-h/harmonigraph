@@ -15,7 +15,7 @@
 use egui::{Response, Sense, Ui, WidgetText};
 
 /// How far below the top of its line box a galley's capitals start, and how
-/// far above its bottom its last baseline sits: the two lengths [`label`]
+/// far above its bottom its last baseline is drawn: the two lengths [`label`]
 /// trims off. Zero for a galley with no glyphs.
 pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     let (Some(first), Some(last)) = (galley.rows.first(), galley.rows.last()) else {
@@ -27,9 +27,9 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     let Some(font) = galley.job.sections.first().map(|s| s.format.font_id.clone()) else {
         return (0.0, 0.0);
     };
-    let cap = cap_height(ui, font);
+    let (cap, drop) = cap_ink(ui, font);
     let top = first.pos.y + first_glyph.pos.y - cap;
-    let bottom = galley.size().y - (last.pos.y + last_glyph.pos.y);
+    let bottom = galley.size().y - (last.pos.y + last_glyph.pos.y + drop);
     (top.max(0.0), bottom.max(0.0))
 }
 
@@ -37,37 +37,28 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
 /// centred across the row. For every run drawn inside a control — a bar's
 /// name and readout, a switch's or the record button's label.
 ///
-/// How depends on the face. Atkinson's own metrics centre its capitals in its
-/// line box (3.81pt over them, 3.91pt under the baseline at 13.5pt), so its
-/// box is centred, exactly as egui centres a button's text: a bar's name then
-/// stands at the same height as the button beside it at every pixel density.
-/// Measuring the caps off the ink instead rounds them to the pixel grid, which
-/// at 2x stood a name one device pixel lower than a button's text (#1481).
-///
-/// Iosevka's capitals stand about 0.4pt above the middle of its box (3.1pt
-/// over them, 3.85pt under the baseline), so a monospace run — a readout — is
-/// centred on its measured caps instead,
-/// and descenders hang into the air below, as they do under a trimmed
-/// [`label`].
-pub(crate) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
-    let monospace = galley
-        .job
-        .sections
-        .first()
-        .is_some_and(|section| section.format.font_id.family == egui::FontFamily::Monospace);
-    if !monospace {
-        return egui::pos2(x, row.center().y - galley.size().y * 0.5);
-    }
-    let (top, bottom) = cap_trim(ui, galley);
-    egui::pos2(x, row.center().y - (top + galley.size().y - bottom) * 0.5)
+/// The face is installed with its capitals centred in its line box
+/// (`theme::install_fonts`), so the box is centred, exactly as egui centres a
+/// button's text: a bar's name and readout then stand at the same height as
+/// the button beside them at every pixel density. Measuring the caps off the
+/// ink instead rounds them to the pixel grid, which at 2x stood a name one
+/// device pixel lower than a button's text (#1481).
+pub(crate) fn text_at(row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
+    egui::pos2(x, row.center().y - galley.size().y * 0.5)
 }
-/// The height of a capital above the baseline in `font`, read off the ink of
-/// an "H". egui caches the layout, so asking every frame is a lookup.
-fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
+/// Where an "H" in `font` is drawn against the baseline egui lays it on: how
+/// far its top stands above it, and how far its foot, the baseline as drawn,
+/// stands below it. Both off the ink, because the chrome's face is drawn below
+/// its layout by `theme::CAP_CENTRING`, so the drawn baseline is not the laid
+/// out one. egui caches the layout, so asking every frame is a lookup.
+fn cap_ink(ui: &Ui, font: egui::FontId) -> (f32, f32) {
     let h = ui.fonts_mut(|fonts| fonts.layout_no_wrap("H".into(), font, egui::Color32::WHITE));
     match h.rows.first().and_then(|row| Some((row, row.glyphs.first()?))) {
-        Some((row, glyph)) => row.pos.y + glyph.pos.y - h.mesh_bounds.min.y,
-        None => 0.0,
+        Some((row, glyph)) => {
+            let baseline = row.pos.y + glyph.pos.y;
+            (baseline - h.mesh_bounds.min.y, h.mesh_bounds.max.y - baseline)
+        }
+        None => (0.0, 0.0),
     }
 }
 
@@ -103,14 +94,14 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
 
 /// Baseline to baseline down a wrapped [`label`], at scale 1.
 ///
-/// egui's own pitch is the font's, 17 points under 13.5-point type, which is
+/// egui's own pitch is the font's, about 1.25 times the type, which is
 /// leading for running prose. The text here is a sentence or two of help
-/// under a heading, and at 1.26 times the type its lines read as separate
-/// rows of a column rather than as one paragraph. 14 is 1.04 times, tight but
-/// clear of a descender meeting the capital under it; 13 brings the two
-/// within a pixel. A whole number of points, so every line lands on the same
+/// under a heading, and at that pitch its lines read as separate rows of a
+/// column rather than as one paragraph. 16 under 15-point type is 1.07 times,
+/// tight but clear of a descender meeting the capital under it, as 14 was
+/// under 13.5. A whole number of points, so every line lands on the same
 /// pixel phase at scale 1.
-const LINE_PITCH: f32 = 14.0;
+const LINE_PITCH: f32 = 16.0;
 
 /// `text` laid out the way `ui.label` would — `ui`'s wrap mode across the
 /// width it has, Body as the fallback face — at [`LINE_PITCH`] rather than the
@@ -134,7 +125,10 @@ fn wrapped(ui: &Ui, text: WidgetText) -> std::sync::Arc<egui::Galley> {
 /// Every box sits where its ink is (see the module docs), so the row gap alone
 /// would put a line of text as near a bar as two bars sit to each other, which
 /// reads cramped. Bars and buttons keep the row gap between themselves.
-pub(crate) const GROUP_GAP: f32 = 6.0;
+///
+/// 8 under 15-point text and a 4-point row gap; 6, under 13.5-point text and
+/// a 3-point gap, read tight beside otonal's panes.
+pub(crate) const GROUP_GAP: f32 = 8.0;
 
 fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")
@@ -187,11 +181,6 @@ fn extra(ui: &Ui) -> f32 {
     (GROUP_GAP * crate::theme::ui_scale(ui.ctx()) - ui.spacing().item_spacing.y).max(0.0)
 }
 
-/// [`label`] in the weak text colour, for `ui.weak`.
-pub fn weak(ui: &mut Ui, text: impl Into<egui::RichText>) -> Response {
-    label(ui, text.into().weak())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{label, GROUP_GAP};
@@ -241,6 +230,40 @@ mod tests {
                     "{place}: a {next} stands {gap}pt under the line, not {GROUP_GAP}pt",
                 );
             }
+        }
+    }
+
+    /// A trimmed label's box is its capitals as DRAWN, top to baseline, at
+    /// 1x and 2x. The chrome's face is drawn a little below where egui lays it
+    /// out (`theme::CAP_CENTRING`), and a box trimmed to the laid-out baseline
+    /// would stop short of the ink and hang the text into the gap under it.
+    #[test]
+    fn a_trimmed_label_is_its_capitals_as_drawn() {
+        for ppp in [1.0, 2.0] {
+            let ctx = crate::tests::probe::themed_at(ppp);
+            let mut rect = egui::Rect::NOTHING;
+            let out = ctx.run_ui(Default::default(), |ui| {
+                rect = ui.horizontal(|ui| label(ui, "HEH").rect).inner;
+            });
+            let ink = out
+                .shapes
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) => Some(t.galley.mesh_bounds.translate(t.pos.to_vec2())),
+                    _ => None,
+                })
+                .expect("the label painted no text");
+            // Within the quarter point a 2x display rounds a glyph to.
+            let slack = 0.25;
+            assert!(
+                (ink.top() - rect.top()).abs() <= slack
+                    && (ink.bottom() - rect.bottom()).abs() <= slack,
+                "at ppp {ppp} the caps are drawn {}..{} in a box {}..{}",
+                ink.top(),
+                ink.bottom(),
+                rect.top(),
+                rect.bottom(),
+            );
         }
     }
 }

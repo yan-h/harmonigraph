@@ -51,7 +51,8 @@ pub fn accent() -> Color32 {
 pub fn text() -> Color32 {
     c(active_skin().text)
 }
-/// Secondary text (labels, weak()).
+/// Marks that are not text: unlit thumbs, chevrons, preview lines, and a
+/// switched-off section's heading. Every text is [`text`].
 pub fn text_dim() -> Color32 {
     c(active_skin().text_dim)
 }
@@ -126,8 +127,8 @@ pub fn picture_off_scale() -> Color32 {
 /// Sized against the row rhythm, not on its own: at [`ROW_GAP`] apart, a radius
 /// well past the gap cuts a notch between two stacked bars wider than the gap
 /// itself, and the column reads as a stack of pills rather than a grid of rows
-/// (5 did, at a 3pt gap). At the gap itself (3) they read as hard-edged boxes,
-/// so the radius sits a point above it.
+/// (5 did, at a 3pt gap). 3 read as hard-edged boxes. 4 is otonal's, at its
+/// 4pt gap.
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`control_radius`].
@@ -167,11 +168,11 @@ pub(crate) const PANE_GUTTER: f32 = 8.0;
 /// The gap between two rows of a settings pane, egui's `item_spacing.y`.
 ///
 /// A settings pane is a tall column of short rows, so this is spent once per
-/// row and buys nothing per point: 3 is enough to keep two bars from reading
-/// as one control, and every point above that is a row fewer on screen.
+/// row. 3 kept two bars from reading as one control and read cramped beside
+/// otonal's panes; 4 is otonal's chrome gap, under its 22-point controls.
 ///
 /// The design size, at [scale](ui_scale) 1.0.
-pub(crate) const ROW_GAP: f32 = 3.0;
+pub(crate) const ROW_GAP: f32 = 4.0;
 
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
@@ -185,9 +186,12 @@ pub(crate) const ROW_GAP: f32 = 3.0;
 /// egui's floor does not reach — a text field, the toggle switch, the record
 /// button — ask for it (see [`crate::widgets`]).
 ///
+/// 22 points holds the 15-point text with room over and under it, as otonal's
+/// chrome controls do; 19 held 13.5-point text, and read small and tight.
+///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`row_height`].
-pub(crate) const ROW_HEIGHT: f32 = 19.0;
+pub(crate) const ROW_HEIGHT: f32 = 22.0;
 
 /// Height of a section's tab bar, which is also the thickness a folded section
 /// is squeezed to (see [`crate::workspace`]) and the depth of the chrome along
@@ -196,7 +200,7 @@ pub(crate) const ROW_HEIGHT: f32 = 19.0;
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`tab_bar_height`].
-pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
+pub(crate) const TAB_BAR_HEIGHT: f32 = 29.0;
 
 // ---- Chrome scale ----------------------------------------------------------
 // One factor over every SIZE in the panel chrome — type, spacing, control
@@ -217,9 +221,9 @@ pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
 // here moves a single node. That is the whole request — the panel gets out of
 // the way, the picture is untouched.
 
-/// What the chrome scale may be dialled to. Down to 0.7, where the 13.5pt body
-/// text lands near 9.5pt, which is about as small as Atkinson stays legible;
-/// up to 1.5 for a large display seen from across a room.
+/// What the chrome scale may be dialled to. Down to 0.7, where the 15pt body
+/// text lands near 10.5pt; up to 1.5 for a large display seen from across a
+/// room.
 pub const UI_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.5;
 
 /// Where [`set_ui_scale`] leaves the factor for the chrome to find.
@@ -368,36 +372,72 @@ pub(crate) fn reserve_scroll_gutter(ui: &mut egui::Ui) {
 
 // ---- Fonts -----------------------------------------------------------------
 
-/// Install the product fonts: Atkinson Hyperlegible for proportional text,
-/// Iosevka Fixed for
-/// monospace — chosen for its narrow numerals in ValueBars and readouts,
-/// and used by the console. All OFL; license texts ship next to the TTFs
-/// in `fonts/`. egui's bundled faces remain as fallbacks.
+/// How far the face's glyphs are drawn below where egui lays them out, as a
+/// fraction of the font size: what centres its CAPITALS in its line box.
+///
+/// Iosevka stands its capitals high in the box its metrics give it, 0.26 em
+/// over them against 0.32 em under the baseline, so egui centring a box — a
+/// button's text, a bar's name — stood the caps about a point above the middle
+/// of a row. Visual only: egui lays the text out exactly as before, so no row,
+/// width or wrap moves, and every box-centred run comes out cap-centred.
+///
+/// The chrome's alone, in the proportional family, which every chrome text is
+/// set in (its `TextStyle::Monospace` included). The picture sets its text in
+/// [`picture_family`], untweaked, because it places every glyph by the ink
+/// egui measures for it, and a shift egui does not lay out would stand the ink
+/// off where the placement put it.
+pub(crate) const CAP_CENTRING: f32 = 0.031;
+
+/// The family every text the picture draws is set in — lattice and analyzer
+/// names, markings, the badge over the lattice — and so what the offline
+/// renderer draws too: the face without [`CAP_CENTRING`]. Picture code asks for
+/// it by this name, so text that is picture rather than chrome says so where it
+/// is laid out; chrome code never asks for egui's monospace family directly.
+///
+/// egui's monospace family rather than a named one of its own: egui panics
+/// laying text out in a named family a context was never given, and a context
+/// without the theme, which only the stock families survive, is one a picture
+/// must still draw in rather than take the host down from.
+pub(crate) fn picture_family() -> egui::FontFamily {
+    egui::FontFamily::Monospace
+}
+
+/// [`picture_family`] at `size` points.
+pub(crate) fn picture_font(size: f32) -> FontId {
+    FontId::new(size, picture_family())
+}
+
+/// Install the product face, Iosevka Fixed Curly Medium, ahead of egui's
+/// bundled faces in both families: words, numbers, headings and the picture's
+/// own labels are one face, as otonal sets them. Medium rather than Regular
+/// because egui draws text thinner than macOS draws its own. The TTF is an OFL
+/// subset (Latin-1, punctuation, arrows, comparison and the music accidentals)
+/// with its license beside it in `fonts/`; egui's faces stay as per-glyph
+/// fallbacks.
+///
+/// The chrome's family, egui's proportional one, carries [`CAP_CENTRING`]; the
+/// picture's ([`picture_family`]) is the face without it.
 pub(crate) fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
 
+    const FACE: &[u8] = include_bytes!("../fonts/iosevka/IosevkaFixedCurly-Medium.ttf");
+    let chrome = FontData::from_static(FACE)
+        .tweak(egui::FontTweak { y_offset_factor: CAP_CENTRING, ..Default::default() });
     let mut fonts = FontDefinitions::default();
-    for (name, bytes) in [
-        (
-            "AtkinsonHyperlegible",
-            &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf")[..],
-        ),
-        ("IosevkaFixed", &include_bytes!("../fonts/iosevka/IosevkaFixed-Regular.ttf")[..]),
-    ] {
-        fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
-    }
+    fonts.font_data.insert("IosevkaChrome".to_owned(), std::sync::Arc::new(chrome));
+    fonts
+        .font_data
+        .insert("IosevkaPicture".to_owned(), std::sync::Arc::new(FontData::from_static(FACE)));
 
     // This runs inside the plugin's editor-open path, where a panic takes
     // the host down: if an egui upgrade ever drops the default families,
     // degrade to egui's bundled fonts instead of crashing the DAW.
-    if let Some(proportional) = fonts.families.get_mut(&FontFamily::Proportional) {
-        proportional.insert(0, "AtkinsonHyperlegible".to_owned());
-        // Per-glyph fallback for symbols Atkinson lacks — notably the music
-        // accidentals (Iosevka's subset keeps U+266D-266F).
-        proportional.push("IosevkaFixed".to_owned());
-    }
-    if let Some(monospace) = fonts.families.get_mut(&FontFamily::Monospace) {
-        monospace.insert(0, "IosevkaFixed".to_owned());
+    for (family, face) in
+        [(FontFamily::Proportional, "IosevkaChrome"), (picture_family(), "IosevkaPicture")]
+    {
+        if let Some(faces) = fonts.families.get_mut(&family) {
+            faces.insert(0, face.to_owned());
+        }
     }
     ctx.set_fonts(fonts);
 }
@@ -459,18 +499,23 @@ pub fn set_skin(ctx: &egui::Context, dials: skin::SkinDials) -> bool {
 /// specification of how the panel looks rather than as a spec with a factor
 /// threaded through every number.
 fn style_at(scale: f32) -> egui::Style {
-    // Type roles (families come from install_fonts). In the initializer rather
-    // than assigned after it because clippy reads the assign-after form as a
-    // `Default` that meant to be a struct literal, and it is right.
+    // Type roles (both families are the one face; see install_fonts). Text side
+    // by side is one size, a label, a button and a bar's readout alike, as
+    // otonal sets its chrome; Small is for the few runs laid over something
+    // else. In the initializer rather than assigned after it because clippy
+    // reads the assign-after form as a `Default` that meant to be a struct
+    // literal, and it is right.
     let mut style = egui::Style {
         text_styles: [
             // egui's own titles (a window's), and settings section headings,
             // set in spaced capitals (`panes::section_header`).
-            (TextStyle::Heading, FontId::proportional(13.5)),
-            (TextStyle::Body, FontId::proportional(13.5)),
-            (TextStyle::Button, FontId::proportional(13.5)),
-            (TextStyle::Small, FontId::proportional(11.0)),
-            (TextStyle::Monospace, FontId::monospace(12.0)),
+            (TextStyle::Heading, FontId::proportional(15.0)),
+            (TextStyle::Body, FontId::proportional(15.0)),
+            (TextStyle::Button, FontId::proportional(15.0)),
+            (TextStyle::Small, FontId::proportional(12.0)),
+            // egui's name for the role a readout and the console take, in the
+            // chrome's family like every other chrome text (see `install_fonts`).
+            (TextStyle::Monospace, FontId::proportional(15.0)),
         ]
         .into(),
         ..Default::default()
@@ -493,18 +538,13 @@ fn style_at(scale: f32) -> egui::Style {
     // any value that fits under the floor draws the same button and any value
     // over it is a button standing taller than its row.
     //
-    // At a 19-point row that is none at all. Its text lays out on the pixel
-    // grid (17 points at the design size on a 1x display), and a point of
-    // padding each side
-    // is 19 there but 13.7 in a 13.3 row at 0.7, the frame margin rounding to
-    // whole points where the type does not. With none the floor holds at
-    // every scale in [`UI_SCALE_RANGE`], by 1.25pt at its tightest (0.75: a
-    // 13pt line in a 14.25pt row) and 2pt at the design size on a 1x display;
-    // a 2x display rounds the line to half points, which moves either by a
-    // quarter point at most. This is what a
-    // session retuning the type or the row is spending, and
-    // `every_settings_row_is_one_row_high` sweeps the range and says so after
-    // a change to either.
+    // So it is none at all: the frame margin rounds to whole points where the
+    // type does not, so any padding is a button that can stand a point taller
+    // than its row at some scale. With none the floor holds at every scale in
+    // [`UI_SCALE_RANGE`]; a 2x display rounds the line to half points, which
+    // moves it by a quarter point at most. This is what a session retuning
+    // the type or the row is spending, and `every_settings_row_is_one_row_high`
+    // sweeps the range and says so after a change to either.
     style.spacing.button_padding = Vec2::new(5.0, 0.0);
     style.spacing.interact_size = Vec2::new(36.0, ROW_HEIGHT);
     style.spacing.slider_width = 160.0;
@@ -546,7 +586,7 @@ fn style_at(scale: f32) -> egui::Style {
 
     w.noninteractive.bg_fill = panel();
     w.noninteractive.bg_stroke = Stroke::new(1.0, hairline());
-    w.noninteractive.fg_stroke = Stroke::new(1.0, text_dim());
+    w.noninteractive.fg_stroke = Stroke::new(1.0, text());
     w.noninteractive.corner_radius = WIDGET_RADIUS;
 
     w.inactive.bg_fill = widget();

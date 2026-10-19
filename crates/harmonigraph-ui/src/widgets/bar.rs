@@ -11,7 +11,7 @@ use crate::theme;
 
 // The bars' own geometry, written at the design size — scale 1.0. Each is
 // multiplied by `theme::ui_scale` where it is drawn, so a bar shrinks with the
-// type inside it rather than keeping a 19-point row around 9-point text.
+// type inside it rather than keeping a 22-point row around 10-point text.
 
 // A bar's own HEIGHT is not among them: it is `theme::row_height`, which every
 // control in a settings row is drawn at. A number here instead would be free to
@@ -25,8 +25,15 @@ use crate::theme;
 pub(super) fn bar_radius(scale: f32) -> u8 {
     theme::control_radius(scale)
 }
-/// Inset of a bar's name and its value readout from the bar's own ends.
-pub(super) const BAR_TEXT_PAD: f32 = 7.0;
+/// Inset of a bar's name and its value readout from the bar's own ends:
+/// otonal's 4, since the face's side bearings already inset a glyph's ink, so
+/// the ink stands about as far from the bar's end as from its top and bottom.
+/// 7 read as a gap before the name.
+pub(super) const BAR_TEXT_PAD: f32 = 4.0;
+/// The name's inset on a bar that parks a handle at its end at rest, a
+/// [`RangeBar`](super::range::RangeBar) open to the full axis: clear of the
+/// handle by two points, so the resting bar's first letter is not under it.
+pub(super) const GRIP_TEXT_PAD: f32 = HANDLE_INSET + HANDLE_W * 0.5 + 2.0;
 /// Clear space kept between the two, so an elided name stops short of the
 /// number rather than touching it.
 pub(super) const BAR_LABEL_GAP: f32 = 6.0;
@@ -127,27 +134,6 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
         theme::accent_fill_hover()
     } else {
         theme::accent_fill()
-    }
-}
-
-/// The colour a bar's NAME is drawn in: full `text()` while the bar is under
-/// the pointer or being dragged, and `text_dim()` at rest.
-///
-/// Every bar whose name is drawn in the theme's text answers the pointer this
-/// way, and in one place for the reason [`track_fill`] is: a name that lit on a
-/// different condition from its neighbours would be the one row in a pane
-/// answering the same pointer differently. The exception is a [`SpectrumBar`],
-/// whose name is one dark colour at every state because it is drawn to read
-/// against the hue behind it (`span_name_color`). A readout is not a name and
-/// keeps its own rule — most stand at full `text()` throughout, and a
-/// [`SpectrumBar`]'s lights only for a pointer on its track.
-///
-/// [`SpectrumBar`]: super::gradient::SpectrumBar
-pub(super) fn name_color(response: &Response) -> Color32 {
-    if response.hovered() || response.dragged() {
-        theme::text()
-    } else {
-        theme::text_dim()
     }
 }
 

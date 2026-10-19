@@ -72,7 +72,7 @@ impl<'a> BendPlot<'a> {
                 (&mut bend.lightness, "Brightness"),
                 (&mut bend.chroma, "Saturation"),
             ] {
-                ui.toggle_value(on, super::option_label(name))
+                ui.toggle_value(on, name)
                     .on_hover_text(format!("Whether {} follows the curve", name.to_lowercase()));
             }
         });

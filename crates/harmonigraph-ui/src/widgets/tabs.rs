@@ -8,7 +8,7 @@
 
 use egui::{Atom, Rect, Ui, Vec2};
 
-use super::rows::{option_label, option_width};
+use super::rows::option_width;
 use crate::theme;
 
 /// Draw `options` as selectable buttons, as many as fit from the left, and the
@@ -33,7 +33,7 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
     });
     ui.horizontal(|ui| {
         for &(choice, label) in &options[..shown] {
-            ui.selectable_value(value, choice, option_label(label));
+            ui.selectable_value(value, choice, label);
         }
         if shown < options.len() {
             overflow(ui, id, value, &options[shown..]);
@@ -70,10 +70,7 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
     let icon = ui.make_persistent_id((id, "overflow icon"));
     let size = Vec2::splat(ui.spacing().icon_width);
     let button = match current {
-        Some(label) => {
-            egui::Button::selectable(true, (option_label(label), Atom::custom(icon, size)))
-                .truncate()
-        }
+        Some(label) => egui::Button::selectable(true, (label, Atom::custom(icon, size))).truncate(),
         None => egui::Button::selectable(false, Atom::custom(icon, size))
             .min_size(Vec2::splat(ui.spacing().interact_size.y)),
     };
@@ -97,7 +94,7 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
             // list is never narrower than the dropdown.
             ui.set_min_width(width);
             for &(choice, label) in hidden {
-                if ui.selectable_label(*value == choice, option_label(label)).clicked() {
+                if ui.selectable_label(*value == choice, label).clicked() {
                     *value = choice;
                 }
             }

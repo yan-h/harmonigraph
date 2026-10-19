@@ -57,7 +57,7 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// only visibility control.
 pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     if !view.spectral_ring_draws() {
-        crate::widgets::weak(ui, "Hidden. Increase Audio width in Note layers to show it.");
+        crate::widgets::label(ui, "Hidden. Increase Audio width in Note layers to show it.");
         return;
     }
     // "Ring display" and not "Ring", though the ring is what it fills: what this row

@@ -5,8 +5,8 @@ use std::ops::RangeInclusive;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, elided_name, grip_radius, name_color, paint_thumbs, track_fill,
-    BAR_TEXT_PAD, HANDLE_INSET,
+    bar_radius, bar_width, elided_name, grip_radius, paint_thumbs, track_fill, BAR_TEXT_PAD,
+    HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -498,7 +498,7 @@ impl<'a> ValueBar<'a> {
 
         let (text_color, value_color) = match self.swatch {
             Some(_) => (theme::well(), theme::well()),
-            None => (name_color(&response), theme::text()),
+            None => (theme::text(), theme::text()),
         };
         // The value is laid out first and the name takes what is left, elided.
         // The number is what the bar is FOR — a name that runs over it, or out
@@ -541,7 +541,7 @@ impl<'a> ValueBar<'a> {
         );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
+        let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
         painter.galley(label_pos, label.clone(), text_color);
@@ -909,12 +909,12 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     let job = egui::text::LayoutJob::simple_singleline(
         label.to_owned(),
         TextStyle::Body.resolve(ui.style()),
-        theme::text_dim(),
+        theme::text(),
     );
     let text_pad = BAR_TEXT_PAD * scale;
     let label = elided_name(painter, job, rect.width(), scale, value.size().x);
-    let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
-    painter.galley(centered(&label, rect.left() + text_pad), label, theme::text_dim());
+    let centered = |galley: &egui::Galley, x: f32| text_at(rect, galley, x);
+    painter.galley(centered(&label, rect.left() + text_pad), label, theme::text());
     painter.galley(
         centered(&value, rect.right() - text_pad - value.size().x),
         value,
