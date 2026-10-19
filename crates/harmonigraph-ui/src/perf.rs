@@ -1,5 +1,5 @@
 //! The performance overlay: a small HUD over the editor showing the frame
-//! rate, the process's memory, and the workload driving them — enough to see
+//! rate, the host process's memory beside our own, and the workload driving them — enough to see
 //! at a glance whether the plugin is working the machine hard.
 //!
 //! Where it sits is the user's, and nothing else's: it opens in the editor's
@@ -119,7 +119,12 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         rows.push((0, "gpu mem", gpu_memory_row(&perf.gpu_memory), None));
     }
     rows.extend([
-        (0, "memory", memory_readout(perf.rss_bytes), None),
+        (
+            0,
+            "memory",
+            memory_readout(perf.footprint_bytes, perf.heap_bytes, &perf.gpu_memory),
+            None,
+        ),
         (0, "voices", format!("{} held · {fading} fading", perf.workload.held_voices), None),
         (
             0,
@@ -555,10 +560,11 @@ mod tests {
     /// `spec` is the readout kept precisely because it is the one that would
     /// have caught both of the spectrogram's silent performance bugs.
     ///
-    /// The last four are set on `perf` rather than driven through `record`:
-    /// what is under test is which field reaches which label, and the
-    /// derivations that fill them (a rate over an interval, an eased memory
-    /// reading) are pinned by tests of their own.
+    /// The spectrogram rates and the memory readings are set on `perf` rather
+    /// than driven through `record`: what is under test is which field reaches
+    /// which label, and the derivations that fill them (a rate over an
+    /// interval, an eased memory reading, a process-wide GPU record) are pinned
+    /// by tests of their own.
     #[test]
     fn every_breakdown_row_reports_the_cost_it_names() {
         // Readings 1..12 in table order, then the three the derived rows are
@@ -608,7 +614,14 @@ mod tests {
             );
         }
         perf.spec_fallbacks = (14.0, 15.0);
-        perf.rss_bytes = 490 * 1024 * 1024;
+        let mb = |n: u64| n * 1024 * 1024;
+        perf.footprint_bytes = mb(490);
+        perf.heap_bytes = Some(mb(210));
+        perf.gpu_memory = harmonigraph_render::gpu_memory::Totals {
+            live: mb(151),
+            peak: mb(160),
+            device: Some(mb(200)),
+        };
 
         let rows = overlay_rows(&perf, true);
         let value_of = |label: &str| {
@@ -641,7 +654,9 @@ mod tests {
             ("roll", "13 notes"),
             // The two caches, in the order the labels name them.
             ("spec", "14/s refold · 15/s full"),
-            ("memory", "490 MB"),
+            // The host process's footprint, then ours: the counted heap and
+            // the GPU record's live total.
+            ("memory", "490 MB host · ours 210 heap + 151 GPU"),
             ("voices", "17 held · 19 fading"),
             ("nodes", "21  ·  3.25× scale"),
         ] {
@@ -842,7 +857,7 @@ mod tests {
         // A shallow parse fails by finding nothing, which would pass every
         // assertion below, so it has to show it found both lists first.
         assert!(
-            workload.contains(&"animating") && stats.contains(&"rss_bytes"),
+            workload.contains(&"animating") && stats.contains(&"footprint_bytes"),
             "the field lists did not parse: {workload:?} / {stats:?}",
         );
 

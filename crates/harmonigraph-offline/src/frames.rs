@@ -112,27 +112,7 @@ impl Renderer {
             },
         );
 
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("offline frame"),
-            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = target.create_view(&Default::default());
-
-        let bytes_per_row = aligned(size[0] * 4);
-        let readback = std::array::from_fn(|_| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("offline readback"),
-                size: u64::from(bytes_per_row) * u64::from(size[1]),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            })
-        });
+        let (target, view, readback, bytes_per_row) = targets(&device, size);
 
         Some(Renderer {
             device,
@@ -146,6 +126,16 @@ impl Renderer {
             size,
             bytes_per_row,
         })
+    }
+
+    /// Draw every later frame at `size`, as a window resized between frames
+    /// would. The frames in flight are read first, being copies out of the
+    /// target this replaces.
+    #[cfg(test)]
+    pub fn resize(&mut self, size: [u32; 2]) {
+        while self.read(&mut Vec::new()).is_some() {}
+        (self.target, self.view, self.readback, self.bytes_per_row) = targets(&self.device, size);
+        self.size = size;
     }
 
     /// Frames submitted and not yet [read](Self::read); at most [`IN_FLIGHT`].
@@ -330,6 +320,35 @@ impl Renderer {
         self.read(&mut frame).expect("the frame just submitted");
         frame
     }
+}
+
+/// The frame target at `size`, its view, a readback buffer per frame in
+/// flight, and their padded row stride.
+fn targets(
+    device: &wgpu::Device,
+    size: [u32; 2],
+) -> (wgpu::Texture, wgpu::TextureView, [wgpu::Buffer; IN_FLIGHT], u32) {
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("offline frame"),
+        size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let bytes_per_row = aligned(size[0] * 4);
+    let readback = std::array::from_fn(|_| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("offline readback"),
+            size: u64::from(bytes_per_row) * u64::from(size[1]),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    });
+    (target, view, readback, bytes_per_row)
 }
 
 /// The clear color, as wgpu wants it for [`FORMAT`].
@@ -1249,6 +1268,115 @@ mod tests {
             state.appearance.camera.yaw = yaw;
             state.appearance.camera.zoom_by(1.6);
             sheet.shoot(&mut state, NOW, &format!("marker-depth-{tag}"));
+        }
+    }
+
+    /// A resize holds one size's targets at a time (#1508). Every target keyed
+    /// on a pane's size — the lattice's offscreen set, the roll's, the spiral's
+    /// glow chain and the spectral cloud's — is dropped before its replacement
+    /// is built, so across a resize the record's peak is the larger steady set.
+    /// A rebuild that built first would hold the old set beside the new one,
+    /// and the peak with it.
+    ///
+    /// The default look in both panes, plus the spiral's glow, which the
+    /// export never draws (#974) and so is added here as the Spiral tab adds
+    /// it. Each owner's target is checked on the record at both sizes, since a
+    /// target never built would pass this for the wrong reason (#450).
+    ///
+    /// One owner holding both sizes shows in the peak only where its old set
+    /// outweighs what the owners preparing after it have yet to grow, or what
+    /// those before it have already shed. So the resize goes both ways, and
+    /// the glow prepares first: last, its growth hid a doubled roll holdout.
+    /// Built new before old, each owner's rebuild fails this, one at a time.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_resize_holds_one_sizes_targets_at_a_time() {
+        use harmonigraph_render::gpu_memory::{snapshot_of, GpuMemory};
+
+        // One target from each owner that rebuilds on a pane's size.
+        const KEYED: [&str; 4] =
+            ["lattice_offscreen_color", "roll_holdout", "glow_discs", "spectral_cloud_source"];
+        const A: [u32; 2] = [1600, 1000];
+        const B: [u32; 2] = [2000, 1250];
+        // Measured at these sizes, the peak is exactly the larger steady set,
+        // to the byte. The margin is slack for a per-frame buffer regrowing
+        // beside its old copy, the largest here being the text glyphs' 88 KiB.
+        // The smallest target rebuilt on a size, the roll's holdout at A, is
+        // 870 KiB; the spiral's glow chain is 4 MB and the lattice's set 40.
+        const MARGIN: u64 = 256 << 10;
+        const RATE: f32 = 48_000.0;
+
+        let Some(mut sheet) = ProbeSheet::new(A, 1.0) else { return };
+        // The export's font route: egui's own texture, shared. The fallback
+        // copy is rebuilt as the atlas grows, a transient that is the font's
+        // rather than a pane's.
+        harmonigraph_ui::use_renderer_font_texture(&sheet.context);
+        let layout = harmonigraph_ui::Layout::split(harmonigraph_ui::LatticeSide::Left, 0.68);
+        let mut state = PictureState::new(FORMAT);
+        // Notes for the roll and a second of sound for the cloud, neither of
+        // which builds a target without.
+        hold(&mut state, &CHORD);
+        let mut now = 1.0;
+        let cfg = state.appearance.spectrum;
+        state.runtime.spectrum.push_samples(&sawtooth(55.0, RATE), 1, RATE, now, &cfg);
+        let params = crate::replay::ReplayParams::default();
+
+        // A few frames at `size`, after reading back every frame in flight,
+        // as a surface reconfigure waits for the GPU.
+        let mut settle = |size: [u32; 2]| -> GpuMemory {
+            sheet.renderer.resize(size);
+            let points = egui::vec2(size[0] as f32, size[1] as f32);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+            for _ in 0..3 {
+                now += 1.0 / 30.0;
+                harmonigraph_ui::begin_frame(&mut state, &params, now);
+                let input =
+                    crate::render::frame_input(screen, now, sheet.renderer.max_texture_side());
+                let output = sheet.context.run_ui(input, |ui| {
+                    let dot = harmonigraph_render::GlowDot {
+                        center: [points.x * 0.5, points.y * 0.5],
+                        radius: 8.0,
+                        color: [255, 200, 120, 255],
+                    };
+                    ui.painter().add(harmonigraph_render::glow_paint_callback(
+                        screen,
+                        vec![dot],
+                        harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom),
+                        FORMAT,
+                    ));
+                    for (surface, (pane, rect)) in layout.resolve(points).into_iter().enumerate() {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                        harmonigraph_ui::draw_pane(&mut child, pane, &mut state, now, surface);
+                    }
+                });
+                let primitives = sheet.context.tessellate(output.shapes, 1.0);
+                let clear = egui::Color32::BLACK;
+                sheet.renderer.render_to_vec(&primitives, &output.textures_delta, 1.0, clear);
+            }
+            snapshot_of(&sheet.renderer.device)
+        };
+        let at_a = settle(A);
+        let at_b = settle(B);
+        let back = settle(A);
+
+        let shape = |record: &GpuMemory, label: &str| {
+            record.resources.iter().find(|r| r.label == label).map(|r| r.shape.clone())
+        };
+        for label in KEYED {
+            let (a, b) = (shape(&at_a, label), shape(&at_b, label));
+            assert!(
+                a.is_some() && b.is_some() && a != b,
+                "{label} must be built at both sizes: {a:?}, then {b:?}"
+            );
+        }
+        let steady = at_a.totals.live.max(at_b.totals.live).max(back.totals.live);
+        for (step, record) in [("growing", &at_b), ("shrinking", &back)] {
+            assert!(
+                record.totals.peak <= steady + MARGIN,
+                "{step}: peak {} B over the larger steady set, {steady} B\n{}",
+                record.totals.peak,
+                record.table()
+            );
         }
     }
 }

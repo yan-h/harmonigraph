@@ -26,7 +26,10 @@ jobs:
     # The check reads as "workspace" and "isolated"; the `Full CI` name stays on
     # the summary job below, which is the one to look at on a PR.
     name: ${{ matrix.group }}
-    runs-on: macos-latest
+    # Pinned rather than macos-latest: the golden frames are byte-exact against
+    # what this image draws, so a runner bump re-baselines every golden. Bump it
+    # in a PR that re-baselines anyway, not whenever GitHub moves the alias (#1496).
+    runs-on: macos-26
     env:
       # Pixel tests must render; a missing adapter must not become a green skip.
       HARMONIGRAPH_REQUIRE_GPU: "1"

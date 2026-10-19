@@ -190,8 +190,8 @@ pub fn totals() -> Totals {
 
 /// What one device holds, and the most it has held. Tests share a process
 /// with other tests' devices, so they read their own.
-#[cfg(all(test, target_vendor = "apple"))]
-pub(crate) fn snapshot_of(device: &wgpu::Device) -> GpuMemory {
+#[cfg(all(any(test, feature = "test-support"), target_vendor = "apple"))]
+pub fn snapshot_of(device: &wgpu::Device) -> GpuMemory {
     metal::snapshot(Some(device))
 }
 
@@ -320,7 +320,8 @@ mod metal {
         // Totals rise only here, so re-counting here makes the peaks exact.
         // One device's own peak is a test's question only; kept for every
         // editor window the plugin ever opened, it would only accumulate.
-        let keys: &[Option<Owner>] = if cfg!(test) { &[Some(owner), None] } else { &[None] };
+        let keys: &[Option<Owner>] =
+            if cfg!(any(test, feature = "test-support")) { &[Some(owner), None] } else { &[None] };
         for &key in keys {
             let live: u64 = record.live(key).map(|r| r.bytes).sum();
             if live > record.peak(key).bytes {

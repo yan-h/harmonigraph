@@ -125,12 +125,18 @@ pub(crate) struct Caster {
     pub stops: f32,
 }
 
-/// The caster a name's glyphs make: the box round every glyph's rect, the
-/// strength the name's rim colour carries — the one number a lattice name's
-/// `rim` holds (`LABEL_SHADOW` in harmonigraph_ui), so a name easing in as the
-/// marker under it eases out grows its shadow on the clock its ink arrives on —
-/// and the style its group is dialled to (`ShadowSettings::lattice_text`): its
-/// σ, and its Spread as [`Caster::stops`].
+/// The caster a name's glyphs make, on the lattice and the spectral panes
+/// alike: one per name, its glyphs drawn into its one cell under MAX. The box
+/// round every glyph's rect, the strength the name's rim colour carries, and
+/// the style its text group is dialled to: its σ, and its Spread as
+/// [`Caster::stops`], which lifts the blur of the word's whole ink.
+///
+/// The strength is the one number a lattice name's `rim` holds (`LABEL_SHADOW`
+/// in harmonigraph_ui), so a name easing in as the marker under it eases out
+/// grows its shadow on the clock its ink arrives on. A spectral name's rim is
+/// the knockout colour its shadow is drawn in (`fs_spectral_shadow`), which
+/// spends the strength itself, so there the level only decides whether the name
+/// casts at all.
 ///
 /// A run with no ink in it — every rect empty — is a caster of nothing, with
 /// its level zeroed rather than a box of infinities for the packer to size.
@@ -565,8 +571,28 @@ impl ShadowTarget {
         ShadowTarget { size, atlas, half }
     }
 
+    /// Make `slot` hold an atlas a layout of `size` fits in: grown to demand,
+    /// never shrunk, and the old atlas dropped BEFORE its replacement is built,
+    /// so a growth never holds both (the resize test, #1508, found both callers
+    /// building first). Nothing carries across a rebuild: the ink pass clears
+    /// the atlas every frame it is used.
+    pub(crate) fn ensure(
+        slot: &mut Option<Self>,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        size: [u32; 2],
+    ) {
+        if slot.as_ref().is_some_and(|target| target.holds(size)) {
+            return;
+        }
+        let held = slot.take().map_or([0, 0], |target| target.size);
+        *slot =
+            Some(Self::new(device, layout, sampler, [size[0].max(held[0]), size[1].max(held[1])]));
+    }
+
     /// Whether this atlas can hold a layout of `size`.
-    pub(crate) fn holds(&self, size: [u32; 2]) -> bool {
+    fn holds(&self, size: [u32; 2]) -> bool {
         self.size[0] >= size[0] && self.size[1] >= size[1]
     }
 

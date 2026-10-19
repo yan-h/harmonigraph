@@ -75,8 +75,10 @@ pub struct GlyphInstance {
     pub uv: [f32; 4],
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub fill: [u8; 4],
-    /// The shadow's pane-specific color and strength. A fully transparent
-    /// value skips this glyph as a caster.
+    /// The shadow's pane-specific color and strength, the same on every glyph
+    /// of a name: a name casts one shadow ([`GlyphRuns`]), drawn in its first
+    /// glyph's rim on the spectral panes (`vs_spectral_shadow`), and a name
+    /// whose rim is fully transparent casts nothing.
     pub rim: [u8; 4],
     /// Which of the pass's two textures [`Self::uv`] addresses:
     /// [`Self::TYPE`] or [`Self::MARK`].
@@ -165,14 +167,13 @@ pub struct PaneIds {
 /// [`SheetUploads`] for the sheets a frame may bring.
 ///
 /// `slide` is the axis this pane's text scrolls along, which the reconstruction
-/// filter follows — see [`SlideAxis`].
-/// `layer_ends` holds increasing glyph offsets after complete labels. Empty
-/// means one layer; any trailing glyphs form a final layer.
+/// filter follows — see [`SlideAxis`]. `runs` says which glyphs make one name
+/// and which names one layer — see [`GlyphRuns`].
 #[allow(clippy::too_many_arguments)]
 pub fn text_paint_callback(
     rect: egui::Rect,
     glyphs: Vec<GlyphInstance>,
-    layer_ends: Vec<u32>,
+    runs: GlyphRuns,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
     sheets: SheetUploads,
     slide: SlideAxis,
@@ -186,7 +187,7 @@ pub fn text_paint_callback(
         TextCallback {
             point_scale,
             glyphs,
-            layer_ends,
+            runs,
             shadow,
             sheets,
             slide,
@@ -198,10 +199,47 @@ pub fn text_paint_callback(
     )
 }
 
+/// Where a batch's glyphs divide, as increasing glyph offsets: after each
+/// complete NAME, and after each complete LAYER of names.
+///
+/// One struct rather than two arguments because both are `Vec<u32>` of the
+/// same kind of offset, and nothing but their order would tell them apart.
+///
+/// The two answer different questions. A name is one shadow caster: its
+/// glyphs are drawn into one cell of the atlas under MAX, and its shadow is
+/// one quad over that cell, as a lattice name's is (`shadow::caster_of`). A
+/// layer is a step of the painter order: each draws its names' shadows and
+/// then their fills, so a later layer's names shadow an earlier layer's ink.
+/// A layer is whole names, so every layer end also ends a name.
+///
+/// Empty `names` makes the batch one name and empty `layers` one layer; any
+/// glyphs after the last offset form a final name and a final layer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GlyphRuns {
+    pub names: Vec<u32>,
+    pub layers: Vec<u32>,
+}
+
+impl GlyphRuns {
+    /// The end of every name in a batch of `count` glyphs, in order and
+    /// finishing at `count`, with every layer end among them. Empty for an
+    /// empty batch.
+    fn name_ends(&self, count: u32) -> Vec<u32> {
+        let mut ends: Vec<u32> = (self.names.iter().chain(&self.layers))
+            .copied()
+            .filter(|&end| end > 0 && end < count)
+            .chain((count > 0).then_some(count))
+            .collect();
+        ends.sort_unstable();
+        ends.dedup();
+        ends
+    }
+}
+
 struct TextCallback {
     point_scale: f32,
     glyphs: Vec<GlyphInstance>,
-    layer_ends: Vec<u32>,
+    runs: GlyphRuns,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
     sheets: SheetUploads,
     slide: SlideAxis,
@@ -302,7 +340,7 @@ impl SlideAxis {
 
 struct TextResources {
     /// The shadow composite, the visible glyph fill, and the draw that fills
-    /// each glyph's shadow cell.
+    /// each name's shadow cell with its glyphs.
     shadow_pipeline: wgpu::RenderPipeline,
     fill_pipeline: wgpu::RenderPipeline,
     glyph_cell_pipeline: wgpu::RenderPipeline,
@@ -544,6 +582,12 @@ struct TextPane {
     uniform_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     instance_buffer: wgpu::Buffer,
+    /// Each glyph's own name's `ShadowBox`, beside `instance_buffer` at the
+    /// same capacity: what the cell fill and the shadow composite read the
+    /// name's cell from, as the lattice's `cell_buffer` is. Written once the
+    /// surface has packed (`spectral_shadow::CellDraw::Text`), and made only
+    /// for a pane that casts, so unshadowed chrome holds none.
+    cells: Option<wgpu::Buffer>,
     capacity: usize,
     count: u32,
 }
@@ -1168,6 +1212,7 @@ impl CallbackTrait for TextCallback {
                     "text_glyphs",
                     INITIAL_GLYPH_CAPACITY,
                 ),
+                cells: None,
                 capacity: INITIAL_GLYPH_CAPACITY,
                 count: 0,
             });
@@ -1181,6 +1226,7 @@ impl CallbackTrait for TextCallback {
             pane.capacity = self.glyphs.len().next_power_of_two();
             pane.instance_buffer =
                 create_vertex_buffer::<GlyphInstance>(device, "text_glyphs", pane.capacity);
+            pane.cells = None;
         }
         pane.count = self.glyphs.len() as u32;
         if !self.glyphs.is_empty() {
@@ -1188,25 +1234,31 @@ impl CallbackTrait for TextCallback {
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
         if let Some(surface_id) = self.shadow_surface_id {
-            // A `Caster` per glyph, built here rather than above because this
-            // is the only thing that reads them: unshadowed chrome passes no
-            // surface, and a batch of a few hundred names was allocating and
-            // filling the vector every frame for nobody.
+            // A `Caster` per NAME, made the way a lattice name's is, and built
+            // here rather than above because this is the only thing that reads
+            // them: unshadowed chrome passes no surface, and a batch of a few
+            // hundred names was allocating and filling the vector every frame
+            // for nobody.
             let sigma = style
                 .filter(|style| style.casts())
                 .map_or(0.0, |style| crate::shadow::spectral_sigma_points(style, self.point_scale));
             let stops = style.map_or(0.0, |s| s.text_spread_stops());
-            let casters: Vec<crate::shadow::Caster> = self
-                .glyphs
-                .iter()
-                .map(|glyph| crate::shadow::Caster {
-                    rect: glyph.rect,
-                    level: f32::from(glyph.rim[3] > 0),
-                    sigma_points: sigma,
-                    spread_points: 0.0,
-                    stops,
+            let mut first = 0;
+            let (casters, names) = (self.runs.name_ends(pane.count).into_iter())
+                .map(|end| {
+                    let run = &self.glyphs[first as usize..end as usize];
+                    first = end;
+                    (crate::shadow::caster_of(run, sigma, stops), run.len() as u32)
                 })
-                .collect();
+                .unzip();
+            let capacity = pane.capacity;
+            let cells = pane.cells.get_or_insert_with(|| {
+                create_vertex_buffer::<crate::shadow::ShadowBox>(
+                    device,
+                    "text_shadow_cells",
+                    capacity,
+                )
+            });
             let submission = crate::spectral_shadow::Submission {
                 key: crate::spectral_shadow::ProducerKey::Text(self.pane_id),
                 casters,
@@ -1214,7 +1266,8 @@ impl CallbackTrait for TextCallback {
                     pipeline: resources.glyph_cell_pipeline.clone(),
                     locals: pane.bind_group.as_ref().expect("bound above").clone(),
                     glyphs: pane.instance_buffer.clone(),
-                    count: pane.count,
+                    cells: cells.clone(),
+                    names,
                 },
                 atlas_uniform: pane.uniform_buffer.clone(),
                 atlas_size_offset: std::mem::offset_of!(TextUniforms, shadow_atlas_size) as u64,
@@ -1272,28 +1325,33 @@ impl CallbackTrait for TextCallback {
                 crate::spectral_shadow::ProducerKey::Text(self.pane_id),
             )
         });
-        let shadow = shadow.filter(|binding| binding.active);
-        if let Some(shadow) = shadow.as_ref() {
-            let stride = std::mem::size_of::<crate::shadow::ShadowBox>() as u64;
-            render_pass.set_vertex_buffer(
-                1,
-                shadow.boxes.slice(
-                    stride * u64::from(shadow.start)
-                        ..stride * u64::from(shadow.start + shadow.count),
-                ),
-            );
+        let shadow = shadow.filter(|binding| binding.active).zip(pane.cells.as_ref());
+        if let Some((_, cells)) = shadow.as_ref() {
+            render_pass.set_vertex_buffer(1, cells.slice(..));
         }
-        let layer_ends = if shadow.is_some() { self.layer_ends.as_slice() } else { &[] };
+        let (layer_ends, name_ends) = match shadow {
+            Some(_) => (self.runs.layers.as_slice(), self.runs.name_ends(pane.count)),
+            None => (&[][..], Vec::new()),
+        };
         let mut start = 0;
-        for end in layer_ends.iter().copied().chain(std::iter::once(pane.count)) {
+        for end in layer_ends.iter().map(|&e| e.min(pane.count)).chain(std::iter::once(pane.count))
+        {
             if end <= start {
                 continue;
             }
-            if let Some(shadow) = shadow.as_ref() {
+            if let Some((shadow, _)) = shadow.as_ref() {
                 render_pass.set_pipeline(&resources.shadow_pipeline);
                 render_pass.set_bind_group(2, shadow.atlas, &[]);
                 render_pass.set_bind_group(3, shadow.casters, &[]);
-                render_pass.draw(0..4, start..end);
+                // One quad per name, at its first glyph: every glyph of a name
+                // carries the name's box and rim, so drawing more of them would
+                // lay the same shadow down again. A layer is whole names, so
+                // the next name's start is never past the layer's end.
+                let mut first = start;
+                while first < end {
+                    render_pass.draw(0..4, first..first + 1);
+                    first = name_ends[name_ends.partition_point(|&e| e <= first)];
+                }
             }
             render_pass.set_pipeline(&resources.fill_pipeline);
             render_pass.draw(0..4, start..end);
@@ -1349,7 +1407,7 @@ pub(crate) mod tests {
         ] {
             let cb = TextCallback {
                 point_scale: 1.0,
-                layer_ends: Vec::new(),
+                runs: GlyphRuns::default(),
                 glyphs: vec![glyph()],
                 shadow: Some(style),
                 sheets: SheetUploads { font: Some(atlas()), marks: None },
@@ -1502,7 +1560,7 @@ pub(crate) mod tests {
 
         let cb = TextCallback {
             point_scale: 1.0,
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             glyphs: vec![glyph()],
             shadow: None,
             sheets: SheetUploads::default(),
@@ -1663,7 +1721,7 @@ pub(crate) mod tests {
         let size = [physical_width.div_ceil(64) * 64, (SIZE[1] as f32 * ppp).round() as u32];
         let cb = TextCallback {
             point_scale,
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             glyphs: vec![glyph],
             shadow,
             sheets: SheetUploads { font: Some(sheet), marks: None },
@@ -1683,6 +1741,17 @@ pub(crate) mod tests {
         size: [u32; 2],
         ppp: f32,
     ) -> Vec<u8> {
+        draw_scheduled(device, queue, cb, size, ppp).0
+    }
+
+    /// [`draw_callback`], with what the shadow surface packed for it.
+    fn draw_scheduled(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cb: &TextCallback,
+        size: [u32; 2],
+        ppp: f32,
+    ) -> (Vec<u8>, crate::spectral_shadow::ScheduleStats) {
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -1707,7 +1776,73 @@ pub(crate) mod tests {
                     &resources,
                 );
             });
-        readback(device, queue, &texture, size)
+        (readback(device, queue, &texture, size), crate::spectral_shadow::stats(&resources, 0))
+    }
+
+    /// Three letters side by side, 8 points each from x=16, reading
+    /// [`atlas`]'s patch, in the knockout's red with no fill over it.
+    fn word(runs: GlyphRuns, width: f32) -> TextCallback {
+        let letter = |x| GlyphInstance { rect: [x, 24.0, 8.0, 8.0], fill: [0; 4], ..glyph() };
+        TextCallback {
+            point_scale: 1.0,
+            glyphs: vec![letter(16.0), letter(24.0), letter(32.0)],
+            runs,
+            shadow: Some(harmonigraph_scene::ShadowStyle { width, depth: 1.0, spread: 0.5 }),
+            sheets: SheetUploads { font: Some(atlas()), marks: None },
+            slide: SlideAxis::default(),
+            target_format: FORMAT,
+            pane_id: 0,
+            shadow_surface_id: Some(0),
+            pass_nr: 0,
+        }
+    }
+
+    /// A spectral name is one caster with one cell, as a lattice name is: its
+    /// letters are drawn into that cell together, so the atlas holds one pad
+    /// round the word rather than one round every letter.
+    ///
+    /// The same three letters split into three names are what each letter
+    /// cost when it was a caster of its own. And the shadow still stands past
+    /// BOTH ends of the word, two points out: only the first letter's
+    /// instance draws the name's quad, so the last letter reaching the cell at
+    /// all is what puts any shadow at x=42, ten points past the second.
+    #[test]
+    fn a_spectral_name_casts_from_one_cell() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let (frame, one) =
+            draw_scheduled(&device, &queue, &word(GlyphRuns::default(), 1.0), SIZE, 1.0);
+        let split = GlyphRuns { names: vec![1, 2], layers: Vec::new() };
+        let (_, three) = draw_scheduled(&device, &queue, &word(split, 1.0), SIZE, 1.0);
+        assert_eq!((one.cells, three.cells), (1, 3), "one cell per name");
+        assert!(
+            3 * one.cell_texels < 2 * three.cell_texels,
+            "the name's one cell covers {} texels against {} for its letters' own",
+            one.cell_texels,
+            three.cell_texels,
+        );
+        for x in [14, 42] {
+            let at = pixel(&frame, x, 28);
+            assert!(at[3] > 0 && at[1] == 0, "no shadow two points past the word at x={x}: {at:?}");
+        }
+    }
+
+    /// A name's shadow is laid down once, however many glyphs it has: two
+    /// letters on the same spot in one name cast exactly what one does. A quad
+    /// per glyph would composite the knockout twice, darker where they meet.
+    #[test]
+    fn a_name_lays_its_shadow_down_once() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let mut cb = word(GlyphRuns::default(), 1.0);
+        cb.glyphs.truncate(1);
+        let single = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        cb.glyphs.push(cb.glyphs[0]);
+        let doubled = draw_callback(&device, &queue, &cb, SIZE, 1.0);
+        assert!(pixel(&single, 14, 28)[3] > 0, "the fixture casts no shadow two points out");
+        assert!(single == doubled, "a second glyph on the first changed the name's shadow");
     }
 
     #[test]
@@ -1719,7 +1854,7 @@ pub(crate) mod tests {
                 glyph(),
                 GlyphInstance { rect: [28.0, 24.0, 8.0, 8.0], fill: [0, 255, 0, 255], ..glyph() },
             ],
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             shadow: Some(harmonigraph_scene::ShadowStyle {
                 width: 0.5,
                 depth: 1.0,
@@ -1733,7 +1868,7 @@ pub(crate) mod tests {
             pass_nr: 0,
         };
         let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
-        cb.layer_ends = vec![1, 2];
+        cb.runs.layers = vec![1, 2];
         let layered = draw_callback(&device, &queue, &cb, SIZE, 1.0);
         // x=26 is back ink within the front glyph's shadow, but outside
         // its fill. Keeping both glyphs in one name must preserve it.
@@ -1875,7 +2010,7 @@ pub(crate) mod tests {
         };
         let cb = TextCallback {
             point_scale: 1.0,
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             // The letter where `glyph` puts it, the mark 16 points to its left.
             glyphs: vec![glyph(), GlyphInstance { rect: [8.0, 24.0, 8.0, 8.0], ..mark() }],
             shadow: None,
@@ -1957,7 +2092,7 @@ pub(crate) mod tests {
         }
         let cb = TextCallback {
             point_scale: 1.0,
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             glyphs: [(4.3, 0.0, 0.0), (24.3, 12.0, 12.0), (44.3, 24.0, 40.0)]
                 .iter()
                 .map(|&(x, u, v)| GlyphInstance {
@@ -2039,7 +2174,7 @@ pub(crate) mod tests {
         };
         let at = |pane_id: u64, pass_nr: u64| TextCallback {
             point_scale: 1.0,
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             glyphs: vec![glyph()],
             shadow: None,
             sheets: SheetUploads { font: Some(atlas()), marks: None },
@@ -2133,7 +2268,7 @@ pub(crate) mod tests {
         let fallback_font = atlas();
         let at = |x: f32, pane_id: u64, atlas: Option<FontAtlas>| TextCallback {
             point_scale: 1.0,
-            layer_ends: Vec::new(),
+            runs: GlyphRuns::default(),
             glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], atlas: sheet, ..glyph() }],
             shadow: None,
             sheets: if sheet == GlyphInstance::TYPE {
@@ -2219,7 +2354,7 @@ pub(crate) mod tests {
             [
                 TextCallback {
                     point_scale: 1.0,
-                    layer_ends: Vec::new(),
+                    runs: GlyphRuns::default(),
                     glyphs: vec![reaching],
                     shadow: None,
                     sheets: SheetUploads::default(),

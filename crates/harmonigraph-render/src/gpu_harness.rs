@@ -95,13 +95,16 @@ pub(crate) fn render_to_texture(
     texture
 }
 
+/// The texture's texels, packed row after row, each as its format lays it
+/// out: four bytes for RGBA8, sixteen for `Rgba32Float`.
 pub(crate) fn readback(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
     size: [u32; 2],
 ) -> Vec<u8> {
-    let row_bytes = size[0] * 4;
+    let texel = texture.format().block_copy_size(None).expect("a copyable colour format");
+    let row_bytes = size[0] * texel;
     let bytes_per_row = row_bytes.div_ceil(256) * 256;
     let buffer = crate::gpu_memory::buffer(
         device,

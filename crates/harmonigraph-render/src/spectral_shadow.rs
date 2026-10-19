@@ -46,11 +46,17 @@ pub(crate) enum CellDraw {
         instances: wgpu::Buffer,
         count: u32,
     },
+    /// A text pane's names, one caster each: `names` is how many glyphs each
+    /// of the submission's casters is made of, in order. The surface writes
+    /// each glyph its own name's box into `cells` once it has packed, which
+    /// is what the glyphs are drawn into their name's cell beside, and what
+    /// the pane's shadow composite reads the cell from.
     Text {
         pipeline: wgpu::RenderPipeline,
         locals: wgpu::BindGroup,
         glyphs: wgpu::Buffer,
-        count: u32,
+        cells: wgpu::Buffer,
+        names: Vec<u32>,
     },
     Dot {
         pipeline: wgpu::RenderPipeline,
@@ -82,6 +88,9 @@ struct ProducerRange {
 pub(crate) struct ScheduleStats {
     pub blur_chains: u32,
     pub groups: u32,
+    /// The cells packed, and their total area in atlas texels.
+    pub cells: u32,
+    pub cell_texels: u64,
 }
 
 struct Surface {
@@ -192,9 +201,6 @@ pub(crate) fn register(
 pub(crate) struct Binding<'a> {
     pub atlas: &'a wgpu::BindGroup,
     pub casters: &'a wgpu::BindGroup,
-    pub boxes: &'a wgpu::Buffer,
-    pub start: u32,
-    pub count: u32,
     pub active: bool,
 }
 
@@ -209,9 +215,6 @@ pub(crate) fn binding<'a>(
     Some(Binding {
         atlas: surface.target.as_ref().unwrap_or(&resources.dummy).read(),
         casters: &surface.caster_bind,
-        boxes: &surface.boxes,
-        start: range.start,
-        count: range.count,
         active: range.active,
     })
 }
@@ -284,19 +287,32 @@ fn finish_for_pass(
             .iter()
             .any(|caster| caster.shade[0] > 0.0);
         surface.ranges.insert(submission.key, ProducerRange { start, count, active });
+        // Each glyph beside its own name's box: the boxes repeated by their
+        // names' lengths, as the lattice writes its `cell_buffer`.
+        if let CellDraw::Text { cells, names, .. } = &submission.draw {
+            let boxes = &packed.boxes[start as usize..(start + count) as usize];
+            let rows =
+                boxes.iter().zip(names).flat_map(|(b, &n)| std::iter::repeat_n(*b, n as usize));
+            let glyphs = names.iter().map(|&n| n as usize).sum();
+            crate::write_rows::<_, { crate::BOX_BYTES }>(queue, cells, glyphs, rows);
+        }
     }
-    surface.stats = ScheduleStats { blur_chains: 0, groups: surface.submissions.len() as u32 };
+    let packed_cells = packed.boxes.iter().filter(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
+    surface.stats = ScheduleStats {
+        blur_chains: 0,
+        groups: surface.submissions.len() as u32,
+        cells: packed_cells.clone().count() as u32,
+        cell_texels: packed_cells.map(|b| (b.cell[2] * b.cell[3]) as u64).sum(),
+    };
 
     if has_cells {
-        if surface.target.as_ref().is_none_or(|target| !target.holds(packed.size)) {
-            let held = surface.target.as_ref().map_or([0, 0], |target| target.size);
-            surface.target = Some(shadow::ShadowTarget::new(
-                device,
-                &layouts.atlas,
-                &sampler,
-                [packed.size[0].max(held[0]), packed.size[1].max(held[1])],
-            ));
-        }
+        shadow::ShadowTarget::ensure(
+            &mut surface.target,
+            device,
+            &layouts.atlas,
+            &sampler,
+            packed.size,
+        );
     } else {
         surface.target = None;
     }
@@ -328,12 +344,12 @@ fn finish_for_pass(
                         pass.set_vertex_buffer(1, boxes);
                         pass.draw(0..4, 0..*count);
                     }
-                    CellDraw::Text { pipeline, locals, glyphs, count } => {
+                    CellDraw::Text { pipeline, locals, glyphs, cells, names } => {
                         pass.set_pipeline(pipeline);
                         pass.set_bind_group(0, locals, &[]);
                         pass.set_vertex_buffer(0, glyphs.slice(..));
-                        pass.set_vertex_buffer(1, boxes);
-                        pass.draw(0..4, 0..*count);
+                        pass.set_vertex_buffer(1, cells.slice(..));
+                        pass.draw(0..4, 0..names.iter().sum::<u32>());
                     }
                     CellDraw::Dot { pipeline, locals, dots, count } => {
                         pass.set_pipeline(pipeline);
@@ -557,7 +573,8 @@ mod tests {
         let mut encoder = device.create_command_encoder(&Default::default());
         finish(&device, &queue, &screen, &mut encoder, &mut resources, 7);
         queue.submit([encoder.finish()]);
-        assert_eq!(stats(&resources, 7), ScheduleStats { blur_chains: 1, groups: 2 });
+        let scheduled = stats(&resources, 7);
+        assert_eq!((scheduled.blur_chains, scheduled.groups), (1, 2));
 
         for surface in [11, 12] {
             let uniform = crate::gpu_memory::buffer(

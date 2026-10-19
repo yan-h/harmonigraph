@@ -440,14 +440,15 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
 }
 
 /// A glyph's coverage, into its name's cell of the shadow atlas (`shadow.rs`)
-/// — what its shadow is a blur of. A lattice name is one cell for all its
-/// glyphs; a spectral glyph is a cell of its own.
+/// — what its shadow is a blur of. A name is one cell for all its glyphs, on
+/// the lattice and the spectral panes alike.
 ///
 /// Written under a MAX blend, so where two glyphs of one name overlap in their
 /// margins the cell holds their union and the order they arrive in decides
 /// nothing. The coverage ALONE: the name's strength is applied where the cell
-/// is read ([`fs_shadow_box`]), as a share of the shadow rather than a scale on
-/// the ink it is blurred from, and the two are not the same thing — see there.
+/// is read ([`fs_shadow_box`], [`fs_spectral_shadow`]), as a share of the
+/// shadow rather than a scale on the ink it is blurred from, and the two are
+/// not the same thing — see there.
 /// So is the group's Spread, which lifts the blurred field rather than growing
 /// the ink (`shadow_profile` in common.wgsl).
 ///
@@ -499,9 +500,14 @@ struct SpectralShadowOut {
     @location(2) @interpolate(flat) who: u32,
 };
 
-/// A spectral glyph's shadow over its packed cell. One box per glyph keeps the
-/// skin-coloured knockout in the text compositor while the cells stay in the
+/// A spectral name's shadow over its packed cell, in the skin-coloured
+/// knockout its rim names: the text compositor's own draw, over a cell in the
 /// common shadow atlas.
+///
+/// Drawn ONCE per name, at its first glyph's instance (`TextCallback::paint`):
+/// every glyph of a name carries the name's box beside it and the name's rim,
+/// so the first stands for all of them, and a quad per glyph would lay the
+/// same shadow down once per letter.
 @vertex
 fn vs_spectral_shadow(
     @builtin(vertex_index) vertex: u32,

@@ -895,8 +895,11 @@ pub(crate) fn draw_stacked_name(
     size: NameSize,
     lead: NameLead,
 ) -> f32 {
-    batch.magnified(anchor, size.magnify, |batch| {
-        stacked_name(batch, painter, anchor, name, ink, size.scale, lead)
+    // One name, so its letter, marks and digits cast one shadow between them.
+    batch.name(|batch| {
+        batch.magnified(anchor, size.magnify, |batch| {
+            stacked_name(batch, painter, anchor, name, ink, size.scale, lead)
+        })
     })
 }
 

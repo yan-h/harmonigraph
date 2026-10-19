@@ -30,3 +30,5 @@ harmonigraph-scene = { workspace = true }
 # The byte-exact frame gate the golden set is measured by.
 harmonigraph-golden = { workspace = true }
 harmonigraph-record = { workspace = true, features = ["test-support"] }
+# Each device's own GPU memory peak, for the resize test in `frames`.
+harmonigraph-render = { workspace = true, features = ["test-support"] }

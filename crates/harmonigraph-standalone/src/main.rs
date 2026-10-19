@@ -22,6 +22,12 @@ use harmonigraph_ui::SharedState;
 const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
 const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
 
+/// Counts our Rust heap for the overlay's memory row, as the plugin does. The
+/// harness links no nice-plug, so nothing else here declares an allocator.
+#[global_allocator]
+static ALLOCATOR: harmonigraph_perf::heap::Counting<std::alloc::System> =
+    harmonigraph_perf::heap::Counting::new(std::alloc::System, &harmonigraph_perf::heap::RUST_HEAP);
+
 fn main() -> eframe::Result {
     harmonigraph_render::shader_assets::initialize();
     // Ask for timestamp queries where the adapter has them, so the

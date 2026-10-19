@@ -1494,6 +1494,7 @@ dependencies = [
  "eframe",
  "egui",
  "harmonigraph-core",
+ "harmonigraph-perf",
  "harmonigraph-render",
  "harmonigraph-take",
  "harmonigraph-ui",

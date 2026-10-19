@@ -29,15 +29,25 @@ const BUILD_TAG_NUL: &str = concat!(env!("LATTICE_BUILD_TAG"), "\0");
 
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
-// The allocator that makes `configuration::tests`' `assert_no_alloc` blocks
-// mean anything, in the one profile nice-plug does not cover.
+// The global allocator: one that counts our Rust heap for the memory row
+// (`harmonigraph_perf::heap`, #1512) in every release build, and in a release
+// TEST binary the allocation guard under it as well.
 //
-// `assert_no_alloc` only raises a thread-local forbid count; the abort lives in
-// the global allocator that reads it. nice-plug installs one
-// (`MeasuredAllocator` over `AllocDisabler`), but both of its declarations are
-// `#[cfg(debug_assertions)]` — see `vendor/nice-plug/src/wrapper/util.rs`. A
-// `--release` test binary therefore runs on the system allocator and the guard
-// passes without guarding: measured, a deliberate 64-byte `Vec` inside
+// Release only, because in a debug build nice-plug may already have installed
+// one, and two `#[global_allocator]`s cannot link. nice-plug declares its own
+// (`MeasuredAllocator` over `AllocDisabler`) under `#[cfg(debug_assertions)]`
+// plus its `assert_process_allocs` feature — see
+// `vendor/nice-plug/src/wrapper/util.rs`. That feature arrives through this
+// crate's dev-dependency, and cargo unifies it into every unit of a build that
+// has dev-dependencies, so a debug `cargo test` that links the cdylib would
+// carry both. Keyed on `debug_assertions` alone, the two are complements: the
+// debug plugin bundle, which nobody loads into a DAW, has no heap reading and
+// the row leaves it out.
+//
+// In a test binary the guard is the point. `assert_no_alloc` only raises a
+// thread-local forbid count; the abort lives in the global allocator that reads
+// it, so without `AllocDisabler` under the counter the `configuration::tests`
+// blocks pass without guarding: measured, a deliberate 64-byte `Vec` inside
 // `canonical_publication_slots_and_loss_are_allocation_free` was reported `ok`.
 //
 // The two declarations are complements only while the profiles they read agree
@@ -54,8 +64,8 @@ pub use editor::startup_probe::run as editor_startup_probe;
 //   * `[profile.dev.package."*"] debug-assertions = false`, the usual
 //     build-speed trick, reaches nice-plug (not a workspace member) and not
 //     this crate, so NEITHER is installed and the guard silently goes back to
-//     passing without guarding. That is the direction to check for whenever
-//     either profile's assertions move.
+//     passing without guarding. `tests::exactly_one_global_allocator_is_installed`
+//     stops compiling on that one: the probe it reads is gated the same way.
 //
 // If a guarded block here ever needs an escape hatch, it must call
 // `nice_assert_no_alloc::permit_alloc` and NOT `nice_plug::util::permit_alloc`,
@@ -66,9 +76,17 @@ pub use editor::startup_probe::run as editor_startup_probe;
 // permit aborts the WHOLE test binary, taking every other test's result with
 // it. The `nice_assert_no_alloc` one is live in both profiles, because the
 // workspace `Cargo.toml` compiles that package with debug assertions on.
+#[cfg(all(not(test), not(debug_assertions)))]
+#[global_allocator]
+static ALLOCATOR: harmonigraph_perf::heap::Counting<std::alloc::System> =
+    harmonigraph_perf::heap::Counting::new(std::alloc::System, &harmonigraph_perf::heap::RUST_HEAP);
 #[cfg(all(test, not(debug_assertions)))]
 #[global_allocator]
-static ALLOCATOR: nice_assert_no_alloc::AllocDisabler = nice_assert_no_alloc::AllocDisabler;
+static ALLOCATOR: harmonigraph_perf::heap::Counting<nice_assert_no_alloc::AllocDisabler> =
+    harmonigraph_perf::heap::Counting::new(
+        nice_assert_no_alloc::AllocDisabler,
+        &harmonigraph_perf::heap::RUST_HEAP,
+    );
 
 #[cfg(test)]
 mod test_scope;
@@ -1143,6 +1161,30 @@ mod tests {
     /// ever spends this — [`columns_after`] returns on the round that
     /// lands — so it costs the suite only when it is about to fail anyway.
     const ANALYSIS_DEADLINE: Duration = Duration::from_secs(5);
+
+    /// The global allocator this profile is meant to have is the one that
+    /// actually runs: ours, counting the heap over the guard, under
+    /// `--release`; nice-plug's measuring guard in a debug build.
+    ///
+    /// Two installed is a link error and needs no test. NEITHER is the silent
+    /// way for the cfg pair at the top of this file to break: the memory row
+    /// loses its heap and every `assert_no_alloc` block passes without
+    /// guarding. Each arm asserts the allocator it expects saw an allocation.
+    #[test]
+    fn exactly_one_global_allocator_is_installed() {
+        #[cfg(not(debug_assertions))]
+        assert!(
+            harmonigraph_perf::heap::rust_heap().is_some(),
+            "a release build runs without the heap-counting allocator",
+        );
+        #[cfg(debug_assertions)]
+        {
+            let (_, measured) = nice_plug::wrapper::allocation_probe::measure_allocations(|| {
+                std::hint::black_box(Box::new(0u64))
+            });
+            assert!(measured.allocations > 0, "a debug build runs without nice-plug's allocator");
+        }
+    }
 
     struct EmptyProcessContext {
         transport: Transport,
