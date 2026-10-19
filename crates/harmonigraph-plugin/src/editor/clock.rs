@@ -27,36 +27,54 @@ pub(crate) struct ClockMapper {
 /// Recent, not ever: a lead the audio no longer supports — a short dropout
 /// that lost audio time, or a sample clock running slow against the wall —
 /// ages out of the window, and `shown` then holds until the audio catches up.
-/// Kept as two buckets so the window costs nothing to slide.
+/// Kept as two buckets so the window costs nothing to slide; it spans between
+/// one and three of them.
+///
+/// And never more than [`Lead::MAX_WAIT_SECONDS`] past the latest lead, which
+/// is the most a heartbeat's wait for its frame can explain. A source running
+/// slower than realtime — an overloaded engine, a slow export — supports a
+/// lower lead with every block, and holding the best one ran the picture at
+/// wall speed and froze it by turns, with new data landing a quarter second
+/// short of the now-line. Capped, the drawn time follows such a source as
+/// closely as it did when each heartbeat set it outright.
 struct Lead {
     previous: f64,
     current: f64,
+    latest: f64,
     since: f64,
 }
 
 impl Lead {
-    /// Long enough to hold a block that met its frame almost at once at any
-    /// block size a host uses; short enough that a lead the audio dropped
-    /// lets go within a second.
+    /// Holds a few dozen 512-sample blocks, so one of them met its frame
+    /// almost at once. At 4096 samples it holds only a handful and leaves
+    /// about a millisecond of unevenness; a longer bucket would smooth that,
+    /// and would also hold a lead the audio dropped for longer.
     const BUCKET_SECONDS: f64 = 0.25;
 
+    /// A frame interval down to 20 fps, which covers every frame cap and the
+    /// closed window's analyzer poll, plus delivery jitter.
+    const MAX_WAIT_SECONDS: f64 = 0.05;
+
     fn new(lead: f64, wall: f64) -> Self {
-        Lead { previous: lead, current: lead, since: wall }
+        Lead { previous: lead, current: lead, latest: lead, since: wall }
     }
 
     fn push(&mut self, lead: f64, wall: f64) {
         let age = wall - self.since;
         if age >= 2.0 * Self::BUCKET_SECONDS {
             *self = Lead::new(lead, wall);
-        } else if age >= Self::BUCKET_SECONDS {
-            *self = Lead { previous: self.current, current: lead, since: wall };
+            return;
+        }
+        if age >= Self::BUCKET_SECONDS {
+            (self.previous, self.current, self.since) = (self.current, lead, wall);
         } else {
             self.current = self.current.max(lead);
         }
+        self.latest = lead;
     }
 
     fn get(&self) -> f64 {
-        self.previous.max(self.current)
+        self.previous.max(self.current).min(self.latest + Self::MAX_WAIT_SECONDS)
     }
 }
 
@@ -130,35 +148,42 @@ impl ClockMapper {
 mod tests {
     use super::ClockMapper;
 
-    /// A 144 Hz window draining 512-sample blocks at 48 kHz, each arriving
-    /// `lateness(k)` seconds after its last sample was due. The two rates are
-    /// incommensurate, so every frame finds its block waited a different
-    /// length of time, and three seconds cycle through those phases many times.
+    const FRAME: f64 = 1.0 / 144.0;
+    const BLOCK: f64 = 512.0 / 48_000.0;
+
+    /// A 144 Hz window draining 512-sample blocks at 48 kHz, block `k` (whose
+    /// last sample is due at `(k + 1) * BLOCK`) arriving at wall time
+    /// `arrives(k)`. The two rates are incommensurate, so every frame finds
+    /// its block waited a different length of time, and three seconds cycle
+    /// through those phases many times.
     ///
-    /// Returns the drawn time of each frame after the first half second, and
-    /// how far the last frame was drawn past the newest audio it had.
-    fn frames_at_144_hz(lateness: impl Fn(usize) -> f64) -> (Vec<f64>, f64) {
-        let (frame, block) = (1.0 / 144.0, 512.0 / 48_000.0);
+    /// Returns, for each frame after the first half second, its drawn time
+    /// and how far that was drawn past the newest audio it had.
+    fn frames_at_144_hz(arrives: impl Fn(usize) -> f64) -> Vec<(f64, f64)> {
         let mut clock = ClockMapper::new();
         let mut newest = 0.0;
         let mut next = 0;
-        let mut shown = Vec::new();
+        let mut frames = Vec::new();
         for i in 1..432 {
-            let wall = i as f64 * frame;
-            while (next + 1) as f64 * block + lateness(next) <= wall {
+            let wall = i as f64 * FRAME;
+            while arrives(next) <= wall {
                 next += 1;
-                newest = next as f64 * block;
+                newest = next as f64 * BLOCK;
             }
             if next > 0 {
                 clock.observe(newest, wall);
             }
             let now = clock.now(wall);
             if wall >= 0.5 {
-                shown.push(now);
+                frames.push((now, now - (newest + clock.offset.unwrap())));
             }
         }
-        let ahead = shown.last().unwrap() - (newest + clock.offset.unwrap());
-        (shown, ahead)
+        frames
+    }
+
+    /// Realtime blocks, each delivered 2 ms after its last sample.
+    fn on_time(k: usize) -> f64 {
+        (k + 1) as f64 * BLOCK + 0.002
     }
 
     /// What used to move the notes in steps: each drain re-anchored the clock
@@ -169,21 +194,30 @@ mod tests {
     /// a few tenths of a millisecond.
     #[test]
     fn block_delivery_does_not_step_the_drawn_time() {
-        let frame = 1.0 / 144.0;
-        let (shown, _) = frames_at_144_hz(|_| 0.002);
-        let worst = shown.windows(2).map(|w| (w[1] - w[0] - frame).abs()).fold(0.0, f64::max);
-        assert!(worst < 5e-4, "a frame advanced {worst:.4} s away from its own interval");
+        let frames = frames_at_144_hz(on_time);
+        let worst = frames.windows(2).map(|w| (w[1].0 - w[0].0 - FRAME).abs()).fold(0.0, f64::max);
+        assert!(worst < 1e-3, "a frame advanced {worst:.4} s away from its own interval");
     }
 
-    /// The audio still owns the clock: a stall that loses it 0.3 s, too short
-    /// to count as a pause, leaves the drawn time ahead of every block after
-    /// it until the lead from before the stall ages out of the window.
+    /// The audio still owns the clock: a stall that loses it 30 ms leaves the
+    /// best lead from before it unsupported, and the window lets that go
+    /// rather than keep drawing every later block 30 ms short of the now-line.
     #[test]
     fn a_lead_the_audio_lost_ages_out() {
-        let block = 512.0 / 48_000.0;
-        let (_, ahead) =
-            frames_at_144_hz(|k| if (k + 1) as f64 * block < 1.5 { 0.002 } else { 0.302 });
-        assert!(ahead < 0.02, "drawn {ahead:.3} s past the newest audio");
+        let stalled = |k| on_time(k) + if on_time(k) < 1.5 { 0.0 } else { 0.03 };
+        let &(_, ahead) = frames_at_144_hz(stalled).last().unwrap();
+        assert!(ahead < 0.015, "drawn {ahead:.3} s past the newest audio");
+    }
+
+    /// A source running at half speed — an overloaded engine, a slow export —
+    /// supports a lower lead with every block. Holding the best one ran the
+    /// picture at wall speed and froze it by turns, with new columns and notes
+    /// landing a quarter second short of the now-line.
+    #[test]
+    fn a_slow_source_is_followed() {
+        let frames = frames_at_144_hz(|k| 2.0 * on_time(k));
+        let worst = frames.iter().map(|&(_, ahead)| ahead).fold(0.0, f64::max);
+        assert!(worst < 0.1, "drawn {worst:.3} s past the newest audio");
     }
 
     #[test]
