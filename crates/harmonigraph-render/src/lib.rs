@@ -24,8 +24,8 @@
 //! sheet behind it. They arrive as glyphs, from the same collector the rest
 //! of the UI's text goes through; what differs is which pass they land in,
 //! and so that they inherit its render scale. They do NOT reach the bloom:
-//! while bloom is on the pass carries a second pair of colour attachments
-//! without their ink or coverage, and the bright pass reads their sum.
+//! while bloom is on the pass carries one more colour attachment without
+//! their ink or coverage, and the bright pass reads that.
 //!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
 //! .wgsl files are watched on disk and every pipeline cut from them rebuilds

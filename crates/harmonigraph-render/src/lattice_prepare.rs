@@ -786,7 +786,7 @@ impl LatticeCallback {
         // (`node_paint`, `plus_paint`, text.wgsl's `fs_shadow_box`), and
         // the light is in the frame first.
         //
-        // With bloom on it writes both attachments, so the bloom's
+        // With bloom on it writes the picture and the bloom input, so the bloom's
         // bright pass reads the light exactly as it reads the nodes: it is
         // light the nodes emit, and it blooms with the rest of them.
         if let Some(glow) = offscreen.glow.as_ref().filter(|_| has_light) {
