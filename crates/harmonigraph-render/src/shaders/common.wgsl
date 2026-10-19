@@ -280,12 +280,15 @@ struct SplitOut {
     @location(2) transmission: vec4<f32>,
 };
 
+// With bloom on, one more attachment: the label-free picture the bloom's
+// bright pass thresholds. One target rather than a pair split like the visible
+// one, because no shadow separates its parts: the bright pass reads only their
+// sum, and premultiplied over distributes across a sum.
 struct SceneOut {
     @location(0) other: vec4<f32>,
     @location(1) ink: vec4<f32>,
     @location(2) transmission: vec4<f32>,
-    @location(3) bloom_other: vec4<f32>,
-    @location(4) bloom_ink: vec4<f32>,
+    @location(3) bloom: vec4<f32>,
 };
 
 // Lattice ink, including names and resting crosses, fades through the same

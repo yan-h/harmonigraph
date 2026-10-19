@@ -52,7 +52,7 @@ struct AddUniforms {
     strength: vec4<f32>,
 };
 @group(0) @binding(4) var<uniform> add: AddUniforms;
-// Lattice-only node contribution, summed before thresholding or compositing.
+// Lattice-only node contribution, summed with the background at composite.
 @group(0) @binding(5) var ink_tex: texture_2d<f32>;
 // Ordered local-notation transmittance, with foreground ink coverage restored.
 @group(0) @binding(6) var local_shadow_tex: texture_2d<f32>;
@@ -178,13 +178,6 @@ fn bright(rgb: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(rgb * keep, 0.0);
 }
 
-@fragment
-fn fs_bright_split(in: BlitOut) -> @location(0) vec4<f32> {
-    let other = textureSample(scene_tex, scene_samp, in.uv);
-    let ink = textureSample(ink_tex, scene_samp, in.uv);
-    return bright(other.rgb + ink.rgb);
-}
-
 // Separable 9-tap Gaussian (sigma ~1.75 in taps; the quarter-res target
 // stretches that to a wide, cheap halo on screen).
 const BLUR_W0: f32 = 0.227027;
@@ -295,8 +288,7 @@ struct GlowSplitOut {
 struct GlowOverOut {
     @location(0) other: vec4<f32>,
     @location(1) ink: vec4<f32>,
-    @location(3) bloom_other: vec4<f32>,
-    @location(4) bloom_ink: vec4<f32>,
+    @location(3) bloom: vec4<f32>,
 };
 
 @fragment
@@ -308,5 +300,5 @@ fn fs_glow_split(in: BlitOut) -> GlowSplitOut {
 @fragment
 fn fs_glow_over(in: BlitOut) -> GlowOverOut {
     let light = textureSample(scene_tex, scene_samp, in.uv);
-    return GlowOverOut(light, vec4<f32>(0.0), light, vec4<f32>(0.0));
+    return GlowOverOut(light, vec4<f32>(0.0), light);
 }
