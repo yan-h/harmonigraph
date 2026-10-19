@@ -439,8 +439,11 @@ impl TextBatch {
         })
     }
 
-    /// Close one layer after all its letters and marks have been collected.
+    /// Close one layer after all its letters and marks have been collected,
+    /// and the name it ends with: a layer is whole names
+    /// ([`harmonigraph_render::GlyphRuns`]).
     pub(crate) fn finish_layer(&mut self) {
+        close_run(&mut self.runs.names, self.glyphs.len());
         close_run(&mut self.runs.layers, self.glyphs.len());
     }
 

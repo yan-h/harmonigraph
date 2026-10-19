@@ -127,7 +127,7 @@ impl Resources {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let dummy = shadow::ShadowTarget::new(device, &atlas, &sampler, [1, 1]);
+        let dummy = shadow::ShadowTarget::new(device, &atlas, &sampler, [1, 1], "spectral_dummy");
         let cells = shadow::create_cell_pipelines(device, &atlas);
         Resources {
             layouts: Layouts { atlas, casters },
@@ -288,11 +288,15 @@ fn finish_for_pass(
             .any(|caster| caster.shade[0] > 0.0);
         surface.ranges.insert(submission.key, ProducerRange { start, count, active });
         // Each glyph beside its own name's box: the boxes repeated by their
-        // names' lengths, as the lattice writes its `cell_buffer`.
+        // names' lengths, as the lattice writes its `cell_buffer`. The name's
+        // first glyph is marked as the one that draws the name's shadow
+        // (`vs_spectral_shadow`), so a layer's composite is one instanced draw.
         if let CellDraw::Text { cells, names, .. } = &submission.draw {
             let boxes = &packed.boxes[start as usize..(start + count) as usize];
-            let rows =
-                boxes.iter().zip(names).flat_map(|(b, &n)| std::iter::repeat_n(*b, n as usize));
+            let rows = boxes.iter().zip(names).flat_map(|(b, &n)| {
+                let lead = shadow::ShadowBox { who: [b.who[0], 1.0, b.who[2], b.who[3]], ..*b };
+                (0..n).map(move |i| if i == 0 { lead } else { *b })
+            });
             let glyphs = names.iter().map(|&n| n as usize).sum();
             crate::write_rows::<_, { crate::BOX_BYTES }>(queue, cells, glyphs, rows);
         }
@@ -312,6 +316,7 @@ fn finish_for_pass(
             &layouts.atlas,
             &sampler,
             packed.size,
+            "spectral",
         );
     } else {
         surface.target = None;

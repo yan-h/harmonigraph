@@ -504,10 +504,12 @@ struct SpectralShadowOut {
 /// knockout its rim names: the text compositor's own draw, over a cell in the
 /// common shadow atlas.
 ///
-/// Drawn ONCE per name, at its first glyph's instance (`TextCallback::paint`):
-/// every glyph of a name carries the name's box beside it and the name's rim,
-/// so the first stands for all of them, and a quad per glyph would lay the
-/// same shadow down once per letter.
+/// Drawn ONCE per name, at its first glyph's instance: every glyph of a name
+/// carries the name's box beside it and the name's rim, so the first stands for
+/// all of them, and a quad per glyph would lay the same shadow down once per
+/// letter. `TextCallback::paint` draws every glyph of a layer in one call, and
+/// all but the one whose box is marked first (`box_who.y`, written by
+/// `spectral_shadow::finish_for_pass`) fold to no quad.
 @vertex
 fn vs_spectral_shadow(
     @builtin(vertex_index) vertex: u32,
@@ -527,7 +529,7 @@ fn vs_spectral_shadow(
     );
     let at = box_rect.xy + corner * box_rect.zw;
     var out: SpectralShadowOut;
-    out.position = select(no_quad(), on_screen(at), cell_packed(box_cell));
+    out.position = select(no_quad(), on_screen(at), cell_packed(box_cell) && box_who.y > 0.5);
     out.at = at;
     out.rim = rim;
     out.who = u32(box_who.x + 0.5);

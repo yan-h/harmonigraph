@@ -178,7 +178,10 @@ pub(crate) struct ShadowBox {
     /// Shadow bar times a constant rather than a screen width.
     pub cell_map: [f32; 4],
     /// x: which caster this box belongs to, as an index into
-    /// [`Packed::casters`]; y: zero, unused; z: how far past the caster's ink
+    /// [`Packed::casters`]; y: 1 on the first glyph of a spectral name in the
+    /// text's per-glyph copy (`spectral_shadow::finish_for_pass`), the one
+    /// instance that draws the name's shadow, and zero everywhere else, which
+    /// nothing reads; z: how far past the caster's ink
     /// this cell reaches, in the pane's points — the pad the rect was grown
     /// by; w: the caster's source expansion before blur, in points.
     ///
@@ -559,15 +562,18 @@ impl Plane {
 }
 
 impl ShadowTarget {
+    /// `owner` prefixes the planes' labels (`lattice`, `spectral`), so the GPU
+    /// memory record tells one owner's atlas from another's.
     pub(crate) fn new(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
         size: [u32; 2],
+        owner: &str,
     ) -> Self {
         let size = [size[0].max(1), size[1].max(1)];
-        let atlas = Plane::new(device, layout, sampler, size, "lattice_shadow_atlas");
-        let half = Plane::new(device, layout, sampler, size, "lattice_shadow_atlas_half");
+        let atlas = Plane::new(device, layout, sampler, size, &format!("{owner}_shadow_atlas"));
+        let half = Plane::new(device, layout, sampler, size, &format!("{owner}_shadow_atlas_half"));
         ShadowTarget { size, atlas, half }
     }
 
@@ -582,13 +588,14 @@ impl ShadowTarget {
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
         size: [u32; 2],
+        owner: &str,
     ) {
         if slot.as_ref().is_some_and(|target| target.holds(size)) {
             return;
         }
         let held = slot.take().map_or([0, 0], |target| target.size);
-        *slot =
-            Some(Self::new(device, layout, sampler, [size[0].max(held[0]), size[1].max(held[1])]));
+        let size = [size[0].max(held[0]), size[1].max(held[1])];
+        *slot = Some(Self::new(device, layout, sampler, size, owner));
     }
 
     /// Whether this atlas can hold a layout of `size`.
@@ -1409,7 +1416,7 @@ pub(crate) mod tests {
         let size = [packed.size[0].max(64), packed.size[1]];
         let layout = read_layout(&device);
         let sampler = device.create_sampler(&Default::default());
-        let target = ShadowTarget::new(&device, &layout, &sampler, size);
+        let target = ShadowTarget::new(&device, &layout, &sampler, size, "lattice");
         let pipelines = create_cell_pipelines(&device, &layout);
 
         // The block: cell A's ink region — everything inside its padding —

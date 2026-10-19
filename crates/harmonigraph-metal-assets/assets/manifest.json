@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "compiler": "Apple metal version 32023.883 (metalfe-32023.883)\nTarget: air64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.pNeupb/Metal.xctoolchain/usr/metal/current/bin\n",
+  "compiler": "Apple metal version 32023.883 (metalfe-32023.883)\nTarget: air64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.KiICPk/Metal.xctoolchain/usr/metal/current/bin\n",
   "flags": [
     "-std=metal3.2",
     "-mmacosx-version-min=15.0",
@@ -116,6 +116,9 @@
     "6c70b18277e4e6c4.metal": "d3dab7917e67ec493b1bba554eec2cd1bf057d96dd86b2af717ea498b7e6a21e",
     "6c70b18277e4e6c4.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "6c70b18277e4e6c4.metallib": "d2355a7c4e0ff3701bfd6471e2a096ddf7a221136c0865eb9313802955838003",
+    "6d58fe055a22eb0f.metal": "d2587274ec67a8254b0e53c86f7b0f42c8de2424c52422cf2cd6b96ea029161e",
+    "6d58fe055a22eb0f.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
+    "6d58fe055a22eb0f.metallib": "be5ad4bc8b60c5e704d63e37374ccc0c983dffd22a26ccaab3636822b2a6a77a",
     "6d8b6761c1570112.metal": "e6aa12f0aef88103d98278953400283046cfd78d760ed88c69dc798d6a5a1305",
     "6d8b6761c1570112.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "6d8b6761c1570112.metallib": "42f935e6c1f12fcda0f0a819567dba4f6baef1fd85410ddc139af346de53cf8f",
@@ -206,9 +209,6 @@
     "aac28ff389181487.metal": "fec832d949e26c1bc4b3ab60e125a6f8ad58efddb0fda8f1a925747379697c93",
     "aac28ff389181487.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "aac28ff389181487.metallib": "5040889c8905199952198b05ea5fabe22704335cdf0e6a7ddfb773029df8e946",
-    "aed7dc8da2a8c99f.metal": "f7b9664b1ee56658098ea1c5f7e3da70fe5912e81b4e061e4553575e0b1ffcef",
-    "aed7dc8da2a8c99f.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
-    "aed7dc8da2a8c99f.metallib": "b06534e8f42e4fd38fc3243f2942d544ec98b1f6d8df8351d256f5ba228528b3",
     "b507c349d14815d5.metal": "6297e57be6b166154aca8a57a481243b8d06c6703f18bd47bb99c57e229c180a",
     "b507c349d14815d5.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "b507c349d14815d5.metallib": "732197003b3fe27d8c8125229a47f146ca9a732dded1d765b5ff848767d6642a",
