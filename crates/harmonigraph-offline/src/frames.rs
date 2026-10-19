@@ -1274,36 +1274,39 @@ mod tests {
     /// A resize holds one size's targets at a time (#1508). Every target keyed
     /// on a pane's size — the lattice's offscreen set, the roll's, the spiral's
     /// glow chain and the spectral cloud's — is dropped before its replacement
-    /// is built, so across a resize the record's peak is the larger steady set.
-    /// A rebuild that built first would hold the old set beside the new one,
-    /// and the peak with it.
+    /// is built, and so is the shadow atlas the lattice pane and the spectral
+    /// surface each grow. A rebuild that built first would hold two of the
+    /// target it rebuilds, so no texture's label may ever have had more copies
+    /// alive at once than it holds at rest (#1518).
+    ///
+    /// Counted per label rather than read off the byte peak, a doubled owner
+    /// shows whatever its place in the frame: in the peak it showed only where
+    /// its old set outweighed what the owners preparing after it had yet to
+    /// grow, which hid a doubled shadow atlas.
     ///
     /// The default look in both panes, plus the spiral's glow, which the
     /// export never draws (#974) and so is added here as the Spiral tab adds
     /// it. Each owner's target is checked on the record at both sizes, since a
-    /// target never built would pass this for the wrong reason (#450).
-    ///
-    /// One owner holding both sizes shows in the peak only where its old set
-    /// outweighs what the owners preparing after it have yet to grow, or what
-    /// those before it have already shed. So the resize goes both ways, and
-    /// the glow prepares first: last, its growth hid a doubled roll holdout.
-    /// Built new before old, each owner's rebuild fails this, one at a time.
+    /// target never built would pass this for the wrong reason (#450). Built
+    /// new before old, each owner's rebuild fails this, one at a time.
     #[cfg(target_vendor = "apple")]
     #[test]
     fn a_resize_holds_one_sizes_targets_at_a_time() {
-        use harmonigraph_render::gpu_memory::{snapshot_of, GpuMemory};
+        use harmonigraph_render::gpu_memory::{most_copies_of, snapshot_of, GpuMemory, Shape};
+        use std::collections::{BTreeMap, BTreeSet};
 
-        // One target from each owner that rebuilds on a pane's size.
-        const KEYED: [&str; 4] =
-            ["lattice_offscreen_color", "roll_holdout", "glow_discs", "spectral_cloud_source"];
+        // One target from each owner that rebuilds on a pane's size, each
+        // of which must be seen rebuilt for the counts below to reach it.
+        const KEYED: [&str; 6] = [
+            "lattice_offscreen_color",
+            "roll_holdout",
+            "glow_discs",
+            "spectral_cloud_source",
+            "lattice_shadow_atlas",
+            "lattice_shadow_atlas_half",
+        ];
         const A: [u32; 2] = [1600, 1000];
         const B: [u32; 2] = [2000, 1250];
-        // Measured at these sizes, the peak is exactly the larger steady set,
-        // to the byte. The margin is slack for a per-frame buffer regrowing
-        // beside its old copy, the largest here being the text glyphs' 88 KiB.
-        // The smallest target rebuilt on a size, the roll's holdout at A, is
-        // 870 KiB; the spiral's glow chain is 4 MB and the lattice's set 40.
-        const MARGIN: u64 = 256 << 10;
         const RATE: f32 = 48_000.0;
 
         let Some(mut sheet) = ProbeSheet::new(A, 1.0) else { return };
@@ -1323,7 +1326,7 @@ mod tests {
 
         // A few frames at `size`, after reading back every frame in flight,
         // as a surface reconfigure waits for the GPU.
-        let mut settle = |size: [u32; 2]| -> GpuMemory {
+        let mut settle = |size: [u32; 2]| -> (GpuMemory, BTreeMap<String, usize>) {
             sheet.renderer.resize(size);
             let points = egui::vec2(size[0] as f32, size[1] as f32);
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
@@ -1353,30 +1356,43 @@ mod tests {
                 let clear = egui::Color32::BLACK;
                 sheet.renderer.render_to_vec(&primitives, &output.textures_delta, 1.0, clear);
             }
-            snapshot_of(&sheet.renderer.device)
+            let device = &sheet.renderer.device;
+            (snapshot_of(device), most_copies_of(device))
         };
-        let at_a = settle(A);
-        let at_b = settle(B);
-        let back = settle(A);
+        let (at_a, built) = settle(A);
+        let (at_b, grown) = settle(B);
+        let (back, shrunk) = settle(A);
 
-        let shape = |record: &GpuMemory, label: &str| {
-            record.resources.iter().find(|r| r.label == label).map(|r| r.shape.clone())
+        let shapes = |record: &GpuMemory, label: &str| -> Vec<_> {
+            record.resources.iter().filter(|r| r.label == label).map(|r| r.shape.clone()).collect()
         };
         for label in KEYED {
-            let (a, b) = (shape(&at_a, label), shape(&at_b, label));
+            let (a, b) = (shapes(&at_a, label), shapes(&at_b, label));
             assert!(
-                a.is_some() && b.is_some() && a != b,
+                !a.is_empty() && b.iter().any(|s| !a.contains(s)),
                 "{label} must be built at both sizes: {a:?}, then {b:?}"
             );
         }
-        let steady = at_a.totals.live.max(at_b.totals.live).max(back.totals.live);
-        for (step, record) in [("growing", &at_b), ("shrinking", &back)] {
-            assert!(
-                record.totals.peak <= steady + MARGIN,
-                "{step}: peak {} B over the larger steady set, {steady} B\n{}",
-                record.totals.peak,
-                record.table()
-            );
+        // Every texture, not only the owners named above: one rebuilt on a
+        // size this list has not met is held twice just the same. Buffers
+        // are left out, the per-frame ones growing to demand beside their
+        // old copy, which is a size but not a pane's.
+        let steady = [&at_a, &at_b, &back];
+        let textures = steady.iter().flat_map(|r| &r.resources);
+        let textures = textures.filter(|r| matches!(r.shape, Shape::Texture { .. }));
+        let labels: BTreeSet<&str> = textures.map(|r| r.label.as_str()).collect();
+        // The counts are the most since the device was made, so each step's
+        // takes in those before it.
+        for (step, most) in [("building", &built), ("growing", &grown), ("shrinking", &shrunk)] {
+            for &label in &labels {
+                let held = steady.map(|r| shapes(r, label).len()).into_iter().max();
+                let most = most.get(label).copied();
+                assert!(
+                    most <= held,
+                    "{step}: {label} had {most:?} alive at once, against {held:?} at rest\n{}",
+                    back.table()
+                );
+            }
         }
     }
 }

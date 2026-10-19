@@ -195,6 +195,16 @@ pub fn snapshot_of(device: &wgpu::Device) -> GpuMemory {
     metal::snapshot(Some(device))
 }
 
+/// The most copies of each label one device has held alive at once. A
+/// rebuild that builds before it drops holds two of what it rebuilds, which
+/// this shows whatever else was allocating around it, where the byte peak
+/// shows it only if nothing else was still growing (#1518). Kept only for
+/// tests, like each device's own peak.
+#[cfg(all(any(test, feature = "test-support"), target_vendor = "apple"))]
+pub fn most_copies_of(device: &wgpu::Device) -> std::collections::BTreeMap<String, usize> {
+    metal::most_copies(device)
+}
+
 #[cfg(target_vendor = "apple")]
 mod metal {
     use std::sync::Mutex;
@@ -231,15 +241,28 @@ mod metal {
         at: Vec<Resource>,
     }
 
+    /// The most entries one owner has held alive under one label at once.
+    /// Kept only in tests.
+    struct Copies {
+        owner: Owner,
+        label: String,
+        most: usize,
+    }
+
     struct Record {
         entries: Vec<Entry>,
         peaks: Vec<Peak>,
+        copies: Vec<Copies>,
         /// The Metal devices seen, for what they hold in all.
         devices: Vec<Handle<ProtocolObject<dyn MTLDevice>>>,
     }
 
-    static RECORD: Mutex<Record> =
-        Mutex::new(Record { entries: Vec::new(), peaks: Vec::new(), devices: Vec::new() });
+    static RECORD: Mutex<Record> = Mutex::new(Record {
+        entries: Vec::new(),
+        peaks: Vec::new(),
+        copies: Vec::new(),
+        devices: Vec::new(),
+    });
 
     impl Record {
         /// Forget what Metal has freed.
@@ -308,6 +331,7 @@ mod metal {
         // address, which must not inherit its peak.
         if !record.entries.iter().any(|e| e.owner == owner) {
             record.peaks.retain(|p| p.owner != Some(owner));
+            record.copies.retain(|c| c.owner != owner);
         }
         record.entries.push(Entry { owner, resource, handle: Handle(Weak::from_retained(&raw)) });
         if !record
@@ -329,6 +353,24 @@ mod metal {
                 *record.peak(key) = Peak { owner: key, bytes: live, at };
             }
         }
+        // A label's count, too, rises only here.
+        if cfg!(any(test, feature = "test-support")) {
+            let label = record.entries.last().expect("pushed above").resource.label.clone();
+            let alive = record.entries.iter().filter(|e| e.owner == owner);
+            let n = alive.filter(|e| e.resource.label == label).count();
+            match record.copies.iter_mut().find(|c| c.owner == owner && c.label == label) {
+                Some(copies) => copies.most = copies.most.max(n),
+                None => record.copies.push(Copies { owner, label, most: n }),
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn most_copies(device: &wgpu::Device) -> std::collections::BTreeMap<String, usize> {
+        let Some((owner, _)) = owner(device) else { return Default::default() };
+        let record = RECORD.lock().unwrap_or_else(|e| e.into_inner());
+        let copies = record.copies.iter().filter(|c| c.owner == owner);
+        copies.map(|c| (c.label.clone(), c.most)).collect()
     }
 
     pub(super) fn snapshot(device: Option<&wgpu::Device>) -> GpuMemory {
@@ -440,6 +482,14 @@ mod tests {
         let at_peak: Vec<_> = freed.at_peak.iter().map(|r| r.label.as_str()).collect();
         assert_eq!(at_peak, ["probe", "second"]);
         assert!(freed.table().contains("which allocating second set"), "{}", freed.table());
+
+        // A label's copies count only while alive at once: a probe built
+        // after the first was freed is one copy, and one beside it is two.
+        let again = target(&device, "probe", side);
+        assert_eq!(most_copies_of(&device).get("probe"), Some(&1));
+        let beside = target(&device, "probe", side);
+        assert_eq!(most_copies_of(&device).get("probe"), Some(&2));
+        drop((again, beside));
     }
 
     /// A buffer is on the record while Metal holds it and off it once freed:
