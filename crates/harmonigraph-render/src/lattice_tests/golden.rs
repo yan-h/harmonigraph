@@ -27,6 +27,14 @@
 //! be MEASURED when they move, not to stay still: PRs B and C of #498 each
 //! re-baseline them and state what moved.
 //!
+//! **Every scene starts from [`harmonigraph_golden::LOOK`]**, never from the
+//! fresh view: a capture of a new DAW look moves none of these frames, and a
+//! diff here is something a PR's own code did. The hand-built scenes are a
+//! partial exception: they stand on the claim tests' fixtures, which state
+//! what they draw and inherit the rest from the fresh view. #1475's whole-look
+//! capture moved them only through the fresh Shadow width the name frames
+//! read, and that width now comes from the pinned look too.
+//!
 //! **A changed golden is a stated picture change.** Re-baseline with
 //! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden`, look at
 //! the contact sheet it names, and say in the PR body what moved and why. The
@@ -114,6 +122,23 @@ fn resting_markers_in_one_light() -> Scene {
 /// nodes spread across the sheet, so the frame carries halos OVERLAPPING,
 /// which is where a shadow model's combining rule shows.
 const CHORD: [u8; 5] = [55, 60, 64, 67, 71];
+
+/// The view of [`harmonigraph_golden::LOOK`], which every whole-lattice frame
+/// here is drawn from.
+///
+/// Sanitized as the app sanitizes a blob it loads, so a value a later range
+/// narrows is drawn the way the app would draw it.
+fn pinned_view() -> harmonigraph_scene::ViewConfig {
+    /// The one group of the document this crate draws.
+    #[derive(serde::Deserialize)]
+    struct Look {
+        view: harmonigraph_scene::ViewConfig,
+    }
+    let mut view =
+        ron::from_str::<Look>(harmonigraph_golden::LOOK).expect("the golden look parses").view;
+    view.sanitize();
+    view
+}
 
 /// The lattice `view` draws at `camera`, with [`CHORD`] held.
 ///
@@ -204,19 +229,20 @@ fn near_camera() -> Camera {
     Camera { distance: 4.0, ..Default::default() }
 }
 
-/// The fresh view, lit by a chord.
+/// The pinned look, lit by a chord.
 ///
-/// The reference frame for the family: every dial at the value a fresh blob
-/// opens on, so a re-baseline here is the shipped look moving.
-fn a_chord_at_the_fresh_view() -> Scene {
-    lattice(&harmonigraph_scene::ViewConfig::default(), near_camera())
+/// The reference frame for the family: every dial at the value
+/// [`harmonigraph_golden::LOOK`] holds, so it moves with whatever the draw
+/// path does to a look nobody has touched.
+fn a_chord_at_the_pinned_view() -> Scene {
+    lattice(&pinned_view(), near_camera())
 }
 
 /// The same chord with the light spread wide enough that neighbouring halos
 /// meet everywhere.
 ///
 /// #453's fourth A/B scene, and the regime its mechanism 3 lives in: at the
-/// fresh Reach the halos barely touch, so the rule two lights combine under is
+/// pinned Reach the halos barely touch, so the rule two lights combine under is
 /// invisible.
 ///
 /// The Strength comes down as the Reach goes up: the light is SCREENED and
@@ -229,12 +255,8 @@ fn a_chord_at_the_fresh_view() -> Scene {
 /// white records nothing, which is the same reason `a_node_in_its_own_shadow`
 /// does not stand on the white ground its own fixture ships.
 fn a_chord_at_a_wide_reach() -> Scene {
-    let view = harmonigraph_scene::ViewConfig {
-        glow_reach: 4.0,
-        glow_strength: 0.5,
-        glow_curve: harmonigraph_scene::GlowCurve::default(),
-        ..Default::default()
-    };
+    let view =
+        harmonigraph_scene::ViewConfig { glow_reach: 4.0, glow_strength: 0.5, ..pinned_view() };
     lattice(&view, near_camera())
 }
 
@@ -245,14 +267,14 @@ fn a_chord_at_a_wide_reach() -> Scene {
 /// full depth and window centred one fifth along.
 ///
 /// Full shadow depth makes changes to reach and profile visible even when a
-/// shallower fresh view would hide them.
+/// shallower look would hide them.
 ///
 /// The capture's TUNING, zoom and pan are deliberately not taken. The tuning
 /// would empty the frame (see [`lattice`]); zoom and pan are navigation state,
 /// outside what a capture is read for at all, and his sits at the near end of
 /// the zoom's travel where a frame this size holds one node's top half.
 pub(super) fn the_live_view() -> Scene {
-    let mut view = harmonigraph_scene::ViewConfig { center_threes: 1, ..Default::default() };
+    let mut view = harmonigraph_scene::ViewConfig { center_threes: 1, ..pinned_view() };
     // The capture's two Shadow numbers, on both groups: it was taken before the
     // groups existed, so one width and one depth is what it says.
     for style in view.shadow.groups_mut() {
@@ -270,17 +292,16 @@ pub(super) fn the_live_view() -> Scene {
 /// #498 needs it because a caster on the home sheet has to darken what stands
 /// on the sheet behind it, at whatever depth it darkens the ground.
 fn a_sheet_behind_a_node() -> Scene {
-    let view =
-        harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..Default::default() };
+    let view = harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..pinned_view() };
     lattice(&view, near_camera())
 }
 
-/// How far the lattice geometry's Shadow bar opens on a fresh blob — for the
-/// frames that are about something else and want the bar where the picture
-/// has it. The geometry group's, because these frames are of nodes: a bare
-/// `ShadowStyle::default()` is a fixture, not what the fresh view draws.
-fn fresh_shadow() -> f32 {
-    harmonigraph_scene::ShadowSettings::default().lattice_geometry.width
+/// How far the lattice geometry's Shadow bar opens in the pinned look — for
+/// the frames that are about something else and want the bar where the
+/// picture has it. The geometry group's, because these frames are of nodes: a
+/// bare `ShadowStyle::default()` is a fixture, not what the look draws.
+fn pinned_shadow() -> f32 {
+    pinned_view().shadow.lattice_geometry.width
 }
 
 /// Where the name goldens stand, and closer than the claim tests' own
@@ -376,7 +397,7 @@ fn node_points(scene: &Scene) -> f32 {
     scene.node_radius * scene.camera.points_per_world(GOLDEN_SIZE[1] as f32)
 }
 
-/// A name standing on the INK of the node it names, at the fresh Shadow.
+/// A name standing on the INK of the node it names, at the pinned Shadow.
 ///
 /// Ink is washed with the RAW light, so what a name's shadow does to the band
 /// under it is the same share it takes off the ground beside it — the
@@ -387,7 +408,7 @@ fn node_points(scene: &Scene) -> f32 {
 /// standing on it, so a name there says nothing about what a shadow does to
 /// INK.
 fn a_name_on_a_nodes_band() -> Shot {
-    let scene = a_named_node(fresh_shadow());
+    let scene = a_named_node(pinned_shadow());
     let labels = strokes_on_the_band(&scene, 1);
     Shot { labels, ..scene.into() }
 }
@@ -435,8 +456,7 @@ fn two_strokes_of_one_name() -> Shot {
 /// stop overlapping the first time either moved — the frame would still render
 /// and would still be blessed.
 pub(super) fn names_overlapping_on_one_sheet() -> Shot {
-    let view =
-        harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..Default::default() };
+    let view = harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..pinned_view() };
     let camera = Camera {
         projection: harmonigraph_scene::Projection::Perspective,
         pitch: 1.1,
@@ -544,10 +564,10 @@ fn the_resting_marker_field_draws_the_frame_on_record() {
     check("resting-markers-in-one-light", resting_markers_in_one_light().into());
 }
 
-/// The fresh view under a chord is byte-identical to the frame on record.
+/// The pinned look under a chord is byte-identical to the frame on record.
 #[test]
-fn a_chord_at_the_fresh_view_draws_the_frame_on_record() {
-    check("chord-fresh", on_the_ground_it_clears_to(a_chord_at_the_fresh_view()));
+fn a_chord_at_the_pinned_view_draws_the_frame_on_record() {
+    check("chord", on_the_ground_it_clears_to(a_chord_at_the_pinned_view()));
 }
 
 /// The same chord with the halos meeting everywhere.

@@ -111,6 +111,7 @@ fn baked_blit_shader_validates() {
     for required in [
         "vs_blit",
         "fs_blit",
+        "fs_downsample",
         "fs_bright",
         "fs_bright_split",
         "fs_blur_h",
