@@ -51,6 +51,14 @@ fn gaussian_spread_uses_resolved_width() {
 }
 
 #[test]
+fn text_spread_is_stops_held_to_the_bar() {
+    let style = ShadowStyle { spread: 0.4, ..Default::default() };
+    assert_eq!(style.text_spread_stops(), 2.0);
+    assert_eq!(ShadowStyle { spread: f32::NAN, ..style }.text_spread_stops(), 0.0);
+    assert_eq!(ShadowStyle { spread: 2.0, ..style }.text_spread_stops(), TEXT_SPREAD_STOPS);
+}
+
+#[test]
 fn the_endpoint_has_exactly_four_explicit_shadow_groups() {
     let mut groups = ShadowSettings::default();
     for (index, group) in groups.groups_mut().into_iter().enumerate() {

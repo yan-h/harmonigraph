@@ -1,7 +1,6 @@
-// Label text: one instanced quad per glyph. Spectral labels rasterize coverage
-// of their fixed glyph SDF into the shared shadow atlas and read the Gaussian
-// made from it; lattice labels reuse the same producers inside the lattice
-// scene pass.
+// Label text: one instanced quad per glyph. Every label draws its glyphs'
+// coverage into the shared shadow atlas and reads back the Gaussian made from
+// it. The lattice reuses the same producer inside its own scene pass.
 //
 // Glyphs come from egui: it lays the text out, rasterizes into its font
 // atlas, and hands over each glyph's screen rect and atlas rect. This
@@ -10,8 +9,8 @@
 // A drawn MARK — the `+`, the chevron, the accidentals — is a glyph here too,
 // cut from a sheet of its own that the UI rasterizes and packs. It reaches the
 // framebuffer through everything below unchanged, which is the point of it
-// being here at all: it takes its shadow from the same SDF arithmetic instead of a
-// second bitmap, and its place in the lattice's draw order from the run of
+// being here at all: it takes its shadow from the same coverage and blur as a
+// letter, and its place in the lattice's draw order from the run of
 // letters it was collected with, so a node in front covers a name and its
 // marks together.
 
@@ -50,7 +49,6 @@ struct Locals {
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
 @group(0) @binding(3) var mark_atlas: texture_2d<f32>;
-@group(0) @binding(4) var sdf_atlas: texture_2d<f32>;
 
 /// The `atlas` an instance carries when it is a drawn mark rather than a
 /// letter — `GlyphInstance::MARK`, against `::TYPE`'s zero.
@@ -93,15 +91,12 @@ fn vs_glyph(
     @location(0) rect: vec4<f32>,
     // The same glyph in the atlas, in texels: min, then max.
     @location(1) uv: vec4<f32>,
-    @location(2) sdf_rect: vec4<f32>,
-    @location(3) sdf_near: vec4<f32>,
-    @location(4) sdf_coarse: vec4<f32>,
-    @location(5) fill: vec4<f32>,
-    @location(6) rim: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) rim: vec4<f32>,
     // Which sheet `uv` addresses.
-    @location(7) sheet: u32,
+    @location(4) sheet: u32,
 ) -> VertexOut {
-    var out = glyph_vertex(vertex, rect, uv, fill, sheet);
+    var out = glyph_vertex(vertex, rect, uv, fill, sheet, 0.0);
     out.position = on_screen(out.position.xy);
     return out;
 }
@@ -113,11 +108,11 @@ fn vs_glyph_lit(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) uv: vec4<f32>,
-    @location(5) fill: vec4<f32>,
-    @location(7) sheet: u32,
-    @location(11) box_who: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(4) sheet: u32,
+    @location(8) box_who: vec4<f32>,
 ) -> VertexOut {
-    var out = glyph_vertex(vertex, rect, uv, fill, sheet);
+    var out = glyph_vertex(vertex, rect, uv, fill, sheet, 0.0);
     out.who = box_who.x;
     out.position = on_screen(out.position.xy);
     return out;
@@ -132,23 +127,26 @@ fn vs_glyph_lit(
 /// so the quad lands in the cell exactly where the pane's quad lands on the pane.
 /// Everything a fragment reads — `texel`, the sheet, the patch bounds — is
 /// interpolated across the quad and does not know which of the two it is on.
+///
+/// Grown by one cell texel past the glyph's own reach. A cell drawn below the
+/// target's resolution has texels wide enough that one straddling the quad's
+/// edge has its centre outside it, and is never rasterized, while its
+/// footprint average ([`fs_glyph_ink`]) would have read the glyph's outermost
+/// column. The texels it adds read nothing past the patch bound.
 @vertex
 fn vs_glyph_cell(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) uv: vec4<f32>,
-    @location(2) sdf_rect: vec4<f32>,
-    @location(3) sdf_near: vec4<f32>,
-    @location(4) sdf_coarse: vec4<f32>,
-    @location(5) fill: vec4<f32>,
-    @location(6) rim: vec4<f32>,
-    @location(7) sheet: u32,
-    @location(8) box_rect: vec4<f32>,
-    @location(9) box_cell: vec4<f32>,
-    @location(10) box_meta: vec4<f32>,
-    @location(11) box_who: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) rim: vec4<f32>,
+    @location(4) sheet: u32,
+    @location(5) box_rect: vec4<f32>,
+    @location(6) box_cell: vec4<f32>,
+    @location(7) box_meta: vec4<f32>,
+    @location(8) box_who: vec4<f32>,
 ) -> VertexOut {
-    var out = glyph_vertex(vertex, rect, uv, fill, sheet);
+    var out = glyph_vertex(vertex, rect, uv, fill, sheet, 1.0 / max(box_meta.x, 1.0e-6));
     let texel = cell_texel(out.position.xy, box_rect, box_cell, box_meta.x);
     // Drawn in plain screen space, so the `w` a cell's clip position is built
     // with is the 1 this quad already carries.
@@ -160,89 +158,18 @@ fn vs_glyph_cell(
     return out;
 }
 
-/// One glyph's fixed signed field over the whole name cell. The visible
-/// coverage rect and these atlas rectangles come from the UI together, so the
-/// renderer maps coordinates without learning the character or its face.
-struct SdfOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) near_texel: vec2<f32>,
-    @location(1) coarse_texel: vec2<f32>,
-    @location(2) @interpolate(flat) near_bounds: vec4<f32>,
-    @location(3) @interpolate(flat) coarse_bounds: vec4<f32>,
-    @location(4) @interpolate(flat) scales: vec2<f32>,
-    // Gaussian source radius and one cell texel, both in pane points.
-    @location(5) @interpolate(flat) expansion: vec2<f32>,
-};
-
-const SDF_NEAR_PAD: f32 = 32.0;
-const SDF_COARSE_PAD: f32 = 48.0;
-const SDF_NEAR_BLEND: f32 = 8.0;
-
-@vertex
-fn vs_glyph_sdf_cell(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) rect: vec4<f32>,
-    @location(1) uv: vec4<f32>,
-    @location(2) sdf_rect: vec4<f32>,
-    @location(3) sdf_near: vec4<f32>,
-    @location(4) sdf_coarse: vec4<f32>,
-    @location(5) fill: vec4<f32>,
-    @location(6) rim: vec4<f32>,
-    @location(7) sheet: u32,
-    @location(8) box_rect: vec4<f32>,
-    @location(9) box_cell: vec4<f32>,
-    @location(10) box_meta: vec4<f32>,
-    @location(11) box_who: vec4<f32>,
-) -> SdfOut {
-    let corner = vec2<f32>(
-        select(0.0, 1.0, (vertex & 1u) == 1u),
-        select(0.0, 1.0, (vertex & 2u) == 2u),
-    );
-    let point = box_rect.xy + corner * box_rect.zw;
-    let near_span = sdf_near.zw - sdf_near.xy;
-    let coarse_span = sdf_coarse.zw - sdf_coarse.xy;
-    let valid = near_span.x > 0.0 && near_span.y > 0.0
-        && coarse_span.x > 0.0 && coarse_span.y > 0.0
-        && sdf_rect.z > 0.0 && sdf_rect.w > 0.0;
-
-    var out: SdfOut;
-    let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
-    out.position = select(
-        no_quad(),
-        cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        valid && cell_packed(box_cell),
-    );
-    let relative = (point - sdf_rect.xy) / max(sdf_rect.zw, vec2<f32>(1.0e-6));
-    out.near_texel = sdf_near.xy + relative * near_span;
-    out.coarse_texel = sdf_coarse.xy + relative * coarse_span;
-    out.near_bounds = vec4<f32>(
-        sdf_near.xy - vec2<f32>(SDF_NEAR_PAD),
-        sdf_near.zw + vec2<f32>(SDF_NEAR_PAD),
-    );
-    out.coarse_bounds = vec4<f32>(
-        sdf_coarse.xy - vec2<f32>(SDF_COARSE_PAD),
-        sdf_coarse.zw + vec2<f32>(SDF_COARSE_PAD),
-    );
-    out.expansion = vec2<f32>(box_who.w, 1.0 / max(box_meta.x, 1e-6));
-    out.scales = vec2<f32>(
-        0.5 * (sdf_rect.z / max(near_span.x, 1.0e-6)
-            + sdf_rect.w / max(near_span.y, 1.0e-6)),
-        0.5 * (sdf_rect.z / max(coarse_span.x, 1.0e-6)
-            + sdf_rect.w / max(coarse_span.y, 1.0e-6)),
-    );
-    return out;
-}
-
 /// Everything a glyph's quad carries, with `position` holding the corner in
 /// the PANE's points rather than in clip space — the caller maps it, because
 /// which surface the quad lands on is the caller's ([`vs_glyph`],
-/// [`vs_glyph_cell`]).
+/// [`vs_glyph_cell`]). `grow` is how many points further the caller's quad
+/// reaches past the glyph.
 fn glyph_vertex(
     vertex: u32,
     rect: vec4<f32>,
     uv: vec4<f32>,
     fill: vec4<f32>,
     sheet: u32,
+    grow: f32,
 ) -> VertexOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
@@ -251,7 +178,7 @@ fn glyph_vertex(
 
     // Grown only by the distance `coverage` reads into. Shadows have their own
     // packed boxes, so changing a style never changes the visible glyph quad.
-    let reach = (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point;
+    let reach = (PATCH_MARGIN + FILTER_TAP) / locals.pixels_per_point + grow;
     let pos = rect.xy - vec2<f32>(reach) + corner * (rect.zw + 2.0 * reach);
 
     var out: VertexOut;
@@ -325,9 +252,9 @@ const PATCH_MARGIN: f32 = 0.5;
 /// Measured on the visible fill at the size the spectral roll sets its names,
 /// as a share of each symbol's own ink: the current flat and sharp swing 4.1%
 /// and 3.8% along the named axis. They are the marks it is for — ink that is
-/// mostly vertical strokes, against a roll that scrolls sideways. The lattice's
-/// unspread shadow cell reuses this reconstructed coverage and therefore pays
-/// the same tap count as its visible fill.
+/// mostly vertical strokes, against a roll that scrolls sideways. Every text
+/// shadow cell reuses this reconstructed coverage and therefore pays the same
+/// tap count as its visible fill.
 ///
 /// ONE axis, and the caller's rather than x, because which way a label
 /// travels is a property of the pane and not of the filter. The roll's names
@@ -436,9 +363,7 @@ fn tap(in: VertexOut, texel: vec2<f32>) -> f32 {
 ///
 /// Two taps [`FILTER_TAP`] either side along a scrolling label's axis, or the
 /// four corners of their Cartesian product for lattice labels that can move
-/// along both. The visible fill and the lattice's unspread shadow-cell producer
-/// read through here. Spectral shadows, and lattice shadows with Spread open,
-/// rasterize coverage from the fixed scale-free SDF rather than this sheet.
+/// along both. The visible fill and every text shadow cell read through here.
 fn coverage(in: VertexOut, texel: vec2<f32>) -> f32 {
     // Along the pane's own travel axes, which the sheets' texels are square
     // with: a glyph's quad is axis-aligned and its atlas patch is upright, so
@@ -514,87 +439,54 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
     );
 }
 
-/// A lattice name's coverage, into its own cell of the shadow atlas
-/// (`shadow.rs`) — what its shadow is a blur of.
+/// A glyph's coverage, into its name's cell of the shadow atlas (`shadow.rs`)
+/// — what its shadow is a blur of. A lattice name is one cell for all its
+/// glyphs; a spectral glyph is a cell of its own.
 ///
 /// Written under a MAX blend, so where two glyphs of one name overlap in their
 /// margins the cell holds their union and the order they arrive in decides
 /// nothing. The coverage ALONE: the name's strength is applied where the cell
 /// is read ([`fs_shadow_box`]), as a share of the shadow rather than a scale on
 /// the ink it is blurred from, and the two are not the same thing — see there.
+/// So is the group's Spread, which lifts the blurred field rather than growing
+/// the ink (`shadow_profile` in common.wgsl).
 ///
 /// Drawn through [`vs_glyph_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, since `texel` is interpolated
 /// across the quad whatever the quad is mapped to.
+///
+/// A cell is drawn at a fraction of the target's pixels once its σ passes
+/// `SIGMA_CELL_MAX` (shadow.rs), down to a quarter at the widest spectral
+/// Shadow, and one sample per cell texel would then skip strokes narrower
+/// than the texel: a scrolling name's shadow would shimmer as its stems
+/// crossed the cell's grid. So where a cell texel spans more than one sheet
+/// texel the coverage is averaged over its footprint, up to
+/// [`CELL_FOOTPRINT_TAPS`] per axis, which is the filtering the glyph SDF
+/// this replaced did with its `fwidth`. At one texel or less it is
+/// [`coverage`] exactly, the visible fill's own reconstruction.
 @fragment
 fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
-}
-
-/// Bilinear sampling written over textureLoad because R32Float is not a
-/// filterable format on the baseline device feature set.
-fn sdf_sample(texel: vec2<f32>, bounds: vec4<f32>) -> f32 {
-    let safe = clamp(texel, bounds.xy + vec2<f32>(0.5), bounds.zw - vec2<f32>(0.5));
-    let p = safe - vec2<f32>(0.5);
-    let first = vec2<i32>(ceil(bounds.xy));
-    let last = vec2<i32>(ceil(bounds.zw)) - vec2<i32>(1, 1);
-    let lo = clamp(vec2<i32>(floor(p)), first, last);
-    let hi = clamp(lo + vec2<i32>(1, 1), first, last);
-    let f = fract(p);
-    let a = mix(
-        textureLoad(sdf_atlas, lo, 0).r,
-        textureLoad(sdf_atlas, vec2<i32>(hi.x, lo.y), 0).r,
-        f.x,
-    );
-    let b = mix(
-        textureLoad(sdf_atlas, vec2<i32>(lo.x, hi.y), 0).r,
-        textureLoad(sdf_atlas, hi, 0).r,
-        f.x,
-    );
-    return mix(a, b, f.y);
-}
-
-fn glyph_sdf_distance(in: SdfOut) -> f32 {
-    let coarse_at = clamp(
-        in.coarse_texel,
-        in.coarse_bounds.xy + vec2<f32>(0.5),
-        in.coarse_bounds.zw - vec2<f32>(0.5),
-    );
-    // Past the coarse tile, carry its boundary value outward by the remaining
-    // Euclidean distance instead of clamping it into a flat shelf. A flat far
-    // field is precisely the ray a wide, fading shadow would expose.
-    let coarse = sdf_sample(coarse_at, in.coarse_bounds) * in.scales.y
-        + length(in.coarse_texel - coarse_at) * in.scales.y;
-    let near = sdf_sample(in.near_texel, in.near_bounds) * in.scales.x;
-    let near_edge = min(
-        min(
-            in.near_texel.x - in.near_bounds.x - 0.5,
-            in.near_texel.y - in.near_bounds.y - 0.5,
-        ),
-        min(
-            in.near_bounds.z - 0.5 - in.near_texel.x,
-            in.near_bounds.w - 0.5 - in.near_texel.y,
-        ),
-    );
-    // The coarse mask is deliberately conservative at its sparse resolution,
-    // so its absolute distance does not meet the near field exactly. Hand off
-    // inside the near tile instead of exposing that difference as a hard ring.
-    return mix(coarse, near, smoothstep(0.0, SDF_NEAR_BLEND, near_edge));
-}
-
-/// Coverage of the glyph's fixed field, grown by the group's Spread: one
-/// antialiased zero contour, followed by the shared separable blur.
-@fragment
-fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
-    let d = glyph_sdf_distance(in) - in.expansion.x;
-    var aa = max(fwidth(d), 1.0e-6);
-    if in.expansion.x > 0.0 {
-        // A thin stem can have positive SDF samples on both sides of its
-        // centre and a vanishing derivative. Retain its sub-texel coverage.
-        aa = max(aa, in.expansion.y);
+    let footprint = fwidth(in.texel);
+    let taps = vec2<i32>(clamp(ceil(footprint), vec2<f32>(1.0), vec2<f32>(CELL_FOOTPRINT_TAPS)));
+    if all(taps == vec2<i32>(1)) {
+        return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
     }
-    return vec4<f32>(clamp(0.5 - d / aa, 0.0, 1.0), 0.0, 0.0, 1.0);
+    var sum = 0.0;
+    for (var y = 0; y < taps.y; y = y + 1) {
+        for (var x = 0; x < taps.x; x = x + 1) {
+            let at = (vec2<f32>(f32(x), f32(y)) + 0.5) / vec2<f32>(taps) - 0.5;
+            sum = sum + tap(in, in.texel + at * footprint);
+        }
+    }
+    return vec4<f32>(sum / f32(taps.x * taps.y), 0.0, 0.0, 0.0);
 }
+
+/// The most taps per axis [`fs_glyph_ink`] averages a cell texel over. The
+/// cost does not grow with it: a cell at `1/n` of the target's resolution has
+/// `n²` fewer texels, so `n × n` taps each is about the glyphs' own area in
+/// sheet texels at any scale up to this bound. Eight is a lattice name's cell
+/// at a wide Shadow zoomed in, where the spectral panes stop at four.
+const CELL_FOOTPRINT_TAPS: f32 = 8.0;
 
 struct SpectralShadowOut {
     @builtin(position) position: vec4<f32>,
@@ -604,23 +496,20 @@ struct SpectralShadowOut {
 };
 
 /// A spectral glyph's shadow over its packed cell. One box per glyph keeps the
-/// skin-coloured knockout in the text compositor while both kernel producers
-/// stay in the common shadow atlas.
+/// skin-coloured knockout in the text compositor while the cells stay in the
+/// common shadow atlas.
 @vertex
 fn vs_spectral_shadow(
     @builtin(vertex_index) vertex: u32,
     @location(0) rect: vec4<f32>,
     @location(1) uv: vec4<f32>,
-    @location(2) sdf_rect: vec4<f32>,
-    @location(3) sdf_near: vec4<f32>,
-    @location(4) sdf_coarse: vec4<f32>,
-    @location(5) fill: vec4<f32>,
-    @location(6) rim: vec4<f32>,
-    @location(7) sheet: u32,
-    @location(8) box_rect: vec4<f32>,
-    @location(9) box_cell: vec4<f32>,
-    @location(10) box_meta: vec4<f32>,
-    @location(11) box_who: vec4<f32>,
+    @location(2) fill: vec4<f32>,
+    @location(3) rim: vec4<f32>,
+    @location(4) sheet: u32,
+    @location(5) box_rect: vec4<f32>,
+    @location(6) box_cell: vec4<f32>,
+    @location(7) box_meta: vec4<f32>,
+    @location(8) box_who: vec4<f32>,
 ) -> SpectralShadowOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),

@@ -1092,6 +1092,7 @@ impl CallbackTrait for RollCallback {
                     level: 1.0,
                     sigma_points: sigma,
                     spread_points: style.gaussian_spread_points(sigma),
+                    stops: 0.0,
                 }
             })
             .collect();

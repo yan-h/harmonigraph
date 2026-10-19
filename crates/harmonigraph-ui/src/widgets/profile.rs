@@ -278,11 +278,14 @@ fn shadow_darkness(depth: f32, coverage: f32, lattice: bool) -> f32 {
     }
 }
 
+/// `text` is a group whose casters are type, whose Spread deepens the blur
+/// rather than growing the ink (`ShadowStyle::text_spread_stops`).
 pub(crate) fn shadow(
     ui: &mut Ui,
     style: &mut harmonigraph_scene::ShadowStyle,
     max: f32,
     lattice: bool,
+    text: bool,
 ) {
     let plot = Plot::without_label(ui, 3);
     let (unit, suffix) =
@@ -295,7 +298,7 @@ pub(crate) fn shadow(
     plot.response.clone().on_hover_text(
         "Shadow around a sample shape. Adjust Width, Darkness, and Spread to preview the result. The sample is scaled to fit; the shadow on each shape depends on its size and outline.",
     );
-    shadow_preview(ui, plot.rect, style.clamped(max), max, lattice);
+    shadow_preview(ui, plot.rect, style.clamped(max), max, lattice, text);
 }
 
 /// A small CPU mesh of a rectangular caster's shadow. The Gaussian separates
@@ -306,6 +309,7 @@ fn shadow_preview(
     style: harmonigraph_scene::ShadowStyle,
     max: f32,
     lattice: bool,
+    text: bool,
 ) {
     const COLUMNS: u32 = 48;
     const ROWS: u32 = 32;
@@ -321,7 +325,14 @@ fn shadow_preview(
     let width = style.width / max * size * 0.15;
     if style.casts() {
         let sigma = width * 0.5;
-        let spread = style.gaussian_spread_points(sigma);
+        // As the renderer spends each group's Spread: geometry grows its ink,
+        // type lifts its blur by stops before the clamp.
+        let (spread, stops) = if text {
+            (0.0, style.text_spread_stops())
+        } else {
+            (style.gaussian_spread_points(sigma), 0.0)
+        };
+        let gain = 2.5 * stops.exp2();
         let blurred = caster.expand(spread);
         let xs: [f32; COLUMNS as usize + 1] = std::array::from_fn(|x| {
             let p = egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32);
@@ -338,8 +349,9 @@ fn shadow_preview(
                     egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32),
                     egui::lerp(rect.y_range(), y as f32 / ROWS as f32),
                 );
-                // The renderer's GAUSSIAN_GAIN in common.wgsl.
-                let coverage = (2.5 * xs[x as usize] * ys[y as usize]).min(1.0);
+                // The renderer's GAUSSIAN_GAIN in common.wgsl, lifted by
+                // text's Spread.
+                let coverage = (gain * xs[x as usize] * ys[y as usize]).min(1.0);
                 let darkness = shadow_darkness(style.depth, coverage, lattice);
                 mesh.colored_vertex(
                     p,

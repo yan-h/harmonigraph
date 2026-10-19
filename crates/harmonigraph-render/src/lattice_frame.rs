@@ -288,7 +288,9 @@ impl LatticeCallback {
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
-        let text_spread = text.gaussian_spread_points(text_sigma);
+        // The text group's Spread grows the marker cross by a distance and
+        // lifts a name's blur by stops: the cross is geometry, the name type.
+        let marker_spread = text.gaussian_spread_points(text_sigma);
         let shadow_reach = geometry_sigma * shadow::reach_sigmas(geometry);
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance, inked: bool| {
             let empty = shadow::Caster {
@@ -296,6 +298,7 @@ impl LatticeCallback {
                 level: 0.0,
                 sigma_points: geometry_sigma,
                 spread_points: geometry_spread,
+                stops: 0.0,
             };
             // A node shipped for its light alone would fill its cell with
             // nothing: level 0 packs no cell and keeps it out of the
@@ -390,7 +393,8 @@ impl LatticeCallback {
                 rect: [-a, -a, 2.0 * a, 2.0 * a],
                 level: 1.0,
                 sigma_points: text_sigma,
-                spread_points: text_spread,
+                spread_points: marker_spread,
+                stops: 0.0,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -437,7 +441,7 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(run, text_sigma, text_spread));
+                casters.push(shadow::caster_of(run, text_sigma, text.text_spread_stops()));
             }
             // The cross stands at this position under its node and name, so
             // what hides it is what stands past all three: every caster from
@@ -467,7 +471,6 @@ impl LatticeCallback {
             marker_arm_points,
             draws,
             sheets: crate::SheetUploads { font: labels.atlas, marks: labels.marks },
-            sdf: labels.sdf,
             slide: labels.slide,
             pluses,
             uniforms: Uniforms {

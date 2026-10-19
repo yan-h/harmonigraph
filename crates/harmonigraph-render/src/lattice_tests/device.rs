@@ -56,7 +56,6 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     };
     window.sheets.atlas.upload(&shooter.device, &shooter.queue, &atlas);
     window.sheets.marks.upload(&shooter.device, &shooter.queue, &atlas);
-    window.sheets.sdf_key = 99;
     // Clone the compiled owner out of a populated, still-live context. Its
     // type excludes mutable state, and constructing another context must
     // initialize every such field independently.
@@ -64,7 +63,6 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         LatticeResources::from_compiled(window.compiled.clone(), &shooter.device, &shooter.queue);
     assert!(reset.panes.is_empty());
     assert!(reset.sheets.atlas.view().is_none() && reset.sheets.marks.view().is_none());
-    assert_eq!(reset.sheets.sdf_key, 0);
     assert_eq!(reset.compiled.shaders.scenes[0].draws.nodes, pipeline);
     if let Some(timer) = &window.timer {
         let fresh = reset.timer.as_ref().expect("same timestamp-capable device");
@@ -73,7 +71,6 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         assert!(fresh.state == TimerState::Idle);
         assert!(!std::sync::Arc::ptr_eq(&fresh.ready, &timer.ready));
     }
-    assert_eq!(window.sheets.sdf_key, 99);
     assert!(window.sheets.atlas.holds(&atlas) && window.sheets.marks.holds(&atlas));
     drop(reset);
     shooter.resources = CallbackResources::default();

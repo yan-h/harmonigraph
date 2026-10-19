@@ -173,18 +173,9 @@ fn foreground_ink_restores_local_shadow_transmittance() {
 }
 
 #[test]
-fn gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink() {
+fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     shooter.clear = wgpu::Color { r: 0.8, g: 0.8, b: 0.8, a: 1.0 };
-    // A three-point stem with a matching signed field: changing only the
-    // screen rect would anisotropically stretch the square fixture's distances.
-    let mut stem_sdf = crate::text::tests::sdf_atlas();
-    for (i, d) in std::sync::Arc::make_mut(&mut stem_sdf.image).iter_mut().enumerate() {
-        let p = glam::vec2((i % 128) as f32 + 0.5, (i / 128) as f32 + 0.5);
-        let q = (p - glam::Vec2::splat(64.0)).abs() - glam::vec2(1.5, 12.0);
-        *d = q.max(glam::Vec2::ZERO).length() + q.x.max(q.y).min(0.0);
-    }
-    stem_sdf.key = 2;
     for group in 0..3 {
         let mut scene = scene(0.0);
         scene.view.glow_strength = 0.0;
@@ -199,12 +190,8 @@ fn gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink() {
         let labels = |scene: &Scene| {
             if group == 1 {
                 let center = on_screen(scene, SIZE, at);
-                let mut glyph = name_glyph(scene, [center.x - 1.5, center.y - 12.0, 3.0, 24.0]);
-                glyph.sdf_near = [62.5, 52.0, 65.5, 76.0];
-                glyph.sdf_coarse = glyph.sdf_near;
-                let mut labels = a_name(vec![glyph]);
-                labels.sdf = Some(stem_sdf.clone());
-                labels
+                // A three-point stem: thin against σ, as a stroke of type is.
+                a_name(vec![name_glyph(scene, [center.x - 1.5, center.y - 12.0, 3.0, 24.0])])
             } else {
                 LatticeLabels::default()
             }
@@ -248,7 +235,7 @@ fn gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink() {
         assert!(darkness(&ordinary) > 100, "group {group}: fixture casts no shadow");
         assert!(
             darkness(&expanded) > darkness(&ordinary) * 3 / 2,
-            "group {group}: spread failed to expand the source"
+            "group {group}: spread failed to deepen the shadow"
         );
     }
 }

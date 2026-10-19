@@ -281,6 +281,7 @@ impl CallbackTrait for DotShadowCallback {
                 level: 0.75 * f32::from(dot.color[3]) / 255.0,
                 sigma_points: sigma,
                 spread_points: style.gaussian_spread_points(sigma),
+                stops: 0.0,
             })
             .collect();
         let locals = Locals {

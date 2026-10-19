@@ -671,6 +671,12 @@ impl Default for ShadowStyle {
     }
 }
 
+/// The stops a text group's full Spread lifts its blurred shadow by
+/// ([`ShadowStyle::text_spread_stops`]). With the renderer's own gain of 2.5,
+/// thirty-two times more keeps a half-plane's blur saturated out to 2.24σ,
+/// against 0.25σ with no Spread.
+pub const TEXT_SPREAD_STOPS: f32 = 5.0;
+
 impl ShadowStyle {
     /// Whether this group casts at all.
     ///
@@ -693,6 +699,19 @@ impl ShadowStyle {
     /// A full spread is one Shadow width, or twice sigma.
     pub fn gaussian_spread_points(self, sigma_points: f32) -> f32 {
         2.0 * finite_or(sigma_points, 0.0).max(0.0) * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
+    }
+
+    /// A TEXT group's Spread, as the stops its blurred shadow is lifted by
+    /// before the renderer clamps it (`shadow_profile` in common.wgsl).
+    ///
+    /// Text does not grow its ink by [`Self::gaussian_spread_points`]: a stroke
+    /// of type is thin against σ, and growing a thin stroke mostly scales its
+    /// blur, which this does directly. Exponential so each step of the bar is
+    /// the same ratio. The top, [`TEXT_SPREAD_STOPS`], is where the lifted blur
+    /// of ink wide against σ stays saturated about 2σ out, the distance a full
+    /// Spread grows geometry by.
+    pub fn text_spread_stops(self) -> f32 {
+        TEXT_SPREAD_STOPS * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
     }
 
     /// This style held to the ranges its bars name — the PICTURE's door, where

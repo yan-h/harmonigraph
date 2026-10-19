@@ -13,7 +13,6 @@ pub mod shell;
 mod startup;
 pub use startup::{begin_editor_loading, editor_loading_status};
 pub(crate) mod text;
-mod text_sdf;
 pub mod theme;
 pub mod widgets;
 
