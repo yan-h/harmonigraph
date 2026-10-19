@@ -71,7 +71,7 @@ impl RenderRequest {
     }
 }
 
-/// Where `update-plugin.sh` installs the renderer, and where the plugin
+/// Where `load-plugin.sh` installs the renderer, and where the plugin
 /// finds its paired renderer. A fixed location beats
 /// guessing at the host's working directory or the bundle's own path.
 pub fn default_renderer_path() -> std::path::PathBuf {

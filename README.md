@@ -51,7 +51,7 @@ cargo xtask bundle harmonigraph-plugin --release
 
 Add `<checkout>/target/bundled/` under **Settings → Locations → Plug-in Locations** in Bitwig.
 After that,
-`./update-plugin.sh` builds this checkout and loads its CLAP plugin plus matching offline renderer in one step —
+`./load-plugin.sh` with no argument builds this checkout and loads its CLAP plugin plus matching offline renderer in one step —
 the one-shot for building and loading your own checkout directly.
 After installing,
 deactivate and reactivate Bitwig's audio engine.
