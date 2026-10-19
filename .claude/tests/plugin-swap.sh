@@ -6,7 +6,7 @@
 #
 #   .claude/tests/plugin-swap.sh          # run it
 #
-# Written for bash 3.2 (macOS system bash), like the scripts it tests.
+# Written for bash 3.2 (macOS system bash), like the script it tests.
 set -uo pipefail
 
 # This test creates and enters a throwaway repository, so inherited GIT_DIR
@@ -17,7 +17,7 @@ for v in $(env | sed -n 's/^\(GIT_[A-Z_]*\)=.*/\1/p'); do
 done
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-for s in load-plugin.sh update-plugin.sh; do
+for s in load-plugin.sh; do
   [ -x "$ROOT/$s" ] || { echo "✗ not executable: $ROOT/$s" >&2; exit 1; }
 done
 
@@ -40,7 +40,7 @@ trap 'rm -rf "$TMP"' EXIT
 NAME="Harmonigraph"
 failures=0
 
-# A throwaway checkout that looks enough like the real one for both scripts:
+# A throwaway checkout that looks enough like the real one for the loader:
 # a git repo with a branch and a commit (they read `git worktree list`, HEAD's
 # sha and its date), the bundle slot with a signed bundle in it, and a build in
 # target/release for the loader to find.
@@ -55,7 +55,7 @@ git -C "$repo" add seed
 git -C "$repo" commit -q -m seed
 sha=$(git -C "$repo" rev-parse --short HEAD)
 
-cp "$ROOT/load-plugin.sh" "$ROOT/update-plugin.sh" "$ROOT/session-lifecycle.sh" "$repo/"
+cp "$ROOT/load-plugin.sh" "$ROOT/session-lifecycle.sh" "$repo/"
 mkdir -p "$repo/.claude"
 cp "$ROOT/.claude/build-handoffs.sh" "$repo/.claude/"
 
@@ -261,37 +261,37 @@ export PLUGIN_SWAP_REAL_TOUCH="$real_touch"
 # The inodes a host would be holding, read before the swap.
 before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 
-# HOME redirected: the scripts install the offline renderer under
+# HOME redirected: the loader installs the offline renderer under
 # ~/Library/Application Support, and a test must not write to the real one.
 out="$TMP/run.log"
 prime_discovery_metadata
 metadata_before=$(stat -f %m "$repo/target/bundled/$NAME.clap/Contents/Info.plist")
-( cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./update-plugin.sh ) \
+( cd "$repo" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./load-plugin.sh ) \
   > "$out" 2>&1
 status=$?
 
 if [ "$status" -ne 0 ]; then
-  echo "✗ update-plugin.sh exited $status" >&2
+  echo "✗ no-argument load-plugin.sh exited $status" >&2
   sed 's/^/    /' "$out" >&2
   failures=$((failures + 1))
 fi
-check_discovery_metadata update-plugin.sh
+check_discovery_metadata "no-argument load-plugin.sh"
 
 after_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 
 # 1. The installed path moves to a fresh inode; an old open descriptor keeps
 #    the old bytes intact instead of seeing a different executable underneath.
 if [ "$before_clap" = "$after_clap" ]; then
-  echo "✗ update-plugin.sh reused an executable inode" >&2
+  echo "✗ no-argument load-plugin.sh reused an executable inode" >&2
   failures=$((failures + 1))
 fi
 cat <&3 > "$TMP/old-open-after"
 exec 3<&-
 if ! cmp -s "$TMP/old-open-bin" "$TMP/old-open-after"; then
-  echo "✗ update-plugin.sh changed the bytes behind an old open descriptor" >&2
+  echo "✗ no-argument load-plugin.sh changed the bytes behind an old open descriptor" >&2
   failures=$((failures + 1))
 fi
-check_loads update-plugin.sh "main @$sha"
+check_loads "no-argument load-plugin.sh" "main @$sha"
 
 # 2. The selected build's bytes actually arrived.
 if ! grep -q "main @$sha" "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"; then

@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
 #
-# load-plugin.sh — pick an already-built registered worktree build and swap it
-# into the ONE bundle slot Bitwig scans (the MAIN checkout's target/bundled/),
-# then re-sign ad-hoc. This is the PULL side of the workflow: parallel sessions
-# each build into their own worktree's target/release/ but do NOT touch the
-# shared slot; you choose which of those builds is live. Git registration, not
-# a parent-directory convention, is what makes both Claude- and Codex-managed
-# worktrees discoverable here.
+# load-plugin.sh — swap a registered worktree's build into the ONE bundle slot
+# Bitwig scans (the MAIN checkout's target/bundled/), then re-sign ad-hoc.
+# Parallel sessions each build into their own worktree's target/release/ but
+# do NOT touch the shared slot; you choose which of those builds is live. Git
+# registration, not a parent-directory convention, is what makes both Claude-
+# and Codex-managed worktrees discoverable here.
 #
-# It COPIES ONLY — it never builds. A build has to exist in the worktree
-# already (a session's `cargo build --release`, or `./update-plugin.sh`).
-# Contrast update-plugin.sh, which BUILDS the checkout it runs from and swaps
-# that one; use it when you want build-and-load in a single shot.
+# Only the no-argument form builds. Naming a branch copies the build already in
+# that worktree (a session's `cargo build --release`), never rebuilding it.
 #
 # Usage:
-#   ./load-plugin.sh            # interactive menu of every worktree's build
+#   ./load-plugin.sh            # build THIS checkout (plugin + renderer) and load it
+#   ./load-plugin.sh <branch>   # load that branch's build (exact, else unique substring)
+#   ./load-plugin.sh --pick     # interactive menu of every worktree's build
 #   ./load-plugin.sh --list     # print the table only; load nothing
 #   ./load-plugin.sh --tag      # print the overlay tag of THIS worktree's build
-#   ./load-plugin.sh <branch>   # load that branch's build (exact, else unique substring)
+#
+# Building here rather than with `cargo xtask bundle` sidesteps two footguns:
+# xtask picks the *topmost* Cargo.toml ancestor, so run from a nested worktree
+# it silently bundles the MAIN checkout's sources; and Bitwig scans only the
+# main checkout's target/bundled/, so a worktree build is invisible until its
+# binary is copied over. Plain `cargo build` resolves the nearest workspace.
 #
 # Staleness is WARN-ONLY: a build not made at its branch HEAD is flagged but
 # still loadable. The test is the commit STAMPED IN THE BINARY against HEAD,
@@ -29,6 +33,32 @@
 set -euo pipefail
 
 HERE_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
+
+# No argument: build the checkout this runs from, then load it by its branch.
+# Built before the lifecycle wrapper below takes its catalog lock, so a
+# minutes-long compile never holds off a retention sweep.
+#
+# Both packages, and the second is the easy half to skip. The offline renderer
+# draws through harmonigraph-ui and harmonigraph-render — the same crates the
+# editor does — so a change to what any pane looks like is a change to what an
+# mp4 looks like, and a worktree that built only the plugin hands the loader
+# whatever renderer it happens to be holding.
+if (( $# == 0 )); then
+  HERE="$(git rev-parse --show-toplevel)"
+  # A detached HEAD has no branch to load by, so say so before the build
+  # rather than after it.
+  BRANCH="$(git -C "$HERE" symbolic-ref --short -q HEAD || true)"
+  if [[ -z "$BRANCH" ]]; then
+    echo "ERROR: $HERE is on a detached HEAD, and builds are loaded by branch name." >&2
+    echo "       Create or check out a branch here, then rerun. To load an existing" >&2
+    echo "       build instead: $0 --pick" >&2
+    exit 1
+  fi
+  echo "Building harmonigraph-plugin + harmonigraph-offline (release) from $HERE ..."
+  ( cd "$HERE" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline )
+  set -- "$BRANCH"
+fi
+
 source "$HERE_SCRIPT/.claude/build-handoffs.sh"
 # A retention sweep cannot retire a publication while this load is copying it.
 COMMON_GIT="$(git rev-parse --path-format=absolute --git-common-dir)"
@@ -410,7 +440,7 @@ wt_containing() {
 
 # The build a branch argument names: the branch spelled exactly, else the one
 # branch it is a substring of. Exact wins because the full name is what a
-# handover and update-plugin.sh pass, and retained handoffs keep branches like
+# handover and the no-argument build pass, and retained handoffs keep branches like
 # `codex/foo-2` beside `codex/foo` long after either worktree is gone. Either
 # way it must be unique: every detached worktree is listed as `(detached)`.
 # Returns 1 when nothing matches and 2 when several do.
@@ -460,7 +490,7 @@ case "${1:-}" in
     [[ -n "$tag_out" ]] || { echo "No build tag readable in $tag_dylib." >&2; exit 1; }
     echo "$tag_out"
     ;;
-  "")
+  --pick|-p)
     print_table
     read -r -p "Pick # (empty to cancel): " choice
     [[ -z "$choice" ]] && { echo "Cancelled."; exit 0; }
@@ -471,7 +501,7 @@ case "${1:-}" in
     ;;
   --*)
     echo "Unknown option: $1" >&2
-    echo "Usage: ./load-plugin.sh [--list | --tag [branch] | <branch>]" >&2
+    echo "Usage: ./load-plugin.sh [<branch> | --pick | --list | --tag [branch]]" >&2
     exit 1
     ;;
   *)

@@ -98,7 +98,7 @@ build_one() {
   echo "    at $(git -C "$wt" log -1 --format='%h %s')"
 
   if (( LOAD )); then
-    ( cd "$wt" && ./update-plugin.sh )
+    ( cd "$wt" && ./load-plugin.sh )
   else
     ( cd "$wt" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline )
     echo "    loadable: ./load-plugin.sh $branch"

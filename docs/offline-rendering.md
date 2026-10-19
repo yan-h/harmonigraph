@@ -194,7 +194,7 @@ an explicit later re-render from disk does not repeat it.
 A finished take always renders:
 the plugin runs `harmonigraph-offline` itself and writes the video next to the take.
 There is nothing to enable, and no field for the renderer's path —
-it uses the copy `update-plugin.sh` installs, and the audio it muxes and analyzes is the take's own recording.
+it uses the copy `load-plugin.sh` installs, and the audio it muxes and analyzes is the take's own recording.
 What you do choose is **when** a take counts as finished, in the **Finish recording** row below.
 
 The video's size comes from **Aspect ratio** and **Output size (px)** in the Frame section, which the plugin passes as `--size`.
@@ -256,7 +256,7 @@ The render runs on its own thread and never touches the audio thread or the GUI,
 The status line reports `rendering ...`, then either the finished path or the renderer's own error —
 which is the only place you'll see it, since a plugin has no terminal.
 
-`update-plugin.sh` builds the renderer alongside the plugin and installs it to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
+`./load-plugin.sh` with no argument builds the renderer alongside the plugin and installs it to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
 they share the take format, so a mismatched pair would fail at the version check.
 
 Note the ordering:

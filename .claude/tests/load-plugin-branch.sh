@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A full branch name selects that branch even when it is a substring of another.
 # Retained handoffs keep `codex/foo-2` beside `codex/foo` after both worktrees
-# are gone, and the full name is what a handover and update-plugin.sh pass.
+# are gone, and the full name is what a handover and the no-argument build pass.
 # `--tag` resolves the argument through the same lookup as loading and needs
 # no codesign, so this runs everywhere `ci.sh` does.
 #
