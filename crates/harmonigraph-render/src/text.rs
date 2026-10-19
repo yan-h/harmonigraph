@@ -210,7 +210,8 @@ pub fn text_paint_callback(
 /// one quad over that cell, as a lattice name's is (`shadow::caster_of`). A
 /// layer is a step of the painter order: each draws its names' shadows and
 /// then their fills, so a later layer's names shadow an earlier layer's ink.
-/// A layer is whole names, so every layer end also ends a name.
+/// A layer is whole names, so every layer end is also in `names`: the UI's
+/// `TextBatch::finish_layer` closes the name it is in.
 ///
 /// Empty `names` makes the batch one name and empty `layers` one layer; any
 /// glyphs after the last offset form a final name and a final layer.
@@ -222,17 +223,17 @@ pub struct GlyphRuns {
 
 impl GlyphRuns {
     /// The end of every name in a batch of `count` glyphs, in order and
-    /// finishing at `count`, with every layer end among them. Empty for an
-    /// empty batch.
-    fn name_ends(&self, count: u32) -> Vec<u32> {
-        let mut ends: Vec<u32> = (self.names.iter().chain(&self.layers))
-            .copied()
-            .filter(|&end| end > 0 && end < count)
+    /// finishing at `count`. Empty for an empty batch.
+    fn name_ends(&self, count: u32) -> impl Iterator<Item = u32> + '_ {
+        debug_assert!(
+            self.layers.iter().all(|end| *end >= count || self.names.binary_search(end).is_ok()),
+            "a layer ends inside a name: names {:?}, layers {:?}",
+            self.names,
+            self.layers,
+        );
+        (self.names.iter().copied())
+            .filter(move |&end| end > 0 && end < count)
             .chain((count > 0).then_some(count))
-            .collect();
-        ends.sort_unstable();
-        ends.dedup();
-        ends
     }
 }
 
@@ -1244,7 +1245,7 @@ impl CallbackTrait for TextCallback {
                 .map_or(0.0, |style| crate::shadow::spectral_sigma_points(style, self.point_scale));
             let stops = style.map_or(0.0, |s| s.text_spread_stops());
             let mut first = 0;
-            let (casters, names) = (self.runs.name_ends(pane.count).into_iter())
+            let (casters, names) = (self.runs.name_ends(pane.count))
                 .map(|end| {
                     let run = &self.glyphs[first as usize..end as usize];
                     first = end;
@@ -1329,10 +1330,7 @@ impl CallbackTrait for TextCallback {
         if let Some((_, cells)) = shadow.as_ref() {
             render_pass.set_vertex_buffer(1, cells.slice(..));
         }
-        let (layer_ends, name_ends) = match shadow {
-            Some(_) => (self.runs.layers.as_slice(), self.runs.name_ends(pane.count)),
-            None => (&[][..], Vec::new()),
-        };
+        let layer_ends = if shadow.is_some() { self.runs.layers.as_slice() } else { &[] };
         let mut start = 0;
         for end in layer_ends.iter().map(|&e| e.min(pane.count)).chain(std::iter::once(pane.count))
         {
@@ -1343,15 +1341,10 @@ impl CallbackTrait for TextCallback {
                 render_pass.set_pipeline(&resources.shadow_pipeline);
                 render_pass.set_bind_group(2, shadow.atlas, &[]);
                 render_pass.set_bind_group(3, shadow.casters, &[]);
-                // One quad per name, at its first glyph: every glyph of a name
-                // carries the name's box and rim, so drawing more of them would
-                // lay the same shadow down again. A layer is whole names, so
-                // the next name's start is never past the layer's end.
-                let mut first = start;
-                while first < end {
-                    render_pass.draw(0..4, first..first + 1);
-                    first = name_ends[name_ends.partition_point(|&e| e <= first)];
-                }
+                // One quad per name all the same: only a name's first glyph
+                // carries the mark `vs_spectral_shadow` draws on, and the rest
+                // fold away.
+                render_pass.draw(0..4, start..end);
             }
             render_pass.set_pipeline(&resources.fill_pipeline);
             render_pass.draw(0..4, start..end);
@@ -1868,7 +1861,7 @@ pub(crate) mod tests {
             pass_nr: 0,
         };
         let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
-        cb.runs.layers = vec![1, 2];
+        cb.runs = GlyphRuns { names: vec![1, 2], layers: vec![1, 2] };
         let layered = draw_callback(&device, &queue, &cb, SIZE, 1.0);
         // x=26 is back ink within the front glyph's shadow, but outside
         // its fill. Keeping both glyphs in one name must preserve it.

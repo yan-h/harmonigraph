@@ -178,7 +178,10 @@ pub(crate) struct ShadowBox {
     /// Shadow bar times a constant rather than a screen width.
     pub cell_map: [f32; 4],
     /// x: which caster this box belongs to, as an index into
-    /// [`Packed::casters`]; y: zero, unused; z: how far past the caster's ink
+    /// [`Packed::casters`]; y: 1 on the first glyph of a spectral name in the
+    /// text's per-glyph copy (`spectral_shadow::finish_for_pass`), the one
+    /// instance that draws the name's shadow, and zero everywhere else, which
+    /// nothing reads; z: how far past the caster's ink
     /// this cell reaches, in the pane's points — the pad the rect was grown
     /// by; w: the caster's source expansion before blur, in points.
     ///
