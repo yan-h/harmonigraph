@@ -20,31 +20,28 @@ a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing fir
 **Don't use `cargo xtask bundle` from a nested Claude worktree** —
 nice-plug-xtask's `chdir_workspace_root()` takes the *topmost* ancestor with a `Cargo.toml` (`ancestors().filter(has Cargo.toml).last()`), which for a nested worktree is the main repo root, so it silently builds main.
 The bundle looks fresh and contains none of the branch's changes.
-`load-plugin.sh` and `update-plugin.sh` exist to sidestep this.
+`load-plugin.sh` exists to sidestep this.
 
 ## Yan: load whichever build you want
 
-- `./load-plugin.sh` — menu of every worktree's build (freshness + which one
-is live now);
-pick a number to swap it in.
 - `./load-plugin.sh <branch>` — load that branch's build directly (unique
 substring is fine).
-- `./load-plugin.sh --list` — just print the table, load nothing.
+- `./load-plugin.sh --list` — every worktree's build (freshness + which one is live now), loading nothing.
 
-It copies only, never builds;
+Loading a branch copies only, never builds;
 a build must already exist in a registered worktree or a verified lifecycle handoff, which holds both the plugin and the offline renderer and stays loadable after source cleanup.
 Stale builds (dylib older than the branch's HEAD) are flagged but still loadable.
 After installing, the loader reports which Bitwig plug-in hosts and audio engine still map the old or the new executable;
 that is one process snapshot, not a check of the running build tag.
 A failed diagnostic never fails an otherwise successful install.
 
-The loader discovers registered Git worktrees, so a Codex-managed worktree appears on the same menu without configuration.
+The loader discovers registered Git worktrees, so a Codex-managed worktree appears in the same table without configuration.
 It does need a branch:
 a detached build appears as `(detached)`, cannot be selected uniquely by branch, and cannot carry a useful overlay tag.
 
-- Both `load-plugin.sh` and `update-plugin.sh` record the live build in
+- Every load records the live build in
 `target/bundled/.loaded`, so "what's loaded?" is answerable without guessing.
-- `./update-plugin.sh` remains the build-and-load-in-one-shot path (it builds
+- `./load-plugin.sh` with no argument is the build-and-load-in-one-shot path (it builds
 the checkout it runs FROM and swaps that immediately) —
 use it when you explicitly want a session to make its own build live, e.g. a single-session flow.
 Run it from the main checkout and it rebuilds main, not your branch.

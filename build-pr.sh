@@ -34,6 +34,7 @@ done
 (( LOAD == 0 || ${#TARGETS[@]} == 1 )) || { echo "ERROR: --load takes one target; the slot holds one build" >&2; exit 2; }
 
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
+SELF="$(cd "$(dirname "$0")" && pwd)"
 
 # Path of the registered worktree that has $1 checked out, or nothing.
 worktree_of() {
@@ -97,10 +98,13 @@ build_one() {
   fi
   echo "    at $(git -C "$wt" log -1 --format='%h %s')"
 
+  ( cd "$wt" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline )
+  # This checkout's loader, not the branch's: a branch cut before the loader
+  # learned to build reads no argument as its old menu, but every version
+  # loads a named branch the same way.
   if (( LOAD )); then
-    ( cd "$wt" && ./update-plugin.sh )
+    "$SELF/load-plugin.sh" "$branch"
   else
-    ( cd "$wt" && cargo build --release -p harmonigraph-plugin -p harmonigraph-offline )
     echo "    loadable: ./load-plugin.sh $branch"
   fi
 }

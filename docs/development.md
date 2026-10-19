@@ -97,18 +97,17 @@ After that one-time bootstrap,
 use the repository scripts for branch builds.
 They copy the executable into the shared bundle slot and re-sign it ad hoc for Apple Silicon.
 The normal path is that a session builds in its own worktree and Yan loads whichever build he wants;
-`update-plugin.sh` is the one-shot for Yan's own checkout,
+`load-plugin.sh` with no argument is the one-shot for Yan's own checkout,
 building and loading it directly with no worktree session in between.
 
 ```sh
+# One-shot for Yan's own checkout: build it and load it in one step.
+./load-plugin.sh
+
 # Load an existing worktree build without building. This is the normal path:
 # a session builds (see AGENTS.md), Yan loads.
-./load-plugin.sh              # interactive worktree menu
-./load-plugin.sh --list       # show builds without loading one
 ./load-plugin.sh <branch>     # a unique branch substring is enough
-
-# One-shot for Yan's own checkout: build it and load it in one step.
-./update-plugin.sh
+./load-plugin.sh --list       # every build, its freshness and which is live; loads nothing
 
 # Bring a pushed PR (e.g. from a cloud session) into a local worktree and build it.
 ./build-pr.sh 1079            # rerun after new pushes to fast-forward and rebuild
@@ -120,12 +119,12 @@ A cloud session builds on a remote machine and pushes only the branch,
 so its PR has no build `load-plugin.sh` can see until `build-pr.sh` makes one locally.
 It checks the branch out under `.claude/worktrees/`, where `.claude/reclaim-worktrees.sh` cleans it up like any session's.
 
-`update-plugin.sh` builds;
-`load-plugin.sh` only copies.
+Only the no-argument form builds;
+loading a named branch only copies.
 The split lets every parallel branch retain its own build while the person at the DAW decides which one occupies the shared slot.
 
-`update-plugin.sh` builds and installs a matching `harmonigraph-offline` renderer.
-`load-plugin.sh` installs the worktree's renderer when it exists;
+The no-argument form builds and installs a matching `harmonigraph-offline` renderer.
+Loading a named branch installs that worktree's renderer when it exists;
 otherwise it leaves the installed renderer alone.
 The offline renderer draws through the same UI and render crates,
 so a change to a pane can change an exported video even when no file under `crates/harmonigraph-offline/` moved.
