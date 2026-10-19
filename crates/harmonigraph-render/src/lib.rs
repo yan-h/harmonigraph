@@ -2065,6 +2065,7 @@ impl Offscreen {
                 shared.shadow_layout,
                 shared.sampler,
                 size,
+                "lattice",
             ),
             None => self.shadow = None,
         }

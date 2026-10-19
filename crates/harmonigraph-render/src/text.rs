@@ -213,8 +213,9 @@ pub fn text_paint_callback(
 /// A layer is whole names, so every layer end is also in `names`: the UI's
 /// `TextBatch::finish_layer` closes the name it is in.
 ///
-/// Empty `names` makes the batch one name and empty `layers` one layer; any
-/// glyphs after the last offset form a final name and a final layer.
+/// Empty `layers` makes the batch one layer, and empty `names` with it one
+/// name; any glyphs after the last offset form a final name and a final
+/// layer. Empty `names` beside a layer end breaks the rule above.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GlyphRuns {
     pub names: Vec<u32>,

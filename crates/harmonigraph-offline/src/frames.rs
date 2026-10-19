@@ -1303,7 +1303,7 @@ mod tests {
             "glow_discs",
             "spectral_cloud_source",
             "lattice_shadow_atlas",
-            "lattice_shadow_atlas_half",
+            "spectral_shadow_atlas",
         ];
         const A: [u32; 2] = [1600, 1000];
         const B: [u32; 2] = [2000, 1250];
