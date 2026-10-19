@@ -13,6 +13,8 @@
 //! `root_ui` entirely, so nothing here ever runs on its (deterministic) draw
 //! path — no wall-clock read reaches a recorded frame.
 
+pub mod heap;
+
 /// The averaging window, in seconds. Every frame cost on the overlay is the
 /// plain mean of the frames measured over this long, recomputed from scratch
 /// each time and printed unchanged until the next window closes.
@@ -54,7 +56,7 @@ const READOUT_INTERVAL: f64 = 0.25;
 /// one from this quarter second.
 const PEAK_WINDOWS: usize = 8;
 
-/// Seconds between memory reads. RSS moves slowly and the read is a syscall,
+/// Seconds between memory reads. Memory moves slowly and the read is a syscall,
 /// so once a second is plenty and keeps it off the per-frame path.
 const MEM_INTERVAL: f64 = 1.0;
 
@@ -561,16 +563,22 @@ pub struct PerfStats {
     pub spec_fallbacks: (f32, f32),
     /// The totals the rates were last differenced from.
     last_fallbacks: (u32, u32),
-    /// Smoothed resident set size in bytes, refreshed about once a second (0
-    /// when the platform can't report it).
+    /// The host process's smoothed physical footprint in bytes, refreshed about
+    /// once a second (0 when the platform can't report it).
+    ///
+    /// The HOST's, not ours: a plug-in host can load other plugins into the
+    /// same process, and their memory is in this figure too (#1512).
     ///
     /// Smoothed where the frame costs are not, because it is a different
     /// kind of signal: a slow-moving LEVEL read once a second, not a
     /// per-frame cost. There is no spike here for a filter to smear across
-    /// time — raw RSS simply wanders by megabytes between reads as the host
-    /// and the GPU driver take memory and give it back.
-    pub rss_bytes: u64,
-    /// The GPU memory record's totals, read with `rss_bytes`. Unsmoothed:
+    /// time — the footprint simply wanders by megabytes between reads as the
+    /// host and the GPU driver take memory and give it back.
+    pub footprint_bytes: u64,
+    /// Our own Rust heap ([`heap::rust_heap`]), read and smoothed with
+    /// `footprint_bytes`. `None` in a binary that does not count its heap.
+    pub heap_bytes: Option<u64>,
+    /// The GPU memory record's totals, read with `footprint_bytes`. Unsmoothed:
     /// they move only when a target is allocated or freed.
     pub gpu_memory: harmonigraph_render::gpu_memory::Totals,
     /// Shell-clock time of the last memory read, to throttle it.
@@ -604,7 +612,8 @@ impl Default for PerfStats {
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
             last_fallbacks: (0, 0),
-            rss_bytes: 0,
+            footprint_bytes: 0,
+            heap_bytes: None,
             gpu_memory: Default::default(),
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -755,16 +764,9 @@ impl PerfStats {
         }
         self.workload = workload;
         if now - self.last_mem_read >= MEM_INTERVAL {
-            let sample = rss_bytes();
-            // Seeded on the first reading rather than eased up from zero,
-            // which would read as a plugin growing into its memory over the
-            // first few seconds of every session.
-            self.rss_bytes = if self.rss_bytes == 0 {
-                sample
-            } else {
-                let (from, to) = (self.rss_bytes as f64, sample as f64);
-                (from + (to - from) * MEM_SMOOTH) as u64
-            };
+            self.footprint_bytes = ease(self.footprint_bytes, footprint_bytes());
+            self.heap_bytes =
+                heap::rust_heap().map(|sample| ease(self.heap_bytes.unwrap_or(0), sample));
             self.gpu_memory = harmonigraph_render::gpu_memory::totals();
             self.last_mem_read = now;
         }
@@ -805,57 +807,103 @@ impl PerfStats {
     }
 }
 
-/// The memory row's text: resident size to the nearest [`MEM_STEP_MB`], or
-/// "n/a" where the platform won't say.
-///
-/// Quantized because of what the number is FOR. It answers "is this plugin
-/// sitting on a sane amount of memory, and is that amount growing?" — and
-/// neither reading needs the exact megabyte, which moves on every refresh.
-/// An unquantized readout spent every second rewriting its last digits, and
-/// digits that never hold still get squinted at rather than read.
-pub fn memory_readout(rss_bytes: u64) -> String {
-    if rss_bytes == 0 {
-        return "n/a".to_string();
-    }
-    let mb = rss_bytes / (1024 * 1024);
-    // Nearest step, but never down to a bare "0 MB" while there IS a reading:
-    // "<10 MB" is the honest thing to say about a process too small to round.
-    let rounded = (mb + MEM_STEP_MB / 2) / MEM_STEP_MB * MEM_STEP_MB;
-    if rounded == 0 {
-        format!("<{MEM_STEP_MB} MB")
+/// One memory reading eased toward a new sample. Seeded on the first reading
+/// rather than eased up from zero, which would read as a plugin growing into
+/// its memory over the first few seconds of every session.
+fn ease(from: u64, to: u64) -> u64 {
+    if from == 0 {
+        to
     } else {
-        format!("{rounded} MB")
+        let (from, to) = (from as f64, to as f64);
+        (from + (to - from) * MEM_SMOOTH) as u64
     }
 }
 
-/// Resident set size of THIS process in bytes, or 0 when the platform can't
+/// The memory row's text: the host process's footprint, then ours — the Rust
+/// heap this binary counted and what the GPU memory record holds — for
+/// example `380 MB host · ours 210 heap + 151 GPU`.
+///
+/// Both halves, because neither answers the question alone. The host figure
+/// is what Activity Monitor shows, but in a shared plug-in host it holds every
+/// other plugin loaded beside us; ours leaves out what the system frameworks
+/// allocate on our behalf (Metal's driver pool, AppKit), which nothing can
+/// attribute per plugin. A part with no reading is left out rather than shown
+/// as zero, and "n/a" stands in for a footprint the platform won't report.
+///
+/// The footprint and heap are quantized to [`MEM_STEP_MB`] because of what the
+/// numbers are FOR. They answer "is this plugin sitting on a sane amount of
+/// memory, and is that amount growing?" — and neither reading needs the exact
+/// megabyte, which moves on every refresh. An unquantized readout spent every
+/// second rewriting its last digits, and digits that never hold still get
+/// squinted at rather than read. The GPU figure is exact: it moves only when a
+/// target is allocated or freed, and then by whole targets.
+pub fn memory_readout(
+    footprint_bytes: u64,
+    heap_bytes: Option<u64>,
+    gpu: &harmonigraph_render::gpu_memory::Totals,
+) -> String {
+    let host = if footprint_bytes == 0 {
+        "n/a host".to_owned()
+    } else {
+        format!("{} MB host", stepped_mb(footprint_bytes))
+    };
+    let ours: Vec<String> = [
+        heap_bytes.map(|bytes| format!("{} heap", stepped_mb(bytes))),
+        gpu.device.map(|_| format!("{} GPU", gpu.live.div_ceil(1024 * 1024))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if ours.is_empty() {
+        host
+    } else {
+        format!("{host} · ours {}", ours.join(" + "))
+    }
+}
+
+/// Megabytes to the nearest [`MEM_STEP_MB`], but never down to a bare "0"
+/// while there IS a reading: "<10" is the honest thing to say about an amount
+/// too small to round.
+fn stepped_mb(bytes: u64) -> String {
+    let rounded = (bytes / (1024 * 1024) + MEM_STEP_MB / 2) / MEM_STEP_MB * MEM_STEP_MB;
+    if rounded == 0 {
+        format!("<{MEM_STEP_MB}")
+    } else {
+        rounded.to_string()
+    }
+}
+
+/// Physical footprint of THIS process in bytes, or 0 when the platform can't
 /// report it. Called about once a second (see [`MEM_INTERVAL`]).
+///
+/// The footprint, not the resident size: `ri_phys_footprint` is what Activity
+/// Monitor's "Memory" column and `footprint <pid>` report. Resident size
+/// counts shared clean pages (framework code, mapped files) that the system can
+/// drop at will, and leaves out memory the system has compressed, so it does
+/// not match either of them even with nothing else in the process.
 #[cfg(target_os = "macos")]
-fn rss_bytes() -> u64 {
-    // proc_pidinfo(PROC_PIDTASKINFO) fills a proc_taskinfo whose
-    // pti_resident_size is the physical footprint — the same "Memory" column
-    // Activity Monitor shows. Returns the bytes written, == the struct size on
-    // success.
-    let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
+fn footprint_bytes() -> u64 {
+    // proc_pid_rusage fills a rusage_info_v4 for the flavor named, and returns
+    // 0 on success. V2 is the first with ri_phys_footprint; asking for V4
+    // fills the whole struct, which is the size passed.
+    let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    let status = unsafe {
+        libc::proc_pid_rusage(
             std::process::id() as libc::c_int,
-            libc::PROC_PIDTASKINFO,
-            0,
-            (&mut info as *mut libc::proc_taskinfo).cast(),
-            size,
+            libc::RUSAGE_INFO_V4,
+            (&mut info as *mut libc::rusage_info_v4).cast(),
         )
     };
-    if written == size {
-        info.pti_resident_size
+    if status == 0 {
+        info.ri_phys_footprint
     } else {
         0
     }
 }
 
+/// Linux has no footprint counter; resident size is the nearest it reports.
 #[cfg(target_os = "linux")]
-fn rss_bytes() -> u64 {
+fn footprint_bytes() -> u64 {
     // /proc/self/statm reports memory in pages; the second field is resident.
     // The page size is 4096 on every common Linux target, so skip the syscall.
     let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
@@ -868,7 +916,7 @@ fn rss_bytes() -> u64 {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn rss_bytes() -> u64 {
+fn footprint_bytes() -> u64 {
     0
 }
 
@@ -1078,7 +1126,7 @@ mod tests {
         // platforms with a reader it must return a real footprint; elsewhere
         // 0 ("n/a") is the documented result.
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        assert!(perf.rss_bytes > 0, "expected a resident-size reading");
+        assert!(perf.footprint_bytes > 0, "expected a footprint reading");
     }
 
     /// The megabyte that moves on every read is noise; the readout answers
@@ -1086,32 +1134,55 @@ mod tests {
     #[test]
     fn the_memory_readout_steps_rather_than_churning() {
         let mb = |n: u64| n * 1024 * 1024;
+        let none = harmonigraph_render::gpu_memory::Totals::default();
         // Everything inside one step reads the same, so the digits hold still.
         for bytes in [mb(485), mb(487), mb(492), mb(494)] {
-            assert_eq!(memory_readout(bytes), "490 MB", "{bytes} bytes");
+            assert_eq!(memory_readout(bytes, None, &none), "490 MB host", "{bytes} bytes");
         }
-        assert_eq!(memory_readout(mb(495)), "500 MB", "and it does step");
-        assert_eq!(memory_readout(0), "n/a", "no reading at all");
+        assert_eq!(memory_readout(mb(495), None, &none), "500 MB host", "and it does step");
+        assert_eq!(memory_readout(0, None, &none), "n/a host", "no reading at all");
         // A process too small to round still says something true, not "0 MB".
-        assert_eq!(memory_readout(mb(3)), "<10 MB");
+        assert_eq!(memory_readout(mb(3), None, &none), "<10 MB host");
+    }
+
+    /// The host's footprint comes first and ours after it, as the heap we
+    /// counted plus what the GPU record holds — and a part with no reading is
+    /// left out rather than printed as a zero that would read as a measurement.
+    #[test]
+    fn the_memory_row_puts_ours_beside_the_hosts() {
+        let mb = |n: u64| n * 1024 * 1024;
+        let gpu = harmonigraph_render::gpu_memory::Totals {
+            live: mb(150) + 1,
+            peak: mb(400),
+            device: Some(mb(300)),
+        };
+        let no_gpu = harmonigraph_render::gpu_memory::Totals::default();
+        let row = |heap, gpu| memory_readout(mb(376), heap, gpu);
+        assert_eq!(row(Some(mb(212)), &gpu), "380 MB host · ours 210 heap + 151 GPU");
+        assert_eq!(row(None, &gpu), "380 MB host · ours 151 GPU", "no counting allocator");
+        assert_eq!(row(Some(mb(212)), &no_gpu), "380 MB host · ours 210 heap", "no Metal");
+        assert_eq!(row(Some(mb(2)), &no_gpu), "380 MB host · ours <10 heap");
     }
 
     /// A single spike shouldn't jump the number: it eases toward each new
     /// reading, so what reaches the digits is where memory actually sits.
     #[test]
     fn memory_eases_toward_a_new_reading() {
-        let mut perf =
-            PerfStats { rss_bytes: 400 * 1024 * 1024, last_mem_read: 0.0, ..Default::default() };
+        let mut perf = PerfStats {
+            footprint_bytes: 400 * 1024 * 1024,
+            last_mem_read: 0.0,
+            ..Default::default()
+        };
         // Force a read whose sample is whatever the platform reports; what is
         // under test is that the stored value MOVES but does not teleport.
-        let before = perf.rss_bytes;
+        let before = perf.footprint_bytes;
         perf.record(
             FrameCosts { cpu_ms: 1.0, ..Default::default() },
             MEM_INTERVAL,
             Workload::default(),
         );
-        let after = perf.rss_bytes as f64;
-        let sample = super::rss_bytes() as f64;
+        let after = perf.footprint_bytes as f64;
+        let sample = super::footprint_bytes() as f64;
         if sample > 0.0 && (sample - before as f64).abs() > 1.0 {
             let step = (after - before as f64).abs();
             let jump = (sample - before as f64).abs();

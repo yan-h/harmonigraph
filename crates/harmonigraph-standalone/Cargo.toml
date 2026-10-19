@@ -9,6 +9,8 @@ publish = false
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-ui = { workspace = true }
+# The heap-counting global allocator the performance overlay's memory row reads.
+harmonigraph-perf = { workspace = true }
 harmonigraph-render = { workspace = true, features = ["hot-reload"] }
 harmonigraph-take = { workspace = true }
 eframe = { workspace = true }
