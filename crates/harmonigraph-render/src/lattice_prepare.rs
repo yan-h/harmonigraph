@@ -13,7 +13,18 @@ struct PreparedFrame {
     /// Which node casters can cover each part of the pane
     /// (`shadow::node_occluders`), for the receivers' occlusion.
     occluders: Vec<u32>,
+    pack_scratch: shadow::PackScratch,
     shadow_wanted: Option<[u32; 2]>,
+}
+
+/// The shadow packing's buffers, lent to each frame's [`PreparedFrame`] and
+/// taken back once it has encoded, so a frame at the node cap fills them again
+/// rather than allocating them. One per window: its panes prepare in turn.
+#[derive(Default)]
+pub(super) struct ShadowBuffers {
+    packed: shadow::Packed,
+    occluders: Vec<u32>,
+    scratch: shadow::PackScratch,
 }
 
 struct FrameSheets {
@@ -94,7 +105,8 @@ impl CallbackTrait for LatticeCallback {
         let has_atlas = !resources.sheets.atlas.is_empty();
         let sheet_sizes = resources.sheets.sizes();
 
-        let frame = self.prepare_targets(device, screen_descriptor);
+        let lent = std::mem::take(&mut resources.shadow_buffers);
+        let frame = self.prepare_targets(device, screen_descriptor, lent);
         let material = resources.compiled.material.clone();
         let pane = resources.pane_buffers(
             device,
@@ -144,6 +156,8 @@ impl CallbackTrait for LatticeCallback {
             stats.scene_ms.store(scene_ms.to_bits(), Relaxed);
             stats.prepare_ms.store(prepare_ms.to_bits(), Relaxed);
         }
+        let PreparedFrame { packed, occluders, pack_scratch: scratch, .. } = frame;
+        resources.shadow_buffers = ShadowBuffers { packed, occluders, scratch };
 
         Vec::new()
     }
@@ -303,22 +317,29 @@ impl LatticeCallback {
             // Only an encoded ink pass consumes its clock and row ownership.
             // Layout callbacks discarded by egui never reach this point.
             let encodes_ink = pane.offscreen.as_ref().is_some_and(|o| o.glow.is_some());
-            let instances = if encodes_ink {
+            let mut mixes = None;
+            if encodes_ink {
                 let strip = pane.ink_history.as_mut().expect("glow target has pane history");
                 strip.parity ^= 1;
                 if let Some(timing) = self.glow_timing {
-                    pane.ink_instances.clear();
-                    pane.ink_instances.extend_from_slice(&self.instances);
-                    strip.history.encode(timing, &mut pane.ink_instances, &self.glow_owners);
-                    &pane.ink_instances
+                    mixes = Some(strip.history.encode(timing, &self.instances, &self.glow_owners));
                 } else {
                     strip.history.clear();
-                    &self.instances
                 }
+            }
+            if let Some(mixes) = mixes {
+                // Each instance with its history coefficient in place of the
+                // seed, written straight into staging rather than into a
+                // patched copy of the frame.
+                let mixed = self.instances.iter().zip(mixes).map(|(&instance, &mix)| {
+                    let [level, row, _, breath] = instance.glow;
+                    GpuInstance { glow: [level, row, mix, breath], ..instance }
+                });
+                let count = self.instances.len();
+                write_rows::<_, INSTANCE_BYTES>(queue, &pane.instance_buffer, count, mixed);
             } else {
-                &self.instances
-            };
-            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(instances));
+                queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
+            }
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -375,7 +396,7 @@ impl LatticeCallback {
                 .iter()
                 .map(|&i| all.get(i as usize).copied().unwrap_or(shadow::NO_CELL));
             debug_assert_eq!(boxes.len(), self.instances.len(), "one box per node instance");
-            write_shadow_boxes(queue, &pane.node_cell_buffer, self.instances.len(), boxes);
+            write_rows::<_, BOX_BYTES>(queue, &pane.node_cell_buffer, self.instances.len(), boxes);
         }
 
         // The labels. With no atlas there is nothing to sample, so the pass
@@ -412,7 +433,7 @@ impl LatticeCallback {
                         _ => None,
                     })
                     .flat_map(|(n, b)| std::iter::repeat_n(b, n as usize));
-                write_shadow_boxes(queue, &pane.cell_buffer, self.glyphs.len(), cells);
+                write_rows::<_, BOX_BYTES>(queue, &pane.cell_buffer, self.glyphs.len(), cells);
             }
             if !self.glyphs.is_empty() {
                 queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
@@ -513,6 +534,7 @@ impl LatticeCallback {
         &self,
         device: &wgpu::Device,
         screen_descriptor: &ScreenDescriptor,
+        lent: ShadowBuffers,
     ) -> PreparedFrame {
         // Offscreen pixel size: the callback rect at native resolution,
         // scaled by the render-scale view setting (clamped in from_scene).
@@ -554,12 +576,14 @@ impl LatticeCallback {
         // device's times the render scale, which is the term #496 found missing
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
+        let ShadowBuffers { mut packed, mut occluders, scratch: mut pack_scratch } = lent;
+        let px_per_point = ppp * self.render_scale;
+        shadow::pack_into(&self.casters, px_per_point, max_dim, &mut packed, &mut pack_scratch);
         // Every receiver, including a label with its own shadow disabled, is
         // occluded by the node casters after it in painter order whose box
         // holds the point. Names immediately follow their owner, so that owner
         // can never occlude its own text.
-        let occluders = shadow::node_occluders(&packed.casters, &self.node_cells);
+        shadow::node_occluders(&packed.casters, &self.node_cells, &mut occluders);
         // Only a real cell asks for the atlas.
         let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         let shadow_wanted = has_shadow_cells.then_some(packed.size);
@@ -570,6 +594,7 @@ impl LatticeCallback {
             has_light,
             packed,
             occluders,
+            pack_scratch,
             shadow_wanted,
         }
     }
