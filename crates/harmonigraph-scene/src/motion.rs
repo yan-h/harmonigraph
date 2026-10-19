@@ -371,11 +371,19 @@ impl NodeMotion {
             if gate {
                 motion.audio_waiting = false;
             }
-            if gate && !motion.gate && motion.progress.iter().all(|&p| p == 0.0) {
+            // A gate rising on a node with no ink begins a lifetime, and the
+            // lifetime owns its order: an arrival's, and also a note's lit over
+            // an audio pose, which starts at full progress and so takes the
+            // reversal below. Seeded only on arrival, that note departed in
+            // whichever order the last note to ARRIVE here left behind.
+            let arriving = motion.progress.iter().all(|&p| p == 0.0);
+            if gate && !motion.gate && (arriving || motion.levels.iter().all(|&l| l == 0.0)) {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 node.lattice_pos.hash(&mut hash);
                 first_onset.hash(&mut hash);
                 motion.order_seed = hash.finish() as u32;
+            }
+            if gate && !motion.gate && arriving {
                 motion.order_delay = view.note_animation.delays(
                     &scene.octave_layout,
                     node.cents,
@@ -1266,6 +1274,42 @@ mod tests {
         assert_eq!(origin(&scene).melody_level, 0.0);
         tracker.handle_event(off(1.8, 60));
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
+    }
+    /// A note that lights a node the audio ring has posed starts its lifetime
+    /// from that pose rather than from an arrival, and departs in its own order
+    /// all the same: not in the order of whichever note last arrived there,
+    /// which is history the picture cannot show.
+    #[test]
+    fn a_note_lit_over_an_audio_pose_departs_in_its_own_order() {
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.order = AnimationOrder::RandomStagger;
+        view.note_animation.stagger_spread = 0.9;
+        let departure = |earlier: bool| {
+            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+            if earlier {
+                tracker.handle_event(on(0.0, 60));
+                draw(&mut motion, &mut tracker, &view, 0.0, false);
+                draw(&mut motion, &mut tracker, &view, 2.0, false);
+                tracker.handle_event(off(2.0, 60));
+            }
+            // Frames inside the replay horizon, so nothing resets the surface:
+            // the earlier note's arrival is still this node's history.
+            for now in [3.0, 4.0, 5.0] {
+                draw(&mut motion, &mut tracker, &view, now, false);
+            }
+            assert_eq!(motion.nodes.get(&LatticePos::ORIGIN).map_or(0.0, |m| m.levels[5]), 0.0);
+            draw(&mut motion, &mut tracker, &view, 5.1, true);
+            assert_eq!(motion.nodes[&LatticePos::ORIGIN].progress, [1.0; 11], "an audio pose");
+            tracker.handle_event(on(5.2, 60));
+            draw(&mut motion, &mut tracker, &view, 5.2, true);
+            draw(&mut motion, &mut tracker, &view, 7.0, true);
+            tracker.handle_event(off(7.0, 60));
+            draw(&mut motion, &mut tracker, &view, 7.0, true);
+            motion.nodes[&LatticePos::ORIGIN].delay
+        };
+        let fresh = departure(false);
+        assert!(fresh.iter().any(|&d| d > 0.0), "an ordered departure: {fresh:?}");
+        assert_eq!(departure(true), fresh);
     }
     #[test]
     fn stagger_spread_spans_starts_and_reverses_without_waiting() {
