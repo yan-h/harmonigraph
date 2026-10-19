@@ -9,7 +9,7 @@ struct BlitOut {
     metal::float2 uv;
     char _pad2[8];
 };
-struct type_6 {
+struct type_7 {
     float inner[5];
 };
 constant float BLOOM_THRESHOLD = 0.35;
@@ -24,7 +24,7 @@ uint naga_f2u32(float value) {
 float bloom_weight(
     float distance
 ) {
-    type_6 weights = type_6 {{0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216}};
+    type_7 weights = type_7 {{0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216}};
     if (distance > 4.0) {
         return 0.0;
     }
