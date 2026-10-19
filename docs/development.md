@@ -269,20 +269,18 @@ an audit stays only while a contract document cites it, as `docs/adaptive-tuning
 
 Shared personal skills come from your local [agent-config](https://github.com/yan-h/agent-config) checkout,
 independently of this repository.
-Install `audit-merges` and `review-and-merge` once for Claude and Codex:
+Its install script links every shared skill for Claude and Codex,
+and installs `session-lifecycle`'s hourly sweep for this checkout.
+That sweep needs Python 3.11+ as `python3`, and macOS ships 3.9:
 
 ```sh
-mkdir -p ~/.claude/skills ~/.agents/skills
-ln -s ~/projects/agent-config/skills/audit-merges ~/.claude/skills/audit-merges
-ln -s ~/projects/agent-config/skills/audit-merges ~/.agents/skills/audit-merges
-ln -s ~/projects/agent-config/skills/review-and-merge ~/.claude/skills/review-and-merge
-ln -s ~/projects/agent-config/skills/review-and-merge ~/.agents/skills/review-and-merge
+brew install python
+~/projects/agent-config/scripts/install.sh --repo ~/projects/harmonigraph
 ```
 
-Use your checkout's actual path,
-and preserve any existing skill before replacing it.
-For a custom Claude configuration directory,
-use its `skills/` directory instead of `~/.claude/skills`.
+Use your checkout's actual paths.
+The script replaces only links and skips a real file in the way.
+Until it has run, every session start reports that worktree cleanup cannot run.
 Update the `agent-config` checkout to update shared skills across projects;
 start a new agent session to refresh its skill catalog.
 Project-specific skills remain in `.claude/skills`.
@@ -291,7 +289,7 @@ but must be installed before Yan invokes a merge audit.
 
 ## Preserved build handoffs
 
-Install the shared `session-lifecycle` skill from agent-config.
+`session-lifecycle` comes from agent-config's install script ([shared agent skills](#shared-agent-skills)).
 After checks and the draft PR, `./session-lifecycle.sh handoff` builds both packages,
 publishes their binaries with checksums in the common Git directory,
 and removes disposable compilation output.
