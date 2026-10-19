@@ -1543,9 +1543,28 @@ struct OffscreenShared<'a> {
     glow_statistics_layout: &'a wgpu::BindGroupLayout,
 }
 
+/// The bloom chain's two working sizes for a picture `screen` pixels across:
+/// the quarter, each side rounded up, and the half as exactly twice it.
+///
+/// Twice the quarter rather than half the screen rounded up, so the
+/// downsample reads the half on an exact 2:1 grid at every size. Rounded
+/// separately, a side 1 or 2 mod 4 left an odd half under a quarter more than
+/// half of it, the tent slid off its texels across the pane, and a two-pixel
+/// note's halo pulsed by 66% of its peak as it crossed them (98% under the box
+/// before it). The half's texels come out a hair under two screen pixels, which
+/// every stage already maps through: the roll's notes by the per-axis scale
+/// `RollUniforms::drawn_into` measures, everything else by uv.
+pub(crate) fn bloom_sizes(screen: [u32; 2]) -> ([u32; 2], [u32; 2]) {
+    let quarter = screen.map(|n| n.div_ceil(4).max(1));
+    (quarter.map(|q| 2 * q), quarter)
+}
+
 /// The bloom post-process's targets and bind groups: a soft-knee threshold
-/// into half the picture's SCREEN size, a plain downsample to a quarter, then
-/// a separable blur ping-ponging between two quarter-res textures.
+/// into half the picture's SCREEN size, a tent-filtered downsample to a
+/// quarter, then a separable blur ping-ponging between two quarter-res
+/// textures, read back up through a B-spline (`bloom_sample` in `blit.wgsl`).
+/// The two filters at the grid changes are what keep a halo's shape still as
+/// its source slides across the quarter grid.
 ///
 /// One chain, every picture. The lattice feeds it the scene without its
 /// labels; the piano roll feeds it the notes rendered again offscreen
@@ -1612,9 +1631,25 @@ impl BloomChain {
         })
     }
 
+    /// The blur's scale per axis, in units of its own nine-tap profile.
+    ///
+    /// Less the spread the tent downsample (1/8 of a quarter texel squared
+    /// over the box it replaced) and the B-spline read (1/6 over bilinear) add
+    /// on their own, against the profile's variance of 2.854 taps squared.
+    /// Those are fixed in quarter texels, so without this they widened a small
+    /// pane's halo more than a large one's at the same width in points:
+    /// `bloom_width_follows_resolution` read 19% at half a pixel per point,
+    /// against 15% allowed. The box and bilinear spread the chain had before
+    /// is not given back here, as it never was. At most half the blur is given
+    /// up, which a pane small enough to need more draws a halo narrower than a
+    /// quarter texel anyway.
     fn scales(screen: [u32; 2], owner_pixels: egui::Vec2) -> [f32; 4] {
+        const FIXED_SPREAD: f32 = (1.0 / 8.0 + 1.0 / 6.0) / 2.854;
         let radius = owner_pixels.min_elem().max(1.0) / 1080.0;
-        let axis = |n: u32| radius * (n.div_ceil(4).max(1) * 4) as f32 / n.max(1) as f32;
+        let axis = |n: u32| {
+            let scale = radius * (n.div_ceil(4).max(1) * 4) as f32 / n.max(1) as f32;
+            (scale * scale - FIXED_SPREAD).max(0.25 * scale * scale).sqrt()
+        };
         [axis(screen[0]), axis(screen[1]), 0.0, 0.0]
     }
 
@@ -1657,8 +1692,7 @@ impl BloomChain {
                 })
                 .create_view(&Default::default())
         };
-        let (hw, hh) = (screen_size[0].div_ceil(2).max(1), screen_size[1].div_ceil(2).max(1));
-        let (qw, qh) = (screen_size[0].div_ceil(4).max(1), screen_size[1].div_ceil(4).max(1));
+        let ([hw, hh], [qw, qh]) = bloom_sizes(screen_size);
         let half_view = tex(format!("{label}_bloom_half"), hw, hh);
         let quarter_a_view = tex(format!("{label}_bloom_quarter_a"), qw, qh);
         let quarter_b_view = tex(format!("{label}_bloom_quarter_b"), qw, qh);
@@ -2887,7 +2921,7 @@ impl CompiledLatticeResources {
             &bright_layout,
             None,
         );
-        let downsample_pipeline = filter("fs_blit");
+        let downsample_pipeline = filter("fs_downsample");
         let blur_h_pipeline = filter("fs_blur_h");
         let blur_v_pipeline = filter("fs_blur_v");
         // Linear filtering: identity when render scale is 1 (texel-aligned

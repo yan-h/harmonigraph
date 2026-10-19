@@ -35,9 +35,15 @@ There are two sets:
 the lattice's in `harmonigraph-render`'s `lattice_tests::golden`, and the spectral pane's in `harmonigraph-offline`'s `golden`, which needs a whole UI frame and so cannot live beside the first.
 
 **A changed golden is a stated picture change**, and the PR body is where it is stated.
-Re-baseline with `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` —
-`--workspace` rather than one `-p`, or the set that is not named is silently left on its old frames —
-and read the contact sheet the failure names before you do:
+The frames on record are the CI runner's, and Yan's Mac no longer draws them:
+on 2026-10-18 it drew every frame of both sets 1–3/255 off a `main` CI passed,
+so a local `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` bakes that drift into every frame and turns CI red.
+Re-baseline from the run instead:
+push, let `Full CI` fail, `gh run download <run> -n golden-diff-workspace` and `-n golden-diff-isolated`,
+read each contact sheet, then copy the artifact's `actual/*` over `crates/`.
+Repeat until green, because a test that checks two frames stops at the first that moved.
+Locally the goldens stay red on `main` until the runner's macOS catches up, so read them there as advisory, for the contact sheet.
+Read the sheet before re-baselining either way:
 a bless nobody looked at is the failure the gate exists to catch, not a step on the way past it.
 
 The merge audit is Yan's to start (`CLAUDE.md` and the shared `audit-merges` skill hold the rule).
