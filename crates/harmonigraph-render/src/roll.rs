@@ -2835,6 +2835,51 @@ mod tests {
         assert!(eased < 0.5, "the halo blend left the fold standing: {blended:?}");
     }
 
+    /// While the cut fills, what it takes comes back in the note's own glow
+    /// color, out past the glow's reach as far as the cut goes; and a glow
+    /// keeps its color against a neighbour's bare cut reaching into it, which
+    /// is what the mask's split depth range is for (`fs_outline_mask`).
+    #[test]
+    fn the_cut_fills_with_the_glows_own_color_past_its_reach() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Long and straight, so the cut is still strong past the glow's reach.
+        let black = RollCut { reach: 8.0, curve: 0.0, ..CUT };
+        let fill = RollCut { fill: 1.0, ..black };
+        let [_, _, spread, glow_reach] = shadow_uniform(wide_shadow(), 1.0);
+        let [_, fade, ..] = cut_uniform(wide_shadow(), fill, 1.0);
+        // A point past the glow's reach, where the cut still takes a share.
+        let out = glow_reach + 1.5;
+        assert!(
+            out < spread + 0.6 * fade && 140.0 + spread + fade < SIZE[0] as f32,
+            "the fixture's cut reaches no further than its glow ({glow_reach} against {})",
+            spread + fade,
+        );
+        let x = (140.0 + out).round() as u32;
+        let red = RollInstance { aura: [200, 0, 0, 255], ..centered_note() };
+        let at = |notes: Vec<RollInstance>, cut, x| {
+            pixel(&draw_cut(&device, &queue, notes, cut, grey(0.9)).0, x, 128)
+        };
+        let (filled, black) = (at(vec![red], fill, x), at(vec![red], black, x));
+        assert!(
+            black[0] < 200 && filled[0] > black[0] + 10 && filled[0] > filled[2] + 10,
+            "past the glow's reach the fill reads {filled:?}, the black cut {black:?}",
+        );
+
+        // Blue stands just past the glow's reach from a point two points off
+        // red's flank: inside red's glow, and inside blue's cut alone.
+        let near = 142;
+        let blue_flank = near as f32 + glow_reach + 1.0;
+        let blue =
+            RollInstance { center: [blue_flank + 12.0, 128.0], aura: [0, 0, 200, 255], ..red };
+        let (alone, beside) = (at(vec![red], fill, near), at(vec![red, blue], fill, near));
+        assert!(
+            beside[2] <= alone[2] + 2,
+            "blue's bare cut recolored red's glow: {beside:?} against {alone:?} alone",
+        );
+    }
+
     /// The cut's targets are kept exactly while it can paint: a cut dialled to
     /// nothing, or a shadow switched off, drops them, as the glow's mask is
     /// dropped with the shadow ([`switching_the_shadow_off_drops_the_glow_mask`]).
