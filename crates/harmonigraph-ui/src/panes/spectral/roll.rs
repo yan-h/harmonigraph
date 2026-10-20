@@ -72,8 +72,8 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// The dark surround standing outside a note: its whole
 /// reach in screen points, and how dark it is where solid.
 ///
-/// BLACK, and not a setting, which the roll draws it as. The outline's job is to give a note a boundary
-/// against a heatmap, and the pane's own background is the color that tells
+/// BLACK, and not a setting: the roll draws every outline black. The outline's
+/// job is to give a note a boundary against a heatmap, and the pane's own background is the color that tells
 /// against the most of one: every preset opens at `L*` 0 and climbs, so black
 /// is what the cells are furthest from nearly everywhere. A note then reads as
 /// an object sitting over the picture, with the picture darkened around it. A

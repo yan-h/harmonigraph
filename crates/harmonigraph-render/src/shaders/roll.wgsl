@@ -40,9 +40,9 @@
 // stand between them. A gap of a point or more still reads as two notes, since
 // the outline fills it.
 //
-// The outline is a color the pane hands over, not a decision made here: this
-// shader is told how far it reaches, how gradually it goes, and what color it
-// is, and invents none of the three.
+// The outline is black, and how dark it is the pane hands over, not a decision
+// made here: this shader is told how far it reaches, how gradually it goes, and
+// how dark it is, and invents none of the three.
 //
 // Nothing here is tessellated. A note is four vertices whatever its shape,
 // and the outline the egui path drew as a separate stroked rounded rect is
