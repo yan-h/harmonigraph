@@ -20,6 +20,14 @@ concurrency:
 env:
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: sccache
+  # sccache checks it can read and write the cache when its server starts,
+  # and a failed check is fatal: on 2026-10-20 the Actions cache's storage
+  # answered that read with 503 ServerBusy, "Egress is over the account
+  # limit", and every rustc call failed before compiling anything (run
+  # 39436707766). Past startup a failed read is already a cache miss and a
+  # failed write is dropped, so skipping the check turns a throttled cache
+  # into a slower build rather than a red one. Needs sccache 0.18.
+  SCCACHE_SKIP_CACHE_CHECK: "true"
 
 jobs:
   full-ci:
@@ -58,7 +66,7 @@ jobs:
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
-          version: v0.16.0
+          version: v0.18.0
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
