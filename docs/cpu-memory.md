@@ -6,8 +6,9 @@ Measured for #1511 on 2026-10-19, an M5 Pro, build `main @d5db292c` in Bitwig an
 
 ## Our heap is the overlay's number, not `footprint`'s
 
-The Performance overlay's memory row reads `host · ours N heap + M GPU`.
-`ours … heap` is what this binary's global allocator has handed out and not taken back (`harmonigraph_perf::heap`), in MiB stepped to 10.
+The Performance overlay's `memory` row reads `N MB heap + M GPU`, ours alone;
+the breakdown adds the host process's footprint as `host mem`.
+`heap` is what this binary's global allocator has handed out and not taken back (`harmonigraph_perf::heap`), in MiB stepped to 10.
 It counts nothing another plugin allocates,
 and nothing the system frameworks allocate on our behalf.
 
@@ -17,7 +18,7 @@ and with **together** it shares it with everything.
 `vmmap -summary <pid>` shows how much of what `footprint` calls Malloc Large is not resident at all:
 in the measured host, 148 MB of large blocks were 15 MB resident and 124 MB swapped or compressed, all of it charged as dirty.
 
-In the measured host, the overlay read `ours 80 heap` against 258 MB allocated in the process's malloc zones (`vmmap -summary`).
+In the measured host, the overlay's heap read 80 MB against 258 MB allocated in the process's malloc zones (`vmmap -summary`).
 The other ~175 MB is otonal and the frameworks.
 Our history is all 8 KB blocks, and everything else we construct is 14.9 MiB,
 so at least 150 MiB of the host's 173 MiB of blocks over 256 KB are someone else's.

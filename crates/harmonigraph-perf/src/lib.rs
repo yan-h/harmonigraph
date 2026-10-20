@@ -66,7 +66,7 @@ const MEM_INTERVAL: f64 = 1.0;
 /// digits.
 const MEM_SMOOTH: f64 = 0.3;
 
-/// Granularity of the memory readout, in MB. See [`memory_readout`].
+/// Granularity of the memory readouts, in MB. See [`memory_readout`].
 const MEM_STEP_MB: u64 = 10;
 
 /// What the SHELL measures about the previous frame, filled in before it
@@ -567,7 +567,8 @@ pub struct PerfStats {
     /// once a second (0 when the platform can't report it).
     ///
     /// The HOST's, not ours: a plug-in host can load other plugins into the
-    /// same process, and their memory is in this figure too (#1512).
+    /// same process, and their memory is in this figure too (#1512). Which is
+    /// why only the breakdown prints it ([`host_memory_readout`]).
     ///
     /// Smoothed where the frame costs are not, because it is a different
     /// kind of signal: a slow-moving LEVEL read once a second, not a
@@ -819,45 +820,63 @@ fn ease(from: u64, to: u64) -> u64 {
     }
 }
 
-/// The memory row's text: the host process's footprint, then ours — the Rust
-/// heap this binary counted and what the GPU memory record holds — for
-/// example `380 MB host · ours 210 heap + 151 GPU`.
+/// The memory row's text: ours — the Rust heap this binary counted and what
+/// the GPU memory record holds — for example `210 MB heap + 151 GPU`.
 ///
-/// Both halves, because neither answers the question alone. The host figure
-/// is what Activity Monitor shows, but in a shared plug-in host it holds every
-/// other plugin loaded beside us; ours leaves out what the system frameworks
+/// Ours alone, not the host process's footprint: in a shared plug-in host that
+/// holds every other plugin loaded beside us, so it says little about this one
+/// and doubled the row's length. The breakdown carries it on a row of its own
+/// ([`host_memory_readout`]). Ours does leave out what the system frameworks
 /// allocate on our behalf (Metal's driver pool, AppKit), which nothing can
 /// attribute per plugin. A part with no reading is left out rather than shown
-/// as zero, and "n/a" stands in for a footprint the platform won't report.
+/// as zero, and "n/a" stands in when neither has one.
 ///
-/// The footprint and heap are quantized to [`MEM_STEP_MB`] because of what the
-/// numbers are FOR. They answer "is this plugin sitting on a sane amount of
-/// memory, and is that amount growing?" — and neither reading needs the exact
-/// megabyte, which moves on every refresh. An unquantized readout spent every
-/// second rewriting its last digits, and digits that never hold still get
-/// squinted at rather than read. The GPU figure is exact: it moves only when a
-/// target is allocated or freed, and then by whole targets.
+/// The heap is quantized to [`MEM_STEP_MB`] because of what the number is
+/// FOR. It answers "is this plugin sitting on a sane amount of memory, and is
+/// that amount growing?" — and that needs no exact megabyte, which moves on
+/// every refresh. An unquantized readout spent every second rewriting its last
+/// digits, and digits that never hold still get squinted at rather than read.
+/// The GPU figure is exact: it moves only when a target is allocated or freed,
+/// and then by whole targets.
 pub fn memory_readout(
-    footprint_bytes: u64,
     heap_bytes: Option<u64>,
     gpu: &harmonigraph_render::gpu_memory::Totals,
 ) -> String {
-    let host = if footprint_bytes == 0 {
-        "n/a host".to_owned()
-    } else {
-        format!("{} MB host", stepped_mb(footprint_bytes))
-    };
-    let ours: Vec<String> = [
-        heap_bytes.map(|bytes| format!("{} heap", stepped_mb(bytes))),
-        gpu.device.map(|_| format!("{} GPU", gpu.live.div_ceil(1024 * 1024))),
+    let parts: Vec<(String, &str)> = [
+        heap_bytes.map(|bytes| (stepped_mb(bytes), "heap")),
+        gpu.device.map(|_| (gpu.live.div_ceil(1024 * 1024).to_string(), "GPU")),
     ]
     .into_iter()
     .flatten()
     .collect();
-    if ours.is_empty() {
-        host
+    if parts.is_empty() {
+        return "n/a".to_owned();
+    }
+    // The unit once, on the first figure, as the `gpu mem` row prints it.
+    parts
+        .iter()
+        .enumerate()
+        .map(
+            |(i, (mb, what))| {
+                if i == 0 {
+                    format!("{mb} MB {what}")
+                } else {
+                    format!("{mb} {what}")
+                }
+            },
+        )
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// The host process's footprint, stepped as [`memory_readout`]'s heap is, or
+/// "n/a" when the platform won't report it. What Activity Monitor shows, and
+/// in a shared plug-in host every other plugin's memory too (#1512).
+pub fn host_memory_readout(footprint_bytes: u64) -> String {
+    if footprint_bytes == 0 {
+        "n/a".to_owned()
     } else {
-        format!("{host} · ours {}", ours.join(" + "))
+        format!("{} MB", stepped_mb(footprint_bytes))
     }
 }
 
@@ -1137,19 +1156,20 @@ mod tests {
         let none = harmonigraph_render::gpu_memory::Totals::default();
         // Everything inside one step reads the same, so the digits hold still.
         for bytes in [mb(485), mb(487), mb(492), mb(494)] {
-            assert_eq!(memory_readout(bytes, None, &none), "490 MB host", "{bytes} bytes");
+            assert_eq!(memory_readout(Some(bytes), &none), "490 MB heap", "{bytes} bytes");
+            assert_eq!(host_memory_readout(bytes), "490 MB", "{bytes} bytes of host");
         }
-        assert_eq!(memory_readout(mb(495), None, &none), "500 MB host", "and it does step");
-        assert_eq!(memory_readout(0, None, &none), "n/a host", "no reading at all");
-        // A process too small to round still says something true, not "0 MB".
-        assert_eq!(memory_readout(mb(3), None, &none), "<10 MB host");
+        assert_eq!(memory_readout(Some(mb(495)), &none), "500 MB heap", "and it does step");
+        assert_eq!(host_memory_readout(0), "n/a", "no host reading at all");
+        // An amount too small to round still says something true, not "0 MB".
+        assert_eq!(memory_readout(Some(mb(3)), &none), "<10 MB heap");
     }
 
-    /// The host's footprint comes first and ours after it, as the heap we
-    /// counted plus what the GPU record holds — and a part with no reading is
-    /// left out rather than printed as a zero that would read as a measurement.
+    /// The row is ours alone — the heap we counted plus what the GPU record
+    /// holds, with the unit once — and a part with no reading is left out
+    /// rather than printed as a zero that would read as a measurement.
     #[test]
-    fn the_memory_row_puts_ours_beside_the_hosts() {
+    fn the_memory_row_is_ours_alone() {
         let mb = |n: u64| n * 1024 * 1024;
         let gpu = harmonigraph_render::gpu_memory::Totals {
             live: mb(150) + 1,
@@ -1157,11 +1177,10 @@ mod tests {
             device: Some(mb(300)),
         };
         let no_gpu = harmonigraph_render::gpu_memory::Totals::default();
-        let row = |heap, gpu| memory_readout(mb(376), heap, gpu);
-        assert_eq!(row(Some(mb(212)), &gpu), "380 MB host · ours 210 heap + 151 GPU");
-        assert_eq!(row(None, &gpu), "380 MB host · ours 151 GPU", "no counting allocator");
-        assert_eq!(row(Some(mb(212)), &no_gpu), "380 MB host · ours 210 heap", "no Metal");
-        assert_eq!(row(Some(mb(2)), &no_gpu), "380 MB host · ours <10 heap");
+        assert_eq!(memory_readout(Some(mb(212)), &gpu), "210 MB heap + 151 GPU");
+        assert_eq!(memory_readout(None, &gpu), "151 MB GPU", "no counting allocator");
+        assert_eq!(memory_readout(Some(mb(212)), &no_gpu), "210 MB heap", "no Metal");
+        assert_eq!(memory_readout(None, &no_gpu), "n/a", "neither");
     }
 
     /// A single spike shouldn't jump the number: it eases toward each new
