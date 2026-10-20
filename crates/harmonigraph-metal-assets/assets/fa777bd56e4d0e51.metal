@@ -10,6 +10,7 @@ struct _mslBufferSizes {
 
 struct Locals {
     metal::float4 shadow;
+    metal::float4 cut;
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
@@ -18,7 +19,8 @@ struct Locals {
     metal::float2 depth_dir;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
-    metal::float2 _tail_pad;
+    float cut_fill;
+    float _tail_pad;
 };
 struct VertexOut {
     metal::float4 position;
