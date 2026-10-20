@@ -15,10 +15,8 @@ struct Locals {
     float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
-    metal::float2 holdout_origin;
-    metal::float4 shadow;
     metal::float2 shadow_atlas_size;
-    metal::float2 _shadow_pad;
+    metal::float4 shadow;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
 };
@@ -35,12 +33,14 @@ struct VertexOut {
     metal::float2 tremolo;
     char _pad9[8];
     metal::float4 core;
-    metal::float4 outline;
+    float outline;
+    char _pad11[4];
     metal::float2 center;
     uint who;
     float feather;
     metal::float2 ramp;
     metal::float2 fade;
+    char _pad16[8];
 };
 constant uint OCCLUDER_HEADER = 5u;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -67,7 +67,7 @@ VertexOut note_vertex(
     float shear_1,
     metal::float4 lead_1,
     metal::float4 core_1,
-    metal::float4 outline_1,
+    float outline_1,
     metal::float4 span_ramp_1,
     metal::float2 fade_1,
     metal::float4 taper_depth_1,
@@ -115,7 +115,7 @@ VertexOut note_vertex(
     return _e120;
 }
 
-struct vs_noteOutput {
+struct vs_note_bodyOutput {
     metal::float4 position [[position]];
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
@@ -126,7 +126,7 @@ struct vs_noteOutput {
     metal::float4 taper [[user(loc6), flat]];
     metal::float2 tremolo [[user(loc7), flat]];
     metal::float4 core [[user(loc8), flat]];
-    metal::float4 outline [[user(loc9), flat]];
+    float outline [[user(loc9), flat]];
     metal::float2 center [[user(loc10), flat]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
@@ -134,19 +134,19 @@ struct vs_noteOutput {
     metal::float2 fade [[user(loc14), flat]];
 };
 struct vb_15_type { metal::uchar data[108]; };
-vertex vs_noteOutput vs_note(
+vertex vs_note_bodyOutput vs_note_body(
   uint vertex_ [[vertex_id]]
 , uint who [[instance_id]]
 , constant Locals& locals [[buffer(0)]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(1)]]
 ) {
     metal::float2 center = {};
     metal::float2 half_extent = {};
     float shear = {};
     metal::float4 lead = {};
     metal::float4 core = {};
-    metal::float4 outline = {};
+    float outline = {};
     metal::float4 span_ramp = {};
     metal::float2 fade = {};
     metal::float4 taper_depth = {};
@@ -159,17 +159,15 @@ vertex vs_noteOutput vs_note(
         shear = unpackFloat32_(vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19]);
         lead = unpackFloat32x4_(vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27], vb_15_elem.data[28], vb_15_elem.data[29], vb_15_elem.data[30], vb_15_elem.data[31], vb_15_elem.data[32], vb_15_elem.data[33], vb_15_elem.data[34], vb_15_elem.data[35]);
         core = unpackUnorm8x4_(vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
-        outline = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
+        outline = unpackFloat32_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         span_ramp = unpackFloat32x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47], vb_15_elem.data[48], vb_15_elem.data[49], vb_15_elem.data[50], vb_15_elem.data[51], vb_15_elem.data[52], vb_15_elem.data[53], vb_15_elem.data[54], vb_15_elem.data[55], vb_15_elem.data[56], vb_15_elem.data[57], vb_15_elem.data[58], vb_15_elem.data[59]);
         fade = unpackFloat32x2_(vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63], vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67]);
         taper_depth = unpackFloat32x4_(vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83]);
         taper = unpackFloat32x4_(vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99]);
         tremolo = unpackFloat32x2_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103], vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107]);
     }
-    float _e16 = locals.shadow.w;
-    float _e19 = locals.feather;
-    float margin_1 = _e16 + _e19;
-    VertexOut _e21 = note_vertex(vertex_, who, center, half_extent, shear, lead, core, outline, span_ramp, fade, taper_depth, taper, tremolo, margin_1, locals);
-    const auto _tmp = _e21;
-    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.tremolo, _tmp.core, _tmp.outline, _tmp.center, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.fade };
+    float _e15 = locals.feather;
+    VertexOut _e16 = note_vertex(vertex_, who, center, half_extent, shear, lead, core, outline, span_ramp, fade, taper_depth, taper, tremolo, _e15, locals);
+    const auto _tmp = _e16;
+    return vs_note_bodyOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.tremolo, _tmp.core, _tmp.outline, _tmp.center, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.fade };
 }

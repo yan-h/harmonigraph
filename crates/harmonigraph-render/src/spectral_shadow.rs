@@ -391,6 +391,11 @@ pub(crate) fn finish(
 /// This callback paints nothing. Its position after the surface's producers
 /// is significant only because egui prepares callbacks in paint order;
 /// `pass_nr` is the painter context's cumulative pass number.
+///
+/// The work stays in `prepare`, not `finish_prepare`: the roll draws its
+/// shadow mask from the finished atlas in its own `finish_prepare`, which egui
+/// runs after every callback's `prepare` but, among `finish_prepare`s, in paint
+/// order, ahead of this one's.
 pub fn spectral_shadow_prepare_callback(
     rect: egui::Rect,
     surface_id: u64,

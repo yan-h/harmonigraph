@@ -6,11 +6,17 @@
 // (`cap_coverage`).
 //
 // TWO LAYERS, drawn as two passes over the same instances rather than
-// composited per note: every note's outline (`fs_outline_*`), then every
-// note's body (`fs_core_*`). Both use ordinary over, and a note's opacity (its
-// `fade`) takes the two out together. The same instances drawn twice, each
-// layer through a quad as big as its own ink: the outline's grown by the
-// shadow's reach (`vs_note`), the body's by one feather (`vs_note_body`).
+// composited per note: every note's outline, then every note's body
+// (`fs_core_*`), and a note's opacity (its `fade`) takes the two out together.
+// The same instances drawn twice, each layer through a quad as big as its own
+// ink: the outline's grown by the shadow's reach (`vs_note`), the body's by one
+// feather (`vs_note_body`).
+//
+// The bodies use ordinary over. The outlines do not: each note's darkness goes
+// into a mask over the roll's rect (`fs_outline_mask`) under a `max` blend, and
+// the mask is laid over the picture once, as black. Where two notes' shadows
+// meet, the picture there is as dark as the darker of the two and no darker,
+// rather than one shadow darkening the other.
 //
 // The order is the whole point. The outline is at its darkest where it meets
 // its own note — as dark as the Shadow darkness makes it — so an outline
@@ -34,9 +40,9 @@
 // stand between them. A gap of a point or more still reads as two notes, since
 // the outline fills it.
 //
-// The outline is a color the pane hands over, not a decision made here: this
-// shader is told how far it reaches, how gradually it goes, and what color it
-// is, and invents none of the three.
+// The outline is black, and how dark it is the pane hands over, not a decision
+// made here: this shader is told how far it reaches, how gradually it goes, and
+// how dark it is, and invents none of the three.
 //
 // Nothing here is tessellated. A note is four vertices whatever its shape,
 // and the outline the egui path drew as a separate stroked rounded rect is
@@ -64,13 +70,9 @@ struct Locals {
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
     depth_dir: vec2<f32>,
-    /// Where `body_holdout`'s first texel stands on the surface, in device
-    /// pixels: the roll's own rect, which is all the holdout covers.
-    holdout_origin: vec2<f32>,
+    shadow_atlas_size: vec2<f32>,
     /// σ, depth, zero, and whole kernel reach, in points.
     shadow: vec4<f32>,
-    shadow_atlas_size: vec2<f32>,
-    _shadow_pad: vec2<f32>,
     /// Where the target being drawn into starts, in its own pixels, and how
     /// many points one of them measures, per axis. What takes a fragment's own
     /// pixel back to the surface point it stands on ([`surface_point`]); set
@@ -82,7 +84,7 @@ struct Locals {
 @group(0) @binding(0) var<uniform> locals: Locals;
 
 /// The union of every body's coverage, one texel per device pixel of the
-/// roll's rect, read only by the outline layer. Binding 2 keeps it clear of
+/// roll's rect, read only by the outline layer's mask. Binding 2 keeps it clear of
 /// the common module's glow slots in the same group.
 @group(1) @binding(2) var body_holdout: texture_2d<f32>;
 
@@ -126,8 +128,8 @@ struct VertexOut {
     @location(7) @interpolate(flat) tremolo: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(8) @interpolate(flat) core: vec4<f32>,
-    /// The outline's color at full coverage; the fade takes it from there.
-    @location(9) @interpolate(flat) outline: vec4<f32>,
+    /// How dark the outline is at full coverage; the fade takes it from there.
+    @location(9) @interpolate(flat) outline: f32,
     /// The note's center in surface points, which [`on_screen`] measures
     /// `local` from.
     @location(10) @interpolate(flat) center: vec2<f32>,
@@ -143,7 +145,7 @@ struct VertexOut {
 };
 
 /// The outline layer's quad: the note's box grown by everything
-/// `outline_color` can reach to.
+/// `outline_darkness` can reach to.
 ///
 /// The outline wraps the note, so it is owed room on BOTH axes: ink runs out
 /// wherever the box distance passes `outline_reach`, which is the shadow's
@@ -159,7 +161,7 @@ fn vs_note(
     // Packed, since a vertex takes sixteen at most.
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
-    @location(9) outline: vec4<f32>,
+    @location(9) outline: f32,
     @location(14) span_ramp: vec4<f32>,
     @location(15) fade: vec2<f32>,
     @location(5) taper_depth: vec4<f32>,
@@ -188,7 +190,7 @@ fn vs_note_body(
     @location(2) shear: f32,
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
-    @location(9) outline: vec4<f32>,
+    @location(9) outline: f32,
     @location(14) span_ramp: vec4<f32>,
     @location(15) fade: vec2<f32>,
     @location(5) taper_depth: vec4<f32>,
@@ -211,7 +213,7 @@ fn note_vertex(
     shear: f32,
     lead: vec4<f32>,
     core: vec4<f32>,
-    outline: vec4<f32>,
+    outline: f32,
     span_ramp: vec4<f32>,
     fade: vec2<f32>,
     taper_depth: vec4<f32>,
@@ -284,7 +286,7 @@ fn vs_shadow_cell(
     @location(2) shear: f32,
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
-    @location(9) outline: vec4<f32>,
+    @location(9) outline: f32,
     @location(5) taper_depth: vec4<f32>,
     @location(6) taper: vec4<f32>,
     @location(10) box_rect: vec4<f32>,
@@ -637,7 +639,7 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
 ///
 /// Without it that end wears no cap at all. It is INTERIOR to the box — the
 /// lead was added to the box's length, not drawn beside it — and
-/// [`outline_color`]'s mask keeps the outline out of a box's middle, correctly,
+/// [`outline_darkness`]'s mask keeps the outline out of a box's middle, correctly,
 /// since a box has no edge there. So the cap would arrive only when the caller
 /// drops the lead and the box shrinks back to the note.
 ///
@@ -686,7 +688,9 @@ fn cap_coverage(in: VertexOut, held: f32) -> f32 {
 /// exact where the note stands alone, and a product would take it out twice
 /// along every antialiased edge.
 fn body_held(in: VertexOut) -> f32 {
-    let texel = vec2<i32>(floor(in.position.xy - locals.holdout_origin));
+    // The outline is drawn into the mask, which covers the roll's rect texel
+    // for texel as the holdout does.
+    let texel = vec2<i32>(floor(in.position.xy));
     let size = vec2<i32>(textureDimensions(body_holdout));
     if any(texel < vec2<i32>(0)) || any(texel >= size) {
         return 0.0;
@@ -694,7 +698,7 @@ fn body_held(in: VertexOut) -> f32 {
     return textureLoad(body_holdout, texel, 0).r;
 }
 
-/// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
+/// How dark the OUTLINE layer is here for this note: the dark surround
 /// standing against every one of the note's edges and fading out.
 ///
 /// The outline stands entirely OUTSIDE the note, which is why it is read off
@@ -717,8 +721,8 @@ fn body_held(in: VertexOut) -> f32 {
 /// [`cap_coverage`] is the second shape this layer draws, standing against the
 /// end of the note INSIDE a box that carries a lead — a place the mask above
 /// keeps the wrap out of, correctly, and where an edge nonetheless is.
-fn outline_color(in: VertexOut) -> vec4<f32> {
-    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
+fn outline_darkness(in: VertexOut) -> f32 {
+    if taper_at(in, in.local.y) <= 0.0 { return 0.0; }
     let d = box_distance(in);
     let held = body_held(in);
     let wrap = outline_coverage(in, d, in.outline_reach) * (1.0 - max(inside(in, d, 0.0), held))
@@ -790,15 +794,11 @@ fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
     return select(higher, lower, cutoff);
 }
 
+/// This note's share of the shadow mask: its outline's darkness, kept where
+/// it is the darkest of any note's by the mask's `max` blend.
 @fragment
-fn fs_outline_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return outline_color(on_screen(in));
-}
-
-@fragment
-fn fs_outline_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = outline_color(on_screen(in));
-    return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
+fn fs_outline_mask(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(outline_darkness(on_screen(in)), 0.0, 0.0, 1.0);
 }
 
 @fragment

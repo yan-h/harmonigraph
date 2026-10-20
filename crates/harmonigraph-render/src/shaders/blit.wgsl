@@ -310,6 +310,16 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
     return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
 }
 
+// The roll's shadow mask as black at its darkness, premultiplied: every
+// note's outline at once, laid under the bodies the caller draws next.
+// `scene_tex` is the mask, the size of the viewport it is drawn over, so each
+// pixel reads its own texel exactly rather than a filtered blend of four.
+@fragment
+fn fs_shadow_mask(in: BlitOut) -> @location(0) vec4<f32> {
+    let texel = vec2<i32>(in.uv * vec2<f32>(textureDimensions(scene_tex)));
+    return vec4<f32>(0.0, 0.0, 0.0, textureLoad(scene_tex, texel, 0).r);
+}
+
 // The lattice's node glow, laid down at the BOTTOM of the scene pass, before
 // any node, marker or label (`crate::LatticeCallback::prepare`). `scene_tex` is
 // the glow's own target here: light where the nodes put it, cleared to

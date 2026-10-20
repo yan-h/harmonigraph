@@ -70,10 +70,10 @@ const MIN_RIBBON_PT: f32 = 1.5;
 const MIN_LENGTH_PT: f32 = 1.0;
 
 /// The dark surround standing outside a note: its whole
-/// reach in screen points and its pane-owned colour.
+/// reach in screen points, and how dark it is where solid.
 ///
-/// BLACK, and not a setting. The outline's job is to give a note a boundary
-/// against a heatmap, and the pane's own background is the color that tells
+/// BLACK, and not a setting: the roll draws every outline black. The outline's
+/// job is to give a note a boundary against a heatmap, and the pane's own background is the color that tells
 /// against the most of one: every preset opens at `L*` 0 and climbs, so black
 /// is what the cells are furthest from nearly everywhere. A note then reads as
 /// an object sitting over the picture, with the picture darkened around it. A
@@ -85,8 +85,10 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// be left in by accident, and the ribbon still carries its own color where
 /// the surround has stopped saying anything.
 ///
-/// The colour is opaque black, and how dark it paints is the Shadow darkness:
-/// darkest against the note, falling off to nothing at its reach. At the bar's
+/// The darkness handed over is a full 1, and how dark it paints is the Shadow
+/// darkness: darkest against the note, falling off to nothing at its reach.
+/// Where two notes' surrounds meet, the darker of the two is what paints, so a
+/// crowd of notes is no darker between them than one note is. At the bar's
 /// default that is a deep tint rather than solid black, so the backdrop still
 /// shows through the edge, as it does through every other shadow in the
 /// picture.
@@ -96,12 +98,12 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// the shadow style itself; the one returned here is for the culls, which keep
 /// a note whose outline is still on screen.
 ///
-/// Off comes back zero-reach AND transparent, never one or the other: the reach
-/// is what the far-edge cull keeps a leaving note alive for, so an outline that
-/// will not paint must not be paid for either.
-fn outline(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> (f32, Color32) {
+/// Off comes back zero-reach AND zero darkness, never one or the other: the
+/// reach is what the far-edge cull keeps a leaving note alive for, so an outline
+/// that will not paint must not be paid for either.
+fn outline(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> (f32, f32) {
     let reach = harmonigraph_render::spectral_shadow_reach(style, point_scale);
-    (reach, if style.casts() { Color32::BLACK } else { Color32::TRANSPARENT })
+    (reach, if style.casts() { 1.0 } else { 0.0 })
 }
 
 /// How far a SOUNDING note's ribbon carries past the now-line, and how much of
@@ -375,7 +377,7 @@ fn roll_instances_with_floor(
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
-    let (outline_px, outline_color) =
+    let (outline_px, outline_darkness) =
         outline(state.appearance.view.shadow.spectral_geometry, point_scale);
     // ...and how far a SOUNDING note carries past the now-line, which is
     // decided once for the same reason. See [`lead`]. How much of that a
@@ -499,7 +501,7 @@ fn roll_instances_with_floor(
                         lead_alpha: standing,
                         cap_reach: 0.0,
                         core: note_color(state, pitch, 1.0).to_array(),
-                        outline: outline_color.to_array(),
+                        outline: outline_darkness,
                         span: RollInstance::WHOLE,
                         ramp: [0.0, 0.0],
                         fade,
@@ -706,7 +708,7 @@ fn roll_instances_with_floor(
                 lead_alpha: attached_alpha,
                 cap_reach: cap_px,
                 core: core.to_array(),
-                outline: outline_color.to_array(),
+                outline: outline_darkness,
                 span: RollInstance::WHOLE,
                 ramp: [0.0, 0.0],
                 fade: [1.0, 1.0],
@@ -1621,37 +1623,32 @@ mod tests {
         assert!(instances(&state, 1.0).is_empty(), "the fixture's note reaches the zoom at rest");
     }
 
-    /// The outline's colour is opaque black at every width that casts at all;
+    /// The outline's darkness is a full 1 at every width that casts at all;
     /// how dark it paints is the Shadow darkness, which the shader applies.
-    /// Anything less than 255 here would dim the outline a second time, by a
-    /// number no bar shows.
+    /// Anything less here would dim the outline a second time, by a number no
+    /// bar shows.
     ///
-    /// Off has to mean zero reach AND no color, never one or the other: the
+    /// Off has to mean zero reach AND no darkness, never one or the other: the
     /// reach is what keeps a leaving note alive past the far edge, so an
     /// outline that will not paint must not be paid for either.
     #[test]
-    fn the_outline_is_opaque_black_at_every_width_that_casts() {
+    fn the_outline_is_fully_dark_at_every_width_that_casts() {
         // Three settings across the bar's whole travel: the least it can be set
         // to above nothing, a modest one, and full.
         for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
-            assert_eq!(
-                note.outline,
-                [0, 0, 0, 255],
-                "the outline is not opaque black at reach {reach}: {:?}",
-                note.outline,
-            );
+            assert_eq!(note.outline, 1.0, "the outline is not fully dark at reach {reach}");
         }
 
         let off = ribbon(0.0);
-        assert_eq!(one(&off).outline[3], 0, "an outline of no width left a color behind");
+        assert_eq!(one(&off).outline, 0.0, "an outline of no width left a darkness behind");
         let shut = harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() };
         assert_eq!(outline(shut, 1.0).0, 0.0, "an outline of no width still made room for one");
     }
 
     /// A zero-depth shadow is off everywhere upstream of the atlas too: the
-    /// instance carries no outline color, and the roll's far-edge cull keeps
+    /// instance carries no outline darkness, and the roll's far-edge cull keeps
     /// it only for the ribbon's own pixel feather rather than for a transparent
     /// width-sized surround.
     #[test]
@@ -1659,7 +1656,7 @@ mod tests {
         let style =
             |depth| harmonigraph_scene::ShadowStyle { width: 1.0, depth, ..Default::default() };
         let shut = ribbon_with_style(style(0.0), 12.0);
-        assert_eq!(one(&shut).outline[3], 0, "the instance kept transparent outline ink");
+        assert_eq!(one(&shut).outline, 0.0, "the instance kept an outline darkness");
 
         let last_visible = |depth| {
             let mut state = fresh();

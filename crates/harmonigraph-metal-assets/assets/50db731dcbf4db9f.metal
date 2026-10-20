@@ -16,10 +16,8 @@ struct Locals {
     float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
-    metal::float2 holdout_origin;
-    metal::float4 shadow;
     metal::float2 shadow_atlas_size;
-    metal::float2 _shadow_pad;
+    metal::float4 shadow;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
 };
@@ -36,12 +34,14 @@ struct VertexOut {
     metal::float2 tremolo;
     char _pad9[8];
     metal::float4 core;
-    metal::float4 outline;
+    float outline;
+    char _pad11[4];
     metal::float2 center;
     uint who;
     float feather;
     metal::float2 ramp;
     metal::float2 fade;
+    char _pad16[8];
 };
 constant uint OCCLUDER_HEADER = 5u;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -111,7 +111,7 @@ struct vs_shadow_cellOutput {
     metal::float4 taper [[user(loc6), flat]];
     metal::float2 tremolo [[user(loc7), flat]];
     metal::float4 core [[user(loc8), flat]];
-    metal::float4 outline [[user(loc9), flat]];
+    float outline [[user(loc9), flat]];
     metal::float2 center [[user(loc10), flat]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
@@ -133,7 +133,7 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     float shear = {};
     metal::float4 lead = {};
     metal::float4 core = {};
-    metal::float4 outline = {};
+    float outline = {};
     metal::float4 taper_depth = {};
     metal::float4 taper = {};
     if (i_id < (_buffer_sizes.buffer_size15 / 108)) {
@@ -143,7 +143,7 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
         shear = unpackFloat32_(vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19]);
         lead = unpackFloat32x4_(vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27], vb_15_elem.data[28], vb_15_elem.data[29], vb_15_elem.data[30], vb_15_elem.data[31], vb_15_elem.data[32], vb_15_elem.data[33], vb_15_elem.data[34], vb_15_elem.data[35]);
         core = unpackUnorm8x4_(vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
-        outline = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
+        outline = unpackFloat32_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         taper_depth = unpackFloat32x4_(vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83]);
         taper = unpackFloat32x4_(vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99]);
     }
