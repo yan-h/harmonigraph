@@ -6,7 +6,8 @@
 //! draws into, in one command buffer. That covers `prepare` (the bloom's notes
 //! and chain, the body holdout), the shared spectral shadow's `finish` (the
 //! Gaussian atlas's ink and blur) and `paint` (outline layer, core layer, bloom
-//! composite). The closing pass READS the holdout, the atlas and the bloom's
+//! composite), and with the backdrop cut on its two passes and its own
+//! composite. The closing pass READS the holdout, the atlas and the bloom's
 //! quarter, so its end is ordered after every pass that wrote them (#1113).
 //! The control's paint draws nothing, which is what the timer's no-pixel draw
 //! is for.
@@ -17,7 +18,9 @@
 //! ```
 //! `PROBE_SIZE=WxH` (device pixels, default 3840x1000: the roll is a strip),
 //! `PROBE_PPP` (default 2), `PROBE_FRAMES` (default 120) and `PROBE_CASE` (a
-//! substring of the case name, e.g. `dense` or `Distance`).
+//! substring of the case name, e.g. `dense` or `cut`). Each workload is timed
+//! under the glow alone and under the backdrop cut at the look's defaults, with
+//! the halo blend on and off.
 //!
 //! The notes are synthetic, since the pane that builds them lives in
 //! `harmonigraph-ui`: ribbons at the pane's default width (0.3 semitone over
@@ -137,7 +140,7 @@ fn a_frame_of_the_roll_costs_this_much() {
     let bloom = crate::bloom_strength(harmonigraph_scene::ViewConfig::default().note_bloom);
 
     // Median and p10 of `frames` frames of one roll, after the timer's warm-up.
-    let time = |instances: Vec<RollInstance>, shadow: harmonigraph_scene::ShadowStyle| {
+    let time = |instances: Vec<RollInstance>, shadow: harmonigraph_scene::ShadowStyle, cut| {
         let cb = RollCallback {
             point_scale: 1.0,
             rect,
@@ -147,6 +150,7 @@ fn a_frame_of_the_roll_costs_this_much() {
             axes: AXES,
             bloom,
             shadow,
+            cut,
             target_format: format,
             pane_id: 0,
             pass_nr: 0,
@@ -177,17 +181,21 @@ fn a_frame_of_the_roll_costs_this_much() {
         size[0], size[1]
     );
     let shadow = harmonigraph_scene::ShadowSettings::default().spectral_geometry;
-    let (control, control_p10) = time(Vec::new(), shadow);
+    let (control, control_p10) = time(Vec::new(), shadow, RollCut::OFF);
     eprintln!("control (empty roll): median {control:.3} ms, p10 {control_p10:.3} ms");
-    for work in &WORKLOADS {
-        let case = work.name;
+    // The look's defaults (`SpectrumConfig`'s), then the same at no blend.
+    let cut = RollCut { amount: 1.0, reach: 4.0, curve: 1.0, fill: 0.0, blend: 0.5 };
+    let cuts =
+        [("glow", RollCut::OFF), ("cut", cut), ("cut, no blend", RollCut { blend: 0.0, ..cut })];
+    for (work, (look, cut)) in WORKLOADS.iter().flat_map(|w| cuts.map(|c| (w, c))) {
+        let case = format!("{} under the {look}", work.name);
         if filter.as_ref().is_some_and(|f| !case.contains(f.as_str())) {
             continue;
         }
-        let reach = crate::shadow::spectral_shadow_reach(shadow, 1.0);
+        let reach = roll_surround_reach(shadow, cut, 1.0);
         let notes = instances(work, points, reach);
         let count = notes.len();
-        let (median, p10) = time(notes, shadow);
+        let (median, p10) = time(notes, shadow, cut);
         eprintln!(
             "{case}: {count} instances, reach {reach:.2} pt: median {median:.3} ms \
              (p10 {p10:.3}); the roll alone {:.3} ms (p10 {:.3})",

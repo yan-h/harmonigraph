@@ -54,7 +54,10 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{roll_paint_callback_with_clipped_tail, RollAxes, RollInstance};
+pub use roll::{
+    roll_paint_callback_with_clipped_tail, roll_surround_reach, RollAxes, RollCut, RollInstance,
+    ROLL_CUT_REACH_RANGE, ROLL_HALO_BLEND_MAX,
+};
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
 /// picture a CPU compose would build texel by texel. Here the aggregator's slab

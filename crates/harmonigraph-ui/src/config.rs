@@ -446,6 +446,32 @@ pub struct SpectrumConfig {
     /// chroma than its ribbon at any share, so even 1 reads as a tint of the
     /// note rather than a second ribbon.
     pub roll_glow_chroma: f32,
+    /// How much of the picture behind the glow the BACKDROP CUT takes at a
+    /// note's edge, 0..1 (#1525). The glow alone never covers wholly, so over
+    /// bright spectrogram energy the backdrop leaks through it and the surround
+    /// reads thin; the cut takes the backdrop away faster than the glow lays its
+    /// color on, so the surround holds over bright cells as over dark ones. 0
+    /// is the plain glow; over black the cut changes nothing.
+    ///
+    /// The cut's shape is the four below; how far the glow reaches is still the
+    /// Notes shadow's, and the cut starts from its spread. See
+    /// [`harmonigraph_render::RollCut`].
+    pub roll_cut: f32,
+    /// How far past the spread the cut fades out, in σ of the glow
+    /// ([`harmonigraph_render::ROLL_CUT_REACH_RANGE`]). Longer reads softer and
+    /// holds further out, and between close notes takes more of the gap.
+    pub roll_cut_reach: f32,
+    /// The cut's fade, 0..1: 0 a straight line, 1 a smoothstep, which holds
+    /// near the note and eases out at both ends.
+    pub roll_cut_curve: f32,
+    /// How much of what the cut takes away is filled with the glow's own color
+    /// rather than left black, 0..1.
+    pub roll_cut_fill: f32,
+    /// How softly neighbouring notes' cuts merge, 0..1. At 0 the strongest
+    /// note's cut stands alone, which folds into a crease along the line
+    /// between two notes once the cut is wide and soft; higher rounds the fold
+    /// out and darkens a narrow gap a little more.
+    pub roll_halo_blend: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -688,6 +714,16 @@ impl SpectrumConfig {
         self.roll_glow_lightness =
             bounded(self.roll_glow_lightness, fresh.roll_glow_lightness, 0.0, 100.0);
         self.roll_glow_chroma = bounded(self.roll_glow_chroma, fresh.roll_glow_chroma, 0.0, 1.0);
+        self.roll_cut = bounded(self.roll_cut, fresh.roll_cut, 0.0, 1.0);
+        self.roll_cut_reach = bounded(
+            self.roll_cut_reach,
+            fresh.roll_cut_reach,
+            *harmonigraph_render::ROLL_CUT_REACH_RANGE.start(),
+            *harmonigraph_render::ROLL_CUT_REACH_RANGE.end(),
+        );
+        self.roll_cut_curve = bounded(self.roll_cut_curve, fresh.roll_cut_curve, 0.0, 1.0);
+        self.roll_cut_fill = bounded(self.roll_cut_fill, fresh.roll_cut_fill, 0.0, 1.0);
+        self.roll_halo_blend = bounded(self.roll_halo_blend, fresh.roll_halo_blend, 0.0, 1.0);
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -960,6 +996,15 @@ impl Default for SpectrumConfig {
             // a bright one alike.
             roll_glow_lightness: 7.0,
             roll_glow_chroma: 0.85,
+            // Picked off contact sheets (S4 with a smooth minimum of σ / 2,
+            // rounds R7-R8, 2026-10-20): the whole backdrop cut at the edge,
+            // easing out over four σ, to black, with the crease between notes
+            // rounded out.
+            roll_cut: 1.0,
+            roll_cut_reach: 4.0,
+            roll_cut_curve: 1.0,
+            roll_cut_fill: 0.0,
+            roll_halo_blend: 0.5,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which

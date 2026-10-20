@@ -100,6 +100,48 @@ fn ribbon_glow(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
                 "How much of each ribbon's color its glow keeps. \
                  0% is a neutral glow; 100% is as colorful as the ribbon at the glow's lightness.",
             );
+        ValueBar::new(&mut cfg.roll_cut, 0.0..=1.0, "Backdrop cut")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How much of the spectrogram behind the glow is taken away next to a ribbon, \
+                 so the glow holds over bright energy as well as over dark. \
+                 0% is the plain glow. Over black it changes nothing.",
+            );
+        ValueBar::new(
+            &mut cfg.roll_cut_reach,
+            harmonigraph_render::ROLL_CUT_REACH_RANGE,
+            "Cut reach",
+        )
+        .decimals(1)
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "How far out from a ribbon the cut fades away, in multiples of the glow's width. \
+                 Longer is softer, and takes more of the gap between close notes.",
+        );
+        ValueBar::new(&mut cfg.roll_cut_curve, 0.0..=1.0, "Cut curve")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "The shape of the cut's fade. 0% fades in a straight line; \
+                 100% holds near the ribbon and eases out gently at the far end.",
+            );
+        ValueBar::new(&mut cfg.roll_cut_fill, 0.0..=1.0, "Cut fill")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "What replaces the spectrogram the cut takes away. \
+                 0% leaves it black; 100% fills it with the glow's own color.",
+            );
+        ValueBar::new(&mut cfg.roll_halo_blend, 0.0..=1.0, "Halo blend")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How smoothly the cuts of neighbouring notes merge. \
+                 0% shows a sharp crease along the line between two notes; \
+                 higher rounds it out and darkens narrow gaps a little more.",
+            );
     })
     .response
     .on_hover_text("MIDI ribbons");
