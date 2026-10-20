@@ -19,7 +19,7 @@
 use egui::Color32;
 use harmonigraph_core::Expressions;
 use harmonigraph_core::RollNote;
-use harmonigraph_render::{RollAxes, RollInstance};
+use harmonigraph_render::{RollAxes, RollCut, RollInstance};
 use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
@@ -93,14 +93,33 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// The inherited spectral geometry width resolves to points, so it is the same
 /// edge at every zoom and every ribbon width. The shader reads that reach from
 /// the shadow style itself; the one returned here is for the culls, which keep
-/// a note whose outline is still on screen.
+/// a note whose outline is still on screen. It is the glow's or the backdrop
+/// cut's, whichever reaches further ([`harmonigraph_render::roll_surround_reach`]):
+/// the cut is ink past the note as much as the glow is.
 ///
 /// Off comes back zero-reach AND zero strength, never one or the other: the
 /// reach is what the far-edge cull keeps a leaving note alive for, so an outline
 /// that will not paint must not be paid for either.
-fn outline(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> (f32, f32) {
-    let reach = harmonigraph_render::spectral_shadow_reach(style, point_scale);
+fn outline(style: harmonigraph_scene::ShadowStyle, cut: RollCut, point_scale: f32) -> (f32, f32) {
+    let reach = harmonigraph_render::roll_surround_reach(style, cut, point_scale);
     (reach, if style.casts() { 1.0 } else { 0.0 })
+}
+
+/// [`outline`] for the roll `state` draws.
+fn surround(state: &PictureState, point_scale: f32) -> (f32, f32) {
+    outline(state.appearance.view.shadow.spectral_geometry, roll_cut(state), point_scale)
+}
+
+/// The backdrop cut the roll's Ribbon glow bars dial, as the renderer takes it.
+fn roll_cut(state: &PictureState) -> RollCut {
+    let cfg = &state.appearance.spectrum;
+    RollCut {
+        amount: cfg.roll_cut,
+        reach: cfg.roll_cut_reach,
+        curve: cfg.roll_cut_curve,
+        fill: cfg.roll_cut_fill,
+        blend: cfg.roll_halo_blend,
+    }
 }
 
 /// How far a SOUNDING note's ribbon carries past the now-line, and how much of
@@ -302,6 +321,7 @@ pub(super) fn draw_roll(
         axes,
         bloom,
         state.appearance.view.shadow.spectral_geometry,
+        roll_cut(state),
         state.surfaces.target_format,
         harmonigraph_render::PaneIds { pane, pass_nr: painter.ctx().cumulative_pass_nr() },
         options.point_scale,
@@ -372,8 +392,7 @@ fn roll_instances_with_floor(
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
-    let (outline_px, outline_strength) =
-        outline(state.appearance.view.shadow.spectral_geometry, point_scale);
+    let (outline_px, outline_strength) = surround(state, point_scale);
     // ...and how far a SOUNDING note carries past the now-line, which is
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
@@ -1601,6 +1620,9 @@ mod tests {
         state.appearance.spectrum.high_midi = 78.0;
         state.appearance.spectrum.roll_thickness = 2.0;
         state.appearance.view.shadow.spectral_geometry = OUTLINE;
+        // The glow's reach alone: the distances below are measured against
+        // it, and a backdrop cut reaching further would keep the note at rest.
+        state.appearance.spectrum.roll_cut = 0.0;
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
                 thickness: Some(2.0),
@@ -1659,7 +1681,13 @@ mod tests {
         let off = ribbon(0.0);
         assert_eq!(one(&off).aura[3], 0, "an outline of no width left a strength behind");
         let shut = harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() };
-        assert_eq!(outline(shut, 1.0).0, 0.0, "an outline of no width still made room for one");
+        let cut = roll_cut(&fresh());
+        assert!(cut.amount > 0.0, "the fixture's cut is off, which proves nothing below");
+        assert_eq!(
+            outline(shut, cut, 1.0).0,
+            0.0,
+            "an outline of no width still made room for one"
+        );
     }
 
     /// A zero-depth shadow is off everywhere upstream of the atlas too: the
@@ -2235,7 +2263,7 @@ mod tests {
         let now = 14.3;
         let time =
             super::super::axes::TimeAxis::new(&state, super::super::axes::spectrum_share(cfg), now);
-        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
+        let (outline_px, _) = surround(&state, 1.0);
         let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
         // Put the note's stop exactly on the live ink boundary, by the cull's
         // own arithmetic: solving for `now` from the stop instead lands it an
@@ -2457,7 +2485,7 @@ mod tests {
             // the line through the screen while the pane placed the note along
             // its own axis — the two orders of arithmetic part at the last bit.
             let tip = past_the_line(&note, &axes, split);
-            let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
+            let (outline_px, _) = surround(&state, 1.0);
             let (drawn, over) = if note.lead > 0.0 {
                 (note.cap_reach > 0.0, tip - note.lead + note.cap_reach + 0.5 / PPP)
             } else {
@@ -2642,7 +2670,7 @@ mod tests {
 
         // Growing with the room, and never shrinking — the cap comes out of the
         // note's own end rather than being faded in over it.
-        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
+        let (outline_px, _) = surround(&state, 1.0);
         let mut previous = 0.0f32;
         let mut full_at = None;
         let mut elapsed = 0.0f64;
@@ -2728,7 +2756,7 @@ mod tests {
             }
         }
         let last = at(with);
-        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
+        let (outline_px, _) = surround(&state, 1.0);
         assert!(
             last.cap_reach >= outline_px - 1e-4,
             "the lead was given up at {without}s with its cap at {} of {outline_px} — the \

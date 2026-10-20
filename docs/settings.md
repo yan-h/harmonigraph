@@ -370,6 +370,17 @@ Where the glow is at full darkness the picture is that lightness whatever the sp
 so every ribbon stands against the same surround.
 Where two glows meet, the stronger one paints, in its own color.
 
+The glow alone never covers fully, so over bright spectrogram energy the backdrop shows through it.
+**Backdrop cut** takes the spectrogram away next to a ribbon faster than the glow lays its color on,
+so the surround holds over bright cells as it does over dark ones.
+At 0% it is the plain glow, and over black it changes nothing.
+**Cut reach** is how far past the Spread the cut fades out, in multiples of the glow's width,
+and **Cut curve** shapes that fade, from a straight line at 0% to a smoothstep at 100%.
+**Cut fill** fills what the cut takes away with the glow's own color instead of black.
+**Halo blend** merges the cuts of neighbouring notes:
+at 0% the stronger cut stands alone and folds into a crease along the line between two notes,
+and higher rounds the fold out while darkening narrow gaps a little more.
+
 Lattice text shadows use local darkness.
 They attenuate bright slices and finished bloom only inside their footprint,
 with foreground ink covering shadows behind it.

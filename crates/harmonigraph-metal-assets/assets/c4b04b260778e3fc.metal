@@ -6,6 +6,7 @@ using metal::uint;
 
 struct Locals {
     metal::float4 shadow;
+    metal::float4 cut;
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
@@ -14,7 +15,8 @@ struct Locals {
     metal::float2 depth_dir;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
-    metal::float2 _tail_pad;
+    float cut_fill;
+    float _tail_pad;
 };
 struct VertexOut {
     metal::float4 position;
@@ -336,7 +338,16 @@ metal::float4 core_color(
     return ((color * _e17) * _e19) * _e22;
 }
 
-struct fs_core_gammaInput {
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
+struct fs_core_linearInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -352,16 +363,17 @@ struct fs_core_gammaInput {
     metal::float2 ramp [[user(loc13), flat]];
     metal::float2 fade [[user(loc14), flat]];
 };
-struct fs_core_gammaOutput {
+struct fs_core_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_core_gammaOutput fs_core_gamma(
-  fs_core_gammaInput varyings [[stage_in]]
+fragment fs_core_linearOutput fs_core_linear(
+  fs_core_linearInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 ) {
     const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.aura, varyings.center, varyings.feather, {}, varyings.ramp, varyings.fade };
     VertexOut _e1 = on_screen(in, locals);
     metal::float4 _e2 = core_color(_e1);
-    return fs_core_gammaOutput { _e2 };
+    metal::float3 _e4 = linear_from_gamma_rgb(_e2.xyz);
+    return fs_core_linearOutput { metal::float4(_e4, _e2.w) };
 }

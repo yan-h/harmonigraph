@@ -40,3 +40,11 @@ These settle the open questions from the first trial above.
 - The glow's reach, darkness and spread stay the shared Notes shadow group's. Ribbon glow lightness and color are two new bars, the roll's alone.
 - This reverses #1499's every-shadow-is-a-blur for the ribbons only: a blur of a ribbon thinner than σ barely darkened round it, which is where legibility failed.
 - Ribbon glow darkness is linear in the profile (Darkness × falloff), as W8 was prototyped, rather than #1314's stops curve; the dots keep stops, so the shared Darkness bar follows two curves.
+
+## 2026-10-20 (backdrop cut, #1525)
+
+- The glow never reaches full strength, so over very bright spectrogram energy the backdrop leaked through it and the halo read thin.
+- Rejected on the way: Darkness 100% with a solid Spread band; dimming the spectrogram's level, its Oklab lightness or a per-channel ceiling under the glow, each of which shifted the heatmap's hue at the halo's edge.
+- Picked off look-prototype rounds R3–R8: a composite-only backdrop cut, with no coupling to the spectrogram. The cut is whole at the ribbon's edge and fades over four σ along a smoothstep (S4), to black.
+- Between close notes the strongest-wins cut folded into a crease along the bisector ("a weird grid artifact"); a smooth minimum of the notes' distances removes it, at σ / 2 by default (R8).
+- Yan asked to tune it on sliders in the plugin rather than on more sheets: Backdrop cut, Cut reach, Cut curve, Cut fill and Halo blend, in the Ribbon glow block. A cut of 0 is the shipped glow exactly.

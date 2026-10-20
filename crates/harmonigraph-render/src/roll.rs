@@ -54,6 +54,12 @@ pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
     "fs_core_gamma",
     "fs_core_linear",
     "fs_body_holdout",
+    "vs_note_cut",
+    "fs_cut_reference",
+    "fs_cut_blend",
+    "vs_cover",
+    "fs_glow_cut_gamma",
+    "fs_glow_cut_linear",
 ];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
@@ -249,6 +255,95 @@ pub struct RollAxes {
     pub depth_dir: [f32; 2],
 }
 
+/// The BACKDROP CUT round the roll's notes (#1525): the composite takes the
+/// picture under the glow away faster than it lays the glow's color on, so a
+/// note's surround holds over bright spectrogram energy where the glow alone,
+/// never quite solid, lets it through.
+///
+/// Per note, `amount × ramp(u)`: whole out to the shadow style's spread, then
+/// fading over `reach` σ along a curve between a straight line and a
+/// smoothstep. Where the glow's strength is `s` and the notes' cuts combine to
+/// `c`, the picture keeps `1 - max(s, c)` of what was there and gains the
+/// glow's color at `max(s, fill × max(s, c))`. An `amount` of 0 is the glow
+/// exactly, and over black the cut changes nothing.
+///
+/// Neighbouring notes' cuts combine as a smooth minimum of their distances,
+/// softened by `blend` (0 the plain strongest-wins, which folds into a crease
+/// along the line between two notes once the cut is wide and soft).
+///
+/// Every field is a 0..1 share but `reach`; [`RollCut::sanitized`] clamps
+/// them, and the pane hands these over as the user dialled them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RollCut {
+    /// How much of the picture the cut takes at a note's edge.
+    pub amount: f32,
+    /// How far past the spread the cut fades out, in σ of the glow
+    /// ([`ROLL_CUT_REACH_RANGE`]).
+    pub reach: f32,
+    /// The fade's shape: 0 a straight line, 1 a smoothstep.
+    pub curve: f32,
+    /// How much of what the cut takes is filled with the glow's own color
+    /// rather than left black.
+    pub fill: f32,
+    /// How softly neighbouring notes' cuts merge: a smooth minimum of their
+    /// distances, softened over `blend` × [`ROLL_HALO_BLEND_MAX`] of the cut's
+    /// fade, and the plain minimum at 0.
+    pub blend: f32,
+}
+
+/// The cut's reach, in σ of the glow, that [`RollCut::reach`] is held to.
+pub const ROLL_CUT_REACH_RANGE: std::ops::RangeInclusive<f32> = 1.0..=8.0;
+
+/// The halo blend's softness at a [`RollCut::blend`] of 1, as a share of the
+/// cut's fade: the smooth minimum's `k` over the fade's length.
+///
+/// A share of the fade rather than of σ, because the crease the blend takes out
+/// widens with the cut: a fade twice as long folds over twice the distance
+/// and wants twice the softening. Half of this at the default four σ is
+/// look-prototype round R8's pick, a `k` of σ / 2. Held to a quarter so a
+/// note's share of the blend, which is lowered by its value at the cut's reach
+/// (`fs_cut_blend` in roll.wgsl), keeps that value — and the slope it steps
+/// by there — under e⁻⁴ of a share at the edge.
+pub const ROLL_HALO_BLEND_MAX: f32 = 0.25;
+
+impl RollCut {
+    /// No cut: the glow alone.
+    pub const OFF: Self = Self { amount: 0.0, reach: 4.0, curve: 1.0, fill: 0.0, blend: 0.5 };
+
+    /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.
+    pub fn sanitized(self) -> Self {
+        let share = |v: f32, off: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { off };
+        let off = Self::OFF;
+        Self {
+            amount: share(self.amount, off.amount),
+            reach: if self.reach.is_finite() { self.reach } else { off.reach }
+                .clamp(*ROLL_CUT_REACH_RANGE.start(), *ROLL_CUT_REACH_RANGE.end()),
+            curve: share(self.curve, off.curve),
+            fill: share(self.fill, off.fill),
+            blend: share(self.blend, off.blend),
+        }
+    }
+}
+
+/// How far a roll note's surround paints past its box, in points: the glow's
+/// reach or the cut's, whichever is longer, and 0 when the shadow is off. What
+/// the pane's culls keep a leaving note alive for, and what it meters a cap's
+/// room against.
+pub fn roll_surround_reach(
+    style: harmonigraph_scene::ShadowStyle,
+    cut: RollCut,
+    point_scale: f32,
+) -> f32 {
+    let glow = crate::shadow::spectral_shadow_reach(style, point_scale);
+    let [_, _, spread, _] = shadow_uniform(style, point_scale);
+    let [_, fade, _, _] = cut_uniform(style, cut, point_scale);
+    if fade > 0.0 {
+        glow.max(spread + fade)
+    } else {
+        glow
+    }
+}
+
 /// Draw `instances` into `rect`. See [`crate::PaneIds`] for what identifies
 /// the roll's own instance buffer (the pipeline is shared) and how long the
 /// buffers live.
@@ -275,6 +370,7 @@ pub fn roll_paint_callback_with_clipped_tail(
     axes: RollAxes,
     bloom: f32,
     shadow: harmonigraph_scene::ShadowStyle,
+    cut: RollCut,
     target_format: wgpu::TextureFormat,
     ids: crate::PaneIds,
     point_scale: f32,
@@ -290,6 +386,7 @@ pub fn roll_paint_callback_with_clipped_tail(
             axes,
             bloom,
             shadow,
+            cut,
             target_format,
             pane_id: ids.pane,
             pass_nr: ids.pass_nr,
@@ -312,6 +409,7 @@ struct RollCallback {
     axes: RollAxes,
     bloom: f32,
     shadow: harmonigraph_scene::ShadowStyle,
+    cut: RollCut,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     /// Egui's cumulative pass number, shared by every callback prepared before
@@ -323,6 +421,8 @@ uniform_group! {
 struct RollUniforms {
     /// [`shadow_uniform`]'s four.
     shadow: Float4,
+    /// [`cut_uniform`]'s four.
+    cut: Float4,
     origin_points: Float2,
     viewport_points: Float2,
     feather: f32,
@@ -336,7 +436,9 @@ struct RollUniforms {
     /// viewport above.
     origin_pixels: Float2,
     pixel_points: Float2,
-    _tail_pad: Float2,
+    /// [`RollCut::fill`], 0 while the cut is off.
+    cut_fill: f32,
+    _tail_pad: f32,
 }
 }
 
@@ -403,6 +505,22 @@ fn shadow_uniform(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> [
     ]
 }
 
+/// The cut's amount, its fade in points past the spread, its curve, and the
+/// halo blend's softness as a share of that fade — `locals.cut` in roll.wgsl,
+/// read by `cut_coverage` and its kin there. All 0 while the cut is off, which
+/// is when the roll casts nothing or the amount is 0.
+///
+/// The softness is `blend × ROLL_HALO_BLEND_MAX`, in the fade's own units,
+/// which is where the shader measures the distances it blends.
+fn cut_uniform(style: harmonigraph_scene::ShadowStyle, cut: RollCut, point_scale: f32) -> [f32; 4] {
+    let cut = cut.sanitized();
+    let [sigma, ..] = shadow_uniform(style, point_scale);
+    if sigma <= 0.0 || cut.amount <= 0.0 {
+        return [0.0; 4];
+    }
+    [cut.amount, cut.reach * sigma, cut.curve, cut.blend * ROLL_HALO_BLEND_MAX]
+}
+
 /// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -420,6 +538,15 @@ struct RollResources {
     /// in one draw (`composite_pipeline`, through the mask's `filter_layout`).
     mask_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
+    /// The backdrop cut's two passes into a [`RollCutTargets`], and the
+    /// composite that lays mask and cut over the picture in place of
+    /// `composite_pipeline` while the cut is on; with the layouts the second
+    /// pass and the composite read those targets through.
+    cut_reference_pipeline: wgpu::RenderPipeline,
+    cut_blend_pipeline: wgpu::RenderPipeline,
+    cut_composite_pipeline: wgpu::RenderPipeline,
+    cut_blend_layout: wgpu::BindGroupLayout,
+    cut_composite_layout: wgpu::BindGroupLayout,
     core_pipeline: wgpu::RenderPipeline,
     /// The bodies' coverage, unioned into a [`RollHoldout`] before either
     /// layer is drawn, and the layout the outline layer reads it through.
@@ -502,11 +629,95 @@ struct RollHoldout {
     mask_depth_view: wgpu::TextureView,
     /// The mask, as the composite's texture and sampler.
     mask_read_bind_group: wgpu::BindGroup,
+    /// The backdrop cut's targets over the same rect: kept while the cut is
+    /// on, and dropped with it.
+    cut: Option<RollCutTargets>,
     /// Where `paint` cuts the clipped tail off, which the passes into these
     /// textures cut it off at too.
     tail: Option<TailClip>,
     /// The roll's size in device pixels this was built for.
     size: [u32; 2],
+}
+
+/// The backdrop cut over a [`RollHoldout`]'s rect, one texel per device pixel
+/// as the mask beside it.
+///
+/// Two targets because the halo blend is a smooth minimum over every note,
+/// summed under an additive blend, and the sum keeps its precision only
+/// relative to the nearest note's cut (see `fs_cut_blend` in roll.wgsl): the
+/// first pass finds that nearest cut, the second sums against it. At a blend
+/// of 0 the first is the cut, and the second is skipped.
+struct RollCutTargets {
+    /// Every fragment's cut as a distance under a `Less` test: the nearest
+    /// note's, in sixteen bits.
+    reference_view: wgpu::TextureView,
+    /// The halo blend's sum, in half floats: between 1 and the count of notes
+    /// reaching a texel, so their eleven bits are a constant relative error.
+    blend_view: wgpu::TextureView,
+    /// The holdout (which the cut is held out by, as the glow is) and the
+    /// reference, as the blend pass's group 1.
+    blend_read_bind_group: wgpu::BindGroup,
+    /// The mask, the reference and the sum, as the composite's group 1.
+    composite_bind_group: wgpu::BindGroup,
+}
+
+/// The cut's nearest distance per texel; Depth16Unorm, as the mask's depth.
+const CUT_REFERENCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth16Unorm;
+
+/// The halo blend's sum: see [`RollCutTargets::blend_view`].
+const CUT_BLEND_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+
+impl RollCutTargets {
+    fn new(
+        device: &wgpu::Device,
+        blend_layout: &wgpu::BindGroupLayout,
+        composite_layout: &wgpu::BindGroupLayout,
+        holdout_view: &wgpu::TextureView,
+        mask_view: &wgpu::TextureView,
+        size: [u32; 2],
+    ) -> Self {
+        let target = |label, format| {
+            crate::gpu_memory::texture(
+                device,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+            )
+            .create_view(&Default::default())
+        };
+        let reference_view = target("roll_cut_reference", CUT_REFERENCE_FORMAT);
+        let blend_view = target("roll_cut_blend", CUT_BLEND_FORMAT);
+        let view = |binding, view| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::TextureView(view),
+        };
+        RollCutTargets {
+            blend_read_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("roll_cut_blend_read_bind_group"),
+                layout: blend_layout,
+                entries: &[view(2, holdout_view), view(5, &reference_view)],
+            }),
+            composite_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("roll_cut_composite_bind_group"),
+                layout: composite_layout,
+                entries: &[view(4, mask_view), view(5, &reference_view), view(6, &blend_view)],
+            }),
+            reference_view,
+            blend_view,
+        }
+    }
 }
 
 /// The instances from `start` on, drawn only inside `scissor` (in the roll's
@@ -648,6 +859,27 @@ impl RollResources {
             label: Some("roll_holdout_bind_group_layout"),
             entries: &[texture_entry(2)],
         });
+        // Binding 5, matching `cut_reference` in roll.wgsl, and 4 and 6 its
+        // `glow_mask` and `cut_blend`.
+        let depth_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Depth,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let cut_blend_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("roll_cut_blend_bind_group_layout"),
+            entries: &[texture_entry(2), depth_entry(5)],
+        });
+        let cut_composite_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("roll_cut_composite_bind_group_layout"),
+                entries: &[texture_entry(4), depth_entry(5), texture_entry(6)],
+            });
         // Binding 4 for the strength, matching `AddUniforms` in blit.wgsl —
         // the lattice's own composite holds 3.
         let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -707,6 +939,27 @@ impl RollResources {
                 &filter_layout,
                 Some(EGUI_BLEND),
             ),
+            cut_reference_pipeline: create_cut_reference_pipeline(
+                device,
+                &shader,
+                &layout,
+                &holdout_layout,
+            ),
+            cut_blend_pipeline: create_cut_blend_pipeline(
+                device,
+                &shader,
+                &layout,
+                &cut_blend_layout,
+            ),
+            cut_composite_pipeline: create_cut_composite_pipeline(
+                device,
+                &shader,
+                target_format,
+                &layout,
+                &cut_composite_layout,
+            ),
+            cut_blend_layout,
+            cut_composite_layout,
             core_pipeline: core_pipeline(target_format),
             light_pipeline: core_pipeline(BLOOM_FORMAT),
             holdout_pipeline: create_holdout_pipeline(device, &shader, &layout),
@@ -885,6 +1138,7 @@ impl RollHoldout {
             mask_view,
             mask_depth_view,
             notes_uniform,
+            cut: None,
             tail: None,
             size,
         }
@@ -1081,6 +1335,146 @@ fn create_mask_pipeline(
     })
 }
 
+/// Every note's cut into a [`RollCutTargets`]' reference, as a distance under
+/// a `Less` test, so the nearest note's lands. Depth alone: the distance is
+/// all the pass is for.
+fn create_cut_reference_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::BindGroupLayout,
+    holdout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("roll_cut_reference_pipeline_layout"),
+        bind_group_layouts: &[Some(layout), Some(holdout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("roll_cut_reference"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_note_cut"),
+            compilation_options: Default::default(),
+            buffers: &[RollInstance::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_cut_reference"),
+            compilation_options: Default::default(),
+            targets: &[],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: CUT_REFERENCE_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Every note's share of the halo blend into a [`RollCutTargets`]' sum, added
+/// as it lands, with no depth test: every note reaching a texel counts.
+fn create_cut_blend_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::BindGroupLayout,
+    read: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("roll_cut_blend_pipeline_layout"),
+        bind_group_layouts: &[Some(layout), Some(read)],
+        ..Default::default()
+    });
+    let add = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("roll_cut_blend"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_note_cut"),
+            compilation_options: Default::default(),
+            buffers: &[RollInstance::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_cut_blend"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: CUT_BLEND_FORMAT,
+                blend: Some(wgpu::BlendState { color: add, alpha: add }),
+                write_mask: wgpu::ColorWrites::RED,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The glow mask and the cut over the roll's rect in one draw, premultiplied
+/// over the picture, in the shading the target wants.
+fn create_cut_composite_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+    layout: &wgpu::BindGroupLayout,
+    read: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("roll_cut_composite_pipeline_layout"),
+        bind_group_layouts: &[Some(layout), Some(read)],
+        ..Default::default()
+    });
+    let entry_point =
+        if target_format.is_srgb() { "fs_glow_cut_linear" } else { "fs_glow_cut_gamma" };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("roll_cut_composite"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_cover"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(entry_point),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(EGUI_BLEND),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 /// The bodies' coverage into a [`RollHoldout`], unioned as it lands: each
 /// note leaves `1 - coverage` of what is already there uncovered.
 fn create_holdout_pipeline(
@@ -1149,6 +1543,7 @@ impl CallbackTrait for RollCallback {
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let shadow = shadow_uniform(self.shadow, self.point_scale);
         let sigma = shadow[0];
+        let cut = cut_uniform(self.shadow, self.cut, self.point_scale);
         // The roll's own rect in device pixels, which is what the bloom chain
         // and the body holdout are sized against. Through epaint's own
         // conversion rather than a rounded `width * ppp`, because that
@@ -1184,10 +1579,12 @@ impl CallbackTrait for RollCallback {
             // test rests on.
             feather: 1.0 / ppp,
             _feather_pad: 0.0,
-            _tail_pad: Float2([0.0; 2]),
             pitch_dir: Float2(self.axes.pitch_dir),
             depth_dir: Float2(self.axes.depth_dir),
             shadow: Float4(shadow),
+            cut: Float4(cut),
+            cut_fill: if cut[0] > 0.0 { self.cut.sanitized().fill } else { 0.0 },
+            _tail_pad: 0.0,
         }
         .drawn_into(ppp, [0, 0], surface, surface);
 
@@ -1210,6 +1607,9 @@ impl CallbackTrait for RollCallback {
         });
         // Only a roll that casts draws the outline layer that reads it.
         let wants_holdout = sigma > 0.0 && has_area;
+        // ...and only a casting roll's cut, which `cut_uniform` zeroes along
+        // with a cut of no amount.
+        let wants_cut = wants_holdout && cut[0] > 0.0;
 
         // Split apart so the pane can be borrowed mutably while the pipelines
         // and layouts beside it are still readable.
@@ -1219,6 +1619,10 @@ impl CallbackTrait for RollCallback {
             mask_pipeline,
             holdout_pipeline,
             holdout_layout,
+            cut_reference_pipeline,
+            cut_blend_pipeline,
+            cut_blend_layout,
+            cut_composite_layout,
             bright_pipeline,
             downsample_pipeline,
             blur_h_pipeline,
@@ -1386,6 +1790,75 @@ impl CallbackTrait for RollCallback {
             pass.set_bind_group(1, &holdout.read_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
             draw_clipped(&mut pass, pane.count, holdout.tail);
+            drop(pass);
+
+            // The backdrop cut's targets, kept exactly while the cut is on: a
+            // cut dialled to nothing pays for neither them nor the passes, and
+            // `paint` lays the plain glow down whenever none are held.
+            if !wants_cut {
+                holdout.cut = None;
+            }
+            if wants_cut {
+                let RollHoldout { cut: targets, view, mask_view, .. } = holdout;
+                let targets = targets.get_or_insert_with(|| {
+                    RollCutTargets::new(
+                        device,
+                        cut_blend_layout,
+                        cut_composite_layout,
+                        view,
+                        mask_view,
+                        roll_size,
+                    )
+                });
+                // Cleared to 1, the distance of no cut at all.
+                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("roll_cut_reference"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &targets.reference_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(cut_reference_pipeline);
+                pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
+                pass.set_bind_group(1, &holdout.read_bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                draw_clipped(&mut pass, pane.count, holdout.tail);
+                drop(pass);
+
+                // At a halo blend of 0 the reference is the whole cut, and the
+                // composite reads nothing else.
+                if cut[3] > 0.0 {
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("roll_cut_blend"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &targets.blend_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(cut_blend_pipeline);
+                    pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
+                    pass.set_bind_group(1, &targets.blend_read_bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    draw_clipped(&mut pass, pane.count, holdout.tail);
+                }
+            }
         }
 
         Vec::new()
@@ -1424,8 +1897,16 @@ impl CallbackTrait for RollCallback {
                 0.0,
                 1.0,
             );
-            render_pass.set_pipeline(&resources.composite_pipeline);
-            render_pass.set_bind_group(0, &holdout.mask_read_bind_group, &[]);
+            // With the backdrop cut, through its own composite, which reads
+            // the cut's amount and fill out of the pane's uniforms.
+            if let Some(cut) = &holdout.cut {
+                render_pass.set_pipeline(&resources.cut_composite_pipeline);
+                render_pass.set_bind_group(0, &pane.bind_group, &[]);
+                render_pass.set_bind_group(1, &cut.composite_bind_group, &[]);
+            } else {
+                render_pass.set_pipeline(&resources.composite_pipeline);
+                render_pass.set_bind_group(0, &holdout.mask_read_bind_group, &[]);
+            }
             render_pass.draw(0..4, 0..1);
         }
 
@@ -1613,6 +2094,7 @@ mod tests {
             clipped_tail: None,
             axes,
             shadow: harness_shadow(),
+            cut: RollCut::OFF,
             bloom,
             target_format: FORMAT,
             pane_id: 0,
@@ -1707,6 +2189,7 @@ mod tests {
                 clipped_tail: Some((clipped_start, rect)),
                 axes: TOP,
                 shadow: harness_shadow(),
+                cut: RollCut::OFF,
                 bloom: 0.0,
                 target_format: FORMAT,
                 pane_id: 0,
@@ -1738,6 +2221,7 @@ mod tests {
             clipped_tail: None,
             axes: TOP,
             shadow,
+            cut: RollCut::OFF,
             bloom: 0.0,
             target_format: FORMAT,
             pane_id: 0,
@@ -2128,6 +2612,7 @@ mod tests {
                 clipped_tail: Some((1, tail)),
                 axes: TOP,
                 shadow: harness_shadow(),
+                cut: RollCut::OFF,
                 bloom: 0.0,
                 target_format: FORMAT,
                 pane_id: 0,
@@ -2200,6 +2685,7 @@ mod tests {
             clipped_tail: None,
             axes: TOP,
             shadow,
+            cut: RollCut::OFF,
             bloom: 0.0,
             target_format: FORMAT,
             pane_id: 0,
@@ -2222,6 +2708,220 @@ mod tests {
             assert!(holds(&resources), "a casting frame kept no glow mask");
             prepare_frame(&device, &queue, &mut resources, &screen, &callback(off));
             assert!(!holds(&resources), "{off:?} kept the last cast frame's glow mask");
+        }
+    }
+
+    /// The backdrop cut at the look's own defaults: whole at the edge, fading
+    /// over four σ along a smoothstep, cut to black, halo blend at R8's pick.
+    const CUT: RollCut = RollCut { amount: 1.0, reach: 4.0, curve: 1.0, fill: 0.0, blend: 0.5 };
+
+    /// A σ of four points (a Shadow width of 2), at full darkness: wide enough
+    /// that the cut's fade, sixteen points at [`CUT`]'s reach, spans pixels
+    /// enough to read a profile off.
+    fn wide_shadow() -> harmonigraph_scene::ShadowStyle {
+        harmonigraph_scene::ShadowStyle { width: 2.0, depth: 1.0, ..Default::default() }
+    }
+
+    /// One roll frame under `cut`, over `clear`, with its resources.
+    fn draw_cut(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        instances: Vec<RollInstance>,
+        cut: RollCut,
+        clear: wgpu::Color,
+    ) -> (Vec<u8>, CallbackResources) {
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let cb = RollCallback {
+            point_scale: 1.0,
+            rect,
+            pane_size: rect.size(),
+            instances,
+            clipped_tail: None,
+            axes: TOP,
+            shadow: wide_shadow(),
+            cut,
+            bloom: 0.0,
+            target_format: FORMAT,
+            pane_id: 0,
+            pass_nr: 0,
+        };
+        draw_callback(device, queue, cb, clear)
+    }
+
+    fn grey(level: f64) -> wgpu::Color {
+        wgpu::Color { r: level, g: level, b: level, a: 1.0 }
+    }
+
+    /// A cut of no amount draws exactly the plain glow, whatever its other
+    /// four dials say: the reach, curve, fill and blend shape a cut, and with
+    /// none to shape they must leave nothing behind — not a filled ring past
+    /// the glow's reach, not a crease, not a byte.
+    #[test]
+    fn a_backdrop_cut_of_nothing_draws_the_plain_glow() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let notes = vec![
+            RollInstance { center: [106.5, 128.0], aura: [40, 20, 60, 255], ..centered_note() },
+            RollInstance { center: [150.5, 128.0], aura: [20, 60, 40, 255], ..centered_note() },
+        ];
+        let bright = grey(0.9);
+        let plain = draw_cut(&device, &queue, notes.clone(), RollCut::OFF, bright).0;
+        let idle = RollCut { amount: 0.0, reach: 8.0, curve: 0.0, fill: 1.0, blend: 1.0 };
+        let (drawn, resources) = draw_cut(&device, &queue, notes, idle, bright);
+        let pane = resources.get::<RollResources>().and_then(|r| r.panes.get(0));
+        assert!(
+            pane.is_some_and(|p| p.holdout.as_ref().is_some_and(|h| h.cut.is_none())),
+            "a cut of nothing kept the cut's targets"
+        );
+        assert!(drawn == plain, "a cut of nothing changed the picture");
+    }
+
+    /// The cut takes the backdrop away round a note faster than the glow lays
+    /// its color on, so over a bright backdrop the surround a σ out is far
+    /// darker than the plain glow leaves it — the glow alone is about half
+    /// strength there and lets the other half through. Over black there is
+    /// nothing to take away, and the picture is the plain glow's.
+    #[test]
+    fn the_cut_darkens_a_bright_backdrop_and_leaves_black_alone() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let note = RollInstance { aura: [20, 10, 30, 255], ..centered_note() };
+        // The note's flank is at x = 140; this pixel's centre is 4.5 points,
+        // about a σ, out: the glow covers about half, the cut four fifths.
+        let at = |cut, clear| pixel(&draw_cut(&device, &queue, vec![note], cut, clear).0, 144, 128);
+        let (glow, cut) = (at(RollCut::OFF, grey(0.9)), at(CUT, grey(0.9)));
+        assert!(
+            cut[1] + 40 < glow[1],
+            "over a bright backdrop the cut surround reads {cut:?}, the plain glow {glow:?}",
+        );
+        let black = wgpu::Color::BLACK;
+        let plain = draw_cut(&device, &queue, vec![note], RollCut::OFF, black).0;
+        let drawn = draw_cut(&device, &queue, vec![note], CUT, black).0;
+        assert!(drawn == plain, "over black the cut changed the picture");
+    }
+
+    /// Where two notes' cuts meet, the strongest-wins cut FOLDS along the line
+    /// between them: the backdrop brightens at full slope right up to the
+    /// bisector and turns there, a crease. The halo blend rounds it, so the
+    /// brightening eases off into the bisector instead.
+    ///
+    /// Two notes twenty points apart, the bisector on a pixel centre (x =
+    /// 128) ten points from each, well inside each cut's sixteen and past
+    /// the glow's reach but for a trace. Read as how much the last pixel into
+    /// the bisector rises against the pixel two further out: at a fold all
+    /// of it (the smoothstep's own easing takes a few percent), under the
+    /// blend at the default about a third.
+    #[test]
+    fn the_halo_blend_takes_the_crease_out_between_two_notes() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let notes = vec![
+            RollInstance { center: [106.5, 128.0], ..centered_note() },
+            RollInstance { center: [150.5, 128.0], ..centered_note() },
+        ];
+        let profile = |blend| {
+            let frame =
+                draw_cut(&device, &queue, notes.clone(), RollCut { blend, ..CUT }, grey(1.0)).0;
+            let at = |x| f32::from(pixel(&frame, x, 128)[1]);
+            ((at(128) - at(129)) / (at(130) - at(131)), [128, 129, 130, 131].map(at))
+        };
+        let (fold, folded) = profile(0.0);
+        assert!(fold > 0.8, "with no blend the cut does not fold at the bisector: {folded:?}");
+        let (eased, blended) = profile(CUT.blend);
+        assert!(eased < 0.5, "the halo blend left the fold standing: {blended:?}");
+    }
+
+    /// While the cut fills, what it takes comes back in the note's own glow
+    /// color, out past the glow's reach as far as the cut goes; and a glow
+    /// keeps its color against a neighbour's bare cut reaching into it, which
+    /// is what the mask's split depth range is for (`fs_outline_mask`).
+    #[test]
+    fn the_cut_fills_with_the_glows_own_color_past_its_reach() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Long and straight, so the cut is still strong past the glow's reach.
+        let black = RollCut { reach: 8.0, curve: 0.0, ..CUT };
+        let fill = RollCut { fill: 1.0, ..black };
+        let [_, _, spread, glow_reach] = shadow_uniform(wide_shadow(), 1.0);
+        let [_, fade, ..] = cut_uniform(wide_shadow(), fill, 1.0);
+        // A point past the glow's reach, where the cut still takes a share.
+        let out = glow_reach + 1.5;
+        assert!(
+            out < spread + 0.6 * fade && 140.0 + spread + fade < SIZE[0] as f32,
+            "the fixture's cut reaches no further than its glow ({glow_reach} against {})",
+            spread + fade,
+        );
+        let x = (140.0 + out).round() as u32;
+        let red = RollInstance { aura: [200, 0, 0, 255], ..centered_note() };
+        let at = |notes: Vec<RollInstance>, cut, x| {
+            pixel(&draw_cut(&device, &queue, notes, cut, grey(0.9)).0, x, 128)
+        };
+        let (filled, black) = (at(vec![red], fill, x), at(vec![red], black, x));
+        assert!(
+            black[0] < 200 && filled[0] > black[0] + 10 && filled[0] > filled[2] + 10,
+            "past the glow's reach the fill reads {filled:?}, the black cut {black:?}",
+        );
+
+        // Blue stands just past the glow's reach from a point two points off
+        // red's flank: inside red's glow, and inside blue's cut alone.
+        let near = 142;
+        let blue_flank = near as f32 + glow_reach + 1.0;
+        let blue =
+            RollInstance { center: [blue_flank + 12.0, 128.0], aura: [0, 0, 200, 255], ..red };
+        let (alone, beside) = (at(vec![red], fill, near), at(vec![red, blue], fill, near));
+        assert!(
+            beside[2] <= alone[2] + 2,
+            "blue's bare cut recolored red's glow: {beside:?} against {alone:?} alone",
+        );
+    }
+
+    /// The cut's targets are kept exactly while it can paint: a cut dialled to
+    /// nothing, or a shadow switched off, drops them, as the glow's mask is
+    /// dropped with the shadow ([`switching_the_shadow_off_drops_the_glow_mask`]).
+    #[test]
+    fn switching_the_cut_or_the_shadow_off_drops_the_cut_targets() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let callback = |shadow, cut| RollCallback {
+            point_scale: 1.0,
+            rect,
+            pane_size: rect.size(),
+            instances: vec![centered_note()],
+            clipped_tail: None,
+            axes: TOP,
+            shadow,
+            cut,
+            bloom: 0.0,
+            target_format: FORMAT,
+            pane_id: 0,
+            pass_nr: 0,
+        };
+        let holds = |resources: &CallbackResources| {
+            resources
+                .get::<RollResources>()
+                .and_then(|r| r.panes.get(0))
+                .and_then(|pane| pane.holdout.as_ref())
+                .is_some_and(|holdout| holdout.cut.is_some())
+        };
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let dark = harmonigraph_scene::ShadowStyle { depth: 0.0, ..wide_shadow() };
+        for (shadow, cut) in [(wide_shadow(), RollCut { amount: 0.0, ..CUT }), (dark, CUT)] {
+            let mut resources = CallbackResources::default();
+            prepare_frame(&device, &queue, &mut resources, &screen, &callback(wide_shadow(), CUT));
+            assert!(holds(&resources), "a cutting frame kept no cut targets");
+            prepare_frame(&device, &queue, &mut resources, &screen, &callback(shadow, cut));
+            assert!(
+                !holds(&resources),
+                "{shadow:?} with {cut:?} kept the last frame's cut targets"
+            );
         }
     }
 
@@ -2289,6 +2989,7 @@ mod tests {
                 clipped_tail: None,
                 axes: TOP,
                 shadow,
+                cut: RollCut::OFF,
                 bloom: 0.0,
                 target_format: FORMAT,
                 pane_id: 0,
@@ -2868,6 +3569,7 @@ mod tests {
                     clipped_tail: None,
                     axes: TOP,
                     shadow: harmonigraph_scene::ShadowStyle { depth: 0.0, ..harness_shadow() },
+                    cut: RollCut::OFF,
                     bloom,
                     target_format: FORMAT,
                     pane_id: 0,
@@ -2992,6 +3694,7 @@ mod tests {
             clipped_tail: None,
             axes: TOP,
             shadow: harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() },
+            cut: RollCut::OFF,
             bloom,
             target_format: FORMAT,
             pane_id: 0,
@@ -3207,6 +3910,7 @@ mod tests {
             clipped_tail: None,
             axes: TOP,
             shadow: harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() },
+            cut: RollCut::OFF,
             bloom: 1.5,
             target_format: FORMAT,
             pane_id,
