@@ -29,7 +29,7 @@
 //! core (and estimated 0.7% at a 32 ms hop). The original 2026-08-09
 //! [#305](https://github.com/yan-h/harmonigraph/pull/305) measured 0.417 ms,
 //! about 5.2%. Neither is a current full-plugin or silent-input measurement.
-//! Memory remains bounded by [`SpectrumHistory`]'s ~120 MiB power sums;
+//! Memory remains bounded by [`SpectrumHistory`]'s ~54 MiB power sums;
 //! the history already outlives the window. A different hop is not the only
 //! possible cost reduction, and would need to preserve the store tiers,
 //! `live_slab` ladder on their shared `FFT_INTERVAL` grid.

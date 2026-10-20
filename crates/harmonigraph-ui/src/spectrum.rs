@@ -470,13 +470,13 @@ impl AudioSpectrum {
     ///
     /// This is the ONLY thing that decides reach — no memory backstop binds
     /// first. Storing linear-power sums and coarsening old columns
-    /// (see [`SpectrumHistory`]) puts the full span at about 120 MiB, so the
+    /// (see [`SpectrumHistory`]) puts the full span at about 54 MiB, so the
     /// cap can simply be the span. Keeping every column at full rate forever
     /// would instead cost 160 MB to reach only ~3.5 minutes at 50 Hz, drawing
     /// a heatmap over the recent stretch and bare roll beyond it.
     ///
     /// Raising it is cheap and sub-linear: another
-    /// [`SpectrumHistory::COARSE_COLUMNS`] (~15 MiB) doubles the reach. The unit
+    /// [`SpectrumHistory::COARSE_COLUMNS`] (~7.5 MiB) doubles the reach. The unit
     /// test `spectrum_history_reaches_the_retention_cap` is what keeps the
     /// structure sized for whatever this says.
     pub(crate) const HISTORY_MAX_SECONDS: f64 = 610.0;
