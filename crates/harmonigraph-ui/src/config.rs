@@ -420,6 +420,32 @@ pub struct SpectrumConfig {
     /// painted width — a note is a flat rectangle of its own color, with
     /// nothing straddling its boundary.
     pub roll_thickness: f32,
+    /// How light the glow standing round every note is, as `L*` (0..100): the
+    /// surround that keeps a ribbon legible whatever heatmap it crosses, drawn
+    /// in the ribbon's own hue.
+    ///
+    /// One lightness for every note, which is what makes the surround the SAME
+    /// thing behind every note: wherever a glow stands at full strength, the
+    /// picture there is that lightness whatever the heatmap under it was, so a
+    /// note's contrast against its own surround is set here once rather than
+    /// left to the cells. Dark by default, far under every ribbon the pitch
+    /// gradient draws, so a note reads as lit against a deep haze of its own
+    /// color. A gradient whose low end is near this lightness draws those notes
+    /// against a glow they cannot stand out from, which is the cost of one
+    /// lightness for all.
+    ///
+    /// How far the glow reaches and how strongly it covers are the spectral
+    /// geometry Shadow's width, spread and darkness, shared with the spiral's
+    /// dots; this and [`roll_glow_chroma`](Self::roll_glow_chroma) are the
+    /// roll's alone.
+    pub roll_glow_lightness: f32,
+    /// How much of its note's colorfulness the glow keeps, 0..1: 0 is a neutral
+    /// grey at [`roll_glow_lightness`](Self::roll_glow_lightness), 1 the
+    /// gradient's own chroma share at that height, resolved at the glow's
+    /// lightness so it stays in gamut. A dark glow holds far less absolute
+    /// chroma than its ribbon at any share, so even 1 reads as a tint of the
+    /// note rather than a second ribbon.
+    pub roll_glow_chroma: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -659,6 +685,9 @@ impl SpectrumConfig {
             *ROLL_THICKNESS_RANGE.start(),
             *ROLL_THICKNESS_RANGE.end(),
         );
+        self.roll_glow_lightness =
+            bounded(self.roll_glow_lightness, fresh.roll_glow_lightness, 0.0, 100.0);
+        self.roll_glow_chroma = bounded(self.roll_glow_chroma, fresh.roll_glow_chroma, 0.0, 1.0);
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -925,6 +954,12 @@ impl Default for SpectrumConfig {
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.551_037_2,
+            // Picked off contact sheets (W8, 2026-10-20): a deep haze of each
+            // note's own hue, near-black in lightness but still colored, so a
+            // ribbon reads lit against its own surround over a dark heatmap and
+            // a bright one alike.
+            roll_glow_lightness: 7.0,
+            roll_glow_chroma: 0.85,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which

@@ -419,3 +419,34 @@ fn the_default_opens_at_the_colorfulness_it_used_to() {
         "the type default's mean chroma is {now:.4}, versus {retired:.4} before conversion",
     );
 }
+
+/// A ribbon's glow is the ribbon's own hue at the glow's lightness, and the
+/// grey of that lightness with its color dialled out.
+///
+/// At a middling `L*`, where every hue holds enough chroma for its angle to be
+/// read back off the drawn color; at the roll's default the glow is near black
+/// and the same construction holds, but the angle is not measurable there.
+#[test]
+fn a_ribbons_glow_is_its_hue_at_the_glows_lightness() {
+    let gradient = crate::ViewConfig::default().pitch_gradient;
+    let (darkest, brightest) = (24.0, 108.0);
+    for t in deciles() {
+        let pitch = darkest + t as f32 * (brightest - darkest);
+        let ribbon = crate::pitch_lut_color(pitch, darkest, brightest, gradient);
+        let glow = crate::pitch_glow_color(pitch, darkest, brightest, gradient, 40.0, 1.0);
+        let l_star = crate::color::lightness_of_encoded(
+            f64::from(glow.x),
+            f64::from(glow.y),
+            f64::from(glow.z),
+        );
+        assert!((l_star - 40.0).abs() < 0.5, "at t = {t} the glow is L* {l_star:.2}, not 40");
+        let turn = hue_delta(oklch(ribbon).2, oklch(glow).2);
+        assert!(
+            turn.abs() < 2.0,
+            "at t = {t} the glow's hue is {turn:.2} degrees off its ribbon's"
+        );
+
+        let grey = crate::pitch_glow_color(pitch, darkest, brightest, gradient, 40.0, 0.0);
+        assert!(oklch(grey).1 < 1e-3, "at t = {t} the glow at no color kept chroma: {grey:?}");
+    }
+}

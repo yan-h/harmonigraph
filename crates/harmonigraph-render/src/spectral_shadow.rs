@@ -1,7 +1,8 @@
 //! One shadow atlas and one optional blur chain for each spectral surface.
 //!
-//! The roll and spiral dots own their analytic fields, while text owns its
-//! glyph field. Their callbacks therefore register the draw that can fill
+//! The spiral's dots own their analytic field, while text owns its glyph
+//! field. (The roll draws its glow straight off its notes' distance, and casts
+//! nothing here.) Their callbacks therefore register the draw that can fill
 //! their cells here. A final, paint-less callback runs after all producers
 //! have prepared, packs every group together, fills the common atlas and
 //! sweeps its Gaussian cells once in each direction. The visible callbacks
@@ -24,7 +25,6 @@ pub(crate) struct Layouts {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum ProducerKey {
-    Roll(u64),
     Text(u64),
     /// The Spiral's dots, which have one copy and so need no id.
     Dot,
@@ -33,19 +33,13 @@ pub(crate) enum ProducerKey {
 impl ProducerKey {
     fn order(self) -> u8 {
         match self {
-            Self::Roll(_) | Self::Dot => 0,
+            Self::Dot => 0,
             Self::Text(_) => 1,
         }
     }
 }
 
 pub(crate) enum CellDraw {
-    Roll {
-        pipeline: wgpu::RenderPipeline,
-        locals: wgpu::BindGroup,
-        instances: wgpu::Buffer,
-        count: u32,
-    },
     /// A text pane's names, one caster each: `names` is how many glyphs each
     /// of the submission's casters is made of, in order. The surface writes
     /// each glyph its own name's box into `cells` once it has packed, which
@@ -342,13 +336,6 @@ fn finish_for_pass(
                 }
                 let boxes = box_slice(&surface.boxes, range);
                 match &submission.draw {
-                    CellDraw::Roll { pipeline, locals, instances, count } => {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, locals, &[]);
-                        pass.set_vertex_buffer(0, instances.slice(..));
-                        pass.set_vertex_buffer(1, boxes);
-                        pass.draw(0..4, 0..*count);
-                    }
                     CellDraw::Text { pipeline, locals, glyphs, cells, names } => {
                         pass.set_pipeline(pipeline);
                         pass.set_bind_group(0, locals, &[]);
@@ -392,10 +379,8 @@ pub(crate) fn finish(
 /// is significant only because egui prepares callbacks in paint order;
 /// `pass_nr` is the painter context's cumulative pass number.
 ///
-/// The work stays in `prepare`, not `finish_prepare`: the roll draws its
-/// shadow mask from the finished atlas in its own `finish_prepare`, which egui
-/// runs after every callback's `prepare` but, among `finish_prepare`s, in paint
-/// order, ahead of this one's.
+/// The work stays in `prepare`: every reader of the atlas composites from it in
+/// `paint`, which egui runs after every callback has prepared.
 pub fn spectral_shadow_prepare_callback(
     rect: egui::Rect,
     surface_id: u64,
@@ -523,7 +508,7 @@ mod tests {
                 resources,
                 surface_id,
                 Submission {
-                    key: ProducerKey::Roll(1),
+                    key: ProducerKey::Dot,
                     casters: vec![shadow::Caster {
                         rect: [8.0, 8.0, 12.0, 12.0],
                         level: 1.0,
@@ -578,7 +563,7 @@ mod tests {
         let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
 
-        submit(&device, &mut resources, ProducerKey::Roll(1));
+        submit(&device, &mut resources, ProducerKey::Dot);
         submit(&device, &mut resources, ProducerKey::Text(2));
         let mut encoder = device.create_command_encoder(&Default::default());
         finish(&device, &queue, &screen, &mut encoder, &mut resources, 7);
@@ -596,7 +581,7 @@ mod tests {
                     mapped_at_creation: false,
                 },
             );
-            for key in [ProducerKey::Roll(1), ProducerKey::Text(2)] {
+            for key in [ProducerKey::Dot, ProducerKey::Text(2)] {
                 register(
                     &device,
                     &mut resources,

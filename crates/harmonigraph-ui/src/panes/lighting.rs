@@ -60,12 +60,15 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
         shadow_group(
             ui,
             "Notes",
-            "MIDI ribbons and Spiral note dots",
+            "MIDI ribbons and Spiral note dots. The preview draws the dots' blur; \
+             around ribbons the same Width, Darkness and Spread shape a glow that \
+             falls off from the ribbon's edge, colored by Ribbon glow below.",
             false,
             false,
             &mut shadow.spectral_geometry,
             None,
         );
+        ribbon_glow(ui, &mut appearance.spectrum);
         shadow_group(
             ui,
             "Labels",
@@ -76,6 +79,30 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             None,
         );
     });
+}
+
+/// The color of the surround the Notes shadow draws round MIDI ribbons: the
+/// roll's alone, where the Notes block above is shared with the Spiral's dots.
+fn ribbon_glow(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+    super::block(ui, "Ribbon glow", |ui| {
+        ValueBar::new(&mut cfg.roll_glow_lightness, 0.0..=100.0, "Glow lightness")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "Lightness (L*) of the glow around MIDI ribbons, drawn in each ribbon's own hue. \
+                 0 is black. Ribbons stand out most where this is far from their own lightness. \
+                 The Notes shadow sets how far the glow reaches and how strongly it covers.",
+            );
+        ValueBar::new(&mut cfg.roll_glow_chroma, 0.0..=1.0, "Glow color")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "How much of each ribbon's color its glow keeps. \
+                 0% is a neutral glow; 100% is as colorful as the ribbon at the glow's lightness.",
+            );
+    })
+    .response
+    .on_hover_text("MIDI ribbons");
 }
 
 /// The same global note bloom is editable beside either picture it affects.

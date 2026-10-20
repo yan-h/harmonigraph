@@ -55,8 +55,8 @@ pub use atmosphere::{
 };
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
-    gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, LutSpacing,
-    HUE_CIRCLE_N,
+    gradient_color, grey_of_lightness, hue_circle, pitch_glow_color, pitch_lut_color,
+    pitch_ramp_lut, LutSpacing, HUE_CIRCLE_N,
 };
 pub use derive::{derive_scene, derive_scene_with_extra};
 pub use intensity::{

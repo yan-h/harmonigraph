@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
+| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels, and the **Ribbon glow** around MIDI ribbons. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -348,9 +348,9 @@ and double-click to reset.
 - The background glow falloff curve keeps its signed shape value and a preview:
   zero is linear, positive fades early, and negative fades late.
 
-Every shadow is a blur of its caster.
+Every shadow is a blur of its caster, except around MIDI ribbons.
 **Shadow spread** strengthens a shadow without changing the visible ink.
-For rings, marks, ribbons and dots it expands the shadow caster before blurring.
+For rings, marks and dots it expands the shadow caster before blurring.
 The percentage is a fraction of the resolved Shadow width:
 100% expands the caster by one Shadow width on each side.
 For the two label groups — names, axis labels and the idle crosses —
@@ -359,6 +359,16 @@ so a name's shadow darkens first and then spreads into a solid plate around the 
 At 100% that plate reaches about one Shadow width past wide ink, as for the other groups,
 but its edge is harder: it ends where the blur itself ends, at one and a half Shadow widths.
 A Shadow width of zero still removes the shadow.
+
+Around MIDI ribbons the Notes shadow is a glow measured from the ribbon's edge rather than a blur of the ribbon,
+so a hairline ribbon is held as firmly as a wide one.
+Spread is a solid band before the falloff, and Width sets the falloff's reach, as for the dots.
+**Ribbon glow** colors it:
+**Glow lightness** is its L*, the same for every ribbon,
+and **Glow color** is how much of each ribbon's own hue it keeps.
+Where the glow is at full darkness the picture is that lightness whatever the spectrogram was,
+so every ribbon stands against the same surround.
+Where two glows meet, the stronger one paints, in its own color.
 
 Lattice text shadows use local darkness.
 They attenuate bright slices and finished bloom only inside their footprint,

@@ -69,36 +69,33 @@ const MIN_RIBBON_PT: f32 = 1.5;
 /// Padding extends the onset pitch into the past without rescaling real bends.
 const MIN_LENGTH_PT: f32 = 1.0;
 
-/// The dark surround standing outside a note: its whole
-/// reach in screen points, and how dark it is where solid.
+/// The glow standing outside a note: its whole reach in screen points, and how
+/// strongly it covers where solid.
 ///
-/// BLACK, and not a setting: the roll draws every outline black. The outline's
-/// job is to give a note a boundary against a heatmap, and the pane's own background is the color that tells
-/// against the most of one: every preset opens at `L*` 0 and climbs, so black
-/// is what the cells are furthest from nearly everywhere. A note then reads as
-/// an object sitting over the picture, with the picture darkened around it. A
-/// colored surround would be a second hue competing with the ribbon's own,
-/// which is the one thing on a note that carries meaning.
+/// A GLOW in the note's own hue rather than a black shadow, and the reason is
+/// legibility over every backdrop rather than color for its own sake. A
+/// multiply toward black takes a fixed share off whatever is under it, so it
+/// all but vanishes over the heatmap's dark cells and lands heavy over its
+/// bright ones, and a ribbon sitting on its own bright fundamental — the
+/// commonest case, since a note lights the very line it is drawn along —
+/// barely separated at all. Where this glow is solid the picture IS the glow's
+/// lightness, whatever was there, so every note stands against the same
+/// surround. Its color is the note's own hue, dark (see
+/// [`SpectrumConfig::roll_glow_lightness`](crate::SpectrumConfig)), so the
+/// surround tints toward the ribbon it belongs to instead of competing with it.
 ///
-/// A gradient dark at BOTH ends is reachable on the bars, and there this
-/// separates nothing — a picture someone dialled rather than one the pane can
-/// be left in by accident, and the ribbon still carries its own color where
-/// the surround has stopped saying anything.
-///
-/// The darkness handed over is a full 1, and how dark it paints is the Shadow
-/// darkness: darkest against the note, falling off to nothing at its reach.
-/// Where two notes' surrounds meet, the darker of the two is what paints, so a
-/// crowd of notes is no darker between them than one note is. At the bar's
-/// default that is a deep tint rather than solid black, so the backdrop still
-/// shows through the edge, as it does through every other shadow in the
-/// picture.
+/// The strength handed over is a full 1, and how strongly it paints is the
+/// Shadow darkness: strongest against the note, falling off to nothing at its
+/// reach. Where two notes' glows meet, the stronger is what paints, with its
+/// color, so a crowd of notes is no more covered between them than one note
+/// is.
 ///
 /// The inherited spectral geometry width resolves to points, so it is the same
 /// edge at every zoom and every ribbon width. The shader reads that reach from
 /// the shadow style itself; the one returned here is for the culls, which keep
 /// a note whose outline is still on screen.
 ///
-/// Off comes back zero-reach AND zero darkness, never one or the other: the
+/// Off comes back zero-reach AND zero strength, never one or the other: the
 /// reach is what the far-edge cull keeps a leaving note alive for, so an outline
 /// that will not paint must not be paid for either.
 fn outline(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> (f32, f32) {
@@ -292,7 +289,6 @@ pub(super) fn draw_roll(
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
     let bloom = harmonigraph_render::bloom_strength(state.appearance.view.note_bloom);
     let pane = crate::panes::lattice::pane_id(options.surface);
-    let shadow_surface = crate::text::spectral_shadow_surface(options.surface);
     let clipped_start = notes.len();
     let mut instances = notes;
     instances.extend(detached);
@@ -308,7 +304,6 @@ pub(super) fn draw_roll(
         state.appearance.view.shadow.spectral_geometry,
         state.surfaces.target_format,
         harmonigraph_render::PaneIds { pane, pass_nr: painter.ctx().cumulative_pass_nr() },
-        shadow_surface,
         options.point_scale,
     ));
 }
@@ -377,7 +372,7 @@ fn roll_instances_with_floor(
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
-    let (outline_px, outline_darkness) =
+    let (outline_px, outline_strength) =
         outline(state.appearance.view.shadow.spectral_geometry, point_scale);
     // ...and how far a SOUNDING note carries past the now-line, which is
     // decided once for the same reason. See [`lead`]. How much of that a
@@ -501,7 +496,7 @@ fn roll_instances_with_floor(
                         lead_alpha: standing,
                         cap_reach: 0.0,
                         core: note_color(state, pitch, 1.0).to_array(),
-                        outline: outline_darkness,
+                        aura: note_glow(state, pitch, outline_strength),
                         span: RollInstance::WHOLE,
                         ramp: [0.0, 0.0],
                         fade,
@@ -708,7 +703,7 @@ fn roll_instances_with_floor(
                 lead_alpha: attached_alpha,
                 cap_reach: cap_px,
                 core: core.to_array(),
-                outline: outline_darkness,
+                aura: note_glow(state, pitch, outline_strength),
                 span: RollInstance::WHOLE,
                 ramp: [0.0, 0.0],
                 fade: [1.0, 1.0],
@@ -1065,6 +1060,26 @@ pub(crate) fn note_color(state: &PictureState, pitch: f32, alpha: f32) -> Color3
         pitch_lut_color(pitch, darkest, brightest, state.appearance.view.pitch_gradient),
         alpha,
     )
+}
+
+/// The glow round a ribbon at `pitch`: its own hue at the roll's glow
+/// lightness and color ([`harmonigraph_scene::pitch_glow_color`]), as straight
+/// sRGB bytes with `strength` (0..1) in alpha — the shape
+/// [`RollInstance::aura`] takes.
+fn note_glow(state: &PictureState, pitch: f32, strength: f32) -> [u8; 4] {
+    let spectrum = &state.appearance.spectrum;
+    let (darkest, brightest) =
+        (state.runtime.frame_params.darkest_pitch, state.runtime.frame_params.brightest_pitch);
+    let c = harmonigraph_scene::pitch_glow_color(
+        pitch,
+        darkest,
+        brightest,
+        state.appearance.view.pitch_gradient,
+        spectrum.roll_glow_lightness,
+        spectrum.roll_glow_chroma,
+    );
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    [byte(c.x), byte(c.y), byte(c.z), byte(strength)]
 }
 
 #[cfg(test)]
@@ -1638,11 +1653,11 @@ mod tests {
         for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
-            assert_eq!(note.outline, 1.0, "the outline is not fully dark at reach {reach}");
+            assert_eq!(note.aura[3], 255, "the glow is not at full strength at reach {reach}");
         }
 
         let off = ribbon(0.0);
-        assert_eq!(one(&off).outline, 0.0, "an outline of no width left a darkness behind");
+        assert_eq!(one(&off).aura[3], 0, "an outline of no width left a strength behind");
         let shut = harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() };
         assert_eq!(outline(shut, 1.0).0, 0.0, "an outline of no width still made room for one");
     }
@@ -1656,7 +1671,7 @@ mod tests {
         let style =
             |depth| harmonigraph_scene::ShadowStyle { width: 1.0, depth, ..Default::default() };
         let shut = ribbon_with_style(style(0.0), 12.0);
-        assert_eq!(one(&shut).outline, 0.0, "the instance kept an outline darkness");
+        assert_eq!(one(&shut).aura[3], 0, "the instance kept an outline strength");
 
         let last_visible = |depth| {
             let mut state = fresh();
