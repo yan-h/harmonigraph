@@ -35,8 +35,8 @@ use harmonigraph_scene::Gradient;
 ///
 /// Raising this is not free: the store's tiers have to keep up with it (see
 /// [`SpectrumHistory::COARSE_COLUMNS`](harmonigraph_core::SpectrumHistory::COARSE_COLUMNS),
-/// which must be at least as large), so this puts linear-power history at
-/// about 120 MiB, four times the former byte store. What the larger one buys is the SHORT
+/// which must be at least as large), so this puts bfloat16 linear-power history at
+/// about 54 MiB, twice the former byte store. What the larger one buys is the SHORT
 /// spans, which is where a halving still lands somewhere the data can tell
 /// apart: a 12 s close-up is cut into 16 ms slabs here and 32 ms ones at half
 /// this, against an 8 ms column rate. At a three-minute Span it is 256 ms
