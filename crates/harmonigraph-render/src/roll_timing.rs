@@ -81,7 +81,7 @@ fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance>
             lead_alpha: 0.0,
             cap_reach: reach,
             core: [230, 40 + shade / 2, 255 - shade, 255],
-            outline: [0, 0, 0, 255],
+            outline: 1.0,
             span: RollInstance::WHOLE,
             ramp: [0.0, 0.0],
             fade: [1.0, 1.0],
@@ -170,6 +170,7 @@ fn a_frame_of_the_roll_costs_this_much() {
                             resources,
                             0,
                         );
+                        cb.finish_prepare(device, queue, encoder, resources);
                         bufs
                     },
                     |pass, resources| cb.paint(pane.paint_info(), pass, resources),

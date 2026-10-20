@@ -117,6 +117,7 @@ fn baked_blit_shader_validates() {
         "fs_blur_v",
         "fs_composite",
         "fs_bloom_add",
+        "fs_shadow_mask",
     ] {
         assert!(
             module.entry_points.iter().any(|ep| ep.name == required),
