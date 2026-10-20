@@ -81,7 +81,7 @@ fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance>
             lead_alpha: 0.0,
             cap_reach: reach,
             core: [230, 40 + shade / 2, 255 - shade, 255],
-            outline: 1.0,
+            aura: [0, 0, 0, 255],
             span: RollInstance::WHOLE,
             ramp: [0.0, 0.0],
             fade: [1.0, 1.0],
@@ -149,7 +149,6 @@ fn a_frame_of_the_roll_costs_this_much() {
             shadow,
             target_format: format,
             pane_id: 0,
-            shadow_surface_id: 0,
             pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
@@ -161,17 +160,7 @@ fn a_frame_of_the_roll_costs_this_much() {
                     crate::frame_timer::Opening::AheadOfPrepare,
                     |encoder, resources| {
                         let (device, queue) = (&timer.device, &timer.queue);
-                        let bufs = cb.prepare(device, queue, &pane.screen, encoder, resources);
-                        crate::spectral_shadow::finish(
-                            device,
-                            queue,
-                            &pane.screen,
-                            encoder,
-                            resources,
-                            0,
-                        );
-                        cb.finish_prepare(device, queue, encoder, resources);
-                        bufs
+                        cb.prepare(device, queue, &pane.screen, encoder, resources)
                     },
                     |pass, resources| cb.paint(pane.paint_info(), pass, resources),
                 )

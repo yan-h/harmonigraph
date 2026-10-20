@@ -37,7 +37,7 @@ fn production_metal_asset_catalog() {
             let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
             drop(crate::LatticeResources::new(&device, &queue, format));
             crate::text::asset_catalog(&device, &queue, format, &layouts);
-            crate::roll::asset_catalog(&device, format, &layouts);
+            crate::roll::asset_catalog(&device, format);
             crate::spectrogram::asset_catalog(&device, format);
             crate::glow::asset_catalog(&device, format);
             crate::dot_shadow::asset_catalog(&device, format, &layouts);

@@ -737,8 +737,8 @@ impl TextBatch {
     /// the analyzer's names ride its time axis and so scroll whichever way
     /// its orientation points that, and nothing here can see it.
     ///
-    /// `shadow_surface_id` joins spectral text to the roll or spiral geometry
-    /// on the same destination surface. Unshadowed chrome passes `None`.
+    /// `shadow_surface_id` joins spectral text to the spiral's geometry on the
+    /// same destination surface. Unshadowed chrome passes `None`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn flush(
         &mut self,

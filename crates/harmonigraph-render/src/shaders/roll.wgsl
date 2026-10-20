@@ -12,24 +12,25 @@
 // ink: the outline's grown by the shadow's reach (`vs_note`), the body's by one
 // feather (`vs_note_body`).
 //
-// The bodies use ordinary over. The outlines do not: each note's darkness goes
-// into a mask over the roll's rect (`fs_outline_mask`) under a `max` blend, and
-// the mask is laid over the picture once, as black. Where two notes' shadows
-// meet, the picture there is as dark as the darker of the two and no darker,
-// rather than one shadow darkening the other.
+// The bodies use ordinary over. The outlines do not: each note's glow goes into
+// a mask over the roll's rect (`fs_outline_mask`), where a depth test keeps
+// whichever note's glow is strongest — its strength AND its color — and the
+// mask is laid over the picture once. Where two notes' glows meet, the picture
+// there is as covered as the stronger of the two and no more, rather than one
+// glow tinting the other.
 //
 // The order is the whole point. The outline is at its darkest where it meets
-// its own note — as dark as the Shadow darkness makes it — so an outline
+// its own note — as strong as the Shadow darkness makes it — so an outline
 // composited with its own note lands on the NEIGHBOURING notes it reaches
 // into, and along time those neighbours are the next note: repeats of one key
 // butt together there, and the later one blanked the tail of the earlier.
-// Under every body instead, an outline darkens the backdrop before the note
+// Under every body instead, an outline covers the backdrop before the note
 // paints its color.
 //
 // A body drawn at less than full opacity would let that shadow through, so
 // every outline is also HELD OUT wherever any body covers (#1293): `prepare`
 // draws the union of the bodies' coverage into `body_holdout` first, and the
-// outline layer takes it off ([`body_held`]). One note's shadow darkens only
+// outline layer takes it off ([`body_held`]). One note's glow covers only
 // the picture behind the ribbons, never another ribbon, at any opacity. That
 // includes a note's own shadow under its own body, so a translucent ribbon
 // shows the picture behind it unshadowed. Outside every body the holdout is 0
@@ -40,9 +41,12 @@
 // stand between them. A gap of a point or more still reads as two notes, since
 // the outline fills it.
 //
-// The outline is black, and how dark it is the pane hands over, not a decision
-// made here: this shader is told how far it reaches, how gradually it goes, and
-// how dark it is, and invents none of the three.
+// The outline is a glow read straight off the note's distance — solid out to
+// the style's spread, then a Gaussian in the distance — so it is as strong
+// against a hairline ribbon as against a wide one. Its color and how strongly
+// it covers are the pane's, not decisions made here: this shader is told how
+// far it reaches, how gradually it goes, how strong it is and what color, and
+// invents none of the four.
 //
 // Nothing here is tessellated. A note is four vertices whatever its shape,
 // and the outline the egui path drew as a separate stroked rounded rect is
@@ -55,6 +59,9 @@
 // never names a screen side either.
 
 struct Locals {
+    /// The glow's σ, strength, solid spread and whole reach, in points except
+    /// the strength (0..1). First, so the vec4 is aligned with no padding.
+    shadow: vec4<f32>,
     /// Where the viewport being drawn into starts, in egui points, and how big
     /// it is. The draw into the egui pass takes the whole surface (origin 0);
     /// the bloom's own pass takes the roll's rect alone, so the same
@@ -70,15 +77,15 @@ struct Locals {
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
     depth_dir: vec2<f32>,
-    shadow_atlas_size: vec2<f32>,
-    /// σ, depth, zero, and whole kernel reach, in points.
-    shadow: vec4<f32>,
     /// Where the target being drawn into starts, in its own pixels, and how
     /// many points one of them measures, per axis. What takes a fragment's own
     /// pixel back to the surface point it stands on ([`surface_point`]); set
     /// with the viewport above by `RollUniforms::drawn_into`.
     origin_pixels: vec2<f32>,
     pixel_points: vec2<f32>,
+    /// Rounds the block up to its vec4's alignment, spelled out to match
+    /// the Rust side.
+    _tail_pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -92,10 +99,8 @@ struct VertexOut {
     @builtin(position) position: vec4<f32>,
     /// Offset from the note's center in points, along (pitch, depth).
     ///
-    /// Interpolated from the quad's corners only for the shadow's atlas cell
-    /// (`vs_shadow_cell`), whose texels are not surface pixels. Every pass that
-    /// draws onto the surface or a texture over the roll REPLACES it with the
-    /// offset of the fragment's own pixel center ([`on_screen`]): interpolated,
+    /// Every pass REPLACES it with the offset of the fragment's own pixel
+    /// center ([`on_screen`]) before reading it: interpolated,
     /// it moved with where the rasterizer's sub-pixel grid snapped the quad's
     /// corners, so a layer's edges shifted by a fraction of a level whenever its
     /// quad changed size, and a tremolo note's hard step at its leading end
@@ -107,9 +112,8 @@ struct VertexOut {
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
     /// How far the outline reaches past the note's edge, in points, and 0 when
-    /// the outline is off: the style's whole reach (`locals.shadow.w`) on
-    /// screen, and the cell's expansion radius in `vs_shadow_cell`. It wraps
-    /// every side — see [`outline_coverage`].
+    /// the outline is off: the style's whole reach (`locals.shadow.w`). It
+    /// wraps every side — see [`outline_coverage`].
     @location(3) @interpolate(flat) outline_reach: f32,
     /// Four to a slot, since a stage passes sixteen at most:
     /// - `x`: how much of the box's LEADING end is a lead rather than the note
@@ -128,15 +132,14 @@ struct VertexOut {
     @location(7) @interpolate(flat) tremolo: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(8) @interpolate(flat) core: vec4<f32>,
-    /// How dark the outline is at full coverage; the fade takes it from there.
-    @location(9) @interpolate(flat) outline: f32,
+    /// The outline's glow: its color, straight gamma-space RGB, and in `a` how
+    /// strongly it covers at full coverage; the fade takes it from there.
+    @location(9) @interpolate(flat) aura: vec4<f32>,
     /// The note's center in surface points, which [`on_screen`] measures
     /// `local` from.
     @location(10) @interpolate(flat) center: vec2<f32>,
-    /// Caster index for the Gaussian atlas read.
-    @location(11) @interpolate(flat) who: u32,
-    /// Width of one coverage sample in points. A visible note uses one display
-    /// pixel; a Gaussian cell uses one of its own deliberately coarser texels.
+    /// Width of one coverage sample in points: one pixel of the target being
+    /// drawn into.
     @location(12) @interpolate(flat) feather: f32,
     /// The two depth offsets the readings below are given at. See [`along`].
     @location(13) @interpolate(flat) ramp: vec2<f32>,
@@ -145,7 +148,7 @@ struct VertexOut {
 };
 
 /// The outline layer's quad: the note's box grown by everything
-/// `outline_darkness` can reach to.
+/// `outline_strength` can reach to.
 ///
 /// The outline wraps the note, so it is owed room on BOTH axes: ink runs out
 /// wherever the box distance passes `outline_reach`, which is the shadow's
@@ -153,7 +156,6 @@ struct VertexOut {
 @vertex
 fn vs_note(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) who: u32,
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
@@ -161,7 +163,7 @@ fn vs_note(
     // Packed, since a vertex takes sixteen at most.
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
-    @location(9) outline: f32,
+    @location(9) aura: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
     @location(15) fade: vec2<f32>,
     @location(5) taper_depth: vec4<f32>,
@@ -170,7 +172,7 @@ fn vs_note(
 ) -> VertexOut {
     let margin = locals.shadow.w + locals.feather;
     return note_vertex(
-        vertex, who, center, half_extent, shear, lead, core, outline, span_ramp, fade,
+        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
         taper_depth, taper, tremolo, margin,
     );
 }
@@ -184,13 +186,12 @@ fn vs_note(
 @vertex
 fn vs_note_body(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) who: u32,
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
-    @location(9) outline: f32,
+    @location(9) aura: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
     @location(15) fade: vec2<f32>,
     @location(5) taper_depth: vec4<f32>,
@@ -198,7 +199,7 @@ fn vs_note_body(
     @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
     return note_vertex(
-        vertex, who, center, half_extent, shear, lead, core, outline, span_ramp, fade,
+        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
         taper_depth, taper, tremolo, locals.feather,
     );
 }
@@ -207,13 +208,12 @@ fn vs_note_body(
 /// both axes, which is what the layer drawing it can reach to.
 fn note_vertex(
     vertex: u32,
-    who: u32,
     center: vec2<f32>,
     half_extent: vec2<f32>,
     shear: f32,
     lead: vec4<f32>,
     core: vec4<f32>,
-    outline: f32,
+    aura: vec4<f32>,
     span_ramp: vec4<f32>,
     fade: vec2<f32>,
     taper_depth: vec4<f32>,
@@ -266,81 +266,12 @@ fn note_vertex(
     out.taper = taper;
     out.tremolo = tremolo;
     out.core = core;
-    out.outline = outline;
+    out.aura = aura;
     out.center = center;
-    out.who = who;
     out.feather = locals.feather;
     out.ramp = span_ramp.zw;
     out.fade = fade;
     return out;
-}
-
-/// Rasterize the roll box field's coverage into a Gaussian cell. The quad is
-/// the packer's padded box; each point is projected back onto the roll's own
-/// pitch/depth axes before the same `box_distance` as the scene draw reads it.
-@vertex
-fn vs_shadow_cell(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) center: vec2<f32>,
-    @location(1) half_extent: vec2<f32>,
-    @location(2) shear: f32,
-    @location(4) lead: vec4<f32>,
-    @location(8) core: vec4<f32>,
-    @location(9) outline: f32,
-    @location(5) taper_depth: vec4<f32>,
-    @location(6) taper: vec4<f32>,
-    @location(10) box_rect: vec4<f32>,
-    @location(11) box_cell: vec4<f32>,
-    @location(12) box_meta: vec4<f32>,
-    @location(13) box_who: vec4<f32>,
-) -> VertexOut {
-    let corner = vec2<f32>(
-        select(0.0, 1.0, (vertex & 1u) == 1u),
-        select(0.0, 1.0, (vertex & 2u) == 2u),
-    );
-    let point = box_rect.xy + corner * box_rect.zw;
-    let delta = point - center;
-    var out: VertexOut;
-    let texel = cell_texel(point, box_rect, box_cell, box_meta.x);
-    out.position = select(
-        no_quad(),
-        cell_clip(texel, locals.shadow_atlas_size, 1.0),
-        cell_packed(box_cell),
-    );
-    out.local = vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
-    out.half_extent = half_extent;
-    out.shear = shear;
-    out.outline_reach = box_who.w;
-    out.lead = lead;
-    // The cell holds this piece's tapered shape, so its shadow narrows with
-    // the ribbon.
-    out.taper_depth = taper_depth;
-    out.taper = taper;
-    out.tremolo = vec2<f32>(0.0);
-    out.core = core;
-    out.outline = outline;
-    // Unread here: the cell's texels are not surface pixels, so this pass keeps
-    // the interpolated `local` rather than going through [`on_screen`].
-    out.center = center;
-    out.who = u32(box_who.x + 0.5);
-    out.feather = 1.0 / max(box_meta.x, 1e-6);
-    // The cell holds the segment's whole coverage whatever piece it is for,
-    // so a piece's shadow runs on across the cut; fading is the outline's.
-    out.ramp = vec2<f32>(0.0);
-    out.fade = vec2<f32>(1.0);
-    return out;
-}
-
-@fragment
-fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
-    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
-    let d = box_distance(in);
-    var source = in;
-    // Only the producer repurposes outline_reach as the expansion radius.
-    // Move the fading lead outward with its source, leaving the visible note.
-    source.local.y += in.outline_reach;
-    let coverage = inside(in, d, in.outline_reach) * lead_coverage(source);
-    return vec4<f32>(coverage, 0.0, 0.0, 1.0);
 }
 
 /// The surface point, in points, at this fragment's own pixel center: the
@@ -386,18 +317,32 @@ fn inside(in: VertexOut, d: f32, edge: f32) -> f32 {
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// The common shadow at this fragment: the one blurred coverage cell made from
-/// the box SDF. The pane keeps only the outside half as its dark surround.
+/// How strongly the glow covers `d` points off the note's edge: the style's
+/// strength out to its spread, then a Gaussian of σ in the distance past it,
+/// lowered by its own value at the style's reach so it lands on exactly 0
+/// there rather than stepping.
+///
+/// Read off the distance rather than a blur of the note's silhouette, which is
+/// the point of it: a blur of a ribbon thinner than σ never reaches full
+/// coverage, so the surround all but vanished round exactly the hairline notes
+/// that need one, and spread into a wide smear round a fat one. Here a note's
+/// edge is equally held at every ribbon width.
+///
+/// `reach` may still shorten an interior cap when the pane has less room
+/// before its now-line. That bound stays hard — shortening a cap moves its end
+/// instead of dimming the whole profile — while the profile's own shape is the
+/// style's whatever bound it is cut at.
 fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
-    if reach <= 0.0 || locals.shadow.y <= 0.0 {
+    let sigma = locals.shadow.x;
+    if reach <= 0.0 || locals.shadow.y <= 0.0 || sigma <= 0.0 {
         return 0.0;
     }
-    let full = shadow_kernel(in.who, surface_point(in));
-    // The common style owns the profile, while `reach` may still shorten an
-    // interior cap when the pane has less room before its now-line. Keep that
-    // geometric bound hard: shortening a cap moves its end instead of dimming
-    // the whole profile.
-    return (1.0 - shadow_transmittance(full, locals.shadow.y, 1.0)) * inside(in, d, reach);
+    let spread = locals.shadow.z;
+    let x = max(d - spread, 0.0) / sigma;
+    let end = (locals.shadow.w - spread) / sigma;
+    let tail = exp(-0.5 * end * end);
+    let profile = max(exp(-0.5 * x * x) - tail, 0.0) / max(1.0 - tail, 1e-6);
+    return locals.shadow.y * profile * inside(in, d, reach);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across the NOTE, and
@@ -418,7 +363,7 @@ fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
 /// Applied to BOTH layers, which is what makes a fading tip a fading ribbon
 /// rather than a ribbon dissolving inside its own outline: the surround wraps
 /// the ends as much as the flanks, so a body taken out on its own would leave a
-/// hard black cap standing where the ink went. Past the tip the ramp is
+/// hard cap of glow standing where the ink went. Past the tip the ramp is
 /// negative and clamps to 0, so that cap is gone rather than merely faint.
 ///
 /// A lead with NO fade keeps its cap, and the branch that gives it one is not a
@@ -639,7 +584,7 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
 ///
 /// Without it that end wears no cap at all. It is INTERIOR to the box — the
 /// lead was added to the box's length, not drawn beside it — and
-/// [`outline_darkness`]'s mask keeps the outline out of a box's middle, correctly,
+/// [`outline_strength`]'s mask keeps the outline out of a box's middle, correctly,
 /// since a box has no edge there. So the cap would arrive only when the caller
 /// drops the lead and the box shrinks back to the note.
 ///
@@ -698,7 +643,7 @@ fn body_held(in: VertexOut) -> f32 {
     return textureLoad(body_holdout, texel, 0).r;
 }
 
-/// How dark the OUTLINE layer is here for this note: the dark surround
+/// How strongly the OUTLINE layer covers here for this note: the glow
 /// standing against every one of the note's edges and fading out.
 ///
 /// The outline stands entirely OUTSIDE the note, which is why it is read off
@@ -709,25 +654,25 @@ fn body_held(in: VertexOut) -> f32 {
 ///
 /// Masked by the note's OWN fill. `outline_coverage` clamps the distance at
 /// the note's edge, so without the mask the outline runs solid across the
-/// interior and a note drawn in anything less than an opaque color has a black
-/// slab under it. Masked too by every OTHER body ([`body_held`]), so over a
+/// interior and a note drawn in anything less than an opaque color has a slab
+/// of glow under it. Masked too by every OTHER body ([`body_held`]), so over a
 /// neighbour the outline is held out rather than left for that neighbour's
 /// body to cover only as far as its opacity does.
 ///
-/// Coverage here is `1 - fill` where the body is `fill`, so the dark wrap
+/// Coverage here is `1 - fill` where the body is `fill`, so the wrap
 /// retreats as the note takes over its antialiased boundary. The body blends
 /// its flat color over that backdrop in the next pass.
 ///
 /// [`cap_coverage`] is the second shape this layer draws, standing against the
 /// end of the note INSIDE a box that carries a lead — a place the mask above
 /// keeps the wrap out of, correctly, and where an edge nonetheless is.
-fn outline_darkness(in: VertexOut) -> f32 {
+fn outline_strength(in: VertexOut) -> f32 {
     if taper_at(in, in.local.y) <= 0.0 { return 0.0; }
     let d = box_distance(in);
     let held = body_held(in);
     let wrap = outline_coverage(in, d, in.outline_reach) * (1.0 - max(inside(in, d, 0.0), held))
         * lead_coverage(in);
-    return in.outline * max(wrap, cap_coverage(in, held)) * along(in, in.fade);
+    return in.aura.a * max(wrap, cap_coverage(in, held)) * along(in, in.fade);
 }
 
 /// This note's share of `body_holdout`: its geometric coverage, as far as a
@@ -774,7 +719,7 @@ fn core_color(in: VertexOut) -> vec4<f32> {
 // One of the note's intensity readings at this depth: `ends` is its value at
 // the two depths `ramp` names, which the caller sampled at the ends of this
 // piece, and between them a straight line. The fade multiplies the body and
-// its outline together, so a note faded to nothing leaves no dark silhouette
+// its outline together, so a note faded to nothing leaves no glowing silhouette
 // behind. Held past both ends, which is what carries the newest value into a
 // lead.
 fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
@@ -794,11 +739,24 @@ fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
     return select(higher, lower, cutoff);
 }
 
-/// This note's share of the shadow mask: its outline's darkness, kept where
-/// it is the darkest of any note's by the mask's `max` blend.
+struct MaskOut {
+    @location(0) glow: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
+/// This note's share of the glow mask: its color and how strongly it covers,
+/// kept where it is the strongest of any note's.
+///
+/// The strength is written as DEPTH, under a `Less` test against a mask
+/// cleared to 1, so the strongest note's fragment is the one that lands and
+/// its color lands with it. A `max` blend would keep the strongest coverage
+/// too, but take each color channel's max separately — a hue neither note has,
+/// wherever two glows meet. A fragment of no strength writes depth 1 and so
+/// never lands, leaving the mask clear there.
 @fragment
-fn fs_outline_mask(in: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(outline_darkness(on_screen(in)), 0.0, 0.0, 1.0);
+fn fs_outline_mask(in: VertexOut) -> MaskOut {
+    let strength = outline_strength(on_screen(in));
+    return MaskOut(vec4<f32>(in.aura.rgb, strength), 1.0 - strength);
 }
 
 @fragment

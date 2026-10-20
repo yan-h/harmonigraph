@@ -32,3 +32,11 @@ These settle the open questions from the first trial above.
 - When those cores and gaps no longer fit, join the local repeated-note run into a solid ribbon with uniform inset hatching. Bold diagonal strokes repeat evenly every six composition points; the long edges remain continuous. The strokes span the middle two-thirds of a typical ribbon and dim its fill by 75% so bloom does not wash them out. The ornament signals density rather than counting individual attacks.
 - Sustained notes remain plain. Resolvable rests and different voices remain separate. Pitch bends and expression history are retained inside dense runs.
 - Minimum-length onset padding meets the first effective pitch segment, including tuning received at the note-on timestamp; it must not leave a short line at the untuned key. Later pitch bends retain their recorded geometry.
+
+## 2026-10-20 (legibility over every backdrop)
+
+- The goal: ribbons legible whatever their color and whatever the backdrop, looking good, in the plugin's ambient, spacey feel. Yan is not attached to shadows for it.
+- Picked off look-prototype contact sheets (W8): a glow in each ribbon's own hue, dark (L* 7 by default), falling off by distance from the ribbon's edge. It replaces the black blur under ribbons; the spiral's dots keep their blur.
+- The glow's reach, darkness and spread stay the shared Notes shadow group's. Ribbon glow lightness and color are two new bars, the roll's alone.
+- This reverses #1499's every-shadow-is-a-blur for the ribbons only: a blur of a ribbon thinner than σ barely darkened round it, which is where legibility failed.
+- Ribbon glow darkness is linear in the profile (Darkness × falloff), as W8 was prototyped, rather than #1314's stops curve; the dots keep stops, so the shared Darkness bar follows two curves.

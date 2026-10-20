@@ -879,6 +879,75 @@ pub fn pitch_lut_color(
     gradient_color(ramp_t(pitch, darkest_pitch, brightest_pitch) as f32, gradient)
 }
 
+/// The glow standing round a piano-roll note of `pitch`: the hue its ribbon
+/// has under `gradient`, drawn at `L*` `lightness` with `chroma` of the
+/// ribbon's own colourfulness.
+///
+/// `chroma` scales the gradient's chroma FRACTION at that height and is
+/// resolved against the gamut at the glow's own lightness ([`chroma_of`]), so
+/// the glow is in gamut at every setting and its lightness is exactly the one
+/// asked for — dark glows hold far less absolute chroma than the ribbon, which
+/// is what keeps them from reading as a second ribbon. 0 is the grey of that
+/// lightness.
+///
+/// Off a table, for [`gradient_color`]'s reason: each entry is a gamut
+/// bisection, and the roll asks once per note per frame. The table is spaced
+/// as the gradient's own is, so a glow's hue sits on its note's at every pitch.
+pub fn pitch_glow_color(
+    pitch: f32,
+    darkest_pitch: f32,
+    brightest_pitch: f32,
+    gradient: Gradient,
+    lightness: f32,
+    chroma: f32,
+) -> Vec4 {
+    let t = ramp_t(pitch, darkest_pitch, brightest_pitch) as f32;
+    let spacing = LutSpacing::of(gradient);
+    with_glow_lut(gradient, lightness, chroma, |lut| sample_lut(t, lut, spacing))
+}
+
+/// What a glow table is built from: everything [`pitch_glow_color`] reads, and
+/// nothing else.
+#[derive(Clone, Copy, PartialEq)]
+struct GlowKey {
+    gradient: Gradient,
+    lightness: f32,
+    chroma: f32,
+}
+
+/// [`with_lut`] for the glow, in one slot: the roll is the only picture that
+/// asks, and a drag of either glow bar or of the gradient changes the key once
+/// per frame whatever the slot count.
+fn with_glow_lut<R>(
+    gradient: Gradient,
+    lightness: f32,
+    chroma: f32,
+    read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R,
+) -> R {
+    thread_local! {
+        static MEMO: std::cell::RefCell<Option<(GlowKey, Box<[Vec4; PITCH_LUT_N]>)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let gradient = gradient.sanitized();
+    let lightness = if lightness.is_finite() { lightness.clamp(0.0, 100.0) } else { 0.0 };
+    let chroma = if chroma.is_finite() { chroma.clamp(0.0, 1.0) } else { 0.0 };
+    let key = GlowKey { gradient, lightness, chroma };
+    MEMO.with(|memo| {
+        if memo.borrow().as_ref().is_none_or(|(built, _)| *built != key) {
+            let spacing = LutSpacing::of(gradient);
+            let l_star = f64::from(lightness);
+            let lut = Box::new(std::array::from_fn(|k| {
+                let t = spacing.height(k as f64 / (PITCH_LUT_N - 1) as f64);
+                let (_, h) = gradient.lightness_and_hue(t);
+                let fraction = (gradient.chroma_at(t) * f64::from(chroma)).clamp(0.0, 1.0);
+                oklab_srgb(l_star, h, chroma_of(fraction, l_star, h))
+            }));
+            *memo.borrow_mut() = Some((key, lut));
+        }
+        read(&memo.borrow().as_ref().expect("filled above").1)
+    })
+}
+
 /// One gradient, evaluated at normalized height `t` (0 at the bottom of its
 /// range, 1 at the top): [`pitch_ramp_lut`] sampled there and interpolated
 /// between entries exactly as `pitch_lut_color` in `lattice.wgsl` does.

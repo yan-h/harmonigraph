@@ -229,16 +229,6 @@ impl ShadowBox {
         ],
     };
 
-    /// After a roll instance's eleven attributes, for rasterizing its box SDF
-    /// into its cell.
-    pub(crate) const BESIDE_ROLL: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![
-            10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4
-        ],
-    };
-
     /// After a spiral dot's centre, radius and color, for rasterizing its
     /// circle field into its cell.
     pub(crate) const BESIDE_DOTS: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
