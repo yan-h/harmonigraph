@@ -1,10 +1,10 @@
 //! Our own Rust heap, counted by the binary's global allocator.
 //!
-//! The process footprint the memory row also shows is the HOST's: in a shared
-//! plug-in host it holds every other plugin loaded beside us (#1512). Each Rust
-//! plugin binary has a global allocator of its own, so one that counts sees
-//! only this binary's allocations — not another plugin's, and not what the
-//! system frameworks allocate on our behalf.
+//! The process footprint the breakdown's `host mem` row shows is the HOST's: in
+//! a shared plug-in host it holds every other plugin loaded beside us (#1512).
+//! Each Rust plugin binary has a global allocator of its own, so one that
+//! counts sees only this binary's allocations — not another plugin's, and not
+//! what the system frameworks allocate on our behalf.
 //!
 //! What it counts is bytes REQUESTED and not yet freed, not bytes resident: a
 //! large buffer that is allocated but never touched counts in full, and the

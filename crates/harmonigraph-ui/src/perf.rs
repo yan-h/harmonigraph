@@ -1,6 +1,6 @@
 //! The performance overlay: a small HUD over the editor showing the frame
-//! rate, the host process's memory beside our own, and the workload driving them — enough to see
-//! at a glance whether the plugin is working the machine hard.
+//! rate, our own memory, and the workload driving them — enough to see at a
+//! glance whether the plugin is working the machine hard.
 //!
 //! Where it sits is the user's, and nothing else's: it opens in the editor's
 //! bottom-left corner and is DRAGGED from there to wherever it is wanted,
@@ -25,7 +25,7 @@
 //! ever runs on its (deterministic) draw path — no wall-clock read reaches a
 //! recorded frame.
 
-use harmonigraph_perf::{memory_readout, PerfStats, Stage, STAGES};
+use harmonigraph_perf::{host_memory_readout, memory_readout, PerfStats, Stage, STAGES};
 
 /// Points between the overlay and the editor's corner it opens in.
 const OVERLAY_INSET: f32 = 8.0;
@@ -117,14 +117,14 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
         let (folds, uploads) = perf.spec_fallbacks;
         rows.push((1, "spec", format!("{folds:.0}/s refold · {uploads:.0}/s full"), None));
         rows.push((0, "gpu mem", gpu_memory_row(&perf.gpu_memory), None));
+        // The whole host process, which in a shared plug-in host is every
+        // other plugin beside us too (#1512): context for reading `memory`
+        // against Activity Monitor, not a measure of this plugin, so it waits
+        // for the breakdown rather than doubling the headline row.
+        rows.push((0, "host mem", host_memory_readout(perf.footprint_bytes), None));
     }
     rows.extend([
-        (
-            0,
-            "memory",
-            memory_readout(perf.footprint_bytes, perf.heap_bytes, &perf.gpu_memory),
-            None,
-        ),
+        (0, "memory", memory_readout(perf.heap_bytes, &perf.gpu_memory), None),
         (0, "voices", format!("{} held · {fading} fading", perf.workload.held_voices), None),
         (
             0,
@@ -526,6 +526,7 @@ mod tests {
                 (1, "spec"),
                 // The GPU memory record's totals; the table is the Console's.
                 (0, "gpu mem"),
+                (0, "host mem"),
                 // The headline rows, which the breakdown keeps at the foot.
                 (0, "memory"),
                 (0, "voices"),
@@ -654,9 +655,10 @@ mod tests {
             ("roll", "13 notes"),
             // The two caches, in the order the labels name them.
             ("spec", "14/s refold · 15/s full"),
-            // The host process's footprint, then ours: the counted heap and
-            // the GPU record's live total.
-            ("memory", "490 MB host · ours 210 heap + 151 GPU"),
+            // The whole host process, apart from ours.
+            ("host mem", "490 MB"),
+            // Ours: the counted heap and the GPU record's live total.
+            ("memory", "210 MB heap + 151 GPU"),
             ("voices", "17 held · 19 fading"),
             ("nodes", "21  ·  3.25× scale"),
         ] {
