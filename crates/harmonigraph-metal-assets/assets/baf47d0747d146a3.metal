@@ -11,10 +11,8 @@ struct Locals {
     float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
-    metal::float2 holdout_origin;
-    metal::float4 shadow;
     metal::float2 shadow_atlas_size;
-    metal::float2 _shadow_pad;
+    metal::float4 shadow;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
 };
@@ -31,12 +29,14 @@ struct VertexOut {
     metal::float2 tremolo;
     char _pad9[8];
     metal::float4 core;
-    metal::float4 outline;
+    float outline;
+    char _pad11[4];
     metal::float2 center;
     uint who;
     float feather;
     metal::float2 ramp;
     metal::float2 fade;
+    char _pad16[8];
 };
 constant uint OCCLUDER_HEADER = 5u;
 constant float GAUSSIAN_GAIN = 2.5;
@@ -44,22 +44,22 @@ constant float SHADOW_KEEP_FLOOR = 0.0009765625;
 constant float GLOW_BASE = 0.8;
 
 float taper_at(
-    VertexOut in_1,
+    VertexOut in,
     float y
 ) {
-    metal::float4 d_1 = in_1.taper_depth;
-    metal::float4 w_1 = in_1.taper;
-    if (y < in_1.taper_depth.y) {
-        return metal::mix(in_1.taper.x, in_1.taper.y, metal::clamp((y - in_1.taper_depth.x) / metal::max(in_1.taper_depth.y - in_1.taper_depth.x, 0.000001), 0.0, 1.0));
+    metal::float4 d_1 = in.taper_depth;
+    metal::float4 w_1 = in.taper;
+    if (y < in.taper_depth.y) {
+        return metal::mix(in.taper.x, in.taper.y, metal::clamp((y - in.taper_depth.x) / metal::max(in.taper_depth.y - in.taper_depth.x, 0.000001), 0.0, 1.0));
     }
-    if (y < in_1.taper_depth.z) {
-        return metal::mix(in_1.taper.y, in_1.taper.z, metal::clamp((y - in_1.taper_depth.y) / metal::max(in_1.taper_depth.z - in_1.taper_depth.y, 0.000001), 0.0, 1.0));
+    if (y < in.taper_depth.z) {
+        return metal::mix(in.taper.y, in.taper.z, metal::clamp((y - in.taper_depth.y) / metal::max(in.taper_depth.z - in.taper_depth.y, 0.000001), 0.0, 1.0));
     }
-    return metal::mix(in_1.taper.z, in_1.taper.w, metal::clamp((y - in_1.taper_depth.z) / metal::max(in_1.taper_depth.w - in_1.taper_depth.z, 0.000001), 0.0, 1.0));
+    return metal::mix(in.taper.z, in.taper.w, metal::clamp((y - in.taper_depth.z) / metal::max(in.taper_depth.w - in.taper_depth.z, 0.000001), 0.0, 1.0));
 }
 
 float parallelogram_distance(
-    VertexOut in_2,
+    VertexOut in_1,
     float trim,
     float half_pitch
 ) {
@@ -68,10 +68,10 @@ float parallelogram_distance(
     float near = {};
     float within = {};
     metal::float2 v = {};
-    float slope_1 = in_2.shear;
-    float half_along = in_2.half_extent.y - (0.5 * trim);
+    float slope_1 = in_1.shear;
+    float half_along = in_1.half_extent.y - (0.5 * trim);
     metal::float2 end = metal::float2(slope_1 * half_along, half_along);
-    p = in_2.local - ((0.5 * trim) * metal::float2(slope_1, 1.0));
+    p = in_1.local - ((0.5 * trim) * metal::float2(slope_1, 1.0));
     metal::float2 _e19 = p;
     metal::float2 _e20 = p;
     float _e23 = p.y;
@@ -110,7 +110,7 @@ float parallelogram_distance(
 }
 
 metal::float2 taper_vertex(
-    VertexOut in_3,
+    VertexOut in_2,
     float depth,
     float width,
     float lo,
@@ -118,7 +118,7 @@ metal::float2 taper_vertex(
 ) {
     bool local = {};
     float y_1 = metal::clamp(depth, lo, hi);
-    float _e6 = taper_at(in_3, y_1);
+    float _e6 = taper_at(in_2, y_1);
     if (depth >= lo) {
         local = depth <= hi;
     } else {
@@ -126,7 +126,7 @@ metal::float2 taper_vertex(
     }
     bool _e12 = local;
     float share = _e12 ? width : _e6;
-    return metal::float2(y_1, in_3.half_extent.x * share);
+    return metal::float2(y_1, in_2.half_extent.x * share);
 }
 
 float segment_distance2_(
@@ -157,26 +157,26 @@ float flanks_distance2_(
 }
 
 float tapered_distance(
-    VertexOut in_4,
+    VertexOut in_3,
     float trim_1
 ) {
     float near_1 = {};
     bool local_1 = {};
     bool local_2 = {};
-    float slope_2 = in_4.shear;
-    float lo_1 = -(in_4.half_extent.y) + trim_1;
-    float hi_1 = in_4.half_extent.y;
-    metal::float2 p_3 = in_4.local;
-    metal::float4 d_2 = in_4.taper_depth;
-    metal::float4 w_2 = in_4.taper;
-    float _e14 = taper_at(in_4, lo_1);
-    metal::float2 start = metal::float2(lo_1, in_4.half_extent.x * _e14);
-    metal::float2 _e19 = taper_vertex(in_4, in_4.taper_depth.x, in_4.taper.x, lo_1, hi_1);
-    metal::float2 _e22 = taper_vertex(in_4, in_4.taper_depth.y, in_4.taper.y, lo_1, hi_1);
-    metal::float2 _e25 = taper_vertex(in_4, in_4.taper_depth.z, in_4.taper.z, lo_1, hi_1);
-    metal::float2 _e28 = taper_vertex(in_4, in_4.taper_depth.w, in_4.taper.w, lo_1, hi_1);
-    float _e31 = taper_at(in_4, hi_1);
-    metal::float2 end_1 = metal::float2(hi_1, in_4.half_extent.x * _e31);
+    float slope_2 = in_3.shear;
+    float lo_1 = -(in_3.half_extent.y) + trim_1;
+    float hi_1 = in_3.half_extent.y;
+    metal::float2 p_3 = in_3.local;
+    metal::float4 d_2 = in_3.taper_depth;
+    metal::float4 w_2 = in_3.taper;
+    float _e14 = taper_at(in_3, lo_1);
+    metal::float2 start = metal::float2(lo_1, in_3.half_extent.x * _e14);
+    metal::float2 _e19 = taper_vertex(in_3, in_3.taper_depth.x, in_3.taper.x, lo_1, hi_1);
+    metal::float2 _e22 = taper_vertex(in_3, in_3.taper_depth.y, in_3.taper.y, lo_1, hi_1);
+    metal::float2 _e25 = taper_vertex(in_3, in_3.taper_depth.z, in_3.taper.z, lo_1, hi_1);
+    metal::float2 _e28 = taper_vertex(in_3, in_3.taper_depth.w, in_3.taper.w, lo_1, hi_1);
+    float _e31 = taper_at(in_3, hi_1);
+    metal::float2 end_1 = metal::float2(hi_1, in_3.half_extent.x * _e31);
     float _e42 = segment_distance2_(p_3, metal::float2((slope_2 * lo_1) - start.y, lo_1), metal::float2((slope_2 * lo_1) + start.y, lo_1));
     float _e51 = segment_distance2_(p_3, metal::float2((slope_2 * hi_1) - end_1.y, hi_1), metal::float2((slope_2 * hi_1) + end_1.y, hi_1));
     near_1 = metal::min(_e42, _e51);
@@ -195,15 +195,15 @@ float tapered_distance(
     float _e66 = near_1;
     float _e67 = flanks_distance2_(p_3, slope_2, _e28, end_1);
     near_1 = metal::min(_e66, _e67);
-    if (in_4.local.y > lo_1) {
-        local_1 = in_4.local.y < hi_1;
+    if (in_3.local.y > lo_1) {
+        local_1 = in_3.local.y < hi_1;
     } else {
         local_1 = false;
     }
     bool _e76 = local_1;
     if (_e76) {
-        float _e87 = taper_at(in_4, in_4.local.y);
-        local_2 = metal::abs(in_4.local.x - (slope_2 * in_4.local.y)) < (in_4.half_extent.x * _e87);
+        float _e87 = taper_at(in_3, in_3.local.y);
+        local_2 = metal::abs(in_3.local.x - (slope_2 * in_3.local.y)) < (in_3.half_extent.x * _e87);
     } else {
         local_2 = false;
     }
@@ -214,46 +214,46 @@ float tapered_distance(
 }
 
 float box_distance_trimmed(
-    VertexOut in_5,
+    VertexOut in_4,
     float trim_2
 ) {
-    metal::float4 t = in_5.taper;
-    if (metal::all(t == metal::float4(in_5.taper.x))) {
-        float _e11 = parallelogram_distance(in_5, trim_2, in_5.half_extent.x * in_5.taper.x);
+    metal::float4 t = in_4.taper;
+    if (metal::all(t == metal::float4(in_4.taper.x))) {
+        float _e11 = parallelogram_distance(in_4, trim_2, in_4.half_extent.x * in_4.taper.x);
         return _e11;
     }
-    float _e12 = tapered_distance(in_5, trim_2);
+    float _e12 = tapered_distance(in_4, trim_2);
     return _e12;
 }
 
 float box_distance(
-    VertexOut in_6
+    VertexOut in_5
 ) {
-    float _e2 = box_distance_trimmed(in_6, 0.0);
+    float _e2 = box_distance_trimmed(in_5, 0.0);
     return _e2;
 }
 
 float inside(
-    VertexOut in_7,
+    VertexOut in_6,
     float d,
     float edge
 ) {
-    float f = metal::max(in_7.feather, 0.000001);
+    float f = metal::max(in_6.feather, 0.000001);
     return metal::clamp(((edge - d) / f) + 0.5, 0.0, 1.0);
 }
 
 float lead_coverage(
-    VertexOut in_8
+    VertexOut in_7
 ) {
     float led = {};
-    float lead = in_8.lead.x;
-    float lead_fade = in_8.lead.y;
-    float lead_alpha = in_8.lead.z;
+    float lead = in_7.lead.x;
+    float lead_fade = in_7.lead.y;
+    float lead_alpha = in_7.lead.z;
     if (lead <= 0.0) {
         return 1.0;
     }
-    float f_1 = metal::max(in_8.feather, 0.000001);
-    float u = in_8.local.y + in_8.half_extent.y;
+    float f_1 = metal::max(in_7.feather, 0.000001);
+    float u = in_7.local.y + in_7.half_extent.y;
     led = lead_alpha;
     if (lead_fade > 0.0) {
         led = lead_alpha * metal::clamp(u / metal::max(metal::min(lead_fade, lead), f_1), 0.0, 1.0);
@@ -264,22 +264,22 @@ float lead_coverage(
 }
 
 metal::float2 surface_point(
-    VertexOut in_9,
+    VertexOut in_8,
     constant Locals& locals
 ) {
     metal::float2 _e3 = locals.origin_pixels;
     metal::float2 _e9 = locals.pixel_points;
-    return (_e3 + in_9.position.xy) * _e9;
+    return (_e3 + in_8.position.xy) * _e9;
 }
 
 VertexOut on_screen(
-    VertexOut in_10,
+    VertexOut in_9,
     constant Locals& locals
 ) {
     VertexOut out = {};
-    out = in_10;
-    metal::float2 _e2 = surface_point(in_10, locals);
-    metal::float2 delta = _e2 - in_10.center;
+    out = in_9;
+    metal::float2 _e2 = surface_point(in_9, locals);
+    metal::float2 delta = _e2 - in_9.center;
     metal::float2 _e8 = locals.pitch_dir;
     metal::float2 _e12 = locals.depth_dir;
     out.local = metal::float2(metal::dot(delta, _e8), metal::dot(delta, _e12));
@@ -287,58 +287,7 @@ VertexOut on_screen(
     return _e15;
 }
 
-float along(
-    VertexOut in_11,
-    metal::float2 ends
-) {
-    float run = in_11.ramp.y - in_11.ramp.x;
-    float t_1 = (metal::abs(run) > 0.000001) ? metal::clamp((in_11.local.y - in_11.ramp.x) / run, 0.0, 1.0) : 0.0;
-    return metal::mix(ends.x, ends.y, t_1);
-}
-
-float tremolo_tone(
-    VertexOut in_12
-) {
-    bool local_3 = {};
-    float scale = in_12.tremolo.y;
-    if (!((scale <= 0.0))) {
-        local_3 = in_12.local.y < (-(in_12.half_extent.y) + in_12.lead.x);
-    } else {
-        local_3 = true;
-    }
-    bool _e18 = local_3;
-    if (_e18) {
-        return 1.0;
-    }
-    float x = (in_12.local.x - (in_12.shear * in_12.local.y)) / scale;
-    float _e32 = taper_at(in_12, in_12.local.y);
-    float half_width = (in_12.half_extent.x * _e32) / scale;
-    float reach = metal::min(4.0, half_width * 0.6666667);
-    float diagonal = (in_12.tremolo.x - (in_12.local.y / scale)) - (0.7 * x);
-    float stroke_distance = (metal::fract((diagonal / 6.0) + 0.5) - 0.5) * 6.0;
-    float distance = metal::max(metal::abs(x) - reach, (metal::abs(stroke_distance) / 1.220656) - 0.75);
-    float _e67 = inside(in_12, distance * scale, 0.0);
-    float inset = metal::clamp((half_width - metal::abs(x)) / metal::max(half_width * 0.5, 0.000001), 0.0, 1.0);
-    return 1.0 - ((0.75 * _e67) * inset);
-}
-
-metal::float4 core_color(
-    VertexOut in_13
-) {
-    float _e3 = taper_at(in_13, in_13.local.y);
-    if (_e3 <= 0.0) {
-        return metal::float4(0.0);
-    }
-    float _e10 = tremolo_tone(in_13);
-    metal::float4 color = metal::float4(in_13.core.xyz * _e10, in_13.core.w);
-    float _e15 = box_distance(in_13);
-    float _e17 = inside(in_13, _e15, 0.0);
-    float _e19 = lead_coverage(in_13);
-    float _e22 = along(in_13, in_13.fade);
-    return ((color * _e17) * _e19) * _e22;
-}
-
-struct fs_core_gammaInput {
+struct fs_body_holdoutInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -348,23 +297,29 @@ struct fs_core_gammaInput {
     metal::float4 taper [[user(loc6), flat]];
     metal::float2 tremolo [[user(loc7), flat]];
     metal::float4 core [[user(loc8), flat]];
-    metal::float4 outline [[user(loc9), flat]];
+    float outline [[user(loc9), flat]];
     metal::float2 center [[user(loc10), flat]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
     metal::float2 ramp [[user(loc13), flat]];
     metal::float2 fade [[user(loc14), flat]];
 };
-struct fs_core_gammaOutput {
+struct fs_body_holdoutOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_core_gammaOutput fs_core_gamma(
-  fs_core_gammaInput varyings [[stage_in]]
+fragment fs_body_holdoutOutput fs_body_holdout(
+  fs_body_holdoutInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.outline, varyings.center, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
-    VertexOut _e1 = on_screen(in, locals);
-    metal::float4 _e2 = core_color(_e1);
-    return fs_core_gammaOutput { _e2 };
+    const VertexOut fragment_ = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.outline, {}, varyings.center, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
+    VertexOut _e1 = on_screen(fragment_, locals);
+    float _e4 = taper_at(_e1, _e1.local.y);
+    if (_e4 <= 0.0) {
+        return fs_body_holdoutOutput { metal::float4(0.0) };
+    }
+    float _e9 = box_distance(_e1);
+    float _e11 = inside(_e1, _e9, 0.0);
+    float _e12 = lead_coverage(_e1);
+    return fs_body_holdoutOutput { metal::float4(_e11 * _e12, 0.0, 0.0, 1.0) };
 }
