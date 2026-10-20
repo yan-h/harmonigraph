@@ -55,5 +55,5 @@ and one pane can build its new targets before another pane, preparing later in t
 A resize is the exception, because reconfiguring the surface waits for the GPU first.
 PR #1506 measured a resize, a style switch and the driver behaviour above.
 
-`phys_footprint_peak` counts the CPU heap as well, which nothing here measures.
+`phys_footprint_peak` counts the CPU heap as well, which `docs/cpu-memory.md` measures.
 
