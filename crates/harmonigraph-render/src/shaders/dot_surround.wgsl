@@ -112,7 +112,16 @@ fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
 fn landed(in: DotOut) -> f32 {
     let p = in.position.xy * dot_locals.feather;
     let mine = dots[in.dot];
-    let grow = cut_reach() + max(dot_locals.feather, 1e-6);
+    let f = max(dot_locals.feather, 1e-6);
+    // A fragment whose own dot cannot cut here cannot win, so it skips the
+    // loop: inside its own disc, which holds its cut out, and past the reach's
+    // antialiasing. A hundredth of a feather inside where `dot_cut` reads 0,
+    // so only where the loop's own reading is 0 too.
+    let own = length(p - mine.center) - mine.radius;
+    if own <= -0.51 * f || own >= cut_reach() + 0.51 * f {
+        discard;
+    }
+    let grow = cut_reach() + f;
     var strongest = 0.0;
     var winner = in.dot;
     for (var n = 0u; n < mine.candidates; n++) {

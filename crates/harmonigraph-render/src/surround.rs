@@ -185,38 +185,62 @@ impl SurroundComposite {
             bind_group_layouts: &[Some(&read_layout)],
             ..Default::default()
         });
-        let entry_point =
-            if target_format.is_srgb() { "fs_surround_linear" } else { "fs_surround_gamma" };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("surround_composite"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_cover"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry_point),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(EGUI_BLEND),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = landing_pipeline(
+            device,
+            "surround_composite",
+            &shader,
+            &layout,
+            "vs_cover",
+            "fs_surround",
+            target_format,
+        );
         SurroundComposite { pipeline, read_layout }
     }
+}
+
+/// A pipeline that lays a surround straight onto the picture, the roll's
+/// composite and the Spiral's dots alike: premultiplied over the egui pass,
+/// with no depth, through `{fragment}_linear` on a target that encodes sRGB
+/// for itself and `{fragment}_gamma` on the rest (`surround_lands_*`).
+pub(crate) fn landing_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex: &str,
+    fragment: &str,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let fragment =
+        format!("{fragment}_{}", if target_format.is_srgb() { "linear" } else { "gamma" });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some(vertex),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(&fragment),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(EGUI_BLEND),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 /// The entry points and vertex buffers a producer's surround pipeline is built

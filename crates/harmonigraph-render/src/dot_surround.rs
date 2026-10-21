@@ -23,7 +23,7 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::surround::SurroundUniform;
 use crate::uniforms::{uniform_group, Float2};
-use crate::{wgpu, EGUI_BLEND};
+use crate::wgpu;
 
 const SRC: &str = include_str!("shaders/dot_surround.wgsl");
 const INITIAL_CAPACITY: usize = 16;
@@ -41,8 +41,7 @@ pub(crate) fn source() -> String {
 /// One sounding note's dot, as its surround needs it: where it stands, how big
 /// it is, and its fill color — straight sRGB bytes, with the dot's own opacity
 /// in alpha, which is how strongly it cuts.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurroundDot {
     /// Centre, in screen points.
     pub center: [f32; 2],
@@ -164,36 +163,15 @@ impl Resources {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let fragment =
-            if format.is_srgb() { "fs_dot_surround_linear" } else { "fs_dot_surround_gamma" };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("spiral_dot_surround"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_dot_cut"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(fragment),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(EGUI_BLEND),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = crate::surround::landing_pipeline(
+            device,
+            "spiral_dot_surround",
+            &shader,
+            &pipeline_layout,
+            "vs_dot_cut",
+            "fs_dot_surround",
+            format,
+        );
         Resources {
             pipeline,
             layout,
@@ -295,9 +273,17 @@ impl CallbackTrait for DotSurroundCallback {
         let size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
         let wants = surround.draws() && !self.dots.is_empty() && size.iter().all(|&d| d > 0);
 
-        // Nothing to cut and nothing built: the pipeline is not built either,
-        // so a reader whose cut is off never pays for it.
-        if !wants && callback_resources.get::<Resources>().is_none() {
+        // Nothing to cut builds nothing, so a reader whose cut is off never
+        // pays for the pipeline. What is built is held through a quiet stretch
+        // rather than dropped, since a dot comes and goes with every note: a
+        // frame with none skips the work, not the buffers, and with no dots
+        // `paint` declines.
+        if !wants {
+            if let Some(pane) =
+                callback_resources.get_mut::<Resources>().and_then(|r| r.pane.as_mut())
+            {
+                pane.dots.clear();
+            }
             return Vec::new();
         }
         let stale = callback_resources
@@ -314,13 +300,6 @@ impl CallbackTrait for DotSurroundCallback {
             candidates: Vec::new(),
         });
 
-        // Held through a quiet stretch rather than dropped, since a dot comes
-        // and goes with every note: what a frame with none skips is the work,
-        // not the buffers. No dots, so `paint` declines.
-        if !wants {
-            pane.dots.clear();
-            return Vec::new();
-        }
         // The quad's own growth, past the disc: the reach and a feather.
         let grow = surround.cut.0[1] + 1.0 / ppp;
         list_candidates(&self.dots, grow, &mut pane.dots, &mut pane.candidates);
@@ -452,20 +431,21 @@ mod tests {
         assert!(!draws(&resources), "the cut switched off still draws");
     }
 
-    /// `dots` cut under `cut` over a white 64-point square at `ppp`, prepared
-    /// into `resources` (held across calls, as a pane's are) and painted: the
-    /// frame's RGB at a point.
+    /// `dots` cut under `cut` over a white 64-point square at `origin` on the
+    /// screen, at `ppp`, prepared into `resources` (held across calls, as a
+    /// pane's are) and painted: the frame's RGB at a point of the screen.
     fn drawn(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         resources: &mut CallbackResources,
         ppp: f32,
+        origin: egui::Pos2,
         dots: Vec<SurroundDot>,
         cut: crate::SurroundCut,
     ) -> impl Fn(f32, f32) -> [u8; 3] {
-        let side = (64.0 * ppp) as u32;
-        let size = [side.div_ceil(64) * 64, side];
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+        let [w, h] = [origin.x + 64.0, origin.y + 64.0].map(|v| (v * ppp).ceil() as u32);
+        let size = [w.div_ceil(64) * 64, h];
+        let rect = egui::Rect::from_min_size(origin, egui::vec2(64.0, 64.0));
         let cb =
             DotSurroundCallback { rect, dots, cut, target_format: wgpu::TextureFormat::Rgba8Unorm };
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
@@ -519,6 +499,7 @@ mod tests {
                     &queue,
                     &mut resources,
                     ppp,
+                    egui::Pos2::ZERO,
                     vec![SurroundDot { aura, ..dot() }],
                     cut,
                 )
@@ -559,7 +540,7 @@ mod tests {
             return;
         };
         let mut resources = CallbackResources::default();
-        drop(drawn(&device, &queue, &mut resources, 1.0, vec![dot()], CUT));
+        drop(drawn(&device, &queue, &mut resources, 1.0, egui::Pos2::ZERO, vec![dot()], CUT));
         let crowd: Vec<SurroundDot> = (0..20)
             .map(|i| SurroundDot {
                 center: [8.0 + 12.0 * (i % 5) as f32, 8.0 + 12.0 * (i / 5) as f32],
@@ -567,7 +548,7 @@ mod tests {
                 aura: [0, 0, 0, 255],
             })
             .collect();
-        let frame = drawn(&device, &queue, &mut resources, 1.0, crowd, CUT);
+        let frame = drawn(&device, &queue, &mut resources, 1.0, egui::Pos2::ZERO, crowd, CUT);
         let capacity = resources
             .get::<Resources>()
             .and_then(|resources| resources.pane.as_ref())
@@ -592,17 +573,21 @@ mod tests {
     /// A full red dot and a half-strength blue one, 16 points apart under an
     /// 8-point reach, so their cuts overlap between them. Read at two points
     /// there: one nearer the red, where red's cut is stronger, and one near
-    /// enough the blue that its weaker opacity still wins on distance.
+    /// enough the blue that its weaker opacity still wins on distance. Drawn
+    /// with the pane at the screen's corner and again off it, since a fragment
+    /// reads its pixel in screen points and the dots stand in them.
     #[test]
     fn where_two_dots_cuts_meet_the_stronger_lands_alone() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let mut resources = CallbackResources::default();
-        let red = SurroundDot { center: [24.0, 32.0], radius: 4.0, aura: [255, 0, 0, 255] };
-        let blue = SurroundDot { center: [40.0, 32.0], radius: 4.0, aura: [0, 0, 255, 128] };
-        for ppp in [1.0f32, 2.0] {
-            let frame = drawn(&device, &queue, &mut resources, ppp, vec![red, blue], CUT);
+        for (ppp, origin) in [(1.0f32, egui::pos2(0.0, 0.0)), (2.0, egui::pos2(37.0, 21.0))] {
+            let [ox, oy] = [origin.x, origin.y];
+            let dot = |x: f32, aura| SurroundDot { center: [ox + x, oy + 32.0], radius: 4.0, aura };
+            let (red, blue) = (dot(24.0, [255, 0, 0, 255]), dot(40.0, [0, 0, 255, 128]));
+            let frame = drawn(&device, &queue, &mut resources, ppp, origin, vec![red, blue], CUT);
+            let frame = |x: f32, y: f32| frame(ox + x, oy + y);
             let fade = |d: f32| 1.0 - d / CUT.reach;
             let at = |x: f32| ((x * ppp).floor() + 0.5) / ppp;
             // White under a cut of `cut` filled with `rgb`.
@@ -633,15 +618,17 @@ pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) 
 /// cargo test --release -p harmonigraph-render a_frame_of_spiral_dots \
 ///   -- --ignored --nocapture --test-threads=1
 /// ```
-/// Two workloads at the default cut, and again at the longest reach: a
-/// six-note chord spread over the turns,
-/// and the crowd the Spiral can actually draw, a chromatic run over its two
-/// innermost turns, where every dot's quad overlaps its neighbours'. The
-/// figure scales with how many dots' reaches cover a pixel, not with the pane.
-/// On an M5 Pro the chord costs 0.01 ms and the run 0.06 at the default
-/// reach, where the targets this replaced cost 0.14 at any crowding; at the
-/// longest reach the run costs 0.31, every dot on those turns a candidate of
-/// every other — the one case where the targets were cheaper.
+/// Three workloads at the default cut, and again at the longest reach: a
+/// six-note chord spread over the turns; a chromatic run over the two
+/// innermost turns, where every dot's quad overlaps its neighbours'; and 48
+/// notes over four turns of a spiral zoomed far out, the ceiling.
+///
+/// The figure scales with how many dots' reaches cover a pixel, squared, and
+/// not with the pane. On an M5 Pro, at the default reach: the chord 0.01 ms,
+/// the run 0.05 and the ceiling 0.43, where the targets this replaced cost
+/// 0.14 at any crowding. At the longest reach the run costs 0.28 and the
+/// ceiling 2.54. That ceiling was accepted (#1545) as the price of the
+/// ordinary frame's saving, rather than bounded by falling back to targets.
 #[cfg(test)]
 mod timing {
     use super::*;
@@ -701,6 +688,10 @@ mod timing {
                     [0, 4, 7, 16, 23, 31].map(|k| on_spiral(k, 60.0, 60.0)).to_vec(),
                 ),
                 ("chromatic run, 24", (0..24).map(|k| on_spiral(k, 40.0, 20.0)).collect()),
+                (
+                    "zoomed out, 48 over four turns",
+                    (0..48).map(|k| on_spiral(k, 20.0, 10.0)).collect(),
+                ),
             ] {
                 eprintln!("  {name}: {:.3} ms over the control", time(dots) - control);
             }
