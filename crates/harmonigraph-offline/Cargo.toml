@@ -16,7 +16,8 @@ egui-wgpu = { workspace = true }
 ron = { workspace = true }
 # Blocks on wgpu's async adapter/device setup; there is no event loop
 # here to be async around.
-# Held at 0.4, which eframe and vendored egui-baseview pin; moves with #1529.
+# Held at 0.4, which eframe and vendored egui-baseview pin; moves to 1.0
+# with the GUI stack (docs/gui-cohort-feasibility.md).
 pollster = "0.4"
 # PNG output for single-frame checks. The moving picture goes out as raw
 # frames to ffmpeg, which needs no crate at all.
