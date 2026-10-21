@@ -370,6 +370,10 @@ enum DepthZoom {
 pub(super) struct OrientationDrag {
     response: egui::Response,
     target: Option<crate::SpectralOrientation>,
+    /// Whether this drag navigates rather than turns the pane. Latched at the
+    /// press, so Shift changing mid-drag cannot make one gesture two edits;
+    /// [`drag_zoom`] takes the choice from here rather than latching its own.
+    pub(super) navigating: bool,
 }
 
 pub(super) fn drag_orientation(
@@ -377,20 +381,20 @@ pub(super) fn drag_orientation(
     response: &egui::Response,
     frame: egui::Rect,
 ) -> OrientationDrag {
-    let held = ui.input(|i| i.modifiers.shift || i.pointer.middle_down());
+    let held = ui.input(|i| i.modifiers.shift);
     let response = response.clone();
-    let mode_id = response.id.with("preview_navigation");
+    let mode_id = response.id.with("preview_rearrange");
     if response.drag_started() {
         ui.data_mut(|data| data.insert_temp(mode_id, held));
     }
-    let navigating = ui.data(|data| data.get_temp::<bool>(mode_id)).unwrap_or(held);
-    let response = if navigating {
-        response
+    let navigating = !ui.data(|data| data.get_temp::<bool>(mode_id)).unwrap_or(held);
+    let response = response.on_hover_text(if held {
+        "Drag to an edge to turn the analyzer"
     } else {
-        response
-            .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text("Drag to an edge to turn the analyzer · Hold Shift and drag to navigate")
-    };
+        "Drag to navigate · Hold Shift and drag to an edge to turn the analyzer"
+    });
+    let response =
+        if navigating { response } else { response.on_hover_cursor(egui::CursorIcon::Grab) };
     // A drag-only egui widget claims the pointer immediately on press, before
     // it knows whether the gesture will move. Keep the target and the persisted
     // edit dark until the pointer has crossed egui's own click threshold.
@@ -407,7 +411,7 @@ pub(super) fn drag_orientation(
     if response.drag_stopped() {
         ui.data_mut(|data| data.remove::<bool>(mode_id));
     }
-    OrientationDrag { response, target }
+    OrientationDrag { response, target, navigating }
 }
 
 impl OrientationDrag {
@@ -495,12 +499,13 @@ fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::Spect
 /// mode — a drag moves whatever it is on top of, and the two regions are drawn
 /// far enough apart to aim at.
 ///
-/// The dock and Video preview both navigate. In the preview, an unmodified
-/// drag belongs to the orientation overlay above this pane, while Shift-drag
-/// leaves that overlay inert and reaches the pan/Span/Level paths here. Its
+/// The dock and Video preview both navigate. In the preview, a Shift-drag
+/// belongs to the orientation overlay above this pane, while an unmodified
+/// drag leaves that overlay inert and reaches the pan/Span/Level paths here. Its
 /// wheel is consumed after zooming so the Video tab's enclosing vertical
 /// `ScrollArea` does not move the controls at the same time. Headless/offline
 /// copies opt out explicitly.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn drag_zoom(
     ui: &egui::Ui,
     axes: &Axes,
@@ -515,6 +520,9 @@ pub(super) fn drag_zoom(
     // screen to zoom; at 0.0 the spectrum is the one with nothing.
     split: f32,
     navigation: Navigation,
+    // False while a preview drag is turning the pane instead; see
+    // [`OrientationDrag::navigating`].
+    drag_navigates: bool,
 ) {
     use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
 
@@ -549,10 +557,6 @@ pub(super) fn drag_zoom(
     // Grab the picture. Per-frame deltas rather than the absolute tracking the
     // divider uses — pushed against an end of an axis, an absolute anchor would
     // keep accumulating off-screen and the view would sit still on the way back.
-    let drag_navigates = !matches!(navigation, Navigation::Preview)
-        || ui
-            .data(|data| data.get_temp::<bool>(response.id.with("preview_navigation")))
-            .unwrap_or_else(|| ui.input(|i| i.modifiers.shift || i.pointer.middle_down()));
     if response.dragged() && drag_navigates {
         let delta = response.drag_delta();
         // Which axis this drag is on — see [`lean_is_depth`]. What comes back is

@@ -298,8 +298,8 @@ Video keeps **Finish recording** and **Stop at bar** with Record take.
 Finishing a take starts rendering;
 **Re-render take** applies the current appearance and video settings to the last take.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
-Drag the lattice to an edge of the preview to arrange the pictures.
-Shift-drag either picture to navigate,
+Shift-drag either picture to an edge of the preview to arrange the pictures.
+Drag either picture without Shift to navigate,
 and scroll or pinch to zoom.
 **Fit video (max 10 min)** changes exported history;
 the preview continues to use live **History duration**.

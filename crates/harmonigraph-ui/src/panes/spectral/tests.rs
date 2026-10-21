@@ -839,11 +839,7 @@ fn drag_pane_with_navigation(
     let screen = egui::vec2(900.0, 900.0);
     let at = Axes::new(rect, &cfg).at(0.5, grab);
     let surface = if matches!(navigation, Navigation::Docked) { 0 } else { 1 };
-    let modifiers = if matches!(navigation, Navigation::Preview) {
-        egui::Modifiers::SHIFT
-    } else {
-        egui::Modifiers::NONE
-    };
+    let modifiers = egui::Modifiers::NONE;
     let frame = |events: Vec<egui::Event>, state: &mut PictureState| {
         let _ = ctx.run_ui(
             egui::RawInput {

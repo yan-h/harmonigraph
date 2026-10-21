@@ -157,14 +157,14 @@ fn preview_layout_controls(
         LatticeSide::Top => move_rect.max.y = handle.top(),
         LatticeSide::Bottom => move_rect.min.y = handle.bottom(),
     }
-    let navigation_held = ui.input(|i| i.modifiers.shift || i.pointer.middle_down());
+    let rearrange_held = ui.input(|i| i.modifiers.shift);
     let moving_lattice = ui
         .interact(move_rect, ui.id().with("preview_lattice_move"), Sense::drag())
         .on_hover_cursor(egui::CursorIcon::Grab)
-        .on_hover_text(if navigation_held {
-            "Pan the lattice"
+        .on_hover_text(if rearrange_held {
+            "Drag the lattice to the left, right, top or bottom edge"
         } else {
-            "Drag the lattice to the left, right, top or bottom edge · Hold Shift and drag to pan · Scroll or pinch to zoom"
+            "Drag to pan the lattice · Hold Shift and drag to move it to the left, right, top or bottom edge · Scroll or pinch to zoom"
         });
     let resizing = ui
         .interact(handle, ui.id().with("preview_lattice_resize"), Sense::drag())
@@ -217,12 +217,11 @@ fn preview_layout_controls(
     // Freeze the choice made at press time. Letting Shift change during a drag
     // switch modes would first pan the camera and then redock the picture on
     // release (or the reverse), which turns one gesture into two edits.
-    let navigation_id = moving_lattice.id.with("preview_navigation");
+    let rearrange_id = moving_lattice.id.with("preview_rearrange");
     if moving_lattice.drag_started() {
-        ui.data_mut(|data| data.insert_temp(navigation_id, navigation_held));
+        ui.data_mut(|data| data.insert_temp(rearrange_id, rearrange_held));
     }
-    let navigating =
-        ui.data(|data| data.get_temp::<bool>(navigation_id)).unwrap_or(navigation_held);
+    let navigating = !ui.data(|data| data.get_temp::<bool>(rearrange_id)).unwrap_or(rearrange_held);
     if navigating && moving_lattice.dragged() {
         let delta = moving_lattice.drag_delta();
         camera.pan(glam::Vec2::new(delta.x, delta.y));
@@ -242,7 +241,7 @@ fn preview_layout_controls(
         }
     }
     if moving_lattice.drag_stopped() {
-        ui.data_mut(|data| data.remove::<bool>(navigation_id));
+        ui.data_mut(|data| data.remove::<bool>(rearrange_id));
     }
 }
 
@@ -779,7 +778,7 @@ mod tests {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
-            modifiers: egui::Modifiers::NONE,
+            modifiers: egui::Modifiers::SHIFT,
         };
         for events in [
             vec![],
@@ -795,6 +794,7 @@ mod tests {
                         egui::Pos2::ZERO,
                         egui::vec2(1000.0, 1000.0),
                     )),
+                    modifiers: egui::Modifiers::SHIFT,
                     events,
                     ..Default::default()
                 },
@@ -913,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_drag_pans_the_preview_lattice_without_redocking_it() {
+    fn plain_drag_pans_the_preview_lattice_without_redocking_it() {
         let ctx = crate::tests::probe::themed();
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         state.appearance.render.frame.lattice = LatticeSide::Left;
@@ -922,12 +922,13 @@ mod tests {
         let before_target = state.appearance.camera.target;
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         let start = preview_lattice_rect(rect, before_frame.lattice, before_frame.split).center();
-        let end = start + egui::vec2(60.0, 30.0);
+        // Ends in the opposite edge's drop band, where a Shift-drag would redock.
+        let end = rect.right_center() - egui::vec2(2.0, 0.0);
         let button = |pos, pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
-            modifiers: egui::Modifiers::SHIFT,
+            modifiers: egui::Modifiers::NONE,
         };
         for events in [
             vec![],
@@ -942,7 +943,7 @@ mod tests {
                         egui::Pos2::ZERO,
                         egui::vec2(800.0, 600.0),
                     )),
-                    modifiers: egui::Modifiers::SHIFT,
+                    modifiers: egui::Modifiers::NONE,
                     events,
                     ..Default::default()
                 },
@@ -958,10 +959,10 @@ mod tests {
                 },
             );
         }
-        assert_ne!(state.appearance.camera.target, before_target, "Shift-drag did not pan");
+        assert_ne!(state.appearance.camera.target, before_target, "Plain drag did not pan");
         assert_eq!(
             state.appearance.render.frame.lattice, before_frame.lattice,
-            "Shift-drag also redocked the lattice"
+            "Plain drag also redocked the lattice"
         );
         assert_eq!(state.appearance.render.frame.split, before_frame.split);
     }
@@ -986,6 +987,10 @@ mod tests {
                     state.appearance.render.frame.split,
                     Pane::Spectral,
                 );
+                let navigable = {
+                    let c = &state.appearance.spectrum;
+                    (c.low_midi, c.high_midi, c.roll_seconds, c.ceiling_db)
+                };
                 let start = spectral.center();
                 let end = match target {
                     LatticeSide::Left => spectral.left_center() + egui::vec2(2.0, 0.0),
@@ -997,7 +1002,7 @@ mod tests {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed,
-                    modifiers: egui::Modifiers::NONE,
+                    modifiers: egui::Modifiers::SHIFT,
                 };
                 for events in [
                     vec![egui::Event::PointerMoved(start)],
@@ -1005,7 +1010,7 @@ mod tests {
                     vec![egui::Event::PointerMoved(end)],
                     vec![button(end, false)],
                 ] {
-                    spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
+                    spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events);
                 }
                 let expected = match target {
                     LatticeSide::Left => SpectralOrientation::Left,
@@ -1021,6 +1026,12 @@ mod tests {
                     state.appearance.render.frame.lattice, lattice_side,
                     "turning the analyzer moved the lattice"
                 );
+                let c = &state.appearance.spectrum;
+                assert_eq!(
+                    (c.low_midi, c.high_midi, c.roll_seconds, c.ceiling_db),
+                    navigable,
+                    "a Shift-drag that turned the analyzer also navigated it"
+                );
 
                 let before = state.appearance.spectrum.orientation;
                 let outside = rect.max + egui::vec2(20.0, 20.0);
@@ -1030,7 +1041,7 @@ mod tests {
                     vec![egui::Event::PointerMoved(outside)],
                     vec![button(outside, false)],
                 ] {
-                    spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
+                    spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events);
                 }
                 assert_eq!(
                     state.appearance.spectrum.orientation, before,
@@ -1059,18 +1070,18 @@ mod tests {
             pos: near_right,
             button: egui::PointerButton::Primary,
             pressed,
-            modifiers: egui::Modifiers::NONE,
+            modifiers: egui::Modifiers::SHIFT,
         };
         for events in
             [vec![egui::Event::PointerMoved(near_right)], vec![button(true)], vec![button(false)]]
         {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events);
         }
         assert_eq!(state.appearance.spectrum.orientation, SpectralOrientation::Left);
     }
 
     #[test]
-    fn shift_drag_reaches_analyzer_zoom_beneath_the_orientation_overlay() {
+    fn plain_drag_reaches_analyzer_zoom_beneath_the_orientation_overlay() {
         let ctx = crate::tests::probe::themed();
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         state.appearance.render.frame.lattice = LatticeSide::Left;
@@ -1096,7 +1107,7 @@ mod tests {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
-            modifiers: egui::Modifiers::SHIFT,
+            modifiers: egui::Modifiers::NONE,
         };
         for events in [
             vec![egui::Event::PointerMoved(start)],
@@ -1104,11 +1115,11 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
             vec![button(end, false)],
         ] {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events);
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
         }
         assert!(
             state.appearance.spectrum.roll_seconds < before.roll_seconds * 0.75,
-            "Shift-drag never reached the preview's Span zoom",
+            "Plain drag never reached the preview's Span zoom",
         );
         assert_eq!(
             state.appearance.spectrum.orientation, before.orientation,
@@ -1142,7 +1153,7 @@ mod tests {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
-            modifiers: egui::Modifiers::NONE,
+            modifiers: egui::Modifiers::SHIFT,
         };
         for events in [
             vec![egui::Event::PointerMoved(start)],
@@ -1150,7 +1161,7 @@ mod tests {
             vec![egui::Event::PointerMoved(end)],
             vec![button(end, false)],
         ] {
-            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::NONE, events);
+            spectral_preview_frame(&ctx, &mut state, rect, egui::Modifiers::SHIFT, events);
         }
         assert!(
             state.appearance.spectrum.roll_fraction < before.roll_fraction - 0.05,
