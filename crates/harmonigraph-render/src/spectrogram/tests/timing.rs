@@ -290,6 +290,7 @@ fn cloud_costs_by_style_and_dial() {
                     points_per_slab: points.x * *fill / slabs as f32,
                     now: 1.0 + frame as f64 / 144.0,
                     history_epoch: 0,
+                    light_hold: None,
                 }
             });
             let cb = &*cb;

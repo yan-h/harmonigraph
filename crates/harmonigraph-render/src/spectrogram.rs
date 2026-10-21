@@ -687,8 +687,12 @@ impl CallbackTrait for SpectrogramCallback {
             }
         }
 
-        if self.vertices.len() > pane.vertex_capacity {
-            pane.vertex_capacity = self.vertices.len().next_power_of_two();
+        // The light-only quad rides after the painted mesh: the source pass
+        // draws both, `paint` only the first `count`.
+        let light_hold = self.atmosphere.and_then(|a| a.light_hold);
+        let source_count = self.vertices.len() + light_hold.map_or(0, |quad| quad.len());
+        if source_count > pane.vertex_capacity {
+            pane.vertex_capacity = source_count.next_power_of_two();
             pane.vertex_buffer = create_vertex_buffer::<SpectrogramVertex>(
                 device,
                 "spectrogram_vertices",
@@ -697,6 +701,10 @@ impl CallbackTrait for SpectrogramCallback {
         }
         pane.count = self.vertices.len() as u32;
         queue.write_buffer(&pane.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+        if let Some(quad) = &light_hold {
+            let offset = std::mem::size_of_val(self.vertices.as_slice()) as wgpu::BufferAddress;
+            queue.write_buffer(&pane.vertex_buffer, offset, bytemuck::cast_slice(quad));
+        }
 
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let uniforms = SpectrogramUniforms {
@@ -806,7 +814,7 @@ impl CallbackTrait for SpectrogramCallback {
                     atmosphere::Draw {
                         style: settings.settings.cloud_style,
                         mesh: pane.vertex_buffer.slice(..),
-                        count: pane.count,
+                        count: source_count as u32,
                         pixels,
                         star_coverage,
                     },

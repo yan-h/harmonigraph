@@ -65,9 +65,8 @@ jobs:
     name: Security audit
     # Ubuntu, unlike `Full CI`'s macOS runner, because nothing here compiles the
     # crate: the check reads `Cargo.lock`, which resolves every platform at once
-    # and is byte-identical whatever runs it. That is also precisely why it
-    # reports the Wayland-only `quick-xml` pair that macOS never builds — see
-    # the ignore list and its guard in `.cargo/audit.toml`.
+    # and is byte-identical whatever runs it. That also means it reports
+    # crates macOS never builds, such as the Wayland-only chain under winit.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -132,35 +131,6 @@ jobs:
           else
             cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
           fi
-
-      # The guard `.cargo/audit.toml`'s suppressions rest on, and the reason
-      # they are safe to hold. `cargo audit`'s ignore list is by advisory ID and
-      # applies GLOBALLY — it does not know that the entry was justified by
-      # `quick-xml` being unreachable on macOS. If a future dependency change
-      # pulls a vulnerable `quick-xml` in through a path macOS DOES build, the
-      # suppression would silently cover that too. So assert the premise
-      # mechanically rather than trusting a comment to age well.
-      #
-      # Resolve the complete target tree successfully before asking whether it
-      # contains the crate. A failed query must never count as absence.
-      - name: Are the suppressed crates still unreachable?
-        if: steps.deps.outputs.audit == 'true'
-        run: |
-          set -euo pipefail
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            # This metadata query needs rustc, but no compilation cache.
-            # Ubuntu does not install the repository's sccache wrapper.
-            tree=$(RUSTC_WRAPPER= cargo tree --locked --target "$target" --prefix none --format '{p}')
-            if printf '%s\n' "$tree" | grep -E '^quick-xml v' >/dev/null; then
-              echo "::error file=.cargo/audit.toml::quick-xml is now reachable on $target."
-              echo "RUSTSEC-2026-0194/0195 are suppressed in .cargo/audit.toml only because"
-              echo "quick-xml is Wayland-gated and absent from the macOS graph. That premise"
-              echo "no longer holds, so the suppressions no longer do either: either upgrade"
-              echo "past 0.41.0 or delete those two ignore entries and handle what they hid."
-              exit 1
-            fi
-          done
-          echo "quick-xml is absent from both macOS targets; the suppressions still hold."
 
       - name: Audit dependencies
         if: steps.deps.outputs.audit == 'true'

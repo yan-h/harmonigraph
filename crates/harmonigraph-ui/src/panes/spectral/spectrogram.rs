@@ -163,6 +163,26 @@ pub(super) fn heatmap_vertices(
     vertices
 }
 
+/// The analyzer's depths, `0..split`, as one quad holding the newest slab, for
+/// the light field alone (`SpectrogramAtmosphere::light_hold`). Everything
+/// past the now-line is past the newest slab, so the whole quad is the
+/// constant `slab_drawn` holds there.
+pub(super) fn light_hold_vertices(
+    axes: &Axes,
+    time: &TimeAxis,
+    layout: &TexLayout,
+    split: f32,
+) -> [SpectrogramVertex; 6] {
+    let slab = slab_drawn(layout, time.time_at(split));
+    let vert = |p: f32, d: f32| {
+        let pos = axes.at(p, d);
+        SpectrogramVertex { pos: [pos.x, pos.y], slab, t: p }
+    };
+    let (low_far, high_far) = (vert(0.0, split), vert(1.0, split));
+    let (high_near, low_near) = (vert(1.0, 0.0), vert(0.0, 0.0));
+    [low_far, high_far, high_near, low_far, high_near, low_near]
+}
+
 /// The drawn strip reaches the now-line while columns are fresh, holding the
 /// newest slab's color across the analysis delay. Allow another 120 ms for
 /// delivery jitter so the edge does not flicker between analysis hops.
@@ -250,6 +270,10 @@ pub(crate) fn draw_spectrogram(
     let points_per_ms = time.region_depth_len(axes) / (time.window() as f32 * 1000.0);
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
+    // Only while the strip reaches the now-line: a stale strip stops at its
+    // newest column, and the gap it leaves is history with no data.
+    let light_hold =
+        (split > 0.0 && d_near <= split).then(|| light_hold_vertices(axes, &time, &layout, split));
     let Some((grid, shades)) = frame_data(surfaces, surface, &cfg) else {
         return;
     };
@@ -279,6 +303,7 @@ pub(crate) fn draw_spectrogram(
             points_per_slab: (layout.bucket * 1000.0) as f32 * points_per_ms,
             now,
             history_epoch: spectrum.history_epoch(),
+            light_hold,
         }),
     ));
 }
