@@ -154,7 +154,12 @@ impl Plot {
     pub fn dot(&self, ui: &Ui, x: f32, y: f32) {
         let scale = theme::ui_scale(ui.ctx());
         let painter =
-            ui.painter().with_clip_rect(self.rect.expand(5.0 * scale).intersect(ui.clip_rect()));
+            // The dot's radius, half its ring, and a pixel of feather.
+            ui.painter().with_clip_rect(
+                self.rect
+                    .expand((4.0 + 0.5 * theme::LINE_WIDTH) * scale + 1.0)
+                    .intersect(ui.clip_rect()),
+            );
         painter.circle_filled(self.point(x, y), 4.0 * scale, theme::accent());
         painter.circle_stroke(
             self.point(x, y),

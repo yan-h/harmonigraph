@@ -64,7 +64,7 @@ pub(crate) fn paint_preview_drop_target(painter: &egui::Painter, rect: egui::Rec
         rect.shrink(2.0),
         0.0,
         crate::theme::accent().gamma_multiply(0.18),
-        egui::Stroke::new(2.0, crate::theme::accent_edge()),
+        egui::Stroke::new(crate::theme::LINE_WIDTH, crate::theme::accent_edge()),
         egui::StrokeKind::Inside,
     );
 }
@@ -479,7 +479,10 @@ pub(super) fn edge_bar(
 /// before it and nowhere over it, and a folded section reads as sitting high.
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
-        ui.add(egui::Separator::default().spacing(2.0 * crate::theme::ui_scale(ui.ctx())));
+        // Never less room than its own line takes, or below scale 1 the rule
+        // would spill onto the rows either side of it.
+        let spacing = (2.0 * crate::theme::ui_scale(ui.ctx())).max(crate::theme::LINE_WIDTH);
+        ui.add(egui::Separator::default().spacing(spacing));
     }
 }
 
