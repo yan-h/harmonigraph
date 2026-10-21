@@ -197,8 +197,9 @@ fn preview_layout_controls(
     if resizing.drag_stopped() {
         ui.data_mut(|d| d.remove::<f32>(grab_id));
     }
-    // Match the Analyzer's divider: only the existing seam at rest, a full
-    // two-point accent line on hover, and the stronger accent while dragging.
+    // Match the Analyzer's divider: only the existing seam at rest, the accent
+    // on hover and the stronger accent while dragging, at the seam's own
+    // hairline width so a hover recolours it rather than swelling it.
     let lit = if resizing.dragged() {
         Some(theme::accent())
     } else if resizing.hovered() {
@@ -212,7 +213,7 @@ fn preview_layout_controls(
         } else {
             [egui::pos2(rect.left(), seam.y), egui::pos2(rect.right(), seam.y)]
         };
-        ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
+        ui.painter().line_segment(ends, egui::Stroke::new(1.0, color));
     }
     // Freeze the choice made at press time. Letting Shift change during a drag
     // switch modes would first pan the camera and then redock the picture on
@@ -1192,6 +1193,49 @@ mod tests {
             assert_eq!(frame.lattice, side);
             assert_eq!(frame.split, 0.95);
         }
+    }
+
+    /// The lattice seam lights as the Analyzer's divider does (#1490): a
+    /// hover recolours it at its resting hairline width rather than swelling
+    /// it.
+    #[test]
+    fn the_preview_seam_lights_at_its_hairline_width() {
+        let ctx = crate::tests::probe::themed();
+        let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(400.0, 300.0));
+        let mut frame =
+            crate::RenderFrame { lattice: LatticeSide::Left, split: 0.5, ..Default::default() };
+        let seam = egui::pos2(rect.left() + rect.width() * frame.split, rect.center().y);
+        let mut lit = Vec::new();
+        for _ in 0..2 {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 1000.0),
+                    )),
+                    events: vec![egui::Event::PointerMoved(seam)],
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut camera = harmonigraph_scene::Camera::default();
+                    let mut view = harmonigraph_scene::ViewConfig::default();
+                    preview_layout_controls(ui, rect, &mut frame, &mut camera, &mut view);
+                },
+            );
+            lit = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::LineSegment { stroke, .. }
+                        if stroke.color == theme::accent_edge() =>
+                    {
+                        Some(stroke.width)
+                    }
+                    _ => None,
+                })
+                .collect();
+        }
+        assert_eq!(lit, [1.0], "the hovered seam's lit strokes");
     }
 
     #[test]
