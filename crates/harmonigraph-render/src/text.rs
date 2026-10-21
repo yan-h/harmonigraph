@@ -582,8 +582,12 @@ struct TextPane {
     uniform_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     instance_buffer: wgpu::Buffer,
-    /// The names' shadow atlas, made only for a pane whose style casts, so
-    /// unshadowed chrome holds none.
+    /// Each glyph's own name's `ShadowBox`, beside `instance_buffer` at the
+    /// same capacity: what the cell fill and the shadow composite read the
+    /// name's cell from, as the lattice's `cell_buffer` is. Made, with the
+    /// names' atlas beside it, only for a pane whose style casts, so
+    /// unshadowed chrome holds neither.
+    cells: Option<wgpu::Buffer>,
     shadow: Option<crate::spectral_shadow::PaneShadow>,
     capacity: usize,
     count: u32,
@@ -1190,6 +1194,7 @@ impl CallbackTrait for TextCallback {
                     "text_glyphs",
                     INITIAL_GLYPH_CAPACITY,
                 ),
+                cells: None,
                 shadow: None,
                 capacity: INITIAL_GLYPH_CAPACITY,
                 count: 0,
@@ -1204,6 +1209,7 @@ impl CallbackTrait for TextCallback {
             pane.capacity = self.glyphs.len().next_power_of_two();
             pane.instance_buffer =
                 create_vertex_buffer::<GlyphInstance>(device, "text_glyphs", pane.capacity);
+            pane.cells = None;
         }
         pane.count = self.glyphs.len() as u32;
         if !self.glyphs.is_empty() {
@@ -1215,6 +1221,7 @@ impl CallbackTrait for TextCallback {
         // frame for nobody.
         let casting = style.filter(|style| style.casts());
         if casting.is_none() {
+            pane.cells = None;
             pane.shadow = None;
         }
         if let Some(style) = casting {
@@ -1229,9 +1236,17 @@ impl CallbackTrait for TextCallback {
                 })
                 .unzip();
             let shared = &resources.shadow;
-            let shadow = pane.shadow.get_or_insert_with(|| {
-                crate::spectral_shadow::PaneShadow::new(device, shared, pane.capacity)
+            let capacity = pane.capacity;
+            let cells = pane.cells.get_or_insert_with(|| {
+                create_vertex_buffer::<crate::shadow::ShadowBox>(
+                    device,
+                    "text_shadow_cells",
+                    capacity,
+                )
             });
+            let shadow = pane
+                .shadow
+                .get_or_insert_with(|| crate::spectral_shadow::PaneShadow::new(device, shared));
             uniforms.shadow_atlas_size = shadow.prepare(
                 device,
                 queue,
@@ -1240,11 +1255,11 @@ impl CallbackTrait for TextCallback {
                 ppp,
                 &casters,
                 &names,
-                pane.capacity,
                 crate::spectral_shadow::Ink {
                     pipeline: &resources.glyph_cell_pipeline,
                     locals: pane.bind_group.as_ref().expect("bound above"),
                     glyphs: &pane.instance_buffer,
+                    cells,
                 },
             );
         }
@@ -1287,8 +1302,9 @@ impl CallbackTrait for TextCallback {
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
         // A layer keeps letters and marks together. Later layers cast onto
         // earlier ink without any glyph shadowing its own name.
-        let shadow = pane.shadow.as_ref().and_then(|shadow| shadow.binding());
-        if let Some((_, _, cells)) = shadow {
+        let shadow =
+            pane.shadow.as_ref().and_then(|shadow| shadow.binding()).zip(pane.cells.as_ref());
+        if let Some((_, cells)) = shadow {
             render_pass.set_vertex_buffer(1, cells.slice(..));
         }
         let layer_ends = if shadow.is_some() { self.runs.layers.as_slice() } else { &[] };
@@ -1298,7 +1314,7 @@ impl CallbackTrait for TextCallback {
             if end <= start {
                 continue;
             }
-            if let Some((atlas, casters, _)) = shadow {
+            if let Some(((atlas, casters), _)) = shadow {
                 render_pass.set_pipeline(&resources.shadow_pipeline);
                 render_pass.set_bind_group(2, atlas, &[]);
                 render_pass.set_bind_group(3, casters, &[]);
@@ -1351,14 +1367,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn either_spectral_text_endpoint_allocates_no_shadow_atlas() {
+    /// A pane at either endpoint of the bar holds no shadow atlas, including
+    /// one that was casting the frame before: what it held is dropped, since
+    /// `paint` composites whatever atlas the pane still has.
+    fn either_spectral_text_endpoint_holds_no_shadow_atlas() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for style in [
-            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
-            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
-        ] {
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let prepare = |style, pass_nr, resources: &mut CallbackResources| {
             let cb = TextCallback {
                 point_scale: 1.0,
                 runs: GlyphRuns::default(),
@@ -1368,17 +1385,24 @@ pub(crate) mod tests {
                 slide: SlideAxis::default(),
                 target_format: FORMAT,
                 pane_id: 0,
-                pass_nr: 0,
+                pass_nr,
             };
-            let mut resources = CallbackResources::default();
-            let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
             let mut encoder = device.create_command_encoder(&Default::default());
-            cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            queue.submit([encoder.finish()]);
             let pane = resources.get::<TextResources>().and_then(|r| r.panes.get(0));
-            assert!(
-                !pane.and_then(|p| p.shadow.as_ref()).is_some_and(|s| s.target_allocated()),
-                "{style:?} allocated a shadow atlas"
-            );
+            pane.and_then(|p| p.shadow.as_ref()).is_some_and(|s| s.target_allocated())
+        };
+        let casting =
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
+        for style in [
+            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
+        ] {
+            let mut resources = CallbackResources::default();
+            assert!(!prepare(style, 0, &mut resources), "{style:?} allocated a shadow atlas");
+            assert!(prepare(casting, 1, &mut resources), "the casting fixture packed no cell");
+            assert!(!prepare(style, 2, &mut resources), "{style:?} kept last frame's atlas");
         }
     }
 

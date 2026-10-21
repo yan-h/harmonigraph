@@ -38,12 +38,14 @@ impl Shared {
 }
 
 /// The draw that fills the pane's cells with its glyphs: the cell pipeline,
-/// the pane's own bind group (whose uniforms carry the atlas size this
-/// returns), and its glyph buffer.
+/// the pane's own bind group (whose uniforms carry the atlas size
+/// [`PaneShadow::prepare`] returns), its glyph buffer, and beside it each
+/// glyph's own name's `ShadowBox`, which this writes.
 pub(crate) struct Ink<'a> {
     pub pipeline: &'a wgpu::RenderPipeline,
     pub locals: &'a wgpu::BindGroup,
     pub glyphs: &'a wgpu::Buffer,
+    pub cells: &'a wgpu::Buffer,
 }
 
 /// The cells packed last frame, for the tests that size them.
@@ -57,11 +59,6 @@ pub(crate) struct CellStats {
 
 /// One casting pane's shadow atlas and the buffers that describe it.
 pub(crate) struct PaneShadow {
-    /// Each glyph's own name's `ShadowBox`, beside the pane's glyph buffer at
-    /// the same capacity: what the cell fill and the shadow composite read the
-    /// name's cell from, as the lattice's `cell_buffer` is.
-    cells: wgpu::Buffer,
-    cell_capacity: usize,
     boxes: wgpu::Buffer,
     box_capacity: usize,
     casters: wgpu::Buffer,
@@ -74,12 +71,10 @@ pub(crate) struct PaneShadow {
 }
 
 impl PaneShadow {
-    pub(crate) fn new(device: &wgpu::Device, shared: &Shared, glyph_capacity: usize) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, shared: &Shared) -> Self {
         let (casters, caster_bind) =
             shadow::caster_buffer(device, &shared.casters, INITIAL_CAPACITY);
         PaneShadow {
-            cells: cell_buffer(device, glyph_capacity),
-            cell_capacity: glyph_capacity,
             boxes: create_vertex_buffer::<shadow::ShadowBox>(
                 device,
                 "spectral_shadow_boxes",
@@ -109,13 +104,8 @@ impl PaneShadow {
         pixels_per_point: f32,
         casters: &[shadow::Caster],
         names: &[u32],
-        glyph_capacity: usize,
         ink: Ink,
     ) -> [f32; 2] {
-        if glyph_capacity > self.cell_capacity {
-            self.cells = cell_buffer(device, glyph_capacity);
-            self.cell_capacity = glyph_capacity;
-        }
         let packed = shadow::pack(
             casters,
             pixels_per_point.max(f32::EPSILON),
@@ -148,7 +138,7 @@ impl PaneShadow {
             (0..n).map(move |i| if i == 0 { lead } else { *b })
         });
         let glyphs = names.iter().map(|&n| n as usize).sum();
-        crate::write_rows::<_, { crate::BOX_BYTES }>(queue, &self.cells, glyphs, rows);
+        crate::write_rows::<_, { crate::BOX_BYTES }>(queue, ink.cells, glyphs, rows);
 
         let packed_cells = packed.boxes.iter().filter(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         #[cfg(test)]
@@ -176,7 +166,7 @@ impl PaneShadow {
             pass.set_pipeline(ink.pipeline);
             pass.set_bind_group(0, ink.locals, &[]);
             pass.set_vertex_buffer(0, ink.glyphs.slice(..));
-            pass.set_vertex_buffer(1, self.cells.slice(..));
+            pass.set_vertex_buffer(1, ink.cells.slice(..));
             pass.draw(0..4, 0..glyphs as u32);
         }
         target.blur(
@@ -188,20 +178,15 @@ impl PaneShadow {
         target.size.map(|v| v as f32)
     }
 
-    /// What the shadow composite binds: the finished atlas at group 2, the
-    /// casters at group 3, and the per-glyph cells at vertex slot 1. None
-    /// when nothing cast this frame.
-    pub(crate) fn binding(&self) -> Option<(&wgpu::BindGroup, &wgpu::BindGroup, &wgpu::Buffer)> {
+    /// What the shadow composite binds: the finished atlas at group 2 and
+    /// the casters at group 3. None when nothing cast this frame.
+    pub(crate) fn binding(&self) -> Option<(&wgpu::BindGroup, &wgpu::BindGroup)> {
         let target = self.target.as_ref()?;
-        Some((target.read(), &self.caster_bind, &self.cells))
+        Some((target.read(), &self.caster_bind))
     }
 
     #[cfg(test)]
     pub(crate) fn target_allocated(&self) -> bool {
         self.target.is_some()
     }
-}
-
-fn cell_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
-    create_vertex_buffer::<shadow::ShadowBox>(device, "text_shadow_cells", capacity)
 }
