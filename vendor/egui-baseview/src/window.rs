@@ -752,6 +752,41 @@ fn after_render(presented: bool, refused: u32, now: Instant) -> (u32, Option<Ins
     (refused, retry)
 }
 
+/// The wheel delta as egui should read it.
+///
+/// macOS reports x with the opposite sign to egui's (a bug that winit has
+/// only half fixed, and baseview may share), so x is flipped there. Shift is
+/// the exception: macOS has already turned a vertical wheel into a
+/// horizontal one by the time it reaches us, with the vertical wheel's own
+/// sign, and egui folds a Shift wheel back to `x + y`. Flipping x on top of
+/// that reverses every Shift-wheel, which on the lattice reversed the zoom.
+fn wheel_delta(delta: egui::Vec2, shift: bool, macos: bool) -> egui::Vec2 {
+    if macos && !shift {
+        egui::vec2(-delta.x, delta.y)
+    } else {
+        delta
+    }
+}
+
+#[cfg(test)]
+mod wheel_delta_tests {
+    use super::*;
+
+    #[test]
+    fn shift_wheel_keeps_its_sign_on_macos() {
+        // macOS delivers a Shift + wheel-up as a positive x; egui sums x and y.
+        let d = wheel_delta(egui::vec2(1.0, 0.0), true, true);
+        assert_eq!(d.x + d.y, 1.0);
+    }
+
+    #[test]
+    fn horizontal_scroll_is_flipped_on_macos_only() {
+        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), false, true), egui::vec2(-1.0, 2.0));
+        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), false, false), egui::vec2(1.0, 2.0));
+        assert_eq!(wheel_delta(egui::vec2(1.0, 2.0), true, false), egui::vec2(1.0, 2.0));
+    }
+}
+
 #[cfg(test)]
 mod wants_render_tests {
     use super::*;
@@ -1153,8 +1188,7 @@ where
                 } => {
                     self.update_modifiers(modifiers);
 
-                    #[allow(unused_mut)]
-                    let (unit, mut delta) = match scroll_delta {
+                    let (unit, delta) = match scroll_delta {
                         baseview::ScrollDelta::Lines { x, y } => {
                             (egui::MouseWheelUnit::Line, egui::vec2(*x, *y))
                         }
@@ -1164,14 +1198,8 @@ where
                             egui::vec2(*x, *y) * self.points_per_pixel,
                         ),
                     };
-
-                    if cfg!(target_os = "macos") {
-                        // This is still buggy in winit despite
-                        // https://github.com/rust-windowing/winit/issues/1695 being closed
-                        //
-                        // TODO: See if this is an issue in baseview as well.
-                        delta.x *= -1.0;
-                    }
+                    let shift = self.egui_input.modifiers.shift;
+                    let delta = wheel_delta(delta, shift, cfg!(target_os = "macos"));
 
                     self.egui_input.events.push(egui::Event::MouseWheel {
                         unit,
