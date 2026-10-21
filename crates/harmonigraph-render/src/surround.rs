@@ -2,14 +2,16 @@
 //! that draw one — the roll's ribbons and the Spiral's dots — so both panes'
 //! notes wear one surround on one set of dials.
 //!
-//! A producer draws its notes once in `prepare`, into one target over its own
-//! rect ([`SurroundTargets`](crate::surround::SurroundTargets)): under a depth
-//! test the strongest note's cut lands there with its fill color. `paint` then
-//! lays it over the picture in one draw
-//! ([`SurroundComposite`](crate::surround::SurroundComposite)). What a note's
-//! cut IS at a fragment — its distance, what holds it out — is the producer's
-//! own shader; the fade's shape and how the cut lands are
-//! `shaders/surround.wgsl`, which every producer joins.
+//! The roll draws its notes once in `prepare`, into one target over its rect
+//! ([`SurroundTargets`](crate::surround::SurroundTargets)): under a depth test
+//! the strongest note's cut lands there with its fill color. `paint` then lays
+//! it over the picture in one draw
+//! ([`SurroundComposite`](crate::surround::SurroundComposite)). The Spiral's
+//! dozen dots pick their strongest in the shader and land straight on the
+//! picture instead (`crate::dot_surround`). What a note's cut IS at a fragment
+//! — its distance, what holds it out — is the producer's own shader; the
+//! fade's shape and how the cut lands are `shaders/surround.wgsl`, which every
+//! producer joins.
 
 use crate::uniforms::{uniform_group, Float4};
 use crate::{wgpu, EGUI_BLEND};
@@ -277,16 +279,12 @@ pub(crate) fn surround_pipeline(
     })
 }
 
-/// A producer's surround over its rect, one texel per device pixel: the
-/// strongest note's color and cut, and the depth that picks it. Held while the
-/// cut draws, and dropped with it; [`ensure`](Self::ensure) rebuilds it when
-/// the rect resizes.
+/// The roll's surround over its rect, one texel per device pixel: the
+/// strongest note's color and cut, and the depth that picks it.
 pub(crate) struct SurroundTargets {
     view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     read_bind_group: wgpu::BindGroup,
-    /// The rect's size in device pixels these were built for.
-    size: [u32; 2],
 }
 
 impl SurroundTargets {
@@ -333,22 +331,7 @@ impl SurroundTargets {
             }),
             view,
             depth_view,
-            size,
         }
-    }
-
-    /// `slot`'s targets, built for a rect `size` device pixels across: kept
-    /// while they are that size, and rebuilt when it is not.
-    pub(crate) fn ensure<'a>(
-        slot: &'a mut Option<Self>,
-        device: &wgpu::Device,
-        composite: &SurroundComposite,
-        size: [u32; 2],
-    ) -> &'a Self {
-        if slot.as_ref().is_some_and(|targets| targets.size != size) {
-            *slot = None;
-        }
-        slot.get_or_insert_with(|| Self::new(device, composite, size))
     }
 
     /// The notes' surround into these targets. `draw` binds the producer's own

@@ -14,13 +14,11 @@ struct Over {
     float cut;
 };
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
+metal::float4 surround_lands_gamma(
+    metal::float3 color,
+    float cut
 ) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
+    return metal::float4(color * cut, cut);
 }
 
 metal::int2 naga_f2i32(metal::float2 value) {
@@ -38,19 +36,19 @@ Over surround_over(
     return Over {strongest.xyz, strongest.w};
 }
 
-struct fs_surround_linearInput {
+struct fs_surround_gammaInput {
     metal::float2 uv [[user(loc0), center_perspective]];
 };
-struct fs_surround_linearOutput {
+struct fs_surround_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_surround_linearOutput fs_surround_linear(
-  fs_surround_linearInput varyings [[stage_in]]
+fragment fs_surround_gammaOutput fs_surround_gamma(
+  fs_surround_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> surround_texels [[texture(0)]]
 ) {
     const CoverOut in = { position, varyings.uv };
     Over _e1 = surround_over(in, surround_texels);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.color);
-    return fs_surround_linearOutput { metal::float4(_e3 * _e1.cut, _e1.cut) };
+    metal::float4 _e4 = surround_lands_gamma(_e1.color, _e1.cut);
+    return fs_surround_gammaOutput { _e4 };
 }
