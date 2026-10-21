@@ -2227,15 +2227,15 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
             .filter(|(_, s)| matches!(&s.shape, egui::Shape::Callback(_)))
             .map(|(i, _)| i)
             .collect();
-        // The now-line is the one segment in the outline's silent color clean
-        // across the pitch axis.
-        let line = super::atmosphere::keyline_at_silence(&state.appearance.spectrum);
-        let hairline = out.shapes.iter().position(|s| {
+        // The now-line is the one segment in the handover's color clean across
+        // the pitch axis.
+        let line = super::atmosphere::handover_color(&state.appearance.spectrum);
+        let now_line = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
                 if stroke.color == line)
         });
-        let hairline = hairline.expect("expected a now-line in the frame");
-        (callbacks.len(), callbacks.iter().filter(|&&c| c < hairline).count())
+        let now_line = now_line.expect("expected a now-line in the frame");
+        (callbacks.len(), callbacks.iter().filter(|&&c| c < now_line).count())
     };
 
     let (quiet_total, quiet_early) = frame(false);
@@ -3232,4 +3232,24 @@ fn the_spectrogram_bed_is_the_gradients_floor() {
         .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == floor))
         .count();
     assert_eq!(beds, 1, "no bed in the gradient's floor");
+}
+
+/// The handover wears the spectrum outline's color at silence, so a silent
+/// stretch of the curve runs into it as one line — but stays visible at an
+/// Intensity that leaves that outline black on the black ground.
+#[test]
+fn the_handover_wears_the_silent_outline_and_never_vanishes() {
+    let mut cfg = SpectrumConfig::default();
+    let silent = |cfg: &SpectrumConfig| {
+        let floor = super::spectrogram::cell_color(cfg.spectrogram_gradient, 0.0);
+        atmosphere::keyline_color(floor, atmosphere::keyline_floor(cfg.keyline_lift))
+    };
+    assert_eq!(atmosphere::handover_color(&cfg), silent(&cfg));
+    cfg.keyline_lift = 0.0;
+    assert_eq!(silent(&cfg), egui::Color32::BLACK, "fixture needs a black silent outline");
+    let line = atmosphere::handover_color(&cfg);
+    assert!(
+        line.r().max(line.g()).max(line.b()) >= 32,
+        "the handover vanished into the black ground: {line:?}"
+    );
 }
