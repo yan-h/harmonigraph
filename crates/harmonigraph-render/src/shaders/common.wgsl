@@ -1,4 +1,4 @@
-// What the lattice, text, roll and spiral-dot shadow modules spell, spelled once.
+// What the lattice, text and roll modules spell, spelled once.
 //
 // Not a module of its own. WGSL has no include and naga takes a string, so this
 // text is prepended to another module's own source at pipeline creation

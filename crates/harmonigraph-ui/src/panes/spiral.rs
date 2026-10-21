@@ -44,7 +44,7 @@
 use egui::Color32;
 
 use super::spectral::axes::{power_db, spectrogram_level_db};
-use super::spectral::roll::note_color;
+use super::spectral::roll::{note_color, note_fill};
 use super::spectral::spectrogram::{cell_color, footprint_mean_db};
 use crate::PictureState;
 
@@ -519,7 +519,7 @@ impl Spiral {
 ///
 /// The docked tab is the only copy of this pane: the Spiral is an editor tab,
 /// never exported or previewed for video (#974). So what it holds between
-/// frames is one of each: the halo's bloom chain and the dots' shadow buffers
+/// frames is one of each: the halo's bloom chain and the dots' surround buffers
 /// are single instances in their renderers, and the rim names' instance buffer
 /// and their shadow target take the docked surface's ids. Were a second copy
 /// ever drawn, each of those would need a key per copy again, and inside a
@@ -550,21 +550,14 @@ pub(crate) fn spiral_pane(
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
     let marks = dots(&spiral, state, &lit);
-    let dot_shadow = state
-        .appearance
-        .view
-        .shadow
-        .spectral_geometry
-        .clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-    // Unconditionally, as the halo below is: the callback declines a frame
-    // with nothing to shadow itself, without building its pipelines.
-    painter.add(harmonigraph_render::dot_shadow_paint_callback(
+    // The roll's own backdrop cut, round every dot, before the discs land on
+    // it. Unconditionally, as the halo below is: the callback declines a frame
+    // with nothing to cut itself, without building its pipelines.
+    painter.add(harmonigraph_render::dot_surround_paint_callback(
         rect,
-        marks.clone(),
-        dot_shadow,
+        surround(&spiral, state, &lit),
+        state.appearance.spectrum.note_cut(),
         state.surfaces.target_format,
-        crate::text::SPIRAL_SHADOW_SURFACE,
-        painter.ctx().cumulative_pass_nr(),
     ));
     for mark in &marks {
         painter.circle_filled(
@@ -895,6 +888,29 @@ fn dots(
                 center: [at.x, at.y],
                 radius: fill,
                 color: color.to_array(),
+            }
+        })
+        .collect()
+}
+
+/// The backdrop cut each sounding note's dot wears: the roll's ribbons' own,
+/// filled with the note's hue at the cut's fill lightness, and as strong as
+/// the dot is opaque, so a fading dot's surround fades with it.
+fn surround(
+    spiral: &Spiral,
+    state: &PictureState,
+    sounding: &[Sounding],
+) -> Vec<harmonigraph_render::SurroundDot> {
+    let radius = spiral.dot();
+    sounding
+        .iter()
+        .filter(|voice| voice.opacity > 0.0)
+        .map(|voice| {
+            let at = spiral.at(voice.pitch, 0.0);
+            harmonigraph_render::SurroundDot {
+                center: [at.x, at.y],
+                radius,
+                aura: note_fill(state, voice.pitch, voice.strength * voice.opacity),
             }
         })
         .collect()
@@ -1468,6 +1484,31 @@ mod tests {
         assert!(marks.iter().all(|mark| mark.color[3] > 0));
     }
 
+    /// Each dot's surround stands on the disc that was painted, cuts as
+    /// strongly as the dot is opaque, and fills with its note's own hue at the
+    /// fill's lightness rather than with the disc's color.
+    #[test]
+    fn each_dot_wears_the_notes_surround_round_its_own_disc() {
+        let mut state = fresh();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 55, 0.5));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 76, 1.0));
+        let intensity = &mut state.appearance.view.intensity;
+        intensity.opacity_rest = 0.0;
+        intensity.velocity.opacity = Some(1.0);
+        let spiral = Spiral::new(PANE, &state.appearance.spectrum);
+        let lit = sounding(&spiral, &state, 0.1);
+        let marks = dots(&spiral, &state, &lit);
+        let cuts = surround(&spiral, &state, &lit);
+        assert_eq!(cuts.len(), 2, "the fixture's two notes are two surrounds");
+        for ((cut, mark), voice) in cuts.iter().zip(&marks).zip(&lit) {
+            assert_eq!((cut.center, cut.radius), (mark.center, mark.radius));
+            assert_eq!(cut.aura[3], mark.color[3], "the cut is not as strong as its dot is opaque");
+            let fill = super::super::spectral::roll::note_fill(&state, voice.pitch, 1.0);
+            assert_eq!(cut.aura[..3], fill[..3], "the cut does not fill with its note's hue");
+        }
+        assert!(cuts[0].aura[3] < cuts[1].aura[3], "the fixture's two dots are equally opaque");
+    }
+
     /// Opacity mapping dims the dot and its effects, while the rim name stays
     /// legible on the note envelope, like the lattice's note names.
     #[test]
@@ -1536,16 +1577,17 @@ mod tests {
             "the bloom strength decided whether the callback went in",
         );
         // The emptiest frame the pane can draw — no strength, nothing
-        // sounding, so nothing to light, nothing to shadow and no names. What
-        // is left is three callbacks that all go in unconditionally and all
-        // decline inside their own `prepare`: the dot shadow's, the halo's,
-        // and the spectral shadow's finish. Each of the three keeps a clock
-        // running that retires state the pane is still using, so a gate on any
-        // one of them would read 2 here.
+        // sounding, so nothing to light, nothing to cut and no names. What is
+        // left is three callbacks that all go in unconditionally and all
+        // decline inside their own `prepare`: the dots' surround, the halo,
+        // and the spectral shadow's finish. The last two keep a clock running
+        // that retires state the pane is still using, and the surround drops
+        // its targets only on a frame that says the cut is off, so a gate on
+        // any one of them would read 2 here.
         assert_eq!(
             callbacks(0.0, false),
             3,
-            "a silent frame asks for something other than the shadow, the halo and the finish",
+            "a silent frame asks for something other than the surround, the halo and the finish",
         );
         assert_eq!(
             callbacks(1.2, false),

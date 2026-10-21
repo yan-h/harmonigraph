@@ -151,11 +151,6 @@
                 spread: 0.12944113,
                 depth: 0.26117995,
             ),
-            spectral_geometry: (
-                width: 1.8736789,
-                spread: 0.11916101,
-                depth: 0.82522184,
-            ),
             spectral_text: (
                 width: 0.64285713,
                 spread: 0.13580954,
@@ -235,6 +230,10 @@
         roll_lead: 0.32020926,
         roll_lead_fade: 0.30084437,
         roll_lead_release: 0.25,
+        note_cut: 1.0,
+        note_cut_reach: 15.0,
+        note_cut_shape: 0.0,
+        note_fill_lightness: 7.0,
         note_names: true,
         note_names_travel: false,
         note_name_scale: 1.4153271,

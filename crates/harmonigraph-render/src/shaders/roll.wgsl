@@ -1,84 +1,64 @@
 // The piano roll's notes: one instanced quad per note segment — a solid
-// rectangle with a flat color, wrapped on every side by an outline that
+// rectangle with a flat color, surrounded on every side by a BACKDROP CUT that
 // fades out, both falling out of a signed distance field. A segment may also
-// end in a fade at its LEADING tip (`lead_coverage`), which takes both layers
-// out together, and carry its own outline cap where the note inside it stops
+// end in a fade at its LEADING tip (`lead_coverage`), which takes both out
+// together, and carry its own surround cap where the note inside it stops
 // (`cap_coverage`).
 //
-// TWO LAYERS, drawn as two passes over the same instances rather than
-// composited per note: every note's outline, then every note's body
-// (`fs_core_*`), and a note's opacity (its `fade`) takes the two out together.
-// The same instances drawn twice, each layer through a quad as big as its own
-// ink: the outline's grown by the shadow's reach (`vs_note`), the body's by one
+// TWO LAYERS, drawn as passes over the same instances rather than composited
+// per note: every note's surround, then every note's body (`fs_core_*`), and a
+// note's opacity (its `fade`) takes the two out together. The same instances
+// drawn more than once, each layer through a quad as big as its own ink: the
+// surround's grown by the cut's reach (`vs_note_cut`), the body's by one
 // feather (`vs_note_body`).
 //
-// The bodies use ordinary over. The outlines do not: each note's glow goes into
-// a mask over the roll's rect (`fs_outline_mask`), where a depth test keeps
-// whichever note's glow is strongest — its strength AND its color — and the
-// mask is laid over the picture once. Where two notes' glows meet, the picture
-// there is as covered as the stronger of the two and no more, rather than one
-// glow tinting the other.
+// The bodies use ordinary over. The surrounds do not: each note's cut goes into
+// a target over the roll's rect (`fs_note_surround`), where a depth test keeps
+// whichever note's cut is strongest — its cut AND its fill color — and the
+// target is laid over the picture once (surround.wgsl and its composite).
+// Where two notes' cuts meet, the picture there is as cut as the stronger of
+// the two and no more, rather than one cut taken twice.
 //
-// The order is the whole point. The outline is at its darkest where it meets
-// its own note — as strong as the Shadow darkness makes it — so an outline
-// composited with its own note lands on the NEIGHBOURING notes it reaches
-// into, and along time those neighbours are the next note: repeats of one key
-// butt together there, and the later one blanked the tail of the earlier.
-// Under every body instead, an outline covers the backdrop before the note
-// paints its color.
+// The order is the whole point. The surround is at its strongest where it
+// meets its own note, so a surround composited with its own note lands on the
+// NEIGHBOURING notes it reaches into, and along time those neighbours are the
+// next note: repeats of one key butt together there, and the later one blanked
+// the tail of the earlier. Under every body instead, a surround takes the
+// backdrop before the note paints its color.
 //
-// A body drawn at less than full opacity would let that shadow through, so
-// every outline is also HELD OUT wherever any body covers (#1293): `prepare`
-// draws the union of the bodies' coverage into `body_holdout` first, and the
-// outline layer takes it off ([`body_held`]). One note's glow covers only
-// the picture behind the ribbons, never another ribbon, at any opacity. That
-// includes a note's own shadow under its own body, so a translucent ribbon
-// shows the picture behind it unshadowed. Outside every body the holdout is 0
-// and the outline is what it was.
+// A body drawn at less than full opacity would let that cut through, so every
+// surround is also HELD OUT wherever any body covers (#1293): `prepare` draws
+// the union of the bodies' coverage into `body_holdout` first, and the surround
+// layer takes it off ([`body_held`]). One note's cut takes only the picture
+// behind the ribbons, never another ribbon, at any opacity. That includes a
+// note's own cut under its own body, so a translucent ribbon shows the picture
+// behind it uncut. Outside every body the holdout is 0 and the cut is what it
+// was.
 //
 // What that costs is the seam between two notes that TOUCH: same key, no gap,
-// and the bodies now meet directly in one color where the outline used to
+// and the bodies now meet directly in one color where the surround used to
 // stand between them. A gap of a point or more still reads as two notes, since
-// the outline fills it.
+// the surround takes it.
 //
-// The outline is a glow read straight off the note's distance — solid out to
-// the style's spread, then a Gaussian in the distance — so it is as strong
-// against a hairline ribbon as against a wide one. Its color and how strongly
-// it covers are the pane's, not decisions made here: this shader is told how
-// far it reaches, how gradually it goes, how strong it is and what color, and
-// invents none of the four.
-//
-// The glow never covers wholly, so over bright spectrogram energy the backdrop
-// shows through it. The BACKDROP CUT (#1525) takes the backdrop away faster
-// than the glow lays its color on: read off the same distance and held out by
-// the same bodies ([`cut_strength`]), combined across notes into a cut `c`, and
-// composited with the mask so the picture keeps `1 - max(s, c)` of what was
-// there ([`fs_glow_cut_gamma`]). Notes' cuts combine by a smooth minimum of
-// their distances (the halo blend, [`fs_cut_blend`]), since the strongest-wins
-// minimum folds into a crease between two notes once the cut is wide and soft.
-// That takes two more passes over the notes into two targets over the roll's
-// rect, both skipped while the cut is off, when the plain glow composite runs.
-//
+// The surround is read straight off the note's distance, so it is as strong
+// against a hairline ribbon as against a wide one. Its reach, amount, shape and
+// fill are the pane's, not decisions made here, and so is each note's fill
+// color: this shader invents none of them.
+
 // Nothing here is tessellated. A note is four vertices whatever its shape,
 // and the outline the egui path drew as a separate stroked rounded rect is
-// read off the distance instead, which costs a compare rather than a second
-// shape.
+// now a surround read off the distance, which costs a compare rather than a
+// second shape.
 //
 // Coordinates arrive in egui POINTS, exactly as egui's own vertex shader
-// takes them, and `vs_note` does the same screen->clip mapping. The pane's
+// takes them, and `note_vertex` does the same screen->clip mapping. The pane's
 // orientation lives entirely in `pitch_dir` / `depth_dir`, so this shader
 // never names a screen side either.
 
 struct Locals {
-    /// The glow's σ, strength, solid spread and whole reach, in points except
-    /// the strength (0..1). First, so the vec4 is aligned with no padding.
-    shadow: vec4<f32>,
-    /// The backdrop cut (#1525): how much of the picture it takes at a note's
-    /// edge (0 when off), how far past the spread its fade runs in points, the
-    /// fade's curve (0 straight, 1 smoothstep), and the halo blend's softness
-    /// as a share of that fade (0 for the strongest note's cut alone). See
-    /// [`cut_coverage`] and [`fs_glow_cut_gamma`].
-    cut: vec4<f32>,
+    /// The backdrop cut (surround.wgsl): its amount, reach and shape. First,
+    /// so its vec4 is aligned with no padding.
+    surround: SurroundCut,
     /// Where the viewport being drawn into starts, in egui points, and how big
     /// it is. The draw into the egui pass takes the whole surface (origin 0);
     /// the bloom's own pass takes the roll's rect alone, so the same
@@ -100,18 +80,15 @@ struct Locals {
     /// with the viewport above by `RollUniforms::drawn_into`.
     origin_pixels: vec2<f32>,
     pixel_points: vec2<f32>,
-    /// How much of what the cut takes away is filled with the glow's own
-    /// color, 0..1, rather than left black.
-    cut_fill: f32,
     /// Rounds the block up to its vec4's alignment, spelled out to match
     /// the Rust side.
-    _tail_pad: f32,
+    _tail_pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
 
 /// The union of every body's coverage, one texel per device pixel of the
-/// roll's rect, read only by the outline layer's mask. Binding 2 keeps it clear of
+/// roll's rect, read only by the surround's passes. Binding 2 keeps it clear of
 /// the common module's glow slots in the same group.
 @group(1) @binding(2) var body_holdout: texture_2d<f32>;
 
@@ -131,17 +108,13 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
-    /// How far the outline reaches past the note's edge, in points, and 0 when
-    /// the outline is off: the style's whole reach (`locals.shadow.w`). It
-    /// wraps every side — see [`outline_coverage`].
-    @location(3) @interpolate(flat) outline_reach: f32,
     /// Four to a slot, since a stage passes sixteen at most:
     /// - `x`: how much of the box's LEADING end is a lead rather than the note
     ///   itself, in points — 0 for the ordinary segment that is all note. See
     ///   [`lead_coverage`].
     /// - `y`: how much of that lead is spent fading out at the tip, in points.
     /// - `z`: how much of the lead is still standing, 0..1.
-    /// - `w`: how far the outline's cap at the NOTE's own leading end reaches,
+    /// - `w`: how far the surround's cap at the NOTE's own leading end reaches,
     ///   in points. See [`cap_coverage`].
     @location(4) @interpolate(flat) lead: vec4<f32>,
     /// Four depth offsets, ascending, and the ribbon's width at each as a share
@@ -152,8 +125,8 @@ struct VertexOut {
     @location(7) @interpolate(flat) tremolo: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(8) @interpolate(flat) core: vec4<f32>,
-    /// The outline's glow: its color, straight gamma-space RGB, and in `a` how
-    /// strongly it covers at full coverage; the fade takes it from there.
+    /// The surround's fill color, straight gamma-space RGB, and in `a` how
+    /// strongly the note cuts at full coverage; the fade takes it from there.
     @location(9) @interpolate(flat) aura: vec4<f32>,
     /// The note's center in surface points, which [`on_screen`] measures
     /// `local` from.
@@ -167,47 +140,17 @@ struct VertexOut {
     @location(14) @interpolate(flat) fade: vec2<f32>,
 };
 
-/// The outline layer's quad: the note's box grown by everything
-/// `outline_strength` can reach to.
-///
-/// The outline wraps the note, so it is owed room on BOTH axes: ink runs out
-/// wherever the box distance passes `outline_reach`, which is the shadow's
-/// reach past every edge and every corner, and half a feather past that. While
-/// the cut fills with the glow's color the mask names a color as far as the cut
-/// reaches too ([`fs_outline_mask`]), so the quad is grown by the larger.
-@vertex
-fn vs_note(
-    @builtin(vertex_index) vertex: u32,
-    @location(0) center: vec2<f32>,
-    @location(1) half_extent: vec2<f32>,
-    @location(2) shear: f32,
-    // Lead, lead fade, lead alpha and cap reach; span then ramp.
-    // Packed, since a vertex takes sixteen at most.
-    @location(4) lead: vec4<f32>,
-    @location(8) core: vec4<f32>,
-    @location(9) aura: vec4<f32>,
-    @location(14) span_ramp: vec4<f32>,
-    @location(15) fade: vec2<f32>,
-    @location(5) taper_depth: vec4<f32>,
-    @location(6) taper: vec4<f32>,
-    @location(7) tremolo: vec2<f32>,
-) -> VertexOut {
-    let reach = select(locals.shadow.w, max(locals.shadow.w, cut_reach()), cut_fills());
-    return note_vertex(
-        vertex, center, half_extent, shear, lead, core, aura, span_ramp, fade,
-        taper_depth, taper, tremolo, reach + locals.feather,
-    );
-}
-
-/// The cut's quad, for the two passes that read the cut alone
-/// ([`fs_cut_reference`], [`fs_cut_blend`]): the note's box grown by the cut's
-/// own reach, which may be longer or shorter than the glow's.
+/// The surround's quad ([`fs_note_surround`]): the note's box grown by the
+/// cut's reach, past every edge and every corner, and half a feather past
+/// that.
 @vertex
 fn vs_note_cut(
     @builtin(vertex_index) vertex: u32,
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
+    // Lead, lead fade, lead alpha and cap reach; span then ramp.
+    // Packed, since a vertex takes sixteen at most.
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,
@@ -226,7 +169,7 @@ fn vs_note_cut(
 /// The BODY layers' quad — the core layer, the body holdout and the bloom's
 /// notes: the note's box grown by one feather. A body's ink is
 /// `inside(in, d, 0.0)`, which is 0 from half a feather past its edge, so the
-/// shadow's reach would only be fragments that compute 0. At long spans that
+/// cut's reach would only be fragments that compute 0. At long spans that
 /// reach is most of the quad: a note a couple of points across drawn through a
 /// box some fifteen points wider.
 @vertex
@@ -306,7 +249,6 @@ fn note_vertex(
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
-    out.outline_reach = locals.shadow.w;
     out.lead = lead;
     out.taper_depth = taper_depth;
     out.taper = taper;
@@ -337,10 +279,10 @@ fn surface_point(in: VertexOut) -> vec2<f32> {
 ///
 /// So what a pixel draws depends on the note and the pixel alone, and not on
 /// how big a quad the layer drew it through: the body's quad is a feather wider
-/// than the body and the outline's a shadow's reach wider, and interpolated
+/// than the body and the surround's a cut's reach wider, and interpolated
 /// across those two, one pixel read two slightly different coordinates. Every
 /// pass onto the surface or a texture over the roll goes through this, so the
-/// body, its holdout and its outline agree to the bit on where the note is
+/// body, its holdout and its surround agree to the bit on where the note is
 /// ([`surface_point`]); the bloom's half-size notes read their own coarser
 /// pixels the same way. The axes are unit and perpendicular, so projecting onto
 /// them inverts `center + pitch_dir * local.x + depth_dir * local.y` exactly.
@@ -363,91 +305,34 @@ fn inside(in: VertexOut, d: f32, edge: f32) -> f32 {
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// How strongly the glow covers `d` points off the note's edge: the style's
-/// strength out to its spread, then a Gaussian of σ in the distance past it,
-/// lowered by its own value at the style's reach so it lands on exactly 0
-/// there rather than stepping.
-///
-/// Read off the distance rather than a blur of the note's silhouette, which is
-/// the point of it: a blur of a ribbon thinner than σ never reaches full
-/// coverage, so the surround all but vanished round exactly the hairline notes
-/// that need one, and spread into a wide smear round a fat one. Here a note's
-/// edge is equally held at every ribbon width.
-///
-/// `reach` may still shorten an interior cap when the pane has less room
-/// before its now-line. That bound stays hard — shortening a cap moves its end
-/// instead of dimming the whole profile — while the profile's own shape is the
-/// style's whatever bound it is cut at.
-fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
-    let sigma = locals.shadow.x;
-    if reach <= 0.0 || locals.shadow.y <= 0.0 || sigma <= 0.0 {
-        return 0.0;
-    }
-    let spread = locals.shadow.z;
-    let x = max(d - spread, 0.0) / sigma;
-    let end = (locals.shadow.w - spread) / sigma;
-    let tail = exp(-0.5 * end * end);
-    let profile = max(exp(-0.5 * x * x) - tail, 0.0) / max(1.0 - tail, 1e-6);
-    return locals.shadow.y * profile * inside(in, d, reach);
-}
-
-/// The backdrop cut's whole reach past a note's edge, in points: the style's
-/// spread, then the cut's own fade. 0 while the cut is off.
+/// The backdrop cut's reach past a note's edge, in points. 0 while the cut is
+/// off.
 fn cut_reach() -> f32 {
-    return select(0.0, locals.shadow.z + locals.cut.y, locals.cut.x > 0.0);
-}
-
-/// Whether what the cut takes away is filled with the glow's color, which is
-/// when the glow mask has to name a color as far as the cut reaches.
-fn cut_fills() -> bool {
-    return locals.cut.x > 0.0 && locals.cut_fill > 0.0;
-}
-
-/// The cut's fade at `u`, the distance past the spread as a share of the fade:
-/// whole at 0 and nothing at 1, along a straight line at a curve of 0 and a
-/// smoothstep at 1, and a mix of the two between.
-fn cut_ramp(u: f32) -> f32 {
-    let x = clamp(u, 0.0, 1.0);
-    return 1.0 - mix(x, x * x * (3.0 - 2.0 * x), locals.cut.z);
-}
-
-/// The `u` at which [`cut_ramp`] reads `y`: how far out a bare note's cut is as
-/// strong as `y` is. What lets a cut taken down by its note's fade, a body or
-/// a lead join the halo blend as a distance ([`fs_cut_reference`]), so the
-/// blend of one note alone is that note's cut exactly.
-///
-/// Exact at the two ends of the curve — the identity, and smoothstep's own
-/// inverse — and Newton from the mix of the two between, where the fade's
-/// slope is at least `1 - curve` and the steps settle in a few.
-fn cut_unramp(y: f32) -> f32 {
-    let g = clamp(1.0 - y, 0.0, 1.0);
-    let c = locals.cut.z;
-    let eased = 0.5 - sin(asin(1.0 - 2.0 * g) / 3.0);
-    var u = mix(g, eased, c);
-    if c > 0.0 && c < 1.0 {
-        for (var i = 0; i < 4; i++) {
-            let miss = mix(u, u * u * (3.0 - 2.0 * u), c) - g;
-            let slope = mix(1.0, 6.0 * u * (1.0 - u), c);
-            u = clamp(u - miss / max(slope, 1e-3), 0.0, 1.0);
-        }
-    }
-    return u;
+    return select(0.0, locals.surround.cut.y, locals.surround.cut.x > 0.0);
 }
 
 /// How much of the picture the cut takes `d` points off the note's edge, as a
-/// share of its amount: whole out to the style's spread, as the glow is, then
-/// [`cut_ramp`] over the cut's own fade, and nothing from `reach` on.
+/// share of its amount: [`surround_ramp`] over the cut's reach, and nothing
+/// from `reach` on.
 ///
-/// A distance profile like [`outline_coverage`] and for its reason, so a
-/// hairline ribbon is cut round as firmly as a wide one. The amount itself is
-/// laid on in the composite ([`fs_glow_cut_gamma`]), after the notes' cuts have
-/// been combined.
+/// Read off the distance rather than a blur of the note's silhouette, which is
+/// the point of it: a blur of a ribbon thinner than its σ never reaches full
+/// strength, so the surround all but vanished round exactly the hairline notes
+/// that need one, and spread into a wide smear round a fat one. Here a note's
+/// edge is equally held at every ribbon width. The amount itself is laid on in
+/// [`fs_note_surround`], one amount for every note, so it changes no note's
+/// rank against another's.
+///
+/// `reach` may still shorten an interior cap when the pane has less room
+/// before its now-line. That bound stays hard — shortening a cap moves its end
+/// instead of dimming the whole profile — while the fade's own shape is the
+/// cut's whatever bound it is cut at.
 fn cut_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
-    let fade = locals.cut.y;
+    let fade = locals.surround.cut.y;
     if reach <= 0.0 || fade <= 0.0 {
         return 0.0;
     }
-    return cut_ramp(max(d - locals.shadow.z, 0.0) / fade) * inside(in, d, reach);
+    return surround_ramp(locals.surround.cut.z, max(d, 0.0) / fade) * inside(in, d, reach);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across the NOTE, and
@@ -466,15 +351,15 @@ fn cut_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
 /// is quieter than it is.
 ///
 /// Applied to BOTH layers, which is what makes a fading tip a fading ribbon
-/// rather than a ribbon dissolving inside its own outline: the surround wraps
+/// rather than a ribbon dissolving inside its own surround: the surround wraps
 /// the ends as much as the flanks, so a body taken out on its own would leave a
-/// hard cap of glow standing where the ink went. Past the tip the ramp is
+/// hard cap of cut standing where the ink went. Past the tip the ramp is
 /// negative and clamps to 0, so that cap is gone rather than merely faint.
 ///
 /// A lead with NO fade keeps its cap, and the branch that gives it one is not a
 /// special case dodged. Whether the tip fades is the one real distinction the
 /// pane's bar draws with its two handles closed against apart, and the two ends
-/// want opposite things: a tip that dissolves has nothing left for an outline to
+/// want opposite things: a tip that dissolves has nothing left for a surround to
 /// bound, while a tip that ends square is an edge like any other on the note and
 /// is owed the same surround the flanks get. So a fade of 0 is uniform right out
 /// to the box, and [`inside`] is what ends it — the same square end the ribbon
@@ -482,7 +367,7 @@ fn cut_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
 /// clips that cap off, its budget past the now-line being the lead itself; a
 /// caller who wants the cap has only to leave it room.)
 ///
-/// The fade is floored at one pixel and CAPPED at the lead, [`outline_coverage`]'s
+/// The fade is floored at one pixel and CAPPED at the lead, [`cut_coverage`]'s
 /// bargain in both directions and for its reasons: a sub-pixel ramp is an
 /// aliased edge, and a fade wider than the thing it is taking out has nothing
 /// past that to take. Capped, a fade dialled past its reach fades the whole
@@ -560,16 +445,16 @@ fn parallelogram_distance(in: VertexOut, trim: f32, half_pitch: f32) -> f32 {
     // across term divided by the shear's length. That shortcut is right beside
     // the long edges and wrong past the ends, where it reads the depth offset
     // alone: on a steep glide the region it calls near runs `slope` times the
-    // outline's reach along pitch. Per-note tuning routinely makes a segment a
+    // surround's reach along pitch. Per-note tuning routinely makes a segment a
     // hundredth of a point long across part of a semitone — a slope in the
-    // thousands — and that segment's outline and antialiasing ramp became a
+    // thousands — and that segment's surround and antialiasing ramp became a
     // hairline strip through the whole pane.
     //
     // Square corners, always: a note is a rectangle in the pane's two axes,
     // and rounding one was a setting until it turned out to be doing nothing a
     // piano roll wants — on the notes short enough for it to show (a tapped
     // key), the radius clamps to the note's own half-length and turns it into
-    // a bead. The outline's own corners are round, being a constant distance
+    // a bead. The surround's own corners are round, being a constant distance
     // from a square one, and that is the shape a note wants wrapped around it.
     let half_along = in.half_extent.y - 0.5 * trim;
     // The center line's far end, from the center.
@@ -602,8 +487,8 @@ fn parallelogram_distance(in: VertexOut, trim: f32, half_pitch: f32) -> f32 {
 /// its NEIGHBOURS' far ends (a step's other side, where one stands between),
 /// so near a cut this piece measures the shape the piece beside it draws
 /// rather than its own flank run on. What it cannot see is a piece beyond
-/// those: a neighbour shorter than the outline's reach lets the next one's
-/// flank be nearer than this piece knows, and the outline steps by that much
+/// those: a neighbour shorter than the surround's reach lets the next one's
+/// flank be nearer than this piece knows, and the surround steps by that much
 /// at the cut. Douglas–Peucker keeps pieces short only where the width bends
 /// hard, which is where that difference is smallest.
 fn taper_at(in: VertexOut, y: f32) -> f32 {
@@ -654,7 +539,7 @@ fn taper_vertex(in: VertexOut, depth: f32, width: f32, lo: f32, hi: f32) -> vec2
 /// [`box_distance_trimmed`] for a ribbon whose width moves along the piece:
 /// the exact distance to the polygon its two flanks bound, straight between
 /// the taper points and square across depth at the box's ends. It is still
-/// the TRUE distance (#1118), so a sliver glide's outline stays within its
+/// the TRUE distance (#1118), so a sliver glide's surround stays within its
 /// reach along pitch here as well.
 fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
     let slope = in.shear;
@@ -683,17 +568,17 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
     return select(sqrt(near), -sqrt(near), inside);
 }
 
-/// How much of the outline's cap at the NOTE's own leading end is painted
-/// here: the same surround every other edge gets, standing against the end of
-/// the note inside a box that carries a lead.
+/// How much of the surround's cap at the NOTE's own leading end is cut here:
+/// the same surround every other edge gets, standing against the end of the
+/// note inside a box that carries a lead.
 ///
 /// Without it that end wears no cap at all. It is INTERIOR to the box — the
 /// lead was added to the box's length, not drawn beside it — and
-/// [`outline_strength`]'s mask keeps the outline out of a box's middle, correctly,
+/// [`cut_strength`]'s mask keeps the surround out of a box's middle, correctly,
 /// since a box has no edge there. So the cap would arrive only when the caller
 /// drops the lead and the box shrinks back to the note.
 ///
-/// Drawn in the outline layer, under every body (see the head of this file),
+/// Drawn in the surround layer, under every body (see the head of this file),
 /// so a lead standing over the cap covers it and a spent one leaves it bare.
 /// The spectral pane gives a cap room only behind a spent lead (`lead.z` of
 /// 0): the box it keeps on a released note while that note's end scrolls
@@ -704,44 +589,41 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
 /// only the caller knows whether its ink is welcome there. Shortened, the cap
 /// grows out of the note's end rather than fading in over it, so it is wholly
 /// on the near side of whatever the caller is protecting at every reach it is
-/// given, and reaching its full `outline_reach` is the same picture the box's
-/// own outline draws once the lead is dropped.
+/// given, and reaching the cut's full reach is the same picture the box's own
+/// surround draws once the lead is dropped.
 ///
-/// Unioned with the wrap rather than added to it: the two are the same color
-/// off two shapes that share three of their sides, and along the note's flanks
-/// both are looking at the same ink. Added, that overlap comes out darker than
-/// the outline's own color is.
-fn cap_coverage(in: VertexOut, rim: Rim, cut: bool) -> f32 {
-    // Bounded by the outline the cap is part of, in both directions at once.
-    // The profile itself runs out at the outline's reach, so what a wider cap
-    // would add is the antialiasing ramp's tail past it: a softer end than
-    // every other edge of the note wears. With no outline at all there is no
-    // band for the cap to be part of.
-    let reach = min(in.lead.w, select(in.outline_reach, cut_reach(), cut));
+/// Unioned with the wrap rather than added to it: the two are one cut off two
+/// shapes that share three of their sides, and along the note's flanks both
+/// are looking at the same ink. Added, that overlap would cut deeper than the
+/// surround does anywhere else.
+fn cap_coverage(in: VertexOut, rim: Rim) -> f32 {
+    // Bounded by the surround the cap is part of, in both directions at once.
+    // The fade itself runs out at the cut's reach, so what a wider cap would
+    // add is the antialiasing ramp's tail past it: a softer end than every
+    // other edge of the note wears. With no cut at all there is no band for
+    // the cap to be part of.
+    let reach = min(in.lead.w, cut_reach());
     if (in.lead.x <= 0.0 || reach <= 0.0) {
         return 0.0;
     }
-    if cut {
-        return cut_coverage(in, rim.cap_d, reach) * rim.cap_keep;
-    }
-    return outline_coverage(in, rim.cap_d, reach) * rim.cap_keep;
+    return cut_coverage(in, rim.cap_d, reach) * rim.cap_keep;
 }
 
 /// How much of this fragment any body covers: the union `prepare` drew into
 /// `body_holdout`, and 0 off the roll's rect, where no body is.
 ///
 /// It is coverage and not opacity — a body's fade and color alpha are not in
-/// it — so a translucent body holds a shadow out as fully as an opaque one.
+/// it — so a translucent body holds a cut out as fully as an opaque one.
 /// A lead counts as far as it still stands ([`lead_coverage`]), so a spent
 /// lead leaves the cap behind it bare, as it always has.
 ///
-/// The outline's masks take the larger of this and their own shape's fill
-/// rather than the product. The union already holds that fill, so the max is
-/// exact where the note stands alone, and a product would take it out twice
-/// along every antialiased edge.
+/// The surround takes the larger of this and its own note's fill rather than
+/// the product. The union already holds that fill, so the max is exact where
+/// the note stands alone, and a product would take it out twice along every
+/// antialiased edge.
 fn body_held(in: VertexOut) -> f32 {
-    // The outline is drawn into the mask, which covers the roll's rect texel
-    // for texel as the holdout does.
+    // The surround is drawn into targets that cover the roll's rect texel for
+    // texel as the holdout does.
     let texel = vec2<i32>(floor(in.position.xy));
     let size = vec2<i32>(textureDimensions(body_holdout));
     if any(texel < vec2<i32>(0)) || any(texel >= size) {
@@ -750,50 +632,40 @@ fn body_held(in: VertexOut) -> f32 {
     return textureLoad(body_holdout, texel, 0).r;
 }
 
-/// How strongly the OUTLINE layer covers here for this note: the glow
-/// standing against every one of the note's edges and fading out.
+/// How much of the picture this note's backdrop cut takes here, as a share of
+/// the cut's amount: the cut standing against every one of the note's edges
+/// and fading out.
 ///
-/// The outline stands entirely OUTSIDE the note, which is why it is read off
+/// The surround stands entirely OUTSIDE the note, which is why it is read off
 /// the distance rather than stroked along the note's path: a centered stroke
 /// grows inward exactly as much as outward, and at the ribbon widths this pane
-/// is used at the two long edges would meet in the middle and flood the note
-/// with the outline's own color.
+/// is used at the two long edges would meet in the middle and cut the note
+/// itself.
 ///
-/// Masked by the note's OWN fill. `outline_coverage` clamps the distance at
-/// the note's edge, so without the mask the outline runs solid across the
-/// interior and a note drawn in anything less than an opaque color has a slab
-/// of glow under it. Masked too by every OTHER body ([`body_held`]), so over a
-/// neighbour the outline is held out rather than left for that neighbour's
-/// body to cover only as far as its opacity does.
+/// Masked by the note's OWN fill. `cut_coverage` clamps the distance at the
+/// note's edge, so without the mask the cut runs whole across the interior and
+/// a note drawn in anything less than an opaque color has a slab of black
+/// under it. Masked too by every OTHER body ([`body_held`]), so over a
+/// neighbour the cut is held out rather than left for that neighbour's body to
+/// cover only as far as its opacity does.
 ///
-/// Coverage here is `1 - fill` where the body is `fill`, so the wrap
-/// retreats as the note takes over its antialiased boundary. The body blends
-/// its flat color over that backdrop in the next pass.
+/// Strength here is `1 - fill` where the body is `fill`, so the wrap retreats
+/// as the note takes over its antialiased boundary. The body blends its flat
+/// color over that backdrop in the next pass.
 ///
 /// [`cap_coverage`] is the second shape this layer draws, standing against the
 /// end of the note INSIDE a box that carries a lead — a place the mask above
-/// keeps the wrap out of, correctly, and where an edge nonetheless is.
-///
-/// The cut's share ([`cut_strength`]) is held out exactly as this is, off the
-/// same [`Rim`], so a faded, held-out or translucent-lead note leaves no solid
-/// cut where it leaves no solid glow.
-fn outline_strength(in: VertexOut, rim: Rim) -> f32 {
-    if !rim.live { return 0.0; }
-    let wrap = outline_coverage(in, rim.d, in.outline_reach) * rim.keep * rim.lead;
-    return in.aura.a * max(wrap, cap_coverage(in, rim, false)) * along(in, in.fade);
-}
-
-/// How much of the picture this note's backdrop cut takes here, as a share of
-/// the cut's amount: [`outline_strength`] with [`cut_coverage`] for its
-/// profile, over the cut's reach.
+/// keeps the wrap out of, correctly, and where an edge nonetheless is. The
+/// note's opacity reading takes the whole of it out, so a faded note leaves no
+/// solid cut behind.
 fn cut_strength(in: VertexOut, rim: Rim) -> f32 {
     if !rim.live { return 0.0; }
     let wrap = cut_coverage(in, rim.d, cut_reach()) * rim.keep * rim.lead;
-    return in.aura.a * max(wrap, cap_coverage(in, rim, true)) * along(in, in.fade);
+    return in.aura.a * max(wrap, cap_coverage(in, rim)) * along(in, in.fade);
 }
 
-/// What the glow and the cut both read off a note at this fragment, once:
-/// where the ribbon stands, its distance, and how much of a surround there the
+/// What the cut reads off a note at this fragment, once: where the ribbon
+/// stands, its distance, and how much of a surround there the
 /// bodies and the lead leave standing — around the box, and around the note's
 /// own end inside a box that carries a lead ([`cap_coverage`]).
 struct Rim {
@@ -870,7 +742,7 @@ fn core_color(in: VertexOut) -> vec4<f32> {
 // One of the note's intensity readings at this depth: `ends` is its value at
 // the two depths `ramp` names, which the caller sampled at the ends of this
 // piece, and between them a straight line. The fade multiplies the body and
-// its outline together, so a note faded to nothing leaves no glowing silhouette
+// its surround together, so a note faded to nothing leaves no cut silhouette
 // behind. Held past both ends, which is what carries the newest value into a
 // lead.
 fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
@@ -879,188 +751,25 @@ fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
     return mix(ends.x, ends.y, t);
 }
 
-// 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used
-// for the same reason: on an sRGB-aware target egui hands the hardware
-// linear values and lets it encode. Both of this project's shells use a
-// plain Unorm surface and take the `_gamma` entry points.
-fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
-    let cutoff = srgb < vec3<f32>(0.04045);
-    let lower = srgb / vec3<f32>(12.92);
-    let higher = pow((srgb + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4));
-    return select(higher, lower, cutoff);
-}
-
-struct MaskOut {
-    @location(0) glow: vec4<f32>,
+struct SurroundOut {
+    @location(0) color: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 };
 
-/// This note's share of the glow mask: its color and how strongly it covers,
-/// kept where it is the strongest of any note's.
+/// This note's share of the surround: its fill color with its cut in alpha,
+/// kept where its cut is the strongest of any note's.
 ///
-/// The strength is written as DEPTH, under a `Less` test against a mask
-/// cleared to 1, so the strongest note's fragment is the one that lands and
-/// its color lands with it. A `max` blend would keep the strongest coverage
-/// too, but take each color channel's max separately — a hue neither note has,
-/// wherever two glows meet. A fragment of no strength writes depth 1 and so
-/// never lands, leaving the mask clear there.
-///
-/// While the cut fills with the glow's color, the mask also has to name a color
-/// past the glow's own reach, as far as the cut goes. The strength then maps
-/// into the nearer half of the depth range and the cut into the farther, so
-/// any glow still beats every bare cut and among bare cuts the strongest names
-/// the color; the strengths, and so the picture where the glow stands, are the
-/// same either way.
+/// The cut is written as DEPTH, under a `Less` test against a target cleared
+/// to 1, so the strongest note's fragment is the one that lands and its color
+/// lands with it. A fragment of no cut leaves the target clear.
 @fragment
-fn fs_outline_mask(fragment: VertexOut) -> MaskOut {
+fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
     let in = on_screen(fragment);
-    let rim = rim_of(in);
-    let strength = outline_strength(in, rim);
-    if !cut_fills() {
-        return MaskOut(vec4<f32>(in.aura.rgb, strength), 1.0 - strength);
-    }
-    let cut = cut_strength(in, rim);
-    let bare = select(1.0, 1.0 - 0.5 * cut, cut > 0.0);
-    let depth = select(bare, 0.5 * (1.0 - strength), strength > 0.0);
-    return MaskOut(vec4<f32>(in.aura.rgb, strength), depth);
-}
-
-/// This note's cut as a DISTANCE ([`cut_unramp`]), into a depth target under a
-/// `Less` test: what lands is the nearest, the strongest note's cut, which is
-/// the cut itself at a halo blend of 0 and the reference the blend below sums
-/// against. A fragment of no cut leaves the target at its clear of 1.
-struct CutReferenceOut {
-    @builtin(frag_depth) depth: f32,
-};
-
-@fragment
-fn fs_cut_reference(fragment: VertexOut) -> CutReferenceOut {
-    let in = on_screen(fragment);
-    let cut = cut_strength(in, rim_of(in));
+    let cut = locals.surround.cut.x * cut_strength(in, rim_of(in));
     if cut <= 0.0 {
         discard;
     }
-    return CutReferenceOut(cut_unramp(cut));
-}
-
-/// The nearest note's cut distance under this fragment, as [`fs_cut_reference`]
-/// left it, and 1 (no cut) off the roll's rect.
-@group(1) @binding(5) var cut_reference: texture_depth_2d;
-
-fn cut_reference_at(texel: vec2<i32>) -> f32 {
-    let size = vec2<i32>(textureDimensions(cut_reference));
-    if any(texel < vec2<i32>(0)) || any(texel >= size) {
-        return 1.0;
-    }
-    return textureLoad(cut_reference, texel, 0);
-}
-
-/// This note's share of the HALO BLEND: a smooth minimum of every note's cut
-/// distance, `-κ ln Σ exp(-u / κ)`, in place of the plain minimum the
-/// reference keeps. Where two notes' cuts meet, the minimum folds along the
-/// line between them, a crease that a wide, soft cut makes plain (#1525);
-/// the smooth minimum has no fold, and darkens a narrow gap a little more.
-///
-/// Summed in half floats under an additive blend, which is why each share is
-/// taken RELATIVE to the nearest note's: `exp(-(u - nearest) / κ)` is 1 for that
-/// note and less for every other, so the sum stays between 1 and the count
-/// of notes reaching here and keeps its precision at any κ. Taken straight,
-/// `exp(-u / κ)` falls under a half float's smallest value within the cut's
-/// reach once κ is under about a sixteenth of it, and the fade's tail would
-/// end in a step.
-///
-/// Each share is lowered by its own value at the cut's reach, as the glow's
-/// profile is, so a note's share reaches 0 exactly where its cut does and a
-/// note with no cut adds nothing: the blend of one note is that note's cut,
-/// and the blend never reaches past the notes' own reach. The composite
-/// ([`fs_glow_cut_gamma`]) puts that value back.
-@fragment
-fn fs_cut_blend(fragment: VertexOut) -> @location(0) vec4<f32> {
-    let in = on_screen(fragment);
-    let cut = cut_strength(in, rim_of(in));
-    if cut <= 0.0 {
-        discard;
-    }
-    let nearest = cut_reference_at(vec2<i32>(floor(in.position.xy)));
-    let kappa = locals.cut.w;
-    let share = exp(-max(cut_unramp(cut) - nearest, 0.0) / kappa)
-        - exp(-max(1.0 - nearest, 0.0) / kappa);
-    return vec4<f32>(max(share, 0.0), 0.0, 0.0, 0.0);
-}
-
-/// The roll's surround laid over the picture with the backdrop cut, in place
-/// of `fs_shadow_mask` in blit.wgsl while the cut is on.
-///
-/// The glow mask (its strongest note's color and strength `s`), the nearest
-/// cut distance, and the halo blend's sum, each the size of the viewport it is
-/// laid over, so a pixel reads its own texel.
-@group(1) @binding(4) var glow_mask: texture_2d<f32>;
-@group(1) @binding(6) var cut_blend: texture_2d<f32>;
-
-struct CoverOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
-
-/// The whole viewport, as `vs_blit` covers it.
-@vertex
-fn vs_cover(@builtin(vertex_index) vi: u32) -> CoverOut {
-    let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
-    var out: CoverOut;
-    out.position = vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
-    out.uv = vec2<f32>(corner.x, 1.0 - corner.y);
-    return out;
-}
-
-/// The surround over this pixel: the glow's straight gamma-space color in
-/// `rgb`, and in `a` how much of the picture it COVERS — the larger of the
-/// glow's strength and the cut — with the color laid on at
-/// `max(s, fill * covered)` of that, which [`glow_cut_weight`] returns.
-///
-/// The cut takes the backdrop away faster than the glow lays its color on:
-/// what is under the surround keeps `1 - max(s, cut)`, and only `s` of the
-/// glow's color (or, filling, as much as the cut took) goes on in its place.
-/// So at a cut of 0 this is exactly the glow, and over black it is the glow
-/// whatever the cut — the cut only takes away light that was there.
-struct GlowCut {
-    color: vec3<f32>,
-    weight: f32,
-    covered: f32,
-};
-
-fn glow_cut(in: CoverOut) -> GlowCut {
-    let size = vec2<i32>(textureDimensions(glow_mask));
-    let texel = min(vec2<i32>(in.uv * vec2<f32>(size)), size - vec2<i32>(1));
-    let glow = textureLoad(glow_mask, texel, 0);
-    let nearest = cut_reference_at(texel);
-    var cut = 0.0;
-    if nearest < 1.0 {
-        var u = nearest;
-        let kappa = locals.cut.w;
-        if kappa > 0.0 {
-            // Undo `fs_cut_blend`: its shares were relative to the nearest
-            // note's and lowered by their value at the reach.
-            let sum = textureLoad(cut_blend, texel, 0).r;
-            let tail = exp(-(1.0 - nearest) / kappa);
-            u = nearest - kappa * log(max(sum + tail, 1e-30));
-        }
-        cut = locals.cut.x * cut_ramp(u);
-    }
-    let covered = max(glow.a, cut);
-    return GlowCut(glow.rgb, max(glow.a, locals.cut_fill * covered), covered);
-}
-
-@fragment
-fn fs_glow_cut_gamma(in: CoverOut) -> @location(0) vec4<f32> {
-    let surround = glow_cut(in);
-    return vec4<f32>(surround.color * surround.weight, surround.covered);
-}
-
-/// The same onto a target that encodes sRGB for itself, as `fs_core_linear`.
-@fragment
-fn fs_glow_cut_linear(in: CoverOut) -> @location(0) vec4<f32> {
-    let surround = glow_cut(in);
-    return vec4<f32>(linear_from_gamma_rgb(surround.color) * surround.weight, surround.covered);
+    return SurroundOut(vec4<f32>(in.aura.rgb, cut), 1.0 - cut);
 }
 
 @fragment

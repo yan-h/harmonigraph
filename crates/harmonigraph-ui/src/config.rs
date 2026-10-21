@@ -420,58 +420,38 @@ pub struct SpectrumConfig {
     /// painted width — a note is a flat rectangle of its own color, with
     /// nothing straddling its boundary.
     pub roll_thickness: f32,
-    /// How light the glow standing round every note is, as `L*` (0..100): the
-    /// surround that keeps a ribbon legible whatever heatmap it crosses, drawn
-    /// in the ribbon's own hue.
+    /// How much of the picture the BACKDROP CUT takes at a note's edge, 0..1
+    /// (#1525, #1528): the surround that keeps a note legible whatever heatmap
+    /// it crosses, round the roll's ribbons and the Spiral's dots alike. Over
+    /// bright energy it takes the backdrop away next to the note; over black
+    /// it is each note's own hue at [`note_fill_lightness`](Self::note_fill_lightness)
+    /// laid on. 0 is no surround at all.
+    ///
+    /// The cut's reach, shape and fill lightness are the fields below. See
+    /// [`harmonigraph_render::SurroundCut`].
+    pub note_cut: f32,
+    /// How far past a note's edge the cut fades out, in points
+    /// ([`harmonigraph_render::SURROUND_REACH_RANGE`]). Longer reads softer and
+    /// holds further out, and between close notes takes more of the gap.
+    pub note_cut_reach: f32,
+    /// The cut's fade, -1..1 ([`harmonigraph_render::SURROUND_SHAPE_RANGE`]):
+    /// 0 a straight line, -1 a steep drop at the note and a long soft tail, 1
+    /// held near the note and a steep drop at the far end.
+    pub note_cut_shape: f32,
+    /// How light the cut's fill is, as `L*` (0..100), drawn in each note's own
+    /// hue at the full chroma that lightness holds in gamut. What the cut takes
+    /// away is always filled; 0 fills it with black.
     ///
     /// One lightness for every note, which is what makes the surround the SAME
-    /// thing behind every note: wherever a glow stands at full strength, the
+    /// thing behind every note: wherever the cut is whole and filled, the
     /// picture there is that lightness whatever the heatmap under it was, so a
     /// note's contrast against its own surround is set here once rather than
-    /// left to the cells. Dark by default, far under every ribbon the pitch
+    /// left to the cells. Dark by default, far under every note the pitch
     /// gradient draws, so a note reads as lit against a deep haze of its own
     /// color. A gradient whose low end is near this lightness draws those notes
-    /// against a glow they cannot stand out from, which is the cost of one
+    /// against a fill they cannot stand out from, which is the cost of one
     /// lightness for all.
-    ///
-    /// How far the glow reaches and how strongly it covers are the spectral
-    /// geometry Shadow's width, spread and darkness, shared with the spiral's
-    /// dots; this and [`roll_glow_chroma`](Self::roll_glow_chroma) are the
-    /// roll's alone.
-    pub roll_glow_lightness: f32,
-    /// How much of its note's colorfulness the glow keeps, 0..1: 0 is a neutral
-    /// grey at [`roll_glow_lightness`](Self::roll_glow_lightness), 1 the
-    /// gradient's own chroma share at that height, resolved at the glow's
-    /// lightness so it stays in gamut. A dark glow holds far less absolute
-    /// chroma than its ribbon at any share, so even 1 reads as a tint of the
-    /// note rather than a second ribbon.
-    pub roll_glow_chroma: f32,
-    /// How much of the picture behind the glow the BACKDROP CUT takes at a
-    /// note's edge, 0..1 (#1525). The glow alone never covers wholly, so over
-    /// bright spectrogram energy the backdrop leaks through it and the surround
-    /// reads thin; the cut takes the backdrop away faster than the glow lays its
-    /// color on, so the surround holds over bright cells as over dark ones. 0
-    /// is the plain glow; over black the cut changes nothing.
-    ///
-    /// The cut's shape is the four below; how far the glow reaches is still the
-    /// Notes shadow's, and the cut starts from its spread. See
-    /// [`harmonigraph_render::RollCut`].
-    pub roll_cut: f32,
-    /// How far past the spread the cut fades out, in σ of the glow
-    /// ([`harmonigraph_render::ROLL_CUT_REACH_RANGE`]). Longer reads softer and
-    /// holds further out, and between close notes takes more of the gap.
-    pub roll_cut_reach: f32,
-    /// The cut's fade, 0..1: 0 a straight line, 1 a smoothstep, which holds
-    /// near the note and eases out at both ends.
-    pub roll_cut_curve: f32,
-    /// How much of what the cut takes away is filled with the glow's own color
-    /// rather than left black, 0..1.
-    pub roll_cut_fill: f32,
-    /// How softly neighbouring notes' cuts merge, 0..1. At 0 the strongest
-    /// note's cut stands alone, which folds into a crease along the line
-    /// between two notes once the cut is wide and soft; higher rounds the fold
-    /// out and darkens a narrow gap a little more.
-    pub roll_halo_blend: f32,
+    pub note_fill_lightness: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -629,6 +609,16 @@ pub struct SpectrumConfig {
 }
 
 impl SpectrumConfig {
+    /// The backdrop cut round the notes, as the renderer takes it: the roll's
+    /// ribbons and the Spiral's dots wear the same one.
+    pub fn note_cut(&self) -> harmonigraph_render::SurroundCut {
+        harmonigraph_render::SurroundCut {
+            amount: self.note_cut,
+            reach: self.note_cut_reach,
+            shape: self.note_cut_shape,
+        }
+    }
+
     /// Span the history over `seconds` — a render's own length, for
     /// [`SpectrogramRender::WholeVideo`](crate::SpectrogramRender::WholeVideo)
     /// — held to the History duration bar's ends, so the span a render draws
@@ -711,19 +701,21 @@ impl SpectrumConfig {
             *ROLL_THICKNESS_RANGE.start(),
             *ROLL_THICKNESS_RANGE.end(),
         );
-        self.roll_glow_lightness =
-            bounded(self.roll_glow_lightness, fresh.roll_glow_lightness, 0.0, 100.0);
-        self.roll_glow_chroma = bounded(self.roll_glow_chroma, fresh.roll_glow_chroma, 0.0, 1.0);
-        self.roll_cut = bounded(self.roll_cut, fresh.roll_cut, 0.0, 1.0);
-        self.roll_cut_reach = bounded(
-            self.roll_cut_reach,
-            fresh.roll_cut_reach,
-            *harmonigraph_render::ROLL_CUT_REACH_RANGE.start(),
-            *harmonigraph_render::ROLL_CUT_REACH_RANGE.end(),
+        self.note_fill_lightness =
+            bounded(self.note_fill_lightness, fresh.note_fill_lightness, 0.0, 100.0);
+        self.note_cut = bounded(self.note_cut, fresh.note_cut, 0.0, 1.0);
+        self.note_cut_reach = bounded(
+            self.note_cut_reach,
+            fresh.note_cut_reach,
+            *harmonigraph_render::SURROUND_REACH_RANGE.start(),
+            *harmonigraph_render::SURROUND_REACH_RANGE.end(),
         );
-        self.roll_cut_curve = bounded(self.roll_cut_curve, fresh.roll_cut_curve, 0.0, 1.0);
-        self.roll_cut_fill = bounded(self.roll_cut_fill, fresh.roll_cut_fill, 0.0, 1.0);
-        self.roll_halo_blend = bounded(self.roll_halo_blend, fresh.roll_halo_blend, 0.0, 1.0);
+        self.note_cut_shape = bounded(
+            self.note_cut_shape,
+            fresh.note_cut_shape,
+            *harmonigraph_render::SURROUND_SHAPE_RANGE.start(),
+            *harmonigraph_render::SURROUND_SHAPE_RANGE.end(),
+        );
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -990,21 +982,15 @@ impl Default for SpectrumConfig {
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.551_037_2,
-            // Picked off contact sheets (W8, 2026-10-20): a deep haze of each
-            // note's own hue, near-black in lightness but still colored, so a
-            // ribbon reads lit against its own surround over a dark heatmap and
-            // a bright one alike.
-            roll_glow_lightness: 7.0,
-            roll_glow_chroma: 0.85,
-            // Picked off contact sheets (S4 with a smooth minimum of σ / 2,
-            // rounds R7-R8, 2026-10-20): the whole backdrop cut at the edge,
-            // easing out over four σ, to black, with the crease between notes
-            // rounded out.
-            roll_cut: 1.0,
-            roll_cut_reach: 4.0,
-            roll_cut_curve: 1.0,
-            roll_cut_fill: 0.0,
-            roll_halo_blend: 0.5,
+            // Picked off contact sheets (S4, rounds R7-R8, 2026-10-20) and then
+            // the dials (#1528): the whole backdrop cut at the edge, fading out
+            // over 15 points, filled with each note's own hue at W8's deep haze
+            // of a lightness, the strongest note's cut standing alone where two
+            // meet.
+            note_cut: 1.0,
+            note_cut_reach: 15.0,
+            note_cut_shape: 0.0,
+            note_fill_lightness: 7.0,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which

@@ -310,37 +310,6 @@ fn fs_bloom_add(in: BlitOut) -> @location(0) vec4<f32> {
     return vec4<f32>(bloom.rgb * add.strength.x, 0.0);
 }
 
-// The roll's glow mask, premultiplied: every note's outline at once, in the
-// color of whichever note's glow was strongest there, laid under the bodies
-// the caller draws next. The mask holds straight gamma-space color and the
-// strength in alpha. `scene_tex` is the mask, the size of the viewport it is
-// drawn over, so each pixel reads its own texel exactly rather than a filtered
-// blend of four.
-fn shadow_mask_texel(in: BlitOut) -> vec4<f32> {
-    let texel = vec2<i32>(in.uv * vec2<f32>(textureDimensions(scene_tex)));
-    return textureLoad(scene_tex, texel, 0);
-}
-
-@fragment
-fn fs_shadow_mask(in: BlitOut) -> @location(0) vec4<f32> {
-    let glow = shadow_mask_texel(in);
-    return vec4<f32>(glow.rgb * glow.a, glow.a);
-}
-
-// The same onto a target that encodes sRGB for itself, which wants linear
-// color, as the roll's `fs_core_linear` does for the bodies.
-@fragment
-fn fs_shadow_mask_linear(in: BlitOut) -> @location(0) vec4<f32> {
-    let glow = shadow_mask_texel(in);
-    let srgb = glow.rgb;
-    let linear = select(
-        pow((srgb + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4)),
-        srgb / vec3<f32>(12.92),
-        srgb < vec3<f32>(0.04045),
-    );
-    return vec4<f32>(linear * glow.a, glow.a);
-}
-
 // The lattice's node glow, laid down at the BOTTOM of the scene pass, before
 // any node, marker or label (`crate::LatticeCallback::prepare`). `scene_tex` is
 // the glow's own target here: light where the nodes put it, cleared to

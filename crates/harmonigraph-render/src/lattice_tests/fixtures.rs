@@ -40,7 +40,6 @@ pub(super) fn one_shadow(width: f32, depth: f32) -> harmonigraph_scene::ShadowSe
     harmonigraph_scene::ShadowSettings {
         lattice_geometry: style,
         lattice_text: style,
-        spectral_geometry: style,
         spectral_text: style,
     }
 }

@@ -1,9 +1,9 @@
 //! One shadow atlas and one optional blur chain for each spectral surface.
 //!
-//! The spiral's dots own their analytic field, while text owns its glyph
-//! field. (The roll draws its glow straight off its notes' distance, and casts
-//! nothing here.) Their callbacks therefore register the draw that can fill
-//! their cells here. A final, paint-less callback runs after all producers
+//! Text owns its glyph field, so its callbacks register the draw that can fill
+//! their cells here. (The roll's ribbons and the spiral's dots draw their
+//! backdrop cut straight off their own distance, `crate::surround`, and cast
+//! nothing here.) A final, paint-less callback runs after all producers
 //! have prepared, packs every group together, fills the common atlas and
 //! sweeps its Gaussian cells once in each direction. The visible callbacks
 //! then composite from that shared result in their original paint order.
@@ -26,17 +26,6 @@ pub(crate) struct Layouts {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum ProducerKey {
     Text(u64),
-    /// The Spiral's dots, which have one copy and so need no id.
-    Dot,
-}
-
-impl ProducerKey {
-    fn order(self) -> u8 {
-        match self {
-            Self::Dot => 0,
-            Self::Text(_) => 1,
-        }
-    }
 }
 
 pub(crate) enum CellDraw {
@@ -51,12 +40,6 @@ pub(crate) enum CellDraw {
         glyphs: wgpu::Buffer,
         cells: wgpu::Buffer,
         names: Vec<u32>,
-    },
-    Dot {
-        pipeline: wgpu::RenderPipeline,
-        locals: wgpu::BindGroup,
-        dots: wgpu::Buffer,
-        count: u32,
     },
     #[cfg(test)]
     None,
@@ -73,7 +56,6 @@ pub(crate) struct Submission {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ProducerRange {
-    start: u32,
     count: u32,
     active: bool,
 }
@@ -213,11 +195,6 @@ pub(crate) fn binding<'a>(
     })
 }
 
-fn box_slice(buffer: &wgpu::Buffer, range: ProducerRange) -> wgpu::BufferSlice<'_> {
-    let stride = std::mem::size_of::<shadow::ShadowBox>() as u64;
-    buffer.slice(stride * u64::from(range.start)..stride * u64::from(range.start + range.count))
-}
-
 fn finish_for_pass(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -241,7 +218,6 @@ fn finish_for_pass(
     let blur_x = resources.cells.blur_x.clone();
     let blur_y = resources.cells.blur_y.clone();
     let surface = resources.surface(device, surface_id, pass_nr);
-    surface.submissions.sort_by_key(|submission| submission.key.order());
 
     let mut casters = Vec::new();
     let mut starts = Vec::with_capacity(surface.submissions.len());
@@ -280,19 +256,23 @@ fn finish_for_pass(
         let active = packed.casters[start as usize..(start + count) as usize]
             .iter()
             .any(|caster| caster.shade[0] > 0.0);
-        surface.ranges.insert(submission.key, ProducerRange { start, count, active });
+        surface.ranges.insert(submission.key, ProducerRange { count, active });
         // Each glyph beside its own name's box: the boxes repeated by their
         // names' lengths, as the lattice writes its `cell_buffer`. The name's
         // first glyph is marked as the one that draws the name's shadow
         // (`vs_spectral_shadow`), so a layer's composite is one instanced draw.
-        if let CellDraw::Text { cells, names, .. } = &submission.draw {
-            let boxes = &packed.boxes[start as usize..(start + count) as usize];
-            let rows = boxes.iter().zip(names).flat_map(|(b, &n)| {
-                let lead = shadow::ShadowBox { who: [b.who[0], 1.0, b.who[2], b.who[3]], ..*b };
-                (0..n).map(move |i| if i == 0 { lead } else { *b })
-            });
-            let glyphs = names.iter().map(|&n| n as usize).sum();
-            crate::write_rows::<_, { crate::BOX_BYTES }>(queue, cells, glyphs, rows);
+        match &submission.draw {
+            CellDraw::Text { cells, names, .. } => {
+                let boxes = &packed.boxes[start as usize..(start + count) as usize];
+                let rows = boxes.iter().zip(names).flat_map(|(b, &n)| {
+                    let lead = shadow::ShadowBox { who: [b.who[0], 1.0, b.who[2], b.who[3]], ..*b };
+                    (0..n).map(move |i| if i == 0 { lead } else { *b })
+                });
+                let glyphs = names.iter().map(|&n| n as usize).sum();
+                crate::write_rows::<_, { crate::BOX_BYTES }>(queue, cells, glyphs, rows);
+            }
+            #[cfg(test)]
+            CellDraw::None => {}
         }
     }
     let packed_cells = packed.boxes.iter().filter(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
@@ -334,7 +314,6 @@ fn finish_for_pass(
                 if range.count == 0 {
                     continue;
                 }
-                let boxes = box_slice(&surface.boxes, range);
                 match &submission.draw {
                     CellDraw::Text { pipeline, locals, glyphs, cells, names } => {
                         pass.set_pipeline(pipeline);
@@ -342,13 +321,6 @@ fn finish_for_pass(
                         pass.set_vertex_buffer(0, glyphs.slice(..));
                         pass.set_vertex_buffer(1, cells.slice(..));
                         pass.draw(0..4, 0..names.iter().sum::<u32>());
-                    }
-                    CellDraw::Dot { pipeline, locals, dots, count } => {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, locals, &[]);
-                        pass.set_vertex_buffer(0, dots.slice(..));
-                        pass.set_vertex_buffer(1, boxes);
-                        pass.draw(0..4, 0..*count);
                     }
                     #[cfg(test)]
                     CellDraw::None => {}
@@ -508,7 +480,7 @@ mod tests {
                 resources,
                 surface_id,
                 Submission {
-                    key: ProducerKey::Dot,
+                    key: ProducerKey::Text(1),
                     casters: vec![shadow::Caster {
                         rect: [8.0, 8.0, 12.0, 12.0],
                         level: 1.0,
@@ -563,7 +535,7 @@ mod tests {
         let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
 
-        submit(&device, &mut resources, ProducerKey::Dot);
+        submit(&device, &mut resources, ProducerKey::Text(1));
         submit(&device, &mut resources, ProducerKey::Text(2));
         let mut encoder = device.create_command_encoder(&Default::default());
         finish(&device, &queue, &screen, &mut encoder, &mut resources, 7);
@@ -581,7 +553,7 @@ mod tests {
                     mapped_at_creation: false,
                 },
             );
-            for key in [ProducerKey::Dot, ProducerKey::Text(2)] {
+            for key in [ProducerKey::Text(1), ProducerKey::Text(2)] {
                 register(
                     &device,
                     &mut resources,

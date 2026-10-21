@@ -13,10 +13,10 @@ use harmonigraph_core::{NoteTracker, Tuning};
 #[test]
 fn the_shadow_controls_keep_one_range_at_both_doors() {
     for (asked_width, widths, asked_spread, spread, asked_depth, depth) in [
-        (-1.0, [0.0; 4], -0.5, 0.0, -0.5, 0.0),
-        (2.0, [1.0, 1.0, 2.0, 2.0], 0.17, 0.17, 0.8, 0.8),
-        (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0),
-        (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 3.0, 1.0),
+        (-1.0, [0.0; 3], -0.5, 0.0, -0.5, 0.0),
+        (2.0, [1.0, 1.0, 2.0], 0.17, 0.17, 0.8, 0.8),
+        (3.0, [1.0, 1.0, 3.0], 1.0, 1.0, 1.0, 1.0),
+        (9.0, [1.0, 1.0, 3.0], 3.0, 1.0, 3.0, 1.0),
     ] {
         let asked = ShadowStyle { width: asked_width, spread: asked_spread, depth: asked_depth };
         let want = widths.map(|width| ShadowStyle { width, spread, depth });
@@ -24,7 +24,6 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             shadow: ShadowSettings {
                 lattice_geometry: asked,
                 lattice_text: asked,
-                spectral_geometry: asked,
                 spectral_text: asked,
             },
             ..ViewConfig::default()
@@ -59,14 +58,14 @@ fn text_spread_is_stops_held_to_the_bar() {
 }
 
 #[test]
-fn the_endpoint_has_exactly_four_explicit_shadow_groups() {
+fn the_endpoint_has_exactly_three_explicit_shadow_groups() {
     let mut groups = ShadowSettings::default();
     for (index, group) in groups.groups_mut().into_iter().enumerate() {
         group.width = index as f32 * 0.1;
     }
     assert_eq!(
         groups.groups().map(|group| group.width),
-        [0.0, 0.1, 0.2, 0.3],
+        [0.0, 0.1, 0.2],
         "a group is missing from the explicit endpoint or aliases another group",
     );
 }

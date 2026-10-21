@@ -140,7 +140,6 @@ fn poisoned_view() -> ViewConfig {
         shadow: ShadowSettings {
             lattice_geometry: shadow,
             lattice_text: shadow,
-            spectral_geometry: shadow,
             spectral_text: shadow,
         },
         hide_behind: nan,
@@ -356,11 +355,9 @@ fn scene_floats(scene: &Scene) -> Floats {
     let GlowCurve { shape } = glow_curve;
     f.one("glow_curve.shape", *shape);
 
-    let ShadowSettings { lattice_geometry, lattice_text, spectral_geometry, spectral_text } =
-        shadow;
+    let ShadowSettings { lattice_geometry, lattice_text, spectral_text } = shadow;
     f.shadow("shadow.lattice_geometry", lattice_geometry);
     f.shadow("shadow.lattice_text", lattice_text);
-    f.shadow("shadow.spectral_geometry", spectral_geometry);
     f.shadow("shadow.spectral_text", spectral_text);
 
     f.one("hide_behind", *hide_behind);

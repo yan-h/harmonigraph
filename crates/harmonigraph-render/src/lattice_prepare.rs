@@ -238,17 +238,17 @@ impl LatticeCallback {
             .and_then(|()| {
                 validate_wgsl(
                     "roll.wgsl",
-                    &module_source(&reloaded.common, roll::ROLL_SRC),
+                    &module_source(&reloaded.common, &crate::roll_module()),
                     reloaded.seam,
                     roll::ROLL_ENTRY_POINTS,
                 )
             })
             .and_then(|()| {
                 validate_wgsl(
-                    "dot_shadow.wgsl",
-                    &module_source(&reloaded.common, dot_shadow::SRC),
-                    reloaded.seam,
-                    dot_shadow::ENTRY_POINTS,
+                    "dot_surround.wgsl",
+                    &dot_surround::source(),
+                    0,
+                    dot_surround::ENTRY_POINTS,
                 )
             });
             match checked {

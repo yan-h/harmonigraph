@@ -80,8 +80,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline_lift, roll_seconds, roll_thickness, roll_lead,
-        roll_lead_fade, roll_lead_release, roll_glow_lightness, roll_glow_chroma, roll_cut,
-        roll_cut_reach, roll_cut_curve, roll_cut_fill, roll_halo_blend, note_name_scale,
+        roll_lead_fade, roll_lead_release, note_cut, note_cut_reach, note_cut_shape,
+        note_fill_lightness, note_name_scale,
         volume_floor_db, volume_ceiling_db, backdrop_strength, backdrop_height, backdrop_gap);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the
@@ -472,13 +472,10 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                 "Live attack",
                 "Live release",
                 "Spiral bloom",
-                "Glow lightness",
-                "Glow color",
                 "Backdrop cut",
                 "Cut reach",
-                "Cut curve",
-                "Cut fill",
-                "Halo blend",
+                "Cut shape",
+                "Fill lightness",
             ]);
             if scenario.enabled {
                 labels.extend([
@@ -526,10 +523,15 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
         // The ring and mark shadows' own bar, beside their Darkness.
         labels.push("Hide behind");
     }
-    if scenario.pane == Tab::LatticeSettings || scenario.pane == Tab::AnalyzerSettings {
-        for _ in 0..2 {
-            labels.extend(["Shadow width", "Shadow darkness", "Shadow spread"]);
-        }
+    // Two shadow groups on the lattice's page, and the labels' alone on the
+    // analyzer's, whose notes wear the Note surround instead.
+    let shadow_groups = match scenario.pane {
+        Tab::LatticeSettings => 2,
+        Tab::AnalyzerSettings => 1,
+        _ => 0,
+    };
+    for _ in 0..shadow_groups {
+        labels.extend(["Shadow width", "Shadow darkness", "Shadow spread"]);
     }
     let stars = (scenario.pane == Tab::LatticeSettings
         && scenario.material == LatticeMaterial::Stars)

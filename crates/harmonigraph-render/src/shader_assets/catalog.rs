@@ -26,7 +26,7 @@ fn production_metal_asset_catalog() {
         crate::roll::asset_catalog(&device, format);
         crate::spectrogram::asset_catalog(&device, format);
         crate::glow::asset_catalog(&device, format);
-        crate::dot_shadow::asset_catalog(&device, format, &layouts);
+        crate::dot_surround::asset_catalog(&device, format);
         // The editor's egui renderer and the offline one differ only in filtering.
         for native in [false, true] {
             drop(egui_wgpu::Renderer::new(

@@ -750,14 +750,12 @@ pub struct ShadowSettings {
     pub lattice_geometry: ShadowStyle,
     /// The lattice's notation: note names, drawn marks and resting markers.
     pub lattice_text: ShadowStyle,
-    /// The spectral roll's ribbons and the spiral's sounding-note dots.
-    pub spectral_geometry: ShadowStyle,
     /// The spectral pane's note names and axis labels, and the spiral's names.
     pub spectral_text: ShadowStyle,
 }
 
 impl Default for ShadowSettings {
-    /// The four groups a fresh view opens on, and the fallback for any one of
+    /// The three groups a fresh view opens on, and the fallback for any one of
     /// them missing from a blob (the container-level `serde(default)` above) —
     /// a group PRESENT with one field missing fills that field from
     /// [`ShadowStyle::default`] instead, which is written out there.
@@ -772,13 +770,6 @@ impl Default for ShadowSettings {
                 width: 0.185_866_79,
                 spread: 0.129_441_13,
                 depth: 0.261_179_95,
-            },
-            // Over four fifths deep under the roll's ribbons and the spiral's
-            // dots, and wide enough to lift them off the heatmap.
-            spectral_geometry: ShadowStyle {
-                width: 1.873_678_9,
-                spread: 0.119_161_01,
-                depth: 0.825_221_84,
             },
             // About two thirds deep, slightly spread, under the spectral pane's
             // names and axis labels.
@@ -796,18 +787,13 @@ impl ShadowSettings {
     ///
     /// The sanitizer's finite-value repair and the tests sweep this list;
     /// [`clamped`](Self::clamped) assigns each group's width limit.
-    pub fn groups(&self) -> [ShadowStyle; 4] {
-        [self.lattice_geometry, self.lattice_text, self.spectral_geometry, self.spectral_text]
+    pub fn groups(&self) -> [ShadowStyle; 3] {
+        [self.lattice_geometry, self.lattice_text, self.spectral_text]
     }
 
     /// The same, to write through — [`groups`](Self::groups)'s pair.
-    pub fn groups_mut(&mut self) -> [&mut ShadowStyle; 4] {
-        [
-            &mut self.lattice_geometry,
-            &mut self.lattice_text,
-            &mut self.spectral_geometry,
-            &mut self.spectral_text,
-        ]
+    pub fn groups_mut(&mut self) -> [&mut ShadowStyle; 3] {
+        [&mut self.lattice_geometry, &mut self.lattice_text, &mut self.spectral_text]
     }
 
     /// Every group held to its bars' ranges; see [`ShadowStyle::clamped`].
@@ -815,7 +801,6 @@ impl ShadowSettings {
         ShadowSettings {
             lattice_geometry: self.lattice_geometry.clamped(crate::GLOW_SHADOW_MAX),
             lattice_text: self.lattice_text.clamped(crate::GLOW_SHADOW_MAX),
-            spectral_geometry: self.spectral_geometry.clamped(crate::SPECTRAL_SHADOW_MAX),
             spectral_text: self.spectral_text.clamped(crate::SPECTRAL_SHADOW_MAX),
         }
     }
