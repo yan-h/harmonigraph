@@ -68,6 +68,12 @@ pub struct SpectrogramAtmosphere {
     /// Changes whenever the spectrogram's history is cleared, so the colour
     /// memory starts from the cleared picture instead of fading the old one out.
     pub history_epoch: u32,
+    /// The analyzer's side of the divider, holding the newest slab, drawn
+    /// into the light source alone and never painted. Without it the source
+    /// is silence there, and the reduced light field's filtering and every
+    /// star centred past the divider darken the newest edge — the Stars seam.
+    /// `None` where the strip does not reach the now-line.
+    pub light_hold: Option<[SpectrogramVertex; 6]>,
 }
 
 /// Cloud-space sampling offset for a texture travelling at a constant visible
@@ -1056,7 +1062,9 @@ pub(super) struct Targets {
     /// Final painting uses `coverage_vertices`, the atmosphere's region.
     /// Both sampled fields must be filled beyond that region: a displaced or
     /// bilinear read at the divider otherwise blends with a cleared texel and
-    /// draws a dark seam. The original data mesh still bounds measured sound.
+    /// draws a dark seam. The light they are made from is held past the
+    /// divider for the same reason (`SpectrogramAtmosphere::light_hold`); the
+    /// painted data mesh still bounds measured sound.
     tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
     /// The reduced scalar cloud tone, allocated at [`Shape::tone`].
@@ -1287,7 +1295,8 @@ impl Plan {
 /// What [`Targets::encode`] draws from beyond the targets themselves.
 pub(super) struct Draw<'a> {
     pub style: harmonigraph_scene::CloudStyle,
-    /// The measured mesh the source pass rasterizes, and its vertex count.
+    /// The mesh the source pass rasterizes, and its vertex count: the measured
+    /// mesh, then the light-only hold past the divider where there is one.
     pub mesh: wgpu::BufferSlice<'a>,
     pub count: u32,
     /// The pane's size in device pixels.
@@ -1683,9 +1692,11 @@ impl Targets {
         source_end: i64,
     ) {
         let Plan { tile, stars, memory_extent, .. } = *plan;
-        // The source mesh records only measured history. Its already-blurred
-        // light can occupy the whole spectrogram region, without crossing the
-        // analyzer divider or widening the exact heatmap's sample footprint.
+        // The source mesh records measured history, and past the divider the
+        // newest slab held (`SpectrogramAtmosphere::light_hold`). Its
+        // already-blurred light is painted over the spectrogram region alone,
+        // never across the analyzer divider, and without widening the exact
+        // heatmap's sample footprint.
         let region = atmosphere.region.intersect(rect);
         let region = if region.is_positive() {
             region
@@ -2409,6 +2420,7 @@ mod tests {
             points_per_slab: 0.0,
             now: 0.0,
             history_epoch: 0,
+            light_hold: None,
         };
         let size = [1920, 1080];
         let density = |a| tone_size(size, 2.0, a, 0.5);
@@ -2493,6 +2505,7 @@ mod tests {
             points_per_slab: 0.0,
             now: 0.0,
             history_epoch: 0,
+            light_hold: None,
         };
         let tile = tile_key([1920, 1080], atmosphere, period);
         assert!(tile.is_some(), "the wash drew no tile");
@@ -2560,6 +2573,7 @@ mod tests {
                     points_per_slab: 0.0,
                     now: 0.0,
                     history_epoch: 0,
+                    light_hold: None,
                 },
                 cloud_tile,
             )
@@ -2602,6 +2616,7 @@ mod tests {
                     points_per_slab: 0.0,
                     now: 0.0,
                     history_epoch: 0,
+                    light_hold: None,
                 },
                 cloud_pixel,
             )
@@ -2661,6 +2676,7 @@ mod tests {
                     points_per_slab,
                     now: 0.0,
                     history_epoch: 0,
+                    light_hold: None,
                 },
             )
         };

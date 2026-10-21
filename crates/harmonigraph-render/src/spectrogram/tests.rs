@@ -732,6 +732,7 @@ fn cloud_fixture() -> SpectrogramCallback {
         points_per_slab: SIZE[0] as f32 / 12.0,
         now: 0.0,
         history_epoch: 0,
+        light_hold: None,
     });
     cb
 }
@@ -2916,6 +2917,7 @@ fn the_tile_is_rebaked_only_when_the_walk_moves() {
                 points_per_slab: 0.0,
                 now,
                 history_epoch: 0,
+                light_hold: None,
             },
             atmosphere::CloudSampling::default().tile_cells,
         )
