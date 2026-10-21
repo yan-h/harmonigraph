@@ -6,7 +6,8 @@ description: How review, squashing, and agent definitions work in this repo. Use
 # Review happens at the merge boundary, not on the branch
 
 GitHub Actions runs `ci.sh` as the automatic full gate for pull requests and pushes to `main`, one job per gate group (`./ci.sh <group>`), reported as a single `Full CI` check.
-It runs every gate `ci.sh` lists, one `run` line each (`grep -nE '^run |^if in_group' ci.sh`), the committed Metal corpus among them since #965 —
+It runs every gate `ci.sh` lists, one `run` line each (`grep -nE '^(quick )?run ' ci.sh`), the committed Metal corpus among them since #965,
+and reports every gate that failed rather than stopping at the first —
 not judgement.
 
 **A session can run the ordinary review itself:** invoke `code-review` through the Skill tool, which is neither a typed slash command nor a Bash route to one.
@@ -41,7 +42,7 @@ so a local `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` bakes that drift
 Re-baseline from the run instead:
 push, let `Full CI` fail, `gh run download <run> -n golden-diff-workspace` and `-n golden-diff-isolated`,
 read each contact sheet, then copy the artifact's `actual/*` over `crates/`.
-Repeat until green, because a test that checks two frames stops at the first that moved.
+One failed run writes every frame that moved, so one re-baseline is enough unless the picture moves again.
 Locally the goldens stay red on `main` until the runner's macOS catches up, so read them there as advisory, for the contact sheet.
 Read the sheet before re-baselining either way:
 a bless nobody looked at is the failure the gate exists to catch, not a step on the way past it.

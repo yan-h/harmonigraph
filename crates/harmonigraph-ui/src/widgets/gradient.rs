@@ -688,7 +688,7 @@ fn flip_mark(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32, sc
     let half = 2.5 * scale; // and half its width
     let gap = 3.0 * scale; // how far each arrow sits off the center line
     let shaft = (rect.width() - 4.0 * scale).max(head);
-    let stroke = egui::Stroke::new((1.0 * scale).max(1.0), color);
+    let stroke = egui::Stroke::new(theme::LINE_WIDTH * scale, color);
     let (left, right) = (rect.center().x - shaft * 0.5, rect.center().x + shaft * 0.5);
     for (y, tip, tail) in
         [(rect.center().y - gap, left, right), (rect.center().y + gap, right, left)]

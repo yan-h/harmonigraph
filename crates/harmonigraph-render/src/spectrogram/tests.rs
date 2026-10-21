@@ -1005,12 +1005,13 @@ fn density_weights_bright_buckets_before_pitch_source_reduction() {
     }
 }
 
-#[test]
-fn golden_spectrogram_styles_broadband_quiet_and_silence() {
-    let Some((device, queue)) = headless_device() else { return };
+/// A broad smooth field, quiet band, granular broadband patch, and black
+/// margins. No peak recognition can explain these shapes.
+///
+/// Plain and musical softness each exercise a visible path, one golden test
+/// each, so a run that moves both frames writes both.
+fn styles_fixture() -> SpectrogramCallback {
     let mut cb = cloud_fixture();
-    // A broad smooth field, quiet band, granular broadband patch, and black
-    // margins. No peak recognition can explain these shapes.
     let mut bytes = vec![0; cb.grid.bytes().len()];
     for slab in 1..11 {
         for bin in 80..944 {
@@ -1027,18 +1028,37 @@ fn golden_spectrogram_styles_broadband_quiet_and_silence() {
         }
     }
     cb.grid.set_bytes(&bytes);
-    // Plain and musical softness each exercise a visible path.
-    let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
     (s.pitch_softness, s.time_softness, s.blur_time_step) = (60.0, 200.0, 1.0);
+    cb
+}
+
+#[test]
+fn golden_spectrogram_style_blur() {
+    let Some((device, queue)) = headless_device() else { return };
+    let cb = styles_fixture();
     let mut resources = CallbackResources::default();
     let blur = frame_with(&device, &queue, &mut resources, &cb);
     let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
     let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
     assert_eq!(passes, 4, "source, two filters and decode bake");
-    gate.check("spectrogram-style-blur", SIZE, &blur);
+    harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(
+        "spectrogram-style-blur",
+        SIZE,
+        &blur,
+    );
+}
+
+#[test]
+fn golden_spectrogram_style_plain() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = styles_fixture();
     every_effect_off(&mut cb);
-    gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
+    harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(
+        "spectrogram-style-plain",
+        SIZE,
+        &fresh_frame(&device, &queue, &cb),
+    );
 }
 
 #[test]

@@ -64,7 +64,7 @@ pub(crate) fn paint_preview_drop_target(painter: &egui::Painter, rect: egui::Rec
         rect.shrink(2.0),
         0.0,
         crate::theme::accent().gamma_multiply(0.18),
-        egui::Stroke::new(2.0, crate::theme::accent_edge()),
+        egui::Stroke::new(crate::theme::LINE_WIDTH, crate::theme::accent_edge()),
         egui::StrokeKind::Inside,
     );
 }
@@ -471,7 +471,7 @@ pub(super) fn edge_bar(
 /// Called by [`section`] and by nothing else — a rule over a heading is what
 /// a section is, so the two travel together.
 ///
-/// The rule is the row gap plus a point either side of the line, and no more:
+/// The rule is the row gap, and never less than its own line, and no more:
 /// the heading row under it is already a row high around type that is not,
 /// which is all the setting-off a section needs in a column kept tight. Any
 /// room it does take is split evenly, because a folded heading sits between
@@ -479,7 +479,20 @@ pub(super) fn edge_bar(
 /// before it and nowhere over it, and a folded section reads as sitting high.
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
-        ui.add(egui::Separator::default().spacing(2.0 * crate::theme::ui_scale(ui.ctx())));
+        // Never less room than its own line takes, or below scale 1 the rule
+        // would spill onto the rows either side of it. Painted rather than an
+        // egui `Separator` for its round ends, drawn inside the column's width.
+        let spacing = (2.0 * crate::theme::ui_scale(ui.ctx())).max(crate::theme::LINE_WIDTH);
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), spacing), egui::Sense::hover());
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let inset = 0.5 * stroke.width;
+        let y = rect.center().y;
+        crate::theme::round_ended(
+            ui.painter(),
+            vec![egui::pos2(rect.left() + inset, y), egui::pos2(rect.right() - inset, y)],
+            stroke,
+        );
     }
 }
 
@@ -823,11 +836,14 @@ pub(super) fn block<R>(
     let (out, body) = crate::widgets::group_box(ui, title, BLOCK_INDENT * scale, rows);
     if ui.visuals().indent_has_left_vline {
         // Down the rows to where egui stops its own, two points short.
-        use egui::emath::GuiRounding as _;
-        let x = (heading.rect.left() + BLOCK_LINE_INSET * scale)
-            .round_to_pixel_center(ui.pixels_per_point());
+        let x = heading.rect.left() + BLOCK_LINE_INSET * scale;
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-        ui.painter().vline(x, body.top()..=body.bottom() - 2.0, stroke);
+        let inset = 0.5 * stroke.width;
+        crate::theme::round_ended(
+            ui.painter(),
+            vec![egui::pos2(x, body.top() + inset), egui::pos2(x, body.bottom() - 2.0 - inset)],
+            stroke,
+        );
     }
     egui::InnerResponse::new(out, heading)
 }

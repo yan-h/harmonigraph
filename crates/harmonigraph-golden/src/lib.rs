@@ -12,9 +12,11 @@
 //! it drew under `target/golden-diff/actual/`, laid out as `crates/` is, CI
 //! uploads that directory beside the amplified sheets when a group fails, and
 //! a picture change is re-baselined from the run's `golden-diff-<group>`
-//! artifacts: read the sheets, copy `actual/*` over `crates/`, push, and repeat
-//! until green — a test that checks two frames stops at the first that moved,
-//! and a failing test binary skips the ones after it.
+//! artifacts: read the sheets, copy `actual/*` over `crates/`, and push. One
+//! run writes every frame that moved, because each golden test holds one frame
+//! (a second [`Gate::check`] in the same test would go unreached once the first
+//! fails) and `ci.sh` runs every test binary rather than stopping at the first
+//! that fails.
 //! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` re-baselines to the
 //! machine it runs on, which is the record only where that machine draws what
 //! CI does.
@@ -80,6 +82,18 @@ const LEVELS: usize = 20;
 
 /// The environment variable that turns a comparison into a re-baseline.
 const BLESS: &str = "HARMONIGRAPH_BLESS";
+
+/// The environment variable that draws a frame and skips its comparison.
+///
+/// For `tools/shader-assets.py` alone, which runs the golden tests to make
+/// every pipeline they build load from a candidate Metal corpus, and whose
+/// verdict is about the corpus rather than the picture. Compared, a PR that both
+/// moves a frame and owes a corpus could not regenerate the corpus until the
+/// frame was re-baselined, a CI round later: four of the eight regenerations
+/// dispatched on 2026-10-19..21 failed on exactly that, a moved frame and no
+/// corpus fault. The vacuity guard still runs, and [`BLESS`] still wins.
+/// `ci.sh` unsets it, so it cannot turn the gate itself into a pass.
+const DRAW_ONLY: &str = "HARMONIGRAPH_GOLDEN_DRAW_ONLY";
 
 /// One crate's set of blessed frames.
 pub struct Gate {
@@ -153,6 +167,9 @@ impl Gate {
                 Some(_) => eprintln!("blessed {name}: unchanged"),
                 None => eprintln!("blessed {name}: new frame"),
             }
+            return;
+        }
+        if std::env::var_os(DRAW_ONLY).is_some() {
             return;
         }
 

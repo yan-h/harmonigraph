@@ -7,7 +7,7 @@
 // A pass here is a draw over the CELLS rather than one quad over the atlas, and
 // that is what lets every cell carry its own σ and its own resolution: a
 // cell's quad reads them off its instance, and a tap that falls outside the
-// cell's own rect reads nothing. The padding a cell is packed with (`pack` in
+// cell's own rect reads nothing. The padding a cell is packed with (`pack_into` in
 // shadow.rs) is what puts the whole of its blur inside the rect the taps are
 // clamped to.
 

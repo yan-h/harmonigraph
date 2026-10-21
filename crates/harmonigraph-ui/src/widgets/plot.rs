@@ -85,9 +85,8 @@ impl Plot {
         )
     }
     pub fn line(&self, ui: &Ui, points: Vec<Pos2>, color: Color32) {
-        ui.painter()
-            .with_clip_rect(self.rect.expand(2.0).intersect(ui.clip_rect()))
-            .add(egui::Shape::line(points, Stroke::new(1.5 * theme::ui_scale(ui.ctx()), color)));
+        let painter = ui.painter().with_clip_rect(self.rect.expand(2.0).intersect(ui.clip_rect()));
+        theme::round_ended(&painter, points, Stroke::new(theme::LINE_WIDTH, color));
     }
     /// A straight line pressed out on the plot's empty space, as the two
     /// plot points it runs between, from the press to the pointer, for as long
@@ -151,9 +150,18 @@ impl Plot {
     pub fn dot(&self, ui: &Ui, x: f32, y: f32) {
         let scale = theme::ui_scale(ui.ctx());
         let painter =
-            ui.painter().with_clip_rect(self.rect.expand(5.0 * scale).intersect(ui.clip_rect()));
+            // The dot's radius, half its ring, and a pixel of feather.
+            ui.painter().with_clip_rect(
+                self.rect
+                    .expand((4.0 + 0.5 * theme::LINE_WIDTH) * scale + 1.0)
+                    .intersect(ui.clip_rect()),
+            );
         painter.circle_filled(self.point(x, y), 4.0 * scale, theme::accent());
-        painter.circle_stroke(self.point(x, y), 4.0 * scale, Stroke::new(1.0, theme::text()));
+        painter.circle_stroke(
+            self.point(x, y),
+            4.0 * scale,
+            Stroke::new(theme::LINE_WIDTH * scale, theme::text()),
+        );
     }
 }
 

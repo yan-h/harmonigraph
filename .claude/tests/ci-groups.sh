@@ -88,10 +88,10 @@ if ! grep -qF './ci.sh ${{ matrix.group }}' "$WORKFLOW"; then
 fi
 
 # And no gate may sit above the first marker. `run` is the only way a gate is
-# invoked, plus the one `if in_group` block, so the first of either has to come
-# after the first `group` line.
+# invoked, `quick run` included, so the first of them has to come after the
+# first `group` line.
 first_marker=$(grep -n '^group ' "$CI" | head -1 | cut -d: -f1)
-first_gate=$(grep -n '^run \|^if in_group; then$' "$CI" | head -1 | cut -d: -f1)
+first_gate=$(grep -nE '^(quick )?run ' "$CI" | head -1 | cut -d: -f1)
 
 if [ -z "$first_marker" ]; then
   echo "✗ ci.sh has no 'group' markers at all" >&2

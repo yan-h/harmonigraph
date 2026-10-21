@@ -37,8 +37,8 @@ pub(crate) enum Opening<'a> {
 pub(crate) struct Sample {
     /// GPU time from the opening stamp to the end of the closing pass.
     pub(crate) gpu_ms: f64,
-    /// Wall clock from submission through the readback's map: host
-    /// submission and waiting included.
+    /// Wall clock from submission until the frame completes: host
+    /// submission and waiting included, the stamps' readback not.
     pub(crate) completion_ms: f64,
     /// CPU time of the `prepare` closure.
     pub(crate) prepare_cpu_ms: f64,
@@ -75,6 +75,8 @@ pub(crate) struct FrameTimer {
     opening: wgpu::TextureView,
     no_pixel: wgpu::RenderPipeline,
     period: f64,
+    /// The last frame's opening stamp, which an unwritten slot 0 would repeat.
+    last_opening: std::cell::Cell<u64>,
 }
 
 const STAMPS: u32 = 2;
@@ -153,7 +155,18 @@ impl FrameTimer {
         });
         let period = f64::from(queue.get_timestamp_period());
         let opening = target(&device, format, "frame_timer_opening", [1, 1]);
-        Some(Self { device, queue, format, set, resolve, staging, opening, no_pixel, period })
+        Some(Self {
+            device,
+            queue,
+            format,
+            set,
+            resolve,
+            staging,
+            opening,
+            no_pixel,
+            period,
+            last_opening: Default::default(),
+        })
     }
 
     /// A pane of `size` device pixels at `ppp` pixels per point.
@@ -209,17 +222,29 @@ impl FrameTimer {
             pass.set_pipeline(&self.no_pixel);
             pass.draw(0..3, 0..1);
         }
-        encoder.resolve_query_set(&self.set, 0..STAMPS, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, u64::from(STAMPS) * 8);
         let completion_start = std::time::Instant::now();
         self.queue.submit(buffers.into_iter().chain([encoder.finish()]));
+        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        let completion_ms = completion_start.elapsed().as_secs_f64() * 1000.0;
+        // Resolved only once the frame has completed: a resolve submitted with
+        // it can read a slot before the stamp lands (an M5 Pro under macOS 27
+        // does, most often for the closing stamp).
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.resolve_query_set(&self.set, 0..STAMPS, &self.resolve, 0);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, u64::from(STAMPS) * 8);
+        self.queue.submit([encoder.finish()]);
         let slice = self.staging.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
         self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
-        let completion_ms = completion_start.elapsed().as_secs_f64() * 1000.0;
         let ticks: Vec<u64> = bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
         self.staging.unmap();
-        assert!(ticks[0] > 0 && ticks[1] >= ticks[0], "unsupported timestamp pair: {ticks:?}");
+        // A slot whose stamp never landed keeps the last frame's value rather
+        // than reading 0, and a repeated opening is the sign of it.
+        let fresh = ticks[0] != self.last_opening.replace(ticks[0]);
+        assert!(
+            ticks[0] > 0 && ticks[1] >= ticks[0] && fresh,
+            "unsupported timestamp pair: {ticks:?}"
+        );
         Sample {
             gpu_ms: (ticks[1] - ticks[0]) as f64 * self.period / 1.0e6,
             completion_ms,

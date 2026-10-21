@@ -35,7 +35,7 @@ const CURVE_SEGMENTS: usize = 64;
 const CURVE_INSET: f32 = 3.5;
 
 /// Thickness of the preview line.
-const CURVE_WIDTH: f32 = 1.5;
+const CURVE_WIDTH: f32 = theme::LINE_WIDTH;
 
 /// The preview line's color: the dim text, softened again.
 ///
@@ -490,10 +490,7 @@ impl<'a> ValueBar<'a> {
                     )
                 })
                 .collect::<Vec<_>>();
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(CURVE_WIDTH * scale, curve_color()),
-            ));
+            painter.add(egui::Shape::line(points, egui::Stroke::new(CURVE_WIDTH, curve_color())));
         }
 
         let (text_color, value_color) = match self.swatch {

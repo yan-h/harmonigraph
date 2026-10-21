@@ -809,7 +809,7 @@ impl RollHoldout {
                     resource: wgpu::BindingResource::TextureView(&view),
                 }],
             }),
-            surround: crate::surround::SurroundTargets::new(device, composite, size, "roll"),
+            surround: crate::surround::SurroundTargets::new(device, composite, size),
             view,
             notes_uniform,
             tail: None,

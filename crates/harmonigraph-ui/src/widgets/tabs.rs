@@ -125,14 +125,15 @@ fn paint_dots(ui: &Ui, rect: Rect, color: egui::Color32) {
 fn paint_chevron(ui: &Ui, rect: Rect, color: egui::Color32) {
     let scale = theme::ui_scale(ui.ctx());
     let c = rect.center();
-    ui.painter().add(egui::Shape::line(
+    theme::round_ended(
+        ui.painter(),
         vec![
             c + egui::vec2(-4.0, -2.0) * scale,
             c + egui::vec2(0.0, 2.0) * scale,
             c + egui::vec2(4.0, -2.0) * scale,
         ],
-        egui::Stroke::new(1.5 * scale, color),
-    ));
+        egui::Stroke::new(theme::LINE_WIDTH * scale, color),
+    );
 }
 
 #[cfg(test)]

@@ -1283,9 +1283,9 @@ mod tests {
     /// its old set outweighed what the owners preparing after it had yet to
     /// grow, which hid a doubled shadow atlas.
     ///
-    /// The default look in both panes, plus the spiral's glow and the cut
-    /// round its dots, which the export never draws (#974) and so are added
-    /// here as the Spiral tab adds them. Each owner's target is checked on the record at both sizes, since a
+    /// The default look in both panes, plus the spiral's glow, which the
+    /// export never draws (#974) and so is added here as the Spiral tab adds
+    /// it. Each owner's target is checked on the record at both sizes, since a
     /// target never built would pass this for the wrong reason (#450). Built
     /// new before old, each owner's rebuild fails this, one at a time.
     #[cfg(target_vendor = "apple")]
@@ -1296,11 +1296,9 @@ mod tests {
 
         // One target from each owner that rebuilds on a pane's size, each
         // of which must be seen rebuilt for the counts below to reach it.
-        const KEYED: [&str; 8] = [
+        const KEYED: [&str; 6] = [
             "lattice_offscreen_color",
             "roll_holdout",
-            "roll_surround",
-            "spiral_surround",
             "glow_discs",
             "spectral_cloud_source",
             "lattice_shadow_atlas",
@@ -1346,16 +1344,6 @@ mod tests {
                         screen,
                         vec![dot],
                         harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom),
-                        FORMAT,
-                    ));
-                    ui.painter().add(harmonigraph_render::dot_surround_paint_callback(
-                        screen,
-                        vec![harmonigraph_render::SurroundDot {
-                            center: dot.center,
-                            radius: dot.radius,
-                            aura: dot.color,
-                        }],
-                        state.appearance.spectrum.note_cut(),
                         FORMAT,
                     ));
                     for (surface, (pane, rect)) in layout.resolve(points).into_iter().enumerate() {

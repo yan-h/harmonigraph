@@ -54,16 +54,19 @@ The standalone harness uses the same UI and render paths as the plugin.
 It can accept hardware or virtual MIDI,
 and feeds its analyzer with a mock synth rather than external audio.
 
-Enable the tracked pre-push formatting check once per clone:
+Enable the tracked pre-push check once per clone:
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-The pre-push hook checks formatting only.
+The pre-push hook runs `./ci.sh quick`:
+formatting, prose, clippy and rustdoc, well under a minute once the worktree has built.
 GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`,
 split across parallel groups and reported as one `Full CI` check.
 A bare local `./ci.sh` runs every group.
+A failing gate does not stop the run:
+every gate runs, and the summary at the end lists each one that failed.
 
 CI sets `HARMONIGRAPH_REQUIRE_GPU=1`,
 so an unavailable GPU adapter fails renderer,

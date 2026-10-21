@@ -78,16 +78,19 @@ It passes only with `1 passed`:
 the catalog compiles on macOS alone,
 so elsewhere it runs 0 tests and proves nothing.
 `Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
-Regenerate on the runner, never locally —
-the `metal-corpus` skill has the command, what to run off macOS, and why grepping the fallback notice is not a check (#947).
+Regenerate on the runner, never locally:
+on a PR, the `Metal shader assets` run that finds the corpus stale builds the replacement as its artifact,
+and the `metal-corpus` skill has the import, what to run off macOS, and why grepping the fallback notice is not a check (#947).
 
 ## House style: formatting is mechanical, and a diff edits what moves
 
 Run `cargo fmt --all`;
 `rustfmt.toml` holds the settings (and why the nightly-only comment-wrapping keys are absent), and `ci.sh` checks them.
 If the output is ever wrong, change the config rather than hand-formatting around it.
-The local pre-push gate is only `cargo fmt --all --check`;
-`ci.sh` runs in GitHub Actions.
+Before pushing Rust, run `./ci.sh quick` (the opt-in pre-push hook runs it too):
+formatting, prose, clippy and rustdoc, well under a minute once the worktree has built,
+the failures that otherwise each cost a ~10 minute CI round.
+The full `ci.sh` runs in GitHub Actions, and reports every gate that fails rather than the first.
 
 Markdown prose is laid out one clause per line instead of being wrapped to a width;
 `.claude/semantic-breaks.py --write` does it and `ci.sh` gates it.

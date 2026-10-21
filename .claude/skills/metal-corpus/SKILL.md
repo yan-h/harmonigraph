@@ -43,13 +43,22 @@ The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on a stale corpus 
 but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the corpus's recorded compiler flags and fallback controls, and still arrives as a separate workflow.
 So a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable.
 
-Regenerate on the runner, not here:
+Regenerate on the runner, not here.
+On a PR there is nothing to dispatch:
+the `Metal shader assets` run whose check fails goes on to generate and validate the replacement, and still fails.
+Without a PR, dispatch it, and it does the same:
 
 ```
-gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
+gh workflow run "Metal shader assets" --ref <branch>
 ```
 
-then download its `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on the artifact's `generated-metal-assets` directory.
+Add `-f regenerate=true` to rebuild a corpus that passes, such as one still holding a deleted shader's libraries.
+
+Read the failed check's log in the artifact's `shader-asset-logs/` first:
+a missing or rejected Metal asset is a stale corpus, and anything else is not one.
+Then download the run's `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on its `generated-metal-assets` directory.
+Its goldens are drawn without being compared, so a frame this PR also moves does not fail the regeneration;
+re-baseline it from `Full CI`'s artifact, in parallel.
 `tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —
 it rebuilds the renderer eight times over, against the production corpus and then against three deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
 PR #918 is the worked example, and it cost a full CI cycle on a diff whose own tests were green the whole time.

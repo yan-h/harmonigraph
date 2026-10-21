@@ -106,6 +106,10 @@ pub fn picture() -> Color32 {
 pub fn picture_ruling() -> Color32 {
     c(skin::PICTURE_RULING)
 }
+/// The line between two panes of an exported frame.
+pub fn picture_divider() -> Color32 {
+    c(skin::PICTURE_DIVIDER)
+}
 /// The analyzer's axis numbers.
 pub fn picture_marking() -> Color32 {
     c(skin::PICTURE_MARKING)
@@ -173,6 +177,71 @@ pub(crate) const PANE_GUTTER: f32 = 8.0;
 ///
 /// The design size, at [scale](ui_scale) 1.0.
 pub(crate) const ROW_GAP: f32 = 4.0;
+
+/// The width of every line, chrome and picture alike: a divider, a widget's
+/// outline, a curve, the spectrum's outline. Otonal's mark width, and like
+/// otonal's the floor: only a grid is ruled finer ([`GRID_WIDTH`]).
+///
+/// FIXED at every [UI scale](ui_scale), as a separator is under a larger text
+/// size: the scale grows what the lines divide, not the lines. What does scale
+/// is a stroke that is part of a glyph — a chevron, the flip arrows, a handle's
+/// ring — which is drawn at `LINE_WIDTH * scale` with the glyph it draws, since
+/// a 2-point stroke on a glyph drawn at 0.7 reads bold and starts to blot.
+pub(crate) const LINE_WIDTH: f32 = 2.0;
+
+/// The width a grid is ruled at, the one line finer than [`LINE_WIDTH`] and
+/// fixed like it: the analyzer's rulings and the Spiral's seam and rays. A grid
+/// is a scale behind the data and must not outweigh it. Otonal's `GRID_WIDTH`,
+/// half a line. The Intensity bar's clip hatching is laid at it too, scaled
+/// with the 3-point pitch it is a texture at, which a full line would fill solid.
+pub(crate) const GRID_WIDTH: f32 = 0.5 * LINE_WIDTH;
+
+/// Paint an open path whose ends are round, for a line or a glyph stroke that
+/// stops in open space; one that runs into an edge keeps egui's square end,
+/// which a round one would notch. egui strokes have no caps, so this is the
+/// path — the same shape egui would have drawn it as — and a disc half its
+/// width over each end.
+///
+/// The discs go in as one tessellated mesh rather than as circle shapes, so
+/// they are never mistaken for the dots a widget draws on purpose.
+///
+/// A level or plumb segment is snapped to the pixel grid HERE, the way egui's
+/// tessellator would snap it, so the caps are laid at the line egui draws
+/// rather than up to half a pixel off it.
+///
+/// A translucent stroke keeps square ends, and so does one in a faded painter
+/// (a disabled section): a disc over its end would paint it twice there.
+pub(crate) fn round_ended(painter: &egui::Painter, mut points: Vec<egui::Pos2>, stroke: Stroke) {
+    let ctx = painter.ctx();
+    if let [a, b] = &mut points[..] {
+        let ppp = ctx.pixels_per_point();
+        if a.x == b.x {
+            stroke.round_center_to_pixel(ppp, &mut a.x);
+            b.x = a.x;
+        } else if a.y == b.y {
+            stroke.round_center_to_pixel(ppp, &mut a.y);
+            b.y = a.y;
+        }
+    }
+    let ends = [points.first().copied(), points.last().copied()];
+    if let [a, b] = points[..] {
+        painter.line_segment([a, b], stroke);
+    } else {
+        painter.add(egui::Shape::line(points, stroke));
+    }
+    if !stroke.color.is_opaque() || painter.opacity() < 1.0 {
+        return;
+    }
+    let options = ctx.tessellation_options(|options| *options);
+    let mut tessellator =
+        egui::epaint::Tessellator::new(ctx.pixels_per_point(), options, [1, 1], Vec::new());
+    let mut caps = egui::Mesh::default();
+    for end in ends.into_iter().flatten() {
+        let disc = egui::epaint::CircleShape::filled(end, 0.5 * stroke.width, stroke.color);
+        tessellator.tessellate_circle(disc, &mut caps);
+    }
+    painter.add(caps);
+}
 
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
@@ -600,7 +669,7 @@ fn style_at(scale: f32) -> egui::Style {
     // selected state unmistakable while still reading fine as a text
     // highlight over glyphs.
     visuals.selection.bg_fill = accent().gamma_multiply(0.5);
-    visuals.selection.stroke = Stroke::new(1.0, text());
+    visuals.selection.stroke = Stroke::new(LINE_WIDTH, text());
     visuals.slider_trailing_fill = true;
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
@@ -620,32 +689,32 @@ fn style_at(scale: f32) -> egui::Style {
     let w = &mut visuals.widgets;
 
     w.noninteractive.bg_fill = panel();
-    w.noninteractive.bg_stroke = Stroke::new(1.0, hairline());
-    w.noninteractive.fg_stroke = Stroke::new(1.0, text());
+    w.noninteractive.bg_stroke = Stroke::new(LINE_WIDTH, hairline());
+    w.noninteractive.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.noninteractive.corner_radius = WIDGET_RADIUS;
 
     w.inactive.bg_fill = widget();
     w.inactive.weak_bg_fill = widget();
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.fg_stroke = Stroke::new(1.0, text());
+    w.inactive.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.inactive.corner_radius = WIDGET_RADIUS;
 
     w.hovered.bg_fill = widget_hover();
     w.hovered.weak_bg_fill = widget_hover();
     w.hovered.bg_stroke = Stroke::NONE;
-    w.hovered.fg_stroke = Stroke::new(1.2, text());
+    w.hovered.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.hovered.corner_radius = WIDGET_RADIUS;
 
     w.active.bg_fill = accent_active();
     w.active.weak_bg_fill = accent_active();
     w.active.bg_stroke = Stroke::NONE;
-    w.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
+    w.active.fg_stroke = Stroke::new(LINE_WIDTH, Color32::WHITE);
     w.active.corner_radius = WIDGET_RADIUS;
 
     w.open.bg_fill = widget();
     w.open.weak_bg_fill = widget();
-    w.open.bg_stroke = Stroke::new(1.0, accent_edge());
-    w.open.fg_stroke = Stroke::new(1.0, text());
+    w.open.bg_stroke = Stroke::new(LINE_WIDTH, accent_edge());
+    w.open.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.open.corner_radius = WIDGET_RADIUS;
 
     scale_chrome(&mut style, scale);
