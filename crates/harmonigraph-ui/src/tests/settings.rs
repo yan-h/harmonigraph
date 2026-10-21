@@ -1491,6 +1491,14 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
                 .iter()
                 .filter_map(|cs| {
                     let rect = pane_shape(cs)?;
+                    // Text by the box it was laid out in, not its mesh: the font
+                    // atlas pads every glyph's quad by a transparent texel, which
+                    // at scale 0.7 put a truncated title's mesh a point past the
+                    // ink and into the lane.
+                    let rect = match &cs.shape {
+                        egui::Shape::Text(t) => t.galley.rect.translate(t.pos.to_vec2()),
+                        _ => rect,
+                    };
                     if rect.right() <= left + 1.0 {
                         return None;
                     }
