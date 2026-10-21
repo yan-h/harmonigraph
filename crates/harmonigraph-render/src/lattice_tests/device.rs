@@ -27,8 +27,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let Some((instance, adapter)) = crate::test_gpu_adapter() else { return };
     (shooter.device, shooter.queue) =
         pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     shooter.resources.insert(instance.clone());
@@ -98,8 +97,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
 fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
     use crate::startup::Status;
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let Some((instance, adapter)) = crate::test_gpu_adapter() else { return };
     (shooter.device, shooter.queue) =
         pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     let scene = parity_scene();
