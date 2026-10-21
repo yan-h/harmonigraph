@@ -1,36 +1,34 @@
-//! The gate a golden frame passes: byte-exact against a blessed PNG, or a
-//! contact sheet and a demand that the PR say what moved.
+//! Golden frames, compared build against build: what this branch draws held
+//! byte-exactly against what its base draws, on the same machine in the same
+//! run.
 //!
 //! Only the MECHANISM lives here. What a frame is OF, and what a diff on it
 //! means, belongs with the scenes — `harmonigraph-render`'s
 //! `lattice_tests::golden` and `harmonigraph-offline`'s `golden` each carry
 //! their own set and their own reading of one.
 //!
-//! The frames on record are the ones the CI runner draws. A Mac on another
-//! macOS draws them apart: on 2026-10-18 the owner's drew every frame of both
-//! sets 1-3/255 off a `main` CI passed. So a failed comparison writes the frame
-//! it drew under `target/golden-diff/actual/`, laid out as `crates/` is, CI
-//! uploads that directory beside the amplified sheets when a group fails, and
-//! a picture change is re-baselined from the run's `golden-diff-<group>`
-//! artifacts: read the sheets, copy `actual/*` over `crates/`, and push. One
-//! run writes every frame that moved, because each golden test holds one frame
-//! (a second [`Gate::check`] in the same test would go unreached once the first
-//! fails) and `ci.sh` runs every test binary rather than stopping at the first
-//! that fails.
-//! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` re-baselines to the
-//! machine it runs on, which is the record only where that machine draws what
-//! CI does.
+//! A golden test draws its frame and hands it to [`Gate::check`], which checks
+//! it is a picture at all and, under [`WRITE`], writes it out. That is all a
+//! test does: an ordinary `cargo test` only proves every scene still draws.
+//! `tools/golden-diff.py` draws the set twice, once from the base (an archive
+//! of `git merge-base origin/main HEAD`, or `HEAD^1` in CI) and once from the
+//! working tree, and [`compare`] says which frames moved, by how much, with a
+//! contact sheet of each.
 //!
-//! There is one gate rather than one per crate because that protocol is a
-//! CONTRACT with whoever is holding the branch. A second implementation of it
-//! would be free to drift — a tolerance here, a different environment variable
-//! there — and the drift would show up as a session re-baselining one crate's
-//! frames and silently not the other's.
+//! Until 2026-10 the record was a committed PNG per frame, drawn by the CI
+//! runner, and a picture change cost a CI round to re-baseline: no other
+//! machine draws the runner's bytes (the owner's Mac is 1-3/255 off), so
+//! nothing could be checked or blessed locally. 132 commits re-baselined it in
+//! its eight weeks, and the three unintended moves it is credited with (#1158,
+//! #1459, #991) were each a few levels on a few pixels, blessed rather than
+//! fixed. What it was for, and what this keeps, is the proof a refactor or a
+//! frame saving moved no pixel — which needs a base drawn on the same machine,
+//! not a record.
 //!
-//! The one thing besides the mechanism that both sets share is [`LOOK`], the
-//! settings their frames are drawn at, for the same reason: two copies of it
-//! would drift.
+//! There is one mechanism rather than one per crate so that the two sets cannot
+//! drift apart in what they compare or where they write.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// The look every golden frame starts from: an `AppearanceDocument` in RON,
@@ -39,9 +37,9 @@ use std::path::{Path, PathBuf};
 /// A golden is worth having for the PR that must not move the picture — a
 /// refactor, a frame saving, a cache — and is a formality on the PR that means
 /// to. Drawn at the defaults, a set is the second kind on every capture of a
-/// DAW look: #1475 re-blessed eighteen frames that way, and nobody learned
-/// anything from them. Pinned, a capture moves nothing here, and whether the
-/// fresh look is right is judged where it is seen, in the DAW.
+/// DAW look: #1475 moved eighteen frames that way, and nobody learned anything
+/// from them. Pinned, a capture moves nothing here, and whether the fresh look
+/// is right is judged where it is seen, in the DAW.
 ///
 /// Each crate parses what it draws from: the offline set the whole document,
 /// the lattice set only its `view`. Missing keys take the field's `Default`,
@@ -52,94 +50,60 @@ use std::path::{Path, PathBuf};
 ///   frames that draw it, which is a picture change and stated as one.
 /// - A RENAMED or retyped field drops its pinned value for the new `Default`.
 ///   If that moves a frame, carry the value over to the new key here rather
-///   than blessing.
+///   than stating it as a picture change.
 /// - An appearance version bump fails the offline parse; edit the number.
 ///
 /// Re-pinning the whole look, say to a newer DAW capture through
-/// `./read-plugin-state.py --appearance`, re-baselines every frame. That goes
-/// in a PR of its own.
+/// `./read-plugin-state.py --appearance`, moves every frame. That goes in a PR
+/// of its own.
 pub const LOOK: &str = include_str!("../look.ron");
-
-/// How far a channel may drift before the frame counts as changed.
-///
-/// Zero: the record is one machine, CI's runner, so there a difference is the
-/// shader's or the scene's and not the platform's. Another machine's 1-3/255
-/// is not a reason for one: a tolerance wide enough for it would pass a uniform
-/// two-level shift, which is #453's shape (a mean of 3.3/255) and the signal
-/// rather than the noise.
-const TOLERANCE: u8 = 0;
 
 /// How many distinct pixel values a frame has to carry to count as a picture.
 ///
 /// The vacuity guard every set shares. A golden cannot pass for the wrong
-/// reason the way a claim test can — it asserts every pixel — but it CAN be a
+/// reason the way a claim test can — it compares every pixel — but it CAN be a
 /// frame with nothing in it: a camera looking past the lattice, a name
-/// projected off the pane, a window with no audio inside it. Such a frame is
-/// blessed once and then agrees with itself forever, which is #450's rule in
-/// the shape a golden takes it in. Twenty is far below what any of these
-/// scenes draws and far above a flat fill plus its edge.
+/// projected off the pane, a window with no audio inside it. Such a frame
+/// agrees with its base forever, which is #450's rule in the shape a golden
+/// takes it in. Twenty is far below what any of these scenes draws and far
+/// above a flat fill plus its edge.
 const LEVELS: usize = 20;
 
-/// The environment variable that turns a comparison into a re-baseline.
-const BLESS: &str = "HARMONIGRAPH_BLESS";
+/// The environment variable naming the directory frames are written to, as
+/// `<dir>/<crate>/<name>.png`. Unset, a golden test draws and checks and
+/// writes nothing.
+pub const WRITE: &str = "HARMONIGRAPH_GOLDEN_WRITE";
 
-/// The environment variable that draws a frame and skips its comparison.
-///
-/// For `tools/shader-assets.py` alone, which runs the golden tests to make
-/// every pipeline they build load from a candidate Metal corpus, and whose
-/// verdict is about the corpus rather than the picture. Compared, a PR that both
-/// moves a frame and owes a corpus could not regenerate the corpus until the
-/// frame was re-baselined, a CI round later: four of the eight regenerations
-/// dispatched on 2026-10-19..21 failed on exactly that, a moved frame and no
-/// corpus fault. The vacuity guard still runs, and [`BLESS`] still wins.
-/// `ci.sh` unsets it, so it cannot turn the gate itself into a pass.
-const DRAW_ONLY: &str = "HARMONIGRAPH_GOLDEN_DRAW_ONLY";
-
-/// One crate's set of blessed frames.
+/// One crate's set of golden frames.
 pub struct Gate {
-    /// Where the blessed PNGs live — `<crate>/golden`, committed.
-    dir: PathBuf,
-    /// Where a failing comparison writes its contact sheet — under `target/`,
-    /// so the working tree stays clean while the gate is passing.
-    diffs: PathBuf,
-    /// Where it writes the frame it actually drew, laid out as the repository
-    /// is (`actual/<crate>/golden/<name>.png`), so a frame CI drew is a copy
-    /// into `crates/` away from being the one on record.
-    actual: PathBuf,
+    krate: String,
 }
 
 impl Gate {
     /// The gate for the crate whose `CARGO_MANIFEST_DIR` is `manifest`.
     ///
-    /// Takes the caller's `env!` rather than reading its own: this crate's
-    /// manifest directory is this crate, and every set of frames belongs to
-    /// the crate that draws them.
+    /// Takes the caller's `env!` rather than reading its own: every set of
+    /// frames belongs to the crate that draws them.
     pub fn new(manifest: &str) -> Gate {
-        let manifest = PathBuf::from(manifest);
-        // Beside the workspace's one `target/`, not inside the crate: a sheet
-        // is written on failure and read once, and `cargo clean` is the right
-        // way to be rid of it.
-        let diffs = manifest.join("../../target/golden-diff");
-        let krate = manifest.file_name().expect("a crate directory").to_owned();
-        let actual = diffs.join("actual").join(krate).join("golden");
-        Gate { dir: manifest.join("golden"), diffs, actual }
+        let krate = Path::new(manifest).file_name().expect("a crate directory");
+        Gate { krate: krate.to_string_lossy().into_owned() }
     }
 
-    /// `frame` is byte-identical to the PNG on record under `name`, or the
-    /// test fails with a sheet to look at.
-    ///
-    /// Under [`BLESS`] it writes the frame instead and reports what that moved,
-    /// so a re-baseline states its own diff rather than leaving it to be found
-    /// in the PR.
+    /// `frame` is a complete picture, written under [`WRITE`] when it is set.
     ///
     /// `frame` is tightly packed RGBA8, `size[0] * size[1] * 4` bytes.
     pub fn check(&self, name: &str, size: [u32; 2], frame: &[u8]) {
+        let out = std::env::var_os(WRITE).map(PathBuf::from);
+        self.check_into(out.as_deref(), name, size, frame);
+    }
+
+    fn check_into(&self, out: Option<&Path>, name: &str, size: [u32; 2], frame: &[u8]) {
         let bytes = (size[0] as usize)
             .checked_mul(size[1] as usize)
             .and_then(|pixels| pixels.checked_mul(4))
             .expect("RGBA8 dimensions exceed addressable memory");
         assert_eq!(frame.len(), bytes, "{name}: wrong RGBA8 byte length");
-        let mut levels = std::collections::BTreeSet::new();
+        let mut levels = BTreeSet::new();
         for px in frame.as_chunks::<4>().0 {
             levels.insert([px[0], px[1], px[2], px[3]]);
             if levels.len() == LEVELS {
@@ -151,105 +115,119 @@ impl Gate {
             "{name} drew {} distinct pixel values — the fixture reaches nothing",
             levels.len(),
         );
-        let path = self.dir.join(format!("{name}.png"));
-
-        if std::env::var_os(BLESS).is_some() {
-            let before = read_png(&path)
-                .filter(|(_, previous_size)| *previous_size == size)
-                .map(|(px, _)| drift(&px, frame));
-            write_png(&path, size, frame);
-            match before {
-                Some((mean, max)) if max > 0 => {
-                    eprintln!(
-                        "blessed {name}: mean {mean:.3}, max {max} — say what moved in the PR"
-                    )
-                }
-                Some(_) => eprintln!("blessed {name}: unchanged"),
-                None => eprintln!("blessed {name}: new frame"),
-            }
-            return;
+        if let Some(out) = out {
+            write_png(&out.join(&self.krate).join(format!("{name}.png")), size, frame);
         }
-        if std::env::var_os(DRAW_ONLY).is_some() {
-            return;
-        }
+    }
+}
 
-        // A new frame and a resized one have nothing to compare against, and
-        // are written out for the same reason a moved one is: the record
-        // comes from what CI drew.
-        let actual = self.actual.join(format!("{name}.png"));
-        let Some((expected, on_record)) = read_png(&path) else {
-            write_png(&actual, size, frame);
-            panic!(
-                "no golden frame at {}\nthe frame drawn: {}\nre-baseline it from CI's \
-                 golden-diff-<group> artifact (see this crate's docs)",
-                path.display(),
-                actual.display(),
-            );
+/// What one set of frames did against another.
+#[derive(Debug, Default, PartialEq)]
+pub struct Report {
+    /// `(frame, mean, max)` for each frame whose bytes differ from the base's,
+    /// with its contact sheet written under `sheets/`.
+    pub moved: Vec<(String, f64, u8)>,
+    /// Frames the head draws and the base does not.
+    pub new: Vec<String>,
+    /// Frames the base draws and the head does not.
+    pub removed: Vec<String>,
+    /// Frames the head drew differently on its second draw: nondeterminism,
+    /// which is reported apart so it never reads as a picture change.
+    pub unstable: Vec<String>,
+}
+
+impl Report {
+    /// Whether the head's picture differs from the base's at all.
+    pub fn changed(&self) -> bool {
+        !(self.moved.is_empty() && self.new.is_empty() && self.removed.is_empty())
+    }
+}
+
+/// Compare the frames under `head` against `base` (each `<crate>/<name>.png`),
+/// writing a contact sheet of each moved frame under `sheets`.
+///
+/// Byte-exact: both sides are drawn on one machine, so any difference is the
+/// branch's and not the platform's, and a tolerance wide enough for noise
+/// would pass a uniform two-level shift, which is #453's shape (a mean of
+/// 3.3/255) and the signal rather than the noise. `again`, when given, is the
+/// head drawn a second time; a frame that differs between the two is unstable.
+pub fn compare(base: &Path, head: &Path, again: Option<&Path>, sheets: &Path) -> Report {
+    let (base_frames, head_frames) = (frames(base), frames(head));
+    let mut report = Report::default();
+    for name in base_frames.difference(&head_frames) {
+        report.removed.push(name.clone());
+    }
+    for name in &head_frames {
+        let drawn = read_png(&head.join(name)).expect("a frame just listed");
+        if again.is_some_and(|again| read_png(&again.join(name)).as_ref() != Some(&drawn)) {
+            report.unstable.push(name.clone());
+            continue;
+        }
+        let Some(expected) = read_png(&base.join(name)) else {
+            report.new.push(name.clone());
+            continue;
         };
-        if on_record != size {
-            write_png(&actual, size, frame);
-            panic!(
-                "{name}: golden was written at a different size; the frame drawn: {}",
-                actual.display()
-            );
+        if expected == drawn {
+            continue;
         }
-
-        let (mean, max) = drift(&expected, frame);
-        if max > TOLERANCE {
-            let sheet = self.write_contact_sheet(name, size, &expected, frame);
-            write_png(&actual, size, frame);
-            panic!(
-                "{name} moved: mean {mean:.3}/255, max {max}/255\n\
-                 expected | actual | difference at 8x: {}\n\
-                 the frame drawn: {}\n\
-                 If the change is intended, say what moved in the PR body and re-baseline \
-                 from the frames CI drew: download the failed run's golden-diff-<group> \
-                 artifacts and copy actual/* over crates/ (see this crate's docs). \
-                 {BLESS}=1 cargo test --workspace golden re-baselines to THIS machine, \
-                 which is the record only if it draws what CI does.",
-                sheet.display(),
-                actual.display(),
-            );
+        let ((expected, before), (actual, size)) = (expected, drawn);
+        if before != size {
+            report.moved.push((name.clone(), f64::NAN, u8::MAX));
+            continue;
         }
+        let (mean, max) = drift(&expected, &actual);
+        write_png(
+            &sheets.join(name),
+            [size[0] * 3, size[1]],
+            &contact_sheet(size, &expected, &actual),
+        );
+        report.moved.push((name.clone(), mean, max));
     }
+    report
+}
 
-    /// Expected, actual, and the difference at 8x, side by side in one image.
-    ///
-    /// The amplification is the point: the drift this gate exists to catch is a
-    /// handful of levels, which is invisible in a raw subtraction and obvious
-    /// at 8x.
-    fn write_contact_sheet(
-        &self,
-        name: &str,
-        size: [u32; 2],
-        expected: &[u8],
-        actual: &[u8],
-    ) -> PathBuf {
-        let [w, h] = [size[0] as usize, size[1] as usize];
-        let mut sheet = vec![0u8; w * 3 * h * 4];
-        for y in 0..h {
-            for x in 0..w {
-                let src = (y * w + x) * 4;
-                for (panel, px) in [
-                    (0usize, [expected[src], expected[src + 1], expected[src + 2], 255]),
-                    (1, [actual[src], actual[src + 1], actual[src + 2], 255]),
-                    (2, {
-                        let amp = |c: usize| {
-                            (u32::from(expected[src + c].abs_diff(actual[src + c])) * 8).min(255)
-                                as u8
-                        };
-                        [amp(0), amp(1), amp(2), 255]
-                    }),
-                ] {
-                    let dst = (y * w * 3 + panel * w + x) * 4;
-                    sheet[dst..dst + 4].copy_from_slice(&px);
-                }
+/// Every `<crate>/<name>.png` under `dir`.
+fn frames(dir: &Path) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for krate in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        for frame in std::fs::read_dir(krate.path()).into_iter().flatten().flatten() {
+            let path = frame.path();
+            if path.extension().is_some_and(|e| e == "png") {
+                let relative = path.strip_prefix(dir).expect("listed under dir");
+                found.insert(relative.to_string_lossy().into_owned());
             }
         }
-        let path = self.diffs.join(format!("{name}.png"));
-        write_png(&path, [size[0] * 3, size[1]], &sheet);
-        path
     }
+    found
+}
+
+/// Expected, actual, and the difference at 8x, side by side in one image.
+///
+/// The amplification is the point: the drift this exists to catch is a
+/// handful of levels, which is invisible in a raw subtraction and obvious at
+/// 8x.
+fn contact_sheet(size: [u32; 2], expected: &[u8], actual: &[u8]) -> Vec<u8> {
+    let [w, h] = [size[0] as usize, size[1] as usize];
+    let mut sheet = vec![0u8; w * 3 * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let src = (y * w + x) * 4;
+            for (panel, px) in [
+                (0usize, [expected[src], expected[src + 1], expected[src + 2], 255]),
+                (1, [actual[src], actual[src + 1], actual[src + 2], 255]),
+                (2, {
+                    let amp = |c: usize| {
+                        (u32::from(expected[src + c].abs_diff(actual[src + c])) * 8).min(255) as u8
+                    };
+                    [amp(0), amp(1), amp(2), 255]
+                }),
+            ] {
+                let dst = (y * w * 3 + panel * w + x) * 4;
+                sheet[dst..dst + 4].copy_from_slice(&px);
+            }
+        }
+    }
+    sheet
 }
 
 /// Mean and largest per-channel drift between two RGBA8 frames.
@@ -301,35 +279,69 @@ fn read_png(path: &Path) -> Option<(Vec<u8>, [u32; 2])> {
 mod tests {
     use super::*;
 
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("harmonigraph-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// A frame of 64 distinct levels, `shift` added to its green channel.
+    fn frame(shift: u8) -> Vec<u8> {
+        (0..64).flat_map(|x| [x, shift, 0, 255]).collect()
+    }
+
     #[test]
-    fn golden_requires_a_complete_frame_even_when_the_prefix_matches() {
-        let dir = std::env::temp_dir().join(format!("harmonigraph-golden-{}", std::process::id()));
-        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
-        let frame: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
-        write_png(&dir.join("complete.png"), [8, 8], &frame);
-        gate.check("complete", [8, 8], &frame);
+    fn a_frame_must_be_complete_and_a_picture() {
+        let gate = Gate { krate: "k".into() };
+        gate.check_into(None, "complete", [8, 8], &frame(0));
         for len in [128, 255, 257, 260] {
-            let mut incomplete = frame.clone();
+            let mut incomplete = frame(0);
             incomplete.resize(len, 0);
             assert!(
-                std::panic::catch_unwind(|| gate.check("complete", [8, 8], &incomplete)).is_err(),
+                std::panic::catch_unwind(|| gate.check_into(None, "c", [8, 8], &incomplete))
+                    .is_err(),
                 "accepted {len} bytes for a 256-byte frame",
             );
         }
-        std::fs::remove_dir_all(dir).unwrap();
+        let flat = [7u8, 7, 7, 255].repeat(64);
+        assert!(std::panic::catch_unwind(|| gate.check_into(None, "flat", [8, 8], &flat)).is_err());
     }
 
-    /// A frame that moved is left on disk exactly as drawn, alpha included,
-    /// which is what re-baselining from CI's uploaded frames rests on.
+    /// One level on one channel is a move, a frame on one side only is new or
+    /// removed, and a head that draws differently twice is unstable rather
+    /// than moved.
     #[test]
-    fn a_moved_frame_is_written_out_as_drawn() {
-        let dir = std::env::temp_dir().join(format!("harmonigraph-moved-{}", std::process::id()));
-        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
-        let on_record: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
-        write_png(&dir.join("moved.png"), [8, 8], &on_record);
-        let drawn: Vec<u8> = (0..64).flat_map(|x| [x, 1, 0, 128 + x]).collect();
-        assert!(std::panic::catch_unwind(|| gate.check("moved", [8, 8], &drawn)).is_err());
-        assert_eq!(read_png(&dir.join("actual/moved.png")), Some((drawn, [8, 8])));
+    fn compare_names_what_moved_appeared_vanished_and_wavered() {
+        let dir = scratch("compare");
+        let gate = Gate { krate: "k".into() };
+        let [base, head, again] = ["base", "head", "again"].map(|side| dir.join(side));
+        for (name, b, h, a) in [
+            ("still", Some(0), Some(0), Some(0)),
+            ("moved", Some(0), Some(1), Some(1)),
+            ("gone", Some(0), None, None),
+            ("added", None, Some(0), Some(0)),
+            ("wavers", Some(0), Some(1), Some(2)),
+        ] {
+            for (side, shift) in [(&base, b), (&head, h), (&again, a)] {
+                if let Some(shift) = shift {
+                    gate.check_into(Some(side), name, [8, 8], &frame(shift));
+                }
+            }
+        }
+        let sheets = dir.join("sheets");
+        let report = compare(&base, &head, Some(&again), &sheets);
+        let mean = 64.0 / 256.0;
+        assert_eq!(
+            report,
+            Report {
+                moved: vec![("k/moved.png".into(), mean, 1)],
+                new: vec!["k/added.png".into()],
+                removed: vec!["k/gone.png".into()],
+                unstable: vec!["k/wavers.png".into()],
+            }
+        );
+        assert!(sheets.join("k/moved.png").is_file(), "no contact sheet for the moved frame");
+        assert!(!compare(&base, &base, None, &sheets).changed());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

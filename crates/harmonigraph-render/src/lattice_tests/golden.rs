@@ -35,16 +35,11 @@
 //! capture moved them only through the fresh Shadow width the name frames
 //! read, and that width now comes from the pinned look too.
 //!
-//! **A changed golden is a stated picture change.** Re-baseline with
-//! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden`, look at
-//! the contact sheet it names, and say in the PR body what moved and why. The
-//! comparison, the bless and the sheet are [`harmonigraph_golden::Gate`]; what
-//! is here is the scenes.
-//!
-//! The frames are Metal-on-macOS specific, so Full CI runs on macOS. A runner,
-//! driver or OS update can re-baseline all of them at once; its signature is
-//! every scene moving by a small amount rather than one scene moving by a
-//! large one.
+//! **A moved golden is a stated picture change.** `tools/golden-diff.py`
+//! draws these frames from the base and from the branch on one machine and
+//! names each that moved with a contact sheet, and the PR body says what moved
+//! and why. The mechanism is [`harmonigraph_golden`]'s; what is here is the
+//! scenes, and "the frame on record" in their names is the one the base draws.
 
 use super::fixtures::*;
 use crate::*;

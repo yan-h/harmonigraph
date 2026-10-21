@@ -34,9 +34,10 @@ jobs:
     # The check reads as "workspace" and "isolated"; the `Full CI` name stays on
     # the summary job below, which is the one to look at on a PR.
     name: ${{ matrix.group }}
-    # Pinned rather than macos-latest: the golden frames are byte-exact against
-    # what this image draws, so a runner bump re-baselines every golden. Bump it
-    # in a PR that re-baselines anyway, not whenever GitHub moves the alias (#1496).
+    # Pinned rather than macos-latest, so that a new image (its Xcode, Metal
+    # toolchain and SDK) lands in a PR of its own instead of turning every
+    # branch red the day GitHub moves the alias. The golden frames no longer
+    # care: they are compared against the base drawn in the same job.
     runs-on: macos-26
     env:
       # Pixel tests must render; a missing adapter must not become a green skip.
@@ -45,6 +46,10 @@ jobs:
       # (#1119). Set in both groups, so a test that moves to one without the
       # install below fails rather than skipping.
       HARMONIGRAPH_REQUIRE_FFMPEG: "1"
+      # The base tools/golden-diff.py draws against: on a pull_request the
+      # checkout is the PR merged into main, so its first parent is that main;
+      # on a push to main it is the commit before. Hence fetch-depth 2 below.
+      GOLDEN_BASE: HEAD^1
     timeout-minutes: 20
     strategy:
       # Both groups always report. A failure in one says nothing about the
@@ -62,6 +67,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 2
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -105,17 +111,14 @@ jobs:
       - name: Run full CI
         run: ./ci.sh ${{ matrix.group }}
 
-      # The golden frames are byte-exact against THIS runner. The owner's Mac
-      # drew every frame of both sets 1-3/255 off a `main` this job passed
-      # (2026-10-18), so a picture change is re-baselined from what the runner
-      # drew. The gate writes each moved frame under actual/ laid out as
-      # crates/ is: copy `actual/*` over `crates/`, and the frames on record are
-      # the runner's. The protocol is in harmonigraph-golden's crate docs.
-      - name: Upload golden frames that moved
-        if: failure()
+      # What tools/golden-diff.py drew and found: both sides' frames, a contact
+      # sheet per moved frame, report.md and `changed`, which the summary job
+      # below reads. Only `isolated` runs it.
+      - name: Upload the golden diff
+        if: always() && matrix.group == 'isolated'
         uses: actions/upload-artifact@v4
         with:
-          name: golden-diff-${{ matrix.group }}
+          name: golden-diff
           path: target/golden-diff/
           if-no-files-found: ignore
           # A re-run attempt of the same job uploads under the same name.
@@ -131,8 +134,43 @@ jobs:
     runs-on: ubuntu-latest
     needs: full-ci
     if: always()
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Did every group pass?
         run: |
           echo "gate groups: ${{ needs.full-ci.result }}"
           [ "${{ needs.full-ci.result }}" = "success" ]
+
+      - name: Download the golden diff
+        if: github.event_name == 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: golden-diff
+          path: golden-diff
+
+      # A moved golden frame is a picture change, and the PR body is where it is
+      # stated. Checked here, on Linux and after the groups, so that a PR body
+      # missing the line is fixed by editing it and re-running this job alone
+      # (`gh run rerun <run> --job <this job's id>`), seconds rather than another
+      # macOS round. The body is fetched live because a re-run replays the
+      # original event, whose copy of the body is the one that lacked the line.
+      - name: Is every moved golden frame stated?
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$(cat golden-diff/changed)" != true ]; then
+            cat golden-diff/report.md
+            exit 0
+          fi
+          cat golden-diff/report.md
+          body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .body)
+          if grep -q '^Golden frames moved:' <<<"$body"; then
+            echo "stated in the PR body"
+            exit 0
+          fi
+          echo "::error::Golden frames moved against main (table above; contact sheets in this run's golden-diff artifact). Read the sheets, then add a line starting 'Golden frames moved:' to the PR body with the table and why, and re-run this job alone: gh run rerun $GITHUB_RUN_ID --job <this job's id>."
+          exit 1
