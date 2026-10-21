@@ -990,7 +990,6 @@ pub(crate) enum NameLead {
 /// nothing below here knows the label will be drawn at any other, marks
 /// included, because everything it emits goes through the one batch that
 /// applies the magnification.
-#[allow(clippy::too_many_arguments)]
 fn stacked_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,

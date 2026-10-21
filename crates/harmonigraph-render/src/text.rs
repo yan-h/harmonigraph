@@ -758,7 +758,6 @@ pub(crate) fn create_shadow_box_pipeline(
 /// `shader` is [`glyph_shader`]'s, handed in rather than built here: a caller
 /// builds several of these at once off one module, and a hot-reload's module is
 /// not the baked one.
-#[allow(clippy::too_many_arguments)]
 fn glyph_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
