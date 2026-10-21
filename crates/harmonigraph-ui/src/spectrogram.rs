@@ -8,7 +8,7 @@
 //! GPU is an immutable snapshot of the slabs it draws. The renderer owns
 //! upload history; the read that turns those bytes into pixels lives in
 //! [`harmonigraph_render`]'s shader.
-//! [`panes::spectral::spectrogram`](crate::panes::spectral::spectrogram) is the
+//! [`panes::spectral::spectrogram`] is the
 //! pane above it: the geometry the run is drawn over, the draw call, and the
 //! cell colour the spectrum curve shares with it.
 //!

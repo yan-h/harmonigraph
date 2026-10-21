@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, env, fs, path::PathBuf};
+use std::{collections::BTreeSet, env, fmt::Write, fs, path::PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -28,11 +28,12 @@ fn main() {
         assert_eq!(PathBuf::from(name).file_name().unwrap(), name.as_str());
         let bytes = fs::read(directory.join(name)).unwrap();
         assert!(!bytes.is_empty(), "empty Metal asset: {name}");
-        assert_eq!(
-            format!("{:x}", Sha256::digest(bytes)),
-            hash.as_str().unwrap(),
-            "changed Metal asset: {name}"
-        );
+        // sha2 0.11's digest no longer implements `LowerHex`.
+        let digest = Sha256::digest(bytes).iter().fold(String::new(), |mut hex, b| {
+            write!(hex, "{b:02x}").unwrap();
+            hex
+        });
+        assert_eq!(digest, hash.as_str().unwrap(), "changed Metal asset: {name}");
     }
     let mut generated = String::from("pub static ASSETS: &[Asset] = &[\n");
     for name in files.iter().filter(|name| name.ends_with(".metal")) {

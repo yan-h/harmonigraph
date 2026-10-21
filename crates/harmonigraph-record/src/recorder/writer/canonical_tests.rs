@@ -1378,7 +1378,7 @@ fn forward_seeks_split_real_audio_at_the_new_notes_origin() {
         assert!(take.incomplete.is_none());
         let samples = |path: &std::path::Path| -> Vec<f32> {
             let bytes = std::fs::read(path.with_extension("wav")).unwrap();
-            bytes[44..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+            bytes[44..].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
         };
         if split {
             let first_take = harmonigraph_take::Take::read(&file).unwrap();
@@ -1447,7 +1447,7 @@ fn an_audio_only_last_pass_renders_after_a_pass_with_midi() {
     assert_eq!(take.header.audio_start, Some(0.0));
     let bytes = std::fs::read(last.with_extension("wav")).unwrap();
     let samples: Vec<_> =
-        bytes[44..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+        bytes[44..].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
     assert_eq!(samples, vec![0.75; 128]);
     assert_eq!(harmonigraph_take::Take::read(&file).unwrap().notes().count(), 2);
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();

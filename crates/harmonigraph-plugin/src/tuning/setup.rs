@@ -139,7 +139,7 @@ impl Shared {
         self.request_main();
     }
     pub fn set_retune(&self, value: bool) {
-        let _ = self.retune.fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+        let _ = self.retune.try_update(Ordering::AcqRel, Ordering::Acquire, |old| {
             ((old & 1 != 0) != value).then_some(((old & !1) + 2) | u64::from(value))
         });
         self.publish_controls();

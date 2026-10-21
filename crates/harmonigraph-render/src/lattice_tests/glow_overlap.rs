@@ -132,7 +132,7 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
         let mut empty = 0;
         let mut darkest_ratio = 1.0f32;
         let mut brightest_ratio = 0.0f32;
-        for (before, after) in smooth.chunks_exact(4).zip(textured.chunks_exact(4)) {
+        for (before, after) in smooth.as_chunks::<4>().0.iter().zip(textured.as_chunks::<4>().0) {
             if before[3] == 0 {
                 assert_eq!(after, before, "texture cannot create light outside a halo");
                 empty += 1;
@@ -192,7 +192,7 @@ fn material_shadow_pickup_darkens_light_without_adding_coverage() {
         shooter.shot_again(&scene);
         let after = read_glow(&shooter);
         let mut changed = 0;
-        for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+        for (a, b) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
             // A star brighter than its light owns alpha to contain its
             // colour; pigment dims that star and hands back a rounding step.
             let slack = u8::from(material == LatticeMaterial::Stars);
@@ -262,8 +262,8 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
                 if level > 0.0 {
                     assert!(
                     before
-                        .chunks_exact(4)
-                        .zip(colored.chunks_exact(4))
+                        .as_chunks::<4>().0.iter()
+                        .zip(colored.as_chunks::<4>().0)
                         .filter(|(a, b)| a[..3].iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
                         .count()
                         > 100,
@@ -273,7 +273,7 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
                 scene.view.atmosphere.material_shadow_pickup = 1.0;
                 shooter.shot_again(&scene);
                 let after = material_source(&shooter);
-                for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+                for (a, b) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
                     assert_eq!(
                         a[3], b[3],
                         "colored pigment preserves alpha, including empty light"
@@ -354,7 +354,7 @@ fn pickup_spreads_around_arc_ends_and_bloom_brightens_its_source() {
     shooter.shot_again(&scene);
     let bloomed = material_source(&shooter);
     let mut brighter = 0;
-    for (a, b) in plain.chunks_exact(4).zip(bloomed.chunks_exact(4)) {
+    for (a, b) in plain.as_chunks::<4>().0.iter().zip(bloomed.as_chunks::<4>().0) {
         assert_eq!(a[3], b[3], "Bloom changes pigment brightness, never source alpha");
         assert!(b[..3].iter().zip(a).all(|(b, a)| *b >= a.saturating_sub(1)));
         assert!(b[..3].iter().all(|v| *v <= b[3].saturating_add(1)));
@@ -419,7 +419,12 @@ fn pickup_and_ordinary_shadows_are_independent() {
                 },
             ],
         });
-        read_glow_binding(shooter, &binding).chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>()
+        read_glow_binding(shooter, &binding)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[3])
+            .collect::<Vec<_>>()
     };
     let plain = glow(&mut shooter, &scene);
     let ordinary = scene_alpha(&shooter);
@@ -455,8 +460,10 @@ fn pigment_reach_extends_beyond_the_ordinary_node_quad() {
     let radius = on_screen(&scene, SIZE, right * scene.node_radius).distance(CENTRE);
     let far_changed = |output: &[u8]| {
         plain
-            .chunks_exact(4)
-            .zip(output.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(output.as_chunks::<4>().0)
             .enumerate()
             .filter(|(i, (a, b))| {
                 let at = glam::vec2(
@@ -493,13 +500,15 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     scene.view.atmosphere.material_amount = 1.0;
     let smooth = glow(&mut shooter, &scene);
     let changed = |a: &[u8], b: &[u8]| {
-        a.chunks_exact(4)
-            .zip(b.chunks_exact(4))
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count()
     };
     assert!(changed(&baseline, &smooth) > 500, "fixture must reach the displacement pass");
-    for pixel in smooth.chunks_exact(4) {
+    for pixel in smooth.as_chunks::<4>().0 {
         assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
         assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
     }
@@ -592,8 +601,10 @@ fn textures_feed_materials_before_sampling() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let changed = |a: &[u8], b: &[u8]| {
-        a.chunks_exact(4)
-            .zip(b.chunks_exact(4))
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count()
     };
@@ -645,7 +656,7 @@ fn textures_feed_materials_before_sampling() {
             "Clouds/{material:?}: visible displacement"
         );
         assert!(changed(&combined, &material_only) > 500, "Clouds/{material:?}: visible texture");
-        for pixel in combined.chunks_exact(4) {
+        for pixel in combined.as_chunks::<4>().0 {
             assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1));
             assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
         }
@@ -771,14 +782,21 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         let after = read_glow(&shooter);
         if label == "random brightness" {
             assert!(
-                before.chunks_exact(4).zip(after.chunks_exact(4)).all(|(a, b)| a[3] == b[3]),
+                before
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(after.as_chunks::<4>().0)
+                    .all(|(a, b)| a[3] == b[3]),
                 "brightness must preserve premultiplied coverage"
             );
         }
         assert_eq!(before_tile != tile(&shooter), rebake, "{style:?}/{label}: tile invalidation");
         let changed = before
-            .chunks_exact(4)
-            .zip(after.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(after.as_chunks::<4>().0)
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count();
         assert!(
@@ -807,8 +825,10 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         shooter.shot_again(&scene);
         let after = read_glow(&shooter);
         let changed = before
-            .chunks_exact(4)
-            .zip(after.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(after.as_chunks::<4>().0)
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count();
         assert!(changed > 100, "Scales/{label}: fixture must reach the effect ({changed} pixels)");
@@ -831,7 +851,7 @@ fn linear(gamma: f64) -> f64 {
     }
 }
 
-fn luminance(pixel: &[u8]) -> f64 {
+fn luminance(pixel: &[u8; 4]) -> f64 {
     [0.2126, 0.7152, 0.0722]
         .iter()
         .zip(pixel)
@@ -858,7 +878,7 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
         }
         let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
         let mut visible = 0;
-        for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+        for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             let at = glam::vec2((index % 256) as f32 + 0.5, (index / 256) as f32 + 0.5);
             let d = at.distance(CENTRE) / per_uv;
             // Even unmarked nodes use the maximum configured mark rim.
@@ -897,7 +917,9 @@ fn different_hues_meet_at_screened_luminance_in_either_order() {
     let peak = linear(0.8 * 0.75);
     let mut overlap = 0;
     let mut lift = 0.0f64;
-    for ((l, r), b) in left.chunks_exact(4).zip(right.chunks_exact(4)).zip(both.chunks_exact(4)) {
+    for ((l, r), b) in
+        left.as_chunks::<4>().0.iter().zip(right.as_chunks::<4>().0).zip(both.as_chunks::<4>().0)
+    {
         let (a, c, got) = (luminance(l), luminance(r), luminance(b));
         if a > 0.01 && c > 0.01 {
             let expected = a + c - a * c / peak;
@@ -926,7 +948,7 @@ fn a_dense_saturated_chord_stays_under_the_fixed_peak() {
         let ceiling = linear(peak);
         let pixels = glow(&mut shooter, &scene);
         let mut brightest = 0.0f64;
-        for pixel in pixels.chunks_exact(4) {
+        for pixel in pixels.as_chunks::<4>().0 {
             let light = luminance(pixel);
             assert!(light <= ceiling + 0.005, "gain {gain}: {pixel:?} exceeds peak {peak}");
             assert!(pixel[..3].iter().all(|channel| *channel <= pixel[3]));
@@ -951,8 +973,12 @@ fn a_fading_neighbour_returns_to_the_lone_glow_without_moving_the_ceiling() {
     let mut previous = glow(&mut shooter, &at(1.0));
     for level in [0.5, 0.1, 0.01, 0.0001, 0.0] {
         let current = glow(&mut shooter, &at(level));
-        for ((before, after), single) in
-            previous.chunks_exact(4).zip(current.chunks_exact(4)).zip(lone.chunks_exact(4))
+        for ((before, after), single) in previous
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(current.as_chunks::<4>().0)
+            .zip(lone.as_chunks::<4>().0)
         {
             assert!(after[0] <= before[0] + 1);
             assert!(after[0] + 1 >= single[0]);
@@ -1003,7 +1029,7 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
         assert!((f64::from(*actual) - expected).abs() < 2.1, "byte {i}: {actual} != {expected}");
     }
     let peak = linear(0.8 * 0.35);
-    let brightest = original.chunks_exact(4).map(luminance).fold(0.0f64, f64::max);
+    let brightest = original.as_chunks::<4>().0.iter().map(luminance).fold(0.0f64, f64::max);
     assert!(brightest > peak + 0.02, "the old endpoint must actually exceed the fixed ceiling");
     for accumulation in [0.25, 0.5, 0.75] {
         let mut scene = at(&levels, accumulation);
@@ -1015,7 +1041,7 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
                 "the sweep must blend the endpoints"
             );
         }
-        assert!(mixed.chunks_exact(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
+        assert!(mixed.as_chunks::<4>().0.iter().all(|p| p[..3].iter().all(|c| *c <= p[3])));
         scene.nodes.reverse();
         assert!(mixed.iter().zip(glow(&mut shooter, &scene)).all(|(a, b)| a.abs_diff(b) <= 1));
     }
@@ -1031,7 +1057,8 @@ fn marks_do_not_change_the_halo_footprint() {
         "the mark must extend beyond the rings to exercise the old size change"
     );
     scene.nodes[0].octaves.fill(1.0);
-    let alpha = |pixels: Vec<u8>| pixels.chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>();
+    let alpha =
+        |pixels: Vec<u8>| pixels.as_chunks::<4>().0.iter().map(|p| p[3]).collect::<Vec<_>>();
     let bare = alpha(glow(&mut shooter, &scene));
     assert!(bare.iter().filter(|&&v| v > 20).count() > 1000);
     for level in [0.25, 1.0, 0.0] {
@@ -1067,7 +1094,7 @@ fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
     let mut low = glam::Vec3::ONE;
     let mut high = glam::Vec3::ZERO;
     let mut worst = 0.0f32;
-    for (i, (a, b)) in ordinary.chunks_exact(4).zip(wide.chunks_exact(4)).enumerate() {
+    for (i, (a, b)) in ordinary.as_chunks::<4>().0.iter().zip(wide.as_chunks::<4>().0).enumerate() {
         let at = glam::vec2((i % 256) as f32 + 0.5, (i / 256) as f32 + 0.5);
         let d = at.distance(CENTRE) / per_uv;
         if d <= scene.rings_outer + 0.02 || d >= scene.rings_outer + 0.3 {
@@ -1116,7 +1143,7 @@ fn dense_faint_overlap_order_precision() {
             scene.view.glow_accumulation = accumulation;
             let forward = glow(&mut shooter, &scene);
             assert!(
-                forward.chunks_exact(4).any(|pixel| pixel[..3].iter().any(|v| *v > 20)),
+                forward.as_chunks::<4>().0.iter().any(|pixel| pixel[..3].iter().any(|v| *v > 20)),
                 "the stress fixture must produce visible overlapping light"
             );
             scene.nodes.reverse();
@@ -1140,20 +1167,20 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
         Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
     scene.view.atmosphere.material_amount = 0.0;
     let raw = glow(&mut shooter, &scene);
-    let hue = raw.chunks_exact(4).max_by_key(|p| p[3]).unwrap();
+    let hue = raw.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).unwrap();
     scene.view.atmosphere.material_amount = 1.0;
     for resolution in [1.0, 0.75, 1.0 / 3.0] {
         scene.view.atmosphere.stars.star_resolution = resolution;
         let painted = glow(&mut shooter, &scene);
         assert!(
-            painted.chunks_exact(4).filter(|p| p[3] > 20).count() > 500,
+            painted.as_chunks::<4>().0.iter().filter(|p| p[3] > 20).count() > 500,
             "fixture lights the starfield: {resolution}"
         );
         assert!(
             raw.iter().zip(&painted).filter(|(a, b)| a.abs_diff(**b) > 3).count() > 500,
             "Stars must change the note field: {resolution}"
         );
-        for p in painted.chunks_exact(4) {
+        for p in painted.as_chunks::<4>().0 {
             assert!(
                 p[..3].iter().all(|c| *c <= p[3].saturating_add(1)),
                 "premultiplied {resolution}: {p:?}"
@@ -1210,7 +1237,7 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
         scene.view.atmosphere.material_style = material;
         scene.view.atmosphere.texture_depth = depth;
         let px = glow(&mut shooter, &scene);
-        px.chunks_exact(4).map(luminance).sum::<f64>() / (px.len() / 4) as f64
+        px.as_chunks::<4>().0.iter().map(luminance).sum::<f64>() / (px.len() / 4) as f64
     };
     let plain = [mean(LatticeMaterial::None, 0.0), mean(LatticeMaterial::None, 1.0)];
     let stars = [mean(LatticeMaterial::Stars, 0.0), mean(LatticeMaterial::Stars, 1.0)];

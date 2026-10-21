@@ -58,7 +58,7 @@ egui-baseview = { version = "0.3", default-features = false, features = [
     # from either `tracing` or `nice-log`.
     "tracing",
 ] }
-# Patched below ([patch.crates-io]) with the macOS run-loop fix; see PATCHES.md.
+# Vendored and patched below ([patch.crates-io]); see PATCHES.md.
 baseview = "0.1.4"
 
 # Plugin framework: the community continuation of nih-plug. Host->plugin
@@ -69,7 +69,7 @@ nice-plug = { version = "0.1.10", default-features = false }
 nice-plug-xtask = "0.1.1"
 
 # Math / utility
-glam = { version = "0.33", features = ["serde"] }
+glam = { version = "0.34", features = ["serde"] }
 # LCH color math, same crate v1 used so channel colors match exactly.
 color_space = "0.5"
 # Shader validation for hot-reload (dev only); version tracks wgpu's.
@@ -79,6 +79,8 @@ bytemuck = { version = "1", features = ["derive"] }
 # nothing outside the plugin chooses: SipHash's flooding resistance buys
 # nothing there and costs it every frame. Already in the graph via wgpu.
 foldhash = "0.2"
+# Held at 0.3 because vendored nice-plug pins it, and two copies buy nothing;
+# retire the hold with the vendored-stack move (#1529).
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
@@ -89,12 +91,8 @@ ron = "0.12"
 midir = "0.11"
 raw-window-handle = "0.5"
 
-# Vendored crates with local patches (see PATCHES.md):
-# - baseview 0.1.4: macOS frame timer in kCFRunLoopCommonModes so the GUI
-#   keeps updating during mouse-tracking loops instead of freezing.
-# - egui-baseview 0.3.0: Queue::resize physical->logical unit fix so windows
-#   aren't resized pixels_per_point times too large on scaled displays.
-# - nice-plug 0.1.10: opt-in CLAP probe hooks and activation latency ordering.
+# Vendored crates with local patches. PATCHES.md lists what each one carries
+# and how to re-apply it when upstream moves; it is the only list.
 [patch.crates-io]
 baseview = { path = "vendor/baseview" }
 egui-baseview = { path = "vendor/egui-baseview" }

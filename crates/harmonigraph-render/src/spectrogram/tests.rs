@@ -450,7 +450,7 @@ fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
         cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
         let blended = frame_with(&device, &queue, &mut resources, &cb);
         assert!(
-            blended.chunks_exact(4).all(|pixel| {
+            blended.as_chunks::<4>().0.iter().all(|pixel| {
                 cb.shades.lut.iter().any(|entry| (0..3).all(|c| pixel[c].abs_diff(entry[c]) <= 2))
             }),
             "{style:?} depth blend left the palette"
@@ -554,7 +554,9 @@ fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
     // differ far more often than the smooth fixture's own do.
     let steps = |frame: &[u8]| {
         frame
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .collect::<Vec<_>>()
             .windows(2)
             .filter(|w| (0..3).any(|c| w[0][c].abs_diff(w[1][c]) > 12))
@@ -576,7 +578,7 @@ fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
     let floor = frame_with(&device, &queue, &mut resources, &cb);
     assert_ne!(fading, floor, "the history never carried the stars into the silence");
     assert_eq!(silent, floor, "silence drew something other than the floor");
-    assert!(floor.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]), "the floor is black");
+    assert!(floor.as_chunks::<4>().0.iter().any(|px| px[..3] != [0, 0, 0]), "the floor is black");
 }
 
 /// The shader carries the starfield along each slice's drift, the way the
@@ -812,7 +814,7 @@ fn float_output_uses_linear_palette_for_every_style() {
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
         let mapped = slice.get_mapped_range();
         let expected = ((128.0_f32 / 255.0 + 0.055) / 1.055).powf(2.4);
-        for channel in mapped[..6].chunks_exact(2) {
+        for channel in mapped[..6].as_chunks::<2>().0 {
             let half = u16::from_le_bytes([channel[0], channel[1]]);
             // The fixture must produce positive normal half-floats.
             assert!((0x0400..0x7c00).contains(&half));
@@ -967,8 +969,10 @@ fn a_time_stepped_light_field_draws_the_smooth_picture_from_one_texel_a_slab() {
     let (max, _) = compare(&native, &stepped);
     let channels = native.len() / 4 * 3;
     let mean = native
-        .chunks_exact(4)
-        .zip(stepped.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(stepped.as_chunks::<4>().0)
         .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
         .sum::<f64>()
         / channels as f64;
@@ -1064,7 +1068,10 @@ fn spectral_clouds_light_the_surroundings_and_leave_silence_dark() {
     cb.target_format = FORMAT;
     cb.grid.fill(0);
     let silent = fresh_frame(&device, &queue, &cb);
-    assert!(silent.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "silence emitted light");
+    assert!(
+        silent.as_chunks::<4>().0.iter().all(|p| *p == [0, 0, 0, 255]),
+        "silence emitted light"
+    );
 }
 
 #[test]
@@ -1078,7 +1085,7 @@ fn spectral_diffusion_colors_the_combined_intensity_once() {
     );
     let frame = fresh_frame(&device, &queue, &cb);
     let mut body_pixels = 0;
-    for p in frame.chunks_exact(4) {
+    for p in frame.as_chunks::<4>().0 {
         let expected = (f32::from(p[1]).powi(2) / 255.0).round() as u8;
         assert!(p[0].abs_diff(expected) <= 2, "cloud left the intensity palette: {p:?}");
         body_pixels += usize::from(p[1] > 8 && p[1] < 240);
@@ -1446,7 +1453,7 @@ fn spectral_cloud_targets_refresh_after_palette_resize_disable_and_empty_frames(
     );
     cb.vertices.clear();
     let empty = frame_with(&device, &queue, &mut resources, &cb);
-    assert!(empty.chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+    assert!(empty.as_chunks::<4>().0.iter().all(|p| *p == [0, 0, 0, 255]));
     assert!(
         !resources
             .get::<SpectrogramResources>()
@@ -1523,7 +1530,7 @@ fn spectral_clouds_follow_offset_panes_at_both_pixel_scales() {
 fn compare(got: &[u8], want: &[u8]) -> (u8, usize) {
     let mut worst = 0u8;
     let mut exact = 0usize;
-    for (g, w) in got.chunks_exact(4).zip(want.chunks_exact(4)) {
+    for (g, w) in got.as_chunks::<4>().0.iter().zip(want.as_chunks::<4>().0) {
         let d = g.iter().zip(w).map(|(&a, &b)| a.abs_diff(b)).max().unwrap_or(0);
         worst = worst.max(d);
         exact += usize::from(d == 0);
@@ -2225,8 +2232,10 @@ fn the_wash_reads_the_light_at_each_globs_centre_and_invents_none() {
         let bent = fresh_frame(&device, &queue, cb);
         let n = straight.len() / 4;
         straight
-            .chunks_exact(4)
-            .zip(bent.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(bent.as_chunks::<4>().0)
             .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
             .count() as f32
             / n as f32
@@ -2268,7 +2277,7 @@ fn a_quiet_pane_takes_the_gradients_own_floor_rather_than_black() {
     );
     let share = |frame: &[u8], want: [u8; 3]| {
         let n = frame.len() / 4;
-        frame.chunks_exact(4).filter(|px| px[..3] == want).count() as f32 / n as f32
+        frame.as_chunks::<4>().0.iter().filter(|px| px[..3] == want).count() as f32 / n as f32
     };
     let lifted = fresh_frame(&device, &queue, &cb);
     assert_eq!(
@@ -2314,8 +2323,10 @@ fn a_cloud_is_drawn_over_an_unblurred_picture() {
     cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
     let bare = fresh_frame(&device, &queue, &cb);
     let moved = clouded
-        .chunks_exact(4)
-        .zip(bare.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(bare.as_chunks::<4>().0)
         .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
         .count() as f32
         / (bare.len() / 4) as f32;
@@ -2376,14 +2387,17 @@ fn watercolor_random_brightness_preserves_average_color() {
             }
             for c in 0..3 {
                 let n = (plain.len() / 4) as f64;
-                let mean = varied.chunks_exact(4).map(|p| linear(p[c])).sum::<f64>() / n;
-                let reference = plain.chunks_exact(4).map(|p| linear(p[c])).sum::<f64>() / n;
+                let mean = varied.as_chunks::<4>().0.iter().map(|p| linear(p[c])).sum::<f64>() / n;
+                let reference =
+                    plain.as_chunks::<4>().0.iter().map(|p| linear(p[c])).sum::<f64>() / n;
                 assert!((mean - reference).abs() < 0.01,
                         "{palette:?}, sampling={sampling}, memory={memory}, channel={c}: {mean} vs {reference}");
             }
             let changed = plain
-                .chunks_exact(4)
-                .zip(varied.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(varied.as_chunks::<4>().0)
                 .filter(|(a, b)| a[2].abs_diff(b[2]) > 2)
                 .count();
             assert!(changed > plain.len() / 40, "fixture must resolve varying globs: {changed}");
@@ -2429,7 +2443,12 @@ fn edge_pooling_shades_one_way_and_leaves_silence_alone() {
     };
     let share = |a: &[u8], b: &[u8], moved: fn(u8, u8) -> bool| {
         let n = a.len() / 4;
-        a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(a, b)| moved(a[0], b[0])).count() as f32
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .filter(|(a, b)| moved(a[0], b[0]))
+            .count() as f32
             / n as f32
     };
     let plain = frame(150, 0.0, 0.55, 0.75);
@@ -2487,8 +2506,10 @@ fn the_wash_dials_each_reach_the_globs() {
         let frame = painted(turn);
         let n = plain.len() / 4;
         let moved = plain
-            .chunks_exact(4)
-            .zip(frame.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(frame.as_chunks::<4>().0)
             .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
             .count() as f32
             / n as f32;
@@ -2551,14 +2572,18 @@ fn a_reduced_cloud_draws_the_same_picture_softened() {
     assert_ne!(native, reduced, "the wash drew the same frame at a quarter resolution");
     let channels = native.len() / 4 * 3;
     let mean = native
-        .chunks_exact(4)
-        .zip(reduced.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reduced.as_chunks::<4>().0)
         .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
         .sum::<f64>()
         / channels as f64;
     let moved = native
-        .chunks_exact(4)
-        .zip(reduced.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reduced.as_chunks::<4>().0)
         .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
         .count() as f64
         / (native.len() / 4) as f64;

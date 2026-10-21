@@ -958,7 +958,11 @@ fn atlas_if_changed(
         mirror.seen.clear();
     }
     let resized = mirror.seen.is_empty() || size != mirror.size;
-    let fresh = drawn.into_iter().fold(false, |fresh, pair| mirror.seen.insert(pair) || fresh);
+    // Every pair is inserted, so this is not `any`, which would stop at the first new one.
+    let mut fresh = false;
+    for pair in drawn {
+        fresh |= mirror.seen.insert(pair);
+    }
     if !fresh && !resized {
         return None;
     }

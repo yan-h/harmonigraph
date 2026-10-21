@@ -313,7 +313,7 @@ mod tests {
             assert_eq!(end, expected_end, "the endpoint belongs to the clamped slice");
             assert_eq!(slice.len() % 2, 0, "[{from}, {to}) cut a frame in half");
             assert!(
-                slice.chunks_exact(2).all(|f| f[0] > 0.0 && f[1] < 0.0),
+                slice.as_chunks::<2>().0.iter().all(|f| f[0] > 0.0 && f[1] < 0.0),
                 "[{from}, {to}) swapped the channels: {slice:?}",
             );
         }

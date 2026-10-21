@@ -75,7 +75,7 @@ fn texels(
     mapped
         .chunks_exact(stride as usize)
         .flat_map(|row| {
-            row[..width as usize * 16].chunks_exact(16).map(|rgba| {
+            row[..width as usize * 16].as_chunks::<16>().0.iter().map(|rgba| {
                 std::array::from_fn(|c| {
                     u32::from_le_bytes(rgba[c * 4..c * 4 + 4].try_into().unwrap())
                 })
@@ -747,7 +747,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
     const PANE: u32 = 384;
     // Mean channel difference over 255, and the share of pixels moved past 8.
     let apart = |a: &[u8], b: &[u8]| {
-        let pixels = a.chunks_exact(4).zip(b.chunks_exact(4));
+        let pixels = a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0);
         let total: u32 = pixels
             .clone()
             .flat_map(|(p, q)| (0..3).map(move |c| u32::from(p[c].abs_diff(q[c]))))

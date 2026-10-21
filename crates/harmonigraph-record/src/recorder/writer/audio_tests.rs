@@ -144,10 +144,8 @@ impl Worker {
 
     fn assert_prefix(&self) {
         let bytes = std::fs::read(self.wav()).unwrap();
-        let samples: Vec<_> = bytes[44..]
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
+        let samples: Vec<_> =
+            bytes[44..].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
         assert_eq!(samples, PREFIX, "WAV preserves every initial sample");
     }
 }
@@ -175,7 +173,7 @@ impl Drop for Worker {
 fn wav_samples(path: &std::path::Path) -> Vec<f32> {
     let bytes = std::fs::read(path).unwrap();
     assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize, bytes.len() - 44);
-    bytes[44..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+    bytes[44..].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect()
 }
 
 #[test]

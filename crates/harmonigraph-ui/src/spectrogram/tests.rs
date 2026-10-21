@@ -2592,8 +2592,8 @@ mod gpu {
                 read.clone(),
                 probe_shades(),
             );
-            let mean =
-                frame.chunks_exact(4).map(|p| f64::from(p[0])).sum::<f64>() / (W * rows) as f64;
+            let mean = frame.as_chunks::<4>().0.iter().map(|p| f64::from(p[0])).sum::<f64>()
+                / (W * rows) as f64;
             // The same rows read by MAX, which is what the mean is being
             // measured against.
             let by_max = runs
@@ -2934,8 +2934,9 @@ mod gpu {
                         read,
                         probe_shades(),
                     );
-                    let mean = frame.chunks_exact(4).map(|p| f64::from(p[0])).sum::<f64>()
-                        / f64::from(W * rows);
+                    let mean =
+                        frame.as_chunks::<4>().0.iter().map(|p| f64::from(p[0])).sum::<f64>()
+                            / f64::from(W * rows);
                     if k == 0 {
                         base = mean;
                     }

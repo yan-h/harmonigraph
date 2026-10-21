@@ -935,8 +935,10 @@ mod tests {
                     assert!(decoded.status.success());
                     let peak = decoded
                         .stdout
-                        .chunks_exact(4)
-                        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()).abs())
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|bytes| f32::from_le_bytes(*bytes).abs())
                         .enumerate()
                         .max_by(|a, b| a.1.total_cmp(&b.1))
                         .unwrap()
@@ -951,7 +953,9 @@ mod tests {
                     assert!(decoded.status.success());
                     let flash = decoded
                         .stdout
-                        .chunks_exact(16 * 16)
+                        .as_chunks::<{ 16 * 16 }>()
+                        .0
+                        .iter()
                         .enumerate()
                         .max_by_key(|(_, frame)| frame.iter().map(|p| u32::from(*p)).sum::<u32>())
                         .unwrap()

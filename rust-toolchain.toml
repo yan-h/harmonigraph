@@ -1,5 +1,6 @@
-# egui 0.35 / wgpu 29 need rustc >= 1.92. Pinned for reproducible builds;
-# bump freely.
+# Pinned for reproducible builds, and the floor as well: the tree adopts each
+# pin's lints and the std APIs they point at (e.g. `AtomicU64::try_update`),
+# so an older rustc does not build it. Bump freely.
 [toolchain]
-channel = "1.92"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]

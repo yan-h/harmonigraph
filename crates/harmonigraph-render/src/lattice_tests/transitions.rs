@@ -89,8 +89,10 @@ fn each_arrival_casts_a_measurable_shadow() {
                 cb.uniforms.geometry_shadow.depth = 0.0
             });
             let shadow: Vec<i16> = bare
-                .chunks_exact(4)
-                .zip(frame.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(frame.as_chunks::<4>().0)
                 .map(|(a, b)| i16::from(a[0]) - i16::from(b[0]))
                 .collect();
             let delta: Vec<i16> =
@@ -108,7 +110,7 @@ fn each_arrival_casts_a_measurable_shadow() {
             ));
             if let Some(root) = &root {
                 let mut ppm = b"P6\n256 256\n255\n".to_vec();
-                for pixel in frame.chunks_exact(4) {
+                for pixel in frame.as_chunks::<4>().0 {
                     ppm.extend_from_slice(&pixel[..3]);
                 }
                 std::fs::write(root.join(format!("{name}-{step}.ppm")), ppm).unwrap();
@@ -203,7 +205,9 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
         // The spark can move outside this independently opaque annulus;
         // measure the audio pixels, not the empty space around the ring.
         let audio_pixels: Vec<_> = reference
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, p)| p[0] > 10 || p[1] > 10 || p[2] > 10)
             .map(|(i, _)| i)
@@ -270,7 +274,7 @@ fn smooth_grow_draws_complete_pieces_and_settles() {
             let root = std::path::PathBuf::from(root);
             std::fs::create_dir_all(&root).unwrap();
             let mut ppm = b"P6\n384 384\n255\n".to_vec();
-            for pixel in shot.chunks_exact(4) {
+            for pixel in shot.as_chunks::<4>().0 {
                 ppm.extend_from_slice(&pixel[..3]);
             }
             std::fs::write(root.join(format!("slices-{step}.ppm")), ppm).unwrap();
@@ -320,7 +324,7 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
                 let root = std::path::PathBuf::from(root);
                 std::fs::create_dir_all(&root).unwrap();
                 let mut ppm = b"P6\n384 384\n255\n".to_vec();
-                for pixel in shot.chunks_exact(4) {
+                for pixel in shot.as_chunks::<4>().0 {
                     ppm.extend_from_slice(&pixel[..3]);
                 }
                 std::fs::write(root.join(format!("orders-{order:?}-{step}.ppm")), ppm).unwrap();

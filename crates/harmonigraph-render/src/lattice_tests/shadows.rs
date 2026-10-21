@@ -89,10 +89,12 @@ fn node_shadow_darkness_scales_the_entire_profile() {
     let (clear, quarter, half, full) = (shot(0.0), shot(0.25), shot(0.5), shot(1.0));
     let (mut body, mut tail) = (0, 0);
     for (((a, b), c), d) in clear
-        .chunks_exact(4)
-        .zip(quarter.chunks_exact(4))
-        .zip(half.chunks_exact(4))
-        .zip(full.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(quarter.as_chunks::<4>().0)
+        .zip(half.as_chunks::<4>().0)
+        .zip(full.as_chunks::<4>().0)
     {
         let removed = i32::from(a[0]) - i32::from(d[0]);
         let at_quarter = i32::from(a[0]) - i32::from(b[0]);
@@ -1371,8 +1373,10 @@ fn rectangular_panes_and_atlases_preserve_shadow_coordinates() {
         let plain = shooter.shot(&scene);
         scene.view.shadow = styles;
         let delta: Vec<i64> = plain
-            .chunks_exact(4)
-            .zip(shadowed.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(shadowed.as_chunks::<4>().0)
             .map(|(a, b)| brightness(&a[..3]) - brightness(&b[..3]))
             .collect();
         for world in [scene.nodes[0].world_pos, scene.pluses[0].pos] {
@@ -1420,8 +1424,10 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
         scene.view.shadow.lattice_geometry.depth = 0.0;
         let bare = shooter.shot(&scene);
         let exterior: Vec<_> = bare
-            .chunks_exact(4)
-            .zip(full.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(full.as_chunks::<4>().0)
             .enumerate()
             .filter_map(|(i, (a, b))| {
                 (a[0] == 204 && a[1] == 204 && a[2] == 204 && a[0].saturating_sub(b[0]) > 30)
@@ -1474,7 +1480,7 @@ fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
         let bare = shooter.shot(&scene);
         let mut reached = 0;
         let mut excess = 0;
-        for (i, pixel) in bare.chunks_exact(4).enumerate() {
+        for (i, pixel) in bare.as_chunks::<4>().0.iter().enumerate() {
             if pixel[..3] != [204, 204, 204] || held[i * 4] < 203 {
                 continue;
             }
