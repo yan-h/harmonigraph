@@ -1,7 +1,7 @@
 # Spectrogram audit evidence, 2026-09-05
 
 Scope owner:
-[spectrogram rendering plan](../../spectrogram-rendering-plan.md).
+[spectrogram rendering plan](../../archive/spectrogram-rendering-plan.md).
 Source baseline:
 `70e9f48dddb3c14e5cb2d2173d5604f8a4c34e84`.
 Machine:

@@ -299,7 +299,7 @@ impl Owner {
                 }),
             }),
         };
-        // Reduce in arrival order. The legacy block snapshot remains Adaptive's
+        // Reduce in arrival order. The per-block `block` config remains Adaptive's
         // authority; Map records the same resolved value at the commit sample.
         if !self.reducer.apply(mutation) {
             self.fault();

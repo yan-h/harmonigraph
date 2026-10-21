@@ -184,27 +184,11 @@ impl Comma {
         }
     }
 
-    /// The comma's own name.
-    pub fn comma_name(self) -> &'static str {
-        match self {
-            Comma::Syntonic => "syntonic comma",
-            Comma::SeptimalKleisma => "septimal kleisma",
-        }
-    }
-
     /// The temperament that tempers it out — what the mode is called.
     pub fn temperament(self) -> &'static str {
         match self {
             Comma::Syntonic => "Meantone",
             Comma::SeptimalKleisma => "Marvel",
-        }
-    }
-
-    /// Its size in cents, at just tuning.
-    pub fn size_cents(self) -> f32 {
-        match self {
-            Comma::Syntonic => SYNTONIC_COMMA,
-            Comma::SeptimalKleisma => SEPTIMAL_KLEISMA,
         }
     }
 
@@ -697,7 +681,6 @@ mod tests {
         // the size it would leave in the tuning if it were not tempered.
         for comma in Comma::ALL {
             assert_eq!(Comma::ALL[comma.index()], comma);
-            assert!(comma.size_cents() > 0.0);
             // 12-TET tempers out both, and the derived axis is what 12-TET
             // already has.
             assert!(comma.is_tempered(THREE_12TET, FIVE_12TET, SEVEN_12TET));

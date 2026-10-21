@@ -1,7 +1,7 @@
 # FFT backend evaluation (#743)
 
 **Superseded by [#804](https://github.com/yan-h/harmonigraph/pull/804),** which adopted the RealFFT backend this evaluation recommended;
-see [`realfft-adoption.md`](realfft-adoption.md) for the accepted implementation.
+see [`realfft-adoption.md`](../realfft-adoption.md) for the accepted implementation.
 This document is the evaluation record, not a description of the current backend.
 
 Evaluation date: 2026-09-09.
@@ -33,7 +33,7 @@ Its [planner](https://docs.rs/realfft/3.5.0/realfft/struct.RealFftPlanner.html) 
 Both exact versions and all transitive checksums are pinned in the scratch lockfile; default SIMD features are enabled.
 Package license/version fields were also checked in the downloaded registry manifests.
 
-The [candidate patch](evidence/fft-backend-evaluation/candidate.patch) changes only a scratch copy of `SpectrumAnalyzer`'s transform storage, configuration and transform-to-bin-power loop.
+The [candidate patch](../evidence/fft-backend-evaluation/candidate.patch) changes only a scratch copy of `SpectrumAnalyzer`'s transform storage, configuration and transform-to-bin-power loop.
 It uses one plan per channel, drops the planner after configuration and retains input/output/scratch vectors with the plan.
 It does not share plans across channels or retain a global cache.
 Changing taper count replans, just as the baseline rebuilds its twiddle table; sharing or avoiding that work was not credited as a measured saving.
@@ -45,7 +45,7 @@ A legacy helper's bit-exact test passing therefore does not establish candidate 
 
 ## Method and limits
 
-The [reproducible evidence](evidence/fft-backend-evaluation/README.md) generates two standalone Cargo workspaces under a caller-selected scratch directory, outside production dependency resolution.
+The [reproducible evidence](../evidence/fft-backend-evaluation/README.md) generates two standalone Cargo workspaces under a caller-selected scratch directory, outside production dependency resolution.
 The baseline spectrum module is obtained directly from the pinned Git object without editing its analyzer path.
 The candidate applies the tracked patch to that same object.
 Both compile actual public `ChannelBank::push_frames` followed by `power_sum`, including deinterleaving, ring writes, both channels, every taper, normalization and pitch buckets.

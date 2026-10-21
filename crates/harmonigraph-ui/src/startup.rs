@@ -101,15 +101,8 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::probe::Defaults;
     use crate::{panes::Tab, workspace};
-
-    struct Defaults;
-    impl crate::params::ParamBackend for Defaults {
-        fn get(&self, key: crate::params::ParamKey) -> f32 {
-            key.default_value()
-        }
-        fn set(&self, _: crate::params::ParamKey, _: f32) {}
-    }
 
     #[test]
     fn loading_frames_age_released_notes_without_pruning_live_voices() {
