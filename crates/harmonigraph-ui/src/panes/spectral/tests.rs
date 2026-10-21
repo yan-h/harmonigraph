@@ -2227,11 +2227,12 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
             .filter(|(_, s)| matches!(&s.shape, egui::Shape::Callback(_)))
             .map(|(i, _)| i)
             .collect();
-        // The now-line is the one hairline-colored segment clean across the
-        // pitch axis.
+        // The now-line is the one segment in the outline's silent color clean
+        // across the pitch axis.
+        let line = super::atmosphere::keyline_at_silence(&state.appearance.spectrum);
         let hairline = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
-                if stroke.color == theme::picture_ruling().gamma_multiply(0.6))
+                if stroke.color == line)
         });
         let hairline = hairline.expect("expected a now-line in the frame");
         (callbacks.len(), callbacks.iter().filter(|&&c| c < hairline).count())

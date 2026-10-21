@@ -204,6 +204,12 @@ pub(super) fn keyline_color(fill: Color32, floor: f32) -> Color32 {
     egui::Rgba::from_rgb(up(c.r()), up(c.g()), up(c.b())).into()
 }
 
+/// The keyline's color where the spectrum is silent and its contour lies on the
+/// handover: the gradient's floor, lifted like any other sample.
+pub(super) fn keyline_at_silence(cfg: &SpectrumConfig) -> Color32 {
+    keyline_color(cell_color(cfg.spectrogram_gradient, 0.0), keyline_floor(cfg.keyline_lift))
+}
+
 /// An open polyline as an antialiased ribbon whose color follows its points,
 /// which `Shape::line` cannot do: it takes one color for the whole path.
 ///

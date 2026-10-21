@@ -506,11 +506,15 @@ pub(crate) fn spectral_pane(
     // Always drawn (there is no setting): the handover is what the pane is
     // built around, so the boundary is marked whether or not anything is
     // sounding on it.
+    //
+    // In the spectrum outline's color at silence, which is where that outline
+    // lies on this line: a quiet stretch of the curve runs into the boundary
+    // as one line instead of a bright one meeting a grey one, and both answer
+    // the outline's Intensity dial.
     if split < 1.0 && split > 0.0 {
-        let fade = 0.6;
         painter.line_segment(
             axes.across_pitch(split),
-            egui::Stroke::new(1.0, theme::picture_ruling().gamma_multiply(fade)),
+            egui::Stroke::new(1.0, atmosphere::keyline_at_silence(&cfg)),
         );
     }
 

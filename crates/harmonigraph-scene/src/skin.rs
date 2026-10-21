@@ -381,8 +381,7 @@ pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
 /// The ground every PICTURE pane is bedded on (see [`picture_color`]).
 pub const PICTURE: [u8; 3] = [0, 0, 0];
 /// Rulings drawn across a picture: the analyzer's frequency and level grid,
-/// the spectrum/roll handover, the spiral's seam and pitch-class rays. Each
-/// site fades it further.
+/// the spiral's seam and pitch-class rays. Each site fades it further.
 pub const PICTURE_RULING: [u8; 3] = [64, 67, 77];
 /// The line between two panes of an exported frame (and the Video preview).
 /// White rather than [`PICTURE_RULING`]: it frames the panes instead of
