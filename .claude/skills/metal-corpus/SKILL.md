@@ -52,6 +52,8 @@ Without a PR, dispatch it, and it does the same:
 gh workflow run "Metal shader assets" --ref <branch>
 ```
 
+Add `-f regenerate=true` to rebuild a corpus that passes, such as one still holding a deleted shader's libraries.
+
 Read the failed check's log in the artifact's `shader-asset-logs/` first:
 a missing or rejected Metal asset is a stale corpus, and anything else is not one.
 Then download the run's `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on its `generated-metal-assets` directory.

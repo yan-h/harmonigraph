@@ -109,6 +109,9 @@ run() {
   )
   local status=$?
   set -e
+  # Interrupted (SIGINT, SIGTERM) rather than failed: a gate that catches the
+  # signal and exits with its code would otherwise only skip to the next gate.
+  case "$status" in 130 | 143) exit "$status" ;; esac
   if [ "$status" != 0 ]; then
     echo "✗ exit $status: $*" >&2
     failures="$failures  ✗ $*"$'\n'
@@ -290,6 +293,7 @@ run cargo test --no-fail-fast -p harmonigraph-render
 # defect; there it skips instead. A macOS machine with no Metal adapter still
 # FAILS, deliberately, on the same policy as HARMONIGRAPH_REQUIRE_GPU.
 metal_corpus() {
+  echo "  HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render production_metal_asset_catalog"
   if [ "$(uname -s)" != Darwin ]; then
     echo "  skipped — the Metal corpus exists only on macOS"
     return

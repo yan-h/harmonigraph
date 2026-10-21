@@ -61,10 +61,16 @@ Without a PR, dispatch one, which does the same:
 gh workflow run "Metal shader assets" --ref <branch>
 ```
 
+`-f regenerate=true` rebuilds a corpus that passes its check, such as one still holding a deleted shader's libraries.
+
 Either way, `python3 tools/shader-assets.py import` the run's validated `production-metal-assets` artifact.
 Import checks the candidate corpus through the normal production path before replacing the checked-in assets;
 inspect and commit the changed source/options/manifest together with the binary libraries.
-The ordinary PR workflow checks the committed corpus before generating anything, and fails on a stale one even after generating its replacement, so generation cannot conceal stale coverage.
+The ordinary PR workflow checks the committed corpus before generating anything,
+and fails on a stale one even after generating its replacement,
+so generation cannot conceal stale coverage.
+Its goldens are drawn and not compared, so a corpus that loads but draws differently is caught by `Full CI` after import:
+a golden that moves again after an import, on a frame just re-baselined, is the corpus and not the picture.
 Its path filter covers assets, renderer code, graphics setup and dependencies;
 ordinary tuning implementation edits do not schedule a third macOS job.
 New pushes cancel superseded asset-validation runs.
