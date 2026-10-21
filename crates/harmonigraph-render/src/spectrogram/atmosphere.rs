@@ -1062,7 +1062,9 @@ pub(super) struct Targets {
     /// Final painting uses `coverage_vertices`, the atmosphere's region.
     /// Both sampled fields must be filled beyond that region: a displaced or
     /// bilinear read at the divider otherwise blends with a cleared texel and
-    /// draws a dark seam. The original data mesh still bounds measured sound.
+    /// draws a dark seam. The light they are made from is held past the
+    /// divider for the same reason (`SpectrogramAtmosphere::light_hold`); the
+    /// painted data mesh still bounds measured sound.
     tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
     /// The reduced scalar cloud tone, allocated at [`Shape::tone`].
@@ -1293,7 +1295,8 @@ impl Plan {
 /// What [`Targets::encode`] draws from beyond the targets themselves.
 pub(super) struct Draw<'a> {
     pub style: harmonigraph_scene::CloudStyle,
-    /// The measured mesh the source pass rasterizes, and its vertex count.
+    /// The mesh the source pass rasterizes, and its vertex count: the measured
+    /// mesh, then the light-only hold past the divider where there is one.
     pub mesh: wgpu::BufferSlice<'a>,
     pub count: u32,
     /// The pane's size in device pixels.
@@ -1689,9 +1692,11 @@ impl Targets {
         source_end: i64,
     ) {
         let Plan { tile, stars, memory_extent, .. } = *plan;
-        // The source mesh records only measured history. Its already-blurred
-        // light can occupy the whole spectrogram region, without crossing the
-        // analyzer divider or widening the exact heatmap's sample footprint.
+        // The source mesh records measured history, and past the divider the
+        // newest slab held (`SpectrogramAtmosphere::light_hold`). Its
+        // already-blurred light is painted over the spectrogram region alone,
+        // never across the analyzer divider, and without widening the exact
+        // heatmap's sample footprint.
         let region = atmosphere.region.intersect(rect);
         let region = if region.is_positive() {
             region

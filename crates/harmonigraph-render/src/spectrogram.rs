@@ -690,9 +690,9 @@ impl CallbackTrait for SpectrogramCallback {
         // The light-only quad rides after the painted mesh: the source pass
         // draws both, `paint` only the first `count`.
         let light_hold = self.atmosphere.and_then(|a| a.light_hold);
-        let vertex_total = self.vertices.len() + light_hold.map_or(0, |quad| quad.len());
-        if vertex_total > pane.vertex_capacity {
-            pane.vertex_capacity = vertex_total.next_power_of_two();
+        let source_count = self.vertices.len() + light_hold.map_or(0, |quad| quad.len());
+        if source_count > pane.vertex_capacity {
+            pane.vertex_capacity = source_count.next_power_of_two();
             pane.vertex_buffer = create_vertex_buffer::<SpectrogramVertex>(
                 device,
                 "spectrogram_vertices",
@@ -814,7 +814,7 @@ impl CallbackTrait for SpectrogramCallback {
                     atmosphere::Draw {
                         style: settings.settings.cloud_style,
                         mesh: pane.vertex_buffer.slice(..),
-                        count: pane.count + settings.light_hold.map_or(0, |quad| quad.len() as u32),
+                        count: source_count as u32,
                         pixels,
                         star_coverage,
                     },

@@ -445,7 +445,10 @@ fn stars_hold_their_light_up_to_the_analyzer() {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
         a.spectrum.roll_fraction = 0.65;
     });
-    let Some(frame) = last_frame(&shot, take) else { return };
+    let Some(frame) = last_frame(&shot, take) else {
+        eprintln!("skipping stars_hold_their_light_up_to_the_analyzer: no usable GPU adapter");
+        return;
+    };
     let [w, h] = shot.size.map(|n| n as usize);
     let mean = |columns: std::ops::Range<usize>| {
         let n = columns.len() * h * 3;
@@ -455,8 +458,9 @@ fn stars_hold_their_light_up_to_the_analyzer() {
             .sum();
         sum as f32 / n as f32
     };
-    // The region is the pane's first `roll_fraction` of its width, and the
-    // divider is drawn at its edge.
+    // `dialled` draws full-bleed, so the region is exactly the pane's first
+    // `roll_fraction` of its width and the divider is drawn at its edge. A
+    // margin there would move both windows off the seam.
     let divider = (0.65 * w as f32).round() as usize;
     let (edge, inside) = (mean(divider - 6..divider - 1), mean(divider - 60..divider - 20));
     assert!(edge > 0.95 * inside, "the newest edge {edge} against {inside} further in");
