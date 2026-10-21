@@ -483,11 +483,9 @@ fn timing_editor_pipeline_startup() {
         let started = std::time::Instant::now();
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            ..Default::default()
-        }))
-        .unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
+                .unwrap();
         eprintln!("opening {opening}: device {:?}", started.elapsed());
         let started = std::time::Instant::now();
         let resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);

@@ -44,6 +44,8 @@ mod lattice_frame;
 mod lattice_prepare;
 mod pass_aged;
 
+mod device;
+pub use device::device_descriptor;
 pub mod gpu_memory;
 pub mod shader_assets;
 /// Progress for interactive editor initialization; offline rendering remains synchronous.
@@ -2258,19 +2260,6 @@ fn scene_targets(format: wgpu::TextureFormat, bloom: bool) -> Vec<Option<wgpu::C
         targets.push(target(format));
     }
     targets
-}
-
-/// Request the adapter's limits in every rendering shell. The lattice's three
-/// RGBA16F attachments plus R16F local transmission require 26 bytes/sample;
-/// supported Apple silicon and the measured CI Metal adapter provide at least 64.
-/// Older adapters are unsupported; there is no second shadow pass to fall back to.
-pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
-    let limits = adapter.limits();
-    assert!(
-        limits.max_color_attachment_bytes_per_sample >= 26,
-        "the lattice requires at least 26 color attachment bytes per sample"
-    );
-    limits
 }
 
 /// Build one of the scene pipelines from the module shared by this resource
