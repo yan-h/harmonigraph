@@ -2,14 +2,16 @@
 //! that draw one — the roll's ribbons and the Spiral's dots — so both panes'
 //! notes wear one surround on one set of dials.
 //!
-//! A producer draws its notes once in `prepare`, into one target over its own
-//! rect ([`SurroundTargets`](crate::surround::SurroundTargets)): under a depth
-//! test the strongest note's cut lands there with its fill color. `paint` then
-//! lays it over the picture in one draw
-//! ([`SurroundComposite`](crate::surround::SurroundComposite)). What a note's
-//! cut IS at a fragment — its distance, what holds it out — is the producer's
-//! own shader; the fade's shape and how the cut lands are
-//! `shaders/surround.wgsl`, which every producer joins.
+//! The roll draws its notes once in `prepare`, into one target over its rect
+//! ([`SurroundTargets`](crate::surround::SurroundTargets)): under a depth test
+//! the strongest note's cut lands there with its fill color. `paint` then lays
+//! it over the picture in one draw
+//! ([`SurroundComposite`](crate::surround::SurroundComposite)). The Spiral's
+//! dozen dots pick their strongest in the shader and land straight on the
+//! picture instead (`crate::dot_surround`). What a note's cut IS at a fragment
+//! — its distance, what holds it out — is the producer's own shader; the
+//! fade's shape and how the cut lands are `shaders/surround.wgsl`, which every
+//! producer joins.
 
 use crate::uniforms::{uniform_group, Float4};
 use crate::{wgpu, EGUI_BLEND};
@@ -183,38 +185,62 @@ impl SurroundComposite {
             bind_group_layouts: &[Some(&read_layout)],
             ..Default::default()
         });
-        let entry_point =
-            if target_format.is_srgb() { "fs_surround_linear" } else { "fs_surround_gamma" };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("surround_composite"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_cover"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry_point),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(EGUI_BLEND),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = landing_pipeline(
+            device,
+            "surround_composite",
+            &shader,
+            &layout,
+            "vs_cover",
+            "fs_surround",
+            target_format,
+        );
         SurroundComposite { pipeline, read_layout }
     }
+}
+
+/// A pipeline that lays a surround straight onto the picture, the roll's
+/// composite and the Spiral's dots alike: premultiplied over the egui pass,
+/// with no depth, through `{fragment}_linear` on a target that encodes sRGB
+/// for itself and `{fragment}_gamma` on the rest (`surround_lands_*`).
+pub(crate) fn landing_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex: &str,
+    fragment: &str,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let fragment =
+        format!("{fragment}_{}", if target_format.is_srgb() { "linear" } else { "gamma" });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some(vertex),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(&fragment),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(EGUI_BLEND),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 /// The entry points and vertex buffers a producer's surround pipeline is built
@@ -277,16 +303,12 @@ pub(crate) fn surround_pipeline(
     })
 }
 
-/// A producer's surround over its rect, one texel per device pixel: the
-/// strongest note's color and cut, and the depth that picks it. Held while the
-/// cut draws, and dropped with it; [`ensure`](Self::ensure) rebuilds it when
-/// the rect resizes.
+/// The roll's surround over its rect, one texel per device pixel: the
+/// strongest note's color and cut, and the depth that picks it.
 pub(crate) struct SurroundTargets {
     view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     read_bind_group: wgpu::BindGroup,
-    /// The rect's size in device pixels these were built for.
-    size: [u32; 2],
 }
 
 impl SurroundTargets {
@@ -333,22 +355,7 @@ impl SurroundTargets {
             }),
             view,
             depth_view,
-            size,
         }
-    }
-
-    /// `slot`'s targets, built for a rect `size` device pixels across: kept
-    /// while they are that size, and rebuilt when it is not.
-    pub(crate) fn ensure<'a>(
-        slot: &'a mut Option<Self>,
-        device: &wgpu::Device,
-        composite: &SurroundComposite,
-        size: [u32; 2],
-    ) -> &'a Self {
-        if slot.as_ref().is_some_and(|targets| targets.size != size) {
-            *slot = None;
-        }
-        slot.get_or_insert_with(|| Self::new(device, composite, size))
     }
 
     /// The notes' surround into these targets. `draw` binds the producer's own

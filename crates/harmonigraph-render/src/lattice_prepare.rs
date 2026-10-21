@@ -496,7 +496,7 @@ impl LatticeCallback {
         // and so cannot read the texture they are writing, and the markers'
         // shared blur cell, which is `casters[0]` wherever that row casts.
         //
-        // The arm in points is the one term `pack` has no way to know, and it
+        // The arm in points is the one term `pack_into` has no way to know, and it
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
@@ -559,7 +559,7 @@ impl LatticeCallback {
 
         let glow = self.glow_draws();
         let has_light = glow && self.instances.iter().any(|node| node.glow[0] > 0.0);
-        // Every caster's cell, packed for this frame (`shadow::pack`): the
+        // Every caster's cell, packed for this frame (`shadow::pack_into`): the
         // Gaussian's one marker cross, one per node and one per name, each at
         // the resolution its own σ asks for. A caster whose group packs
         // nothing (either bar at the bottom, or for the node group Width 0 or

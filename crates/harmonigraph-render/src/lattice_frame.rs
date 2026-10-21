@@ -300,7 +300,7 @@ impl LatticeCallback {
         // billboard does not foreshorten with it, so where each cross stands in
         // the order is what the reader is being told about depth.
         // One node's ink as a box on the pane, in points — the space a caster
-        // is packed in (`shadow::pack`). The billboard faces the camera's own
+        // is packed in (`shadow::pack_into`). The billboard faces the camera's own
         // right and up, so those two axes project onto the screen's and one
         // corner along each bounds the circle the node fits inside.
         //
@@ -354,7 +354,7 @@ impl LatticeCallback {
             };
             // A node shipped for its light alone would fill its cell with
             // nothing: level 0 packs no cell and keeps it out of the
-            // occluders (`shadow::pack`, `shadow::node_occluders`).
+            // occluders (`shadow::pack_into`, `shadow::node_occluders`).
             if !inked {
                 return empty;
             }

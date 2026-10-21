@@ -1,6 +1,7 @@
 // The BACKDROP CUT round a note (#1525, #1528): the arithmetic every producer
-// of one shares — the roll's ribbons and the Spiral's dots — and the composite
-// that lays the notes' combined cut over the picture (surround_composite.wgsl).
+// of one shares — the roll's ribbons, laid over the picture by their composite
+// (surround_composite.wgsl), and the Spiral's dots, which land straight on it
+// (dot_surround.wgsl).
 //
 // A note's surround is the picture taken away next to it and replaced with the
 // note's own hue: whole at its edge (at the cut's full amount), fading out over
@@ -31,6 +32,19 @@ struct SurroundCut {
 fn surround_ramp(k: f32, x: f32) -> f32 {
     let t = clamp(x, 0.0, 1.0);
     return 1.0 - t / (k * (1.0 - t) + 1.0);
+}
+
+/// How a note's cut lands on the picture: premultiplied over, so what is under
+/// keeps `1 - cut` of itself and gains `color`, the note's straight gamma-space
+/// fill, as much as the cut took. `cut` carries the amount.
+fn surround_lands_gamma(color: vec3<f32>, cut: f32) -> vec4<f32> {
+    return vec4<f32>(color * cut, cut);
+}
+
+/// The same onto a target that encodes sRGB for itself, which wants linear
+/// color, as the roll's `fs_core_linear` does for the bodies.
+fn surround_lands_linear(color: vec3<f32>, cut: f32) -> vec4<f32> {
+    return vec4<f32>(linear_from_gamma_rgb(color) * cut, cut);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used

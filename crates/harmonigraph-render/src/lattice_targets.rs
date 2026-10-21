@@ -343,7 +343,7 @@ impl Offscreen {
     /// strikes, on the names' shadows instead of the Reach.
     ///
     /// Grown to demand and never shrunk while it is wanted: a layout is a pure
-    /// function of its frame (`shadow::pack`), so the texture's size decides
+    /// function of its frame (`shadow::pack_into`), so the texture's size decides
     /// nothing drawn, and a smaller one rebuilt on every frame a name leaves
     /// would be an allocation per frame of a fade. Nothing is carried across a
     /// rebuild the way a glow's ink strip is: the atlas is rewritten from the

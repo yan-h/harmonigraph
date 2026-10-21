@@ -83,7 +83,7 @@ pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle, point_scale
 /// at its own width with no second conversion between them.
 ///
 /// In points and not in the target's pixels, so the target's own scale enters
-/// once, where the cell is SIZED (`pack`'s `px_per_point`, the device's scale
+/// once, where the cell is SIZED (`pack_into`'s `px_per_point`, the device's scale
 /// times the render scale, which is the term #496 found missing from the
 /// field's reach). Written as the POSITIVE test so a NaN out of a corrupt blob
 /// is no shadow rather than a kernel of NaNs.
@@ -258,7 +258,7 @@ pub(crate) struct Packed {
 /// location 15 and leave five free, and a caster is four of them; the cell is
 /// read by a node, a marker and a name alike, so one array they all index is
 /// also one place the shape is written down. Indexed by the caster's own index
-/// — the order `pack` was handed — so nothing carries a second copy.
+/// — the order `pack_into` was handed — so nothing carries a second copy.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct ShadowCaster {
@@ -291,6 +291,22 @@ pub(crate) struct ShadowCaster {
 pub(crate) const NO_CASTER: ShadowCaster =
     ShadowCaster { rect: [0.0; 4], cell: [0.0; 4], map: [0.0; 4], shade: [0.0; 4] };
 
+/// [`pack_into`], into fresh buffers, for a test that holds none.
+#[cfg(test)]
+pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Packed {
+    let mut packed = Packed::default();
+    pack_into(casters, px_per_point, max_side, &mut packed, &mut PackScratch::default());
+    packed
+}
+
+/// What [`pack_into`] works in, kept between frames with the packing it fills.
+#[derive(Default)]
+pub(crate) struct PackScratch {
+    rects: Vec<[f32; 4]>,
+    sizes: Vec<[u32; 2]>,
+    placed: Vec<[u32; 2]>,
+}
+
 /// Every caster's cell, shelf-packed in the order the casters arrive.
 ///
 /// `px_per_point` is the target's pixels per pane point — the device's scale
@@ -311,23 +327,10 @@ pub(crate) const NO_CASTER: ShadowCaster =
 /// Every property that differs BETWEEN groups rides on the caster, so this walk
 /// never learns what a group is: a mixed frame is one shelf of cells whose
 /// widths differ, packed in one pass.
-pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Packed {
-    let mut packed = Packed::default();
-    pack_into(casters, px_per_point, max_side, &mut packed, &mut PackScratch::default());
-    packed
-}
-
-/// What [`pack_into`] works in, kept between frames with the packing it fills.
-#[derive(Default)]
-pub(crate) struct PackScratch {
-    rects: Vec<[f32; 4]>,
-    sizes: Vec<[u32; 2]>,
-    placed: Vec<[u32; 2]>,
-}
-
-/// [`pack`], into last frame's buffers rather than new ones: at the node cap
-/// they come to a couple of megabytes a frame. Every one is emptied first, so
-/// the packing is still this frame's alone.
+///
+/// Into last frame's buffers rather than new ones: at the node cap they come
+/// to a couple of megabytes a frame. Every one is emptied first, so the
+/// packing is still this frame's alone.
 pub(crate) fn pack_into(
     casters: &[Caster],
     px_per_point: f32,
@@ -828,7 +831,7 @@ pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32], out: 
         ([r[0], r[1]], [r[0] + r[2], r[1] + r[3]])
     };
     // A box that is not finite contains nothing the shader's test accepts,
-    // except an infinite one, which `pack` never makes.
+    // except an infinite one, which `pack_into` never makes.
     occluders.retain(|&i| {
         let (min, max) = rect(i);
         min.iter().chain(&max).all(|v| v.is_finite())

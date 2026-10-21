@@ -2,10 +2,9 @@
 // rect, after surround.wgsl, reading the target its producer drew in `prepare`
 // (`crate::surround::SurroundTargets`).
 //
-// What is under the surround keeps `1 - cut` of itself, and gains the
-// strongest note's fill color as much as the cut took: premultiplied over.
-// The target holds both already, the cut's amount included, so this draw
-// reads nothing but its texel.
+// How it lands is `surround_lands_*`. The target holds the strongest note's
+// fill and cut already, the cut's amount included, so this draw reads nothing
+// but its texel.
 
 /// The strongest note's straight gamma-space fill color, and in alpha how much
 /// of the picture its cut takes, the size of the rect it is laid over, so a
@@ -44,13 +43,12 @@ fn surround_over(in: CoverOut) -> Over {
 @fragment
 fn fs_surround_gamma(in: CoverOut) -> @location(0) vec4<f32> {
     let over = surround_over(in);
-    return vec4<f32>(over.color * over.cut, over.cut);
+    return surround_lands_gamma(over.color, over.cut);
 }
 
-/// The same onto a target that encodes sRGB for itself, which wants linear
-/// color, as the roll's `fs_core_linear` does for the bodies.
+/// The same onto a target that encodes sRGB for itself.
 @fragment
 fn fs_surround_linear(in: CoverOut) -> @location(0) vec4<f32> {
     let over = surround_over(in);
-    return vec4<f32>(linear_from_gamma_rgb(over.color) * over.cut, over.cut);
+    return surround_lands_linear(over.color, over.cut);
 }

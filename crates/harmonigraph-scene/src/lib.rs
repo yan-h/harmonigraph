@@ -302,7 +302,7 @@ pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 /// around the node rather than empty room beyond it.
 ///
 /// It is the cheap direction of the two the bar moves in. A cell is drawn at
-/// `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels (`shadow::pack`), so the
+/// `min(1, SIGMA_CELL_MAX / σ)` of the target's pixels (`shadow::pack_into`), so the
 /// atlas SHRINKS as this opens and the blur's tap count is flat; what grows is
 /// the quad every caster is billboarded onto, each one reaching
 /// `REACH_SIGMAS · σ` past its own ink (`shadow_reach_uv` in lattice.wgsl), and
