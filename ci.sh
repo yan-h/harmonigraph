@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Canonical full CI gate. Each `run` line below is one gate, plus the two
-# `if in_group` blocks, and the comment above each says what it guards; the
-# file is the list, so there is no second copy of it here to drift.
-# `grep -nE '^run |^if in_group' ci.sh` prints it.
+# Canonical full CI gate. Each `run` line below is one gate, and the comment
+# above each says what it guards; the file is the list, so there is no second
+# copy of it here to drift. `grep -nE '^(quick )?run ' ci.sh` prints it.
 #
 # GitHub Actions invokes this script on the toolchain pinned by
 # rust-toolchain.toml, once per GROUP below. It remains available locally when a
@@ -10,6 +9,7 @@
 #
 #   ./ci.sh              # every gate, in file order — the local default
 #   ./ci.sh workspace    # one group, which is what one CI job runs
+#   ./ci.sh quick        # the gates marked `quick`, before a push
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -47,10 +47,10 @@ fi
 # leaves open, and that one was worth ~48s of the critical path.
 CI_GROUPS=(workspace isolated)
 CI_GROUP="${1:-all}"
-case " ${CI_GROUPS[*]} all " in
+case " ${CI_GROUPS[*]} all quick " in
   *" $CI_GROUP "*) ;;
   *)
-    echo "✗ unknown CI group '$CI_GROUP' (want one of: ${CI_GROUPS[*]} all)" >&2
+    echo "✗ unknown CI group '$CI_GROUP' (want one of: ${CI_GROUPS[*]} all quick)" >&2
     exit 2
     ;;
 esac
@@ -61,9 +61,62 @@ esac
 # silent, so .claude/tests/ci-groups.sh fails on one.
 current_group=
 group() { current_group=$1; }
-in_group() { [ "$CI_GROUP" = all ] || [ "$CI_GROUP" = "$current_group" ]; }
+in_group() {
+  case "$CI_GROUP" in
+    all) true ;;
+    quick) [ -n "$quick" ] ;;
+    *) [ "$CI_GROUP" = "$current_group" ] ;;
+  esac
+}
 
-run() { in_group || return 0; echo; echo "▶ $*"; "$@"; }
+# `./ci.sh quick` is what to run before pushing: the gates whose failures cost
+# a whole CI round to learn of while taking seconds to a minute or two here —
+# formatting, prose, clippy, rustdoc and the Metal corpus. Clippy and rustdoc
+# alone were five of the 27 Full CI failures on 2026-10-19..21, each a ~10 min
+# round on a macOS runner. The tests are left out on purpose: they are the
+# minutes, and a golden frame can only be judged on the runner anyway.
+quick=
+quick() {
+  quick=1
+  "$@"
+  quick=
+}
+
+# A failing gate is recorded and the next one runs anyway, so one run reports
+# every gate that fails rather than the first. Stopping at the first made a
+# branch learn of its failures one CI round apart: a moved golden frame in
+# `workspace` ended the group before rustdoc ran, so a dead doc link behind it
+# cost a second ~10 min round, and worktree-cut-only-surround took three. The
+# gates are independent, which is what makes carrying on sound. Where one failure causes
+# the next — a compile error fails every later cargo gate too — the list at the
+# end repeats it, and its first line is the one to read.
+#
+# A gate that is a shell function needs errexit inside it, and bash suspends
+# errexit within anything whose status is tested (`||`, `if`), so the gate runs
+# as a plain statement in a subshell that turns errexit back on, and its status
+# is read afterwards.
+failures=
+run() {
+  in_group || return 0
+  echo
+  echo "▶ $*"
+  set +e
+  (
+    set -e
+    "$@"
+  )
+  local status=$?
+  set -e
+  if [ "$status" != 0 ]; then
+    echo "✗ exit $status: $*" >&2
+    failures="$failures  ✗ $*"$'\n'
+  fi
+}
+
+# Read by harmonigraph-golden, for tools/shader-assets.py alone: it draws each
+# golden frame without comparing it, which would turn every golden gate below
+# into a pass.
+unset HARMONIGRAPH_GOLDEN_DRAW_ONLY
 
 group workspace
 
@@ -75,7 +128,7 @@ group workspace
 # The point of the line is that nobody has to hold the house style in their
 # head. Before it, style was a convention kept by attention alone, which is the
 # scarcest thing in a repo whose commits mostly come from parallel sessions.
-run cargo fmt --all --check
+quick run cargo fmt --all --check
 
 # The same idea for markdown, which rustfmt never opens. Prose here is laid out
 # one clause per line, so a line break only ever falls where the text already
@@ -88,13 +141,13 @@ run cargo fmt --all --check
 #
 # A break inside a paragraph renders as a space, so none of this changes a
 # rendered byte. `--write` fixes every failure this reports.
-run .claude/semantic-breaks.py --check
+quick run .claude/semantic-breaks.py --check
 run python3 -B .claude/tests/semantic-breaks.py
 
 # Rustdoc below checks Rust comments only. Local Markdown links must also
 # resolve to tracked targets and current headings, including after docs move,
 # and so must repository paths written as inline code.
-run python3 -B .claude/markdown-links.py
+quick run python3 -B .claude/markdown-links.py
 run python3 -B .claude/tests/markdown-links.py
 
 # Real compressed state sections must retain distinct instances and JSON strings.
@@ -105,7 +158,7 @@ run python3 -B .claude/tests/read-plugin-state.py
 # focused suite uses only Node's built-ins and costs under a second.
 run node --test tools/adaptive-tuning-simulator/model.test.mjs
 
-run cargo clippy --workspace --all-targets -- -D warnings
+quick run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported
 # callbacks, and the CLAP configuration owner's allocation-free paths
 # (`configuration::tests`), which this is the only run of.
@@ -124,7 +177,8 @@ run cargo clippy --workspace --all-targets -- -D warnings
 # line above, so a `#[cfg(feature = "hot-reload")]` break in one of them still
 # fails here; what is given up is a hot-reload-only RUNTIME failure inside a
 # render test, in a feature that is standalone-harness-only.
-run cargo test --workspace --exclude harmonigraph-render --features nice-plug/assert_process_allocs
+run cargo test --no-fail-fast --workspace --exclude harmonigraph-render \
+  --features nice-plug/assert_process_allocs
 
 group isolated
 
@@ -194,7 +248,7 @@ run cargo check --release --workspace --all-targets
 # package rather than running a hot-reload-unified second copy of the tests
 # these two share. So this line is load-bearing for all 284, not just for the
 # two the `cfg` deletes — narrowing it to a filter would silently drop the rest.
-run cargo test -p harmonigraph-render
+run cargo test --no-fail-fast -p harmonigraph-render
 
 # ...and the one question none of the runs above can ask: is the committed Metal
 # corpus still valid for THIS tree's shaders? A key the corpus is missing makes
@@ -233,36 +287,36 @@ run cargo test -p harmonigraph-render
 # could never be met and the gate would go red for a reason that is not a
 # defect; there it skips instead. A macOS machine with no Metal adapter still
 # FAILS, deliberately, on the same policy as HARMONIGRAPH_REQUIRE_GPU.
-if in_group; then
-  echo
-  echo "▶ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render production_metal_asset_catalog"
+metal_corpus() {
   if [ "$(uname -s)" != Darwin ]; then
     echo "  skipped — the Metal corpus exists only on macOS"
-  else
-    corpus_status=0
-    corpus=$(HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
-      --features shader-assets-tools -- --ignored --exact \
-      shader_assets::catalog::production_metal_asset_catalog 2>&1) || corpus_status=$?
-    echo "$corpus"
-    if [ "$corpus_status" != 0 ]; then
-      echo "✗ the committed Metal corpus does not cover this tree's shaders." >&2
-      echo "  Regenerate it on the runner, into the SAME commit as the change:" >&2
-      echo "    gh workflow run \"Metal shader assets\" --ref <branch> -f regenerate=true" >&2
-      echo "  then import the production-metal-assets artifact with tools/shader-assets.py." >&2
-      exit 1
-    fi
-    case "$corpus" in
-      *"test result: ok. 1 passed"*)
-        echo "  ok — every production library resolved from the committed corpus"
-        ;;
-      *)
-        echo "✗ the strict-catalog filter matched no test, so this gate guarded nothing." >&2
-        echo "  Did shader_assets::catalog::production_metal_asset_catalog move or get renamed?" >&2
-        exit 1
-        ;;
-    esac
+    return
   fi
-fi
+  local corpus corpus_status=0
+  corpus=$(HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
+    --features shader-assets-tools -- --ignored --exact \
+    shader_assets::catalog::production_metal_asset_catalog 2>&1) || corpus_status=$?
+  echo "$corpus"
+  if [ "$corpus_status" != 0 ]; then
+    echo "✗ the committed Metal corpus does not cover this tree's shaders." >&2
+    echo "  On a PR, the Metal shader assets run for the same push generates the" >&2
+    echo "  replacement when its check fails: import that run's production-metal-assets" >&2
+    echo "  artifact with tools/shader-assets.py import, into the SAME commit as the change." >&2
+    echo "  Without a PR: gh workflow run \"Metal shader assets\" --ref <branch> -f regenerate=true" >&2
+    return 1
+  fi
+  case "$corpus" in
+    *"test result: ok. 1 passed"*)
+      echo "  ok — every production library resolved from the committed corpus"
+      ;;
+    *)
+      echo "✗ the strict-catalog filter matched no test, so this gate guarded nothing." >&2
+      echo "  Did shader_assets::catalog::production_metal_asset_catalog move or get renamed?" >&2
+      return 1
+      ;;
+  esac
+}
+quick run metal_corpus
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
@@ -277,11 +331,12 @@ fi
 # Each crate is its own workspace root, so keep both of their targets under
 # `target/debug`: the idle-worktree reclaimer owns that whole subtree.
 # Production opt-in CLAP performance boundary and CLAP auxiliary bounds.
-run cargo test --manifest-path vendor/nice-plug/Cargo.toml \
+run cargo test --no-fail-fast --manifest-path vendor/nice-plug/Cargo.toml \
   --target-dir target/debug/vendor-nice-plug --features assert_process_allocs,clap-boundary-tests \
   --test clap_boundary --test clap_auxiliary
-run cargo test --manifest-path vendor/baseview/Cargo.toml --target-dir target/debug/vendor-baseview
-run cargo test --manifest-path vendor/egui-baseview/Cargo.toml \
+run cargo test --no-fail-fast --manifest-path vendor/baseview/Cargo.toml \
+  --target-dir target/debug/vendor-baseview
+run cargo test --no-fail-fast --manifest-path vendor/egui-baseview/Cargo.toml \
   --no-default-features --features wgpu,tracing \
   --config 'patch.crates-io.baseview.path="vendor/baseview"' \
   --target-dir target/debug/vendor-egui-baseview
@@ -309,7 +364,7 @@ group workspace
 # still skipped — and the only thing that reaches such a path is the compiler,
 # through a `use` of it. Two commits in a row have now swept `cfg(test)` doc
 # links by eye and reported the sweep complete while nine were still broken.
-run env RUSTDOCFLAGS="-D rustdoc::all -A rustdoc::private_intra_doc_links" \
+quick run env RUSTDOCFLAGS="-D rustdoc::all -A rustdoc::private_intra_doc_links" \
   cargo doc --no-deps --quiet --workspace --document-private-items
 
 # The security audit has trigger-dependent behavior that no Rust test reaches:
@@ -330,12 +385,8 @@ run .claude/tests/ci-groups.sh
 # library, so its dependency list must stay empty: a GPL (or otherwise
 # restrictive) dependency would silently contradict its stated license.
 # Adding one is allowed, but must be a deliberate edit here, not a drive-by.
-#
-# The one gate that is a shell block rather than a command, so it consults the
-# group itself where the others let `run` do it.
-if in_group; then
-  echo
-  echo "▶ harmonigraph-core dependency guard"
+core_dependency_guard() {
+  local deps
   deps=$(cargo metadata --no-deps --format-version 1 \
     | python3 -c 'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="harmonigraph-core"][0]; print(" ".join(sorted(d["name"] for d in p["dependencies"])))')
   if [ -n "$deps" ]; then
@@ -343,10 +394,11 @@ if in_group; then
     echo "  unlike the GPL workspace around it). Found: $deps" >&2
     echo "  If the dependency is intended and permissively licensed, update" >&2
     echo "  this guard in ci.sh and the rationale in crates/harmonigraph-core/README.md." >&2
-    exit 1
+    return 1
   fi
   echo "  ok — no dependencies"
-fi
+}
+run core_dependency_guard
 
 # The worktree reclaimer and its gate ship with agent-config's
 # session-lifecycle skill, whose own check runs that gate on every change to
@@ -384,8 +436,14 @@ sccache --show-stats 2>/dev/null \
   || echo "  (sccache reported nothing)"
 
 echo
-if [ "$CI_GROUP" = all ]; then
+if [ -n "$failures" ]; then
+  echo "✗ CI '$CI_GROUP' failed — every gate that failed, in file order:" >&2
+  printf '%s' "$failures" >&2
+  exit 1
+elif [ "$CI_GROUP" = all ]; then
   echo "✅ full CI passed — every group: ${CI_GROUPS[*]}"
+elif [ "$CI_GROUP" = quick ]; then
+  echo "✅ quick gates passed — the tests run in CI or under ./ci.sh"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi

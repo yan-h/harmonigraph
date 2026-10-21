@@ -60,10 +60,14 @@ Enable the tracked pre-push formatting check once per clone:
 git config core.hooksPath .githooks
 ```
 
-The pre-push hook checks formatting only.
+The pre-push hook checks formatting only;
+`./ci.sh quick` is the fuller check before a push,
+running formatting, prose, clippy, rustdoc and the Metal corpus in under a minute.
 GitHub Actions runs the full `./ci.sh` gate for pull requests and pushes to `main`,
 split across parallel groups and reported as one `Full CI` check.
 A bare local `./ci.sh` runs every group.
+A failing gate does not stop the run:
+every gate runs, and the summary at the end lists each one that failed.
 
 CI sets `HARMONIGRAPH_REQUIRE_GPU=1`,
 so an unavailable GPU adapter fails renderer,
