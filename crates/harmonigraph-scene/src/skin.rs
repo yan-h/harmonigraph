@@ -384,6 +384,10 @@ pub const PICTURE: [u8; 3] = [0, 0, 0];
 /// the spectrum/roll handover, the spiral's seam and pitch-class rays. Each
 /// site fades it further.
 pub const PICTURE_RULING: [u8; 3] = [64, 67, 77];
+/// The line between two panes of an exported frame (and the Video preview).
+/// White rather than [`PICTURE_RULING`]: it frames the panes instead of
+/// measuring inside one, so it reads as an edge, not as more grid.
+pub const PICTURE_DIVIDER: [u8; 3] = [255, 255, 255];
 /// The analyzer's axis numbers.
 pub const PICTURE_MARKING: [u8; 3] = [172, 177, 188];
 /// Note names drawn in a picture, outlined in [`PICTURE`].

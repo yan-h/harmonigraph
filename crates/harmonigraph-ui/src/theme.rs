@@ -106,6 +106,10 @@ pub fn picture() -> Color32 {
 pub fn picture_ruling() -> Color32 {
     c(skin::PICTURE_RULING)
 }
+/// The line between two panes of an exported frame.
+pub fn picture_divider() -> Color32 {
+    c(skin::PICTURE_DIVIDER)
+}
 /// The analyzer's axis numbers.
 pub fn picture_marking() -> Color32 {
     c(skin::PICTURE_MARKING)

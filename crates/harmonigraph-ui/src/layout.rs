@@ -171,7 +171,7 @@ impl Layout {
     /// The live dock deliberately does NOT get these: its editor-only Frameless
     /// mode can show adjacent panes as one continuous live picture.
     pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
-        let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_ruling());
+        let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider());
         for line in self.dividers(placements) {
             painter.line_segment(line, stroke);
         }
@@ -347,7 +347,7 @@ mod tests {
             assert_eq!(lines.len(), layout.dividers(&placements).len());
             assert!(!lines.is_empty(), "the fixture must paint a real boundary");
             assert!(lines.iter().all(|(_, stroke)| *stroke
-                == egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_ruling())));
+                == egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider())));
             strokes.push(lines);
         }
         skin::set_active_skin(saved);
