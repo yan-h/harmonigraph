@@ -384,15 +384,17 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         let cell_fast = draw_cells(SHADER_SRC);
         let cell_slow = draw_cells(&reference_src);
         assert!(
-            cell_slow.chunks_exact(4).any(|p| {
+            cell_slow.as_chunks::<4>().0.iter().any(|p| {
                 let bits = u16::from_le_bytes([p[0], p[1]]);
                 shadow::tests::half(bits) >= 0.99
             }),
             "the {name} fixture wrote no opaque node interior",
         );
         let differing = cell_fast
-            .chunks_exact(4)
-            .zip(cell_slow.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(cell_slow.as_chunks::<4>().0)
             .enumerate()
             .find(|(_, (a, b))| a != b)
             .map(|(i, (a, b))| {

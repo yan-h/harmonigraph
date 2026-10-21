@@ -1847,7 +1847,7 @@ fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
     assert!(body.vertices.len() > 100, "fixture must reach the sampled contour");
     // Each sample is one color and one alpha from the floor to its contour:
     // the flat fill, or nothing where the curve is a sliver.
-    for column in body.vertices.chunks_exact(atmosphere::BODY_STOPS) {
+    for column in body.vertices.as_chunks::<{ atmosphere::BODY_STOPS }>().0 {
         let tall = column[1].pos.distance(column[0].pos) > atmosphere::BODY_SLIVER_PT;
         let alpha = if tall { BODY_ALPHA } else { 0 };
         assert!(column.iter().all(|v| v.color == column[0].color && v.color.a() == alpha));
@@ -1903,7 +1903,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     };
     // Four vertices across the ribbon, the second of them solid.
     let solid = |outline: &egui::Mesh| {
-        outline.vertices.chunks_exact(4).map(|across| across[1].color).collect::<Vec<_>>()
+        outline.vertices.as_chunks::<4>().0.iter().map(|across| across[1].color).collect::<Vec<_>>()
     };
     let (meshes, outlines) = draw(cfg, &visible);
     assert_eq!(outlines.len(), 1);
@@ -2038,7 +2038,7 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
                 a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
             };
             let mut columns = std::collections::BTreeSet::new();
-            for triangle in sky.indices.chunks_exact(3) {
+            for triangle in sky.indices.as_chunks::<3>().0 {
                 let corners =
                     triangle.iter().map(|&k| at(&sky.vertices[k as usize])).collect::<Vec<_>>();
                 let (lo, hi) = corners

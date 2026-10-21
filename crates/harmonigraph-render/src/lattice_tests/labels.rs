@@ -1556,9 +1556,9 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
         scene.view.note_bloom = bloom;
         let faint = shot(&scene, Some(1), 0.18, 0.18);
         let deep = shot(&scene, Some(1), 1.0, 0.18);
-        let pairs = || faint.chunks_exact(4).zip(deep.chunks_exact(4));
-        let hidden_more = pairs().filter(|(f, d)| brightness(f) - brightness(d) > 6).count();
-        let brighter = pairs().filter(|(f, d)| brightness(d) > brightness(f) + 1).count();
+        let pairs = || faint.as_chunks::<4>().0.iter().zip(deep.as_chunks::<4>().0);
+        let hidden_more = pairs().filter(|(f, d)| brightness(*f) - brightness(*d) > 6).count();
+        let brighter = pairs().filter(|(f, d)| brightness(*d) > brightness(*f) + 1).count();
         assert!(
             hidden_more > 30,
             "bloom={bloom}: more Hide behind hid only {hidden_more} more rear-label pixels"

@@ -410,7 +410,7 @@ mod gap_tests {
                     let at = (pixel.y as usize * SIZE[0] as usize + pixel.x as usize) * 4;
                     assert_eq!(&delta[at..at + 3], &[0, 0, 0], "the real gap is black");
                     assert!(
-                        delta.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]),
+                        delta.as_chunks::<4>().0.iter().any(|p| p[..3] != [0, 0, 0]),
                         "resumed energy is visible"
                     );
                 }

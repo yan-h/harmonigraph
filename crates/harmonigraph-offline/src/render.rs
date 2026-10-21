@@ -799,7 +799,7 @@ mod tests {
         let Some(plain) = render_take(fixture(false), &settings) else { return };
         let learning = render_take(fixture(true), &settings).expect("the second export has a GPU");
         assert_eq!(plain.len(), 1, "the fixture must replay and draw one actual frame");
-        let distinct: std::collections::HashSet<_> = plain[0].chunks_exact(4).collect();
+        let distinct: std::collections::HashSet<_> = plain[0].as_chunks::<4>().0.iter().collect();
         assert!(distinct.len() > 32, "the clean picture must have actual rendered content");
         assert_eq!(plain, learning, "recorded Learn mode changed the exported picture");
     }
@@ -962,7 +962,7 @@ mod tests {
         // fixture was one sample of ±1 read a second past the end of its own
         // buffer — 97% digital silence, which both asserts passed over only
         // because the wash then painted it with a lift nothing held back.
-        let lit = first[mid].chunks_exact(4).filter(|px| px[..3] != [0, 0, 0]).count();
+        let lit = first[mid].as_chunks::<4>().0.iter().filter(|px| px[..3] != [0, 0, 0]).count();
         let pane = first[mid].len() / 4;
         assert!(
             lit * 2 > pane,

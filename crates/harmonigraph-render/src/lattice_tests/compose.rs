@@ -41,7 +41,7 @@ fn fractional_bloom_strength_is_independent_of_render_scale() {
             let frame = shooter.shot(&scene);
             let halo: u64 = outside
                 .iter()
-                .zip(frame.chunks_exact(4))
+                .zip(frame.as_chunks::<4>().0)
                 .filter(|(outside, _)| **outside)
                 .map(|(_, b)| b[..3].iter().map(|v| u64::from(*v)).sum::<u64>())
                 .sum();
@@ -171,7 +171,9 @@ fn a_thin_lines_light_reaches_the_half_whatever_the_scene_to_half_ratio() {
         );
         let bytes = crate::gpu_harness::readback(&device, &queue, &texture, [hw, hh]);
         let red: Vec<f32> = bytes
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|texel| f32::from_le_bytes(texel[..4].try_into().unwrap()))
             .collect();
         // A one-texel line is 1/ratio of one half texel's box, wherever it

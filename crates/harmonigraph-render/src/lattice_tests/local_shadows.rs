@@ -57,7 +57,7 @@ fn notation_shadows_darken_saturated_light_without_changing_remote_pixels() {
         scene.view.shadow.lattice_text.depth = 0.0;
         let bare = shooter.shot_with(&scene, labels(&scene));
         let (mut saturated, mut remote) = (0, 0);
-        for (i, (a, b)) in bare.chunks_exact(4).zip(deep.chunks_exact(4)).enumerate() {
+        for (i, (a, b)) in bare.as_chunks::<4>().0.iter().zip(deep.as_chunks::<4>().0).enumerate() {
             let pixel = glam::vec2((i % 256) as f32 + 0.5, (i / 256) as f32 + 0.5);
             if (pixel - centre).abs().max_element() > radius {
                 assert_eq!(a, b, "marker={marker}: remote pixel {pixel:?}");
@@ -91,7 +91,9 @@ fn text_depth_scales_a_fixed_profile_on_the_pane_fill() {
     let half = shot(0.5);
     let full = shot(1.0);
     let mut measured = 0;
-    for ((a, b), c) in bare.chunks_exact(4).zip(half.chunks_exact(4)).zip(full.chunks_exact(4)) {
+    for ((a, b), c) in
+        bare.as_chunks::<4>().0.iter().zip(half.as_chunks::<4>().0).zip(full.as_chunks::<4>().0)
+    {
         let removed = i32::from(a[0]) - i32::from(c[0]);
         if a[0] == 204 && removed > 8 {
             let half_removed = i32::from(a[0]) - i32::from(b[0]);
@@ -146,9 +148,11 @@ fn foreground_ink_restores_local_shadow_transmittance() {
         let uncovered_flat = shot(0.0, false);
         let mut restored = 0;
         for (i, ((a, b), c)) in deep
-            .chunks_exact(4)
-            .zip(flat.chunks_exact(4))
-            .zip(uncovered.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(flat.as_chunks::<4>().0)
+            .zip(uncovered.as_chunks::<4>().0)
             .enumerate()
         {
             // Exclude the stretched atlas's reconstruction fringe;
@@ -217,8 +221,10 @@ fn spread_strengthens_node_label_and_marker_shadows_without_moving_ink() {
         style(&mut scene, group).spread = 0.5;
         let expanded = shooter.shot_with(&scene, labels(&scene));
         let darkness = |frame: &[u8]| -> u64 {
-            ink.chunks_exact(4)
-                .zip(frame.chunks_exact(4))
+            ink.as_chunks::<4>()
+                .0
+                .iter()
+                .zip(frame.as_chunks::<4>().0)
                 .map(|(a, b)| u64::from(a[0].saturating_sub(b[0])))
                 .sum()
         };

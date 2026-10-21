@@ -385,7 +385,7 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
         * (arm.length() * measured.plus_half_width + 2.0);
     let loss_at = |along: f32| {
         let p = centre + arm * along + side;
-        let i = ((p.y.round() as usize * SIZE[0] as usize + p.x.round() as usize) * 4) as usize;
+        let i = (p.y.round() as usize * SIZE[0] as usize + p.x.round() as usize) * 4;
         brightness(&flat[i..i + 3]) - brightness(&deep[i..i + 3])
     };
     let body_loss = loss_at(0.45);

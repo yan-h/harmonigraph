@@ -551,11 +551,11 @@ fn fs_brightness_boundary(@builtin(position) p: vec4<f32>) -> @location(0) vec4<
             pass.draw(0..4, 0..1);
         });
         let pixels = readback(&device, &queue, &target, size);
-        for pixel in pixels[..8].chunks_exact(4) {
+        for pixel in pixels[..8].as_chunks::<4>().0 {
             assert_eq!(&pixel[1..3], &[255, 255], "fixture must reach a lone, covered glob");
         }
         // Uncovered tile texels still filter into their covered neighbors.
-        for pixel in pixels[8..].chunks_exact(4) {
+        for pixel in pixels[8..].as_chunks::<4>().0 {
             assert_eq!(pixel, &[128, 0, 255, 255], "missing globs must have neutral brightness");
         }
         assert!(

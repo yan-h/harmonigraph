@@ -315,8 +315,8 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
         2,
         "the old release and the newly writable row must both reach the GPU"
     );
-    assert_eq!(grown.chunks_exact(4).map(|p| u64::from(p[0])).sum::<u64>(), 0);
-    assert!(grown.chunks_exact(4).map(|p| u64::from(p[1])).sum::<u64>() > 64);
+    assert_eq!(grown.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum::<u64>(), 0);
+    assert!(grown.as_chunks::<4>().0.iter().map(|p| u64::from(p[1])).sum::<u64>() > 64);
     let pane = shooter.pane;
     assert_eq!(grown, shooter.shot(&scene), "growth is exactly fresh current ink");
     shooter.pane = pane;
@@ -334,9 +334,9 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     scene.pitch_lut.fill(glam::Vec4::new(0.0, 0.0, 1.0, 1.0));
     let reused = shooter.shot_again(&scene);
     assert_eq!(history(&shooter).raw_views, grown_raw);
-    assert_eq!(reused.chunks_exact(4).map(|p| u64::from(p[0])).sum::<u64>(), 0);
-    assert!(reused.chunks_exact(4).map(|p| u64::from(p[1])).sum::<u64>() > 64);
-    assert!(reused.chunks_exact(4).map(|p| u64::from(p[2])).sum::<u64>() > 64);
+    assert_eq!(reused.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum::<u64>(), 0);
+    assert!(reused.as_chunks::<4>().0.iter().map(|p| u64::from(p[1])).sum::<u64>() > 64);
+    assert!(reused.as_chunks::<4>().0.iter().map(|p| u64::from(p[2])).sum::<u64>() > 64);
     scene.nodes.swap(0, 1);
     let reordered = shooter.shot_again(&scene);
     // Half-float overlap blends round after each incoming halo. Reordering
@@ -349,7 +349,7 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     shooter.shot_again(&scene);
     scene.nodes.push(absent);
     let returned = shooter.shot_again(&scene);
-    assert!(returned.chunks_exact(4).map(|p| u64::from(p[2])).sum::<u64>() > 64);
+    assert!(returned.as_chunks::<4>().0.iter().map(|p| u64::from(p[2])).sum::<u64>() > 64);
     eprintln!("history growth fixture: 64 -> 128, 2 GPU instances including row 64, 1 strip creation, 0 viewport recreations; release red lost, held green present, reuse byte-exact");
 }
 
@@ -387,8 +387,8 @@ fn glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level() {
         (mix - (1.0 - (-0.1f32).exp())).abs() < 1e-6,
         "attack uses the last encoded level: {mix}"
     );
-    assert!(delivered.chunks_exact(4).map(|p| u64::from(p[0])).sum::<u64>() > 64);
-    assert!(delivered.chunks_exact(4).map(|p| u64::from(p[1])).sum::<u64>() > 64);
+    assert!(delivered.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum::<u64>() > 64);
+    assert!(delivered.as_chunks::<4>().0.iter().map(|p| u64::from(p[1])).sum::<u64>() > 64);
     shooter.pane = 20;
     assert_eq!(delivered, shooter.shot_again(&scene), "discarded callbacks cannot spend GPU time");
     assert_eq!(delivered, shooter.shot_again(&scene), "same-time passes do not advance ink");

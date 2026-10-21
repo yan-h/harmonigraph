@@ -3514,8 +3514,10 @@ mod tests {
                 let bloomed =
                     draw_bloomed(&device, &queue, vec![note], TOP, 1.5, wgpu::Color::BLACK);
                 bloomed
-                    .chunks_exact(4)
-                    .zip(plain.chunks_exact(4))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(plain.as_chunks::<4>().0)
                     .map(|(lit, base)| f64::from(lit[0].saturating_sub(base[0])))
                     .sum()
             })

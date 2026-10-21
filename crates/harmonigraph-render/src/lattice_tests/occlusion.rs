@@ -71,8 +71,12 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             let mut mostly_hidden_ink = 0;
             let mut unchanged_ground = 0;
             let mut illuminated_ground = 0;
-            for ((old, new), mask) in
-                before.chunks_exact(4).zip(after.chunks_exact(4)).zip(ink.chunks_exact(4))
+            for ((old, new), mask) in before
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(after.as_chunks::<4>().0)
+                .zip(ink.as_chunks::<4>().0)
             {
                 if mask[..3] == [0, 0, 0] {
                     assert_eq!(
@@ -135,9 +139,11 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
         };
         let (none, full) = (at(0.18), at(0.8));
         let moved = none
-            .chunks_exact(4)
-            .zip(full.chunks_exact(4))
-            .zip(ink.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(full.as_chunks::<4>().0)
+            .zip(ink.as_chunks::<4>().0)
             .filter(|((a, b), mask)| {
                 mask[..3] != [0, 0, 0] && (0..3).any(|k| a[k].abs_diff(b[k]) > 2)
             })
@@ -156,9 +162,9 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
         for bloom in [0.0, 1.0] {
             scene.view.note_bloom = bloom;
             let (coupled, whole) = (shot(&scene, 0.28), shot(&scene, 1.0));
-            let pairs = || coupled.chunks_exact(4).zip(whole.chunks_exact(4));
-            let hidden_more = pairs().filter(|(c, w)| brightness(c) - brightness(w) > 6).count();
-            let brighter = pairs().filter(|(c, w)| brightness(w) > brightness(c) + 1).count();
+            let pairs = || coupled.as_chunks::<4>().0.iter().zip(whole.as_chunks::<4>().0);
+            let hidden_more = pairs().filter(|(c, w)| brightness(*c) - brightness(*w) > 6).count();
+            let brighter = pairs().filter(|(c, w)| brightness(*w) > brightness(*c) + 1).count();
             assert!(
                 hidden_more > 50,
                 "lit={lit}, bloom={bloom}: full Hide behind hid only {hidden_more} \
@@ -179,11 +185,13 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
         scene.view.shadow.lattice_geometry.depth = 0.18;
         let faint_glow = shot(&scene, 1.0);
         let changed_glow = faint_glow
-            .chunks_exact(4)
-            .zip(deep_glow.chunks_exact(4))
-            .zip(ink.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(deep_glow.as_chunks::<4>().0)
+            .zip(ink.as_chunks::<4>().0)
             .filter(|((faint, deep), mask)| {
-                mask[..3] == [0, 0, 0] && brightness(faint) - brightness(deep) > 6
+                mask[..3] == [0, 0, 0] && brightness(*faint) - brightness(*deep) > 6
             })
             .count();
         assert!(
@@ -261,10 +269,12 @@ fn a_node_at_no_darkness_still_hides_the_node_behind() {
         (shot(1.0, 1.0, true), shot(1.0, 0.0, true), shot(0.0, 1.0, true));
     let mut faded = 0;
     for (((h, s), u), mask) in hidden
-        .chunks_exact(4)
-        .zip(shown.chunks_exact(4))
-        .zip(unfielded.chunks_exact(4))
-        .zip(ink.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(shown.as_chunks::<4>().0)
+        .zip(unfielded.as_chunks::<4>().0)
+        .zip(ink.as_chunks::<4>().0)
     {
         if mask[..3] == [0, 0, 0] {
             assert_eq!(h, u, "a shadow at Darkness 0 moved a pixel off the rear ink");
@@ -328,7 +338,7 @@ fn a_name_on(scene: &Scene, place: usize, at: glam::Vec3, side: f32) -> LatticeL
 
 /// The pixels a shot holds any ink on, out of a black frame.
 fn inked(shot: &[u8]) -> Vec<bool> {
-    shot.chunks_exact(4).map(|px| px[..3] != [0, 0, 0]).collect()
+    shot.as_chunks::<4>().0.iter().map(|px| px[..3] != [0, 0, 0]).collect()
 }
 
 /// A ring in front hides a resting cross behind it, as it hides a ring or a
@@ -362,9 +372,9 @@ fn a_ring_in_front_hides_a_cross_behind_it() {
     let alone = shot(false, 1.0);
     let cross = inked(&alone);
     let (shown, hidden) = (shot(true, 0.0), shot(true, 1.0));
-    let pairs = || shown.chunks_exact(4).zip(hidden.chunks_exact(4)).enumerate();
+    let pairs = || shown.as_chunks::<4>().0.iter().zip(hidden.as_chunks::<4>().0).enumerate();
     let faded =
-        pairs().filter(|(i, (s, h))| cross[*i] && brightness(s) - brightness(h) > 6).count();
+        pairs().filter(|(i, (s, h))| cross[*i] && brightness(*s) - brightness(*h) > 6).count();
     let moved = pairs().filter(|(i, (s, h))| !cross[*i] && s != h).count();
     assert!(faded > 30, "the ring hid only {faded} pixels of the cross behind it");
     assert_eq!(moved, 0, "hiding the cross moved {moved} pixels off it");
@@ -380,8 +390,10 @@ fn a_ring_in_front_hides_a_cross_behind_it() {
         shooter.draw(&scene, LatticeLabels::default())
     });
     let kept = shown
-        .chunks_exact(4)
-        .zip(alone.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(alone.as_chunks::<4>().0)
         .enumerate()
         .filter(|(i, _)| cross[*i] && !ring[*i])
         .flat_map(|(_, (a, b))| (0..3).map(move |k| a[k].abs_diff(b[k])))

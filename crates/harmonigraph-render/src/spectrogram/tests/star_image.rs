@@ -327,7 +327,7 @@ fn a_core_depth_draws_its_stars_whole() {
             })
             .collect();
         let floor = cb.shades.lut[0];
-        let lit = frames[0].chunks_exact(4).filter(|px| px[..3] != floor[..3]).count();
+        let lit = frames[0].as_chunks::<4>().0.iter().filter(|px| px[..3] != floor[..3]).count();
         assert!(lit > 500, "jitter={jitter}: only {lit} lit pixels");
         // A cut star loses whole levels; the reference's own summation order
         // moves a channel by one at most.
@@ -378,10 +378,10 @@ fn a_capped_depth_draws_what_a_wide_read_draws() {
     // its light, a capped star kept 0.96.
     let floor = cb.shades.lut[0];
     let light = |frame: &[u8]| -> f64 {
-        let over = |px: &[u8]| -> f64 {
+        let over = |px: &[u8; 4]| -> f64 {
             px[..3].iter().zip(&floor).map(|(&c, &f)| f64::from(c.abs_diff(f))).sum()
         };
-        frame.chunks_exact(4).map(over).sum()
+        frame.as_chunks::<4>().0.iter().map(over).sum()
     };
     let kept = light(&frames[0]) / light(&frames[2]);
     assert!(kept < 0.92, "capping kept {kept} of the uncapped field's light");

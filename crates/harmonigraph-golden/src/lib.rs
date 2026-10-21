@@ -126,7 +126,7 @@ impl Gate {
             .expect("RGBA8 dimensions exceed addressable memory");
         assert_eq!(frame.len(), bytes, "{name}: wrong RGBA8 byte length");
         let mut levels = std::collections::BTreeSet::new();
-        for px in frame.chunks_exact(4) {
+        for px in frame.as_chunks::<4>().0 {
             levels.insert([px[0], px[1], px[2], px[3]]);
             if levels.len() == LEVELS {
                 break;
