@@ -73,7 +73,7 @@ fn the_endpoint_has_exactly_three_explicit_shadow_groups() {
 /// Either bar at its bottom is the whole of a group's shadow gone, and the two
 /// are separate switches.
 ///
-/// The claim the renderer's early-out rests on: `pack` reads this to decide
+/// The claim the renderer's early-out rests on: `pack_into` reads this to decide
 /// whether a caster takes a cell at all, so a group that reads as casting with
 /// one bar shut would allocate atlas and rasterize ink for a shadow the picture
 /// never spends.

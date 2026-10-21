@@ -83,7 +83,7 @@ pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle, point_scale
 /// at its own width with no second conversion between them.
 ///
 /// In points and not in the target's pixels, so the target's own scale enters
-/// once, where the cell is SIZED (`pack`'s `px_per_point`, the device's scale
+/// once, where the cell is SIZED (`pack_into`'s `px_per_point`, the device's scale
 /// times the render scale, which is the term #496 found missing from the
 /// field's reach). Written as the POSITIVE test so a NaN out of a corrupt blob
 /// is no shadow rather than a kernel of NaNs.
@@ -258,7 +258,7 @@ pub(crate) struct Packed {
 /// location 15 and leave five free, and a caster is four of them; the cell is
 /// read by a node, a marker and a name alike, so one array they all index is
 /// also one place the shape is written down. Indexed by the caster's own index
-/// — the order `pack` was handed — so nothing carries a second copy.
+/// — the order `pack_into` was handed — so nothing carries a second copy.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct ShadowCaster {
@@ -831,7 +831,7 @@ pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32], out: 
         ([r[0], r[1]], [r[0] + r[2], r[1] + r[3]])
     };
     // A box that is not finite contains nothing the shader's test accepts,
-    // except an infinite one, which `pack` never makes.
+    // except an infinite one, which `pack_into` never makes.
     occluders.retain(|&i| {
         let (min, max) = rect(i);
         min.iter().chain(&max).all(|v| v.is_finite())

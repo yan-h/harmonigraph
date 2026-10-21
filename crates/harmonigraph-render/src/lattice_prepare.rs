@@ -496,7 +496,7 @@ impl LatticeCallback {
         // and so cannot read the texture they are writing, and the markers'
         // shared blur cell, which is `casters[0]` wherever that row casts.
         //
-        // The arm in points is the one term `pack` has no way to know, and it
+        // The arm in points is the one term `pack_into` has no way to know, and it
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;

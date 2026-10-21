@@ -561,7 +561,7 @@ struct BoxOut {
 };
 
 /// A caster's box: the quad its shadow is laid over, which is its ink's own box
-/// grown by the kernel's reach (`pack` in shadow.rs).
+/// grown by the kernel's reach (`pack_into` in shadow.rs).
 ///
 /// No vertex buffer at all. The draw is one instance at the caster's own index
 /// (`Draw::Label` in lib.rs), so the index IS the instance index, and every

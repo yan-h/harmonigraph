@@ -109,7 +109,7 @@ struct ShadowCaster {
 };
 
 // Every caster's shadow, indexed by the caster's own index in the frame
-// (`pack`'s order).
+// (`pack_into`'s order).
 //
 // A storage buffer and a group of its own. A node's instance rows and the box
 // beside them already take fifteen of the sixteen attribute locations a vertex
@@ -232,7 +232,7 @@ fn local_shadow_transmittance(full: f32, depth: f32, level: f32) -> f32 {
 
 // Where a point of the pane reads its caster's cell, in atlas texels: the cell's
 // origin plus how far into the box the point stands, at the scale the packer
-// related the two by (`pack` in shadow.rs).
+// related the two by (`pack_into` in shadow.rs).
 fn cell_texel(points: vec2<f32>, rect: vec4<f32>, cell: vec4<f32>, k: f32) -> vec2<f32> {
     return cell.xy + (points - rect.xy) * k;
 }
