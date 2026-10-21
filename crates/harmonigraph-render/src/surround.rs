@@ -3,12 +3,13 @@
 //! notes wear one surround on one set of dials.
 //!
 //! A producer draws its notes once in `prepare`, into one target over its own
-//! rect ([`SurroundTargets`]): under a depth test the strongest note's cut
-//! lands there with its fill color. `paint` then lays it over the picture in
-//! one draw ([`SurroundComposite`]). What a note's cut IS at a fragment — its
-//! distance, what holds it out — is the producer's own shader; the fade's
-//! shape and how the cut lands are `shaders/surround.wgsl`, which every
-//! producer joins.
+//! rect ([`SurroundTargets`](crate::surround::SurroundTargets)): under a depth
+//! test the strongest note's cut lands there with its fill color. `paint` then
+//! lays it over the picture in one draw
+//! ([`SurroundComposite`](crate::surround::SurroundComposite)). What a note's
+//! cut IS at a fragment — its distance, what holds it out — is the producer's
+//! own shader; the fade's shape and how the cut lands are
+//! `shaders/surround.wgsl`, which every producer joins.
 
 use crate::uniforms::{uniform_group, Float4};
 use crate::{wgpu, EGUI_BLEND};
