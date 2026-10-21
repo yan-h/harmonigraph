@@ -567,7 +567,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         for (name, v) in [
             ("lattice geometry width", view.shadow.lattice_geometry.width),
             ("lattice text width", view.shadow.lattice_text.width),
-            ("spectral geometry width", view.shadow.spectral_geometry.width),
             ("spectral text width", view.shadow.spectral_text.width),
             ("roll_lead", cfg.roll_lead),
             ("roll_lead_fade", cfg.roll_lead_fade),
@@ -1456,7 +1455,7 @@ fn lattice_map_indicator_visibility_round_trips_and_defaults_on() {
 }
 
 #[test]
-fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
+fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_two() {
     let mut endpoint = harmonigraph_scene::ShadowSettings::default();
     for (index, group) in endpoint.groups_mut().into_iter().enumerate() {
         group.width = 0.1 + index as f32 * 0.1;
@@ -1464,7 +1463,7 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
     }
     let full = ron::to_string(&endpoint).expect("Shadow settings serialize");
     let pairs = top_level_pairs(&full);
-    assert_eq!(pairs.len(), 4, "the persisted endpoint is not exactly four groups: {full}");
+    assert_eq!(pairs.len(), 3, "the persisted endpoint is not exactly three groups: {full}");
     assert!(!full.contains("spiral"), "the spiral grew a distinct persisted group: {full}");
 
     for (missing, _) in &pairs {
@@ -1478,20 +1477,18 @@ fn a_shadow_endpoint_missing_any_one_group_keeps_the_other_three() {
                 .unwrap_or_else(|e| panic!("dropping {missing} sank the endpoint: {e}"));
         // A missing group comes back at the FRESH endpoint's value for that
         // group, not at a bare `ShadowStyle::default()`: the container-level
-        // `serde(default)` fills from `ShadowSettings::default()`, whose four
+        // `serde(default)` fills from `ShadowSettings::default()`, whose three
         // groups differ.
         let fresh = harmonigraph_scene::ShadowSettings::default();
         for (name, group) in [
             ("lattice_geometry", loaded.lattice_geometry),
             ("lattice_text", loaded.lattice_text),
-            ("spectral_geometry", loaded.spectral_geometry),
             ("spectral_text", loaded.spectral_text),
         ] {
             let source = if name == missing { &fresh } else { &endpoint };
             let want = match name {
                 "lattice_geometry" => source.lattice_geometry,
                 "lattice_text" => source.lattice_text,
-                "spectral_geometry" => source.spectral_geometry,
                 _ => source.spectral_text,
             };
             assert_eq!(group, want, "dropping {missing} changed {name}");

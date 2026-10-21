@@ -754,7 +754,7 @@ mod tests {
             depth: f32::from(enabled),
             ..Default::default()
         };
-        state.appearance.view.shadow.spectral_geometry = style;
+        state.appearance.spectrum.note_cut = f32::from(enabled);
         state.appearance.view.shadow.spectral_text = style;
         let mut take = take();
         take.header.appearance = Some(state.appearance.serialize());

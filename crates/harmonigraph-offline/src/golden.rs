@@ -456,7 +456,6 @@ fn spectral_shadows_draw_the_frame_on_record() {
     appearance.render.spectrogram = SpectrogramRender::Scrolling;
     (appearance.spectrum.low_midi, appearance.spectrum.high_midi) = shot.range;
     let style = harmonigraph_scene::ShadowStyle { width: 0.75, depth: 0.85, ..Default::default() };
-    appearance.view.shadow.spectral_geometry = style;
     appearance.view.shadow.spectral_text = style;
     let notes: Vec<_> = [60u8, 64, 67, 72]
         .into_iter()

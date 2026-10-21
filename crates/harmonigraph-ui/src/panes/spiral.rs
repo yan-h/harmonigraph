@@ -44,7 +44,7 @@
 use egui::Color32;
 
 use super::spectral::axes::{power_db, spectrogram_level_db};
-use super::spectral::roll::note_color;
+use super::spectral::roll::{note_color, note_fill};
 use super::spectral::spectrogram::{cell_color, footprint_mean_db};
 use crate::PictureState;
 
@@ -550,21 +550,14 @@ pub(crate) fn spiral_pane(
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
     let marks = dots(&spiral, state, &lit);
-    let dot_shadow = state
-        .appearance
-        .view
-        .shadow
-        .spectral_geometry
-        .clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-    // Unconditionally, as the halo below is: the callback declines a frame
-    // with nothing to shadow itself, without building its pipelines.
-    painter.add(harmonigraph_render::dot_shadow_paint_callback(
+    // The roll's own backdrop cut, round every dot, before the discs land on
+    // it. Unconditionally, as the halo below is: the callback declines a frame
+    // with nothing to cut itself, without building its pipelines.
+    painter.add(harmonigraph_render::dot_surround_paint_callback(
         rect,
-        marks.clone(),
-        dot_shadow,
+        surround(&spiral, state, &lit),
+        state.appearance.spectrum.note_cut(),
         state.surfaces.target_format,
-        crate::text::SPIRAL_SHADOW_SURFACE,
-        painter.ctx().cumulative_pass_nr(),
     ));
     for mark in &marks {
         painter.circle_filled(
@@ -895,6 +888,29 @@ fn dots(
                 center: [at.x, at.y],
                 radius: fill,
                 color: color.to_array(),
+            }
+        })
+        .collect()
+}
+
+/// The backdrop cut each sounding note's dot wears: the roll's ribbons' own,
+/// filled with the note's hue at the cut's fill lightness, and as strong as
+/// the dot is opaque, so a fading dot's surround fades with it.
+fn surround(
+    spiral: &Spiral,
+    state: &PictureState,
+    sounding: &[Sounding],
+) -> Vec<harmonigraph_render::SurroundDot> {
+    let radius = spiral.dot();
+    sounding
+        .iter()
+        .filter(|voice| voice.opacity > 0.0)
+        .map(|voice| {
+            let at = spiral.at(voice.pitch, 0.0);
+            harmonigraph_render::SurroundDot {
+                center: [at.x, at.y],
+                radius,
+                aura: note_fill(state, voice.pitch, voice.strength * voice.opacity),
             }
         })
         .collect()

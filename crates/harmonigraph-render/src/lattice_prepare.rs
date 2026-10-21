@@ -245,10 +245,10 @@ impl LatticeCallback {
             })
             .and_then(|()| {
                 validate_wgsl(
-                    "dot_shadow.wgsl",
-                    &module_source(&reloaded.common, dot_shadow::SRC),
-                    reloaded.seam,
-                    dot_shadow::ENTRY_POINTS,
+                    "dot_surround.wgsl",
+                    &dot_surround::source(),
+                    0,
+                    dot_surround::ENTRY_POINTS,
                 )
             });
             match checked {

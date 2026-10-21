@@ -48,3 +48,11 @@ These settle the open questions from the first trial above.
 - Picked off look-prototype rounds R3–R8: a composite-only backdrop cut, with no coupling to the spectrogram. The cut is whole at the ribbon's edge and fades over four σ along a smoothstep (S4), to black.
 - Between close notes the strongest-wins cut folded into a crease along the bisector ("a weird grid artifact"); a smooth minimum of the notes' distances removes it, at σ / 2 by default (R8).
 - Yan asked to tune it on sliders in the plugin rather than on more sheets: Backdrop cut, Cut reach, Cut curve, Cut fill and Halo blend, in the Ribbon glow block. A cut of 0 is the shipped glow exactly.
+
+## 2026-10-20 (cut only, #1528)
+
+- Once the cut is on it does all the backdrop removal, so the glow's only remaining job was a faint L* 7 tint. The surround is the cut alone.
+- The Spiral's dots wear the same cut instead of their blur, and the Notes shadow group is gone: notes on both panes share one Note surround block.
+- Cut fill stays, so the cut can fill with each note's hue; Fill lightness stays, and the fill's chroma is fixed at full.
+- Cut curve (linear to smoothstep) is replaced by Cut shape, one bipolar bar: a steep drop at the note with a long tail at one end, linear in the middle, held near the note with a steep drop at the far end at the other.
+- Halo blend stays a bar for now; Yan prefers it at 100%, the new default.

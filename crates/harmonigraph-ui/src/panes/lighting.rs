@@ -57,15 +57,6 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
     let shadow = &mut appearance.view.shadow;
     section(ui, "Shadows", |ui| {
-        shadow_group(
-            ui,
-            "Notes",
-            "Spiral note dots",
-            false,
-            false,
-            &mut shadow.spectral_geometry,
-            None,
-        );
         note_surround(ui, &mut appearance.spectrum);
         shadow_group(
             ui,
@@ -79,7 +70,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// The backdrop cut round every MIDI ribbon: how much of the picture it takes
+/// The backdrop cut round every MIDI ribbon and Spiral dot: how much of the picture it takes
 /// next to a note, how far and along what curve it fades, and what fills it.
 fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     super::block(ui, "Note surround", |ui| {
@@ -141,7 +132,7 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
             );
     })
     .response
-    .on_hover_text("MIDI ribbons");
+    .on_hover_text("MIDI ribbons and Spiral note dots");
 }
 
 /// The same global note bloom is editable beside either picture it affects.

@@ -228,16 +228,6 @@ impl ShadowBox {
             5 => Float32x4, 9 => Float32x4, 14 => Float32x4, 13 => Float32x4
         ],
     };
-
-    /// After a spiral dot's centre, radius and color, for rasterizing its
-    /// circle field into its cell.
-    pub(crate) const BESIDE_DOTS: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![
-            3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
-        ],
-    };
 }
 
 /// A caster with no cell at all: what a draw carries when the frame packed

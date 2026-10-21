@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels, and the **Ribbon glow** around MIDI ribbons. |
+| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -348,9 +348,9 @@ and double-click to reset.
 - The background glow falloff curve keeps its signed shape value and a preview:
   zero is linear, positive fades early, and negative fades late.
 
-Every shadow is a blur of its caster, except around MIDI ribbons.
+Every shadow is a blur of its caster.
 **Shadow spread** strengthens a shadow without changing the visible ink.
-For rings, marks and dots it expands the shadow caster before blurring.
+For rings and marks it expands the shadow caster before blurring.
 The percentage is a fraction of the resolved Shadow width:
 100% expands the caster by one Shadow width on each side.
 For the two label groups — names, axis labels and the idle crosses —
@@ -360,23 +360,19 @@ At 100% that plate reaches about one Shadow width past wide ink, as for the othe
 but its edge is harder: it ends where the blur itself ends, at one and a half Shadow widths.
 A Shadow width of zero still removes the shadow.
 
-Around MIDI ribbons the Notes shadow is a glow measured from the ribbon's edge rather than a blur of the ribbon,
+MIDI ribbons and the Spiral's note dots wear no shadow.
+Their **Note surround** is a backdrop cut measured from the note's edge rather than a blur of the note,
 so a hairline ribbon is held as firmly as a wide one.
-Spread is a solid band before the falloff, and Width sets the falloff's reach, as for the dots.
-**Ribbon glow** colors it:
-**Glow lightness** is its L*, the same for every ribbon,
-and **Glow color** is how much of each ribbon's own hue it keeps.
-Where the glow is at full darkness the picture is that lightness whatever the spectrogram was,
-so every ribbon stands against the same surround.
-Where two glows meet, the stronger one paints, in its own color.
-
-The glow alone never covers fully, so over bright spectrogram energy the backdrop shows through it.
-**Backdrop cut** takes the spectrogram away next to a ribbon faster than the glow lays its color on,
-so the surround holds over bright cells as it does over dark ones.
-At 0% it is the plain glow, and over black it changes nothing.
-**Cut reach** is how far past the Spread the cut fades out, in multiples of the glow's width,
-and **Cut curve** shapes that fade, from a straight line at 0% to a smoothstep at 100%.
-**Cut fill** fills what the cut takes away with the glow's own color instead of black.
+**Backdrop cut** is how much of the picture it takes away at the note's edge; 0% turns it off.
+Over black it changes nothing but its fill, and over bright energy it is what keeps the note legible.
+**Cut reach** is how far it fades out, in points,
+and **Cut shape** bends that fade:
+a straight line at 0%, a steep drop at the note with a long soft tail toward −100%,
+and a hold near the note with a steep drop at the far end toward 100%.
+**Cut fill** fills what the cut takes away with the note's own hue instead of black,
+at **Fill lightness** (L*), the same for every note,
+so wherever the cut is whole and filled every note stands against the same surround.
+Where two notes' cuts meet, the stronger one names the fill's color.
 **Halo blend** merges the cuts of neighbouring notes:
 at 0% the stronger cut stands alone and folds into a crease along the line between two notes,
 and higher rounds the fold out while darkening narrow gaps a little more.

@@ -2907,9 +2907,10 @@ fn the_rolls_ink_stops_at_the_now_line() {
             let mut state = fresh();
             state.appearance.spectrum.orientation = orientation;
             state.appearance.spectrum.roll_fraction = 0.55;
-            // The widest outline there is, so the reach that would cross the
+            // The longest surround there is, so the reach that would cross the
             // line is as big as the setting allows, and a bloom over it.
-            state.appearance.view.shadow.spectral_geometry.width = 1.0;
+            state.appearance.spectrum.note_cut_reach =
+                *harmonigraph_render::SURROUND_REACH_RANGE.end();
             state.appearance.spectrum.roll_lead = lead;
             state.appearance.spectrum.roll_lead_fade = lead;
             state.appearance.view.note_bloom = 1.2;

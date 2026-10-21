@@ -87,7 +87,7 @@ pub use spectrogram::{
     SpectrogramRead, SpectrogramShades, SpectrogramSlab, SpectrogramVertex,
 };
 
-mod dot_shadow;
+mod dot_surround;
 /// A halo alone, over marks a pane drew for itself — the third caller of
 /// [`BloomChain`], and the one that draws no picture of its own.
 mod glow;
@@ -95,7 +95,7 @@ mod lattice_material;
 mod lattice_node_glow;
 mod lattice_stars;
 mod stars;
-pub use dot_shadow::dot_shadow_paint_callback;
+pub use dot_surround::{dot_surround_paint_callback, SurroundDot};
 pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
 
@@ -232,9 +232,9 @@ pub(crate) fn text_source() -> String {
     }
 }
 
-/// The roll and spiral-dot modules joined to the common half currently in
-/// force, the roll's after the surround's arithmetic it shares with the
-/// Spiral's dots. Their own files remain baked; a common-shader reload still rebuilds
+/// The roll's module joined to the common half currently in force, after the
+/// surround's arithmetic it shares with the Spiral's dots. Its own file
+/// remains baked; a common-shader reload still rebuilds
 /// them so every group uses one generation of the two kernels.
 pub(crate) fn roll_source() -> String {
     #[cfg(feature = "hot-reload")]
@@ -251,17 +251,6 @@ pub(crate) fn roll_source() -> String {
 /// roll's own half of its module: common.wgsl goes before both.
 pub(crate) fn roll_module() -> String {
     format!("{}\n{}", surround::SRC, roll::ROLL_SRC)
-}
-
-pub(crate) fn dot_shadow_source() -> String {
-    #[cfg(feature = "hot-reload")]
-    {
-        module_source(&reload::common_source(), dot_shadow::SRC)
-    }
-    #[cfg(not(feature = "hot-reload"))]
-    {
-        with_common(dot_shadow::SRC)
-    }
 }
 
 /// What a committed reload leaves for the pipelines it cannot reach itself.
