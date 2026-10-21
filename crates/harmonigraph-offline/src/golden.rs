@@ -336,24 +336,29 @@ fn check(name: &str, shot: Shot) {
 }
 
 fn check_take(name: &str, shot: Shot, take: Take) {
+    let Some(last) = last_frame(&shot, take) else {
+        eprintln!("skipping {name}: no usable GPU adapter");
+        return;
+    };
+    harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(name, shot.size, &last);
+}
+
+/// The LAST frame `take` renders at `shot`, or `None` without a GPU.
+fn last_frame(shot: &Shot, take: Take) -> Option<Vec<u8>> {
     let settings = shot.settings();
     let mut audio = probe_audio();
     let mut replay = Replay::new(take);
     let mut last = Vec::new();
     let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
     match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
-        // The gate wants the LAST frame: keep this one and hand the previous
-        // one back to be drawn into again.
+        // Keep this frame and hand the previous one back to be drawn into
+        // again.
         Ok(std::mem::replace(&mut last, bytes))
     }) {
-        Ok(_) => {}
-        Err(e) if e.contains("no usable GPU adapter") => {
-            eprintln!("skipping {name}: {e}");
-            return;
-        }
+        Ok(_) => Some(last),
+        Err(e) if e.contains("no usable GPU adapter") => None,
         Err(e) => panic!("{e}"),
     }
-    harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(name, shot.size, &last);
 }
 
 /// A tall pane zoomed out draws the frame on record.
@@ -427,6 +432,34 @@ fn full_resolution_stars_draw_the_frame_on_record() {
         a.spectrum.atmosphere.stars.star_resolution = 1.0;
     });
     check_take("spectrogram-starfield", shot, take);
+}
+
+/// The light field holds the newest slab across the analyzer divider, so the
+/// stars beside it are as bright as the ones further in. It used to be silence
+/// past the divider, which the reduced field's filtering and every star
+/// centred there pulled into a dark seam a few pixels wide.
+#[test]
+fn stars_hold_their_light_up_to_the_analyzer() {
+    let shot = Shot { size: [480, 240], range: (36.0, 96.0) };
+    let take = shot.dialled(|a| {
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+        a.spectrum.roll_fraction = 0.65;
+    });
+    let Some(frame) = last_frame(&shot, take) else { return };
+    let [w, h] = shot.size.map(|n| n as usize);
+    let mean = |columns: std::ops::Range<usize>| {
+        let n = columns.len() * h * 3;
+        let sum: u32 = columns
+            .flat_map(|x| (0..h).flat_map(move |y| (0..3).map(move |c| (y * w + x) * 4 + c)))
+            .map(|i| u32::from(frame[i]))
+            .sum();
+        sum as f32 / n as f32
+    };
+    // The region is the pane's first `roll_fraction` of its width, and the
+    // divider is drawn at its edge.
+    let divider = (0.65 * w as f32).round() as usize;
+    let (edge, inside) = (mean(divider - 6..divider - 1), mean(divider - 60..divider - 20));
+    assert!(edge > 0.95 * inside, "the newest edge {edge} against {inside} further in");
 }
 
 /// The pinned look's Stars settings draw into a reduced image, filtered up

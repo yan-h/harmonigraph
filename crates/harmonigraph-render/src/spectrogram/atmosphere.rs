@@ -68,6 +68,12 @@ pub struct SpectrogramAtmosphere {
     /// Changes whenever the spectrogram's history is cleared, so the colour
     /// memory starts from the cleared picture instead of fading the old one out.
     pub history_epoch: u32,
+    /// The analyzer's side of the divider, holding the newest slab, drawn
+    /// into the light source alone and never painted. Without it the source
+    /// is silence there, and the reduced light field's filtering and every
+    /// star centred past the divider darken the newest edge — the Stars seam.
+    /// `None` where the strip does not reach the now-line.
+    pub light_hold: Option<[SpectrogramVertex; 6]>,
 }
 
 /// Cloud-space sampling offset for a texture travelling at a constant visible
@@ -2409,6 +2415,7 @@ mod tests {
             points_per_slab: 0.0,
             now: 0.0,
             history_epoch: 0,
+            light_hold: None,
         };
         let size = [1920, 1080];
         let density = |a| tone_size(size, 2.0, a, 0.5);
@@ -2493,6 +2500,7 @@ mod tests {
             points_per_slab: 0.0,
             now: 0.0,
             history_epoch: 0,
+            light_hold: None,
         };
         let tile = tile_key([1920, 1080], atmosphere, period);
         assert!(tile.is_some(), "the wash drew no tile");
@@ -2560,6 +2568,7 @@ mod tests {
                     points_per_slab: 0.0,
                     now: 0.0,
                     history_epoch: 0,
+                    light_hold: None,
                 },
                 cloud_tile,
             )
@@ -2602,6 +2611,7 @@ mod tests {
                     points_per_slab: 0.0,
                     now: 0.0,
                     history_epoch: 0,
+                    light_hold: None,
                 },
                 cloud_pixel,
             )
@@ -2661,6 +2671,7 @@ mod tests {
                     points_per_slab,
                     now: 0.0,
                     history_epoch: 0,
+                    light_hold: None,
                 },
             )
         };
