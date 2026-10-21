@@ -514,7 +514,7 @@ pub(crate) fn spectral_pane(
     if split < 1.0 && split > 0.0 {
         painter.line_segment(
             axes.across_pitch(split),
-            egui::Stroke::new(1.0, atmosphere::keyline_at_silence(&cfg)),
+            egui::Stroke::new(theme::LINE_WIDTH, atmosphere::keyline_at_silence(&cfg)),
         );
     }
 
@@ -635,7 +635,10 @@ pub(crate) fn spectral_pane(
             None
         };
         if let Some(color) = lit {
-            painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, color));
+            painter.line_segment(
+                axes.across_pitch(split),
+                egui::Stroke::new(theme::LINE_WIDTH, color),
+            );
         }
     }
     if let Some(drag) = orientation_drag {

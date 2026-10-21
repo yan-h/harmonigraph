@@ -33,7 +33,7 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
         let start = plot.point(0.5,0.5);
         let end = plot.point(x,y);
         if start.distance(end)>0.01 {
-            ui.painter().arrow(start,end-start,egui::Stroke::new(1.5,theme::accent()));
+            ui.painter().arrow(start,end-start,egui::Stroke::new(theme::LINE_WIDTH,theme::accent()));
         }
         plot.dot(ui,x,y);
         // Stars set their own pace under Star speed and pass no speed here.

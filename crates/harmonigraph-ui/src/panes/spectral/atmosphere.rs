@@ -185,7 +185,7 @@ fn backdrop_mesh(
 }
 
 /// The outline's width, in points.
-const KEYLINE_WIDTH_PT: f32 = 1.0;
+const KEYLINE_WIDTH_PT: f32 = theme::LINE_WIDTH;
 
 /// The Intensity dial, gamma-encoded so it reads evenly, as the linear luminance
 /// floor [`keyline_color`] lifts to.

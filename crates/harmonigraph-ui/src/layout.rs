@@ -178,9 +178,8 @@ impl Layout {
     }
 }
 
-/// Divider thickness in points. A hairline: enough to separate two panels,
-/// not enough to become a graphic element of its own.
-const DIVIDER_WIDTH: f32 = 1.0;
+/// Divider thickness in points: a line's, like every other line.
+const DIVIDER_WIDTH: f32 = crate::theme::LINE_WIDTH;
 
 #[cfg(test)]
 mod tests {

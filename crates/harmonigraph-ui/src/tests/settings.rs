@@ -1314,8 +1314,9 @@ fn a_configuration_fault_asks_for_a_host_reset() {
 
 /// The size a settings pane is soloed at to make it scroll: narrow enough that
 /// the bars run the width of the column, and short enough that every pane in
-/// the sweep — System, the shortest list of them — overflows it.
-const SCROLLING_PANE: egui::Vec2 = egui::vec2(320.0, 200.0);
+/// the sweep — System, the shortest list of them — overflows it. The width
+/// counts the two section gaps beside the pane, each a line wide.
+const SCROLLING_PANE: egui::Vec2 = egui::vec2(318.0 + 2.0 * crate::theme::LINE_WIDTH, 200.0);
 
 /// The chrome scales the sweep runs at: the design size, both ends of
 /// [`theme::UI_SCALE_RANGE`], and two in between that leave `8 * scale`

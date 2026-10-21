@@ -243,7 +243,7 @@ fn band_shapes(
                     Pos2::new(start, rect.center().y),
                     Pos2::new((start + 3.0 * scale).min(rect.right()), rect.center().y),
                 ],
-                Stroke::new(scale, color),
+                Stroke::new(theme::LINE_WIDTH * scale, color),
             ));
             start += 6.0 * scale;
         }

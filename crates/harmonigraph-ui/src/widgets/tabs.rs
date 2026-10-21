@@ -131,7 +131,7 @@ fn paint_chevron(ui: &Ui, rect: Rect, color: egui::Color32) {
             c + egui::vec2(0.0, 2.0) * scale,
             c + egui::vec2(4.0, -2.0) * scale,
         ],
-        egui::Stroke::new(1.5 * scale, color),
+        egui::Stroke::new(theme::LINE_WIDTH * scale, color),
     ));
 }
 

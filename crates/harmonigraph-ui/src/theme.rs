@@ -178,6 +178,15 @@ pub(crate) const PANE_GUTTER: f32 = 8.0;
 /// The design size, at [scale](ui_scale) 1.0.
 pub(crate) const ROW_GAP: f32 = 4.0;
 
+/// The width of every line, chrome and picture alike: a divider, a widget's
+/// stroke, a curve, the spectrum's outline. Otonal's mark width, and like
+/// otonal's the floor: only a grid is ruled finer — the analyzer's rulings, the
+/// Spiral's seam and rays — because a grid is a scale behind the data and must
+/// not outweigh it.
+///
+/// The design size, at [scale](ui_scale) 1.0; chrome that scales multiplies it.
+pub(crate) const LINE_WIDTH: f32 = 2.0;
+
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
 ///
@@ -604,7 +613,7 @@ fn style_at(scale: f32) -> egui::Style {
     // selected state unmistakable while still reading fine as a text
     // highlight over glyphs.
     visuals.selection.bg_fill = accent().gamma_multiply(0.5);
-    visuals.selection.stroke = Stroke::new(1.0, text());
+    visuals.selection.stroke = Stroke::new(LINE_WIDTH, text());
     visuals.slider_trailing_fill = true;
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
@@ -624,32 +633,32 @@ fn style_at(scale: f32) -> egui::Style {
     let w = &mut visuals.widgets;
 
     w.noninteractive.bg_fill = panel();
-    w.noninteractive.bg_stroke = Stroke::new(1.0, hairline());
-    w.noninteractive.fg_stroke = Stroke::new(1.0, text());
+    w.noninteractive.bg_stroke = Stroke::new(LINE_WIDTH, hairline());
+    w.noninteractive.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.noninteractive.corner_radius = WIDGET_RADIUS;
 
     w.inactive.bg_fill = widget();
     w.inactive.weak_bg_fill = widget();
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.fg_stroke = Stroke::new(1.0, text());
+    w.inactive.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.inactive.corner_radius = WIDGET_RADIUS;
 
     w.hovered.bg_fill = widget_hover();
     w.hovered.weak_bg_fill = widget_hover();
     w.hovered.bg_stroke = Stroke::NONE;
-    w.hovered.fg_stroke = Stroke::new(1.2, text());
+    w.hovered.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.hovered.corner_radius = WIDGET_RADIUS;
 
     w.active.bg_fill = accent_active();
     w.active.weak_bg_fill = accent_active();
     w.active.bg_stroke = Stroke::NONE;
-    w.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
+    w.active.fg_stroke = Stroke::new(LINE_WIDTH, Color32::WHITE);
     w.active.corner_radius = WIDGET_RADIUS;
 
     w.open.bg_fill = widget();
     w.open.weak_bg_fill = widget();
-    w.open.bg_stroke = Stroke::new(1.0, accent_edge());
-    w.open.fg_stroke = Stroke::new(1.0, text());
+    w.open.bg_stroke = Stroke::new(LINE_WIDTH, accent_edge());
+    w.open.fg_stroke = Stroke::new(LINE_WIDTH, text());
     w.open.corner_radius = WIDGET_RADIUS;
 
     scale_chrome(&mut style, scale);

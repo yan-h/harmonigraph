@@ -113,7 +113,7 @@ impl<'a> BendPlot<'a> {
         let bend = self.gradient.bend.sanitized();
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
-        let hairline = Stroke::new(scale, theme::hairline());
+        let hairline = Stroke::new(theme::LINE_WIDTH * scale, theme::hairline());
         let dot = pos_of(bend.at, bend.share);
         painter.line_segment([pos_of(0.0, 0.0), pos_of(1.0, 1.0)], hairline);
         painter.line_segment([pos_of(0.0, 0.0), dot], hairline);
@@ -132,9 +132,14 @@ impl<'a> BendPlot<'a> {
         let applies = bend.hue || bend.lightness || bend.chroma;
         let live = response.hovered() || response.dragged();
         let ink = if applies { theme::text() } else { theme::text_dim() };
-        painter.add(egui::Shape::line(points, Stroke::new(1.5 * scale, ink)));
+        painter.add(egui::Shape::line(points, Stroke::new(theme::LINE_WIDTH * scale, ink)));
         let fill = if live { theme::text() } else { theme::text_dim() };
-        painter.circle(dot, 4.0 * scale, fill, Stroke::new(scale, theme::panel()));
+        painter.circle(
+            dot,
+            4.0 * scale,
+            fill,
+            Stroke::new(theme::LINE_WIDTH * scale, theme::panel()),
+        );
 
         response.on_hover_cursor(egui::CursorIcon::Crosshair)
     }

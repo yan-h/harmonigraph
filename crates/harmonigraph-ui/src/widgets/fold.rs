@@ -68,6 +68,9 @@ pub(crate) fn paint_chevron(
             center + direction * 2.0 * scale,
             center - direction * 2.0 * scale - cross * 4.0 * scale,
         ],
-        egui::Stroke::new(1.5 * scale, if hot { theme::text() } else { theme::text_dim() }),
+        egui::Stroke::new(
+            theme::LINE_WIDTH * scale,
+            if hot { theme::text() } else { theme::text_dim() },
+        ),
     ));
 }

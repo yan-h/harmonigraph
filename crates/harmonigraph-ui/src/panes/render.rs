@@ -463,7 +463,7 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
     p.rect_stroke(
         box_rect,
         0,
-        egui::Stroke::new(1.0, theme::hairline()),
+        egui::Stroke::new(theme::LINE_WIDTH, theme::hairline()),
         egui::StrokeKind::Outside,
     );
     // One step further out than the hairline, and only when the inset left
@@ -473,7 +473,7 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
         return;
     }
     let len = (box_rect.size().min_elem() * 0.05).clamp(4.0, 14.0);
-    let stroke = egui::Stroke::new(1.0, theme::text_dim());
+    let stroke = egui::Stroke::new(theme::LINE_WIDTH, theme::text_dim());
     for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         let corner = egui::pos2(
             if sx < 0.0 { box_rect.left() } else { box_rect.right() },
