@@ -68,9 +68,13 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{
-    roll_paint_callback_with_clipped_tail, roll_surround_reach, RollAxes, RollCut, RollInstance,
-    ROLL_CUT_REACH_RANGE, ROLL_HALO_BLEND_MAX,
+pub use roll::{roll_paint_callback_with_clipped_tail, RollAxes, RollInstance};
+
+/// The backdrop cut round a note, shared by the roll's ribbons and the
+/// Spiral's dots.
+mod surround;
+pub use surround::{
+    surround_fade, SurroundCut, SURROUND_HALO_BLEND_MAX, SURROUND_REACH_RANGE, SURROUND_SHAPE_RANGE,
 };
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
@@ -229,17 +233,24 @@ pub(crate) fn text_source() -> String {
 }
 
 /// The roll and spiral-dot modules joined to the common half currently in
-/// force. Their own files remain baked; a common-shader reload still rebuilds
+/// force, the roll's after the surround's arithmetic it shares with the
+/// Spiral's dots. Their own files remain baked; a common-shader reload still rebuilds
 /// them so every group uses one generation of the two kernels.
 pub(crate) fn roll_source() -> String {
     #[cfg(feature = "hot-reload")]
     {
-        module_source(&reload::common_source(), roll::ROLL_SRC)
+        module_source(&reload::common_source(), &roll_module())
     }
     #[cfg(not(feature = "hot-reload"))]
     {
-        with_common(roll::ROLL_SRC)
+        with_common(&roll_module())
     }
+}
+
+/// roll.wgsl after the surround's arithmetic it calls into, which is the
+/// roll's own half of its module: common.wgsl goes before both.
+pub(crate) fn roll_module() -> String {
+    format!("{}\n{}", surround::SRC, roll::ROLL_SRC)
 }
 
 pub(crate) fn dot_shadow_source() -> String {

@@ -238,7 +238,7 @@ impl LatticeCallback {
             .and_then(|()| {
                 validate_wgsl(
                     "roll.wgsl",
-                    &module_source(&reloaded.common, roll::ROLL_SRC),
+                    &module_source(&reloaded.common, &crate::roll_module()),
                     reloaded.seam,
                     roll::ROLL_ENTRY_POINTS,
                 )

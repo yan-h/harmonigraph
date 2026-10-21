@@ -4,11 +4,10 @@
 //! The interval is `crate::frame_timer`'s, shared with the lattice probe: from
 //! an empty 1x1 pass encoded ahead of `prepare` to the END of the pass `paint`
 //! draws into, in one command buffer. That covers `prepare` (the bloom's notes
-//! and chain, the body holdout), the shared spectral shadow's `finish` (the
-//! Gaussian atlas's ink and blur) and `paint` (outline layer, core layer, bloom
-//! composite), and with the backdrop cut on its two passes and its own
-//! composite. The closing pass READS the holdout, the atlas and the bloom's
-//! quarter, so its end is ordered after every pass that wrote them (#1113).
+//! and chain, the body holdout, the surround's cut and fill passes) and `paint`
+//! (surround composite, core layer, bloom composite). The closing pass READS
+//! the holdout, the surround's targets and the bloom's quarter, so its end is
+//! ordered after every pass that wrote them (#1113).
 //! The control's paint draws nothing, which is what the timer's no-pixel draw
 //! is for.
 //!
@@ -18,9 +17,9 @@
 //! ```
 //! `PROBE_SIZE=WxH` (device pixels, default 3840x1000: the roll is a strip),
 //! `PROBE_PPP` (default 2), `PROBE_FRAMES` (default 120) and `PROBE_CASE` (a
-//! substring of the case name, e.g. `dense` or `cut`). Each workload is timed
-//! under the glow alone and under the backdrop cut at the look's defaults, with
-//! the halo blend on and off.
+//! substring of the case name, e.g. `dense` or `fill`). Each workload is timed
+//! under the backdrop cut at the look's defaults, with the halo blend on and
+//! off, and filled with the notes' hue.
 //!
 //! The notes are synthetic, since the pane that builds them lives in
 //! `harmonigraph-ui`: ribbons at the pane's default width (0.3 semitone over
@@ -32,6 +31,7 @@
 //! (#1458). `PROBE_SIZE=839x1348` is that pane.
 
 use super::*;
+use crate::SurroundCut;
 
 const AXES: RollAxes = RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [1.0, 0.0] };
 const SPAN_SEMITONES: f32 = 72.0;
@@ -140,7 +140,7 @@ fn a_frame_of_the_roll_costs_this_much() {
     let bloom = crate::bloom_strength(harmonigraph_scene::ViewConfig::default().note_bloom);
 
     // Median and p10 of `frames` frames of one roll, after the timer's warm-up.
-    let time = |instances: Vec<RollInstance>, shadow: harmonigraph_scene::ShadowStyle, cut| {
+    let time = |instances: Vec<RollInstance>, cut| {
         let cb = RollCallback {
             point_scale: 1.0,
             rect,
@@ -149,7 +149,6 @@ fn a_frame_of_the_roll_costs_this_much() {
             clipped_tail: None,
             axes: AXES,
             bloom,
-            shadow,
             cut,
             target_format: format,
             pane_id: 0,
@@ -180,22 +179,25 @@ fn a_frame_of_the_roll_costs_this_much() {
         "roll probe: {}x{} px at {ppp} ppp, {frames} frames, bloom {bloom}",
         size[0], size[1]
     );
-    let shadow = harmonigraph_scene::ShadowSettings::default().spectral_geometry;
-    let (control, control_p10) = time(Vec::new(), shadow, RollCut::OFF);
+    let (control, control_p10) = time(Vec::new(), SurroundCut::OFF);
     eprintln!("control (empty roll): median {control:.3} ms, p10 {control_p10:.3} ms");
-    // The look's defaults (`SpectrumConfig`'s), then the same at no blend.
-    let cut = RollCut { amount: 1.0, reach: 4.0, curve: 1.0, fill: 0.0, blend: 0.5 };
-    let cuts =
-        [("glow", RollCut::OFF), ("cut", cut), ("cut, no blend", RollCut { blend: 0.0, ..cut })];
+    // The look's defaults (`SpectrumConfig`'s), then the same at no blend and
+    // filled.
+    let cut = SurroundCut { amount: 1.0, ..SurroundCut::OFF };
+    let cuts = [
+        ("cut", cut),
+        ("cut, no blend", SurroundCut { blend: 0.0, ..cut }),
+        ("cut, fill 0.9", SurroundCut { fill: 0.9, ..cut }),
+    ];
     for (work, (look, cut)) in WORKLOADS.iter().flat_map(|w| cuts.map(|c| (w, c))) {
         let case = format!("{} under the {look}", work.name);
         if filter.as_ref().is_some_and(|f| !case.contains(f.as_str())) {
             continue;
         }
-        let reach = roll_surround_reach(shadow, cut, 1.0);
+        let reach = cut.reach_points(1.0);
         let notes = instances(work, points, reach);
         let count = notes.len();
-        let (median, p10) = time(notes, shadow, cut);
+        let (median, p10) = time(notes, cut);
         eprintln!(
             "{case}: {count} instances, reach {reach:.2} pt: median {median:.3} ms \
              (p10 {p10:.3}); the roll alone {:.3} ms (p10 {:.3})",

@@ -19,7 +19,7 @@
 use egui::Color32;
 use harmonigraph_core::Expressions;
 use harmonigraph_core::RollNote;
-use harmonigraph_render::{RollAxes, RollCut, RollInstance};
+use harmonigraph_render::{RollAxes, RollInstance, SurroundCut};
 use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
@@ -69,57 +69,39 @@ const MIN_RIBBON_PT: f32 = 1.5;
 /// Padding extends the onset pitch into the past without rescaling real bends.
 const MIN_LENGTH_PT: f32 = 1.0;
 
-/// The glow standing outside a note: its whole reach in screen points, and how
-/// strongly it covers where solid.
+/// The surround standing outside a note: its whole reach in screen points,
+/// and how strongly the note cuts where its cut is whole.
 ///
-/// A GLOW in the note's own hue rather than a black shadow, and the reason is
-/// legibility over every backdrop rather than color for its own sake. A
-/// multiply toward black takes a fixed share off whatever is under it, so it
-/// all but vanishes over the heatmap's dark cells and lands heavy over its
-/// bright ones, and a ribbon sitting on its own bright fundamental — the
-/// commonest case, since a note lights the very line it is drawn along —
-/// barely separated at all. Where this glow is solid the picture IS the glow's
-/// lightness, whatever was there, so every note stands against the same
-/// surround. Its color is the note's own hue, dark (see
-/// [`SpectrumConfig::roll_glow_lightness`](crate::SpectrumConfig)), so the
-/// surround tints toward the ribbon it belongs to instead of competing with it.
+/// A BACKDROP CUT rather than a black shadow, and the reason is legibility over
+/// every backdrop. A multiply toward black takes a fixed share off whatever is
+/// under it, so it all but vanishes over the heatmap's dark cells and lands
+/// heavy over its bright ones, and a ribbon sitting on its own bright
+/// fundamental — the commonest case, since a note lights the very line it is
+/// drawn along — barely separated at all. The cut takes the picture away next
+/// to the note, wholly at its edge at a full amount, so every note stands
+/// against the same surround; what it takes is filled with the note's own hue
+/// as far as the cut fills ([`note_fill`]).
 ///
-/// The strength handed over is a full 1, and how strongly it paints is the
-/// Shadow darkness: strongest against the note, falling off to nothing at its
-/// reach. Where two notes' glows meet, the stronger is what paints, with its
-/// color, so a crowd of notes is no more covered between them than one note
-/// is.
+/// The strength handed over is a full 1, and how strongly it cuts is the cut's
+/// amount: strongest against the note, falling off to nothing at its reach.
+/// Where two notes' cuts meet they merge (the halo blend) rather than stack,
+/// so a crowd of notes is no more cut between them than the blend says.
 ///
-/// The inherited spectral geometry width resolves to points, so it is the same
-/// edge at every zoom and every ribbon width. The shader reads that reach from
-/// the shadow style itself; the one returned here is for the culls, which keep
-/// a note whose outline is still on screen. It is the glow's or the backdrop
-/// cut's, whichever reaches further ([`harmonigraph_render::roll_surround_reach`]):
-/// the cut is ink past the note as much as the glow is.
+/// The reach is in points, so it is the same edge at every zoom and every
+/// ribbon width. The shader reads it from the cut itself; the one returned
+/// here is for the culls, which keep a note whose surround is still on screen.
 ///
 /// Off comes back zero-reach AND zero strength, never one or the other: the
-/// reach is what the far-edge cull keeps a leaving note alive for, so an outline
-/// that will not paint must not be paid for either.
-fn outline(style: harmonigraph_scene::ShadowStyle, cut: RollCut, point_scale: f32) -> (f32, f32) {
-    let reach = harmonigraph_render::roll_surround_reach(style, cut, point_scale);
-    (reach, if style.casts() { 1.0 } else { 0.0 })
+/// reach is what the far-edge cull keeps a leaving note alive for, so a
+/// surround that will not paint must not be paid for either.
+fn outline(cut: SurroundCut, point_scale: f32) -> (f32, f32) {
+    let reach = cut.reach_points(point_scale);
+    (reach, if reach > 0.0 { 1.0 } else { 0.0 })
 }
 
 /// [`outline`] for the roll `state` draws.
 fn surround(state: &PictureState, point_scale: f32) -> (f32, f32) {
-    outline(state.appearance.view.shadow.spectral_geometry, roll_cut(state), point_scale)
-}
-
-/// The backdrop cut the roll's Ribbon glow bars dial, as the renderer takes it.
-fn roll_cut(state: &PictureState) -> RollCut {
-    let cfg = &state.appearance.spectrum;
-    RollCut {
-        amount: cfg.roll_cut,
-        reach: cfg.roll_cut_reach,
-        curve: cfg.roll_cut_curve,
-        fill: cfg.roll_cut_fill,
-        blend: cfg.roll_halo_blend,
-    }
+    outline(state.appearance.spectrum.note_cut(), point_scale)
 }
 
 /// How far a SOUNDING note's ribbon carries past the now-line, and how much of
@@ -320,8 +302,7 @@ pub(super) fn draw_roll(
         detached_region,
         axes,
         bloom,
-        state.appearance.view.shadow.spectral_geometry,
-        roll_cut(state),
+        state.appearance.spectrum.note_cut(),
         state.surfaces.target_format,
         harmonigraph_render::PaneIds { pane, pass_nr: painter.ctx().cumulative_pass_nr() },
         options.point_scale,
@@ -515,7 +496,7 @@ fn roll_instances_with_floor(
                         lead_alpha: standing,
                         cap_reach: 0.0,
                         core: note_color(state, pitch, 1.0).to_array(),
-                        aura: note_glow(state, pitch, outline_strength),
+                        aura: note_fill(state, pitch, outline_strength),
                         span: RollInstance::WHOLE,
                         ramp: [0.0, 0.0],
                         fade,
@@ -722,7 +703,7 @@ fn roll_instances_with_floor(
                 lead_alpha: attached_alpha,
                 cap_reach: cap_px,
                 core: core.to_array(),
-                aura: note_glow(state, pitch, outline_strength),
+                aura: note_fill(state, pitch, outline_strength),
                 span: RollInstance::WHOLE,
                 ramp: [0.0, 0.0],
                 fade: [1.0, 1.0],
@@ -1081,12 +1062,11 @@ pub(crate) fn note_color(state: &PictureState, pitch: f32, alpha: f32) -> Color3
     )
 }
 
-/// The glow round a ribbon at `pitch`: its own hue at the roll's glow
-/// lightness and color ([`harmonigraph_scene::pitch_glow_color`]), as straight
-/// sRGB bytes with `strength` (0..1) in alpha — the shape
-/// [`RollInstance::aura`] takes.
-fn note_glow(state: &PictureState, pitch: f32, strength: f32) -> [u8; 4] {
-    let spectrum = &state.appearance.spectrum;
+/// The fill of the surround round a note at `pitch`: its own hue at the
+/// fill's lightness and the full chroma that lightness holds
+/// ([`harmonigraph_scene::pitch_glow_color`]), as straight sRGB bytes with
+/// `strength` (0..1) in alpha — the shape [`RollInstance::aura`] takes.
+pub(crate) fn note_fill(state: &PictureState, pitch: f32, strength: f32) -> [u8; 4] {
     let (darkest, brightest) =
         (state.runtime.frame_params.darkest_pitch, state.runtime.frame_params.brightest_pitch);
     let c = harmonigraph_scene::pitch_glow_color(
@@ -1094,8 +1074,8 @@ fn note_glow(state: &PictureState, pitch: f32, strength: f32) -> [u8; 4] {
         darkest,
         brightest,
         state.appearance.view.pitch_gradient,
-        spectrum.roll_glow_lightness,
-        spectrum.roll_glow_chroma,
+        state.appearance.spectrum.note_fill_lightness,
+        1.0,
     );
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     [byte(c.x), byte(c.y), byte(c.z), byte(strength)]
@@ -1118,12 +1098,12 @@ mod tests {
     /// [`MIN_LENGTH_PT`] comes to one point.
     const PPP: f32 = 2.0;
 
-    /// The outline the time- and pitch-cull fixtures below are sized against:
-    /// the spectral geometry shadow of 2026-09-26. Their notes are placed a
-    /// set number of points from an edge, so a wider default outline would
-    /// move them across the boundary they are there to stand either side of.
-    const OUTLINE: harmonigraph_scene::ShadowStyle =
-        harmonigraph_scene::ShadowStyle { width: 1.192_405_8, spread: 0.0, depth: 0.912_995_6 };
+    /// The surround reach, in points, the time- and pitch-cull fixtures below
+    /// are sized against: what the spectral geometry shadow of 2026-09-26
+    /// reached. Their notes are placed a set number of points from an edge, so
+    /// a wider default reach would move them across the boundary they are
+    /// there to stand either side of.
+    const OUTLINE_REACH: f32 = 7.154_435;
 
     /// The roll's geometry for `state`, derived exactly the way
     /// [`spectral_pane`](super::super::spectral_pane) derives it
@@ -1144,44 +1124,31 @@ mod tests {
         notes
     }
 
-    /// One held note, and the instances the roll would draw for it. `range`
-    /// is the pitch span in semitones — the pane is 100 points across the
-    /// pitch axis, so a wide range makes a thin ribbon, which is where the
-    /// outline geometry is under the most pressure.
-    fn ribbon_with_style(style: harmonigraph_scene::ShadowStyle, range: f32) -> Vec<RollInstance> {
+    /// One held note under a surround of `amount` reaching `reach` points, and
+    /// the instances the roll would draw for it. `range` is the pitch span in
+    /// semitones — the pane is 100 points across the pitch axis, so a wide
+    /// range makes a thin ribbon, which is where the surround geometry is
+    /// under the most pressure.
+    fn ribbon_with_cut(amount: f32, reach: f32, range: f32) -> Vec<RollInstance> {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 60.0 - range * 0.5;
         state.appearance.spectrum.high_midi = 60.0 + range * 0.5;
         state.appearance.spectrum.roll_thickness = 2.0;
-        state.appearance.view.shadow.spectral_geometry = style;
+        state.appearance.spectrum.note_cut = amount;
+        state.appearance.spectrum.note_cut_reach = reach;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         instances(&state, 0.05)
     }
 
-    fn ribbon_with_range(outline: f32, range: f32) -> Vec<RollInstance> {
-        ribbon_with_style(
-            harmonigraph_scene::ShadowStyle {
-                width: outline
-                    / harmonigraph_render::spectral_shadow_reach(
-                        harmonigraph_scene::ShadowStyle {
-                            width: 1.0,
-                            depth: 1.0,
-                            ..Default::default()
-                        },
-                        1.0,
-                    ),
-                depth: 1.0,
-                ..Default::default()
-            },
-            range,
-        )
+    fn ribbon_with_range(reach: f32, range: f32) -> Vec<RollInstance> {
+        ribbon_with_cut(1.0, reach, range)
     }
 
     /// The note is 12 semitones across a 100-point axis (a thick ribbon), so
     /// it is bounded rather than drawn as a bare spine.
-    fn ribbon(outline: f32) -> Vec<RollInstance> {
-        ribbon_with_range(outline, 12.0)
+    fn ribbon(reach: f32) -> Vec<RollInstance> {
+        ribbon_with_range(reach, 12.0)
     }
 
     /// A note must stay on screen until the last of its INK is past the far
@@ -1200,7 +1167,7 @@ mod tests {
         state.appearance.spectrum.roll_seconds = 10.0;
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
-        state.appearance.view.shadow.spectral_geometry = OUTLINE;
+        state.appearance.spectrum.note_cut_reach = OUTLINE_REACH;
         state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
 
@@ -1619,10 +1586,9 @@ mod tests {
         state.appearance.spectrum.low_midi = 54.0;
         state.appearance.spectrum.high_midi = 78.0;
         state.appearance.spectrum.roll_thickness = 2.0;
-        state.appearance.view.shadow.spectral_geometry = OUTLINE;
-        // The glow's reach alone: the distances below are measured against
-        // it, and a backdrop cut reaching further would keep the note at rest.
-        state.appearance.spectrum.roll_cut = 0.0;
+        // The distances below are measured against this reach, and a
+        // surround reaching further would keep the note at rest.
+        state.appearance.spectrum.note_cut_reach = OUTLINE_REACH;
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
                 thickness: Some(2.0),
@@ -1660,54 +1626,51 @@ mod tests {
         assert!(instances(&state, 1.0).is_empty(), "the fixture's note reaches the zoom at rest");
     }
 
-    /// The outline's darkness is a full 1 at every width that casts at all;
-    /// how dark it paints is the Shadow darkness, which the shader applies.
-    /// Anything less here would dim the outline a second time, by a number no
-    /// bar shows.
+    /// A note cuts at a full 1 at every reach the surround draws at; how much
+    /// it takes is the cut's amount, which the shader applies. Anything less
+    /// here would weaken the cut a second time, by a number no bar shows.
     ///
-    /// Off has to mean zero reach AND no darkness, never one or the other: the
-    /// reach is what keeps a leaving note alive past the far edge, so an
-    /// outline that will not paint must not be paid for either.
+    /// Off has to mean zero reach AND no strength, never one or the other: the
+    /// reach is what keeps a leaving note alive past the far edge, so a
+    /// surround that will not paint must not be paid for either.
     #[test]
-    fn the_outline_is_fully_dark_at_every_width_that_casts() {
-        // Three settings across the bar's whole travel: the least it can be set
-        // to above nothing, a modest one, and full.
-        for reach in [0.05, 2.0, 4.0] {
+    fn the_surround_is_at_full_strength_at_every_reach_that_draws() {
+        // The bar's whole travel: its least reach, the default, and its most.
+        let reaches = harmonigraph_render::SURROUND_REACH_RANGE;
+        for reach in [*reaches.start(), 15.0, *reaches.end()] {
             let lit = ribbon(reach);
-            let note = one(&lit);
-            assert_eq!(note.aura[3], 255, "the glow is not at full strength at reach {reach}");
+            assert_eq!(one(&lit).aura[3], 255, "the cut is not at full strength at reach {reach}");
         }
 
-        let off = ribbon(0.0);
-        assert_eq!(one(&off).aura[3], 0, "an outline of no width left a strength behind");
-        let shut = harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() };
-        let cut = roll_cut(&fresh());
-        assert!(cut.amount > 0.0, "the fixture's cut is off, which proves nothing below");
-        assert_eq!(
-            outline(shut, cut, 1.0).0,
-            0.0,
-            "an outline of no width still made room for one"
-        );
+        assert_eq!(one(&ribbon_with_cut(0.0, 15.0, 12.0)).aura[3], 0, "no cut left a strength");
+        let off = harmonigraph_render::SurroundCut {
+            amount: 0.0,
+            ..fresh().appearance.spectrum.note_cut()
+        };
+        assert!(off.reach > 0.0, "the fixture's reach is 0, which proves nothing below");
+        assert_eq!(outline(off, 1.0).0, 0.0, "a cut of nothing still made room for one");
     }
 
-    /// A zero-depth shadow is off everywhere upstream of the atlas too: the
-    /// instance carries no outline darkness, and the roll's far-edge cull keeps
-    /// it only for the ribbon's own pixel feather rather than for a transparent
-    /// width-sized surround.
+    /// A cut of nothing is off everywhere upstream of the renderer too: the
+    /// instance carries no strength, and the roll's far-edge cull keeps it only
+    /// for the ribbon's own pixel feather rather than for a reach-sized
+    /// surround that will not paint.
     #[test]
-    fn zero_shadow_depth_adds_no_roll_instance_or_culling_reach() {
-        let style =
-            |depth| harmonigraph_scene::ShadowStyle { width: 1.0, depth, ..Default::default() };
-        let shut = ribbon_with_style(style(0.0), 12.0);
-        assert_eq!(one(&shut).aura[3], 0, "the instance kept an outline strength");
+    fn a_cut_of_nothing_adds_no_roll_strength_or_culling_reach() {
+        assert_eq!(
+            one(&ribbon_with_cut(0.0, 15.0, 12.0)).aura[3],
+            0,
+            "the instance kept a strength"
+        );
 
-        let last_visible = |depth| {
+        let last_visible = |amount| {
             let mut state = fresh();
             state.appearance.spectrum.orientation = SpectralOrientation::Left;
             state.appearance.spectrum.roll_seconds = 10.0;
             state.appearance.spectrum.low_midi = 48.0;
             state.appearance.spectrum.high_midi = 84.0;
-            state.appearance.view.shadow.spectral_geometry = style(depth);
+            state.appearance.spectrum.note_cut = amount;
+            state.appearance.spectrum.note_cut_reach = 15.0;
             state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
             state.runtime.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
             (11_500..12_000)
@@ -1716,10 +1679,10 @@ mod tests {
                 .last()
                 .expect("the released note reaches its own box edge")
         };
-        let (bare, casting) = (last_visible(0.0), last_visible(1.0));
+        let (bare, cutting) = (last_visible(0.0), last_visible(1.0));
         assert!(
-            casting > bare + 0.05,
-            "a transparent shadow kept the enabled culling reach: shut {bare}, live {casting}",
+            cutting > bare + 0.05,
+            "a cut of nothing kept the enabled culling reach: shut {bare}, live {cutting}",
         );
     }
 
@@ -2137,7 +2100,7 @@ mod tests {
             state.appearance.spectrum.roll_seconds = 10.0;
             state.appearance.spectrum.low_midi = 48.0;
             state.appearance.spectrum.high_midi = 84.0;
-            state.appearance.view.shadow.spectral_geometry.width = 0.0;
+            state.appearance.spectrum.note_cut = 0.0;
             state.appearance.view.intensity = IntensitySettings {
                 velocity: Default::default(),
                 gain: Default::default(),
@@ -2455,7 +2418,7 @@ mod tests {
             state.appearance.spectrum.roll_lead = 0.05;
             state.appearance.spectrum.roll_lead_fade = 0.04;
             state.appearance.spectrum.roll_lead_release = release;
-            state.appearance.view.shadow.spectral_geometry.width = 1.0;
+            state.appearance.spectrum.note_cut_reach = 6.0;
             state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
             state.runtime.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
@@ -2654,9 +2617,10 @@ mod tests {
         state.appearance.spectrum.roll_lead = 0.05;
         state.appearance.spectrum.roll_lead_fade = 0.04;
         state.appearance.spectrum.roll_lead_release = 0.4;
-        // The retired roll setting opened at a two-point reach. Keep that
-        // geometry explicit: this test is about cap/lead timing, not defaults.
-        state.appearance.view.shadow.spectral_geometry.width = 0.25;
+        // The surround's shortest reach. Keep that geometry explicit: this test
+        // is about cap/lead timing, not defaults.
+        state.appearance.spectrum.note_cut_reach =
+            *harmonigraph_render::SURROUND_REACH_RANGE.start();
         state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
 
@@ -2910,7 +2874,7 @@ mod tests {
             state.appearance.spectrum.low_midi = 36.0;
             state.appearance.spectrum.high_midi = 60.0;
             // The retired outline bar topped out at a four-point reach.
-            state.appearance.view.shadow.spectral_geometry.width = 0.5;
+            state.appearance.spectrum.note_cut_reach = 4.0;
             state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 62, 1.0));
             state.runtime.tracker.handle_event(NoteEvent {
                 source: SourceId::DIRECT,

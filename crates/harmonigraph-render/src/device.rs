@@ -22,15 +22,27 @@ use crate::wgpu;
 /// not granted the overlay says "n/a".
 const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
+/// Required of every adapter, with no fallback behind them.
+///
+/// `FLOAT32_BLENDABLE` lets the notes' surround sum its halo blend in f32
+/// (`crate::surround`). Metal always offers it, which is every adapter this
+/// project ships on or tests against.
+const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::FLOAT32_BLENDABLE;
+
 /// The descriptor for every device this project creates: the adapter's own
-/// limits, plus each [`OPTIONAL_FEATURES`] entry the adapter offers.
+/// limits, [`REQUIRED_FEATURES`], plus each [`OPTIONAL_FEATURES`] entry the
+/// adapter offers.
 ///
 /// A caller that cannot work without one of the optional features checks
 /// `required_features` on the result and bails, rather than building its own.
 pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    assert!(
+        adapter.features().contains(REQUIRED_FEATURES),
+        "the adapter must offer {REQUIRED_FEATURES:?}"
+    );
     wgpu::DeviceDescriptor {
         label: Some("harmonigraph device"),
-        required_features: adapter.features() & OPTIONAL_FEATURES,
+        required_features: REQUIRED_FEATURES | (adapter.features() & OPTIONAL_FEATURES),
         required_limits: device_limits(adapter),
         ..Default::default()
     }

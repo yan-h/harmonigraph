@@ -60,15 +60,13 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
         shadow_group(
             ui,
             "Notes",
-            "MIDI ribbons and Spiral note dots. The preview draws the dots' blur; \
-             around ribbons the same Width, Darkness and Spread shape a glow that \
-             falls off from the ribbon's edge, colored by Ribbon glow below.",
+            "Spiral note dots",
             false,
             false,
             &mut shadow.spectral_geometry,
             None,
         );
-        ribbon_glow(ui, &mut appearance.spectrum);
+        note_surround(ui, &mut appearance.spectrum);
         shadow_group(
             ui,
             "Labels",
@@ -81,60 +79,59 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// The color of the surround the Notes shadow draws round MIDI ribbons: the
-/// roll's alone, where the Notes block above is shared with the Spiral's dots.
-fn ribbon_glow(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
-    super::block(ui, "Ribbon glow", |ui| {
-        ValueBar::new(&mut cfg.roll_glow_lightness, 0.0..=100.0, "Glow lightness")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Lightness (L*) of the glow around MIDI ribbons, drawn in each ribbon's own hue. \
-                 0 is black. Ribbons stand out most where this is far from their own lightness. \
-                 The Notes shadow sets how far the glow reaches and how strongly it covers.",
-            );
-        ValueBar::new(&mut cfg.roll_glow_chroma, 0.0..=1.0, "Glow color")
+/// The backdrop cut round every MIDI ribbon: how much of the picture it takes
+/// next to a note, how far and along what curve it fades, and what fills it.
+fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+    super::block(ui, "Note surround", |ui| {
+        ValueBar::new(&mut cfg.note_cut, 0.0..=1.0, "Backdrop cut")
             .percent()
             .show(ui)
             .on_hover_text(
-                "How much of each ribbon's color its glow keeps. \
-                 0% is a neutral glow; 100% is as colorful as the ribbon at the glow's lightness.",
-            );
-        ValueBar::new(&mut cfg.roll_cut, 0.0..=1.0, "Backdrop cut")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How much of the spectrogram behind the glow is taken away next to a ribbon, \
-                 so the glow holds over bright energy as well as over dark. \
-                 0% is the plain glow. Over black it changes nothing.",
+                "How much of the spectrogram is taken away next to a note, so the note \
+                 holds over bright energy as well as over dark. 0% turns the surround off. \
+                 Over black it changes nothing but the fill.",
             );
         ValueBar::new(
-            &mut cfg.roll_cut_reach,
-            harmonigraph_render::ROLL_CUT_REACH_RANGE,
+            &mut cfg.note_cut_reach,
+            harmonigraph_render::SURROUND_REACH_RANGE,
             "Cut reach",
         )
         .decimals(1)
-        .unit(1.0, "×")
+        .unit(1.0, " pt")
         .show(ui)
         .on_hover_text(
-            "How far out from a ribbon the cut fades away, in multiples of the glow's width. \
+            "How far out from a note the cut fades away. \
                  Longer is softer, and takes more of the gap between close notes.",
         );
-        ValueBar::new(&mut cfg.roll_cut_curve, 0.0..=1.0, "Cut curve")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "The shape of the cut's fade. 0% fades in a straight line; \
-                 100% holds near the ribbon and eases out gently at the far end.",
-            );
-        ValueBar::new(&mut cfg.roll_cut_fill, 0.0..=1.0, "Cut fill")
+        ValueBar::new(
+            &mut cfg.note_cut_shape,
+            harmonigraph_render::SURROUND_SHAPE_RANGE,
+            "Cut shape",
+        )
+        .percent()
+        .magnet(0.0, 0.03)
+        .curve(harmonigraph_render::surround_fade)
+        .show(ui)
+        .on_hover_text(
+            "The curve the cut fades along. 0% is a straight line; \
+                 -100% drops steeply at the note and leaves a long soft tail; \
+                 100% holds near the note and drops steeply at the far end.",
+        );
+        ValueBar::new(&mut cfg.note_cut_fill, 0.0..=1.0, "Cut fill")
             .percent()
             .show(ui)
             .on_hover_text(
                 "What replaces the spectrogram the cut takes away. \
-                 0% leaves it black; 100% fills it with the glow's own color.",
+                 0% leaves it black; 100% fills it with the note's own hue.",
             );
-        ValueBar::new(&mut cfg.roll_halo_blend, 0.0..=1.0, "Halo blend")
+        ValueBar::new(&mut cfg.note_fill_lightness, 0.0..=100.0, "Fill lightness")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "Lightness (L*) of the fill, drawn in each note's own hue. \
+                 0 is black. Notes stand out most where this is far from their own lightness.",
+            );
+        ValueBar::new(&mut cfg.note_halo_blend, 0.0..=1.0, "Halo blend")
             .percent()
             .show(ui)
             .on_hover_text(
