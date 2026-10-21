@@ -46,13 +46,15 @@ So a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unm
 Regenerate on the runner, not here.
 On a PR there is nothing to dispatch:
 the `Metal shader assets` run whose check fails goes on to generate and validate the replacement, and still fails.
-Without a PR, dispatch it:
+Without a PR, dispatch it, and it does the same:
 
 ```
-gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
+gh workflow run "Metal shader assets" --ref <branch>
 ```
 
-Either way, download the run's `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on its `generated-metal-assets` directory.
+Read the failed check's log in the artifact's `shader-asset-logs/` first:
+a missing or rejected Metal asset is a stale corpus, and anything else is not one.
+Then download the run's `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on its `generated-metal-assets` directory.
 Its goldens are drawn without being compared, so a frame this PR also moves does not fail the regeneration;
 re-baseline it from `Full CI`'s artifact, in parallel.
 `tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —

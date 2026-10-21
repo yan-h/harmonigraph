@@ -15,12 +15,9 @@ on:
       - crates/harmonigraph-plugin/src/editor/**
       - crates/harmonigraph-offline/**
       - crates/harmonigraph-standalone/src/main.rs
+  # Off a PR, or for a change the paths above miss: a stale corpus generates
+  # its replacement here exactly as on a PR.
   workflow_dispatch:
-    inputs:
-      regenerate:
-        description: Generate and validate a replacement corpus for import
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -72,7 +69,6 @@ jobs:
       # anything to import.
       - name: Check the committed production corpus
         id: check
-        if: ${{ !inputs.regenerate }}
         continue-on-error: true
         run: python3 tools/shader-assets.py check
       - name: Ensure Apple's compiler is available
@@ -81,10 +77,13 @@ jobs:
             xcodebuild -downloadComponent MetalToolchain
           fi
       - name: Generate and validate replacement embedded assets
-        if: ${{ inputs.regenerate || steps.check.outcome == 'failure' }}
-        run: python3 tools/shader-assets.py generate target/generated-metal-assets
+        if: ${{ steps.check.outcome == 'failure' }}
+        # Its own logs, so the check's logs that say why it failed survive.
+        run: >-
+          python3 tools/shader-assets.py generate target/generated-metal-assets
+          --logs target/shader-asset-logs/generate
       - name: Exercise metadata and provider fallback
-        if: ${{ !inputs.regenerate && steps.check.outcome == 'success' }}
+        if: ${{ steps.check.outcome == 'success' }}
         run: python3 tools/shader-assets.py controls
       - name: Preserve assets and validation evidence
         if: always()
@@ -93,11 +92,11 @@ jobs:
           name: production-metal-assets
           path: |
             target/generated-metal-assets/
-            target/shader-asset-logs/*.log
+            target/shader-asset-logs/
           if-no-files-found: warn
           retention-days: 7
       - name: Fail on the corpus the check rejected
         if: ${{ steps.check.outcome == 'failure' }}
         run: |
-          echo "::error::The committed Metal corpus failed its check, and this run generated and validated a replacement. Import it into the same commit as the change: download this run's production-metal-assets artifact and run tools/shader-assets.py import <download>/generated-metal-assets."
+          echo "::error::The committed Metal corpus failed its check, and this run generated and validated a replacement. Read why in the artifact's shader-asset-logs/ (generate/ holds the replacement's own). A missing or rejected Metal asset is a stale corpus: download this run's production-metal-assets artifact and run tools/shader-assets.py import <download>/generated-metal-assets, into the same commit as the change. Anything else is not the corpus, and the replacement is not the fix."
           exit 1

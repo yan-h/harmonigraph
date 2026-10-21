@@ -55,10 +55,10 @@ Do not run other Cargo builds in the same checkout concurrently with validation:
 
 Regenerate on the runner, never locally, whether or not local Command Line Tools have `metal`/`metallib`.
 On a PR, the `Metal shader assets` run whose check fails goes on to generate and validate a replacement in the same run.
-Without a PR, dispatch one:
+Without a PR, dispatch one, which does the same:
 
 ```sh
-gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
+gh workflow run "Metal shader assets" --ref <branch>
 ```
 
 Either way, `python3 tools/shader-assets.py import` the run's validated `production-metal-assets` artifact.

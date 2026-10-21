@@ -87,8 +87,8 @@ and the `metal-corpus` skill has the import, what to run off macOS, and why grep
 Run `cargo fmt --all`;
 `rustfmt.toml` holds the settings (and why the nightly-only comment-wrapping keys are absent), and `ci.sh` checks them.
 If the output is ever wrong, change the config rather than hand-formatting around it.
-Before pushing Rust, run `./ci.sh quick`:
-formatting, prose, clippy, rustdoc and the Metal corpus in under a minute,
+Before pushing Rust, run `./ci.sh quick` (the opt-in pre-push hook runs it too):
+formatting, prose, clippy and rustdoc, well under a minute once the worktree has built,
 the failures that otherwise each cost a ~10 minute CI round.
 The full `ci.sh` runs in GitHub Actions, and reports every gate that fails rather than the first.
 

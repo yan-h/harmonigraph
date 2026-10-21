@@ -70,11 +70,13 @@ in_group() {
 }
 
 # `./ci.sh quick` is what to run before pushing: the gates whose failures cost
-# a whole CI round to learn of while taking seconds to a minute or two here —
-# formatting, prose, clippy, rustdoc and the Metal corpus. Clippy and rustdoc
-# alone were five of the 27 Full CI failures on 2026-10-19..21, each a ~10 min
-# round on a macOS runner. The tests are left out on purpose: they are the
-# minutes, and a golden frame can only be judged on the runner anyway.
+# a whole CI round to learn of while taking well under a minute here once the
+# worktree has built: formatting, prose, clippy and rustdoc. Clippy and rustdoc
+# were five of the 27 Full CI failures on 2026-10-19..21, each a ~10 min round
+# on a macOS runner. The tests are left out on purpose: they are the minutes,
+# and a golden frame can only be judged on the runner anyway. So is the Metal
+# corpus, a build of its own: knowing it is stale saves no round, since the
+# PR's own Metal shader assets run generates the replacement either way.
 quick=
 quick() {
   quick=1
@@ -113,10 +115,10 @@ run() {
   fi
 }
 
-# Read by harmonigraph-golden, for tools/shader-assets.py alone: it draws each
-# golden frame without comparing it, which would turn every golden gate below
-# into a pass.
-unset HARMONIGRAPH_GOLDEN_DRAW_ONLY
+# Read by harmonigraph-golden, and each would turn every golden gate below into
+# a pass: DRAW_ONLY (tools/shader-assets.py's) draws a frame without comparing
+# it, and BLESS writes it over the one on record.
+unset HARMONIGRAPH_GOLDEN_DRAW_ONLY HARMONIGRAPH_BLESS
 
 group workspace
 
@@ -299,10 +301,10 @@ metal_corpus() {
   echo "$corpus"
   if [ "$corpus_status" != 0 ]; then
     echo "✗ the committed Metal corpus does not cover this tree's shaders." >&2
-    echo "  On a PR, the Metal shader assets run for the same push generates the" >&2
-    echo "  replacement when its check fails: import that run's production-metal-assets" >&2
-    echo "  artifact with tools/shader-assets.py import, into the SAME commit as the change." >&2
-    echo "  Without a PR: gh workflow run \"Metal shader assets\" --ref <branch> -f regenerate=true" >&2
+    echo "  The Metal shader assets run for this push generates the replacement when its" >&2
+    echo "  check fails (without a PR: gh workflow run \"Metal shader assets\" --ref <branch>)." >&2
+    echo "  Import its production-metal-assets artifact with tools/shader-assets.py import," >&2
+    echo "  into the SAME commit as the change." >&2
     return 1
   fi
   case "$corpus" in
@@ -316,7 +318,7 @@ metal_corpus() {
       ;;
   esac
 }
-quick run metal_corpus
+run metal_corpus
 
 # The vendored crates are `exclude`d from the workspace (the `[workspace]`
 # table's own key, in Cargo.toml), so `--workspace` compiles them as
