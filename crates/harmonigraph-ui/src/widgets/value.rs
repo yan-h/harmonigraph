@@ -490,10 +490,7 @@ impl<'a> ValueBar<'a> {
                     )
                 })
                 .collect::<Vec<_>>();
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(CURVE_WIDTH * scale, curve_color()),
-            ));
+            painter.add(egui::Shape::line(points, egui::Stroke::new(CURVE_WIDTH, curve_color())));
         }
 
         let (text_color, value_color) = match self.swatch {

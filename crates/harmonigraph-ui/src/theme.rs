@@ -179,17 +179,20 @@ pub(crate) const PANE_GUTTER: f32 = 8.0;
 pub(crate) const ROW_GAP: f32 = 4.0;
 
 /// The width of every line, chrome and picture alike: a divider, a widget's
-/// stroke, a curve, the spectrum's outline. Otonal's mark width, and like
-/// otonal's the floor: only a grid is ruled finer — the analyzer's rulings, the
-/// Spiral's seam and rays — because a grid is a scale behind the data and must
-/// not outweigh it.
+/// outline, a curve, the spectrum's outline. Otonal's mark width, and like
+/// otonal's the floor: only a grid is ruled finer ([`GRID_WIDTH`]).
 ///
-/// The design size, at [scale](ui_scale) 1.0; chrome that scales multiplies it.
+/// FIXED at every [UI scale](ui_scale), as a separator is under a larger text
+/// size: the scale grows what the lines divide, not the lines. What does scale
+/// is a stroke that is part of a glyph — a chevron, the flip arrows, a handle's
+/// ring — which is drawn at `LINE_WIDTH * scale` with the glyph it draws, since
+/// a 2-point stroke on a glyph drawn at 0.7 reads bold and starts to blot.
 pub(crate) const LINE_WIDTH: f32 = 2.0;
 
-/// The width a grid is ruled at, the one line finer than [`LINE_WIDTH`]: the
-/// analyzer's rulings, the Spiral's seam and rays, and the Intensity bar's clip
-/// hatching, whose 3-point pitch a full line would fill solid. Otonal's
+/// The width a grid is ruled at, the one line finer than [`LINE_WIDTH`] and
+/// fixed like it: the analyzer's rulings, the Spiral's seam and rays, and the
+/// Intensity bar's clip hatching, whose 3-point pitch a full line would fill
+/// solid. A grid is a scale behind the data and must not outweigh it. Otonal's
 /// `GRID_WIDTH`, half a line.
 pub(crate) const GRID_WIDTH: f32 = 0.5 * LINE_WIDTH;
 

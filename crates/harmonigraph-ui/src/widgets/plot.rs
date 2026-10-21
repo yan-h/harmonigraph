@@ -85,12 +85,9 @@ impl Plot {
         )
     }
     pub fn line(&self, ui: &Ui, points: Vec<Pos2>, color: Color32) {
-        ui.painter().with_clip_rect(self.rect.expand(2.0).intersect(ui.clip_rect())).add(
-            egui::Shape::line(
-                points,
-                Stroke::new(theme::LINE_WIDTH * theme::ui_scale(ui.ctx()), color),
-            ),
-        );
+        ui.painter()
+            .with_clip_rect(self.rect.expand(2.0).intersect(ui.clip_rect()))
+            .add(egui::Shape::line(points, Stroke::new(theme::LINE_WIDTH, color)));
     }
     /// A straight line pressed out on the plot's empty space, as the two
     /// plot points it runs between, from the press to the pointer, for as long

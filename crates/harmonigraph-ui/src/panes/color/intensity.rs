@@ -243,7 +243,7 @@ fn band_shapes(
                     Pos2::new(start, rect.center().y),
                     Pos2::new((start + 3.0 * scale).min(rect.right()), rect.center().y),
                 ],
-                Stroke::new(theme::LINE_WIDTH * scale, color),
+                Stroke::new(theme::LINE_WIDTH, color),
             ));
             start += 6.0 * scale;
         }
@@ -270,7 +270,7 @@ fn band_shapes(
                             Pos2::new(x + low, end.bottom() - low),
                             Pos2::new(x + high, end.bottom() - high),
                         ],
-                        Stroke::new(theme::GRID_WIDTH * scale, theme::well()),
+                        Stroke::new(theme::GRID_WIDTH, theme::well()),
                     ));
                 }
                 x += 3.0 * scale;

@@ -1314,10 +1314,9 @@ fn a_configuration_fault_asks_for_a_host_reset() {
 
 /// The size a settings pane is soloed at to make it scroll: narrow enough that
 /// the bars run the width of the column, and short enough that every pane in
-/// the sweep — System, the shortest list of them — overflows it. The width
-/// counts the two section gaps beside the pane at their design width, so at
-/// scale 1 the pane measured is the 318 points it was beside 1-point gaps.
-const SCROLLING_PANE: egui::Vec2 = egui::vec2(318.0 + 2.0 * crate::theme::LINE_WIDTH, 200.0);
+/// the sweep — System, the shortest list of them — overflows it. The window
+/// it is soloed in adds the two section gaps beside it, which do not scale.
+const SCROLLING_PANE: egui::Vec2 = egui::vec2(318.0, 200.0);
 
 /// The chrome scales the sweep runs at: the design size, both ends of
 /// [`theme::UI_SCALE_RANGE`], and two in between that leave `8 * scale`
@@ -1374,7 +1373,8 @@ fn scrolling_settings_pane(
     }
     // The window scales with the chrome, so every pane overflows it by the same
     // margin at every scale rather than the sweep having a size per scale.
-    let mut h = DockHarness::scaled(SCROLLING_PANE * scale, scale, &mut state);
+    let gaps = egui::vec2(2.0 * crate::theme::LINE_WIDTH, 0.0);
+    let mut h = DockHarness::scaled(SCROLLING_PANE * scale + gaps, scale, &mut state);
     let screen = h.screen;
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     let margin = crate::theme::pane_gutter(scale);
