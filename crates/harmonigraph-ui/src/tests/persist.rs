@@ -3,7 +3,7 @@
 //! missing — is not the shape this build expects.
 
 use super::harness::collapsed;
-use super::probe::fresh;
+use super::probe::{fresh, Defaults};
 use crate::state::UI_PERSIST_VERSION;
 use crate::*;
 use harmonigraph_scene::{Camera, NoteNames};
@@ -1389,13 +1389,6 @@ fn loading_a_project_preserves_released_temperaments() {
     assert!(!saved.contains("marvel_auto"));
     let mut restored = fresh();
     assert!(restored.load_persist(&saved));
-    struct Defaults;
-    impl crate::params::ParamBackend for Defaults {
-        fn get(&self, key: crate::params::ParamKey) -> f32 {
-            key.default_value()
-        }
-        fn set(&self, _: crate::params::ParamKey, _: f32) {}
-    }
     for frame in 0..3 {
         begin_frame(&mut restored.picture, &Defaults, frame as f64);
         assert!(!restored.picture.appearance.view.meantone);
