@@ -2,7 +2,7 @@
 
 This is the feasibility investigation for [#699](https://github.com/yan-h/harmonigraph/issues/699).
 This historical report describes probe commit `06d3f0a8`; its reconstruction commands apply at that commit.
-The subsequent [production integration](metal-shader-assets.md) replaces the copied-backend experiment with one installed provider and embedded assets.
+The subsequent [production integration](../metal-shader-assets.md) replaces the copied-backend experiment with one installed provider and embedded assets.
 The measured results below remain evidence from the original probe, not measurements of that later integration.
 
 ## Recommendation and scope
@@ -73,7 +73,7 @@ Production image coverage and fallback controls passed in the workflow described
 ## Reproduction
 
 This section reproduces probe commit `06d3f0a8`, whose `backend.py` and `exercise.py` were removed from the current tree.
-For current code, use the [production workflow](metal-shader-assets.md).
+For current code, use the [production workflow](../metal-shader-assets.md).
 
 The local machine has Command Line Tools but no `metal` or `metallib` executable.
 The existing macOS CI job can obtain Apple's Metal toolchain, as the earlier #704 probe already does.
@@ -139,14 +139,14 @@ It includes test-only programs and is not a complete shipping manifest.
 The compiler was Apple Metal `32023.883` with the options documented above.
 The downloaded corpus passed SHA-256/file-set verification and then the diagnostic and all 243 renderer tests on the local Apple M1 Pro.
 That is evidence of CI-to-local library reuse for this configuration, not an OS/GPU compatibility matrix.
-The durable [validation record](evidence/generated-shader-assets/validation.txt), [CI counters](evidence/generated-shader-assets/ci-results.json) and [artifact manifest](evidence/generated-shader-assets/asset-manifest.json) preserve the results independently of the expiring CI artifact.
+The durable [validation record](../evidence/generated-shader-assets/validation.txt), [CI counters](../evidence/generated-shader-assets/ci-results.json) and [artifact manifest](../evidence/generated-shader-assets/asset-manifest.json) preserve the results independently of the expiring CI artifact.
 
 ### Startup measurements
 
 The same local release test binary ran `timing_editor_pipeline_startup` with an empty artifact directory/source fallback versus strict downloaded assets.
 Three fresh processes per mode and cache condition used alternating source/asset, asset/source, source/asset order.
 The table reports the median of the first opening in each fresh process;
-all three openings per process are retained in the [raw timings](evidence/generated-shader-assets/startup-timings.json).
+all three openings per process are retained in the [raw timings](../evidence/generated-shader-assets/startup-timings.json).
 
 | Measured stage | Cache blocked, source | Cache blocked, assets | Cache available, source | Cache available, assets |
 | --- | ---: | ---: | ---: | ---: |
@@ -185,7 +185,7 @@ The table gives the median of the three per-run GPU medians.
 GPU timestamps cover the prepare encoder, including scene, label/shadow and bloom work;
 they exclude the final egui composite.
 Issue #1113 later found that the closing beginning-of-pass stamp does not contain the scene passes' fragment work on this GPU, so these medians undercount.
-The [raw results](evidence/generated-shader-assets/gpu-timings.json) retain every run and its p10/p90 spread.
+The [raw results](../evidence/generated-shader-assets/gpu-timings.json) retain every run and its p10/p90 spread.
 The spread and first-source-run disturbance are large enough that this does not establish unchanged GPU performance.
 Three of four medians are slightly higher with assets, while one is lower;
 controlled broader GPU measurements remain a release gate.

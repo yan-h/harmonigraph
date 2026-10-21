@@ -25,7 +25,6 @@ use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
 /// ([`ViewConfig::scrolled`]); handing it the view's naming
 /// [`reach`](ViewConfig::reach) instead draws a picture that is subtly the
 /// wrong size, which is why the two are different types.
-#[allow(clippy::too_many_arguments)]
 pub fn derive_scene(
     tracker: &NoteTracker,
     tuning: &Tuning,

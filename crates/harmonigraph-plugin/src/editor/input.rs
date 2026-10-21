@@ -128,7 +128,6 @@ impl LiveInput {
 #[cfg(test)]
 mod tests {
     use super::super::shared::EditorShared;
-    #[allow(unused_imports)]
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
 

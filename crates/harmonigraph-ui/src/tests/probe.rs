@@ -29,6 +29,17 @@ pub(crate) fn fresh() -> SharedState {
     SharedState::new(TextureFormat::Bgra8Unorm)
 }
 
+/// A backend holding every parameter at its default and discarding writes:
+/// what a frame that only reads parameters is handed.
+pub(crate) struct Defaults;
+
+impl crate::params::ParamBackend for Defaults {
+    fn get(&self, key: crate::params::ParamKey) -> f32 {
+        key.default_value()
+    }
+    fn set(&self, _: crate::params::ParamKey, _: f32) {}
+}
+
 /// A context carrying the app's own theme — the real Iosevka faces and sizes,
 /// not egui's 12.5pt fallback.
 ///
