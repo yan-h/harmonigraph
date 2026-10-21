@@ -273,7 +273,7 @@ fn shadow_reach_uv(scale: f32) -> f32 {
 }
 
 // A clip position as a point of the pane, in points — the units a caster's box
-// and its cell are related in (`shadow::pack`).
+// and its cell are related in (`shadow::pack_into`).
 fn pane_points(clip: vec4<f32>) -> vec2<f32> {
     let ndc = clip.xy / clip.w;
     return vec2<f32>(
@@ -586,7 +586,7 @@ struct VsOut {
     // being rasterized ON is, as a share of the target's pixels (w). z is the
     // caster's level on the pane draw; on a cell draw its magnitude is one node
     // uv in pane points and its sign selects coverage (+) or the analytic
-    // spread source (-). w is 1 on every draw that lands on the pane and `shadow::pack`'s own
+    // spread source (-). w is 1 on every draw that lands on the pane and `shadow::pack_into`'s own
     // scale on a draw that fills a cell, which is the softness every shape edge
     // is cut with (`aa_width`).
     //

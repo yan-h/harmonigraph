@@ -559,7 +559,7 @@ impl LatticeCallback {
 
         let glow = self.glow_draws();
         let has_light = glow && self.instances.iter().any(|node| node.glow[0] > 0.0);
-        // Every caster's cell, packed for this frame (`shadow::pack`): the
+        // Every caster's cell, packed for this frame (`shadow::pack_into`): the
         // Gaussian's one marker cross, one per node and one per name, each at
         // the resolution its own σ asks for. A caster whose group packs
         // nothing (either bar at the bottom, or for the node group Width 0 or

@@ -66,6 +66,10 @@ pub(crate) struct PaneShadow {
     caster_capacity: usize,
     /// None while no name packed a cell, which is a pane that draws no shadow.
     target: Option<shadow::ShadowTarget>,
+    /// Last frame's packing and what it worked in, refilled each frame for
+    /// their allocations, as the lattice's are.
+    packed: shadow::Packed,
+    pack_scratch: shadow::PackScratch,
     #[cfg(test)]
     pub(crate) stats: CellStats,
 }
@@ -85,6 +89,8 @@ impl PaneShadow {
             caster_bind,
             caster_capacity: INITIAL_CAPACITY,
             target: None,
+            packed: Default::default(),
+            pack_scratch: Default::default(),
             #[cfg(test)]
             stats: CellStats::default(),
         }
@@ -106,11 +112,14 @@ impl PaneShadow {
         names: &[u32],
         ink: Ink,
     ) -> [f32; 2] {
-        let packed = shadow::pack(
+        shadow::pack_into(
             casters,
             pixels_per_point.max(f32::EPSILON),
             device.limits().max_texture_dimension_2d,
+            &mut self.packed,
+            &mut self.pack_scratch,
         );
+        let packed = &self.packed;
         if packed.boxes.len() > self.box_capacity {
             self.box_capacity = packed.boxes.len().next_power_of_two();
             self.boxes = create_vertex_buffer::<shadow::ShadowBox>(

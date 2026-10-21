@@ -291,6 +291,22 @@ pub(crate) struct ShadowCaster {
 pub(crate) const NO_CASTER: ShadowCaster =
     ShadowCaster { rect: [0.0; 4], cell: [0.0; 4], map: [0.0; 4], shade: [0.0; 4] };
 
+/// [`pack_into`], into fresh buffers, for a test that holds none.
+#[cfg(test)]
+pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Packed {
+    let mut packed = Packed::default();
+    pack_into(casters, px_per_point, max_side, &mut packed, &mut PackScratch::default());
+    packed
+}
+
+/// What [`pack_into`] works in, kept between frames with the packing it fills.
+#[derive(Default)]
+pub(crate) struct PackScratch {
+    rects: Vec<[f32; 4]>,
+    sizes: Vec<[u32; 2]>,
+    placed: Vec<[u32; 2]>,
+}
+
 /// Every caster's cell, shelf-packed in the order the casters arrive.
 ///
 /// `px_per_point` is the target's pixels per pane point — the device's scale
@@ -311,23 +327,10 @@ pub(crate) const NO_CASTER: ShadowCaster =
 /// Every property that differs BETWEEN groups rides on the caster, so this walk
 /// never learns what a group is: a mixed frame is one shelf of cells whose
 /// widths differ, packed in one pass.
-pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Packed {
-    let mut packed = Packed::default();
-    pack_into(casters, px_per_point, max_side, &mut packed, &mut PackScratch::default());
-    packed
-}
-
-/// What [`pack_into`] works in, kept between frames with the packing it fills.
-#[derive(Default)]
-pub(crate) struct PackScratch {
-    rects: Vec<[f32; 4]>,
-    sizes: Vec<[u32; 2]>,
-    placed: Vec<[u32; 2]>,
-}
-
-/// [`pack`], into last frame's buffers rather than new ones: at the node cap
-/// they come to a couple of megabytes a frame. Every one is emptied first, so
-/// the packing is still this frame's alone.
+///
+/// Into last frame's buffers rather than new ones: at the node cap they come
+/// to a couple of megabytes a frame. Every one is emptied first, so the
+/// packing is still this frame's alone.
 pub(crate) fn pack_into(
     casters: &[Caster],
     px_per_point: f32,
