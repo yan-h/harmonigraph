@@ -89,13 +89,7 @@ impl FrameTimer {
     /// timestamps.
     pub(crate) fn new(format: wgpu::TextureFormat) -> Option<Self> {
         crate::shader_assets::initialize();
-        let instance = wgpu::Instance::default();
-        let Ok(adapter) =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        else {
-            eprintln!("no GPU adapter; nothing timed");
-            return None;
-        };
+        let (_, adapter) = crate::test_gpu_adapter()?;
         eprintln!("adapter: {:?}", adapter.get_info());
         let descriptor = crate::device_descriptor(&adapter);
         if !descriptor.required_features.contains(wgpu::Features::TIMESTAMP_QUERY) {

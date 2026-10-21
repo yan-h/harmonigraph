@@ -1,13 +1,15 @@
-//! The one device every shell and test in this workspace asks for. The plugin,
-//! the standalone harness, the offline renderer and the GPU tests all take
-//! their descriptor from [`device_descriptor`], so a feature or limit added
-//! here reaches each of them, and a test never runs against a device
-//! production doesn't use. (The vendored crates' own tests build theirs.)
+//! The one device descriptor every shell and test in this workspace asks for.
+//! The plugin, the standalone harness, the offline renderer and the GPU tests
+//! all take it from [`device_descriptor`], so a feature or limit added here
+//! reaches each of them, and a test never runs with features or limits
+//! production doesn't ask for. Which adapter each picks is separate: tests go
+//! through `test_gpu_adapter`, the shells through their own instance. (The
+//! vendored crates' own tests build their devices themselves.)
 //!
 //! Every optional feature is granted wherever the adapter offers it, so on
-//! the CI Metal adapter no test takes a feature's fallback by accident. A test
-//! of a fallback asks for it on purpose, by narrowing the descriptor:
-//! `descriptor.required_features -= wgpu::Features::...`.
+//! the CI Metal adapter no test reaches a feature's fallback, and none
+//! covers the timestamp-free path today. A test that should reach one would
+//! narrow the descriptor: `descriptor.required_features -= wgpu::Features::...`.
 
 use crate::wgpu;
 

@@ -1,6 +1,6 @@
 //! Scenes, shooters and readings shared by the modules beside this one.
 
-use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use crate::gpu_harness::{readback, render_to_texture};
 use crate::*;
 
 /// A completed MIDI snapshot through the production carried-motion path.
@@ -280,6 +280,11 @@ pub(super) fn parity_scene() -> Scene {
 /// nothing here is shared between tests, which is what lets the pane counter
 /// below start from the same place in all of them.
 pub(super) struct Shooter {
+    /// The instance the device came from, for tests that hand the pipeline
+    /// cache an instance and need it to be the device's own. Those tests are
+    /// compiled out under `hot-reload`.
+    #[cfg_attr(feature = "hot-reload", allow(dead_code))]
+    pub(super) instance: wgpu::Instance,
     pub(super) device: wgpu::Device,
     pub(super) queue: wgpu::Queue,
     pub(super) resources: CallbackResources,
@@ -306,8 +311,12 @@ impl Shooter {
     /// `None` where the machine has no usable GPU — CI containers, mostly.
     /// Every caller returns on it.
     pub(super) fn new(size: [u32; 2]) -> Option<Shooter> {
-        let (device, queue) = headless_device()?;
+        let (instance, adapter) = crate::test_gpu_adapter()?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
+                .expect("headless device");
         Some(Shooter {
+            instance,
             device,
             queue,
             resources: CallbackResources::default(),
