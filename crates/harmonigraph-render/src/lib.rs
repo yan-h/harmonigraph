@@ -108,9 +108,8 @@ pub use text::{
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
 pub use shadow::{spectral_shadow_reach, SPECTRAL_WIDTH_POINTS};
-/// One combined atlas and blur schedule per spectral destination surface.
+/// A spectral text pane's own shadow atlas and blur.
 mod spectral_shadow;
-pub use spectral_shadow::spectral_shadow_prepare_callback;
 
 /// The lattice's own labels: the glyphs of every node name it wants drawn,
 /// and which node each of them belongs to.

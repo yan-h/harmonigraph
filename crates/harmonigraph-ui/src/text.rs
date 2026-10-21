@@ -263,15 +263,6 @@ pub(crate) fn spectral_labels(surface: usize) -> u64 {
     batch(surface, 2)
 }
 
-/// Shared shadow targets are per destination surface and per pane kind.
-pub(crate) fn spectral_shadow_surface(surface: usize) -> u64 {
-    surface as u64 * 2
-}
-
-/// The Spiral's shadow target: the docked surface's odd id, the Spiral having
-/// no other copy.
-pub(crate) const SPIRAL_SHADOW_SURFACE: u64 = crate::panes::DOCKED_SURFACE as u64 * 2 + 1;
-
 /// One glyph as the mirror identifies it: its size, its character, and the
 /// TEXEL it was found at.
 ///
@@ -737,8 +728,8 @@ impl TextBatch {
     /// the analyzer's names ride its time axis and so scroll whichever way
     /// its orientation points that, and nothing here can see it.
     ///
-    /// `shadow_surface_id` joins spectral text to the spiral's geometry on the
-    /// same destination surface. Unshadowed chrome passes `None`.
+    /// `shadow` is the style the batch's names cast in, each pane into its own
+    /// atlas. Unshadowed chrome passes `None`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn flush(
         &mut self,
@@ -748,7 +739,6 @@ impl TextBatch {
         pane_id: u64,
         slide: harmonigraph_render::SlideAxis,
         shadow: Option<harmonigraph_scene::ShadowStyle>,
-        shadow_surface_id: Option<u64>,
         point_scale: f32,
     ) {
         if self.glyphs.is_empty() {
@@ -781,7 +771,6 @@ impl TextBatch {
                 pane: pane_id,
                 pass_nr: painter.ctx().cumulative_pass_nr(),
             },
-            shadow_surface_id,
             point_scale,
         ));
     }
@@ -1620,7 +1609,6 @@ mod tests {
                     harmonigraph_render::SlideAxis::Both,
                     state.picture.surfaces.target_format,
                     harmonigraph_render::PaneIds { pane: 0, pass_nr: ctx.cumulative_pass_nr() },
-                    None,
                     1.0,
                 ));
             });
@@ -1732,7 +1720,6 @@ mod tests {
         }
         use_renderer_font_texture(&context);
 
-        let surface = spectral_shadow_surface(0);
         let mut state = crate::PictureState::new(FORMAT);
         state.appearance.view.shadow.spectral_text =
             harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
@@ -1778,14 +1765,8 @@ mod tests {
                     spectral_labels(0),
                     harmonigraph_render::SlideAxis::default(),
                     Some(state.appearance.view.shadow.spectral_text),
-                    Some(surface),
                     1.0,
                 );
-                painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
-                    rect,
-                    surface,
-                    painter.ctx().cumulative_pass_nr(),
-                ));
             },
         );
         for (id, delta) in &output.textures_delta.set {

@@ -3,7 +3,7 @@
 //!
 //! **Why this exists.** A label used to be stamped around twenty offsets to
 //! make a rim. A name's shadow now draws its glyphs' coverage into a cell of
-//! the shared shadow atlas and runs the common separable blur over it.
+//! its pane's own shadow atlas and runs the common separable blur over it.
 //!
 //! **What it does NOT do.** It does not render text. egui still owns the
 //! fonts, the shaping, the layout and the atlas — this takes the glyphs it
@@ -179,7 +179,6 @@ pub fn text_paint_callback(
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     ids: PaneIds,
-    shadow_surface_id: Option<u64>,
     point_scale: f32,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
@@ -193,7 +192,6 @@ pub fn text_paint_callback(
             slide,
             target_format,
             pane_id: ids.pane,
-            shadow_surface_id,
             pass_nr: ids.pass_nr,
         },
     )
@@ -247,7 +245,6 @@ struct TextCallback {
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
-    shadow_surface_id: Option<u64>,
     pass_nr: u64,
 }
 
@@ -347,8 +344,9 @@ struct TextResources {
     fill_pipeline: wgpu::RenderPipeline,
     glyph_cell_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
-    shadow_layout: wgpu::BindGroupLayout,
-    caster_layout: wgpu::BindGroupLayout,
+    /// What every casting pane's own shadow atlas is bound and blurred
+    /// through.
+    shadow: crate::spectral_shadow::Shared,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
     /// Which reload the two pipelines above were built from
@@ -586,10 +584,11 @@ struct TextPane {
     instance_buffer: wgpu::Buffer,
     /// Each glyph's own name's `ShadowBox`, beside `instance_buffer` at the
     /// same capacity: what the cell fill and the shadow composite read the
-    /// name's cell from, as the lattice's `cell_buffer` is. Written once the
-    /// surface has packed (`spectral_shadow::CellDraw::Text`), and made only
-    /// for a pane that casts, so unshadowed chrome holds none.
+    /// name's cell from, as the lattice's `cell_buffer` is. Made, with the
+    /// names' atlas beside it, only for a pane whose style casts, so
+    /// unshadowed chrome holds neither.
     cells: Option<wgpu::Buffer>,
+    shadow: Option<crate::spectral_shadow::PaneShadow>,
     capacity: usize,
     count: u32,
 }
@@ -845,8 +844,7 @@ impl TextResources {
     fn pipelines(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        shadow_layout: &wgpu::BindGroupLayout,
-        caster_layout: &wgpu::BindGroupLayout,
+        shadow: &crate::spectral_shadow::Shared,
         target_format: wgpu::TextureFormat,
     ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
         let shader = glyph_shader(device, &crate::text_source());
@@ -854,8 +852,8 @@ impl TextResources {
             device,
             &shader,
             layout,
-            shadow_layout,
-            caster_layout,
+            &shadow.atlas,
+            &shadow.casters,
             target_format,
         );
         let fill_pipeline = create_text_pipeline(
@@ -883,13 +881,8 @@ impl TextResources {
         // The source is read inside, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
-        let (shadow_pipeline, fill_pipeline, cell) = Self::pipelines(
-            device,
-            &self.layout,
-            &self.shadow_layout,
-            &self.caster_layout,
-            target_format,
-        );
+        let (shadow_pipeline, fill_pipeline, cell) =
+            Self::pipelines(device, &self.layout, &self.shadow, target_format);
         #[cfg(feature = "hot-reload")]
         {
             self.generation = crate::reload::generation();
@@ -900,20 +893,14 @@ impl TextResources {
         self.target_format = target_format;
     }
 
-    fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        target_format: wgpu::TextureFormat,
-        shadow_layouts: &crate::spectral_shadow::Layouts,
-    ) -> Self {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         let layout = glyph_bind_group_layout(device);
-        let shadow_layout = shadow_layouts.atlas.clone();
-        let caster_layout = shadow_layouts.casters.clone();
+        let shadow = crate::spectral_shadow::Shared::new(device);
         // Read once for the pair, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
         let (shadow_pipeline, fill_pipeline, cell) =
-            Self::pipelines(device, &layout, &shadow_layout, &caster_layout, target_format);
+            Self::pipelines(device, &layout, &shadow, target_format);
         #[cfg(feature = "hot-reload")]
         let generation = crate::reload::generation();
         TextResources {
@@ -921,8 +908,7 @@ impl TextResources {
             fill_pipeline,
             glyph_cell_pipeline: cell,
             layout,
-            shadow_layout,
-            caster_layout,
+            shadow,
             sampler: glyph_sampler(device),
             target_format,
             #[cfg(feature = "hot-reload")]
@@ -1133,10 +1119,9 @@ impl CallbackTrait for TextCallback {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen_descriptor: &ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let shadow_layouts = crate::spectral_shadow::layouts(device, callback_resources);
         // The shell inserts the current egui font texture under its concrete
         // wgpu type. Cloning this handle does not copy texture data.
         let shared_atlas = callback_resources.get::<wgpu::Texture>().cloned();
@@ -1149,12 +1134,7 @@ impl CallbackTrait for TextCallback {
             }
             Some(_) => {}
             None => {
-                callback_resources.insert(TextResources::new(
-                    device,
-                    queue,
-                    self.target_format,
-                    &shadow_layouts,
-                ));
+                callback_resources.insert(TextResources::new(device, queue, self.target_format));
             }
         }
         let resources: &mut TextResources =
@@ -1173,7 +1153,7 @@ impl CallbackTrait for TextCallback {
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.map(|style| style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX));
         let sizes = resources.sheets.sizes();
-        let uniforms = TextUniforms {
+        let mut uniforms = TextUniforms {
             screen_points: [
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
                 screen_descriptor.size_in_pixels[1] as f32 / ppp,
@@ -1183,6 +1163,7 @@ impl CallbackTrait for TextCallback {
             filter_axis: self.slide.unit(),
             pixels_per_point: ppp,
             shadow_depth: style.map_or(0.0, |s| s.depth),
+            // The pane's own atlas, once its names have packed below.
             shadow_atlas_size: [1.0; 2],
             node_occlusion: 0.0,
             _pad: [0.0; 3],
@@ -1214,6 +1195,7 @@ impl CallbackTrait for TextCallback {
                     INITIAL_GLYPH_CAPACITY,
                 ),
                 cells: None,
+                shadow: None,
                 capacity: INITIAL_GLYPH_CAPACITY,
                 count: 0,
             });
@@ -1233,25 +1215,27 @@ impl CallbackTrait for TextCallback {
         if !self.glyphs.is_empty() {
             queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.glyphs));
         }
-        queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-        if let Some(surface_id) = self.shadow_surface_id {
-            // A `Caster` per NAME, made the way a lattice name's is, and built
-            // here rather than above because this is the only thing that reads
-            // them: unshadowed chrome passes no surface, and a batch of a few
-            // hundred names was allocating and filling the vector every frame
-            // for nobody.
-            let sigma = style
-                .filter(|style| style.casts())
-                .map_or(0.0, |style| crate::shadow::spectral_sigma_points(style, self.point_scale));
-            let stops = style.map_or(0.0, |s| s.text_spread_stops());
+        // A `Caster` per NAME, made the way a lattice name's is, and built only
+        // for a style that casts: unshadowed chrome passes none, and a batch of
+        // a few hundred names was allocating and filling the vector every
+        // frame for nobody.
+        let casting = style.filter(|style| style.casts());
+        if casting.is_none() {
+            pane.cells = None;
+            pane.shadow = None;
+        }
+        if let Some(style) = casting {
+            let sigma = crate::shadow::spectral_sigma_points(style, self.point_scale);
+            let stops = style.text_spread_stops();
             let mut first = 0;
-            let (casters, names) = (self.runs.name_ends(pane.count))
+            let (casters, names): (Vec<_>, Vec<_>) = (self.runs.name_ends(pane.count))
                 .map(|end| {
                     let run = &self.glyphs[first as usize..end as usize];
                     first = end;
                     (crate::shadow::caster_of(run, sigma, stops), run.len() as u32)
                 })
                 .unzip();
+            let shared = &resources.shadow;
             let capacity = pane.capacity;
             let cells = pane.cells.get_or_insert_with(|| {
                 create_vertex_buffer::<crate::shadow::ShadowBox>(
@@ -1260,27 +1244,26 @@ impl CallbackTrait for TextCallback {
                     capacity,
                 )
             });
-            let submission = crate::spectral_shadow::Submission {
-                key: crate::spectral_shadow::ProducerKey::Text(self.pane_id),
-                casters,
-                draw: crate::spectral_shadow::CellDraw::Text {
-                    pipeline: resources.glyph_cell_pipeline.clone(),
-                    locals: pane.bind_group.as_ref().expect("bound above").clone(),
-                    glyphs: pane.instance_buffer.clone(),
-                    cells: cells.clone(),
-                    names,
-                },
-                atlas_uniform: pane.uniform_buffer.clone(),
-                atlas_size_offset: std::mem::offset_of!(TextUniforms, shadow_atlas_size) as u64,
-            };
-            crate::spectral_shadow::register_for_pass(
+            let shadow = pane
+                .shadow
+                .get_or_insert_with(|| crate::spectral_shadow::PaneShadow::new(device, shared));
+            uniforms.shadow_atlas_size = shadow.prepare(
                 device,
-                callback_resources,
-                surface_id,
-                submission,
-                self.pass_nr,
+                queue,
+                egui_encoder,
+                shared,
+                ppp,
+                &casters,
+                &names,
+                crate::spectral_shadow::Ink {
+                    pipeline: &resources.glyph_cell_pipeline,
+                    locals: pane.bind_group.as_ref().expect("bound above"),
+                    glyphs: &pane.instance_buffer,
+                    cells,
+                },
             );
         }
+        queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         Vec::new()
     }
@@ -1319,15 +1302,9 @@ impl CallbackTrait for TextCallback {
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
         // A layer keeps letters and marks together. Later layers cast onto
         // earlier ink without any glyph shadowing its own name.
-        let shadow = self.shadow_surface_id.and_then(|surface_id| {
-            crate::spectral_shadow::binding(
-                callback_resources,
-                surface_id,
-                crate::spectral_shadow::ProducerKey::Text(self.pane_id),
-            )
-        });
-        let shadow = shadow.filter(|binding| binding.active).zip(pane.cells.as_ref());
-        if let Some((_, cells)) = shadow.as_ref() {
+        let shadow =
+            pane.shadow.as_ref().and_then(|shadow| shadow.binding()).zip(pane.cells.as_ref());
+        if let Some((_, cells)) = shadow {
             render_pass.set_vertex_buffer(1, cells.slice(..));
         }
         let layer_ends = if shadow.is_some() { self.runs.layers.as_slice() } else { &[] };
@@ -1337,10 +1314,10 @@ impl CallbackTrait for TextCallback {
             if end <= start {
                 continue;
             }
-            if let Some((shadow, _)) = shadow.as_ref() {
+            if let Some(((atlas, casters), _)) = shadow {
                 render_pass.set_pipeline(&resources.shadow_pipeline);
-                render_pass.set_bind_group(2, shadow.atlas, &[]);
-                render_pass.set_bind_group(3, shadow.casters, &[]);
+                render_pass.set_bind_group(2, atlas, &[]);
+                render_pass.set_bind_group(3, casters, &[]);
                 // One quad per name all the same: only a name's first glyph
                 // carries the mark `vs_spectral_shadow` draws on, and the rest
                 // fold away.
@@ -1390,14 +1367,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn either_spectral_text_endpoint_allocates_no_shadow_atlas() {
+    /// A pane at either endpoint of the bar holds no shadow atlas, including
+    /// one that was casting the frame before: what it held is dropped, since
+    /// `paint` composites whatever atlas the pane still has.
+    fn either_spectral_text_endpoint_holds_no_shadow_atlas() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for style in [
-            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
-            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
-        ] {
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let prepare = |style, pass_nr, resources: &mut CallbackResources| {
             let cb = TextCallback {
                 point_scale: 1.0,
                 runs: GlyphRuns::default(),
@@ -1407,25 +1385,24 @@ pub(crate) mod tests {
                 slide: SlideAxis::default(),
                 target_format: FORMAT,
                 pane_id: 0,
-                shadow_surface_id: Some(0),
-                pass_nr: 0,
+                pass_nr,
             };
-            let mut resources = CallbackResources::default();
-            let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
             let mut encoder = device.create_command_encoder(&Default::default());
-            cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-            crate::spectral_shadow::finish(
-                &device,
-                &queue,
-                &screen,
-                &mut encoder,
-                &mut resources,
-                0,
-            );
-            assert!(
-                !crate::spectral_shadow::target_allocated(&resources, 0),
-                "{style:?} allocated a shadow atlas"
-            );
+            cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            queue.submit([encoder.finish()]);
+            let pane = resources.get::<TextResources>().and_then(|r| r.panes.get(0));
+            pane.and_then(|p| p.shadow.as_ref()).is_some_and(|s| s.target_allocated())
+        };
+        let casting =
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 1.0, ..Default::default() };
+        for style in [
+            harmonigraph_scene::ShadowStyle { width: 0.0, depth: 1.0, ..Default::default() },
+            harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
+        ] {
+            let mut resources = CallbackResources::default();
+            assert!(!prepare(style, 0, &mut resources), "{style:?} allocated a shadow atlas");
+            assert!(prepare(casting, 1, &mut resources), "the casting fixture packed no cell");
+            assert!(!prepare(style, 2, &mut resources), "{style:?} kept last frame's atlas");
         }
     }
 
@@ -1438,9 +1415,7 @@ pub(crate) mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let mut callbacks = CallbackResources::default();
-        let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
-        let resources = TextResources::new(&device, &queue, FORMAT, &layouts);
+        let resources = TextResources::new(&device, &queue, FORMAT);
         assert!(!resources.is_stale(FORMAT));
         assert!(resources.is_stale(wgpu::TextureFormat::Bgra8Unorm));
     }
@@ -1456,9 +1431,7 @@ pub(crate) mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let mut callbacks = CallbackResources::default();
-        let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
-        let resources = TextResources::new(&device, &queue, FORMAT, &layouts);
+        let resources = TextResources::new(&device, &queue, FORMAT);
         assert!(!resources.is_stale(FORMAT), "nothing has been published since these were built");
 
         crate::reload::publish(
@@ -1472,7 +1445,7 @@ pub(crate) mod tests {
 
         // ...and a build taken after it is current again, so the rebuild
         // happens once rather than on every frame from here on.
-        let after = TextResources::new(&device, &queue, FORMAT, &layouts);
+        let after = TextResources::new(&device, &queue, FORMAT);
         assert!(!after.is_stale(FORMAT));
     }
 
@@ -1490,9 +1463,7 @@ pub(crate) mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let mut callbacks = CallbackResources::default();
-        let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
-        let mut resources = TextResources::new(&device, &queue, FORMAT, &layouts);
+        let mut resources = TextResources::new(&device, &queue, FORMAT);
 
         // A sheet in hand, the way a frame that has drawn one label leaves it.
         resources.bind_sheets(
@@ -1531,9 +1502,7 @@ pub(crate) mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let mut callbacks = CallbackResources::default();
-        let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
-        let _resources = TextResources::new(&device, &queue, FORMAT, &layouts);
+        let _resources = TextResources::new(&device, &queue, FORMAT);
     }
 
     /// The shell's font texture is keyed by GPU-resource identity. A patch to
@@ -1560,7 +1529,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            shadow_surface_id: None,
             pass_nr: 0,
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -1721,7 +1689,6 @@ pub(crate) mod tests {
             slide,
             target_format: FORMAT,
             pane_id: 0,
-            shadow_surface_id: shadow.map(|_| 0),
             pass_nr: 0,
         };
         (draw_callback(device, queue, &cb, size, ppp), size)
@@ -1737,21 +1704,18 @@ pub(crate) mod tests {
         draw_scheduled(device, queue, cb, size, ppp).0
     }
 
-    /// [`draw_callback`], with what the shadow surface packed for it.
+    /// [`draw_callback`], with the cells its pane packed.
     fn draw_scheduled(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         cb: &TextCallback,
         size: [u32; 2],
         ppp: f32,
-    ) -> (Vec<u8>, crate::spectral_shadow::ScheduleStats) {
+    ) -> (Vec<u8>, crate::spectral_shadow::CellStats) {
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
-        if cb.shadow_surface_id.is_some() {
-            crate::spectral_shadow::finish(device, queue, &screen, &mut encoder, &mut resources, 0);
-        }
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
 
         let rect =
@@ -1769,7 +1733,10 @@ pub(crate) mod tests {
                     &resources,
                 );
             });
-        (readback(device, queue, &texture, size), crate::spectral_shadow::stats(&resources, 0))
+        let stats = (resources.get::<TextResources>().and_then(|r| r.panes.get(cb.pane_id)))
+            .and_then(|pane| pane.shadow.as_ref())
+            .map_or(Default::default(), |shadow| shadow.stats);
+        (readback(device, queue, &texture, size), stats)
     }
 
     /// Three letters side by side, 8 points each from x=16, reading
@@ -1785,7 +1752,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            shadow_surface_id: Some(0),
             pass_nr: 0,
         }
     }
@@ -1857,7 +1823,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            shadow_surface_id: Some(0),
             pass_nr: 0,
         };
         let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
@@ -2011,7 +1976,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            shadow_surface_id: None,
             pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
@@ -2102,7 +2066,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            shadow_surface_id: None,
             pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
@@ -2174,7 +2137,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
-            shadow_surface_id: None,
             pass_nr,
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -2272,7 +2234,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
-            shadow_surface_id: None,
             pass_nr: 0,
         };
 
@@ -2354,7 +2315,6 @@ pub(crate) mod tests {
                     slide: SlideAxis::default(),
                     target_format: FORMAT,
                     pane_id: 0,
-                    shadow_surface_id: None,
                     pass_nr: 1,
                 },
                 at(40.0, 1, Some(atlas_of(64, 3))),
@@ -2789,7 +2749,6 @@ pub(super) fn asset_catalog(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
-    layouts: &crate::spectral_shadow::Layouts,
 ) {
-    drop(TextResources::new(device, queue, format, layouts));
+    drop(TextResources::new(device, queue, format));
 }
