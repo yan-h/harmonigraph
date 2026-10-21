@@ -1,6 +1,6 @@
 //! The sequence a windowed shell owes the UI, as three calls.
 //!
-//! Two shells drive [`root_ui`](crate::root_ui) and neither can share the
+//! Two shells drive [`root_ui`] and neither can share the
 //! other's windowing stack — the plugin editor runs on egui-baseview inside a
 //! host's window, the dev harness on eframe in one of its own. What they can
 //! share is everything AROUND the drawing, which is the same steps in the same
