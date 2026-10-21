@@ -207,8 +207,8 @@ pub(crate) fn spectral_pane(
     painter.rect_filled(rect, 0.0, theme::picture());
 
     let axes = Axes::new(rect, &cfg);
-    // The pane-wide response means two things in the preview: plain drag turns
-    // the analyzer, while Shift-drag navigates it. The narrow divider is
+    // The pane-wide response means two things in the preview: plain drag
+    // navigates the analyzer, while Shift-drag turns it. The narrow divider is
     // registered afterward and remains the topmost target where they overlap.
     let orientation_drag =
         navigation.is_preview().then(|| gestures::drag_orientation(ui, &response, rect));

@@ -363,6 +363,10 @@ enum DepthZoom {
     Level,
 }
 
+/// Where the press-time choice between rearranging (Shift held) and
+/// navigating is kept for the length of one drag.
+const REARRANGE_MODE: &str = "preview_rearrange";
+
 /// A preview-only drag that turns the analyzer toward one of the render
 /// frame's four edges. Kept beside the other gesture routing because it shares
 /// the pane-wide response with navigation; the internal divider is registered
@@ -377,19 +381,19 @@ pub(super) fn drag_orientation(
     response: &egui::Response,
     frame: egui::Rect,
 ) -> OrientationDrag {
-    let held = ui.input(|i| i.modifiers.shift || i.pointer.middle_down());
+    let held = ui.input(|i| i.modifiers.shift);
     let response = response.clone();
-    let mode_id = response.id.with("preview_navigation");
+    let mode_id = response.id.with(REARRANGE_MODE);
     if response.drag_started() {
         ui.data_mut(|data| data.insert_temp(mode_id, held));
     }
-    let navigating = ui.data(|data| data.get_temp::<bool>(mode_id)).unwrap_or(held);
+    let navigating = !ui.data(|data| data.get_temp::<bool>(mode_id)).unwrap_or(held);
     let response = if navigating {
         response
     } else {
         response
             .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text("Drag to an edge to turn the analyzer · Hold Shift and drag to navigate")
+            .on_hover_text("Hold Shift and drag to an edge to turn the analyzer · Drag to navigate")
     };
     // A drag-only egui widget claims the pointer immediately on press, before
     // it knows whether the gesture will move. Keep the target and the persisted
@@ -495,9 +499,9 @@ fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::Spect
 /// mode — a drag moves whatever it is on top of, and the two regions are drawn
 /// far enough apart to aim at.
 ///
-/// The dock and Video preview both navigate. In the preview, an unmodified
-/// drag belongs to the orientation overlay above this pane, while Shift-drag
-/// leaves that overlay inert and reaches the pan/Span/Level paths here. Its
+/// The dock and Video preview both navigate. In the preview, a Shift-drag
+/// belongs to the orientation overlay above this pane, while an unmodified
+/// drag leaves that overlay inert and reaches the pan/Span/Level paths here. Its
 /// wheel is consumed after zooming so the Video tab's enclosing vertical
 /// `ScrollArea` does not move the controls at the same time. Headless/offline
 /// copies opt out explicitly.
@@ -550,9 +554,9 @@ pub(super) fn drag_zoom(
     // divider uses — pushed against an end of an axis, an absolute anchor would
     // keep accumulating off-screen and the view would sit still on the way back.
     let drag_navigates = !matches!(navigation, Navigation::Preview)
-        || ui
-            .data(|data| data.get_temp::<bool>(response.id.with("preview_navigation")))
-            .unwrap_or_else(|| ui.input(|i| i.modifiers.shift || i.pointer.middle_down()));
+        || !ui
+            .data(|data| data.get_temp::<bool>(response.id.with(REARRANGE_MODE)))
+            .unwrap_or_else(|| ui.input(|i| i.modifiers.shift));
     if response.dragged() && drag_navigates {
         let delta = response.drag_delta();
         // Which axis this drag is on — see [`lean_is_depth`]. What comes back is
