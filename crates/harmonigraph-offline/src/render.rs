@@ -754,7 +754,6 @@ mod tests {
             depth: f32::from(enabled),
             ..Default::default()
         };
-        state.appearance.spectrum.note_cut = f32::from(enabled);
         state.appearance.view.shadow.spectral_text = style;
         let mut take = take();
         take.header.appearance = Some(state.appearance.serialize());
@@ -1005,9 +1004,11 @@ mod tests {
 
     /// Offline export calls the same pane and paint callbacks as the editor;
     /// exercise that shared route at every UI/export scale promised by #556.
-    /// The mixed frame is compared with its two depths shut so a passing render
-    /// must actually reach both spectral shadow groups, not merely produce a
-    /// plausible roll and axis at each scale.
+    /// The frame is compared with the spectral text shadow's depth shut, and
+    /// only that, so a passing render must actually reach the names' shadow,
+    /// not merely produce a plausible roll and axis at each scale. The notes'
+    /// backdrop cut stays as it is in both, since a cut round the held notes
+    /// would change the frame on its own.
     #[test]
     fn spectral_shadows_agree_with_the_shared_editor_path_at_every_export_scale() {
         for ppp in [1.0f32, 1.5, 2.0, 4.0] {

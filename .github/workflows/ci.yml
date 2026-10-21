@@ -13,8 +13,13 @@ on:
 permissions:
   contents: read
 
+# A PR's newer push supersedes its older run. A push to main supersedes
+# nothing: each is the first run of what it landed beside, so every one gets its
+# own group, and a merge close behind another neither cancels it nor leaves a
+# red `Full CI` on a commit that failed nothing. The price is a burst of merges
+# running side by side on the macOS cap rather than only the newest surviving.
 concurrency:
-  group: full-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: full-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 env:
