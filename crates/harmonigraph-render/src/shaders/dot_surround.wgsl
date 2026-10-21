@@ -96,7 +96,7 @@ struct SurroundOut {
 /// lands with it. A fragment of no cut leaves the target clear.
 @fragment
 fn fs_dot_surround(in: DotOut) -> SurroundOut {
-    let cut = dot_cut(in);
+    let cut = dot_locals.surround.cut.x * dot_cut(in);
     if cut <= 0.0 {
         discard;
     }

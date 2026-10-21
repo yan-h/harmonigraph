@@ -109,9 +109,9 @@ struct Pane {
     dots: wgpu::Buffer,
     dot_capacity: usize,
     count: u32,
-    /// The surround over the spiral's rect, and the size in device pixels it
-    /// was built for. Dropped when the cut draws nothing.
-    targets: Option<(SurroundTargets, [u32; 2])>,
+    /// The surround over the spiral's rect. Dropped when the cut draws
+    /// nothing.
+    targets: Option<SurroundTargets>,
 }
 
 impl Resources {
@@ -266,14 +266,9 @@ impl CallbackTrait for DotSurroundCallback {
             _tail_pad: Float2([0.0; 2]),
         };
         queue.write_buffer(&pane.locals, 0, bytemuck::bytes_of(&locals));
-        if pane.targets.as_ref().is_some_and(|(_, built)| *built != size) {
-            pane.targets = None;
-        }
-        let (targets, _) = pane
-            .targets
-            .get_or_insert_with(|| (SurroundTargets::new(device, composite, size), size));
+        let targets = SurroundTargets::ensure(&mut pane.targets, device, composite, size);
         let (locals_bind, dots, count) = (&pane.locals_bind, &pane.dots, pane.count);
-        targets.draw(queue, encoder, pipeline, surround, |pass| {
+        targets.draw(encoder, pipeline, |pass| {
             pass.set_bind_group(0, locals_bind, &[]);
             pass.set_vertex_buffer(0, dots.slice(..));
             pass.draw(0..4, 0..count);
@@ -293,7 +288,7 @@ impl CallbackTrait for DotSurroundCallback {
         let Some(pane) = &resources.pane else {
             return;
         };
-        let Some((targets, _)) = pane.targets.as_ref().filter(|_| pane.count > 0) else {
+        let Some(targets) = pane.targets.as_ref().filter(|_| pane.count > 0) else {
             return;
         };
         let vp = info.viewport_in_pixels();
@@ -347,12 +342,13 @@ mod tests {
     }
 
     /// A cut that draws nothing, and a frame with no dots in it, each skip the
-    /// whole thing: no pipelines are built, and so no targets.
+    /// whole thing: no pipelines are built, and so no targets. Once built, the
+    /// targets go again with a cut switched off.
     ///
     /// Asked of the RESOURCES rather than of the frame, because both draw the
-    /// same bytes however much work went into them. Read off a FIRST prepare,
-    /// since anything already built is deliberately held through a quiet
-    /// stretch.
+    /// same bytes however much work went into them. The skips are read off a
+    /// FIRST prepare, since anything already built is deliberately held through
+    /// a quiet stretch.
     #[test]
     fn nothing_to_cut_builds_no_pipelines() {
         let Some((device, queue)) = headless_device() else {
@@ -375,14 +371,18 @@ mod tests {
         }
         // The control, and what makes the two above claims about the DECISION
         // rather than about a fixture too small to reach the build.
-        let resources = prepared(&device, &queue, &callback(vec![dot()], CUT), &screen);
-        assert!(
+        let mut resources = prepared(&device, &queue, &callback(vec![dot()], CUT), &screen);
+        let holds = |resources: &CallbackResources| {
             resources
                 .get::<Resources>()
                 .and_then(|resources| resources.pane.as_ref())
-                .is_some_and(|pane| pane.targets.is_some()),
-            "a dot under a cut that draws built no targets",
-        );
+                .is_some_and(|pane| pane.targets.is_some())
+        };
+        assert!(holds(&resources), "a dot under a cut that draws built no targets");
+        let off = callback(vec![dot()], crate::SurroundCut { amount: 0.0, ..CUT });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        off.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        assert!(!holds(&resources), "the cut switched off kept its targets");
     }
 
     /// A dot's surround takes the picture beside it as the cut's fade says, in

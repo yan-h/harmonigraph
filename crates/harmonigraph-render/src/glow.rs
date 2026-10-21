@@ -59,10 +59,9 @@ const GLOW_ENTRY_POINTS: &[&str] = &["vs_disc", "fs_disc_gamma", "fs_disc_linear
 /// and a caller with a different shape is better served by widening this than
 /// by a second callback growing a second halo out of the same strength.
 ///
-/// A DARK companion mark is not one of these: the shadow under a spiral dot or
-/// the roll's black outline round a note, and dark is the one thing that
-/// cannot bloom. Drawn here it would only take light out of the
-/// halo the colored mark does grow.
+/// A DARK companion mark is not one of these: the backdrop cut round a spiral
+/// dot or a roll note, and dark is the one thing that cannot bloom. Drawn here
+/// it would only take light out of the halo the colored mark does grow.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GlowDot {

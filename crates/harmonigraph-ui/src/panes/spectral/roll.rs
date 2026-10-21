@@ -80,12 +80,13 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// drawn along — barely separated at all. The cut takes the picture away next
 /// to the note, wholly at its edge at a full amount, so every note stands
 /// against the same surround; what it takes is filled with the note's own hue
-/// as far as the cut fills ([`note_fill`]).
+/// ([`note_fill`]).
 ///
 /// The strength handed over is a full 1, and how strongly it cuts is the cut's
 /// amount: strongest against the note, falling off to nothing at its reach.
-/// Where two notes' cuts meet they merge (the halo blend) rather than stack,
-/// so a crowd of notes is no more cut between them than the blend says.
+/// Where two notes' cuts meet, the stronger lands, with its color, rather than
+/// the two stacking, so a crowd of notes is no more cut between them than one
+/// note is.
 ///
 /// The reach is in points, so it is the same edge at every zoom and every
 /// ribbon width. The shader reads it from the cut itself; the one returned

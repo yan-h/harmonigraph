@@ -42,7 +42,7 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
 /// Entry points the roll shader must provide: the two vertex stages (the
-/// surround's quad and the bodies'), the surround's two passes, the bodies'
+/// surround's quad and the bodies'), the surround's pass, the bodies'
 /// holdout, and the body layer in each of the two shadings
 /// [`create_core_pipeline`] picks between. Its entry point is assembled from a
 /// shading's name, so a rename in the WGSL is a panic at pipeline creation and
@@ -62,7 +62,7 @@ pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
 ///
 /// Reading outward: [`core`](Self::core), then the cut fading out over its
 /// reach, which is the whole roll's and rides in the uniform rather than here,
-/// filled with [`aura`](Self::aura)'s color as far as the cut fills.
+/// filled with [`aura`](Self::aura)'s color.
 ///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
@@ -468,7 +468,7 @@ struct RollHoldout {
     /// Notes mapped into that texture rather than onto the surface.
     notes_uniform: wgpu::Buffer,
     notes_bind_group: wgpu::BindGroup,
-    /// The texture, as the surround passes' group 1.
+    /// The texture, as the surround pass's group 1.
     read_bind_group: wgpu::BindGroup,
     /// Every note's cut and fill color over the same rect: drawn in `prepare`
     /// after the holdout it reads, and laid over the picture by `paint`. One
@@ -659,7 +659,7 @@ impl RollResources {
         });
         RollResources {
             // The surround reaches past its note by the cut's reach, and reads
-            // the holdout in both its passes.
+            // the holdout.
             surround: crate::surround::surround_pipeline(
                 device,
                 &shader,
@@ -1231,7 +1231,7 @@ impl CallbackTrait for RollCallback {
             draw_clipped(&mut pass, pane.count, holdout.tail);
             drop(pass);
 
-            holdout.surround.draw(queue, egui_encoder, surround_pipeline, surround, |pass| {
+            holdout.surround.draw(egui_encoder, surround_pipeline, |pass| {
                 pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
                 pass.set_bind_group(1, &holdout.read_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
@@ -1615,8 +1615,8 @@ mod tests {
             // whether it shows.
             cap_reach: HARNESS_REACH,
             core: [255, 0, 0, 255],
-            // Cutting whole; the black fill is never laid on under the
-            // harness's fill of 0.
+            // Cutting whole, and filling with black, so the harness's cut takes
+            // the backdrop toward black.
             aura: [0, 0, 0, 255],
             span: RollInstance::WHOLE,
             ramp: [0.0, 0.0],
@@ -1839,7 +1839,7 @@ mod tests {
         );
     }
 
-    /// While the cut fills, what it takes comes back in the STRONGEST note's
+    /// What the cut takes comes back in the STRONGEST note's
     /// own color, whole — not a channel-by-channel max of the notes' colors
     /// where two cuts meet, which would draw a hue neither note has.
     ///
@@ -1847,8 +1847,8 @@ mod tests {
     /// eight points, the probe a point nearer the red: red cuts 0.69 there
     /// and blue 0.56, so blue alone lifts blue well above the backdrop, and
     /// with both drawn — red first, so a depth test that let the later note
-    /// through would show — the probe must read as red's fill alone. Over the
-    /// backdrop's `1 - cut`, which is all a fill of 0 would leave.
+    /// through would show — the probe must read as red's fill alone, over the
+    /// backdrop's `1 - cut`.
     #[test]
     fn the_cut_fills_with_the_strongest_notes_own_color() {
         let Some((device, queue)) = headless_device() else {

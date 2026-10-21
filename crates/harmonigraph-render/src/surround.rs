@@ -98,11 +98,6 @@ impl SurroundCut {
         }
     }
 
-    /// Whether this cut draws anything.
-    pub fn draws(self) -> bool {
-        self.sanitized().amount > 0.0
-    }
-
     /// How far the surround paints past a note's edge, in points of a picture
     /// drawn at `point_scale`, and 0 when it draws nothing. What a producer's
     /// quads are grown by, and what the roll's culls keep a leaving note alive
@@ -142,8 +137,8 @@ impl SurroundUniform {
     }
 }
 
-/// The strongest note's straight gamma-space fill color, and in alpha its cut
-/// as a share of the amount. Eight bits, as the surface it lands on: what it
+/// The strongest note's straight gamma-space fill color, and in alpha how much
+/// of the picture its cut takes, the amount included. Eight bits, as the surface it lands on: what it
 /// holds is the color and coverage of a surround laid over an eight-bit
 /// picture, so all it costs is one rounding at the composite.
 const SURROUND_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -156,29 +151,15 @@ const SURROUND_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const SURROUND_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth16Unorm;
 
 /// The composite that lays a producer's [`SurroundTargets`] over the picture,
-/// premultiplied, in the shading the target wants; and the two layouts its
-/// targets bind through.
+/// premultiplied, in the shading the target wants; and the layout its targets
+/// bind through.
 pub(crate) struct SurroundComposite {
     pipeline: wgpu::RenderPipeline,
-    uniform_layout: wgpu::BindGroupLayout,
     read_layout: wgpu::BindGroupLayout,
 }
 
 impl SurroundComposite {
     pub(crate) fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("surround_uniform_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
         let read_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("surround_read_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -198,7 +179,7 @@ impl SurroundComposite {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("surround_composite_layout"),
-            bind_group_layouts: &[Some(&uniform_layout), Some(&read_layout)],
+            bind_group_layouts: &[Some(&read_layout)],
             ..Default::default()
         });
         let entry_point =
@@ -231,7 +212,7 @@ impl SurroundComposite {
             multiview_mask: None,
             cache: None,
         });
-        SurroundComposite { pipeline, uniform_layout, read_layout }
+        SurroundComposite { pipeline, read_layout }
     }
 }
 
@@ -296,15 +277,15 @@ pub(crate) fn surround_pipeline(
 }
 
 /// A producer's surround over its rect, one texel per device pixel: the
-/// strongest note's color and cut, the depth that picks it, and the cut's
-/// uniform for the composite. Held while the cut draws, and dropped with it or
-/// when the rect resizes, which the producer keeps track of.
+/// strongest note's color and cut, and the depth that picks it. Held while the
+/// cut draws, and dropped with it; [`ensure`](Self::ensure) rebuilds it when
+/// the rect resizes.
 pub(crate) struct SurroundTargets {
     view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
     read_bind_group: wgpu::BindGroup,
+    /// The rect's size in device pixels these were built for.
+    size: [u32; 2],
 }
 
 impl SurroundTargets {
@@ -340,24 +321,7 @@ impl SurroundTargets {
         );
         let depth_view =
             target("surround_depth", SURROUND_DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        let uniform_buffer = crate::gpu_memory::buffer(
-            device,
-            &wgpu::BufferDescriptor {
-                label: Some("surround_uniform"),
-                size: std::mem::size_of::<SurroundUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            },
-        );
         SurroundTargets {
-            uniform_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("surround_uniform_bind_group"),
-                layout: &composite.uniform_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                }],
-            }),
             read_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("surround_read_bind_group"),
                 layout: &composite.read_layout,
@@ -368,8 +332,22 @@ impl SurroundTargets {
             }),
             view,
             depth_view,
-            uniform_buffer,
+            size,
         }
+    }
+
+    /// `slot`'s targets, built for a rect `size` device pixels across: kept
+    /// while they are that size, and rebuilt when it is not.
+    pub(crate) fn ensure<'a>(
+        slot: &'a mut Option<Self>,
+        device: &wgpu::Device,
+        composite: &SurroundComposite,
+        size: [u32; 2],
+    ) -> &'a Self {
+        if slot.as_ref().is_some_and(|targets| targets.size != size) {
+            *slot = None;
+        }
+        slot.get_or_insert_with(|| Self::new(device, composite, size))
     }
 
     /// The notes' surround into these targets. `draw` binds the producer's own
@@ -377,13 +355,10 @@ impl SurroundTargets {
     /// set.
     pub(crate) fn draw(
         &self,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pipeline: &wgpu::RenderPipeline,
-        uniform: SurroundUniform,
         draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("surround"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -421,8 +396,7 @@ impl SurroundTargets {
         composite: &SurroundComposite,
     ) {
         pass.set_pipeline(&composite.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &self.read_bind_group, &[]);
+        pass.set_bind_group(0, &self.read_bind_group, &[]);
         pass.draw(0..4, 0..1);
     }
 }
@@ -440,10 +414,5 @@ mod tests {
             COMPOSITE_ENTRY_POINTS,
         )
         .expect("baked surround_composite.wgsl must parse and validate");
-    }
-
-    #[test]
-    fn composite_uniform_matches_the_bound_shader_layout() {
-        crate::uniforms::layout::check_binding::<SurroundUniform>(&composite_source(), 0, 0);
     }
 }

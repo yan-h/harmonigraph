@@ -4,13 +4,13 @@
 //
 // What is under the surround keeps `1 - cut` of itself, and gains the
 // strongest note's fill color as much as the cut took: premultiplied over.
+// The target holds both already, the cut's amount included, so this draw
+// reads nothing but its texel.
 
-@group(0) @binding(0) var<uniform> surround: SurroundCut;
-
-/// The strongest note's straight gamma-space fill color, and in alpha its cut
-/// as a share of the amount, the size of the rect it is laid over, so a pixel
-/// reads its own texel.
-@group(1) @binding(0) var surround_texels: texture_2d<f32>;
+/// The strongest note's straight gamma-space fill color, and in alpha how much
+/// of the picture its cut takes, the size of the rect it is laid over, so a
+/// pixel reads its own texel.
+@group(0) @binding(0) var surround_texels: texture_2d<f32>;
 
 struct CoverOut {
     @builtin(position) position: vec4<f32>,
@@ -38,8 +38,7 @@ fn surround_over(in: CoverOut) -> Over {
     let size = vec2<i32>(textureDimensions(surround_texels));
     let texel = min(vec2<i32>(in.uv * vec2<f32>(size)), size - vec2<i32>(1));
     let strongest = textureLoad(surround_texels, texel, 0);
-    let cut = surround.cut.x * strongest.a;
-    return Over(strongest.rgb, cut);
+    return Over(strongest.rgb, strongest.a);
 }
 
 @fragment

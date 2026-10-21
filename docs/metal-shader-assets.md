@@ -28,7 +28,7 @@ An Apple Silicon corpus does not promise complete Intel internal-shader coverage
 
 ## Generation and validation
 
-The feature-gated `production_metal_asset_catalog` calls the actual lattice, text, roll, spectrogram, glow, dot-shadow, shared-shadow and egui constructors.
+The feature-gated `production_metal_asset_catalog` calls the actual lattice, text, roll, spectrogram, glow, dot-surround, shared-shadow and egui constructors.
 It exercises default/offline and native/timestamp device profiles with BGRA8/RGBA8 linear and sRGB targets.
 Pipeline state stays defined at its existing owner.
 Synthetic reference shaders from other tests are not shipping assets.

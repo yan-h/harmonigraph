@@ -140,9 +140,9 @@ struct VertexOut {
     @location(14) @interpolate(flat) fade: vec2<f32>,
 };
 
-/// The surround's quad, for both of its passes ([`fs_note_cut`],
-/// [`fs_note_fill`]): the note's box grown by the cut's reach, past every edge
-/// and every corner, and half a feather past that.
+/// The surround's quad ([`fs_note_surround`]): the note's box grown by the
+/// cut's reach, past every edge and every corner, and half a feather past
+/// that.
 @vertex
 fn vs_note_cut(
     @builtin(vertex_index) vertex: u32,
@@ -320,7 +320,8 @@ fn cut_reach() -> f32 {
 /// strength, so the surround all but vanished round exactly the hairline notes
 /// that need one, and spread into a wide smear round a fat one. Here a note's
 /// edge is equally held at every ribbon width. The amount itself is laid on in
-/// the composite, after the strongest note's cut has been kept.
+/// [`fs_note_surround`], one amount for every note, so it changes no note's
+/// rank against another's.
 ///
 /// `reach` may still shorten an interior cap when the pane has less room
 /// before its now-line. That bound stays hard — shortening a cap moves its end
@@ -764,7 +765,7 @@ struct SurroundOut {
 @fragment
 fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
     let in = on_screen(fragment);
-    let cut = cut_strength(in, rim_of(in));
+    let cut = locals.surround.cut.x * cut_strength(in, rim_of(in));
     if cut <= 0.0 {
         discard;
     }

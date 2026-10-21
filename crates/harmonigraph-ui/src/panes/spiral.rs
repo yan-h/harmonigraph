@@ -519,7 +519,7 @@ impl Spiral {
 ///
 /// The docked tab is the only copy of this pane: the Spiral is an editor tab,
 /// never exported or previewed for video (#974). So what it holds between
-/// frames is one of each: the halo's bloom chain and the dots' shadow buffers
+/// frames is one of each: the halo's bloom chain and the dots' surround buffers
 /// are single instances in their renderers, and the rim names' instance buffer
 /// and their shadow target take the docked surface's ids. Were a second copy
 /// ever drawn, each of those would need a key per copy again, and inside a
@@ -1577,12 +1577,13 @@ mod tests {
             "the bloom strength decided whether the callback went in",
         );
         // The emptiest frame the pane can draw — no strength, nothing
-        // sounding, so nothing to light, nothing to shadow and no names. What
-        // is left is three callbacks that all go in unconditionally and all
-        // decline inside their own `prepare`: the dot shadow's, the halo's,
-        // and the spectral shadow's finish. Each of the three keeps a clock
-        // running that retires state the pane is still using, so a gate on any
-        // one of them would read 2 here.
+        // sounding, so nothing to light, nothing to cut and no names. What is
+        // left is three callbacks that all go in unconditionally and all
+        // decline inside their own `prepare`: the dots' surround, the halo,
+        // and the spectral shadow's finish. The last two keep a clock running
+        // that retires state the pane is still using, and the surround drops
+        // its targets only on a frame that says the cut is off, so a gate on
+        // any one of them would read 2 here.
         assert_eq!(
             callbacks(0.0, false),
             3,
