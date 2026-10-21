@@ -521,7 +521,6 @@ fn draw_learn_overlay(
         crate::text::lattice_learn(surface),
         harmonigraph_render::SlideAxis::default(),
         None,
-        None,
         1.0,
     );
 }

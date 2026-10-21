@@ -602,14 +602,8 @@ pub(crate) fn spiral_pane(
         // lattice's orbiting camera is the same answer.
         harmonigraph_render::SlideAxis::Across,
         Some(state.appearance.view.shadow.spectral_text),
-        Some(crate::text::SPIRAL_SHADOW_SURFACE),
         1.0,
     );
-    painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
-        rect,
-        crate::text::SPIRAL_SHADOW_SURFACE,
-        painter.ctx().cumulative_pass_nr(),
-    ));
 }
 
 /// Drag to slide the disc under the pane, scroll or pinch to magnify it, and
@@ -1578,16 +1572,15 @@ mod tests {
         );
         // The emptiest frame the pane can draw — no strength, nothing
         // sounding, so nothing to light, nothing to cut and no names. What is
-        // left is three callbacks that all go in unconditionally and all
-        // decline inside their own `prepare`: the dots' surround, the halo,
-        // and the spectral shadow's finish. The last two keep a clock running
-        // that retires state the pane is still using, and the surround drops
-        // its targets only on a frame that says the cut is off, so a gate on
-        // any one of them would read 2 here.
+        // left is two callbacks that both go in unconditionally and both
+        // decline inside their own `prepare`: the dots' surround and the halo.
+        // The halo keeps a clock running that retires state the pane is still
+        // using, and the surround drops its targets only on a frame that says
+        // the cut is off, so a gate on either would read 1 here.
         assert_eq!(
             callbacks(0.0, false),
-            3,
-            "a silent frame asks for something other than the surround, the halo and the finish",
+            2,
+            "a silent frame asks for something other than the surround and the halo",
         );
         assert_eq!(
             callbacks(1.2, false),

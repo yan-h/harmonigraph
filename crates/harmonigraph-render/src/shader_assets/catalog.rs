@@ -19,10 +19,8 @@ fn production_metal_asset_catalog() {
         wgpu::TextureFormat::Bgra8UnormSrgb,
         wgpu::TextureFormat::Rgba8UnormSrgb,
     ] {
-        let mut callbacks = crate::CallbackResources::default();
-        let layouts = crate::spectral_shadow::layouts(&device, &mut callbacks);
         drop(crate::LatticeResources::new(&device, &queue, format));
-        crate::text::asset_catalog(&device, &queue, format, &layouts);
+        crate::text::asset_catalog(&device, &queue, format);
         crate::roll::asset_catalog(&device, format);
         crate::spectrogram::asset_catalog(&device, format);
         crate::glow::asset_catalog(&device, format);
