@@ -9,10 +9,6 @@ struct CoverOut {
     metal::float2 uv;
     char _pad2[8];
 };
-constant uint OCCLUDER_HEADER = 5u;
-constant float GAUSSIAN_GAIN = 2.5;
-constant float SHADOW_KEEP_FLOOR = 0.0009765625;
-constant float GLOW_BASE = 0.8;
 
 struct vs_coverInput {
 };

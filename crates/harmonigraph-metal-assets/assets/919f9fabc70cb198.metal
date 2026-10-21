@@ -4,9 +4,11 @@
 
 using metal::uint;
 
-struct Locals {
-    metal::float4 shadow;
+struct SurroundCut {
     metal::float4 cut;
+};
+struct Locals {
+    SurroundCut surround;
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
@@ -15,26 +17,24 @@ struct Locals {
     metal::float2 depth_dir;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
-    float cut_fill;
-    float _tail_pad;
+    metal::float2 _tail_pad;
 };
 struct VertexOut {
     metal::float4 position;
     metal::float2 local;
     metal::float2 half_extent;
     float shear;
-    float outline_reach;
-    char _pad5[8];
+    char _pad4[12];
     metal::float4 lead;
     metal::float4 taper_depth;
     metal::float4 taper;
     metal::float2 tremolo;
-    char _pad9[8];
+    char _pad8[8];
     metal::float4 core;
     metal::float4 aura;
     metal::float2 center;
     float feather;
-    char _pad13[4];
+    char _pad12[4];
     metal::float2 ramp;
     metal::float2 fade;
 };
@@ -342,7 +342,6 @@ struct fs_core_gammaInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
-    float outline_reach [[user(loc3), flat]];
     metal::float4 lead [[user(loc4), flat]];
     metal::float4 taper_depth [[user(loc5), flat]];
     metal::float4 taper [[user(loc6), flat]];
@@ -362,7 +361,7 @@ fragment fs_core_gammaOutput fs_core_gamma(
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.aura, varyings.center, varyings.feather, {}, varyings.ramp, varyings.fade };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.aura, varyings.center, varyings.feather, {}, varyings.ramp, varyings.fade };
     VertexOut _e1 = on_screen(in, locals);
     metal::float4 _e2 = core_color(_e1);
     return fs_core_gammaOutput { _e2 };

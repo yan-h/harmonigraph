@@ -8,9 +8,11 @@ struct _mslBufferSizes {
     uint buffer_size15;
 };
 
-struct Locals {
-    metal::float4 shadow;
+struct SurroundCut {
     metal::float4 cut;
+};
+struct Locals {
+    SurroundCut surround;
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
@@ -19,26 +21,24 @@ struct Locals {
     metal::float2 depth_dir;
     metal::float2 origin_pixels;
     metal::float2 pixel_points;
-    float cut_fill;
-    float _tail_pad;
+    metal::float2 _tail_pad;
 };
 struct VertexOut {
     metal::float4 position;
     metal::float2 local;
     metal::float2 half_extent;
     float shear;
-    float outline_reach;
-    char _pad5[8];
+    char _pad4[12];
     metal::float4 lead;
     metal::float4 taper_depth;
     metal::float4 taper;
     metal::float2 tremolo;
-    char _pad9[8];
+    char _pad8[8];
     metal::float4 core;
     metal::float4 aura;
     metal::float2 center;
     float feather;
-    char _pad13[4];
+    char _pad12[4];
     metal::float2 ramp;
     metal::float2 fade;
 };
@@ -96,8 +96,6 @@ VertexOut note_vertex(
     out.local = _e96;
     out.half_extent = half_extent_1;
     out.shear = shear_1;
-    float _e103 = locals.shadow.w;
-    out.outline_reach = _e103;
     out.lead = lead_1;
     out.taper_depth = taper_depth_1;
     out.taper = taper_1;
@@ -105,12 +103,12 @@ VertexOut note_vertex(
     out.core = core_1;
     out.aura = aura_1;
     out.center = center_1;
-    float _e114 = locals.feather;
-    out.feather = _e114;
+    float _e109 = locals.feather;
+    out.feather = _e109;
     out.ramp = span_ramp_1.zw;
     out.fade = fade_1;
-    VertexOut _e118 = out;
-    return _e118;
+    VertexOut _e113 = out;
+    return _e113;
 }
 
 struct vs_note_bodyOutput {
@@ -118,7 +116,6 @@ struct vs_note_bodyOutput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
-    float outline_reach [[user(loc3), flat]];
     metal::float4 lead [[user(loc4), flat]];
     metal::float4 taper_depth [[user(loc5), flat]];
     metal::float4 taper [[user(loc6), flat]];
@@ -166,5 +163,5 @@ vertex vs_note_bodyOutput vs_note_body(
     float _e14 = locals.feather;
     VertexOut _e15 = note_vertex(vertex_, center, half_extent, shear, lead, core, aura, span_ramp, fade, taper_depth, taper, tremolo, _e14, locals);
     const auto _tmp = _e15;
-    return vs_note_bodyOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.tremolo, _tmp.core, _tmp.aura, _tmp.center, _tmp.feather, _tmp.ramp, _tmp.fade };
+    return vs_note_bodyOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.tremolo, _tmp.core, _tmp.aura, _tmp.center, _tmp.feather, _tmp.ramp, _tmp.fade };
 }
