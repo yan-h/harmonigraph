@@ -691,7 +691,7 @@ the [implementation record](adaptive-tuning-plugin.md#controls) describes every 
 5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes.
 For reproducible policy checks use the versioned fixtures linked from the [implementation record](adaptive-tuning-plugin.md#validation).
 Destination conversion still matters:
-the [historical pitch-conversion measurements](tuning-probe-bitwig.md#pitch-conversion) include Vital's required matching MPE settings and bend ranges.
+the [historical pitch-conversion measurements](archive/tuning-probe-bitwig.md#pitch-conversion) include Vital's required matching MPE settings and bend ranges.
 6. Check the lifecycle boundaries before treating a build as host-qualified:
 Stop, **Reset all voices**, adding and deleting a Tune mid-phrase, deleting and restoring the Hub, a host buffer-size change, and project reopening.
 A cut should stop the sounding phrase cleanly;
@@ -790,9 +790,9 @@ its test is retargeted here as "Reset cuts and audio resumes within two callback
 The measurements this design rests on are archived rather than maintained:
 
 - [`evidence/adaptive-tuning/`](evidence/adaptive-tuning/README.md) — the memory ledger, the replay callback-cost measurements, and the record of which numbers have since moved and by how much;
-- [`evidence/615/`](evidence/615/README.md) with its [measurement report](tuning-probe-bitwig.md) — the Bitwig host-timing spike: callback order, event delivery, transport and offline cases.
+- [`evidence/615/`](evidence/615/README.md) with its [measurement report](archive/tuning-probe-bitwig.md) — the Bitwig host-timing spike: callback order, event delivery, transport and offline cases.
 Its verdict is *viable with narrower constraints*, at D = 2,048 samples, and it did not search for a minimum;
-- [`tuning-probe.md`](tuning-probe.md) — the disposable apparatus that produced them, since deleted.
+- [`tuning-probe.md`](archive/tuning-probe.md) — the disposable apparatus that produced them, since deleted.
 
 External references that establish the mechanisms, none of which prove Bitwig's behavior in this chain:
 

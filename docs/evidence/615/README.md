@@ -1,6 +1,6 @@
 # #615 evidence archive
 
-The [measurement report](../../tuning-probe-bitwig.md) is the maintained account of the result and its limits.
+The [measurement report](../../archive/tuning-probe-bitwig.md) is the maintained account of the result and its limits.
 This directory is a small index into frozen evidence, not another implementation of the probe.
 
 The filtered package contains the original numeric traces, synthetic test WAVs, probe configurations, action notes, historical analysis outputs and scratch analysis scripts.

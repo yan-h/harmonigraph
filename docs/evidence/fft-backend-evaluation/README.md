@@ -1,7 +1,7 @@
 # Reproducing the #743 evaluation
 
 This directory is evaluation evidence, not a production backend or a workspace member.
-The [report](../../fft-backend-evaluation.md) contains the recommendation, measured values and limits.
+The [report](../../archive/fft-backend-evaluation.md) contains the recommendation, measured values and limits.
 Source is pinned to `0c32443a5f23f59c5a4ad7fee21ec49628f8e436`; run setup from a repository containing that Git object.
 Requirements: Rust 1.92.0, Python 3, Git and `patch`.
 Registry access is needed once to fetch the exact lockfile dependencies.

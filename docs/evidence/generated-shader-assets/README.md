@@ -1,6 +1,6 @@
 # Generated asset experiment evidence
 
-See the [design and interpretation](../../generated-shader-assets.md) before comparing these numbers.
+See the [design and interpretation](../../archive/generated-shader-assets.md) before comparing these numbers.
 This directory preserves measured results from probe commit `06d3f0a8`, not a shipping shader bundle.
 
 - `ci-results.json`: source/export, strict replay and deliberate failure/fallback counters.

@@ -2,7 +2,7 @@
 
 The renderer loads embedded Metal libraries through the normal wgpu backend compilation boundary.
 WGSL and the existing Rust pipeline constructors remain the authoring sources.
-The [feasibility record](generated-shader-assets.md) explains why this boundary preserves metadata while avoiding substantial cold source-compilation work.
+The [feasibility record](archive/generated-shader-assets.md) explains why this boundary preserves metadata while avoiding substantial cold source-compilation work.
 
 ## Ownership and ordinary builds
 

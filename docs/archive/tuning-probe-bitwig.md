@@ -6,7 +6,7 @@
 **Verdict:
 viable with narrower constraints.** In the measured Bitwig graph, complete source intervals, central assignment and accepted delayed output fit a fixed D of 2,048 samples (46.440 ms).
 This establishes a usable host configuration for #615, not a portable CLAP clock guarantee or a finished tuning feature.
-The production transport-stop and late-stream behavior was subsequently accepted in [PR #633](https://github.com/yan-h/harmonigraph/pull/633), and the built mechanics are in [the adaptive tuning design](adaptive-tuning.md).
+The production transport-stop and late-stream behavior was subsequently accepted in [PR #633](https://github.com/yan-h/harmonigraph/pull/633), and the built mechanics are in [the adaptive tuning design](../adaptive-tuning.md).
 [#632](https://github.com/yan-h/harmonigraph/issues/632), Bitwig acceptance for the resulting Stop behavior, was later closed not-planned;
 those later decisions do not add host measurements to this record.
 The apparatus is in [PR #630](https://github.com/yan-h/harmonigraph/pull/630), and its configuration and limitations are in [tuning-probe.md](tuning-probe.md).
@@ -69,7 +69,7 @@ Note IDs are present and the source keys are 60, 64 and 67. The initial accident
 
 The candidate delay was fixed at 2,048 samples per activation, or 46.440 ms. Unless noted otherwise, every source requested continuous callbacks and published silence progress.
 All clock offsets initially equalled zero.
-The [evidence archive](evidence/615/README.md) preserves the raw traces, disposable projects, analyses and measured source history with checksums and a run index.
+The [evidence archive](../evidence/615/README.md) preserves the raw traces, disposable projects, analyses and measured source history with checksums and a run index.
 The full archive stays private;
 the filtered package excludes host logs and Bitwig project/preset files.
 The original capture directory was `/tmp/harmonigraph-615-evidence`;
@@ -308,7 +308,7 @@ the hub correctly waited for their next intervals, then the second following B c
 Accepted physical output still occurred at input plus 2,048 samples.
 Across all 15 trial-24 attacks, eleven replies took one following source callback and four took two.
 The archived project preserves this tempo separately from the normal 120-BPM audio-capture fixture.
-[The delay is now a chosen multiple of the host's own buffer](adaptive-tuning.md#why-a-fixed-sample-count-was-the-wrong-knob) rather than a fixed sample count, which is the answer this scheduling shape argued for.
+[The delay is now a chosen multiple of the host's own buffer](../adaptive-tuning.md#why-a-fixed-sample-count-was-the-wrong-knob) rather than a fixed sample count, which is the answer this scheduling shape argued for.
 That counterexample is arithmetic, not another measured trial or a changed D.
 
 ## Framework defect exposed by offline export

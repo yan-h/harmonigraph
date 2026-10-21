@@ -84,7 +84,7 @@ Reintroducing depth would require a demonstrated consumer and composition rule, 
 
 **State, 2026-09-06, settled.** Yan was satisfied with current performance and selected only SG1 bounded gap recovery, SG4A direct upload staging and SG2 offline timestamp repair, which landed together in [#710](https://github.com/yan-h/harmonigraph/pull/710).
 Every issue below is closed as not planned.
-The [spectrogram plan](spectrogram-rendering-plan.md) and [#654](https://github.com/yan-h/harmonigraph/issues/654) preserve the audit and current scope.
+The [spectrogram plan](archive/spectrogram-rendering-plan.md) and [#654](https://github.com/yan-h/harmonigraph/issues/654) preserve the audit and current scope.
 The following options are deferred and not planned, with no scheduled implementation, profiling campaign or periodic re-evaluation.
 Reopening requires the stated concrete trigger and explicit reprioritization;
 landing a prerequisite or having spare agent capacity is insufficient.
