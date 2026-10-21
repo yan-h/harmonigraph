@@ -212,8 +212,8 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         } else {
             painter.circle_stroke(
                 dot,
-                dot_r - 0.75 * scale,
-                egui::Stroke::new(1.5 * scale, theme::text_dim()),
+                dot_r - 0.5 * theme::LINE_WIDTH * scale,
+                egui::Stroke::new(theme::LINE_WIDTH * scale, theme::text_dim()),
             );
         }
         painter.galley(

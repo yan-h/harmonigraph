@@ -529,7 +529,11 @@ impl<'a> StackBar<'a> {
         // The quad edge, where a ring stops fitting and the margin the marks
         // run out into begins. A hairline and not a cell: nothing is drawn
         // there, it is where the drawing stops being possible.
-        painter.vline(x_of(1.0), rect.y_range(), egui::Stroke::new(1.0, theme::hairline()));
+        painter.vline(
+            x_of(1.0),
+            rect.y_range(),
+            egui::Stroke::new(theme::LINE_WIDTH, theme::hairline()),
+        );
 
         // Every layer that is on the node wears its own name, laid at the
         // handle that OPENS it — the inner end of the stretch of bar that means

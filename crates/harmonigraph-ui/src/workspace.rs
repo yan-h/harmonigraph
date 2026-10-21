@@ -525,8 +525,8 @@ pub(crate) fn show(
     let scale = theme::ui_scale(ui.ctx());
     let rail = if frameless { 0.0 } else { theme::tab_bar_height(scale) };
     // The gap between sections is the divider itself, so it is drawn a
-    // hairline; `dividers` widens the band a hand can grab around it.
-    let gap = 1.0 * scale;
+    // line's width; `dividers` widens the band a hand can grab around it.
+    let gap = theme::LINE_WIDTH;
     let floor = theme::min_settings(scale);
     let resized = runtime.area.is_none_or(|last| (last - area.size()).length_sq() > 0.25);
     // A request is answered before the next plugin frame. Keep the guard

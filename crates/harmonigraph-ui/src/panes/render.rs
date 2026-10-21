@@ -212,7 +212,7 @@ fn preview_layout_controls(
         } else {
             [egui::pos2(rect.left(), seam.y), egui::pos2(rect.right(), seam.y)]
         };
-        ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
+        ui.painter().line_segment(ends, egui::Stroke::new(theme::LINE_WIDTH, color));
     }
     // Freeze the choice made at press time. Letting Shift change during a drag
     // switch modes would first pan the camera and then redock the picture on
@@ -463,25 +463,31 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
     p.rect_stroke(
         box_rect,
         0,
-        egui::Stroke::new(1.0, theme::hairline()),
+        egui::Stroke::new(theme::LINE_WIDTH, theme::hairline()),
         egui::StrokeKind::Outside,
     );
-    // One step further out than the hairline, and only when the inset left
-    // room for them.
-    let out = pad * 0.5;
-    if out < 3.0 {
+    // One step further out than the outline, a line's width clear of it so the
+    // two read as two marks rather than one thick one, and only when the inset
+    // left room for them.
+    let out = 2.5 * theme::LINE_WIDTH;
+    if out + 0.5 * theme::LINE_WIDTH > pad {
         return;
     }
     let len = (box_rect.size().min_elem() * 0.05).clamp(4.0, 14.0);
-    let stroke = egui::Stroke::new(1.0, theme::text_dim());
+    let stroke = egui::Stroke::new(theme::LINE_WIDTH, theme::text_dim());
     for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         let corner = egui::pos2(
             if sx < 0.0 { box_rect.left() } else { box_rect.right() },
             if sy < 0.0 { box_rect.top() } else { box_rect.bottom() },
         );
         let o = corner + egui::vec2(sx * out, sy * out);
-        p.line_segment([o, o - egui::vec2(sx * len, 0.0)], stroke);
-        p.line_segment([o, o - egui::vec2(0.0, sy * len)], stroke);
+        // One path through the corner, so its join is mitred: two butt-ended
+        // segments leave the outer corner square of a wide stroke unpainted.
+        theme::round_ended(
+            p,
+            vec![o - egui::vec2(sx * len, 0.0), o, o - egui::vec2(0.0, sy * len)],
+            stroke,
+        );
     }
 }
 

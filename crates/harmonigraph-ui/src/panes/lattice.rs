@@ -418,7 +418,11 @@ fn draw_map_overlay(
         {
             if let Some(p) = projector.project(scene.nodes[index].world_pos) {
                 let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
-                painter.circle_stroke(center, 12.0, egui::Stroke::new(2.0, egui::Color32::GOLD));
+                painter.circle_stroke(
+                    center,
+                    12.0,
+                    egui::Stroke::new(theme::LINE_WIDTH, egui::Color32::GOLD),
+                );
             }
         }
     }
@@ -509,7 +513,7 @@ fn draw_learn_overlay(
     painter.rect_stroke(
         rect.shrink(1.5),
         0,
-        egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
+        egui::Stroke::new(theme::LINE_WIDTH, theme::armed().gamma_multiply(learn_pulse(now))),
         egui::StrokeKind::Inside,
     );
     // Pinned to the corner, so it slides along nothing; the filter's axis is
