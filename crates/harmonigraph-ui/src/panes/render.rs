@@ -466,10 +466,11 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
         egui::Stroke::new(theme::LINE_WIDTH, theme::hairline()),
         egui::StrokeKind::Outside,
     );
-    // One step further out than the hairline, and only when the inset left
-    // room for them.
-    let out = pad * 0.5;
-    if out < 3.0 {
+    // One step further out than the outline, a line's width clear of it so the
+    // two read as two marks rather than one thick one, and only when the inset
+    // left room for them.
+    let out = 2.5 * theme::LINE_WIDTH;
+    if out + 0.5 * theme::LINE_WIDTH > pad {
         return;
     }
     let len = (box_rect.size().min_elem() * 0.05).clamp(4.0, 14.0);
@@ -480,8 +481,12 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
             if sy < 0.0 { box_rect.top() } else { box_rect.bottom() },
         );
         let o = corner + egui::vec2(sx * out, sy * out);
-        p.line_segment([o, o - egui::vec2(sx * len, 0.0)], stroke);
-        p.line_segment([o, o - egui::vec2(0.0, sy * len)], stroke);
+        // One path through the corner, so its join is mitred: two butt-ended
+        // segments leave the outer corner square of a wide stroke unpainted.
+        p.add(egui::Shape::line(
+            vec![o - egui::vec2(sx * len, 0.0), o, o - egui::vec2(0.0, sy * len)],
+            stroke,
+        ));
     }
 }
 
