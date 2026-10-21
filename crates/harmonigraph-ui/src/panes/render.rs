@@ -212,7 +212,7 @@ fn preview_layout_controls(
         } else {
             [egui::pos2(rect.left(), seam.y), egui::pos2(rect.right(), seam.y)]
         };
-        ui.painter().line_segment(ends, egui::Stroke::new(2.0, color));
+        ui.painter().line_segment(ends, egui::Stroke::new(theme::LINE_WIDTH, color));
     }
     // Freeze the choice made at press time. Letting Shift change during a drag
     // switch modes would first pan the camera and then redock the picture on

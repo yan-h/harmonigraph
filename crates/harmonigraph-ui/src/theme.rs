@@ -187,6 +187,12 @@ pub(crate) const ROW_GAP: f32 = 4.0;
 /// The design size, at [scale](ui_scale) 1.0; chrome that scales multiplies it.
 pub(crate) const LINE_WIDTH: f32 = 2.0;
 
+/// The width a grid is ruled at, the one line finer than [`LINE_WIDTH`]: the
+/// analyzer's rulings, the Spiral's seam and rays, and the Intensity bar's clip
+/// hatching, whose 3-point pitch a full line would fill solid. Otonal's
+/// `GRID_WIDTH`, half a line.
+pub(crate) const GRID_WIDTH: f32 = 0.5 * LINE_WIDTH;
+
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
 ///

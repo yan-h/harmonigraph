@@ -287,7 +287,10 @@ pub(super) fn tuning_pane(
                 ui.painter().rect_stroke(
                     learn.rect.expand(f32::from(pad)),
                     egui::CornerRadius::same(theme::control_radius(scale) + pad),
-                    egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
+                    egui::Stroke::new(
+                        theme::LINE_WIDTH,
+                        theme::armed().gamma_multiply(learn_pulse(now)),
+                    ),
                     egui::StrokeKind::Outside,
                 );
             }

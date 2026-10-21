@@ -96,7 +96,7 @@ const RAY_FADE: (f32, f32) = (0.8, 0.32);
 /// boundary and each is a whole turn long, so what is a hairline on a ray is
 /// several times the ink here. Enough to count the turns by and not enough to
 /// read as part of the spectrum.
-const SEAM: (f32, f32) = (0.28, 1.0);
+const SEAM: (f32, f32) = (0.28, crate::theme::GRID_WIDTH);
 
 /// Points of arc one segment of the seam covers — coarser than the strip's
 /// [`SEGMENT_PT`], and it can be. What a straight segment costs a curve is its
@@ -808,7 +808,10 @@ fn rays(painter: &egui::Painter, spiral: &Spiral) {
         let dir = spiral.ray(pc as f32);
         painter.line_segment(
             [spiral.centre + dir * r_in, spiral.centre + dir * r_out],
-            egui::Stroke::new(1.0, crate::theme::picture_ruling().gamma_multiply(fade)),
+            egui::Stroke::new(
+                crate::theme::GRID_WIDTH,
+                crate::theme::picture_ruling().gamma_multiply(fade),
+            ),
         );
     }
 }
