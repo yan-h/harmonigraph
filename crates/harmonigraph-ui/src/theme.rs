@@ -196,6 +196,39 @@ pub(crate) const LINE_WIDTH: f32 = 2.0;
 /// `GRID_WIDTH`, half a line.
 pub(crate) const GRID_WIDTH: f32 = 0.5 * LINE_WIDTH;
 
+/// Paint an open path whose ends are round, for a line or a glyph stroke that
+/// stops in open space; one that runs into an edge keeps egui's square end,
+/// which a round one would notch. egui strokes have no caps, so this is the
+/// path — the same shape egui would have drawn it as — and a disc half its
+/// width over each end.
+///
+/// The discs go in as one tessellated mesh rather than as circle shapes, so
+/// they are never mistaken for the dots a widget draws on purpose.
+///
+/// A translucent stroke keeps square ends: a disc over its end would paint it
+/// twice there.
+pub(crate) fn round_ended(painter: &egui::Painter, points: Vec<egui::Pos2>, stroke: Stroke) {
+    let ends = [points.first().copied(), points.last().copied()];
+    if let [a, b] = points[..] {
+        painter.line_segment([a, b], stroke);
+    } else {
+        painter.add(egui::Shape::line(points, stroke));
+    }
+    if !stroke.color.is_opaque() {
+        return;
+    }
+    let ctx = painter.ctx();
+    let options = ctx.tessellation_options(|options| *options);
+    let mut tessellator =
+        egui::epaint::Tessellator::new(ctx.pixels_per_point(), options, [1, 1], Vec::new());
+    let mut caps = egui::Mesh::default();
+    for end in ends.into_iter().flatten() {
+        let disc = egui::epaint::CircleShape::filled(end, 0.5 * stroke.width, stroke.color);
+        tessellator.tessellate_circle(disc, &mut caps);
+    }
+    painter.add(caps);
+}
+
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
 ///

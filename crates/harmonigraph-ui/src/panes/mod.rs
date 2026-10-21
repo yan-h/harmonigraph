@@ -480,9 +480,19 @@ pub(super) fn edge_bar(
 pub(super) fn section_separator(ui: &mut egui::Ui) {
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
         // Never less room than its own line takes, or below scale 1 the rule
-        // would spill onto the rows either side of it.
+        // would spill onto the rows either side of it. Painted rather than an
+        // egui `Separator` for its round ends, drawn inside the column's width.
         let spacing = (2.0 * crate::theme::ui_scale(ui.ctx())).max(crate::theme::LINE_WIDTH);
-        ui.add(egui::Separator::default().spacing(spacing));
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), spacing), egui::Sense::hover());
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let inset = 0.5 * stroke.width;
+        let y = rect.center().y;
+        crate::theme::round_ended(
+            ui.painter(),
+            vec![egui::pos2(rect.left() + inset, y), egui::pos2(rect.right() - inset, y)],
+            stroke,
+        );
     }
 }
 
@@ -830,7 +840,12 @@ pub(super) fn block<R>(
         let x = (heading.rect.left() + BLOCK_LINE_INSET * scale)
             .round_to_pixel_center(ui.pixels_per_point());
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-        ui.painter().vline(x, body.top()..=body.bottom() - 2.0, stroke);
+        let inset = 0.5 * stroke.width;
+        crate::theme::round_ended(
+            ui.painter(),
+            vec![egui::pos2(x, body.top() + inset), egui::pos2(x, body.bottom() - 2.0 - inset)],
+            stroke,
+        );
     }
     egui::InnerResponse::new(out, heading)
 }

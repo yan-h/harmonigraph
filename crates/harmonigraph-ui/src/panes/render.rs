@@ -483,10 +483,11 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
         let o = corner + egui::vec2(sx * out, sy * out);
         // One path through the corner, so its join is mitred: two butt-ended
         // segments leave the outer corner square of a wide stroke unpainted.
-        p.add(egui::Shape::line(
+        theme::round_ended(
+            p,
             vec![o - egui::vec2(sx * len, 0.0), o, o - egui::vec2(0.0, sy * len)],
             stroke,
-        ));
+        );
     }
 }
 

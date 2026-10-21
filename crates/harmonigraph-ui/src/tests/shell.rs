@@ -184,3 +184,37 @@ fn nonsense_caps_read_as_uncapped() {
         assert_eq!(frame_interval(Some(bad)), None, "{bad} should read as uncapped");
     }
 }
+
+/// A line that stops in open space ends round: a disc half its width over each
+/// end, in the stroke's own color. A translucent one keeps egui's square ends,
+/// which a disc would paint over twice.
+#[test]
+fn an_opaque_line_ends_round_and_a_translucent_one_square() {
+    let (a, b) = (egui::pos2(20.0, 40.0), egui::pos2(80.0, 40.0));
+    let caps = |color: egui::Color32| {
+        let stroke = egui::Stroke::new(theme::LINE_WIDTH, color);
+        let out = super::probe::painted_full(egui::vec2(100.0, 80.0), |ui| {
+            theme::round_ended(ui.painter(), vec![a, b], stroke);
+        });
+        let line = out.shapes.iter().any(|cs| {
+            matches!(cs.shape, egui::Shape::LineSegment { points, stroke: s }
+                if points == [a, b] && s == stroke)
+        });
+        assert!(line, "the line itself is the segment egui would have drawn");
+        out.shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let round = caps(theme::text());
+    assert_eq!(round.len(), 1, "both caps are one mesh");
+    let cap = egui::Vec2::splat(theme::LINE_WIDTH);
+    for end in [a, b] {
+        let disc = egui::Rect::from_center_size(end, cap);
+        assert!(round[0].expand(0.01).contains_rect(disc), "no cap over {end:?}: {round:?}");
+    }
+    assert!(caps(theme::text().gamma_multiply(0.5)).is_empty(), "a translucent line got caps");
+}

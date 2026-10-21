@@ -33,7 +33,13 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
         let start = plot.point(0.5,0.5);
         let end = plot.point(x,y);
         if start.distance(end)>0.01 {
-            ui.painter().arrow(start,end-start,egui::Stroke::new(theme::LINE_WIDTH,theme::accent()));
+            // egui's `arrow` is three butt-ended segments, which notch the tip
+            // at this width: the shaft, and the head as one mitred path.
+            let stroke = egui::Stroke::new(theme::LINE_WIDTH, theme::accent());
+            let back = (start - end) * 0.25;
+            let rot = egui::emath::Rot2::from_angle(std::f32::consts::TAU / 10.0);
+            theme::round_ended(ui.painter(), vec![start, end], stroke);
+            theme::round_ended(ui.painter(), vec![end + rot * back, end, end + rot.inverse() * back], stroke);
         }
         plot.dot(ui,x,y);
         // Stars set their own pace under Star speed and pass no speed here.
