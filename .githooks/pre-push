@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Keep the local push gate cheap; GitHub Actions runs the canonical full CI.
+# The cheap gates whose failures otherwise each cost a CI round: formatting,
+# prose, clippy and rustdoc (`./ci.sh quick`). GitHub Actions runs the full CI.
 # Enable once: git config core.hooksPath .githooks
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
-exec cargo fmt --all --check
+exec ./ci.sh quick
