@@ -1036,9 +1036,12 @@ fn golden_spectrogram_styles_broadband_quiet_and_silence() {
     let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
     let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
     assert_eq!(passes, 4, "source, two filters and decode bake");
-    gate.check("spectrogram-style-blur", SIZE, &blur);
     every_effect_off(&mut cb);
-    gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
+    let plain = fresh_frame(&device, &queue, &cb);
+    gate.check_all(&[
+        ("spectrogram-style-blur", SIZE, &blur),
+        ("spectrogram-style-plain", SIZE, &plain),
+    ]);
 }
 
 #[test]

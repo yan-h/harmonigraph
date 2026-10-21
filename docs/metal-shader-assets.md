@@ -39,7 +39,10 @@ Check the committed corpus on a real Metal adapter:
 python3 tools/shader-assets.py check
 ```
 
-This requires zero source fallback in the constructor catalog and runs real-path renderer and offline goldens in strict mode.
+This requires zero source fallback in the constructor catalog and draws the real-path renderer and offline goldens in strict mode.
+It draws them without comparing frames (`HARMONIGRAPH_GOLDEN_DRAW_ONLY`):
+whether the picture moved is `Full CI`'s question,
+and asking it here failed every regeneration on a PR that also moves a frame.
 Ordinary reference tests retain normal fallback, so their test-only shaders do not pollute the shipping corpus.
 The regular workspace gates remain required too.
 Generation also builds a separate temporary storage-array diagnostic corpus and verifies strict rejection/source fallback for missing, mismatched and invalid libraries.
@@ -50,16 +53,18 @@ They never replace the tracked corpus, even during deliberate invalid-library co
 Cargo tracks this build input and rebuilds with the checked-in corpus when the variable is absent.
 Do not run other Cargo builds in the same checkout concurrently with validation: a second build could replace a test executable between its build and execution.
 
-Regenerate on the runner, never locally, whether or not local Command Line Tools have `metal`/`metallib`:
+Regenerate on the runner, never locally, whether or not local Command Line Tools have `metal`/`metallib`.
+On a PR, the `Metal shader assets` run whose check fails goes on to generate and validate a replacement in the same run.
+Without a PR, dispatch one:
 
 ```sh
 gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
 ```
 
-then `python3 tools/shader-assets.py import` its validated `production-metal-assets` artifact.
+Either way, `python3 tools/shader-assets.py import` the run's validated `production-metal-assets` artifact.
 Import checks the candidate corpus through the normal production path before replacing the checked-in assets;
 inspect and commit the changed source/options/manifest together with the binary libraries.
-The ordinary PR workflow checks the committed corpus without regenerating it, so generation cannot conceal stale coverage.
+The ordinary PR workflow checks the committed corpus before generating anything, and fails on a stale one even after generating its replacement, so generation cannot conceal stale coverage.
 Its path filter covers assets, renderer code, graphics setup and dependencies;
 ordinary tuning implementation edits do not schedule a third macOS job.
 New pushes cancel superseded asset-validation runs.

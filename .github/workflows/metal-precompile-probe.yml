@@ -65,8 +65,15 @@ jobs:
           cache-targets: false
           shared-key: full-ci
           save-if: false
+      # A failed check carries on to generate the replacement in this same run,
+      # because a stale corpus is what fails it and the replacement is the fix;
+      # the last step still fails the job. Stopping here made a branch dispatch
+      # `regenerate` and wait out a second run of this job before it had
+      # anything to import.
       - name: Check the committed production corpus
+        id: check
         if: ${{ !inputs.regenerate }}
+        continue-on-error: true
         run: python3 tools/shader-assets.py check
       - name: Ensure Apple's compiler is available
         run: |
@@ -74,10 +81,10 @@ jobs:
             xcodebuild -downloadComponent MetalToolchain
           fi
       - name: Generate and validate replacement embedded assets
-        if: ${{ inputs.regenerate }}
+        if: ${{ inputs.regenerate || steps.check.outcome == 'failure' }}
         run: python3 tools/shader-assets.py generate target/generated-metal-assets
       - name: Exercise metadata and provider fallback
-        if: ${{ !inputs.regenerate }}
+        if: ${{ !inputs.regenerate && steps.check.outcome == 'success' }}
         run: python3 tools/shader-assets.py controls
       - name: Preserve assets and validation evidence
         if: always()
@@ -89,3 +96,8 @@ jobs:
             target/shader-asset-logs/*.log
           if-no-files-found: warn
           retention-days: 7
+      - name: Fail on the corpus the check rejected
+        if: ${{ steps.check.outcome == 'failure' }}
+        run: |
+          echo "::error::The committed Metal corpus failed its check, and this run generated and validated a replacement. Import it into the same commit as the change: download this run's production-metal-assets artifact and run tools/shader-assets.py import <download>/generated-metal-assets."
+          exit 1

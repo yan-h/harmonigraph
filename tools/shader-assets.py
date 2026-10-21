@@ -103,6 +103,10 @@ def run(binary, arguments, mode, name, logs, export=None, failure=False):
     environment = dict(os.environ, HARMONIGRAPH_REQUIRE_GPU="1", WGPU_BACKEND="metal",
                        HARMONIGRAPH_SHADER_ASSETS=mode)
     environment.pop("HARMONIGRAPH_BLESS", None)
+    # The golden runs here are about whether every pipeline loads from the
+    # corpus, not whether the picture moved; comparing frames would fail a
+    # regeneration on any PR that also moves one (harmonigraph-golden's docs).
+    environment["HARMONIGRAPH_GOLDEN_DRAW_ONLY"] = "1"
     if export is not None:
         environment["HARMONIGRAPH_SHADER_EXPORT_DIR"] = str(export)
     result = subprocess.run([binary, *arguments, "--nocapture", "--test-threads=1"], cwd=ROOT,

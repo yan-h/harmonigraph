@@ -12,9 +12,10 @@
 //! it drew under `target/golden-diff/actual/`, laid out as `crates/` is, CI
 //! uploads that directory beside the amplified sheets when a group fails, and
 //! a picture change is re-baselined from the run's `golden-diff-<group>`
-//! artifacts: read the sheets, copy `actual/*` over `crates/`, push, and repeat
-//! until green — a test that checks two frames stops at the first that moved,
-//! and a failing test binary skips the ones after it.
+//! artifacts: read the sheets, copy `actual/*` over `crates/`, and push. One
+//! run writes every frame that moved: a test holding several frames checks them
+//! with [`Gate::check_all`], which compares them all before it fails, and
+//! `ci.sh` runs every test binary rather than stopping at the first that fails.
 //! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` re-baselines to the
 //! machine it runs on, which is the record only where that machine draws what
 //! CI does.
@@ -81,6 +82,18 @@ const LEVELS: usize = 20;
 /// The environment variable that turns a comparison into a re-baseline.
 const BLESS: &str = "HARMONIGRAPH_BLESS";
 
+/// The environment variable that draws a frame and skips its comparison.
+///
+/// For `tools/shader-assets.py` alone, which runs the golden tests to make
+/// every pipeline they build load from a candidate Metal corpus, and whose
+/// verdict is about the corpus rather than the picture. Compared, a PR that both
+/// moves a frame and owes a corpus could not regenerate the corpus until the
+/// frame was re-baselined, a CI round later: four of the eight regenerations
+/// dispatched on 2026-10-19..21 failed on exactly that, a moved frame and no
+/// corpus fault. The vacuity guard still runs. `ci.sh` unsets it,
+/// so it cannot turn the gate itself into a pass.
+const DRAW_ONLY: &str = "HARMONIGRAPH_GOLDEN_DRAW_ONLY";
+
 /// One crate's set of blessed frames.
 pub struct Gate {
     /// Where the blessed PNGs live — `<crate>/golden`, committed.
@@ -120,6 +133,23 @@ impl Gate {
     ///
     /// `frame` is tightly packed RGBA8, `size[0] * size[1] * 4` bytes.
     pub fn check(&self, name: &str, size: [u32; 2], frame: &[u8]) {
+        self.check_all(&[(name, size, frame)]);
+    }
+
+    /// [`Gate::check`] for several frames, failing once after comparing them
+    /// all, so a test that holds more than one writes every frame that moved
+    /// in the same run instead of one per CI round.
+    pub fn check_all(&self, frames: &[(&str, [u32; 2], &[u8])]) {
+        let moved: Vec<String> = frames
+            .iter()
+            .filter_map(|&(name, size, frame)| self.compare(name, size, frame).err())
+            .collect();
+        if !moved.is_empty() {
+            panic!("{}", moved.join("\n\n"));
+        }
+    }
+
+    fn compare(&self, name: &str, size: [u32; 2], frame: &[u8]) -> Result<(), String> {
         let bytes = (size[0] as usize)
             .checked_mul(size[1] as usize)
             .and_then(|pixels| pixels.checked_mul(4))
@@ -137,6 +167,9 @@ impl Gate {
             "{name} drew {} distinct pixel values — the fixture reaches nothing",
             levels.len(),
         );
+        if std::env::var_os(DRAW_ONLY).is_some() {
+            return Ok(());
+        }
         let path = self.dir.join(format!("{name}.png"));
 
         if std::env::var_os(BLESS).is_some() {
@@ -153,7 +186,7 @@ impl Gate {
                 Some(_) => eprintln!("blessed {name}: unchanged"),
                 None => eprintln!("blessed {name}: new frame"),
             }
-            return;
+            return Ok(());
         }
 
         // A new frame and a resized one have nothing to compare against, and
@@ -162,26 +195,26 @@ impl Gate {
         let actual = self.actual.join(format!("{name}.png"));
         let Some((expected, on_record)) = read_png(&path) else {
             write_png(&actual, size, frame);
-            panic!(
+            return Err(format!(
                 "no golden frame at {}\nthe frame drawn: {}\nre-baseline it from CI's \
                  golden-diff-<group> artifact (see this crate's docs)",
                 path.display(),
                 actual.display(),
-            );
+            ));
         };
         if on_record != size {
             write_png(&actual, size, frame);
-            panic!(
+            return Err(format!(
                 "{name}: golden was written at a different size; the frame drawn: {}",
                 actual.display()
-            );
+            ));
         }
 
         let (mean, max) = drift(&expected, frame);
         if max > TOLERANCE {
             let sheet = self.write_contact_sheet(name, size, &expected, frame);
             write_png(&actual, size, frame);
-            panic!(
+            return Err(format!(
                 "{name} moved: mean {mean:.3}/255, max {max}/255\n\
                  expected | actual | difference at 8x: {}\n\
                  the frame drawn: {}\n\
@@ -192,8 +225,9 @@ impl Gate {
                  which is the record only if it draws what CI does.",
                 sheet.display(),
                 actual.display(),
-            );
+            ));
         }
+        Ok(())
     }
 
     /// Expected, actual, and the difference at 8x, side by side in one image.
@@ -313,6 +347,29 @@ mod tests {
         let drawn: Vec<u8> = (0..64).flat_map(|x| [x, 1, 0, 128 + x]).collect();
         assert!(std::panic::catch_unwind(|| gate.check("moved", [8, 8], &drawn)).is_err());
         assert_eq!(read_png(&dir.join("actual/moved.png")), Some((drawn, [8, 8])));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Every frame a test holds is compared before it fails, so the first one
+    /// to move does not hide the next until another CI round.
+    #[test]
+    fn every_moved_frame_is_written_out_before_the_test_fails() {
+        let dir = std::env::temp_dir().join(format!("harmonigraph-all-{}", std::process::id()));
+        let gate = Gate { dir: dir.clone(), diffs: dir.join("diffs"), actual: dir.join("actual") };
+        let on_record: Vec<u8> = (0..64).flat_map(|x| [x, 0, 0, 255]).collect();
+        let drawn: Vec<u8> = (0..64).flat_map(|x| [x, 1, 0, 255]).collect();
+        for name in ["first", "second"] {
+            write_png(&dir.join(format!("{name}.png")), [8, 8], &on_record);
+        }
+        let failure = std::panic::catch_unwind(|| {
+            gate.check_all(&[("first", [8, 8], &drawn), ("second", [8, 8], &drawn)])
+        })
+        .expect_err("two moved frames passed");
+        let message = failure.downcast_ref::<String>().expect("a formatted panic");
+        assert!(message.contains("first moved") && message.contains("second moved"), "{message}");
+        for name in ["first", "second"] {
+            assert!(dir.join(format!("actual/{name}.png")).is_file(), "{name} was not written");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
