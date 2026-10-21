@@ -223,7 +223,8 @@ pub(crate) fn spectral_pane(
     let at_split = regions.map_or_else(|| spectrum_split(state, surface), |r| r.split);
     let divider = (regions.is_none() && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface, at_split));
-    drag_zoom(ui, &axes, &response, state, surface, at_split, navigation);
+    let drag_navigates = orientation_drag.as_ref().is_none_or(|d| d.navigating);
+    drag_zoom(ui, &axes, &response, state, surface, at_split, navigation, drag_navigates);
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
     // range, the Span or the level ceiling, and everything below has to be this
     // frame's values, not the ones from before the drag. The ceiling is the

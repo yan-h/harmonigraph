@@ -922,7 +922,8 @@ mod tests {
         let before_target = state.appearance.camera.target;
         let rect = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(600.0, 400.0));
         let start = preview_lattice_rect(rect, before_frame.lattice, before_frame.split).center();
-        let end = start + egui::vec2(60.0, 30.0);
+        // Ends in the opposite edge's drop band, where a Shift-drag would redock.
+        let end = rect.right_center() - egui::vec2(2.0, 0.0);
         let button = |pos, pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -986,6 +987,10 @@ mod tests {
                     state.appearance.render.frame.split,
                     Pane::Spectral,
                 );
+                let navigable = {
+                    let c = &state.appearance.spectrum;
+                    (c.low_midi, c.high_midi, c.roll_seconds, c.ceiling_db)
+                };
                 let start = spectral.center();
                 let end = match target {
                     LatticeSide::Left => spectral.left_center() + egui::vec2(2.0, 0.0),
@@ -1020,6 +1025,12 @@ mod tests {
                 assert_eq!(
                     state.appearance.render.frame.lattice, lattice_side,
                     "turning the analyzer moved the lattice"
+                );
+                let c = &state.appearance.spectrum;
+                assert_eq!(
+                    (c.low_midi, c.high_midi, c.roll_seconds, c.ceiling_db),
+                    navigable,
+                    "a Shift-drag that turned the analyzer also navigated it"
                 );
 
                 let before = state.appearance.spectrum.orientation;
