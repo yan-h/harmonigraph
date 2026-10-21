@@ -52,7 +52,7 @@ It closed [#654](https://github.com/yan-h/harmonigraph/issues/654), [#655](https
 | SG5 | A concrete memory-pressure/lifetime problem remains after SG1. Preserve folded temporal fidelity and compare retirement against reopen cost. |
 | SG6 | A concrete rendering performance or visual problem requires attribution to decide a necessary change. Start with the smallest probe for that question; broader GPU/text/export experiments require a demonstrated bottleneck. |
 
-[Evidence and reproduction packet](evidence/spectrogram-audit/README.md) contains commands, fixture reach, raw results, limitations, and the temporary probe patch.
+[Evidence and reproduction packet](../evidence/spectrogram-audit/README.md) contains commands, fixture reach, raw results, limitations, and the temporary probe patch.
 Labels used here are **S** (established by source), **M** (measured in this audit), **H** (historical measurement), **E** (calculated estimate), and **Q** (hypothesis requiring measurement).
 These are distinct kinds of evidence, not confidence scores.
 
@@ -546,7 +546,7 @@ Both independent initial reviews used the same complete proposal commit `994fbac
 Claude Opus/xhigh (`fix=false`) accepted with corrections to SG1/SG3 and priority;
 Astra supported the direction with three SG3 contract corrections.
 Neither received the other's report before its initial verdict.
-[Reports and individually validated dispositions](evidence/spectrogram-audit/review-disposition.md) preserve every finding, accepted correction, qualification and declined dependency claim.
+[Reports and individually validated dispositions](../evidence/spectrogram-audit/review-disposition.md) preserve every finding, accepted correction, qualification and declined dependency claim.
 The revised plan and issues are coordinator-validated documentation changes;
 they were not submitted for another independent verdict.
 The audit merged in [PR #663](https://github.com/yan-h/harmonigraph/pull/663) as `ef21ca1f`.
