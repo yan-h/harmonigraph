@@ -469,11 +469,13 @@ fragment fs_note_surroundOutput fs_note_surround(
 ) {
     const VertexOut fragment_ = { position, varyings.local, varyings.half_extent, varyings.shear, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.aura, varyings.center, varyings.feather, {}, varyings.ramp, varyings.fade };
     VertexOut _e1 = on_screen(fragment_, locals);
-    Rim _e2 = rim_of(_e1, body_holdout);
-    float _e3 = cut_strength(_e1, _e2, locals);
-    if (_e3 <= 0.0) {
+    float _e6 = locals.surround.cut.x;
+    Rim _e7 = rim_of(_e1, body_holdout);
+    float _e8 = cut_strength(_e1, _e7, locals);
+    float cut = _e6 * _e8;
+    if (cut <= 0.0) {
         metal::discard_fragment();
     }
-    const auto _tmp = SurroundOut {metal::float4(_e1.aura.xyz, _e3), 1.0 - _e3};
+    const auto _tmp = SurroundOut {metal::float4(_e1.aura.xyz, cut), 1.0 - cut};
     return fs_note_surroundOutput { _tmp.color, _tmp.depth };
 }

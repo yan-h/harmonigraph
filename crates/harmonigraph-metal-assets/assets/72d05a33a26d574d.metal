@@ -69,10 +69,12 @@ fragment fs_dot_surroundOutput fs_dot_surround(
 , constant DotLocals& dot_locals [[buffer(0)]]
 ) {
     const DotOut in = { position, varyings.local, varyings.radius, {}, varyings.aura };
-    float _e1 = dot_cut(in, dot_locals);
-    if (_e1 <= 0.0) {
+    float _e5 = dot_locals.surround.cut.x;
+    float _e6 = dot_cut(in, dot_locals);
+    float cut = _e5 * _e6;
+    if (cut <= 0.0) {
         metal::discard_fragment();
     }
-    const auto _tmp = SurroundOut {metal::float4(in.aura.xyz, _e1), 1.0 - _e1};
+    const auto _tmp = SurroundOut {metal::float4(in.aura.xyz, cut), 1.0 - cut};
     return fs_dot_surroundOutput { _tmp.color, _tmp.depth };
 }
