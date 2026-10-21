@@ -30,12 +30,12 @@ pub(crate) fn composite_source() -> String {
 /// The cut as the pane dials it: the notes' surround takes the picture away
 /// next to each note — whole at its edge at a full `amount`, fading out over
 /// `reach` along a curve `shape` bends — and fills what it took with the
-/// note's own hue as far as `fill` says. Over black it draws the fill alone.
+/// note's own hue. Over black it is that hue laid on.
 ///
 /// Where two notes' cuts meet, the stronger is what lands, with its color, so a
 /// crowd of notes is no more cut between them than one note is.
 ///
-/// `amount` and `fill` are 0..1 shares; [`SurroundCut::sanitized`] clamps
+/// `amount` is a 0..1 share; [`SurroundCut::sanitized`] clamps
 /// every field, and the panes hand these over as the user dialled them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurroundCut {
@@ -49,9 +49,6 @@ pub struct SurroundCut {
     /// steep drop at the note and a long soft tail, 1 held near the note and a
     /// steep drop at the far end.
     pub shape: f32,
-    /// How much of what the cut takes is filled with the note's own hue rather
-    /// than left black.
-    pub fill: f32,
 }
 
 /// The cut's reach, in points, that [`SurroundCut::reach`] is held to: the
@@ -86,7 +83,7 @@ pub fn surround_fade(shape: f32, x: f32) -> f32 {
 
 impl SurroundCut {
     /// No surround: what a cut at its defaults but for its amount draws.
-    pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, fill: 0.0 };
+    pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0 };
 
     /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.
     pub fn sanitized(self) -> Self {
@@ -98,7 +95,6 @@ impl SurroundCut {
             amount: within(self.amount, off.amount, 0.0..=1.0),
             reach: within(self.reach, off.reach, SURROUND_REACH_RANGE),
             shape: within(self.shape, off.shape, SURROUND_SHAPE_RANGE),
-            fill: within(self.fill, off.fill, 0.0..=1.0),
         }
     }
 
@@ -126,20 +122,16 @@ impl SurroundCut {
         let cut = self.sanitized();
         let reach = cut.reach_points(point_scale);
         if reach <= 0.0 {
-            return SurroundUniform { cut: Float4([0.0; 4]), fill: Float4([0.0; 4]) };
+            return SurroundUniform { cut: Float4([0.0; 4]) };
         }
-        SurroundUniform {
-            cut: Float4([cut.amount, reach, shape_bias(cut.shape), 0.0]),
-            fill: Float4([cut.fill, 0.0, 0.0, 0.0]),
-        }
+        SurroundUniform { cut: Float4([cut.amount, reach, shape_bias(cut.shape), 0.0]) }
     }
 }
 
 uniform_group! {
-/// `SurroundCut` in surround.wgsl: [`SurroundCut::uniform`]'s eight.
+/// `SurroundCut` in surround.wgsl: [`SurroundCut::uniform`]'s four.
 struct SurroundUniform {
     cut: Float4,
-    fill: Float4,
 }
 }
 

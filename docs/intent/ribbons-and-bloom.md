@@ -56,4 +56,4 @@ These settle the open questions from the first trial above.
 - Cut fill stays, so the cut can fill with each note's hue; Fill lightness stays, and the fill's chroma is fixed at full.
 - Cut curve (linear to smoothstep) is replaced by Cut shape, one bipolar bar: a steep drop at the note with a long tail at one end, linear in the middle, held near the note with a steep drop at the far end at the other.
 - Halo blend is gone: Yan wants the strongest note's cut to stand alone, so cut and fill share one strongest-wins pass.
-- Cut fill defaults to 100%, so the surround is the note's own hue; at Fill lightness 7 that hue is close to black.
+- Cut fill is gone, fixed at 100%: the cut always fills with the note's own hue, and Fill lightness 0 is the black cut. At the default lightness 7 the hue is close to black.

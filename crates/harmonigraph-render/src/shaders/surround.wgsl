@@ -2,27 +2,23 @@
 // of one shares — the roll's ribbons and the Spiral's dots — and the composite
 // that lays the notes' combined cut over the picture (surround_composite.wgsl).
 //
-// A note's surround is the picture taken away next to it: whole at its edge
-// (at the cut's full amount), fading out over the cut's reach, and, as far as
-// the fill says, replaced with the note's own hue rather than left black. Over
-// black it draws nothing but that fill, since it takes away only light that was
-// there; over bright energy it is what keeps the note legible. Where two notes'
-// cuts meet, the stronger lands, with its color.
+// A note's surround is the picture taken away next to it and replaced with the
+// note's own hue: whole at its edge (at the cut's full amount), fading out over
+// the cut's reach. Over black it is that hue laid on; over bright energy it is
+// what keeps the note legible. Where two notes' cuts meet, the stronger lands,
+// with its color.
 //
 // Functions only, with no bindings, so it can be joined to any module: a
 // producer's own module puts it after common.wgsl and before its own source,
 // and the composite's after nothing.
 
-/// The cut as every module that draws or lays it reads it. Two vec4s, so it
+/// The cut as every module that draws or lays it reads it. One vec4, so it
 /// sits at the head of a uniform block with no padding of its own.
 struct SurroundCut {
     /// The amount the cut takes at a note's edge (0 when off), its reach past
     /// that edge in points, the fade's bias `k` ([`surround_ramp`]), and
     /// padding.
     cut: vec4<f32>,
-    /// How much of what the cut takes is filled with the note's own hue, 0..1,
-    /// then padding.
-    fill: vec4<f32>,
 };
 
 /// The cut's fade at `x`, the distance past a note's edge as a share of the

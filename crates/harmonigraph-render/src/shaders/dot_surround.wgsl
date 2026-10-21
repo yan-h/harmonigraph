@@ -4,8 +4,8 @@
 // composite, before the dots themselves are painted over it.
 
 struct DotLocals {
-    /// The backdrop cut, the roll's own. First, so its two vec4s are aligned
-    /// with no padding.
+    /// The backdrop cut, the roll's own. First, so its vec4 is aligned with no
+    /// padding.
     surround: SurroundCut,
     /// Where the rect drawn into starts, in egui points, and how big it is.
     origin_points: vec2<f32>,

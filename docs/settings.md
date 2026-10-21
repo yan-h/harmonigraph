@@ -364,14 +364,14 @@ MIDI ribbons and the Spiral's note dots wear no shadow.
 Their **Note surround** is a backdrop cut measured from the note's edge rather than a blur of the note,
 so a hairline ribbon is held as firmly as a wide one.
 **Backdrop cut** is how much of the picture it takes away at the note's edge; 0% turns it off.
-Over black it changes nothing but its fill, and over bright energy it is what keeps the note legible.
+What it takes away is filled with the note's own hue at **Fill lightness** (L*), the same for every note,
+so wherever the cut is whole every note stands against the same surround;
+over black that is the hue laid on, and over bright energy it is what keeps the note legible.
+A Fill lightness of 0 fills it with black.
 **Cut reach** is how far it fades out, in points,
 and **Cut shape** bends that fade:
 a straight line at 0%, a steep drop at the note with a long soft tail toward −100%,
 and a hold near the note with a steep drop at the far end toward 100%.
-**Cut fill** fills what the cut takes away with the note's own hue instead of black,
-at **Fill lightness** (L*), the same for every note,
-so wherever the cut is whole and filled every note stands against the same surround.
 Where two notes' cuts meet, the stronger one stands, with its color.
 
 Lattice text shadows use local darkness.

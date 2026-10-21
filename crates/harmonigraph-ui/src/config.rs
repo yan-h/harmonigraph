@@ -424,10 +424,10 @@ pub struct SpectrumConfig {
     /// (#1525, #1528): the surround that keeps a note legible whatever heatmap
     /// it crosses, round the roll's ribbons and the Spiral's dots alike. Over
     /// bright energy it takes the backdrop away next to the note; over black
-    /// it changes nothing but what [`note_cut_fill`](Self::note_cut_fill) puts
-    /// back. 0 is no surround at all.
+    /// it is each note's own hue at [`note_fill_lightness`](Self::note_fill_lightness)
+    /// laid on. 0 is no surround at all.
     ///
-    /// The cut's reach, shape and fill are the fields below. See
+    /// The cut's reach, shape and fill lightness are the fields below. See
     /// [`harmonigraph_render::SurroundCut`].
     pub note_cut: f32,
     /// How far past a note's edge the cut fades out, in points
@@ -438,12 +438,9 @@ pub struct SpectrumConfig {
     /// 0 a straight line, -1 a steep drop at the note and a long soft tail, 1
     /// held near the note and a steep drop at the far end.
     pub note_cut_shape: f32,
-    /// How much of what the cut takes away is filled with the note's own hue,
-    /// at [`note_fill_lightness`](Self::note_fill_lightness), rather than left
-    /// black, 0..1.
-    pub note_cut_fill: f32,
     /// How light the cut's fill is, as `L*` (0..100), drawn in each note's own
-    /// hue at the full chroma that lightness holds in gamut.
+    /// hue at the full chroma that lightness holds in gamut. What the cut takes
+    /// away is always filled; 0 fills it with black.
     ///
     /// One lightness for every note, which is what makes the surround the SAME
     /// thing behind every note: wherever the cut is whole and filled, the
@@ -619,7 +616,6 @@ impl SpectrumConfig {
             amount: self.note_cut,
             reach: self.note_cut_reach,
             shape: self.note_cut_shape,
-            fill: self.note_cut_fill,
         }
     }
 
@@ -720,7 +716,6 @@ impl SpectrumConfig {
             *harmonigraph_render::SURROUND_SHAPE_RANGE.start(),
             *harmonigraph_render::SURROUND_SHAPE_RANGE.end(),
         );
-        self.note_cut_fill = bounded(self.note_cut_fill, fresh.note_cut_fill, 0.0, 1.0);
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -995,7 +990,6 @@ impl Default for SpectrumConfig {
             note_cut: 1.0,
             note_cut_reach: 15.0,
             note_cut_shape: 0.0,
-            note_cut_fill: 1.0,
             note_fill_lightness: 7.0,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A

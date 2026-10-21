@@ -3,8 +3,7 @@
 // (`crate::surround::SurroundTargets`).
 //
 // What is under the surround keeps `1 - cut` of itself, and gains the
-// strongest note's fill color at `fill × cut`: premultiplied over, so the
-// picture loses exactly what the cut takes and the fill puts back only as much.
+// strongest note's fill color as much as the cut took: premultiplied over.
 
 @group(0) @binding(0) var<uniform> surround: SurroundCut;
 
@@ -28,11 +27,10 @@ fn vs_cover(@builtin(vertex_index) vi: u32) -> CoverOut {
     return out;
 }
 
-/// This pixel's surround: the strongest note's fill color, straight, how much
-/// of it goes on (`fill × cut`), and how much of the picture the cut takes.
+/// This pixel's surround: the strongest note's fill color, straight, and how
+/// much of the picture the cut takes, which is as much of the color as goes on.
 struct Over {
     color: vec3<f32>,
-    weight: f32,
     cut: f32,
 };
 
@@ -41,13 +39,13 @@ fn surround_over(in: CoverOut) -> Over {
     let texel = min(vec2<i32>(in.uv * vec2<f32>(size)), size - vec2<i32>(1));
     let strongest = textureLoad(surround_texels, texel, 0);
     let cut = surround.cut.x * strongest.a;
-    return Over(strongest.rgb, surround.fill.x * cut, cut);
+    return Over(strongest.rgb, cut);
 }
 
 @fragment
 fn fs_surround_gamma(in: CoverOut) -> @location(0) vec4<f32> {
     let over = surround_over(in);
-    return vec4<f32>(over.color * over.weight, over.cut);
+    return vec4<f32>(over.color * over.cut, over.cut);
 }
 
 /// The same onto a target that encodes sRGB for itself, which wants linear
@@ -55,5 +53,5 @@ fn fs_surround_gamma(in: CoverOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_surround_linear(in: CoverOut) -> @location(0) vec4<f32> {
     let over = surround_over(in);
-    return vec4<f32>(linear_from_gamma_rgb(over.color) * over.weight, over.cut);
+    return vec4<f32>(linear_from_gamma_rgb(over.color) * over.cut, over.cut);
 }

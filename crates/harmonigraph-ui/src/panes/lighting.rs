@@ -108,18 +108,11 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
                  -100% drops steeply at the note and leaves a long soft tail; \
                  100% holds near the note and drops steeply at the far end.",
         );
-        ValueBar::new(&mut cfg.note_cut_fill, 0.0..=1.0, "Cut fill")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "What replaces the spectrogram the cut takes away. \
-                 0% leaves it black; 100% fills it with the note's own hue.",
-            );
         ValueBar::new(&mut cfg.note_fill_lightness, 0.0..=100.0, "Fill lightness")
             .decimals(0)
             .show(ui)
             .on_hover_text(
-                "Lightness (L*) of the fill, drawn in each note's own hue. \
+                "Lightness (L*) of what fills the cut, drawn in each note's own hue. \
                  0 is black. Notes stand out most where this is far from their own lightness.",
             );
     })

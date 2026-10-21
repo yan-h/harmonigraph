@@ -1496,7 +1496,7 @@ mod tests {
     /// The cut [`draw`] and its kin draw under: whole at the edge, a straight
     /// fade over [`HARNESS_REACH`], cut to black.
     const HARNESS_CUT: crate::SurroundCut =
-        crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0, fill: 0.0 };
+        crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0 };
 
     /// Everything egui does to `cb` before it paints, and submitted: its
     /// `prepare`, which draws the holdout and the surround's targets. Every
@@ -1854,7 +1854,7 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let fill = crate::SurroundCut { reach: 8.0, fill: 1.0, ..HARNESS_CUT };
+        let fill = crate::SurroundCut { reach: 8.0, ..HARNESS_CUT };
         // Edges at x = 126 and x = 132; the probe's centre is 2.5 and 3.5 off
         // them.
         let red =
@@ -1994,7 +1994,7 @@ mod tests {
                 .is_some_and(|pane| pane.holdout.is_some())
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let off = crate::SurroundCut { amount: 0.0, fill: 1.0, ..HARNESS_CUT };
+        let off = crate::SurroundCut { amount: 0.0, ..HARNESS_CUT };
         let mut resources = CallbackResources::default();
         let cutting = callback(vec![centered_note()], HARNESS_CUT);
         prepare_frame(&device, &queue, &mut resources, &screen, &cutting);

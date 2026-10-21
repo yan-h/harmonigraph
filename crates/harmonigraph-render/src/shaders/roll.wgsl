@@ -56,7 +56,8 @@
 // never names a screen side either.
 
 struct Locals {
-    /// The backdrop cut (surround.wgsl): its amount, reach, shape and fill. First, so its two vec4s are aligned with no padding.
+    /// The backdrop cut (surround.wgsl): its amount, reach and shape. First,
+    /// so its vec4 is aligned with no padding.
     surround: SurroundCut,
     /// Where the viewport being drawn into starts, in egui points, and how big
     /// it is. The draw into the egui pass takes the whole surface (origin 0);
