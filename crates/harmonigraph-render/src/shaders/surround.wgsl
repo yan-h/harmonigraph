@@ -12,7 +12,7 @@
 // producer's own module puts it after common.wgsl and before its own source,
 // and the composite's after nothing.
 
-/// The cut as every module that draws or lays it reads it. One vec4, so it
+/// The cut as every producer that draws it reads it. One vec4, so it
 /// sits at the head of a uniform block with no padding of its own.
 struct SurroundCut {
     /// The amount the cut takes at a note's edge (0 when off), its reach past

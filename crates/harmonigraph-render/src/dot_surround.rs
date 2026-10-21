@@ -389,8 +389,9 @@ mod tests {
     /// points at every display density, leaves its own disc and everything
     /// past the reach alone, and fills what it took with the dot's own color.
     ///
-    /// Read once with a black fill, where what is left is the picture alone,
-    /// and once with a red one, where the white the cut took comes back red.
+    /// Read with a black fill, where what is left is the picture alone — at the
+    /// whole amount and at half of it — and with a red one, where the white the
+    /// cut took comes back red.
     #[test]
     fn a_dots_cut_takes_the_picture_beside_it_and_fills_with_its_color() {
         let Some((device, queue)) = headless_device() else {
@@ -401,11 +402,11 @@ mod tests {
             let size = [side.div_ceil(64) * 64, side];
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
             let resources = std::cell::RefCell::new(CallbackResources::default());
-            let draw = |aura| {
+            let draw = |aura, cut| {
                 let cb = DotSurroundCallback {
                     rect,
                     dots: vec![SurroundDot { aura, ..dot() }],
-                    cut: CUT,
+                    cut,
                     target_format: wgpu::TextureFormat::Rgba8Unorm,
                 };
                 let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
@@ -443,7 +444,7 @@ mod tests {
             // About two and a half points past the edge, the straight fade
             // leaves `d / reach` of the white, `d` measured to the centre of
             // the pixel sampled.
-            let black = draw([0, 0, 0, 255]);
+            let black = draw([0, 0, 0, 255], CUT);
             let d = ((38.5 * ppp).floor() + 0.5) / ppp - 36.0;
             let left = 255.0 * d / CUT.reach;
             let beside = black(38.5, 32.0);
@@ -451,9 +452,16 @@ mod tests {
                 beside.iter().all(|&c| (f32::from(c) - left).abs() <= 3.0),
                 "at {ppp} ppp {d} points out read {beside:?}, not {left}",
             );
+            // At half the amount, half as much is taken.
+            let half = draw([0, 0, 0, 255], crate::SurroundCut { amount: 0.5, ..CUT })(38.5, 32.0);
+            let left_half = 255.0 * (1.0 - 0.5 * (1.0 - d / CUT.reach));
+            assert!(
+                half.iter().all(|&c| (f32::from(c) - left_half).abs() <= 3.0),
+                "at {ppp} ppp half the cut read {half:?}, not {left_half}",
+            );
             assert_eq!(black(32.0, 32.0), [255; 3], "at {ppp} ppp the cut reached under its dot");
             assert_eq!(black(4.0, 4.0), [255; 3], "at {ppp} ppp the cut escaped its reach");
-            let filled = draw([255, 0, 0, 255])(38.5, 32.0);
+            let filled = draw([255, 0, 0, 255], CUT)(38.5, 32.0);
             assert!(filled[0] >= 250 && filled[1] < 100, "at {ppp} ppp the fill read {filled:?}");
         }
     }

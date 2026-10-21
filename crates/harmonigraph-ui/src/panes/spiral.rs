@@ -1587,7 +1587,7 @@ mod tests {
         assert_eq!(
             callbacks(0.0, false),
             3,
-            "a silent frame asks for something other than the shadow, the halo and the finish",
+            "a silent frame asks for something other than the surround, the halo and the finish",
         );
         assert_eq!(
             callbacks(1.2, false),

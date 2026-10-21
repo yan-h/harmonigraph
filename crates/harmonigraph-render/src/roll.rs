@@ -2011,21 +2011,30 @@ mod tests {
 
     /// Over a bright backdrop the cut takes the picture away round a note,
     /// whole at its edge and fading in a straight line to nothing at its
-    /// reach; over black there is nothing to take away, and a cut that fills
-    /// with nothing draws nothing at all.
+    /// reach, and at half the amount takes half as much everywhere; over
+    /// black there is nothing to take away, and a cut that fills with nothing
+    /// draws nothing at all.
     #[test]
     fn the_cut_darkens_a_bright_backdrop_and_leaves_black_alone() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], grey(0.9));
+        let half = crate::SurroundCut { amount: 0.5, ..HARNESS_CUT };
+        let halved = draw_cut(&device, &queue, vec![centered_note()], half, grey(0.9)).0;
         let backdrop = pixel(&frame, 0, 0)[1];
         // The flank is at x = 140, so these pixel centres stand half a point
         // to three and a half off it, and the next one past the reach.
         for x in 140..144 {
             let cut = 1.0 - (x as f32 + 0.5 - 140.0) / HARNESS_REACH;
-            let (got, want) = (pixel(&frame, x, 128)[1], kept(f32::from(backdrop), cut));
-            assert!(got.abs_diff(want) <= 3, "at x = {x} the cut leaves {got}, not {want}");
+            for (frame, amount) in [(&frame, 1.0), (&halved, 0.5)] {
+                let got = pixel(frame, x, 128)[1];
+                let want = kept(f32::from(backdrop), amount * cut);
+                assert!(
+                    got.abs_diff(want) <= 3,
+                    "at x = {x} a cut of {amount} leaves {got}, not {want}"
+                );
+            }
         }
         assert_eq!(pixel(&frame, 144, 128)[1], backdrop, "the cut reaches past its reach");
         let black = wgpu::Color::BLACK;
