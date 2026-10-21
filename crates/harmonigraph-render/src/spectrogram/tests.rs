@@ -1,0 +1,2993 @@
+use super::*;
+use crate::gpu_harness::{headless_device, readback, render_to_texture};
+use std::collections::HashMap;
+
+/// 128 x 128 at one point per pixel. Every coordinate below is a dyadic
+/// fraction of that, so the rasterizer's interpolation of `slab` and `t`
+/// is exact and [`Reference`] can reproduce which taps a pixel took —
+/// otherwise a fragment landing a float's width across a row boundary
+/// reads a different run and the parity numbers measure the fixture.
+const SIZE: [u32; 2] = [128, 128];
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Buckets per semitone, and the spectrum's own floor — the analyzer's
+/// numbers, so the row geometry is the shape the pane hands over.
+const BINS_PER_SEMITONE: f32 = 32.0;
+const SPECTRUM_MIN_MIDI: f32 = 15.486_82;
+/// Buckets in a test spectrum: 32 semitones of it, which is enough range
+/// for a fixture to sit inside and for another to run off the top.
+const BINS: u32 = 1024;
+
+/// A gradient table shaped like the real one: 4096 samples of a ramp whose
+/// channels are 8-bit, so one index of slack is one level of one channel
+/// and a wrong INDEX is still a wrong colour.
+fn ramp_lut() -> Arc<Vec<[u8; 4]>> {
+    Arc::new(
+        (0..4096)
+            .map(|i| {
+                let v = i as f32 / 4095.0;
+                let b = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+                [b(v), b(1.0 - v), b(v * v), 255]
+            })
+            .collect(),
+    )
+}
+
+fn shades() -> SpectrogramShades {
+    SpectrogramShades { lut: ramp_lut() }
+}
+
+/// The read's scalars for a visible range of `span` semitones from
+/// `min_midi`, at a pane spending `rows` pixels on pitch. The level
+/// mapping spends most of the 0..1 on the fixtures' own byte range and
+/// tilts with pitch, so a fragment that lands on the wrong bucket lands on
+/// the wrong colour.
+fn read_of(min_midi: f32, span: f32, rows: u32) -> SpectrogramRead {
+    SpectrogramRead {
+        min_midi,
+        span,
+        rows,
+        spectrum_min_midi: SPECTRUM_MIN_MIDI,
+        bins_per_semitone: BINS_PER_SEMITONE,
+        level0: 0.0,
+        level_per_step: 0.0035,
+        level_per_midi: 0.002,
+    }
+}
+
+/// A grid no read can get right by luck: a ramp across the buckets, a
+/// one-bucket peak that moves slab to slab, and an LCG noise bed over
+/// both.
+///
+/// The noise is what makes the MEAN arm measurable at all. Over a pure
+/// tone every bucket of a run but one is the floor, so the weighted sum is
+/// within a hair of the run's own maximum and a shader that returned the
+/// max would pass.
+fn noisy_grid(bins: usize, slabs: usize) -> Arc<Vec<u8>> {
+    let mut seed = 0x2545_f491u32;
+    let mut out = vec![0u8; bins * slabs];
+    for s in 0..slabs {
+        for b in 0..bins {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = (seed >> 24) % 40;
+            let ramp = (b * 120 / bins) as u32;
+            let peak = if b % 61 == s % 61 { 90 } else { 0 };
+            out[s * bins + b] = (20 + ramp + noise + peak).min(250) as u8;
+        }
+    }
+    Arc::new(out)
+}
+
+fn grid_of(run: Arc<Vec<u8>>, bins: u32, capacity: u32, first_key: i64) -> SpectrogramGrid {
+    let run = SpectrogramGrid::slabs_of(&run, bins as usize);
+    SpectrogramGrid { full_uploads: Arc::default(), capacity, bins, first_key, run }
+}
+
+impl SpectrogramGrid {
+    /// The run as slab-major bytes, the form the fixtures write it in.
+    fn bytes(&self) -> Vec<u8> {
+        self.run.iter().flat_map(|slab| slab.iter().copied()).collect()
+    }
+
+    /// Replace the run with slab-major `bytes`, in fresh slabs.
+    fn set_bytes(&mut self, bytes: &[u8]) {
+        self.run = SpectrogramGrid::slabs_of(bytes, self.bins as usize);
+    }
+
+    /// Every stored byte set to `value`, over the same extent.
+    pub(super) fn fill(&mut self, value: u8) {
+        self.set_bytes(&vec![value; self.run.len() * self.bins as usize]);
+    }
+}
+
+/// A quad over the whole surface: `slab` running 0..n left to right, `t`
+/// running 1 at the top down to 0 at the bottom.
+fn full_quad(run_slabs: u32) -> Vec<SpectrogramVertex> {
+    full_quad_in(run_slabs, SIZE)
+}
+
+/// [`full_quad`] over a pane of the caller's own size, for a fixture that
+/// needs one — a texture fixture can need a pane the cloud's
+/// coarsest texture is still coarse on.
+fn full_quad_in(run_slabs: u32, size: [u32; 2]) -> Vec<SpectrogramVertex> {
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    let n = run_slabs as f32;
+    let v = |x: f32, y: f32| SpectrogramVertex { pos: [x, y], slab: x / w * n, t: 1.0 - y / h };
+    vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+}
+
+/// The pane a callback draws over, in pixels — its own rect rather than
+/// [`SIZE`], so a fixture that wants a bigger pane gets one by saying so.
+/// Every fixture built by [`callback`] is [`SIZE`] and renders exactly as
+/// it always did.
+fn pane_of(cb: &SpectrogramCallback) -> [u32; 2] {
+    [cb.rect.width() as u32, cb.rect.height() as u32]
+}
+
+/// Re-lay the quad over `slabs` of the run across the callback's OWN pane,
+/// and the slab width that goes with it.
+///
+/// One call rather than two lines, because the two cannot disagree.
+/// `Blur time step` bounds the light field against `points_per_slab` and
+/// ships at a step of one, so a fixture that re-lays the quad and leaves
+/// that number where [`cloud_fixture`] set it draws its light field at the
+/// resolution of a pane it no longer has — measuring the wrong picture
+/// without a word about it.
+pub(super) fn relay_quad(cb: &mut SpectrogramCallback, slabs: u32) {
+    let pane = pane_of(cb);
+    cb.vertices = full_quad_in(slabs, pane);
+    if let Some(atmosphere) = cb.atmosphere.as_mut() {
+        atmosphere.points_per_slab = pane[0] as f32 / slabs as f32;
+    }
+}
+
+/// The pitch fraction pixel row `py` of the frame samples, as
+/// [`full_quad`] lays the coordinate out.
+fn t_at(py: u32) -> f32 {
+    1.0 - (py as f32 + 0.5) / SIZE[1] as f32
+}
+
+/// The read the shader performs, in Rust — the same arms, the same
+/// weights, the same blend in level space, indexing the run DIRECTLY
+/// rather than through a slot, so a slot rule that disagrees with the
+/// scatter shows up as a wrong column.
+struct Reference {
+    grid: SpectrogramGrid,
+    read: SpectrogramRead,
+    shades: SpectrogramShades,
+}
+
+impl Reference {
+    fn bins(&self) -> usize {
+        self.grid.bins as usize
+    }
+
+    fn run_slabs(&self) -> usize {
+        self.grid.run.len()
+    }
+
+    fn stored(&self, j: usize, bucket: usize) -> u8 {
+        self.grid.run[j][bucket]
+    }
+
+    /// Where a pitch fraction sits on the bucket axis.
+    fn bucket_x(&self, t: f32) -> f32 {
+        let midi = self.read.min_midi + t * self.read.span;
+        (midi - self.read.spectrum_min_midi) * self.read.bins_per_semitone
+    }
+
+    /// The footprint a fragment at `t` covers, in bucket coordinates.
+    fn foot(&self, t: f32) -> (f32, f32) {
+        let half = 0.5 / self.read.rows as f32;
+        (self.bucket_x(t - half), self.bucket_x(t + half))
+    }
+
+    /// The buckets a fragment at `t` covers, where it covers two or more —
+    /// which is the arm as well as the run, since one bucket is the lerp.
+    fn run_at(&self, t: f32) -> Option<std::ops::Range<usize>> {
+        let (x0, x1) = self.foot(t);
+        let top = self.bins() as f32 - 1.0;
+        let idx = x0.floor().clamp(0.0, top) as usize;
+        let last = x1.floor().clamp(0.0, top) as usize;
+        (last > idx).then_some(idx..last + 1)
+    }
+
+    fn bucket_level(&self, j: usize, b: usize) -> f32 {
+        let midi = self.read.spectrum_min_midi + (b as f32 + 0.5) / self.read.bins_per_semitone;
+        let v = f32::from(self.stored(j, b));
+        (self.read.level0 + self.read.level_per_step * v + self.read.level_per_midi * midi)
+            .clamp(0.0, 1.0)
+    }
+
+    fn read_level(&self, j: usize, t: f32) -> f32 {
+        let (x0, x1) = self.foot(t);
+        let bins = self.bins();
+        let top = bins as f32 - 1.0;
+        let idx = x0.floor().clamp(0.0, top) as usize;
+        let last = x1.floor().clamp(0.0, top) as usize;
+        if last > idx {
+            let lo = x0.clamp(0.0, bins as f32);
+            let hi = x1.clamp(0.0, bins as f32);
+            let (mut sum, mut total) = (0.0f32, 0.0f32);
+            for b in idx..=last {
+                let w = (hi.min(b as f32 + 1.0) - lo.max(b as f32)).max(0.0);
+                sum += w * self.bucket_level(j, b);
+                total += w;
+            }
+            if total <= 0.0 {
+                return self.bucket_level(j, idx);
+            }
+            return sum / total;
+        }
+        let x = self.bucket_x(t) - 0.5;
+        let b = x.floor().clamp(0.0, bins as f32 - 2.0) as usize;
+        let f = (x - b as f32).clamp(0.0, 1.0);
+        let (a, c) = (self.bucket_level(j, b), self.bucket_level(j, b + 1));
+        a + (c - a) * f
+    }
+
+    fn color_at(&self, slab: f32, t: f32) -> [u8; 4] {
+        let n = self.run_slabs();
+        let jx = (slab - 0.5).floor().clamp(0.0, n as f32 - 1.0);
+        let j0 = jx as usize;
+        let j1 = (j0 + 1).min(n - 1);
+        let fx = (slab - 0.5 - jx).clamp(0.0, 1.0);
+
+        let (a, b) = (self.read_level(j0, t), self.read_level(j1, t));
+        let level = a + (b - a) * fx;
+        let levels = self.shades.lut.len();
+        let i = ((level * levels as f32) as usize).min(levels - 1);
+        let c = self.shades.lut[i];
+        [c[0], c[1], c[2], 255]
+    }
+
+    /// The frame [`full_quad`] draws, pixel by pixel.
+    fn frame(&self) -> Vec<u8> {
+        let (w, h) = (SIZE[0], SIZE[1]);
+        let n = self.run_slabs() as f32;
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        for py in 0..h {
+            for px in 0..w {
+                let slab = (px as f32 + 0.5) / w as f32 * n;
+                let t = 1.0 - (py as f32 + 0.5) / h as f32;
+                let c = self.color_at(slab, t);
+                let i = ((py * w + px) * 4) as usize;
+                out[i..i + 4].copy_from_slice(&c);
+            }
+        }
+        out
+    }
+
+    /// How many of the frame's sampled rows take each arm — `(mean,
+    /// lerp)`. A fixture claiming an arm is checked against this rather
+    /// than assumed to reach it.
+    fn arms(&self) -> (usize, usize) {
+        let mean = (0..SIZE[1]).filter(|&py| self.run_at(t_at(py)).is_some()).count();
+        (mean, SIZE[1] as usize - mean)
+    }
+
+    /// How many sampled rows cover a run of at least `n` buckets.
+    fn runs_at_least(&self, n: usize) -> usize {
+        (0..SIZE[1]).filter(|&py| self.run_at(t_at(py)).is_some_and(|run| run.len() >= n)).count()
+    }
+
+    /// How many sampled rows take the LERP arm with its lower tap pinned
+    /// at the top of the spectrum.
+    fn top_clamped(&self) -> usize {
+        (0..SIZE[1])
+            .filter(|&py| {
+                let t = t_at(py);
+                self.run_at(t).is_none()
+                    && (self.bucket_x(t) - 0.5).floor() >= self.bins() as f32 - 2.0
+            })
+            .count()
+    }
+}
+
+fn callback(
+    vertices: Vec<SpectrogramVertex>,
+    grid: &SpectrogramGrid,
+    read: &SpectrogramRead,
+) -> SpectrogramCallback {
+    SpectrogramCallback {
+        rect: egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        ),
+        atmosphere: None,
+        vertices,
+        grid: grid.clone(),
+        read: read.clone(),
+        shades: shades(),
+        target_format: FORMAT,
+        pane_id: 0,
+        pass_nr: 0,
+    }
+}
+
+/// One `prepare` of `cb` against `resources`, submitted — the unit a
+/// pane's age is measured in.
+pub(super) fn prepare_once(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    resources: &mut CallbackResources,
+    cb: &SpectrogramCallback,
+) {
+    let screen = ScreenDescriptor { size_in_pixels: pane_of(cb), pixels_per_point: 1.0 };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
+    queue.submit(bufs.into_iter().chain([encoder.finish()]));
+}
+
+/// `prepare` then `paint` against resources the caller owns, so a test can
+/// hand the same ones a sequence of frames.
+pub(super) fn frame_with(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    resources: &mut CallbackResources,
+    cb: &SpectrogramCallback,
+) -> Vec<u8> {
+    prepare_once(device, queue, resources, cb);
+    let size = pane_of(cb);
+    let rect = cb.rect;
+    let texture =
+        render_to_texture(device, queue, size, cb.target_format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: size,
+                },
+                pass,
+                resources,
+            );
+        });
+    readback(device, queue, &texture, size)
+}
+
+/// The same frame from resources that have never seen this pane — the
+/// full-upload path.
+fn fresh_frame(device: &wgpu::Device, queue: &wgpu::Queue, cb: &SpectrogramCallback) -> Vec<u8> {
+    let mut resources = CallbackResources::default();
+    frame_with(device, queue, &mut resources, cb)
+}
+
+/// Broad bands give both displacement fields detail to move, on both axes.
+/// Per-bucket noise alone averages almost flat under the fixture's footprint.
+pub(super) fn refracted_fixture() -> SpectrogramCallback {
+    let mut cb = cloud_fixture();
+    let bytes: Vec<u8> = (0..cb.grid.bytes().len())
+        .map(|i| [20, 80, 150, 230][(i / BINS as usize + (i % BINS as usize) / 96) % 4])
+        .collect();
+    cb.grid.set_bytes(&bytes);
+    // A curved palette with a non-black floor exposes level changes that a
+    // linear blue ramp can hide, as well as any invented black background.
+    cb.shades.lut = Arc::new(
+        (0..256)
+            .map(|v| {
+                let t = v as f32 / 255.0;
+                [
+                    (30.0 + 210.0 * t * t).round() as u8,
+                    (180.0 - 130.0 * t).round() as u8,
+                    (60.0 + 160.0 * (std::f32::consts::PI * t).sin()).round() as u8,
+                    255,
+                ]
+            })
+            .collect(),
+    );
+    cb
+}
+
+#[test]
+fn uniforms_match_the_bound_shader_layout() {
+    crate::uniforms::layout::check_binding::<SpectrogramUniforms>(SPECTROGRAM_SRC, 0, 0);
+}
+
+/// A texture reads the light under each pixel and adds nothing to its
+/// level: at a refraction too small to move any lookup, the effects path
+/// draws the plain picture to the byte, so the bypass exactly zero takes is
+/// the same picture rather than merely a cheaper one. Nonzero refraction
+/// must execute each enabled path and move structured sound without
+/// painting a constant field. Reusing resources also exercises
+/// disabling/re-enabling.
+///
+/// The identity is held softened at native spacing, where the composite
+/// reads the light field directly. Unsoftened, a cloud reads that field at
+/// its own resolution, which `Blur time step` bounds to a texel a slab, and
+/// at a reduced spacing it reads the tone target: neither is the plain
+/// picture to the byte on this fixture's per-slab bands (measured maxima of
+/// 96 and 36), which is what the reduced-cloud tests bound instead.
+#[test]
+fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
+    let Some((device, queue)) = headless_device() else { return };
+    let style = harmonigraph_scene::CloudStyle::Watercolor;
+    for pixel in [0.5, 2.0] {
+        let mut cb = refracted_fixture();
+        let mut resources = CallbackResources::default();
+        resources.insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
+        {
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.cloud_style = style;
+            s.color_pickup = 0.0;
+            s.color_release = 0.0;
+            s.cloud_depth = 1.0;
+        }
+        if pixel < 1.0 {
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_refract = 0.0;
+            assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
+            let bare = frame_with(&device, &queue, &mut resources, &cb);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_refract = f32::MIN_POSITIVE;
+            let vanishing = frame_with(&device, &queue, &mut resources, &cb);
+            let pane = resources.get::<SpectrogramResources>().unwrap();
+            let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
+            assert!(targets.shape().tile.is_some(), "{style:?} drew no cloud");
+            assert!(vanishing == bare, "{style:?}: the texture moved the levels");
+        }
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.material_settings.wash_refract = 0.0;
+        let straight = frame_with(&device, &queue, &mut resources, &cb);
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.material_settings.wash_refract = 1.0;
+        let bent = frame_with(&device, &queue, &mut resources, &cb);
+        let moved = bent.iter().zip(&straight).filter(|(a, b)| a.abs_diff(**b) > 4).count();
+        assert!(moved > bent.len() / 50, "{style:?} did not displace structured sound");
+        let targets = resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .unwrap()
+            .cloud
+            .as_ref()
+            .unwrap();
+        assert_eq!(targets.shape().tone.is_some(), pixel > 1.0);
+        assert!(targets.shape().tile.is_some());
+        // Intermediate depth must stay on the curved palette too.
+        // Mixing RGB endpoints would cut across this ramp's curve.
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
+        let blended = frame_with(&device, &queue, &mut resources, &cb);
+        assert!(
+            blended.chunks_exact(4).all(|pixel| {
+                cb.shades.lut.iter().any(|entry| (0..3).all(|c| pixel[c].abs_diff(entry[c]) <= 2))
+            }),
+            "{style:?} depth blend left the palette"
+        );
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        for value in [0, 1, 64, 150, 255] {
+            cb.grid.fill(value);
+            // The GPU cache must re-upload when the supplied samples change.
+            let bent = frame_with(&device, &queue, &mut resources, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+            let bare = frame_with(&device, &queue, &mut resources, &cb);
+            assert!(
+                bent.iter().zip(&bare).all(|(a, b)| a.abs_diff(*b) <= 1),
+                "{style:?} changes flat level {value}: pixel={pixel}"
+            );
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        }
+    }
+}
+
+#[test]
+fn velvet_samples_body_light_and_preserves_flat_fields() {
+    use harmonigraph_scene::CloudStyle;
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = refracted_fixture();
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+    s.cloud_style = CloudStyle::VelvetScales;
+    s.color_pickup = 0.0;
+    s.color_release = 0.0;
+    s.cloud_speed = 0.0;
+    s.cloud_depth = 1.0;
+    let mut resources = CallbackResources::default();
+    let bodies = frame_with(&device, &queue, &mut resources, &cb);
+    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+    let raw = frame_with(&device, &queue, &mut resources, &cb);
+    assert!(
+        bodies.iter().zip(&raw).filter(|(a, b)| a.abs_diff(**b) > 4).count() > bodies.len() / 50,
+        "structured fixture did not reach body-light replacement"
+    );
+    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+    // Squareness and Tilt each move the bodies' edges. Scale shape 0, or
+    // its scallop taper would hide much of the corner.
+    let moved = |cb: &mut SpectrogramCallback,
+                 turn: fn(&mut harmonigraph_scene::MaterialSettings)| {
+        let mut resources = CallbackResources::default();
+        let before = frame_with(&device, &queue, &mut resources, cb);
+        turn(&mut cb.atmosphere.as_mut().unwrap().settings.material_settings);
+        let after = frame_with(&device, &queue, &mut resources, cb);
+        before.iter().zip(&after).filter(|(a, b)| a.abs_diff(**b) > 4).count()
+    };
+    cb.atmosphere.as_mut().unwrap().settings.material_settings.velvet_shape = 0.0;
+    let squared = moved(&mut cb, |m| m.velvet_square = 1.0);
+    let straightened = moved(&mut cb, |m| m.velvet_tilt = 0.0);
+    assert!(squared > bodies.len() / 50, "Squareness did not reach the bodies: {squared}");
+    assert!(straightened > bodies.len() / 50, "Tilt did not reach square bodies: {straightened}");
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings.material_settings;
+    (s.velvet_shape, s.velvet_square, s.velvet_tilt) = (1.0, 0.0, 1.0);
+    for value in [0, 64, 150, 255] {
+        cb.grid.fill(value);
+        let bodies = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let raw = frame_with(&device, &queue, &mut resources, &cb);
+        assert!(
+            bodies.iter().zip(&raw).all(|(a, b)| a.abs_diff(*b) <= 1),
+            "Velvet invented structure over flat {value}"
+        );
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+    }
+}
+
+/// The starfield draws stars over sound and the scheme's floor over
+/// silence, and reads no tile; at the fresh Medium preset its far three
+/// depths take the reduced tone target as their precomposite.
+///
+/// Silence is the claim the look is most likely to break: no star is drawn
+/// over silence, so a quiet pane must settle on the floor EXACTLY — on a
+/// palette whose floor is not black, so an invented black would show —
+/// rather than a field of faint noise. Run with the fresh colour response
+/// on, so the silence is the one a history fades into after sound stops:
+/// ten Releases on, nothing of the stars is left. Seven are not enough on
+/// this floor — the brightest star's e^-7 residue rounds a level above it.
+/// Lives are the longest the dial allows, or over the wait every star turns
+/// over into a new life that carries no history and the fade is never read.
+#[test]
+fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = refracted_fixture();
+    let mut resources = CallbackResources::default();
+    let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+    s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+    (s.color_pickup, s.color_release) = (fresh.color_pickup, fresh.color_release);
+    s.stars.star_lifetime = harmonigraph_scene::STAR_LIFETIME_MAX;
+    s.cloud_depth = 0.0;
+    let bare = frame_with(&device, &queue, &mut resources, &cb);
+    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+    let stars = frame_with(&device, &queue, &mut resources, &cb);
+    let moved = stars.iter().zip(&bare).filter(|(a, b)| a.abs_diff(**b) > 8).count();
+    assert!(moved > stars.len() / 10, "the starfield left the picture");
+    // Pinpoints, not a flat tint: neighbouring pixels along a row
+    // differ far more often than the smooth fixture's own do.
+    let steps = |frame: &[u8]| {
+        frame
+            .chunks_exact(4)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter(|w| (0..3).any(|c| w[0][c].abs_diff(w[1][c]) > 12))
+            .count()
+    };
+    assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars");
+    let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+    let targets = targets.cloud.as_ref().unwrap();
+    let shape = targets.shape();
+    assert!(shape.stars.is_some() && shape.tone.is_none() && shape.tile.is_none());
+    assert!(targets.shape().memory.is_some(), "the fresh Stars ran without their history");
+    cb.grid.fill(0);
+    let release = f64::from(fresh.color_release);
+    cb.atmosphere.as_mut().unwrap().now += release;
+    let fading = frame_with(&device, &queue, &mut resources, &cb);
+    cb.atmosphere.as_mut().unwrap().now += 9.0 * release;
+    let silent = frame_with(&device, &queue, &mut resources, &cb);
+    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+    let floor = frame_with(&device, &queue, &mut resources, &cb);
+    assert_ne!(fading, floor, "the history never carried the stars into the silence");
+    assert_eq!(silent, floor, "silence drew something other than the floor");
+    assert!(floor.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]), "the floor is black");
+}
+
+/// The shader carries the starfield along each slice's drift, the way the
+/// CPU hands it over: a frame a moment later is the earlier one moved by
+/// exactly the distance the drift covered, in the drift's direction.
+///
+/// The CPU side of the drift is held by its own tests; this is the half
+/// they cannot see, whether `star_color` applies `offset` at all and with
+/// which sign. Every depth moves at one speed (each depth's `Star speed` equal),
+/// over a flat level so a star's colour does not change with where
+/// it is, on a 540-point pane so a star pixel is a device pixel — and the
+/// clock steps by the time the drift takes to cover a whole number of
+/// them, and of texels in the star image too, so resampling is not read
+/// as a move: 8 pixels is 4 texels at 50%. The field is drawn twice, with
+/// no depth close enough to read 3x3 and with the nearest reading 3x3.
+/// A longer step instead moves fading stars past the
+/// threshold. Lives are long and the step short, so a star's fade moves a
+/// couple of levels at most, and a life that turns over is at zero at both
+/// ends of the turn. An ignored offset leaves the field where it was, and
+/// a flipped one moves it the other way: either fails the first assert.
+#[test]
+fn the_starfield_moves_by_the_drift() {
+    const PANE: u32 = 540;
+    const SHIFT: usize = 8;
+    const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
+    let Some((device, queue)) = headless_device() else { return };
+    let fresh = harmonigraph_scene::StarSettings::default();
+    // Every depth at the far spacing, which 2x2 reads, then the fresh
+    // spacings, whose nearest depth needs 3x3.
+    for (spacing, three) in [
+        ([fresh.star_spacing_ratio[0]; atmosphere::STAR_SLICES], false),
+        (fresh.star_spacing_ratio, true),
+    ] {
+        let mut cb = refracted_fixture();
+        cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
+        relay_quad(&mut cb, 12);
+        cb.read.rows = PANE;
+        cb.grid.fill(150);
+        let atmosphere = cb.atmosphere.as_mut().unwrap();
+        atmosphere.region = cb.rect;
+        atmosphere.now = 3.0;
+        let s = &mut atmosphere.settings;
+        s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+        s.cloud_depth = 1.0;
+        (s.pitch_softness, s.time_softness) = (0.0, 0.0);
+        (s.stars.star_speed, s.cloud_direction) = ([SPEED; atmosphere::STAR_SLICES], 0.0);
+        s.stars.star_lifetime = 20.0;
+        // Equal sizes: the smallest stars resample unevenly in the reduced
+        // image under a whole-pixel shift, which is not drift. Every depth's
+        // stars big enough that 2x2 holds the 50% image's floor of 2 star
+        // pixels (a size of 3.8 at the fresh jitter and spacing), or the
+        // first arm would read them 3x3 too.
+        s.stars.star_size_variation = 0.0;
+        s.stars.star_resolution = 0.5;
+        s.stars.star_size = fresh.star_size.map(|size| size.max(4.0));
+        s.stars.star_spacing_ratio = spacing;
+        let layout = atmosphere::star_layout(s.stars, 1.0);
+        let image = atmosphere::star_image_size([PANE, PANE], s.stars);
+        let gathers = atmosphere::star_slices(s.stars, 0.0, 0.0, &layout, image).map(|s| s.gather);
+        assert_eq!(gathers.contains(&3), three, "{gathers:?}");
+        let mut resources = CallbackResources::default();
+        let before = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().now +=
+            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_px_per_second());
+        let after = frame_with(&device, &queue, &mut resources, &cb);
+
+        // Clear of the edges, where the light the stars read need not be flat.
+        let (margin, side) = (40usize, PANE as usize);
+        let px = |frame: &[u8], x: usize, y: usize| {
+            let at = (y * side + x) * 4;
+            [frame[at], frame[at + 1], frame[at + 2]]
+        };
+        let apart = |a: [u8; 3], b: [u8; 3]| (0..3).any(|c| a[c].abs_diff(b[c]) > 8);
+        let interior = || {
+            (margin..side - margin)
+                .flat_map(move |y| (margin + SHIFT..side - margin).map(move |x| (x, y)))
+        };
+        let total = interior().count();
+        let floor = cb.shades.lut[0];
+        let lit = interior()
+            .filter(|&(x, y)| apart(px(&before, x, y), [floor[0], floor[1], floor[2]]))
+            .count();
+        assert!(lit * 5 > total, "three={three}: too few stars to see a move: {lit} of {total}");
+        let moved =
+            interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x - SHIFT, y))).count();
+        assert!(
+                moved * 200 < total,
+                "three={three}: the field is not the earlier one moved {SHIFT} px: {moved} of {total} differ"
+            );
+        let still = interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x, y))).count();
+        assert!(
+            still * 10 > total,
+            "three={three}: the field did not move: only {still} of {total} pixels changed"
+        );
+    }
+}
+
+fn cloud_fixture() -> SpectrogramCallback {
+    // Three device pixels of pitch over the middle third of the time
+    // axis: wide enough to seed the quarter target, with dark room on
+    // every side where only the new surrounding light can draw.
+    let mut bytes = vec![0; 12 * BINS as usize];
+    for slab in 4..8 {
+        bytes[slab * BINS as usize + 500..slab * BINS as usize + 524].fill(255);
+    }
+    let grid = grid_of(Arc::new(bytes), BINS, 12, 0);
+    let mut read = read_of(SPECTRUM_MIN_MIDI, 32.0, SIZE[1]);
+    read.level0 = 0.0;
+    read.level_per_step = 1.0 / 255.0;
+    read.level_per_midi = 0.0;
+    let mut cb = callback(full_quad(12), &grid, &read);
+    cb.shades.lut = Arc::new((0..256).map(|v| [0, (v as f32 * 0.7) as u8, v as u8, 255]).collect());
+    cb.atmosphere = Some(SpectrogramAtmosphere {
+        // Pin the visible diffusion used by the pixel probes independently
+        // of the fresh appearance's gentler setting.
+        settings: harmonigraph_scene::SpectralAtmosphere {
+            // The blur alone. The probes read the diffusion transfer; a
+            // cloud over it would move the very pixels they measure.
+            cloud_depth: 0.0,
+            color_pickup: 0.0,
+            color_release: 0.0,
+            // A blur wide on both axes, spread into the dark around the
+            // ridge, which is what the diffusion probes measure.
+            pitch_softness: 35.0,
+            time_softness: 120.0,
+            // The wash at 1x, for the probes that turn `cloud_depth` up: a
+            // cloud the refraction reaches, where the fresh Stars would
+            // paint a field of their own.
+            cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+            material_settings: harmonigraph_scene::MaterialSettings {
+                wash_size: 1.0,
+                wash_lobe: 0.55,
+                ..Default::default()
+            },
+            // No tide line, which the probes that want one turn up: the
+            // fresh pool would darken every edge they measure, and would
+            // keep a wash drawn at zero refraction.
+            wash_pool: 0.0,
+            // The type's stars rather than the captured look's, whose
+            // jitter, spacings and sizes the starfield probes are not about.
+            stars: harmonigraph_scene::StarSettings::default(),
+            ..Default::default()
+        },
+        region: cb.rect,
+        pitch_vertical: true,
+        points_per_cent: 0.03,
+        points_per_ms: 0.01,
+        // The twelve slabs `full_quad` lays across the pane's width. A
+        // fixture that re-lays the quad owes this number too, which is what
+        // `relay_quad` is for.
+        points_per_slab: SIZE[0] as f32 / 12.0,
+        now: 0.0,
+        history_epoch: 0,
+    });
+    cb
+}
+
+/// Every effect at zero, which is the measured heatmap — what selecting the
+/// `Plain` style used to mean, now that the effects are dials.
+fn every_effect_off(cb: &mut SpectrogramCallback) {
+    let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+    settings.pitch_softness = 0.0;
+    settings.time_softness = 0.0;
+    settings.cloud_depth = 0.0;
+}
+
+#[test]
+fn float_output_uses_linear_palette_for_every_style() {
+    let Some((device, queue)) = headless_device() else { return };
+    // The two pipelines a float target can be drawn through: the plain
+    // heatmap with every effect at zero, and the composite over a blurred
+    // field.
+    for (style, soft) in [("measured", false), ("blurred", true)] {
+        let mut cb = cloud_fixture();
+        cb.target_format = wgpu::TextureFormat::Rgba16Float;
+        cb.grid.fill(96);
+        cb.shades.lut = Arc::new(vec![[128, 128, 128, 255]; 256]);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        if !soft {
+            settings.pitch_softness = 0.0;
+            settings.time_softness = 0.0;
+        }
+        let mut resources = CallbackResources::default();
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let texture = render_to_texture(
+            &device,
+            &queue,
+            SIZE,
+            cb.target_format,
+            wgpu::Color::BLACK,
+            |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: cb.rect,
+                        clip_rect: cb.rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            },
+        );
+        // One actual float pixel distinguishes linear 0.216 from an
+        // erroneously gamma-encoded 0.502; an RGBA8 readback cannot.
+        let buffer = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("float_palette_pixel"),
+                size: 8,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            },
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut source = texture.as_image_copy();
+        source.origin = wgpu::Origin3d { x: 64, y: 64, z: 0 };
+        encoder.copy_texture_to_buffer(
+            source,
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map float pixel"));
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        let mapped = slice.get_mapped_range();
+        let expected = ((128.0_f32 / 255.0 + 0.055) / 1.055).powf(2.4);
+        for channel in mapped[..6].chunks_exact(2) {
+            let half = u16::from_le_bytes([channel[0], channel[1]]);
+            // The fixture must produce positive normal half-floats.
+            assert!((0x0400..0x7c00).contains(&half));
+            let actual = f32::from_bits((u32::from(half) << 13) + 0x3800_0000);
+            assert!((actual - expected).abs() < 0.001, "{style}: {actual} != {expected}");
+        }
+    }
+}
+
+#[test]
+fn held_newest_slab_and_zero_softness_preserve_the_field() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    cb.grid = grid_of(Arc::new(vec![96; 128 * BINS as usize]), BINS, 128, 0);
+    for v in &mut cb.vertices {
+        v.slab = 100.5;
+    }
+    let held = fresh_frame(&device, &queue, &cb);
+    assert!((95..=97).contains(&held[(64 * 128 + 64) * 4 + 2]), "held strip became black");
+    let mut raw = cloud_fixture();
+    // The ridge again, on a slab a pixel: the field's time axis is then at
+    // full resolution under `Blur time step`'s data bound, and zero
+    // softness is the one thing left that could take it down.
+    let slabs = SIZE[0];
+    relay_quad(&mut raw, slabs);
+    let mut bytes = vec![0; (slabs * BINS) as usize];
+    for slab in 40..80 {
+        bytes[slab * BINS as usize + 500..slab * BINS as usize + 524].fill(255);
+    }
+    raw.grid = grid_of(Arc::new(bytes), BINS, slabs, 0);
+    let settings = &mut raw.atmosphere.as_mut().unwrap().settings;
+    settings.pitch_softness = 0.0;
+    settings.time_softness = 0.0;
+    // A cloud too faint in its bend to move a lookup: it reads the light
+    // field under each pixel, which is all that is drawn of it.
+    settings.cloud_depth = 1.0;
+    settings.material_settings.wash_refract = f32::MIN_POSITIVE;
+    let field = atmosphere::source_size(SIZE, 1.0, raw.atmosphere.unwrap());
+    assert_eq!(field, SIZE, "the field was reduced, so zero softness is not what is measured");
+    let zero = fresh_frame(&device, &queue, &raw);
+    raw.atmosphere = None;
+    let plain = fresh_frame(&device, &queue, &raw);
+    // The field takes each pixel's own footprint — in time the box over a
+    // slab-affine ramp, in pitch the encoded-domain mean of the buckets
+    // under the row — so on the ridge's edge pixels it is not the plain
+    // point read (measured: up to 82 on 92 of them). Anywhere else it is
+    // the plain picture to the byte, and nothing reaches past an edge.
+    let at = |frame: &[u8], x: i32, y: i32| {
+        let (x, y) = (x.clamp(0, SIZE[0] as i32 - 1), y.clamp(0, SIZE[1] as i32 - 1));
+        let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
+        [frame[i], frame[i + 1], frame[i + 2]]
+    };
+    let mut edges = 0;
+    for (x, y) in (0..SIZE[1] as i32).flat_map(|y| (0..SIZE[0] as i32).map(move |x| (x, y))) {
+        if at(&zero, x, y) != at(&plain, x, y) {
+            let edge = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                .any(|(dx, dy)| at(&plain, x + dx, y + dy) != at(&plain, x, y));
+            assert!(edge, "zero widths smoothed ({x}, {y}), off the ridge's edge");
+            edges += 1;
+        }
+    }
+    assert!(edges > 0, "the fixture never reached the field: no edge pixel moved");
+}
+
+#[test]
+fn wide_musical_blur_integrates_periodic_broadband_without_phase_aliasing() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    relay_quad(&mut cb, 512);
+    cb.atmosphere.as_mut().unwrap().settings.time_softness = 2000.0;
+    cb.atmosphere.as_mut().unwrap().points_per_ms = 0.128;
+    let mut frames = Vec::new();
+    for phase in 0..2 {
+        let bytes = (0..512)
+            .flat_map(|slab| vec![if (slab + phase) % 2 == 0 { 0 } else { 255 }; BINS as usize])
+            .collect();
+        cb.grid = grid_of(Arc::new(bytes), BINS, 512, 0);
+        frames.push(fresh_frame(&device, &queue, &cb));
+    }
+    assert!(compare(&frames[0], &frames[1]).0 <= 2, "wide source aliased alternating columns");
+    let blue = frames[0][(64 * 128 + 64) * 4 + 2];
+    // Half zero and half one average to 0.5 in the encoded domain.
+    // Encoding after source reduction would incorrectly remain at 0.5
+    // display intensity instead of this brighter decoded result.
+    let expected = (255.0_f32 / (0.1 + 1.81_f32.sqrt())).round() as u8;
+    assert!(blue.abs_diff(expected) <= 2, "all encoded columns contribute, got {blue}");
+}
+
+/// At one source texel a slab, the light field is the same picture the
+/// full-resolution one draws — on a fixture smooth in time, which is the
+/// only thing the dial claims.
+///
+/// **The bound is derived rather than dialled to green.** The field is
+/// affine between slab centres and the source integrates each texel's whole
+/// footprint, so capping the axis at a texel per slab replaces a linear
+/// interpolant stepped every quarter slab with one stepped every slab. The
+/// difference of the two is what a linear interpolant misses on a curve:
+/// `|g''| h^2 / 8` over a span `h`, plus `|g''| h^2 / 24` between a
+/// footprint's mean and its midpoint — so `(1 - 1/16) * (1/8 + 1/24)`, about
+/// `0.156 |g''|`, where `g` is the DISPLAYED intensity against slabs.
+///
+/// The fixture runs two cosine periods over the 32 slabs, so `f''` peaks at
+/// `0.45 (2 pi / 16)^2` = 0.069 of the encoded range per slab squared, at
+/// the two ends of the cosine where `f'` is zero. The decode's own slope is
+/// steepest down at the dark end (2.3 at a tenth of the range, against 0.74
+/// at the middle), so `|g''|` is about 0.16 of display intensity there,
+/// 0.156 of that is 0.025, and a palette channel moving over the whole
+/// 0..255 turns it into about 6 levels. That is the MAX; the mean runs a
+/// fraction of it, since most of the picture is where the cosine is
+/// straight. Measured: mean 0.82, max 3.
+#[test]
+fn a_time_stepped_light_field_draws_the_smooth_picture_from_one_texel_a_slab() {
+    let Some((device, queue)) = headless_device() else { return };
+    const SLABS: u32 = 32;
+    let mut cb = cloud_fixture();
+    // Four pane points to a slab, which is the zoomed-out pane's own
+    // geometry at this fixture's size.
+    relay_quad(&mut cb, SLABS);
+    // Smooth along TIME and flat along pitch, so what the two frames differ
+    // by is the resample and nothing else. Two periods of a cosine over the
+    // run — sixteen slabs each, well sampled, and the curvature the bound
+    // below is derived from.
+    let bytes = (0..SLABS as usize)
+        .flat_map(|slab| {
+            let phase = slab as f32 / 16.0 * std::f32::consts::TAU;
+            let level = (0.5 + 0.45 * phase.cos()) * 255.0;
+            vec![level.round() as u8; BINS as usize]
+        })
+        .collect();
+    cb.grid = grid_of(Arc::new(bytes), BINS, SLABS, 0);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.pitch_softness, a.settings.time_softness) = (0.0, 20.0);
+    // The comparison's OFF arm, asked for rather than inherited: a step of
+    // one is what a fresh pane carries, and this is the frame it is being
+    // compared against.
+    a.settings.blur_time_step = 0.0;
+    // The fixture's own precondition: at this softness the time sigma is a
+    // fifth of a pixel, so the musical reduction leaves that axis at full
+    // resolution and the dial is the only thing that can take it down.
+    let pane = pane_of(&cb);
+    let full = atmosphere::source_size(pane, 1.0, cb.atmosphere.unwrap());
+    assert_eq!(full[0], pane[0], "the time axis was reduced with the dial off");
+    let native = fresh_frame(&device, &queue, &cb);
+
+    cb.atmosphere.as_mut().unwrap().settings.blur_time_step = 1.0;
+    let stepped_size = atmosphere::source_size(pane, 1.0, cb.atmosphere.unwrap());
+    assert_eq!(stepped_size, [SLABS, full[1]], "the capped path was never taken");
+    let stepped = fresh_frame(&device, &queue, &cb);
+    assert_ne!(native, stepped, "one texel a slab drew the full-resolution frame");
+
+    let (max, _) = compare(&native, &stepped);
+    let channels = native.len() / 4 * 3;
+    let mean = native
+        .chunks_exact(4)
+        .zip(stepped.chunks_exact(4))
+        .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
+        .sum::<f64>()
+        / channels as f64;
+    assert!(mean < 2.0 && max <= 7, "the resample moved the picture: mean {mean:.3}, max {max}");
+}
+
+#[test]
+fn density_weights_bright_buckets_before_pitch_source_reduction() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    // One bright bucket per period: both equal mixtures and narrow
+    // bright bands must survive averaging over many source buckets.
+    for period in [2, 8] {
+        let bytes: Vec<u8> =
+            (0..12 * BINS as usize).map(|i| if i % period == 0 { 255 } else { 0 }).collect();
+        cb.grid.set_bytes(&bytes);
+        let encoded_mean = 1.0 / period as f32;
+        let expected =
+            (255.0 * 2.0 * encoded_mean / (0.1 + (0.01 + 3.6 * encoded_mean).sqrt())).round() as u8;
+        for width in [140.0, 280.0] {
+            cb.atmosphere.as_mut().unwrap().settings.pitch_softness = width;
+            let frame = fresh_frame(&device, &queue, &cb);
+            let blue = frame[(64 * 128 + 64) * 4 + 2];
+            assert!(
+                blue.abs_diff(expected) <= 2,
+                "pitch source averaged before encoding: {blue}, expected {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn golden_spectrogram_styles_broadband_quiet_and_silence() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    // A broad smooth field, quiet band, granular broadband patch, and black
+    // margins. No peak recognition can explain these shapes.
+    let mut bytes = vec![0; cb.grid.bytes().len()];
+    for slab in 1..11 {
+        for bin in 80..944 {
+            let y = bin as f32 / 1024.0;
+            let x = slab as f32 / 12.0;
+            let blob = (1.0 - ((x - 0.55).powi(2) * 7.0 + (y - 0.55).powi(2) * 5.0)).max(0.0);
+            let level = if bin < 220 { 0.13 } else { blob * 0.8 };
+            let grain = if slab < 5 && bin > 650 {
+                ((bin * 17 + slab * 31) % 13) as f32 / 50.0
+            } else {
+                0.0
+            };
+            bytes[slab * BINS as usize + bin] = ((level + grain).min(1.0) * 255.0) as u8;
+        }
+    }
+    cb.grid.set_bytes(&bytes);
+    // Plain and musical softness each exercise a visible path.
+    let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+    (s.pitch_softness, s.time_softness, s.blur_time_step) = (60.0, 200.0, 1.0);
+    let mut resources = CallbackResources::default();
+    let blur = frame_with(&device, &queue, &mut resources, &cb);
+    let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+    let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
+    assert_eq!(passes, 4, "source, two filters and decode bake");
+    gate.check("spectrogram-style-blur", SIZE, &blur);
+    every_effect_off(&mut cb);
+    gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
+}
+
+#[test]
+fn spectral_clouds_light_the_surroundings_and_leave_silence_dark() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let mut cb = cloud_fixture();
+    // 90 cents at 0.03 points/cent gives sigma 2.7 px: the Gaussian
+    // reaches the outside-ridge probes without a second broad kernel.
+    cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 90.0;
+    let lit = fresh_frame(&device, &queue, &cb);
+    let mut plain = cloud_fixture();
+    plain.atmosphere = None;
+    let core = fresh_frame(&device, &queue, &plain);
+    let pixel = |frame: &[u8], x, y| frame[(y * SIZE[0] as usize + x) * 4 + 2];
+    assert_eq!(pixel(&core, 64, 56), 0, "fixture put core ink in the halo probe");
+    assert!(pixel(&lit, 64, 56) > 3, "no light outside the measured ridge");
+    assert_eq!(pixel(&core, 64, 63), 255, "fixture missed its narrow ridge");
+    assert!(pixel(&lit, 64, 63) > 4 * pixel(&lit, 64, 56), "diffusion lost the pitch ridge");
+    assert!(pixel(&lit, 64, 63) < pixel(&core, 64, 63), "bright ridge bypassed diffusion");
+    assert_eq!(lit, fresh_frame(&device, &queue, &cb), "paused clouds moved");
+    cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    assert!(
+        compare(&lit, &fresh_frame(&device, &queue, &cb)).0 <= 1,
+        "sRGB target changed the cloud material"
+    );
+    cb.target_format = FORMAT;
+    cb.grid.fill(0);
+    let silent = fresh_frame(&device, &queue, &cb);
+    assert!(silent.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "silence emitted light");
+}
+
+#[test]
+fn spectral_diffusion_colors_the_combined_intensity_once() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    // A curved ramp exposes RGB mixing: every correctly colored pixel
+    // must lie on red = green squared, including the dim cloud tail.
+    cb.shades.lut = Arc::new(
+        (0..256).map(|v| [((v * v) as f32 / 255.0).round() as u8, v as u8, 0, 255]).collect(),
+    );
+    let frame = fresh_frame(&device, &queue, &cb);
+    let mut body_pixels = 0;
+    for p in frame.chunks_exact(4) {
+        let expected = (f32::from(p[1]).powi(2) / 255.0).round() as u8;
+        assert!(p[0].abs_diff(expected) <= 2, "cloud left the intensity palette: {p:?}");
+        body_pixels += usize::from(p[1] > 8 && p[1] < 240);
+    }
+    assert!(body_pixels > 200, "fixture never reached the diffused body");
+}
+
+#[test]
+fn spectral_diffusion_removes_bright_grain_in_both_axes() {
+    let Some((device, queue)) = headless_device() else { return };
+    for temporal in [false, true] {
+        let mut phases = Vec::new();
+        for phase in 0..2 {
+            let mut cb = cloud_fixture();
+            // A four-pixel stripe period, softened with a four-pixel
+            // Gaussian sigma in either axis. Musical controls explicitly
+            // provide that width; the source has no hidden quarter-res blur.
+            cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 140.0;
+            cb.atmosphere.as_mut().unwrap().settings.time_softness = 400.0;
+            let mut bytes = vec![0; 128 * BINS as usize];
+            for slab in 0..128 {
+                for bucket in 256..768 {
+                    let stripe = if temporal { slab } else { bucket / 8 };
+                    if matches!((stripe + phase * 2) % 4, 1 | 2) {
+                        bytes[slab * BINS as usize + bucket] = 255;
+                    }
+                }
+            }
+            cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
+            relay_quad(&mut cb, 128);
+            // The measured grain first, then the same picture softened.
+            let soft = fresh_frame(&device, &queue, &cb);
+            every_effect_off(&mut cb);
+            phases.push([fresh_frame(&device, &queue, &cb), soft]);
+        }
+        // Stay inside the band, away from the history/filter boundaries.
+        let difference = |setting: usize| -> u32 {
+            (48..80)
+                .flat_map(|y| (32..96).map(move |x| (y * 128 + x) * 4 + 2))
+                .map(|i| u32::from(phases[0][setting][i].abs_diff(phases[1][setting][i])))
+                .sum()
+        };
+        let raw = difference(0);
+        assert!(raw > 2048 * 100, "fixture missed bright grain, temporal={temporal}");
+        assert!(
+            difference(1) <= 2048,
+            "Gaussian retained fine phase, temporal={temporal}, difference={}",
+            difference(1)
+        );
+        for phase in &phases {
+            let full = &phase[1];
+            assert!(full[(64 * 128 + 64) * 4 + 2] > 80, "diffusion erased the pitch band");
+            assert!(full[(8 * 128 + 64) * 4 + 2] < 5, "diffusion lost the band separation");
+        }
+    }
+}
+
+#[test]
+fn spectral_diffusion_softens_faint_detail_with_one_fade_to_the_palettes_floor() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    // 90 cents at 0.03 points/cent gives sigma 2.7 px: the Gaussian
+    // reaches the outside-ridge probes without a second broad kernel.
+    cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 90.0;
+    let bytes: Vec<u8> = cb.grid.bytes().iter().map(|&v| if v > 0 { 102 } else { 0 }).collect();
+    cb.grid.set_bytes(&bytes);
+    // An edited palette may start above black, and then the diffused tail
+    // has to land on THAT and stop, not carry on down to a black the scheme
+    // never named. What the tail owes is an end, which the monotone check
+    // below is: one fade, no moat, no second floor under the first.
+    Arc::make_mut(&mut cb.shades.lut)[0] = [80, 0, 0, 255];
+    let soft = fresh_frame(&device, &queue, &cb);
+    every_effect_off(&mut cb);
+    let zero = fresh_frame(&device, &queue, &cb);
+    cb.atmosphere = None;
+    let plain = fresh_frame(&device, &queue, &cb);
+    assert_eq!(zero, plain, "every effect at zero did not restore the measured heatmap");
+    let pixel = |frame: &[u8], y| frame[(y * SIZE[0] as usize + 64) * 4 + 2];
+    assert_eq!(pixel(&plain, 63), 102, "fixture missed the faint ridge");
+    assert!(pixel(&soft, 63) < 82, "faint grain kept its original contrast");
+    assert!(pixel(&soft, 60) > pixel(&plain, 60), "softened body never formed");
+    let far = (16 * SIZE[0] as usize + 64) * 4;
+    assert_eq!(
+        &soft[far..far + 4],
+        &[80, 0, 0, 255],
+        "diffusion left the background off the palette's own floor"
+    );
+    for y in 16..63 {
+        assert!(
+            pixel(&soft, y) <= pixel(&soft, y + 1).saturating_add(1),
+            "dark moat before the ridge at row {y}"
+        );
+    }
+}
+
+#[test]
+fn spectral_clouds_extend_past_the_scrolling_history_edge() {
+    let Some((device, queue)) = headless_device() else { return };
+    for turns in 0..4 {
+        let mut cb = cloud_fixture();
+        // Resolve the single Gaussian's six-pixel tail independently of
+        // coarse history-column sampling; this probe tests region clipping.
+        let atmosphere = cb.atmosphere.as_mut().unwrap();
+        atmosphere.settings.time_softness = 300.0; // sigma 3 px
+        atmosphere.settings.blur_time_step = 0.0;
+        atmosphere.points_per_slab = 48.0 / 12.0;
+        // History starts inside the pane. A ten-pixel ridge seeds enough
+        // scalar density for a visible tail six pixels beyond that edge.
+        let mut bytes = vec![0; cb.grid.bytes().len()];
+        for slab in 0..4 {
+            bytes[slab * BINS as usize + 472..slab * BINS as usize + 552].fill(255);
+        }
+        cb.grid.set_bytes(&bytes);
+        for vertex in &mut cb.vertices {
+            vertex.pos[0] = 40.0 + vertex.pos[0] * 0.375;
+            for _ in 0..turns {
+                vertex.pos = [SIZE[1] as f32 - vertex.pos[1], vertex.pos[0]];
+            }
+        }
+        cb.atmosphere.as_mut().unwrap().pitch_vertical = turns % 2 == 0;
+        let mut resources = CallbackResources::default();
+        let lit = frame_with(&device, &queue, &mut resources, &cb);
+        if turns == 0 {
+            cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+            assert!(
+                compare(&lit, &fresh_frame(&device, &queue, &cb)).0 <= 1,
+                "sRGB target changed the light beyond recorded history"
+            );
+            cb.target_format = FORMAT;
+        }
+        let mut corners = [egui::pos2(36.0, 0.0), egui::pos2(112.0, 128.0)];
+        for corner in &mut corners {
+            for _ in 0..turns {
+                *corner = egui::pos2(SIZE[1] as f32 - corner.y, corner.x);
+            }
+        }
+        cb.atmosphere.as_mut().unwrap().region = egui::Rect::from_two_pos(corners[0], corners[1]);
+        let bounded = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere = None;
+        let core = fresh_frame(&device, &queue, &cb);
+        let pixel = |frame: &[u8], mut x: usize, mut y: usize| {
+            for _ in 0..turns {
+                (x, y) = (SIZE[1] as usize - 1 - y, x);
+            }
+            frame[(y * SIZE[0] as usize + x) * 4 + 2]
+        };
+        assert!(pixel(&lit, 34, 63) > 4, "fixture did not reach the region boundary");
+        assert_eq!(pixel(&bounded, 34, 63), 0, "cloud crossed into the analyzer region");
+        assert!(pixel(&bounded, 38, 63) > 4, "updating the region lost its history tail");
+        assert_eq!(pixel(&core, 34, 63), 0, "fixture smeared data beyond history");
+        assert!(pixel(&lit, 34, 63) > 4, "cloud cropped at history edge, turn {turns}");
+        assert_eq!(pixel(&lit, 8, 63), 0, "cloud did not decay into the empty history");
+        assert_eq!(pixel(&core, 46, 63), 255, "fixture missed the measured ridge");
+        assert!(pixel(&lit, 46, 63) > 128, "diffusion lost the measured pitch band");
+        for x in 8..46 {
+            assert!(
+                pixel(&lit, x, 63) <= pixel(&lit, x + 1, 63).saturating_add(1),
+                "dark moat at history edge, turn {turns}, column {x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn spectral_diffusion_adds_no_texture_or_analyzer_coupling() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = cloud_fixture();
+    cb.grid.fill(96);
+    let smooth = fresh_frame(&device, &queue, &cb);
+    // A broad uniform field must stay uniform. Keep the probes beyond
+    // the filter's reach from the image edges.
+    for y in 32..96 {
+        for x in 32..96 {
+            let blue = smooth[(y * 128 + x) * 4 + 2];
+            assert!((95..=97).contains(&blue), "texture modulated the field at {x},{y}");
+        }
+    }
+}
+
+#[test]
+fn spectral_cloud_targets_survive_pitch_zoom_and_span_drags() {
+    let Some((device, queue)) = headless_device() else { return };
+    for pitch in [false, true] {
+        let mut resources = CallbackResources::default();
+        let mut cb = cloud_fixture();
+        let settings = cb.atmosphere.as_mut().unwrap();
+        settings.points_per_cent = 0.128;
+        settings.points_per_ms = 0.04;
+        let mut previous = None;
+        let mut previous_requested = None;
+        let mut allocations = 0;
+        let mut exact_allocations = 0;
+        // Two-second drags at 60 Hz in each direction, moving 0.3% per
+        // frame. Reversing also traverses every prior resize boundary.
+        for step in (0..120).chain((0..120).rev()) {
+            let scale = 1.003_f32.powi(step);
+            let settings = cb.atmosphere.as_mut().unwrap();
+            if pitch {
+                settings.points_per_cent = 0.128 * scale;
+            } else {
+                settings.points_per_ms = 0.04 / scale;
+                // A Span drag carries the slab's WIDTH with the window,
+                // since the rung holds through it — and `Blur time step`
+                // bounds the time axis on exactly that number, so a drag
+                // that left it behind would hold the axis at one size and
+                // exercise no churn at all.
+                settings.points_per_slab = SIZE[0] as f32 / 12.0 / scale;
+            }
+            let requested = atmosphere::source_size(SIZE, 1.0, *settings);
+            exact_allocations += usize::from(previous_requested != Some(requested));
+            previous_requested = Some(requested);
+            frame_with(&device, &queue, &mut resources, &cb);
+            let target = resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .expect("the spectrogram prepared a pane")
+                .cloud
+                .as_ref()
+                .unwrap();
+            allocations += usize::from(previous.as_ref() != Some(&target.source_view));
+            previous = Some(target.source_view.clone());
+            for (held, requested) in target.shape().size.into_iter().zip(requested) {
+                assert!(held * 10 >= requested * 9 && held * 10 <= requested * 11);
+            }
+        }
+        eprintln!("pitch={pitch}: {allocations} target allocations vs {exact_allocations} exact-size allocations over 240 drag frames");
+        // The first frame allocates under any policy, so the drag's own
+        // churn is what is left of each count after it.
+        let (churn, reallocations) = (exact_allocations - 1, allocations - 1);
+        // What the band is worth depends on how finely the dragged axis
+        // churns, and the two arms differ by construction. The PITCH axis
+        // is reduced by the musical radius and moves nearly every frame, so
+        // the band absorbs 34 size changes into 5. The TIME axis is bounded
+        // by the SLABS instead and steps a whole texel at a time — 12 of
+        // them where this drag starts and 18 where its window has widened
+        // by 1.003^119 — so one step is already a twelfth of the size and
+        // the tenth the band allows swallows every second one, no more.
+        let (floor, band) = if pitch { (24, 5) } else { (12, 2) };
+        assert!(churn >= floor, "fixture did not exercise size churn: {churn}");
+        assert!(
+            reallocations <= 7 && reallocations * band <= churn,
+            "the drag reallocated {reallocations} times against {churn} size changes"
+        );
+    }
+}
+
+#[test]
+fn palette_uploads_follow_prepared_snapshots_and_resource_lifetimes() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut resources = CallbackResources::default();
+    let mut cb = cloud_fixture();
+    let uploaded = |resources: &CallbackResources| {
+        let lut = resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .unwrap()
+            .lut
+            .as_ref()
+            .unwrap();
+        (lut.texture.clone(), lut.snapshot.clone(), lut.uploads)
+    };
+    let first = frame_with(&device, &queue, &mut resources, &cb);
+    let (texture, snapshot, _) = uploaded(&resources);
+    assert_eq!(first, frame_with(&device, &queue, &mut resources, &cb));
+    assert_eq!(uploaded(&resources).2, 1, "identical Arc must not upload twice");
+
+    cb.shades.lut = Arc::new((*snapshot).clone());
+    assert!(!Arc::ptr_eq(&snapshot, &cb.shades.lut));
+    assert_eq!(first, frame_with(&device, &queue, &mut resources, &cb));
+    let (held, retained, writes) = uploaded(&resources);
+    assert_eq!(held, texture);
+    assert_eq!(writes, 1, "equal bytes in a new Arc must not upload");
+    assert!(Arc::ptr_eq(&retained, &cb.shades.lut), "retain the new fast-path identity");
+
+    let changed = Arc::new(cb.shades.lut.iter().map(|c| [c[2], c[1], 0, 255]).collect::<Vec<_>>());
+    let mut discarded = cloud_fixture();
+    discarded.shades.lut = changed.clone();
+    drop(discarded);
+    let (_, retained, writes) = uploaded(&resources);
+    assert!(Arc::ptr_eq(&retained, &cb.shades.lut));
+    assert_eq!(writes, 1, "constructing a callback cannot advance upload truth");
+
+    cb.shades.lut = changed;
+    let recolored = frame_with(&device, &queue, &mut resources, &cb);
+    assert_ne!(first, recolored, "the fixture must draw the changed palette");
+    assert_eq!(recolored, fresh_frame(&device, &queue, &cb));
+    assert_eq!(uploaded(&resources).0, texture, "same size reuses the texture");
+    assert_eq!(uploaded(&resources).2, 2, "changed bytes must upload");
+
+    cb.shades.lut = Arc::new(cb.shades.lut.iter().step_by(2).copied().collect());
+    let resized = frame_with(&device, &queue, &mut resources, &cb);
+    assert_eq!(resized, fresh_frame(&device, &queue, &cb));
+    let (grown, _, writes) = uploaded(&resources);
+    assert_ne!(grown, texture, "new dimensions require a new texture");
+    assert_eq!(writes, 1, "a new texture must receive the snapshot");
+
+    resources = CallbackResources::default();
+    assert_eq!(resized, frame_with(&device, &queue, &mut resources, &cb));
+    let (recreated, _, writes) = uploaded(&resources);
+    assert_ne!(recreated, grown);
+    assert_eq!(writes, 1, "fresh resources must upload even the same Arc");
+}
+
+#[test]
+fn spectral_cloud_targets_refresh_after_palette_resize_disable_and_empty_frames() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let mut resources = CallbackResources::default();
+    let mut cb = cloud_fixture();
+    let first = frame_with(&device, &queue, &mut resources, &cb);
+    cb.shades.lut = Arc::new(cb.shades.lut.iter().map(|c| [c[2], c[1], 0, 255]).collect());
+    let recolored = frame_with(&device, &queue, &mut resources, &cb);
+    assert_ne!(first, recolored, "palette change retained old cloud colors");
+    assert_eq!(recolored, fresh_frame(&device, &queue, &cb));
+    cb.rect.max.y *= 0.5;
+    for vertex in &mut cb.vertices {
+        vertex.pos[1] *= 0.5;
+    }
+    let smaller = frame_with(&device, &queue, &mut resources, &cb);
+    assert_eq!(smaller, fresh_frame(&device, &queue, &cb));
+    assert_eq!(
+        resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .expect("the spectrogram prepared a pane")
+            .cloud
+            .as_ref()
+            .unwrap()
+            .shape()
+            .size,
+        atmosphere::source_size([128, 64], 1.0, cb.atmosphere.unwrap())
+    );
+    let mut other = cloud_fixture();
+    other.pane_id = 1;
+    frame_with(&device, &queue, &mut resources, &other);
+    assert_eq!(
+        smaller,
+        frame_with(&device, &queue, &mut resources, &cb),
+        "unequal pane replaced this cloud target"
+    );
+    every_effect_off(&mut cb);
+    // Mode or viewport changes can replace the grid while diffusion is
+    // disabled. Re-enabling at the same pane size must use that new grid.
+    cb.grid.capacity *= 2;
+    cb.grid.fill(64);
+    let disabled = frame_with(&device, &queue, &mut resources, &cb);
+    cb.atmosphere = None;
+    assert_eq!(
+        disabled,
+        fresh_frame(&device, &queue, &cb),
+        "every effect at zero changed the original heatmap"
+    );
+    cb.atmosphere = other.atmosphere;
+    assert_eq!(
+        frame_with(&device, &queue, &mut resources, &cb),
+        fresh_frame(&device, &queue, &cb),
+        "re-enabled smoothing retained the replaced grid"
+    );
+    cb.vertices.clear();
+    let empty = frame_with(&device, &queue, &mut resources, &cb);
+    assert!(empty.chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+    assert!(
+        !resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .expect("the spectrogram prepared a pane")
+            .cloud_ready
+    );
+}
+
+#[test]
+fn spectral_clouds_follow_offset_panes_at_both_pixel_scales() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    for ppp in [1.0, 2.0] {
+        let size = [256, 256];
+        let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+        let mut resources = CallbackResources::default();
+        let mut cb = cloud_fixture();
+        cb.rect = egui::Rect::from_min_size(egui::pos2(0.24, 0.24), egui::vec2(96.49, 96.49));
+        cb.atmosphere.as_mut().unwrap().region = cb.rect;
+        cb.read.rows = (96.0 * ppp) as u32;
+        for v in &mut cb.vertices {
+            v.pos = v.pos.map(|x| x * 96.49 / 128.0 + 0.24);
+        }
+        let mut draw = |cb: &SpectrogramCallback| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let commands = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(commands.into_iter().chain([encoder.finish()]));
+            let target =
+                render_to_texture(&device, &queue, size, FORMAT, wgpu::Color::BLACK, |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: cb.rect,
+                            clip_rect: cb.rect,
+                            pixels_per_point: ppp,
+                            screen_size_px: size,
+                        },
+                        pass,
+                        &resources,
+                    );
+                });
+            readback(&device, &queue, &target, size)
+        };
+        let origin = draw(&cb);
+        let offset = egui::vec2(8.0, 12.0);
+        cb.rect = cb.rect.translate(offset);
+        cb.atmosphere.as_mut().unwrap().region = cb.rect;
+        for v in &mut cb.vertices {
+            v.pos[0] += offset.x;
+            v.pos[1] += offset.y;
+        }
+        let shifted = draw(&cb);
+        let dx = (offset.x * ppp) as usize;
+        let dy = (offset.y * ppp) as usize;
+        let side = (96.0 * ppp) as usize;
+        let mut worst = 0;
+        for y in 1..side - 1 {
+            for x in 1..side - 1 {
+                for channel in 0..4 {
+                    let a = origin[(y * 256 + x) * 4 + channel];
+                    let b = shifted[((y + dy) * 256 + x + dx) * 4 + channel];
+                    worst = worst.max(a.abs_diff(b));
+                }
+            }
+        }
+        assert!(worst <= 1, "offset pane moved the cloud against its source at {ppp}×: {worst}");
+    }
+}
+
+/// Largest channel difference and how many pixels match exactly.
+fn compare(got: &[u8], want: &[u8]) -> (u8, usize) {
+    let mut worst = 0u8;
+    let mut exact = 0usize;
+    for (g, w) in got.chunks_exact(4).zip(want.chunks_exact(4)) {
+        let d = g.iter().zip(w).map(|(&a, &b)| a.abs_diff(b)).max().unwrap_or(0);
+        worst = worst.max(d);
+        exact += usize::from(d == 0);
+    }
+    (worst, exact)
+}
+
+/// The frame the shader draws against the read written out in Rust,
+/// reported as `(max channel diff, fraction exact)`.
+fn parity(device: &wgpu::Device, queue: &wgpu::Queue, reference: &Reference) -> (u8, f64) {
+    let cb = callback(full_quad(reference.run_slabs() as u32), &reference.grid, &reference.read);
+    let got = fresh_frame(device, queue, &cb);
+    let (worst, exact) = compare(&got, &reference.frame());
+    (worst, exact as f64 / (SIZE[0] * SIZE[1]) as f64)
+}
+
+#[test]
+fn baked_spectrogram_shader_validates() {
+    for (source, required) in [
+        (SPECTROGRAM_SRC, SPECTROGRAM_ENTRY_POINTS),
+        (atmosphere::SOURCE, &["vs_fullscreen", "fs_close_h", "fs_close_v"][..]),
+    ] {
+        let module = naga::front::wgsl::parse_str(source)
+            .map_err(|e| e.emit_to_string(source))
+            .expect("spectral shaders must parse");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("spectral shaders must validate");
+        for required in required {
+            assert!(
+                module.entry_points.iter().any(|ep| ep.name == *required),
+                "missing entry point `{required}`"
+            );
+        }
+    }
+}
+
+/// The vertex-layout <-> shader-input contract (attribute locations,
+/// formats, strides) and the bind-group layout against the shader's own
+/// bindings, neither of which the naga check or the type system covers — a
+/// mismatch otherwise panics at first paint inside a host.
+#[test]
+fn the_pipeline_builds_against_a_headless_device() {
+    let Some((device, _queue)) = headless_device() else {
+        return;
+    };
+    let _resources = SpectrogramResources::new(&device, FORMAT);
+}
+
+/// Every pixel wider than a bucket: the shader's MINIFYING arm against the
+/// same area-weighted mean written in Rust, over runs of seven buckets.
+///
+/// The arm is the one thing a pure tone cannot measure, so the fixture is
+/// a noise bed with peaks in it — see [`noisy_grid`] — and the arm counts
+/// are checked below rather than assumed from the span.
+#[test]
+fn a_pixel_wider_than_a_bucket_reads_the_mean_of_the_buckets_under_it() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let run = noisy_grid(BINS as usize, 6);
+    let reference = Reference {
+        grid: grid_of(run, BINS, 8, 0),
+        read: read_of(18.0, 24.0, SIZE[1]),
+        shades: shades(),
+    };
+    let rows = SIZE[1] as usize;
+    let (mean, lerp) = reference.arms();
+    assert_eq!((mean, lerp), (rows, 0), "every pixel of this fixture must take the mean");
+    assert_eq!(reference.runs_at_least(7), rows, "the runs must be wide enough to average");
+
+    let (worst, exact) = parity(&device, &queue, &reference);
+    assert!(worst <= 1, "channels differ by {worst} levels, not the blend's own rounding");
+    assert!(exact >= 0.99, "only {:.4} of pixels are exact", exact);
+}
+
+/// Pixels narrower than a bucket: the MAGNIFYING arm, with the half-bucket
+/// centre offset and the clamp that keeps its upper tap in the spectrum.
+///
+/// A footprint narrower than a bucket still STRADDLES one now and then, so
+/// this fixture reaches both arms and the counts below say in what
+/// proportion — a shader that took the mean everywhere would fail on the
+/// majority.
+///
+/// The span is what puts a straddle anywhere at all. The frame samples the
+/// pitch axis on a fixed grid, so a span that makes the bucket spacing a
+/// tidy fraction of the pixel spacing (2 semitones is half a bucket per
+/// pixel) gives every sample the same two phases against the buckets and
+/// the mean arm is reached by nothing.
+#[test]
+fn a_pixel_narrower_than_a_bucket_reads_between_the_two_under_it() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let run = noisy_grid(BINS as usize, 6);
+    let reference = Reference {
+        grid: grid_of(run, BINS, 8, 0),
+        read: read_of(20.0, 1.7, 512),
+        shades: shades(),
+    };
+    let (mean, lerp) = reference.arms();
+    assert!(lerp > 3 * mean, "this fixture must be mostly lerp, got {lerp} against {mean}");
+    assert!(mean > 0, "and must still straddle a boundary somewhere");
+
+    let (worst, exact) = parity(&device, &queue, &reference);
+    assert!(worst <= 1, "channels differ by {worst} levels, not the blend's own rounding");
+    assert!(exact >= 0.99, "only {:.4} of pixels are exact", exact);
+}
+
+/// A visible range running off the top of the spectrum: the reads that
+/// clamp — the footprint's buckets at the last one, and the lerp's lower
+/// tap pinned at `bins - 2` so its upper tap still exists.
+#[test]
+fn a_range_past_the_top_of_the_spectrum_reads_its_last_two_buckets() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let run = noisy_grid(BINS as usize, 6);
+    let reference = Reference {
+        grid: grid_of(run, BINS, 8, 0),
+        read: read_of(42.0, 8.0, 512),
+        shades: shades(),
+    };
+    let clamped = reference.top_clamped();
+    assert!(clamped > 10, "only {clamped} sampled rows reach the clamp at the top bucket");
+    assert!(clamped < SIZE[1] as usize, "the fixture must also read inside");
+
+    let (worst, exact) = parity(&device, &queue, &reference);
+    assert!(worst <= 1, "channels differ by {worst} levels, not the blend's own rounding");
+    assert!(exact >= 0.99, "only {:.4} of pixels are exact", exact);
+}
+
+/// Slab `key` at `version`, distinct in both.
+fn versioned_slab(key: i64, version: u32, bins: usize) -> Vec<u8> {
+    let mut seed = (key as u64 as u32).wrapping_mul(2_654_435_761).wrapping_add(version);
+    (0..bins)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (20 + (seed >> 24) % 200) as u8
+        })
+        .collect()
+}
+
+/// Complete snapshots exercise the actual uploader against fresh resources.
+struct Step {
+    label: &'static str,
+    capacity: u32,
+    first_key: i64,
+    mutate: &'static [i64],
+    slabs: usize,
+    changed: usize,
+    full: bool,
+}
+
+impl Step {
+    const fn new(
+        label: &'static str,
+        capacity: u32,
+        first_key: i64,
+        mutate: &'static [i64],
+        changed: usize,
+        full: bool,
+    ) -> Self {
+        Self { label, capacity, first_key, mutate, slabs: 6, changed, full }
+    }
+}
+
+#[test]
+fn a_delta_upload_draws_what_a_full_upload_draws() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    for bins in [256, harmonigraph_core::spectrum::SPECTRUM_BINS, 3827, 3829] {
+        check_delta_upload(&device, &queue, bins, false);
+    }
+    check_delta_upload(&device, &queue, harmonigraph_core::spectrum::SPECTRUM_BINS, true);
+}
+
+fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize, softened: bool) {
+    let callback = |vertices, grid: &SpectrogramGrid, read: &SpectrogramRead| {
+        let mut cb = callback(vertices, grid, read);
+        if softened {
+            cb.atmosphere = cloud_fixture().atmosphere;
+        }
+        cb
+    };
+    let read = SpectrogramRead {
+        level_per_midi: 0.0,
+        ..read_of(SPECTRUM_MIN_MIDI, bins as f32 / BINS_PER_SEMITONE, 96)
+    };
+    let mut version: HashMap<i64, u32> = HashMap::new();
+    let mut resources = CallbackResources::default();
+    let mut previous: Option<Vec<u8>> = None;
+    let mut moved = 0;
+    let uploads: Arc<AtomicU32> = Arc::default();
+    let mut expected_uploads = 0;
+    let steps = [
+        Step::new("first", 8, 0, &[], 6, true),
+        Step::new("equal bytes in a new Arc", 8, 0, &[], 0, false),
+        Step::new("newest rewritten", 8, 0, &[5], 1, false),
+        Step::new("interior rewritten", 8, 0, &[2], 1, false),
+        Step::new("advanced", 8, 1, &[], 1, false),
+        Step::new("advanced again", 8, 2, &[], 1, false),
+        Step::new("wrapped", 8, 4, &[], 2, false),
+        Step::new("wrapped rewrite", 8, 4, &[9], 1, false),
+        Step::new("exactly half changed", 8, 4, &[7, 8, 9], 3, false),
+        Step::new("more than half changed", 8, 4, &[4, 5, 6, 7], 4, true),
+        Step::new("negative keys", 8, -3, &[], 6, true),
+        Step::new("negative rewrite", 8, -3, &[-1], 1, false),
+        Step::new("across zero", 8, -2, &[], 1, false),
+        Step::new("capacity changed", 12, -2, &[], 6, true),
+        Step { slabs: 3, ..Step::new("shrink extent", 12, -2, &[], 0, false) },
+        Step::new("expand extent", 12, -2, &[], 3, false),
+        Step { slabs: 5, ..Step::new("oldest slab leaves", 12, -1, &[], 0, false) },
+        Step::new("oldest slab returns", 12, -2, &[], 1, false),
+    ];
+    let mut last = None;
+    for step in steps {
+        for &key in step.mutate {
+            *version.entry(key).or_insert(0) += 1;
+        }
+        let run: Vec<u8> = (0..step.slabs as i64)
+            .flat_map(|j| {
+                let key = step.first_key + j;
+                versioned_slab(key, *version.entry(key).or_insert(0), bins)
+            })
+            .collect();
+        let grid = SpectrogramGrid {
+            capacity: step.capacity,
+            bins: bins as u32,
+            first_key: step.first_key,
+            run: SpectrogramGrid::slabs_of(&run, bins),
+            full_uploads: uploads.clone(),
+        };
+        let changed = resources
+            .get::<SpectrogramResources>()
+            .and_then(|r| r.panes.get(0))
+            .and_then(|p| p.grid.as_ref())
+            .filter(|held| held.fits(&grid))
+            .map_or(step.slabs, |held| held.changed_slabs(&grid).len());
+        assert_eq!(changed, step.changed, "{}: changed slabs", step.label);
+        let cb = callback(full_quad(step.slabs as u32), &grid, &read);
+        let incremental = frame_with(device, queue, &mut resources, &cb);
+        expected_uploads += u32::from(step.full);
+        assert_eq!(
+            uploads.load(Ordering::Relaxed),
+            expected_uploads,
+            "{}: upload policy",
+            step.label
+        );
+        let reference = SpectrogramCallback {
+            grid: SpectrogramGrid { full_uploads: Arc::default(), ..grid.clone() },
+            ..callback(cb.vertices.clone(), &cb.grid, &read)
+        };
+        assert_eq!(incremental, fresh_frame(device, queue, &reference), "{}: pixels", step.label);
+        // Reusing this exact snapshot has no writes, including after extent changes.
+        let held = resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .unwrap()
+            .grid
+            .as_ref()
+            .unwrap();
+        assert!(held.changed_slabs(&grid).is_empty());
+        assert_eq!(incremental, frame_with(device, queue, &mut resources, &cb));
+        assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
+        moved += usize::from(previous.as_ref().is_some_and(|p| p != &incremental));
+        previous = Some(incremental);
+        last = Some(grid);
+    }
+    assert!(moved >= 8, "the fixtures must change the picture");
+    let last = last.unwrap();
+
+    // Undrawable and omitted callbacks cannot advance the resource owner's snapshot.
+    for j in 1..=3 {
+        let dropped = SpectrogramGrid {
+            full_uploads: uploads.clone(),
+            first_key: last.first_key + j,
+            run: SpectrogramGrid::slabs_of(&vec![64; 6 * bins], bins),
+            ..last.clone()
+        };
+        let mut cb = callback(full_quad(6), &dropped, &read);
+        if j == 1 {
+            cb.vertices.clear();
+            prepare_once(device, queue, &mut resources, &cb);
+        } else if j == 2 {
+            cb.grid.run = Arc::new([]);
+            prepare_once(device, queue, &mut resources, &cb);
+        }
+        // The third callback is constructed and discarded without prepare.
+    }
+    assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
+    let held = resources
+        .get::<SpectrogramResources>()
+        .unwrap()
+        .panes
+        .get(0)
+        .unwrap()
+        .grid
+        .as_ref()
+        .unwrap();
+    assert!(Arc::ptr_eq(&held.snapshot.run, &last.run));
+    let resumed = SpectrogramGrid {
+        full_uploads: uploads.clone(),
+        first_key: last.first_key + 2,
+        run: (0..6)
+            .map(|j| {
+                let key = last.first_key + 2 + j;
+                SpectrogramSlab::from(versioned_slab(key, *version.entry(key).or_insert(0), bins))
+            })
+            .collect(),
+        ..last.clone()
+    };
+    let cb = callback(full_quad(6), &resumed, &read);
+    let actual = frame_with(device, queue, &mut resources, &cb);
+    let reference = SpectrogramCallback {
+        grid: SpectrogramGrid { full_uploads: Arc::default(), ..resumed.clone() },
+        ..callback(cb.vertices.clone(), &cb.grid, &read)
+    };
+    assert_eq!(actual, fresh_frame(device, queue, &reference));
+    assert_eq!(
+        uploads.load(Ordering::Relaxed),
+        expected_uploads,
+        "resume patches the last actual upload"
+    );
+    resources = CallbackResources::default();
+    assert_eq!(actual, frame_with(device, queue, &mut resources, &cb));
+    expected_uploads += 1;
+    assert_eq!(
+        uploads.load(Ordering::Relaxed),
+        expected_uploads,
+        "same Arc in a fresh context uploads"
+    );
+    let resized = SpectrogramGrid {
+        full_uploads: uploads.clone(),
+        bins: bins as u32 + 4,
+        run: SpectrogramGrid::slabs_of(&vec![100; 6 * (bins + 4)], bins + 4),
+        ..resumed
+    };
+    frame_with(device, queue, &mut resources, &callback(full_quad(6), &resized, &read));
+    assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads + 1, "bin shape changed");
+}
+
+/// Keys before zero and a run that wraps past the end of the ring land
+/// where the shader reads them.
+///
+/// Each slab is one constant byte, so a column is one colour whichever arm
+/// its rows take, and a mis-slotted column is a colour from somewhere else
+/// in the run rather than a blur. One slab per pixel column puts every
+/// sample on a slab's own centre, where the time axis' blend weight is 0.
+#[test]
+fn slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let bins = 128usize;
+    let slabs = SIZE[0] as usize;
+    let run: Vec<u8> = (0..slabs).flat_map(|j| std::iter::repeat_n((j * 2) as u8, bins)).collect();
+    let run = SpectrogramGrid::slabs_of(&run, bins);
+    // No tilt: a column is then one colour top to bottom, so a wrong slot
+    // cannot hide behind the pitch axis.
+    let read = SpectrogramRead { level_per_midi: 0.0, ..read_of(18.0, 4.0, 96) };
+
+    for (capacity, first_key) in [(128u32, -37i64), (160, -37)] {
+        let grid = SpectrogramGrid {
+            full_uploads: Arc::default(),
+            capacity,
+            bins: bins as u32,
+            first_key,
+            run: run.clone(),
+        };
+        // The run really does cross the ring's end.
+        let first_slot = slot_of(first_key, capacity);
+        assert!(
+            first_slot + slabs as u32 > capacity,
+            "capacity {capacity} does not make this run wrap"
+        );
+        let reference = Reference { grid: grid.clone(), read: read.clone(), shades: shades() };
+        let want: Vec<[u8; 4]> =
+            (0..slabs).map(|j| reference.color_at(j as f32 + 0.5, 0.5)).collect();
+        for j in 1..slabs {
+            assert_ne!(want[j - 1], want[j], "slabs {j} and {} draw alike", j - 1);
+        }
+
+        let cb = callback(full_quad(slabs as u32), &grid, &read);
+        let frame = fresh_frame(&device, &queue, &cb);
+        for (px, expected) in want.iter().enumerate() {
+            let i = ((SIZE[1] / 2) * SIZE[0] + px as u32) as usize * 4;
+            let got: [u8; 4] = frame[i..i + 4].try_into().expect("four channels");
+            assert_eq!(
+                got, *expected,
+                "column {px} of a run at {first_key} in a ring of {capacity}"
+            );
+        }
+    }
+}
+
+/// Two spectrograms in one frame keep their own grid copies, and a pane
+/// that stops drawing gives its copy back.
+///
+/// A closed tab holding a grid is the reason the sweep exists — and there
+/// is no teardown to hang it on, a closed tab
+/// simply stopping calling back, so the sweep runs from whichever pane IS
+/// preparing.
+#[test]
+fn a_pane_that_stops_drawing_gives_its_grid_back() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let read = read_of(18.0, 24.0, 48);
+    let grid = grid_of(noisy_grid(BINS as usize, 6), BINS, 8, 0);
+    let of_pane = |pane_id| SpectrogramCallback { pane_id, ..callback(full_quad(6), &grid, &read) };
+    let (mut docked, preview) = (of_pane(0), of_pane(1));
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &docked);
+    prepare_once(&device, &queue, &mut resources, &preview);
+    let live = |resources: &CallbackResources| {
+        let spectrogram: &SpectrogramResources =
+            resources.get().expect("prepare inserts its resources");
+        let mut ids: Vec<u64> = spectrogram.panes.keys().collect();
+        ids.sort_unstable();
+        ids
+    };
+    assert_eq!(live(&resources), vec![0, 1], "both spectrograms should hold buffers");
+    let held = |resources: &CallbackResources, id: u64| {
+        let spectrogram: &SpectrogramResources = resources.get().expect("resources");
+        spectrogram
+            .panes
+            .get(id)
+            .expect("a drawn pane holds a grid")
+            .grid
+            .as_ref()
+            .expect("a drawn pane holds a grid")
+            .buffer
+            .size()
+    };
+    assert_eq!(held(&resources, 0), held(&resources, 1), "each pane sizes its own copy");
+
+    for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
+        docked.pass_nr = pass_nr;
+        prepare_once(&device, &queue, &mut resources, &docked);
+    }
+    assert_eq!(live(&resources), vec![0], "the closed pane is still holding its grid");
+}
+
+/// [`SpectrogramHeadless::frame`] is the callback, so a dependent crate's
+/// parity test measures the path that ships rather than a second one.
+#[test]
+fn the_headless_frame_is_the_frame_the_callback_paints() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let read = read_of(18.0, 24.0, 48);
+    let grid = grid_of(noisy_grid(BINS as usize, 6), BINS, 8, 0);
+    let cb = callback(full_quad(6), &grid, &read);
+    let through_callback = fresh_frame(&device, &queue, &cb);
+    let through_entry = SpectrogramHeadless::new()
+        .expect("this machine has an adapter, the harness above just used it")
+        .frame(0, SIZE, full_quad(6), grid.clone(), read.clone(), shades());
+    assert_eq!(through_entry, through_callback);
+}
+
+/// Every point of the plane is inside some glob of the wash's base octave,
+/// and every glob that reaches a point is inside the ring the scan walks.
+/// Three things push on those two inequalities.
+///
+/// `Wander` is ABSENT from both, and that is the design rather than an
+/// oversight: it turns each glob's jitter offset about its own cell instead
+/// of adding a travel to it, so the offset's length never changes and the
+/// clock cannot carry a glob anywhere the ring does not already reach. What
+/// it costs instead is the `sqrt(2)` on the reach side — a rotated corner of
+/// the jitter box can point along either axis, where an unturned one is at
+/// most `JITTER / 2` along it.
+///
+/// A retired `Ragged` dial pushed a RIM outward and never inward, so reach
+/// paid `* (1 + WASH_RAGGED)` where coverage read `WASH_RADIUS_MIN`
+/// untouched. One-sided also inflated every rim by about 15% at the setting
+/// that shipped, so the band was scaled by 1.15 as the wobble went and the
+/// globs are the size they always drew. Reach now carries `WASH_RADIUS_MAX`
+/// alone, which leaves room for a band wider than 1.63:1 — a look change,
+/// and Yan's, so the numbers here do not take it.
+///
+/// And the ring is `WASH_RING` cells rather than a hard-coded 1, because at
+/// 3x3 these inequalities leave a radius band of about 1.2:1 at a jitter of
+/// 0.20 — a nearly regular grid of nearly equal globs, which is the one thing
+/// a field of DIFFERENT SIZED globs cannot be. At 5x5 they leave 1.63:1 at a
+/// jitter of 0.40, with 15.4% of a radius spare on coverage and 16.1% on
+/// reach.
+///
+/// Both bounds cover the visible glob and the glob under its rim.
+/// Lookup bleed uses the two-nearest approximation in `wash_scan`.
+///
+/// Read off the shipped shader text, not a transcription: an uncovered point
+/// is not visible as a hole, it is a pixel whose lookup falls from most of a
+/// radius to nothing, which is a hard edge in a construction whose whole
+/// point is not having one.
+#[test]
+fn the_wash_grid_covers_the_plane_and_the_ring_holds_it() {
+    let number = |name: &str| -> f32 {
+        crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
+    };
+    let slack = number("WASH_JITTER") / 2.0 * std::f32::consts::SQRT_2;
+    let smallest = number("WASH_RADIUS_MIN");
+    let largest = number("WASH_RADIUS_MAX");
+    let farthest = 0.5 * std::f32::consts::SQRT_2 + slack;
+    assert!(
+        smallest > farthest,
+        "a glob of {smallest} cannot reach a corner {farthest} away, so at some corner of \
+             the cell grid no glob of the base octave covers the pane and the wash reads its \
+             own light with no centre to borrow"
+    );
+    let unvisited = number("WASH_RING") + 0.5 - slack;
+    assert!(
+        largest < unvisited,
+        "a rim of {largest} reaches {unvisited} into a pixel the ring never visits it from, \
+             so the wash gains and loses that glob as `floor(r)` crosses a cell"
+    );
+}
+
+/// The fixed tile period makes a whole number of cells
+/// out of EVERY lattice the wash's walk hashes on.
+///
+/// A tile is one period of the walk read through a REPEATING sampler, so the
+/// walk has to be periodic or its far edge hashes cells that do not meet its
+/// near edge — a straight seam down the pane every period, which is the same
+/// failure the ring proof above exists to keep off the cell grid.
+///
+/// The walk does not run on one lattice. It has a second octave at its own
+/// lacunarity, and reads a shared warp noise whose cells are
+/// `WASH_WARP_SCALE` across, with a second octave of its own.
+/// `WASH_FBM_FINE` sets that second octave, so it is read here too, and
+/// moving it off a whole number fails this.
+///
+/// Read off the shipped shader text rather than a transcription of it, for
+/// the reason the ring proof above gives.
+#[test]
+fn the_tile_period_tiles_every_lattice() {
+    let number = |name: &str| -> f32 {
+        crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
+    };
+    let fine = number("WASH_FBM_FINE");
+    let warp = number("WASH_WARP_SCALE");
+    let lattices = [
+        ("the wash's fine octave", number("WASH_LACUNARITY")),
+        ("the warp noise", warp),
+        ("the warp noise's own second octave", warp * fine),
+    ];
+    let period = atmosphere::CloudSampling::default().tile_cells as f32;
+    for (name, lattice) in lattices {
+        let cells = lattice * period;
+        assert!(
+            (cells - cells.round()).abs() < 1.0e-3,
+            "a period of {period} leaves {name} {cells} cells across, which is not a \
+                 whole number of them, so the walk does not close on itself and the tile \
+                 draws a seam every period"
+        );
+    }
+}
+
+/// The production shader's hash fold closes on both axes of every derived
+/// lattice, including on their negative sides.
+///
+/// This probes `wrap_cell` itself through a compute entry point.
+/// Sampling a baked texture cannot prove this: a repeating sampler repeats
+/// even a texture whose own two edges do not meet, hiding the seam this
+/// contract exists to prevent.
+#[test]
+fn the_tile_hash_fold_closes_every_lattice() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const COUNT: u64 = 12;
+    let source = format!(
+        "{}\n{}",
+        SPECTROGRAM_SRC,
+        r#"
+struct WrapProbe { cells: array<vec2<i32>, 12> }
+@group(0) @binding(3) var<storage, read_write> wrap_probe: WrapProbe;
+
+@compute @workgroup_size(1)
+fn cs_wrap_probe() {
+    // Base, +x period, +y period for P40 and every derived P40 lattice.
+    wrap_probe.cells[0] = wrap_cell(vec2<i32>(-41, 7), 40);
+    wrap_probe.cells[1] = wrap_cell(vec2<i32>(-1, 7), 40);
+    wrap_probe.cells[2] = wrap_cell(vec2<i32>(-41, 47), 40);
+    wrap_probe.cells[3] = wrap_cell(vec2<i32>(-85, 7), 84);
+    wrap_probe.cells[4] = wrap_cell(vec2<i32>(-1, 7), 84);
+    wrap_probe.cells[5] = wrap_cell(vec2<i32>(-85, 91), 84);
+    wrap_probe.cells[6] = wrap_cell(vec2<i32>(-37, 7), 36);
+    wrap_probe.cells[7] = wrap_cell(vec2<i32>(-1, 7), 36);
+    wrap_probe.cells[8] = wrap_cell(vec2<i32>(-37, 43), 36);
+    wrap_probe.cells[9] = wrap_cell(vec2<i32>(-73, 7), 72);
+    wrap_probe.cells[10] = wrap_cell(vec2<i32>(-1, 7), 72);
+    wrap_probe.cells[11] = wrap_cell(vec2<i32>(-73, 79), 72);
+}
+"#,
+    );
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("spectral_cloud_wrap_probe"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("spectral_cloud_wrap_probe"),
+        layout: None,
+        module: &shader,
+        entry_point: Some("cs_wrap_probe"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let bytes = COUNT * 8;
+    let output = crate::gpu_memory::buffer(
+        &device,
+        &wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_wrap_probe_output"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        },
+    );
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("spectral_cloud_wrap_probe"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[wgpu::BindGroupEntry { binding: 3, resource: output.as_entire_binding() }],
+    });
+    let readback = crate::gpu_memory::buffer(
+        &device,
+        &wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_wrap_probe_readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        },
+    );
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+    queue.submit([encoder.finish()]);
+    let slice = readback.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |result| result.expect("map wrap probe"));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll wrap probe");
+    let mapped = slice.get_mapped_range();
+    let cells: &[[i32; 2]] = bytemuck::cast_slice(&mapped);
+    assert_eq!(cells[0], [39, 7], "negative coordinates did not use positive modulo: {cells:?}");
+    for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]] {
+        assert_eq!(
+            cells[group[0]], cells[group[1]],
+            "an x-period translation changed the wrapped hash cell: {cells:?}"
+        );
+        assert_eq!(
+            cells[group[0]], cells[group[2]],
+            "a y-period translation changed the wrapped hash cell: {cells:?}"
+        );
+    }
+}
+
+/// The fixture the wash is measured over: the ridge pane above, with the
+/// watercolour texture selected and its globs made big enough to BE a
+/// texture on a 128-point pane.
+///
+/// The size is the part that has to be said. At the fresh cloud size this
+/// 128-point pane carries fifty cells, so a glob is under six points across
+/// — and a texture whose own detail is a handful of pixels wide measures its
+/// own aliasing rather than the dial being turned, the same trap
+/// the scale fixture uses. The top of the dial takes the
+/// pane down to twenty-six cells and the glob up to about twelve points,
+/// which is where every figure below was measured.
+fn wash_fixture() -> SpectrogramCallback {
+    let mut cb = cloud_fixture();
+    // Off zero, where the retired `Wander` needed it: every figure measured
+    // over this fixture was taken with the drift three seconds along.
+    cb.atmosphere.as_mut().unwrap().now = 3.0;
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+    s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
+    s.cloud_depth = 1.0;
+    s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+    cb
+}
+
+/// Watercolor displaces structured sound and leaves a constant field alone.
+#[test]
+fn the_wash_reads_the_light_at_each_globs_centre_and_invents_none() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let moved_by_refraction = |cb: &mut SpectrogramCallback| {
+        cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_refract = 0.0;
+        let straight = fresh_frame(&device, &queue, cb);
+        cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_refract = 1.0;
+        let bent = fresh_frame(&device, &queue, cb);
+        let n = straight.len() / 4;
+        straight
+            .chunks_exact(4)
+            .zip(bent.chunks_exact(4))
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+            .count() as f32
+            / n as f32
+    };
+    let over_structure = moved_by_refraction(&mut wash_fixture());
+    let mut flat = wash_fixture();
+    flat.grid.fill(150);
+    let over_flat = moved_by_refraction(&mut flat);
+    assert!(
+        over_structure > 0.02,
+        "carrying every glob's reading from under the pixel to its own centre moved \
+             almost none of the pane over a picture with structure in it, so the wash is not \
+             refracting at all: {over_structure}"
+    );
+    assert_eq!(
+        over_flat, 0.0,
+        "the refraction moved a FEATURELESS picture, so the wash is drawing its globs out \
+             of the paint rather than reading them out of the light: {over_flat} flat against \
+             {over_structure} over structure"
+    );
+}
+
+/// Silence takes the authored palette floor, including a non-black floor.
+#[test]
+fn a_quiet_pane_takes_the_gradients_own_floor_rather_than_black() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let floor = [0u8, 153, 140];
+    let mut cb = wash_fixture();
+    cb.shades.lut = Arc::new(
+        (0..256)
+            .map(|v| {
+                let t = v as f32 / 255.0;
+                let up = |lo: u8| (f32::from(lo) + (255.0 - f32::from(lo)) * t).round() as u8;
+                [up(floor[0]), up(floor[1]), up(floor[2]), 255]
+            })
+            .collect(),
+    );
+    let share = |frame: &[u8], want: [u8; 3]| {
+        let n = frame.len() / 4;
+        frame.chunks_exact(4).filter(|px| px[..3] == want).count() as f32 / n as f32
+    };
+    let lifted = fresh_frame(&device, &queue, &cb);
+    assert_eq!(
+        share(&lifted, [0, 0, 0]),
+        0.0,
+        "a palette with no black in it still drew black over silence, so the picture has \
+             a floor of its own under the scheme's"
+    );
+    assert!(
+        share(&lifted, floor) > 0.5,
+        "the quiet pane did not settle on the palette's own floor: {} of it",
+        share(&lifted, floor)
+    );
+
+    // And the other direction, on the same fixture: a scheme whose floor IS
+    // black still gets black, which is what keeps the fresh Aurora — the
+    // whole `L*` axis, so `L*` 0 at the bottom — drawing the pane it always
+    // drew.
+    cb.shades.lut = Arc::new((0..256).map(|v| [0, (v as f32 * 0.7) as u8, v as u8, 255]).collect());
+    let dark = fresh_frame(&device, &queue, &cb);
+    assert!(
+        share(&dark, [0, 0, 0]) > 0.5,
+        "a palette that does start at black lost it: {} of the pane",
+        share(&dark, [0, 0, 0])
+    );
+}
+
+/// Refraction also moves structured sound when both softness widths are zero.
+#[test]
+fn a_cloud_is_drawn_over_an_unblurred_picture() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let mut cb = wash_fixture();
+    let bytes: Vec<u8> =
+        (0..cb.grid.bytes().len()).map(|i| ((i * 37 + i / 19) % 256) as u8).collect();
+    cb.grid.set_bytes(&bytes);
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+    s.pitch_softness = 0.0;
+    s.time_softness = 0.0;
+    s.cloud_depth = 1.0;
+    let clouded = fresh_frame(&device, &queue, &cb);
+    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+    let bare = fresh_frame(&device, &queue, &cb);
+    let moved = clouded
+        .chunks_exact(4)
+        .zip(bare.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+        .count() as f32
+        / (bare.len() / 4) as f32;
+    assert!(
+        moved > 0.05,
+        "the wash at full depth moved {moved} of a lit pane with both softness dials at \
+             0, so the cloud still needs a blur to be drawn",
+    );
+}
+
+/// Brightness changes colored globs even at zero refraction, without biasing
+/// their linear-light RGB mean. Hundreds of resolved globs reach the random
+/// field; constant palettes isolate brightness from nonlinear palette shifts.
+#[test]
+fn watercolor_random_brightness_preserves_average_color() {
+    let Some((device, queue)) = headless_device() else { return };
+    let linear = |byte: u8| {
+        let v = f64::from(byte) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    for palette in [[96, 128, 160, 255], [210, 230, 250, 255]] {
+        for (sampling, memory) in [(1.0, false), (2.0, false), (1.0, true)] {
+            let mut cb = wash_fixture();
+            cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(384.0, 384.0));
+            cb.atmosphere.as_mut().unwrap().region = cb.rect;
+            relay_quad(&mut cb, 12);
+            cb.grid.fill(150);
+            cb.shades.lut = Arc::new(vec![palette; 256]);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.pitch_softness = 0.0;
+            s.time_softness = 0.0;
+            s.material_settings.wash_size = 0.7;
+            s.material_settings.wash_refract = 0.0;
+            s.color_pickup = if memory { 0.5 } else { 0.0 };
+            s.color_release = s.color_pickup;
+            let mut resources = CallbackResources::default();
+            resources
+                .insert(atmosphere::CloudSampling { pixel_points: sampling, ..Default::default() });
+            let plain = frame_with(&device, &queue, &mut resources, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_randomness = 1.0;
+            let varied = frame_with(&device, &queue, &mut resources, &cb);
+            let cloud = resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .unwrap()
+                .cloud
+                .as_ref();
+            let cloud = cloud.expect("zero refraction must still draw random brightness");
+            if sampling > 1.0 {
+                let size = cloud.shape().tone.expect("fixture must reach reduced tone");
+                assert!(size[0] < 384 && size[1] < 384);
+            }
+            for c in 0..3 {
+                let n = (plain.len() / 4) as f64;
+                let mean = varied.chunks_exact(4).map(|p| linear(p[c])).sum::<f64>() / n;
+                let reference = plain.chunks_exact(4).map(|p| linear(p[c])).sum::<f64>() / n;
+                assert!((mean - reference).abs() < 0.01,
+                        "{palette:?}, sampling={sampling}, memory={memory}, channel={c}: {mean} vs {reference}");
+            }
+            let changed = plain
+                .chunks_exact(4)
+                .zip(varied.chunks_exact(4))
+                .filter(|(a, b)| a[2].abs_diff(b[2]) > 2)
+                .count();
+            assert!(changed > plain.len() / 40, "fixture must resolve varying globs: {changed}");
+            assert_eq!(
+                varied,
+                frame_with(&device, &queue, &mut resources, &cb),
+                "brightness must be stable at a fixed drift time"
+            );
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_randomness = 0.0;
+            assert_eq!(
+                plain,
+                frame_with(&device, &queue, &mut resources, &cb),
+                "zero restores the original color, including carried memory"
+            );
+        }
+    }
+}
+
+/// Edge pooling shades one way only: above 0 it darkens glob edges over a
+/// lit flat field and brightens nothing, below 0 the reverse, and over
+/// silence it draws nothing at all, so the palette's floor needs no black
+/// point. Width narrows the band and Softness reshapes it. A grey ramp makes
+/// "darker" one comparison per pixel.
+#[test]
+fn edge_pooling_shades_one_way_and_leaves_silence_alone() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let frame = |fill: u8, pool: f32, width: f32, softness: f32| {
+        let mut cb = wash_fixture();
+        cb.grid.fill(fill);
+        cb.shades.lut = Arc::new((0..=255u8).map(|v| [v, v, v, 255]).collect());
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.material_settings.wash_refract = 0.0;
+        s.material_settings.wash_fuzz = 0.5;
+        s.material_settings.wash_randomness = 0.0;
+        s.wash_pool = pool;
+        s.wash_pool_width = width;
+        s.wash_pool_softness = softness;
+        s.color_pickup = 0.0;
+        s.color_release = 0.0;
+        fresh_frame(&device, &queue, &cb)
+    };
+    let share = |a: &[u8], b: &[u8], moved: fn(u8, u8) -> bool| {
+        let n = a.len() / 4;
+        a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(a, b)| moved(a[0], b[0])).count() as f32
+            / n as f32
+    };
+    let plain = frame(150, 0.0, 0.55, 0.75);
+    let dark = frame(150, 1.0, 0.55, 0.75);
+    assert_eq!(share(&plain, &dark, |a, b| b > a), 0.0, "darkening lifted a pixel");
+    let darker = share(&plain, &dark, |a, b| a > b + 4);
+    assert!(darker > 0.05, "pooling darkened almost none of a lit pane: {darker}");
+    let light = frame(150, -1.0, 0.55, 0.75);
+    assert_eq!(share(&plain, &light, |a, b| b < a), 0.0, "lightening darkened a pixel");
+    let lighter = share(&plain, &light, |a, b| b > a + 4);
+    assert!(lighter > 0.05, "negative pooling lightened almost none of a lit pane: {lighter}");
+    let narrow = share(&plain, &frame(150, 1.0, 0.2, 0.75), |a, b| a > b + 4);
+    assert!(narrow < 0.7 * darker, "a narrower width reached as much: {narrow} vs {darker}");
+    let hard = share(&plain, &frame(150, 1.0, 0.55, 0.0), |a, b| a > b + 4);
+    assert!(hard > 1.3 * darker, "a hard band darkened no more than the fade: {hard} vs {darker}");
+    let silence = frame(0, 0.0, 0.55, 0.75);
+    for pool in [4.0, -4.0] {
+        assert_eq!(silence, frame(0, pool, 0.55, 0.75), "pooling {pool} drew over silence");
+    }
+}
+
+/// Each retained wash control changes the displacement over structured sound.
+#[test]
+fn the_wash_dials_each_reach_the_globs() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let painted = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+        let mut cb = refracted_fixture();
+        cb.atmosphere.as_mut().unwrap().settings.cloud_style =
+            harmonigraph_scene::CloudStyle::Watercolor;
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_size =
+            harmonigraph_scene::CLOUD_SIZE_MAX;
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.material_settings.wash_fuzz = 0.5;
+        s.material_settings.wash_lobe = 0.5;
+        s.material_settings.wash_layers = 0.5;
+        turn(s);
+        fresh_frame(&device, &queue, &cb)
+    };
+    let plain = painted(|_| {});
+    for (name, turn) in [
+        (
+            "Patch size",
+            (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.material_settings.wash_size = 1.0)
+                as fn(&mut harmonigraph_scene::SpectralAtmosphere),
+        ),
+        ("Edge feathering", |s| s.material_settings.wash_fuzz = 0.0),
+        ("Shape warp", |s| s.material_settings.wash_lobe = 0.0),
+        ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
+        ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
+        ("Edge pooling", |s| s.wash_pool = 1.0),
+    ] {
+        let frame = painted(turn);
+        let n = plain.len() / 4;
+        let moved = plain
+            .chunks_exact(4)
+            .zip(frame.chunks_exact(4))
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+            .count() as f32
+            / n as f32;
+        assert!(moved > 0.02, "{name} moved almost none of the pane: {moved}");
+    }
+}
+
+/// A coarser tone target draws the SAME PICTURE, softened — which is the whole
+/// claim of the reduced path, and the only reason a performance dial is
+/// allowed to be one dial rather than a second look.
+///
+/// Both halves are load-bearing. That the frame CHANGED is what says the
+/// reduced path ran at all, and it is checked twice over — once on the
+/// pixels and once on the pass count, because a frame can differ for any
+/// number of reasons while a third light pass appearing can only be this.
+/// That the change is SMALL is the claim itself: a reduced tone stretched
+/// back over the picture has to land within a rim's softening of the walk it
+/// replaces, and a reduction that had lost the drift, the pane offset or the
+/// style would differ by a great deal more. Measured at 2 pt against a
+/// 1 px/pt fixture — a quarter resolution — the mean absolute channel
+/// difference is 0.34/255 for the wash, no channel anywhere moves more than
+/// 8, and 0.26% of the pane moves past 4 at all.
+#[test]
+fn a_reduced_cloud_draws_the_same_picture_softened() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let passes = |resources: &CallbackResources| {
+        resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .expect("the spectrogram prepared a pane")
+            .cloud
+            .as_ref()
+            .expect("a clouded pane holds its targets")
+            .encoded_passes
+            .load(Ordering::Relaxed)
+    };
+    // The wash fixture's coarse glob: at the fresh size this 128-point
+    // pane draws the texture a handful of pixels wide, which measures its
+    // own aliasing rather than what the tone target lost.
+    let mut cb = wash_fixture();
+    // Displacement of a mostly flat field cannot distinguish a wrong
+    // lookup from a correct one. Noise gives both axes detail to move.
+    cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+    let mut native_resources = CallbackResources::default();
+    let native = frame_with(&device, &queue, &mut native_resources, &cb);
+    // 2 pt against the fixture's 1 pixel per point: a 64 by 64 tone
+    // target under a 128 by 128 pane, which is a quarter of the walk.
+    let mut reduced_resources = CallbackResources::default();
+    reduced_resources.insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
+    let reduced = frame_with(&device, &queue, &mut reduced_resources, &cb);
+    assert_eq!(
+        passes(&reduced_resources),
+        passes(&native_resources) + 1,
+        "the wash encoded no tone pass, so the reduced path never ran"
+    );
+    assert_ne!(native, reduced, "the wash drew the same frame at a quarter resolution");
+    let channels = native.len() / 4 * 3;
+    let mean = native
+        .chunks_exact(4)
+        .zip(reduced.chunks_exact(4))
+        .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
+        .sum::<f64>()
+        / channels as f64;
+    let moved = native
+        .chunks_exact(4)
+        .zip(reduced.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+        .count() as f64
+        / (native.len() / 4) as f64;
+    assert!(
+        mean < 3.0,
+        "a reduced cloud is not the picture the walk draws: mean {mean}, moved {moved}"
+    );
+}
+
+/// A reduced cloud draws no seam along the edge the region starts at.
+///
+/// Every other cloud fixture here sets `region: cb.rect`, so the region's
+/// boundary does not exist in any of them and this is the geometry the
+/// crate never rendered. Production is the other way round: `rect` is the
+/// painter's whole clip and `region` starts at the analyzer divider
+/// (`Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0))`), so at
+/// the shipped `roll_fraction` the region is a strict sub-rect by DEFAULT
+/// and the divider is an edge interior to the tone target.
+///
+/// The trap is that the tone target is sized from the whole pane and the
+/// composite reads it at `pt / cloud.size` over that same whole pane, while
+/// the pass that fills it draws the REGION quad and clears the rest to
+/// zero. `cloud_sampler` is `Linear`, so a fragment on the region's inside
+/// edge took up to half its tone from a cleared texel, and after #934 a
+/// tone of zero is `palette_color(0)` — the gradient's own floor. The band
+/// is half a tone texel wide, so it widens with the dial: invisible at the
+/// fresh 0.5 pt, which takes the native path and allocates no target at all.
+///
+/// Measured on this fixture at two device pixels a sample, the production
+/// maximum. With the tone pass put back on the region quad, the first row
+/// inside the region's edge reads 13.22 mean absolute channel difference
+/// from the native walk, against an interior that stays under 1.5;
+/// repaired, the two edge rows read 0.22 and the interior stays under
+/// 0.53. The bound below sits
+/// between the interior's own band and the seam, which is the claim: an
+/// edge row is no further from the walk than the middle of the pane is.
+///
+/// Only rows INSIDE the region are measured. Production draws the cloud
+/// over the backdrop's region quad and the heatmap mesh, both of which stop
+/// at the divider, so what this fixture's full-pane mesh puts above the
+/// region is not a picture anyone sees.
+#[test]
+fn a_reduced_cloud_draws_no_seam_where_its_region_starts() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let mut cb = wash_fixture();
+    // The noisy grid for the same reason the sibling test takes it: over a
+    // flat picture both resolutions draw the same few levels and a seam has
+    // nothing to stand against.
+    cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+    let split = 0.25;
+    {
+        let a = cb.atmosphere.as_mut().unwrap();
+        let r = cb.rect;
+        a.region =
+            egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y + r.height() * split), r.max);
+        assert!(
+            a.region.height() < r.height(),
+            "the region is not a strict sub-rect, so this fixture never reaches the edge"
+        );
+    }
+    let mut native_res = CallbackResources::default();
+    let native = frame_with(&device, &queue, &mut native_res, &cb);
+    // 2 pt against the fixture's 1 pixel per point, the production maximum
+    // of two device pixels, so a cleared texel reaches a pixel into the
+    // region.
+    let mut reduced_res = CallbackResources::default();
+    reduced_res.insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
+    let reduced = frame_with(&device, &queue, &mut reduced_res, &cb);
+    let (w, h) = (SIZE[0] as usize, SIZE[1] as usize);
+    let row_mean = |y: usize| {
+        let mut sum = 0.0f64;
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            for c in 0..3 {
+                sum += f64::from(native[i + c].abs_diff(reduced[i + c]));
+            }
+        }
+        sum / (w * 3) as f64
+    };
+    let first = (h as f32 * split) as usize;
+    let edge: Vec<f64> = (first..first + 2).map(row_mean).collect();
+    let interior: Vec<f64> = (first + 4..h).map(row_mean).collect();
+    let worst_edge = edge.iter().cloned().fold(0.0, f64::max);
+    let worst_interior = interior.iter().cloned().fold(0.0, f64::max);
+    // Both halves matter. A reduced cloud that had lost the picture
+    // everywhere would make the interior large and let the edge through.
+    assert!(
+        worst_interior < 8.0,
+        "the reduced cloud is not the walk anywhere, so the edge proves nothing: \
+             interior {worst_interior:.2}"
+    );
+    assert!(
+        worst_edge < 8.0,
+        "a reduced cloud seams where its region starts: edge {edge:?} against an \
+             interior worst of {worst_interior:.2}"
+    );
+}
+
+thread_local! {
+    /// Consumed only when the timing probe's first real source pass runs.
+    pub(super) static SOURCE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The source every spectrogram pipeline is built from: production's, or
+/// the reference a star-image test asks for.
+pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
+    if let Some(source) = star_image::reference_source() {
+        return source.into();
+    }
+    SPECTROGRAM_SRC.into()
+}
+
+/// The production Watercolor lookup is the exact 3-4-5 rotation in
+/// semantic `(time, pitch)` coordinates, whichever pane axis carries
+/// pitch.
+///
+/// This probes the helpers themselves through a compute entry point. A
+/// rendered repeat alone cannot tell a 36.87-degree turn from an arbitrary
+/// affine transform whose two sampled patches happen to agree. It also
+/// checks the directional channels: rotating the lookup without rotating
+/// those vectors would leave refraction on the old axes.
+#[test]
+fn the_watercolor_tile_uses_the_exact_rotation_in_both_pane_orientations() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const COUNT: u64 = 10;
+    let source = format!(
+        "{}\n{}",
+        SPECTROGRAM_SRC,
+        r#"
+struct RotationProbe { values: array<vec2<f32>, 10> }
+@group(0) @binding(3) var<storage, read_write> rotation_probe: RotationProbe;
+
+@compute @workgroup_size(1)
+fn cs_rotation_probe() {
+    // Pitch vertical: the two P40 repeat vectors, pure time, and local time.
+    rotation_probe.values[0] = watercolor_tile_uv_for(vec2<f32>(32.0, 24.0), 40.0, 1u);
+    rotation_probe.values[1] = watercolor_tile_uv_for(vec2<f32>(-24.0, 32.0), 40.0, 1u);
+    rotation_probe.values[2] = watercolor_tile_uv_for(vec2<f32>(40.0, 0.0), 40.0, 1u);
+    rotation_probe.values[3] =
+        rotate_watercolor_tile_vector_for(vec2<f32>(1.0, 0.0), 1u);
+    // The same semantic vectors when physical x is pitch and y is time.
+    rotation_probe.values[4] = watercolor_tile_uv_for(vec2<f32>(24.0, 32.0), 40.0, 0u);
+    rotation_probe.values[5] = watercolor_tile_uv_for(vec2<f32>(32.0, -24.0), 40.0, 0u);
+    rotation_probe.values[6] = watercolor_tile_uv_for(vec2<f32>(0.0, 40.0), 40.0, 0u);
+    rotation_probe.values[7] =
+        rotate_watercolor_tile_vector_for(vec2<f32>(0.0, 1.0), 0u);
+    // The production tile reader must apply that vector transform to BOTH
+    // sampled octaves, rather than merely leaving the helper correct but dead.
+    let field = wash_tile_field(vec2<f32>(0.0));
+    rotation_probe.values[8] = field.coarse.offset;
+    rotation_probe.values[9] = field.fine.offset;
+}
+"#,
+    );
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("spectral_cloud_rotation_probe"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("spectral_cloud_rotation_probe"),
+        layout: None,
+        module: &shader,
+        entry_point: Some("cs_rotation_probe"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let bytes = COUNT * 8;
+    let output = crate::gpu_memory::buffer(
+        &device,
+        &wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_rotation_probe_output"),
+            size: bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        },
+    );
+    let output_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("spectral_cloud_rotation_probe"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[wgpu::BindGroupEntry { binding: 3, resource: output.as_entire_binding() }],
+    });
+    let make_tile = |label, rgba: [u8; 4]| {
+        let texture = crate::gpu_memory::texture(
+            &device,
+            &wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+        );
+        queue.write_texture(
+            texture.as_image_copy(),
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    };
+    let (_coarse_texture, coarse_view) =
+        make_tile("spectral_cloud_rotation_coarse", [255, 0, 64, 0]);
+    let (_fine_texture, fine_view) = make_tile("spectral_cloud_rotation_fine", [0, 255, 128, 255]);
+    let uniform_bytes = atmosphere::watercolor_tile_probe_uniform(true);
+    let uniform = crate::gpu_memory::buffer(
+        &device,
+        &wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_rotation_uniform"),
+            size: uniform_bytes.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        },
+    );
+    queue.write_buffer(&uniform, 0, &uniform_bytes);
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("spectral_cloud_rotation_sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    let tile_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("spectral_cloud_rotation_tiles"),
+        layout: &pipeline.get_bind_group_layout(1),
+        entries: &[
+            wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&coarse_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&fine_view),
+            },
+            // The pigment tile, never sampled: the probe's pigment dials are 0.
+            wgpu::BindGroupEntry {
+                binding: 13,
+                resource: wgpu::BindingResource::TextureView(&coarse_view),
+            },
+            wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&sampler) },
+        ],
+    });
+    let readback = crate::gpu_memory::buffer(
+        &device,
+        &wgpu::BufferDescriptor {
+            label: Some("spectral_cloud_rotation_probe_readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        },
+    );
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &output_group, &[]);
+        pass.set_bind_group(1, &tile_group, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+    queue.submit([encoder.finish()]);
+    let slice = readback.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |result| result.expect("map rotation probe"));
+    device.poll(wgpu::PollType::wait_indefinitely()).expect("poll rotation probe");
+    let mapped = slice.get_mapped_range();
+    let values: &[[f32; 2]] = bytemuck::cast_slice(&mapped);
+    let close = |actual: [f32; 2], expected: [f32; 2]| {
+        assert!(
+            actual.into_iter().zip(expected).all(|(a, b)| (a - b).abs() < 1.0e-6),
+            "{actual:?} is not {expected:?}: {values:?}"
+        );
+    };
+    for index in [0, 4] {
+        close(values[index], [1.0, 0.0]);
+    }
+    for index in [1, 5] {
+        close(values[index], [0.0, 1.0]);
+    }
+    for index in [2, 6] {
+        close(values[index], [0.8, -0.6]);
+    }
+    close(values[3], [0.8, 0.6]);
+    close(values[7], [0.6, 0.8]);
+    close(values[8], [0.8, 0.6]);
+    close(values[9], [-0.6, 0.8]);
+}
+
+/// The tile is rebaked when the WALK moves and never when the picture does.
+///
+/// This is the cache-key half of the dial, and a key is wrong in two
+/// directions: a dial the walk reads and the key does not serves a stale
+/// texture, while one the key carries and the walk does not pays a whole
+/// cell walk — tens of milliseconds — on every frame of a drag of it. So
+/// both lists are here, and the clock is at the head of the second: the
+/// drift slides a fixed field rather than changing one, which is the whole
+/// reason this cache can exist.
+///
+/// The key comparison is what decides, so it is what is checked; the pass
+/// count at the end is the seam that says `prepare` actually asks it,
+/// rather than rebaking around it on a resize of something else.
+#[test]
+fn the_tile_is_rebaked_only_when_the_walk_moves() {
+    let key_at = |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere), now, pitch_vertical| {
+        let mut settings = harmonigraph_scene::SpectralAtmosphere {
+            cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+            ..Default::default()
+        };
+        turn(&mut settings);
+        atmosphere::tile_key(
+            [1920, 1080],
+            SpectrogramAtmosphere {
+                settings,
+                region: egui::Rect::ZERO,
+                pitch_vertical,
+                points_per_cent: 0.03,
+                points_per_ms: 0.01,
+                points_per_slab: 0.0,
+                now,
+                history_epoch: 0,
+            },
+            atmosphere::CloudSampling::default().tile_cells,
+        )
+    };
+    let key = |turn, now| key_at(turn, now, true);
+    let fresh = key(|_| {}, 0.0);
+    assert!(fresh.is_some(), "the fixture turned the tile on and got no tile");
+    assert_ne!(
+        key_at(|_| {}, 0.0, false),
+        fresh,
+        "changing which axis is time kept a Watercolor tile baked for the old rotated basis"
+    );
+    for now in [0.5, 7.0, 600.0] {
+        assert_eq!(key(|_| {}, now), fresh, "a clock of {now} rebaked a field that only slid");
+    }
+    type Turn = fn(&mut harmonigraph_scene::SpectralAtmosphere);
+    for (name, turn) in [
+        ("Drift speed", (|s| s.cloud_speed = 20.0) as Turn),
+        ("Drift direction", |s| s.cloud_direction = 42.0),
+        ("Texture mix", |s| s.cloud_depth = 0.5),
+        ("Refraction", |s| s.material_settings.wash_refract = 0.2),
+        ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
+        ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
+        ("Edge pooling", |s| s.wash_pool = 1.0),
+        ("Pooling width", |s| s.wash_pool_width = 0.2),
+        ("Pooling softness", |s| s.wash_pool_softness = 0.0),
+        ("Pitch softness", |s| s.pitch_softness = 300.0),
+        // Scales' own dial, which the wash's walk cannot read.
+        ("Size variation", |s| s.material_settings.velvet_variety = 1.0),
+    ] {
+        assert_eq!(key(turn, 0.0), fresh, "{name} rebaked a tile it cannot reach");
+    }
+    for (name, turn) in [
+        ("Shape warp", (|s| s.material_settings.wash_lobe = 0.0) as Turn),
+        ("Edge feathering", |s| s.material_settings.wash_fuzz = 0.0),
+        // Through the tile's texel size alone — how many cells cross the
+        // pane, not what a cell draws.
+        ("Patch size", |s| s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),
+    ] {
+        assert_ne!(key(turn, 0.0), fresh, "{name} reaches the walk and did not rebake");
+    }
+    assert_eq!(key(|s| s.cloud_depth = 0.0, 0.0), None, "a disabled cloud still allocated a tile");
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let passes = |resources: &CallbackResources| {
+        resources
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .expect("the spectrogram prepared a pane")
+            .cloud
+            .as_ref()
+            .expect("a clouded pane holds its targets")
+            .encoded_passes
+            .load(Ordering::Relaxed)
+    };
+    let mut cb = wash_fixture();
+    // `encoded_passes` lives on the TARGETS, so it only counts across
+    // frames that hold on to them — and the orientation flip below
+    // transposes the light field's size as soon as `Blur time step` bounds
+    // the time axis (12 texels one way round, 128 the other), which rebuilds
+    // them and starts the counter over. The tile survives that rebuild;
+    // the instrument watching it does not, so the field stays square.
+    cb.atmosphere.as_mut().unwrap().settings.blur_time_step = 0.0;
+    let mut resources = CallbackResources::default();
+    frame_with(&device, &queue, &mut resources, &cb);
+    let first = passes(&resources);
+    cb.atmosphere.as_mut().unwrap().now = 9.0;
+    frame_with(&device, &queue, &mut resources, &cb);
+    let steady = passes(&resources) - first;
+    assert_eq!(first, steady + 1, "the first frame encoded no bake, so nothing is cached");
+    cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_fuzz = 0.9;
+    frame_with(&device, &queue, &mut resources, &cb);
+    assert_eq!(
+        passes(&resources) - first - steady,
+        steady + 1,
+        "a dial the walk reads left the tile standing"
+    );
+    let after_dial = passes(&resources);
+    cb.atmosphere.as_mut().unwrap().pitch_vertical = false;
+    frame_with(&device, &queue, &mut resources, &cb);
+    assert_eq!(
+        passes(&resources) - after_dial,
+        steady + 1,
+        "changing which axis is time did not rebake the rotated tile"
+    );
+    let after_orientation = passes(&resources);
+    frame_with(&device, &queue, &mut resources, &cb);
+    assert_eq!(
+        passes(&resources) - after_orientation,
+        steady,
+        "an unchanged pane orientation rebaked the rotated tile again"
+    );
+}
+
+mod star_image;
+mod timing;
