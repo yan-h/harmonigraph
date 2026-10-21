@@ -996,13 +996,13 @@ impl Default for SpectrumConfig {
             roll_thickness: 0.551_037_2,
             // Picked off contact sheets (S4, rounds R7-R8, 2026-10-20) and then
             // the dials (#1528): the whole backdrop cut at the edge, fading out
-            // over 15 points to black, with the crease between notes rounded
-            // all the way out. The fill's lightness is W8's deep haze, for a
-            // fill dialled up from 0.
+            // over 15 points, filled with each note's own hue at W8's deep haze
+            // of a lightness, with the crease between notes rounded all the way
+            // out.
             note_cut: 1.0,
             note_cut_reach: 15.0,
             note_cut_shape: 0.0,
-            note_cut_fill: 0.0,
+            note_cut_fill: 1.0,
             note_fill_lightness: 7.0,
             note_halo_blend: 1.0,
             // A long tongue whose fade spans nearly its whole reach: about a

@@ -233,7 +233,7 @@
         note_cut: 1.0,
         note_cut_reach: 15.0,
         note_cut_shape: 0.0,
-        note_cut_fill: 0.0,
+        note_cut_fill: 1.0,
         note_fill_lightness: 7.0,
         note_halo_blend: 1.0,
         note_names: true,
