@@ -91,7 +91,7 @@ three picked looks that are one construction at different settings is a build pl
   enter the worktree before spawning the builder.
 - The builder proves the port **by picture**: the plugin's render of each picked cell beside the prototype's, through the offline frame harness (a scratch `#[cfg(test)]` on `crate::frames::Renderer` with `crate::frames::single_pane(harmonigraph_ui::Pane::Spectral)` and real audio, saved with `image::save_buffer`; delete it before committing).
   Compare structure, not colour — the kit's palette is not the plugin's.
-- What the existing look's golden frames prove is that the new style did not disturb it: they pass UNBLESSED or something is wrong.
+- What the existing look's golden frames prove is that the new style did not disturb it: `tools/golden-diff.py` reports none of them moved, or something is wrong.
 - Measure cost against the look it sits beside, back to back, and report it rather than quietly trading the look for speed.
 
 After he has turned the dials in Bitwig, read the values back with the `capture-daw-state` skill rather than asking him to describe where they ended up.

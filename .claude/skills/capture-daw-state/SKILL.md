@@ -52,7 +52,7 @@ That is the intended trade, not an accident.
 defaults.
 - A capture moves no golden frame:
 both sets draw from the pinned `crates/harmonigraph-golden/look.ron`, not from these defaults.
-A golden that moves anyway is a fixture still reading a default, so pin that fixture rather than blessing (the `pr-hygiene` skill).
+A golden that moves anyway is a fixture still reading a default, so pin that fixture rather than stating a picture change (the `pr-hygiene` skill).
 
 ## Using `--appearance`
 

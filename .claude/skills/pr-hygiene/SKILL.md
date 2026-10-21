@@ -31,34 +31,32 @@ where `code-review` argues against each finding before anyone acts on it.
 
 No diff review at any effort covers the class that actually slips through here, a picture change:
 #453 moved the frame by a mean 3.3–3.7/255 with local swings of −90 while the suite stayed 146/0 green.
-Byte-exact golden frames cover it, both the parts a feature PR is not supposed to reach and the ones a given rework is.
+Byte-exact golden frames, drawn from the base and the branch, cover it: both the parts a feature PR is not supposed to reach and the ones a given rework is.
 There are two sets:
 the lattice's in `harmonigraph-render`'s `lattice_tests::golden`, and the spectral pane's in `harmonigraph-offline`'s `golden`, which needs a whole UI frame and so cannot live beside the first.
 
-**A changed golden is a stated picture change**, and the PR body is where it is stated.
-The frames on record are the CI runner's, and Yan's Mac no longer draws them:
-on 2026-10-18 it drew every frame of both sets 1–3/255 off a `main` CI passed,
-so a local `HARMONIGRAPH_BLESS=1 cargo test --workspace golden` bakes that drift into every frame and turns CI red.
-Re-baseline from the run instead:
-push, let `Full CI` fail, `gh run download <run> -n golden-diff-workspace` and `-n golden-diff-isolated`,
-read each contact sheet, then copy the artifact's `actual/*` over `crates/`.
-One failed run writes every frame that moved, so one re-baseline is enough unless the picture moves again.
-Locally the goldens stay red on `main` until the runner's macOS catches up, so read them there as advisory, for the contact sheet.
-Read the sheet before re-baselining either way:
-a bless nobody looked at is the failure the gate exists to catch, not a step on the way past it.
-Reading it is the session's job, not Yan's:
-he judges a look in the DAW, and the PR body's what-moved line, with each frame's mean and max, is the record of the bless.
+**A moved golden is a stated picture change**, and the PR body is where it is stated.
+Nothing is committed and nothing is blessed:
+`tools/golden-diff.py` draws every golden frame from the base and from the branch on one machine, byte-exactly, and names each frame that moved with its mean, max and a contact sheet.
+Run it locally under `./session-lifecycle.sh run --` (about 40 s);
+`Full CI` runs it in `isolated` against `HEAD^1` and uploads the `golden-diff` artifact.
+When a frame moved, read its sheet, then put a line starting `Golden frames moved:` in the PR body with the table and why.
+`Full CI`'s Linux summary job fails without that line;
+after adding it, re-run that job alone (`gh run rerun <run> --job <job id>`), not the macOS groups.
+Reading the sheet is the session's job, not Yan's:
+he judges a look in the DAW, and the PR body's line is the record of what moved.
+A frame reported unstable was drawn differently twice by the same build, which is nondeterminism to report, not a picture change.
 
 The gate earns its keep on the PR that must not move the picture —
 a refactor, a frame saving, a cache —
-where "every golden passes unblessed" is the only proof of "behaviour-preserving" this repo has.
+where `tools/golden-diff.py --strict` (exit 1 if anything moved) is the proof of "behaviour-preserving" this repo has, and can now be had before pushing.
 On a PR that means to move the picture it is a formality, so keep those rare:
 
 - Every frame is drawn from the pinned look in `crates/harmonigraph-golden/look.ron`, never from the fresh defaults, so capturing a DAW look as the new defaults moves no golden.
-  A golden that does move under a capture is a fixture still reading a default: pin it rather than bless.
+  A golden that does move under a capture is a fixture still reading a default: pin it rather than state it as a picture change.
   `harmonigraph_golden::LOOK` documents how the pinned look ages under a new, renamed or dropped field.
 - Do not add a golden for a look still being dialled in.
-  It is re-blessed on every round and proves nothing, as the starfield's were through #1136–#1457;
+  It moves on every round and proves nothing, as the starfield's did through #1136–#1457;
   claim tests carry a look while it moves, and a golden joins once it settles.
 
 The merge audit is Yan's to start (`CLAUDE.md` and the shared `audit-merges` skill hold the rule).
