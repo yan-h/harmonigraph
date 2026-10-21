@@ -28,11 +28,9 @@ fn main() {
         assert_eq!(PathBuf::from(name).file_name().unwrap(), name.as_str());
         let bytes = fs::read(directory.join(name)).unwrap();
         assert!(!bytes.is_empty(), "empty Metal asset: {name}");
-        assert_eq!(
-            format!("{:x}", Sha256::digest(bytes)),
-            hash.as_str().unwrap(),
-            "changed Metal asset: {name}"
-        );
+        // sha2 0.11's digest no longer implements `LowerHex`.
+        let digest: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(digest, hash.as_str().unwrap(), "changed Metal asset: {name}");
     }
     let mut generated = String::from("pub static ASSETS: &[Asset] = &[\n");
     for name in files.iter().filter(|name| name.ends_with(".metal")) {
