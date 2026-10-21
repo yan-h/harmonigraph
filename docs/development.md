@@ -7,7 +7,7 @@ start with the [project README](../README.md).
 
 ## Prerequisites
 
-The Rust toolchain is pinned by [`rust-toolchain.toml`](../rust-toolchain.toml) (1.92).
+The Rust toolchain is pinned by [`rust-toolchain.toml`](../rust-toolchain.toml) (1.99.1).
 With rustup installed,
 the first build installs it automatically.
 
