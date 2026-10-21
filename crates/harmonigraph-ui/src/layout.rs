@@ -180,7 +180,7 @@ impl Layout {
 
 /// Divider thickness in points. A hairline: enough to separate two panels,
 /// not enough to become a graphic element of its own.
-const DIVIDER_WIDTH: f32 = 1.0;
+pub(crate) const DIVIDER_WIDTH: f32 = 1.0;
 
 #[cfg(test)]
 mod tests {

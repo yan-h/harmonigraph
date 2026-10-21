@@ -213,7 +213,7 @@ fn preview_layout_controls(
         } else {
             [egui::pos2(rect.left(), seam.y), egui::pos2(rect.right(), seam.y)]
         };
-        ui.painter().line_segment(ends, egui::Stroke::new(1.0, color));
+        ui.painter().line_segment(ends, egui::Stroke::new(crate::layout::DIVIDER_WIDTH, color));
     }
     // Freeze the choice made at press time. Letting Shift change during a drag
     // switch modes would first pan the camera and then redock the picture on
@@ -1235,7 +1235,7 @@ mod tests {
                 })
                 .collect();
         }
-        assert_eq!(lit, [1.0], "the hovered seam's lit strokes");
+        assert_eq!(lit, [crate::layout::DIVIDER_WIDTH], "the hovered seam's lit strokes");
     }
 
     #[test]

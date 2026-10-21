@@ -330,6 +330,7 @@ so Shift and Caps Lock letters still produce egui key events.
 Upstream negates x on every macOS wheel, but macOS has already turned a Shift+wheel into a horizontal delta carrying the vertical wheel's own sign, and egui folds a Shift wheel back to `x + y`,
 so the flip reversed every Shift-wheel and with it the lattice's zoom.
 Upstream egui-baseview 0.9.0 still flips unconditionally, so a migration carries this forward.
+Unchecked on a trackpad: a sideways swipe with Shift held keeps its raw sign too, which is reversed if macOS swaps no axes for a precise scroll.
 `wheel_delta` is a pure function with its own tests in `vendor/egui-baseview`, which `ci.sh` runs.
 - **`[workspace]` table** (`Cargo.toml`): an empty `[workspace]` table, for the same ancestor-root-exclusion reason `vendor/baseview/Cargo.toml` carries one —
 without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
