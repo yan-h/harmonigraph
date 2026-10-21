@@ -137,16 +137,7 @@ pub fn close(state: &SharedState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params::{ParamBackend, ParamKey};
-    use crate::tests::probe::fresh;
-
-    struct Defaults;
-    impl ParamBackend for Defaults {
-        fn get(&self, key: ParamKey) -> f32 {
-            key.default_value()
-        }
-        fn set(&self, _: ParamKey, _: f32) {}
-    }
+    use crate::tests::probe::{fresh, Defaults};
 
     fn frame(ctx: &egui::Context, state: &mut SharedState, size: egui::Vec2) -> Option<egui::Vec2> {
         let mut ask = None;
