@@ -270,7 +270,9 @@ fn band_shapes(
                             Pos2::new(x + low, end.bottom() - low),
                             Pos2::new(x + high, end.bottom() - high),
                         ],
-                        Stroke::new(theme::GRID_WIDTH, theme::well()),
+                        // Scaled with the pitch it is laid at, as a texture's
+                        // grain is: fixed, it filled most of the band at 0.7.
+                        Stroke::new(theme::GRID_WIDTH * scale, theme::well()),
                     ));
                 }
                 x += 3.0 * scale;

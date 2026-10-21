@@ -190,10 +190,10 @@ pub(crate) const ROW_GAP: f32 = 4.0;
 pub(crate) const LINE_WIDTH: f32 = 2.0;
 
 /// The width a grid is ruled at, the one line finer than [`LINE_WIDTH`] and
-/// fixed like it: the analyzer's rulings, the Spiral's seam and rays, and the
-/// Intensity bar's clip hatching, whose 3-point pitch a full line would fill
-/// solid. A grid is a scale behind the data and must not outweigh it. Otonal's
-/// `GRID_WIDTH`, half a line.
+/// fixed like it: the analyzer's rulings and the Spiral's seam and rays. A grid
+/// is a scale behind the data and must not outweigh it. Otonal's `GRID_WIDTH`,
+/// half a line. The Intensity bar's clip hatching is laid at it too, scaled
+/// with the 3-point pitch it is a texture at, which a full line would fill solid.
 pub(crate) const GRID_WIDTH: f32 = 0.5 * LINE_WIDTH;
 
 /// Paint an open path whose ends are round, for a line or a glyph stroke that
@@ -205,19 +205,33 @@ pub(crate) const GRID_WIDTH: f32 = 0.5 * LINE_WIDTH;
 /// The discs go in as one tessellated mesh rather than as circle shapes, so
 /// they are never mistaken for the dots a widget draws on purpose.
 ///
-/// A translucent stroke keeps square ends: a disc over its end would paint it
-/// twice there.
-pub(crate) fn round_ended(painter: &egui::Painter, points: Vec<egui::Pos2>, stroke: Stroke) {
+/// A level or plumb segment is snapped to the pixel grid HERE, the way egui's
+/// tessellator would snap it, so the caps are laid at the line egui draws
+/// rather than up to half a pixel off it.
+///
+/// A translucent stroke keeps square ends, and so does one in a faded painter
+/// (a disabled section): a disc over its end would paint it twice there.
+pub(crate) fn round_ended(painter: &egui::Painter, mut points: Vec<egui::Pos2>, stroke: Stroke) {
+    let ctx = painter.ctx();
+    if let [a, b] = &mut points[..] {
+        let ppp = ctx.pixels_per_point();
+        if a.x == b.x {
+            stroke.round_center_to_pixel(ppp, &mut a.x);
+            b.x = a.x;
+        } else if a.y == b.y {
+            stroke.round_center_to_pixel(ppp, &mut a.y);
+            b.y = a.y;
+        }
+    }
     let ends = [points.first().copied(), points.last().copied()];
     if let [a, b] = points[..] {
         painter.line_segment([a, b], stroke);
     } else {
         painter.add(egui::Shape::line(points, stroke));
     }
-    if !stroke.color.is_opaque() {
+    if !stroke.color.is_opaque() || painter.opacity() < 1.0 {
         return;
     }
-    let ctx = painter.ctx();
     let options = ctx.tessellation_options(|options| *options);
     let mut tessellator =
         egui::epaint::Tessellator::new(ctx.pixels_per_point(), options, [1, 1], Vec::new());

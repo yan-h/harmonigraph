@@ -186,35 +186,53 @@ fn nonsense_caps_read_as_uncapped() {
 }
 
 /// A line that stops in open space ends round: a disc half its width over each
-/// end, in the stroke's own color. A translucent one keeps egui's square ends,
-/// which a disc would paint over twice.
+/// end, in the stroke's own color, laid where egui actually draws the line — a
+/// level line off the pixel grid is snapped onto it first, caps and all. A
+/// translucent line, or one in a faded (disabled) painter, keeps egui's square
+/// ends, which a disc would paint over twice.
 #[test]
 fn an_opaque_line_ends_round_and_a_translucent_one_square() {
-    let (a, b) = (egui::pos2(20.0, 40.0), egui::pos2(80.0, 40.0));
-    let caps = |color: egui::Color32| {
+    let (a, b) = (egui::pos2(20.0, 40.3), egui::pos2(80.0, 40.3));
+    let caps = |color: egui::Color32, disabled: bool| {
         let stroke = egui::Stroke::new(theme::LINE_WIDTH, color);
+        let mut y = a.y;
         let out = super::probe::painted_full(egui::vec2(100.0, 80.0), |ui| {
+            stroke.round_center_to_pixel(ui.pixels_per_point(), &mut y);
+            if disabled {
+                ui.disable();
+            }
             theme::round_ended(ui.painter(), vec![a, b], stroke);
         });
+        assert_ne!(y, a.y, "fixture must start the line off the pixel grid");
         let line = out.shapes.iter().any(|cs| {
-            matches!(cs.shape, egui::Shape::LineSegment { points, stroke: s }
-                if points == [a, b] && s == stroke)
+            matches!(cs.shape, egui::Shape::LineSegment { points, .. }
+                if points == [egui::pos2(a.x, y), egui::pos2(b.x, y)])
         });
-        assert!(line, "the line itself is the segment egui would have drawn");
-        out.shapes
+        assert!(line, "the line is not the segment egui would have drawn at {y}");
+        let meshes = out
+            .shapes
             .iter()
             .filter_map(|cs| match &cs.shape {
                 egui::Shape::Mesh(mesh) => Some(mesh.calc_bounds()),
                 _ => None,
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (y, meshes)
     };
-    let round = caps(theme::text());
+    let (y, round) = caps(theme::text(), false);
     assert_eq!(round.len(), 1, "both caps are one mesh");
     let cap = egui::Vec2::splat(theme::LINE_WIDTH);
-    for end in [a, b] {
-        let disc = egui::Rect::from_center_size(end, cap);
-        assert!(round[0].expand(0.01).contains_rect(disc), "no cap over {end:?}: {round:?}");
+    for x in [a.x, b.x] {
+        let disc = egui::Rect::from_center_size(egui::pos2(x, y), cap);
+        assert!(round[0].expand(0.01).contains_rect(disc), "no cap over ({x}, {y}): {round:?}");
     }
-    assert!(caps(theme::text().gamma_multiply(0.5)).is_empty(), "a translucent line got caps");
+    assert!(
+        (round[0].center().y - y).abs() < 0.01,
+        "the caps sit off the line egui draws: {round:?} against {y}"
+    );
+    assert!(
+        caps(theme::text().gamma_multiply(0.5), false).1.is_empty(),
+        "a translucent line got caps"
+    );
+    assert!(caps(theme::text(), true).1.is_empty(), "a line in a disabled section got caps");
 }

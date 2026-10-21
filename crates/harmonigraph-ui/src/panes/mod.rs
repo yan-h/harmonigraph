@@ -471,7 +471,7 @@ pub(super) fn edge_bar(
 /// Called by [`section`] and by nothing else — a rule over a heading is what
 /// a section is, so the two travel together.
 ///
-/// The rule is the row gap plus a point either side of the line, and no more:
+/// The rule is the row gap, and never less than its own line, and no more:
 /// the heading row under it is already a row high around type that is not,
 /// which is all the setting-off a section needs in a column kept tight. Any
 /// room it does take is split evenly, because a folded heading sits between
@@ -836,9 +836,7 @@ pub(super) fn block<R>(
     let (out, body) = crate::widgets::group_box(ui, title, BLOCK_INDENT * scale, rows);
     if ui.visuals().indent_has_left_vline {
         // Down the rows to where egui stops its own, two points short.
-        use egui::emath::GuiRounding as _;
-        let x = (heading.rect.left() + BLOCK_LINE_INSET * scale)
-            .round_to_pixel_center(ui.pixels_per_point());
+        let x = heading.rect.left() + BLOCK_LINE_INSET * scale;
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
         let inset = 0.5 * stroke.width;
         crate::theme::round_ended(
