@@ -51,7 +51,7 @@ see `PATCHES.md`.)
 
 Two smaller blockers in the same area:
 `egui-wgpu`'s `capture` feature —
-which contains a ready-made capture texture + readback buffer + blit (`egui-wgpu/src/capture.rs`) —
+which contains a ready-made capture texture + readback buffer + blit (upstream `egui-wgpu/src/capture.rs`, not vendored here) —
 **is not enabled in the plugin build** (it is in the standalone, via eframe), and egui-baseview drops `ViewportCommand::Screenshot` on the floor (`window.rs:403-414`), so the standalone's self-screenshot trick is a silent no-op in the plugin.
 
 ## 3. The problem nobody thinks about until the first clip looks wrong
@@ -136,7 +136,7 @@ you'd need an offscreen `egui_wgpu::Renderer` to get the labels and pane chrome,
 
 **Route 3 is the literal request and should be last.** It needs an egui-baseview patch that (a) adds `COPY_SRC` to the surface while recording —
 cheap, since `configure_surface` already runs every frame —
-or wires up `egui-wgpu`'s `CaptureState`, and (b) exposes `RenderState` through the `Queue` so the editor can drive it.
+or wires up upstream `egui-wgpu`'s `CaptureState`, and (b) exposes `RenderState` through the `Queue` so the editor can drive it.
 Frames go to a worker thread and out to ffmpeg;
 pool 3-4 readback buffers and memcpy padded rows rather than using egui's per-pixel `ColorImage` conversion, whose own comment warns it isn't built for video.
 The redeeming feature:

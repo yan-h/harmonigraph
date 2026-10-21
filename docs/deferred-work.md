@@ -110,7 +110,7 @@ a node is its ring stack read out from an empty middle (`ring_inner`), and what 
 every layer contributing in proportion to the radial width it takes up, through the ink strip.
 - **The piano roll's geometry** (was two entries here: baking settled notes
 into cached meshes, then superseding that with a wgpu callback).
-**Built.** The roll now draws as one instanced quad per note segment through `roll_paint_callback`, with a square-cornered box SDF painting the note's body and the two rim bands beside it as bands of one distance —
+**Built.** The roll now draws as one instanced quad per note segment through `roll_paint_callback_with_clipped_tail`, with a square-cornered box SDF painting the note's body and the two rim bands beside it as bands of one distance —
 the reasoning, the measurement it came from, and why the instance buffer is still rewritten every frame all live in `crates/harmonigraph-render/src/roll.rs`'s module doc, which is where they belong now that there is code to read them against.
 Mesh baking is dead rather than deferred:
 it addressed the 0.5 ms of tessellation and none of the 4-5 ms of upload, and with the notes off egui's vertex buffer entirely there is nothing left for it to cache.

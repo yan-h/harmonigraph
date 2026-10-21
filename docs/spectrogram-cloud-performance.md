@@ -363,8 +363,11 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 
 ## Source map at `8b4edf4e`
 
-- The two walks: `crates/harmonigraph-render/src/shaders/spectrogram.wgsl`, `dome_octave` / `cloud_domes` and `wash_glob` / `wash_scan`.
-- What reads them: `scale_clouds` and `wash_clouds` / `wash_tone`, reached from `clouded`.
+- The two walks, as they stood: `dome_octave` / `cloud_domes` and `wash_glob` / `wash_scan` in `spectrogram.wgsl`.
+  `dome_octave` and `cloud_domes` left with Mosaic;
+  `wash_glob` and `wash_scan` now live in `crates/harmonigraph-render/src/shaders/atmosphere_geometry.wgsl`.
+- What read them: `scale_clouds` and `wash_clouds` / `wash_tone`, reached from `clouded`.
+  Those names are gone too (the wash's tone is now `wash_cloud_tone` in `spectrogram.wgsl`).
 - Light field sizing and passes: `crates/harmonigraph-render/src/spectrogram/atmosphere.rs`, `source_size`, `Plan::new` for every target's size, and `Targets::encode` for the order of the passes.
 - The backdrop and composite draws: `SpectrogramCallback::paint`.
 

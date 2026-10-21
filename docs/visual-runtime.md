@@ -60,7 +60,7 @@ Saved appearance/editor documents and their versions are unchanged.
 
 ## Fold sharing and keys
 
-[`AudioSpectrum::folded`](../crates/harmonigraph-ui/src/spectrum.rs) keeps one lazy Fold measurement keyed on `(display_revision, normalized_width_bits)`.
+[`AudioSpectrum::folded`](../crates/harmonigraph-ui/src/spectrum.rs) keeps one lazy Fold measurement keyed on `(display_revision, width.to_bits())`.
 It reuses that measurement across frames while the smoothed spectrum and normalized Fold width stay unchanged.
 Time gates availability before cache lookup;
 it is not part of the key.
