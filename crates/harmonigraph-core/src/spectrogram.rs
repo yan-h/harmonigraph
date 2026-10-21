@@ -256,12 +256,6 @@ impl SpectrumHistory {
         span
     }
 
-    /// Bytes the columns themselves occupy when full (the per-column bookkeeping
-    /// on top is a timestamp and a pointer).
-    pub const fn max_bytes() -> usize {
-        Self::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<u16>()
-    }
-
     /// Append a column (callers push in time order).
     pub fn push(&mut self, column: SpectrogramColumn) {
         self.tiers[0].push_back(column);
@@ -551,6 +545,12 @@ mod tests {
         let held = history.back().unwrap().time - history.front().unwrap().time;
         let want = SpectrumHistory::reach(INTERVAL);
         assert!((held - want).abs() < want * 0.05, "reaches back {held} s, advertised {want} s",);
+        // Two bytes (a bfloat16) per bin, with no redundant quantized history;
+        // the per-column bookkeeping on top is a timestamp and a pointer.
+        let megabytes = (SpectrumHistory::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<u16>())
+            as f64
+            / (1024.0 * 1024.0);
+        assert!(megabytes < 64.0, "the full store is {megabytes:.1} MiB");
     }
 
     /// Small whole powers, so every coarse sum stays exact in bfloat16 and a
