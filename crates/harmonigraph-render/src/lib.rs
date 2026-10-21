@@ -48,7 +48,9 @@ mod lattice_prepare;
 mod lattice_targets;
 mod pass_aged;
 
+mod device;
 use bloom_chain::*;
+pub use device::device_descriptor;
 use gpu_timer::GpuTimer;
 #[cfg(test)]
 use gpu_timer::TimerState;
@@ -1256,19 +1258,6 @@ impl PaneBuffers {
             self.ink_history = Some(InkStrip::new(device, layout, rows));
         }
     }
-}
-
-/// Request the adapter's limits in every rendering shell. The lattice's three
-/// RGBA16F attachments plus R16F local transmission require 26 bytes/sample;
-/// supported Apple silicon and the measured CI Metal adapter provide at least 64.
-/// Older adapters are unsupported; there is no second shadow pass to fall back to.
-pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
-    let limits = adapter.limits();
-    assert!(
-        limits.max_color_attachment_bytes_per_sample >= 26,
-        "the lattice requires at least 26 color attachment bytes per sample"
-    );
-    limits
 }
 
 impl CompiledLatticeResources {

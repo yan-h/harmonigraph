@@ -30,22 +30,10 @@ static ALLOCATOR: harmonigraph_perf::heap::Counting<std::alloc::System> =
 
 fn main() -> eframe::Result {
     harmonigraph_render::shader_assets::initialize();
-    // Ask for timestamp queries where the adapter has them, so the
-    // performance overlay can report GPU time. Only where advertised:
-    // `request_device` fails outright on an unsupported feature, and a
-    // missing readout is a far better outcome than a harness that won't
-    // start. Mirrors `graphics_config` in the plugin's editor.
+    // The device the plugin's editor asks for, as `graphics_config` does there.
     let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {
-        let base = setup.device_descriptor.clone();
-        setup.device_descriptor =
-            std::sync::Arc::new(move |adapter: &harmonigraph_render::wgpu::Adapter| {
-                use harmonigraph_render::wgpu::Features;
-                let mut descriptor = base(adapter);
-                descriptor.required_limits = harmonigraph_render::device_limits(adapter);
-                descriptor.required_features |= adapter.features() & Features::TIMESTAMP_QUERY;
-                descriptor
-            });
+        setup.device_descriptor = std::sync::Arc::new(harmonigraph_render::device_descriptor);
     }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,

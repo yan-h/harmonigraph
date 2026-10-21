@@ -27,15 +27,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-    (shooter.device, shooter.queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
-            ..Default::default()
-        }))
-        .unwrap();
+    let instance = shooter.instance.clone();
     shooter.resources.insert(instance.clone());
     let cache = std::sync::Arc::new(LatticePipelineCache::default());
     let mut scene = parity_scene();
@@ -103,14 +95,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
 fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
     use crate::startup::Status;
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-    (shooter.device, shooter.queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            ..Default::default()
-        }))
-        .unwrap();
+    let instance = shooter.instance.clone();
     let scene = parity_scene();
     let synchronous = shooter.shot(&scene);
     shooter.resources = CallbackResources::default();
@@ -162,22 +147,15 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
     let Some((instance, adapter)) = crate::test_gpu_adapter() else {
         return;
     };
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_limits: crate::device_limits(&adapter),
-        ..Default::default()
-    }))
-    .unwrap();
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     let cache = LatticePipelineCache::default();
     let rgba = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let bgra = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
     assert_ne!(rgba.compiled.composite_pipeline, bgra.compiled.composite_pipeline);
     assert_eq!(bgra.compiled.target_format, wgpu::TextureFormat::Bgra8Unorm);
     let (other, other_queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            ..Default::default()
-        }))
-        .unwrap();
+        pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     let replaced =
         cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
     assert_ne!(
@@ -189,11 +167,7 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
     let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
     let (other_instance, adapter) = crate::test_gpu_adapter().expect("second GPU instance");
     let (other, other_queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            ..Default::default()
-        }))
-        .unwrap();
+        pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
     let _ = cache.resources(&other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
     let retained = cache.compiled.lock().unwrap();
@@ -203,22 +177,16 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
 }
 
 /// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
-/// returns `Some` and the readback cycle is live. Without the feature the
-/// timer is `None` and any test about it would pass vacuously — hence a
-/// separate constructor rather than a flag on [`headless_device`].
+/// returns `Some` and the readback cycle is live. [`headless_device`] asks for
+/// it only where the adapter has it, and without it the timer is `None` and
+/// any test about the timer would pass vacuously — so these tests skip instead.
 fn headless_device_with_timestamps() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let (_, adapter) = crate::test_gpu_adapter()?;
-    if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-        eprintln!("adapter has no timestamp queries; skipping");
+    let (device, queue) = headless_device()?;
+    if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        eprintln!("device has no timestamp queries; skipping");
         return None;
     }
-    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_limits: crate::device_limits(&adapter),
-        required_features: wgpu::Features::TIMESTAMP_QUERY,
-        ..Default::default()
-    }))
-    .expect("headless device with timestamp queries");
-    Some(pair)
+    Some((device, queue))
 }
 
 /// Two lattice views in ONE frame — the docked pane plus the Video tab's
