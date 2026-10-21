@@ -455,11 +455,6 @@ pub struct SpectrumConfig {
     /// against a fill they cannot stand out from, which is the cost of one
     /// lightness for all.
     pub note_fill_lightness: f32,
-    /// How softly neighbouring notes' cuts merge, 0..1. At 0 the strongest
-    /// note's cut stands alone, which folds into a crease along the line
-    /// between two notes once the cut is wide and soft; higher rounds the fold
-    /// out and darkens a narrow gap a little more.
-    pub note_halo_blend: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -625,7 +620,6 @@ impl SpectrumConfig {
             reach: self.note_cut_reach,
             shape: self.note_cut_shape,
             fill: self.note_cut_fill,
-            blend: self.note_halo_blend,
         }
     }
 
@@ -727,7 +721,6 @@ impl SpectrumConfig {
             *harmonigraph_render::SURROUND_SHAPE_RANGE.end(),
         );
         self.note_cut_fill = bounded(self.note_cut_fill, fresh.note_cut_fill, 0.0, 1.0);
-        self.note_halo_blend = bounded(self.note_halo_blend, fresh.note_halo_blend, 0.0, 1.0);
         // The lead and its fade, which are the same shape of pair on the same
         // shape of bar (the Lead bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
@@ -997,14 +990,13 @@ impl Default for SpectrumConfig {
             // Picked off contact sheets (S4, rounds R7-R8, 2026-10-20) and then
             // the dials (#1528): the whole backdrop cut at the edge, fading out
             // over 15 points, filled with each note's own hue at W8's deep haze
-            // of a lightness, with the crease between notes rounded all the way
-            // out.
+            // of a lightness, the strongest note's cut standing alone where two
+            // meet.
             note_cut: 1.0,
             note_cut_reach: 15.0,
             note_cut_shape: 0.0,
             note_cut_fill: 1.0,
             note_fill_lightness: 7.0,
-            note_halo_blend: 1.0,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which

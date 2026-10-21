@@ -51,8 +51,7 @@ pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
     "vs_note_cut",
     "vs_note_body",
-    "fs_note_cut",
-    "fs_note_fill",
+    "fs_note_surround",
     "fs_core_gamma",
     "fs_core_linear",
     "fs_body_holdout",
@@ -398,7 +397,7 @@ struct RollResources {
     /// the whole point, and what the second draw costs. The surrounds go into a
     /// [`RollHoldout`]'s targets (`surround`), which are laid over the picture
     /// in one draw (`surround_composite`).
-    surround: crate::surround::SurroundPipelines,
+    surround: wgpu::RenderPipeline,
     surround_composite: crate::surround::SurroundComposite,
     core_pipeline: wgpu::RenderPipeline,
     /// The bodies' coverage, unioned into a [`RollHoldout`] before either
@@ -661,15 +660,14 @@ impl RollResources {
         RollResources {
             // The surround reaches past its note by the cut's reach, and reads
             // the holdout in both its passes.
-            surround: crate::surround::SurroundPipelines::new(
+            surround: crate::surround::surround_pipeline(
                 device,
                 &shader,
                 &[Some(&layout), Some(&holdout_layout)],
                 crate::surround::SurroundStages {
                     label: "roll_surround",
                     vertex: "vs_note_cut",
-                    cut: "fs_note_cut",
-                    color: "fs_note_fill",
+                    fragment: "fs_note_surround",
                     buffers: &[RollInstance::LAYOUT],
                 },
             ),
@@ -1092,7 +1090,7 @@ impl CallbackTrait for RollCallback {
         let RollResources {
             light_pipeline,
             layout,
-            surround: surround_pipelines,
+            surround: surround_pipeline,
             surround_composite,
             holdout_pipeline,
             holdout_layout,
@@ -1233,24 +1231,12 @@ impl CallbackTrait for RollCallback {
             draw_clipped(&mut pass, pane.count, holdout.tail);
             drop(pass);
 
-            let RollHoldout { surround: targets, notes_bind_group, read_bind_group, tail, .. } =
-                holdout;
-            let tail = *tail;
-            let groups = (&*notes_bind_group, &*read_bind_group);
-            targets.draw(
-                device,
-                queue,
-                egui_encoder,
-                surround_pipelines,
-                surround_composite,
-                surround,
-                |pass| {
-                    pass.set_bind_group(0, groups.0, &[]);
-                    pass.set_bind_group(1, groups.1, &[]);
-                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                    draw_clipped(pass, pane.count, tail);
-                },
-            );
+            holdout.surround.draw(queue, egui_encoder, surround_pipeline, surround, |pass| {
+                pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
+                pass.set_bind_group(1, &holdout.read_bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                draw_clipped(pass, pane.count, holdout.tail);
+            });
         }
 
         Vec::new()
@@ -1508,10 +1494,9 @@ mod tests {
     const HARNESS_REACH: f32 = 4.0;
 
     /// The cut [`draw`] and its kin draw under: whole at the edge, a straight
-    /// fade over [`HARNESS_REACH`], cut to black, and strongest-wins, so a
-    /// single note's cut is its own profile and no blend's.
+    /// fade over [`HARNESS_REACH`], cut to black.
     const HARNESS_CUT: crate::SurroundCut =
-        crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0, fill: 0.0, blend: 0.0 };
+        crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0, fill: 0.0 };
 
     /// Everything egui does to `cb` before it paints, and submitted: its
     /// `prepare`, which draws the holdout and the surround's targets. Every
@@ -1826,9 +1811,9 @@ mod tests {
         assert_eq!(cut, uncut, "the lower ribbon's cut darkened the upper ribbon's body");
     }
 
-    /// Where two notes' cuts meet with no halo blend, the picture is as dark
-    /// as the darker of the two and no darker: every note's cut goes into one
-    /// target under `max`, rather than each darkening what the other already
+    /// Where two notes' cuts meet, the picture is as dark as the darker of the
+    /// two and no darker: every note's cut goes into one target where the
+    /// strongest is kept, rather than each darkening what the other already
     /// had.
     ///
     /// Two notes three points apart across pitch, the probe in the middle of
@@ -2009,7 +1994,7 @@ mod tests {
                 .is_some_and(|pane| pane.holdout.is_some())
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let off = crate::SurroundCut { amount: 0.0, fill: 1.0, blend: 1.0, ..HARNESS_CUT };
+        let off = crate::SurroundCut { amount: 0.0, fill: 1.0, ..HARNESS_CUT };
         let mut resources = CallbackResources::default();
         let cutting = callback(vec![centered_note()], HARNESS_CUT);
         prepare_frame(&device, &queue, &mut resources, &screen, &cutting);
@@ -2082,39 +2067,6 @@ mod tests {
             kept_at[0] > kept_at[1] + 40 && kept_at[1] > kept_at[2] + 40,
             "the shape does not bend the fade: {kept_at:?} at -1, 0 and 1",
         );
-    }
-
-    /// Where two notes' cuts meet, the strongest-wins cut FOLDS along the line
-    /// between them: the backdrop brightens at full slope right up to the
-    /// bisector and turns there, a crease. The halo blend rounds it, so the
-    /// brightening eases off into the bisector instead.
-    ///
-    /// Two notes twenty points apart under a straight cut over sixteen, the
-    /// bisector on a pixel centre (x = 128) ten points from each. Read as how
-    /// much the last pixel into the bisector rises against the pixel two
-    /// further out: at a fold all of it, the straight cut stepping by a
-    /// sixteenth of the backdrop a point on both, and under the full blend
-    /// about a fifth (the smooth minimum's distances at a κ of a quarter of
-    /// the reach: 0.48, 0.47, 0.45 and 0.41 of it).
-    #[test]
-    fn the_halo_blend_takes_the_crease_out_between_two_notes() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let notes = vec![
-            RollInstance { center: [106.5, 128.0], ..centered_note() },
-            RollInstance { center: [150.5, 128.0], ..centered_note() },
-        ];
-        let profile = |blend| {
-            let cut = crate::SurroundCut { reach: 16.0, blend, ..HARNESS_CUT };
-            let frame = draw_cut(&device, &queue, notes.clone(), cut, grey(1.0)).0;
-            let at = |x| f32::from(pixel(&frame, x, 128)[1]);
-            ((at(128) - at(129)) / (at(130) - at(131)), [128, 129, 130, 131].map(at))
-        };
-        let (fold, folded) = profile(0.0);
-        assert!(fold > 0.8, "with no blend the cut does not fold at the bisector: {folded:?}");
-        let (eased, blended) = profile(1.0);
-        assert!(eased < 0.5, "the halo blend left the fold standing: {blended:?}");
     }
 
     /// The cut's reach is in the composition's points, so a picture drawn at a

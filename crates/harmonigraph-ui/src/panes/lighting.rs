@@ -122,14 +122,6 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
                 "Lightness (L*) of the fill, drawn in each note's own hue. \
                  0 is black. Notes stand out most where this is far from their own lightness.",
             );
-        ValueBar::new(&mut cfg.note_halo_blend, 0.0..=1.0, "Halo blend")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How smoothly the cuts of neighbouring notes merge. \
-                 0% shows a sharp crease along the line between two notes; \
-                 higher rounds it out and darkens narrow gaps a little more.",
-            );
     })
     .response
     .on_hover_text("MIDI ribbons and Spiral note dots");

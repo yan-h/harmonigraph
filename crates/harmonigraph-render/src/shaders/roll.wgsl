@@ -13,12 +13,11 @@
 // feather (`vs_note_body`).
 //
 // The bodies use ordinary over. The surrounds do not: each note's cut goes into
-// a target over the roll's rect (`fs_note_cut`), where the notes' cuts combine
-// as a smooth minimum of their distances, or the strongest note's alone, and
-// the target is laid over the picture once (surround.wgsl and its composite).
-// Where two notes' cuts meet, the picture there is cut as the two together say
-// and not twice over. While the cut fills with the notes' hue, a second target
-// keeps the strongest note's color under a depth test (`fs_note_fill`).
+// a target over the roll's rect (`fs_note_surround`), where a depth test keeps
+// whichever note's cut is strongest — its cut AND its fill color — and the
+// target is laid over the picture once (surround.wgsl and its composite).
+// Where two notes' cuts meet, the picture there is as cut as the stronger of
+// the two and no more, rather than one cut taken twice.
 //
 // The order is the whole point. The surround is at its strongest where it
 // meets its own note, so a surround composited with its own note lands on the
@@ -57,8 +56,7 @@
 // never names a screen side either.
 
 struct Locals {
-    /// The backdrop cut (surround.wgsl): its amount, reach, shape, halo blend
-    /// and fill. First, so its two vec4s are aligned with no padding.
+    /// The backdrop cut (surround.wgsl): its amount, reach, shape and fill. First, so its two vec4s are aligned with no padding.
     surround: SurroundCut,
     /// Where the viewport being drawn into starts, in egui points, and how big
     /// it is. The draw into the egui pass takes the whole surface (origin 0);
@@ -321,8 +319,7 @@ fn cut_reach() -> f32 {
 /// strength, so the surround all but vanished round exactly the hairline notes
 /// that need one, and spread into a wide smear round a fat one. Here a note's
 /// edge is equally held at every ribbon width. The amount itself is laid on in
-/// the composite (`surround_strength`), after the notes' cuts have been
-/// combined.
+/// the composite, after the strongest note's cut has been kept.
 ///
 /// `reach` may still shorten an interior cap when the pane has less room
 /// before its now-line. That bound stays hard — shortening a cap moves its end
@@ -752,38 +749,25 @@ fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
     return mix(ends.x, ends.y, t);
 }
 
-/// This note's share of the surround's cut target ([`surround_share`]): summed
-/// with every other note's under an additive blend for the halo blend, or kept
-/// where it is the strongest under a max. A fragment of no cut adds nothing.
-@fragment
-fn fs_note_cut(fragment: VertexOut) -> @location(0) vec4<f32> {
-    let in = on_screen(fragment);
-    let cut = cut_strength(in, rim_of(in));
-    if cut <= 0.0 {
-        discard;
-    }
-    return vec4<f32>(surround_share(locals.surround, cut), 0.0, 0.0, 0.0);
-}
-
-struct FillOut {
+struct SurroundOut {
     @location(0) color: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 };
 
-/// This note's fill color, kept where its cut is the strongest of any note's;
-/// drawn only while the cut fills.
+/// This note's share of the surround: its fill color with its cut in alpha,
+/// kept where its cut is the strongest of any note's.
 ///
 /// The cut is written as DEPTH, under a `Less` test against a target cleared
 /// to 1, so the strongest note's fragment is the one that lands and its color
 /// lands with it. A fragment of no cut leaves the target clear.
 @fragment
-fn fs_note_fill(fragment: VertexOut) -> FillOut {
+fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
     let in = on_screen(fragment);
     let cut = cut_strength(in, rim_of(in));
     if cut <= 0.0 {
         discard;
     }
-    return FillOut(vec4<f32>(in.aura.rgb, 1.0), 1.0 - cut);
+    return SurroundOut(vec4<f32>(in.aura.rgb, cut), 1.0 - cut);
 }
 
 @fragment

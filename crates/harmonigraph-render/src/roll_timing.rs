@@ -18,8 +18,8 @@
 //! `PROBE_SIZE=WxH` (device pixels, default 3840x1000: the roll is a strip),
 //! `PROBE_PPP` (default 2), `PROBE_FRAMES` (default 120) and `PROBE_CASE` (a
 //! substring of the case name, e.g. `dense` or `fill`). Each workload is timed
-//! under the backdrop cut at the look's defaults, with the halo blend on and
-//! off, and filled with the notes' hue.
+//! under the backdrop cut at the look's defaults, filled with the notes' hue,
+//! and to black.
 //!
 //! The notes are synthetic, since the pane that builds them lives in
 //! `harmonigraph-ui`: ribbons at the pane's default width (0.3 semitone over
@@ -181,14 +181,9 @@ fn a_frame_of_the_roll_costs_this_much() {
     );
     let (control, control_p10) = time(Vec::new(), SurroundCut::OFF);
     eprintln!("control (empty roll): median {control:.3} ms, p10 {control_p10:.3} ms");
-    // The look's defaults (`SpectrumConfig`'s), then the same at no blend and
-    // filled.
-    let cut = SurroundCut { amount: 1.0, ..SurroundCut::OFF };
-    let cuts = [
-        ("cut", cut),
-        ("cut, no blend", SurroundCut { blend: 0.0, ..cut }),
-        ("cut, fill 0.9", SurroundCut { fill: 0.9, ..cut }),
-    ];
+    // The look's defaults (`SpectrumConfig`'s), then the same to black.
+    let cut = SurroundCut { amount: 1.0, fill: 1.0, ..SurroundCut::OFF };
+    let cuts = [("cut", cut), ("cut, to black", SurroundCut { fill: 0.0, ..cut })];
     for (work, (look, cut)) in WORKLOADS.iter().flat_map(|w| cuts.map(|c| (w, c))) {
         let case = format!("{} under the {look}", work.name);
         if filter.as_ref().is_some_and(|f| !case.contains(f.as_str())) {

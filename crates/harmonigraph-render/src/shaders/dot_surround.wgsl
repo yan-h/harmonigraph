@@ -83,28 +83,22 @@ fn dot_cut(in: DotOut) -> f32 {
     return in.aura.a * fade * end * (1.0 - fill);
 }
 
-/// This dot's share of the surround's cut target ([`surround_share`]).
-@fragment
-fn fs_dot_cut(in: DotOut) -> @location(0) vec4<f32> {
-    let cut = dot_cut(in);
-    if cut <= 0.0 {
-        discard;
-    }
-    return vec4<f32>(surround_share(dot_locals.surround, cut), 0.0, 0.0, 0.0);
-}
-
-struct FillOut {
+struct SurroundOut {
     @location(0) color: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 };
 
-/// This dot's fill color, kept where its cut is the strongest of any dot's,
-/// written as depth under a `Less` test; drawn only while the cut fills.
+/// This dot's share of the surround: its fill color with its cut in alpha,
+/// kept where its cut is the strongest of any dot's.
+///
+/// The cut is written as DEPTH, under a `Less` test against a target cleared
+/// to 1, so the strongest dot's fragment is the one that lands and its color
+/// lands with it. A fragment of no cut leaves the target clear.
 @fragment
-fn fs_dot_fill(in: DotOut) -> FillOut {
+fn fs_dot_surround(in: DotOut) -> SurroundOut {
     let cut = dot_cut(in);
     if cut <= 0.0 {
         discard;
     }
-    return FillOut(vec4<f32>(in.aura.rgb, 1.0), 1.0 - cut);
+    return SurroundOut(vec4<f32>(in.aura.rgb, cut), 1.0 - cut);
 }

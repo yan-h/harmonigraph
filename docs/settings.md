@@ -372,10 +372,7 @@ and a hold near the note with a steep drop at the far end toward 100%.
 **Cut fill** fills what the cut takes away with the note's own hue instead of black,
 at **Fill lightness** (L*), the same for every note,
 so wherever the cut is whole and filled every note stands against the same surround.
-Where two notes' cuts meet, the stronger one names the fill's color.
-**Halo blend** merges the cuts of neighbouring notes:
-at 0% the stronger cut stands alone and folds into a crease along the line between two notes,
-and higher rounds the fold out while darkening narrow gaps a little more.
+Where two notes' cuts meet, the stronger one stands, with its color.
 
 Lattice text shadows use local darkness.
 They attenuate bright slices and finished bloom only inside their footprint,

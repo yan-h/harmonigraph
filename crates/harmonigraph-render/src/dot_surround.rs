@@ -12,9 +12,7 @@
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::surround::{
-    SurroundComposite, SurroundPipelines, SurroundStages, SurroundTargets, SurroundUniform,
-};
+use crate::surround::{SurroundComposite, SurroundStages, SurroundTargets, SurroundUniform};
 use crate::uniforms::{uniform_group, Float2};
 use crate::{create_vertex_buffer, wgpu};
 
@@ -22,7 +20,7 @@ const SRC: &str = include_str!("shaders/dot_surround.wgsl");
 const INITIAL_CAPACITY: usize = 16;
 
 #[cfg(any(test, feature = "hot-reload"))]
-pub(crate) const ENTRY_POINTS: &[&str] = &["vs_dot_cut", "fs_dot_cut", "fs_dot_fill"];
+pub(crate) const ENTRY_POINTS: &[&str] = &["vs_dot_cut", "fs_dot_surround"];
 
 /// dot_surround.wgsl after the surround's arithmetic it calls into. It names
 /// nothing in common.wgsl, so it takes none of it.
@@ -95,7 +93,7 @@ struct DotLocals {
 }
 
 struct Resources {
-    surround: SurroundPipelines,
+    surround: wgpu::RenderPipeline,
     composite: SurroundComposite,
     locals_layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
@@ -144,15 +142,14 @@ impl Resources {
             source: wgpu::ShaderSource::Wgsl(source().into()),
         });
         Resources {
-            surround: SurroundPipelines::new(
+            surround: crate::surround::surround_pipeline(
                 device,
                 &shader,
                 &[Some(&locals_layout)],
                 SurroundStages {
                     label: "spiral_dot_surround",
                     vertex: "vs_dot_cut",
-                    cut: "fs_dot_cut",
-                    color: "fs_dot_fill",
+                    fragment: "fs_dot_surround",
                     buffers: &[SurroundDot::LAYOUT],
                 },
             ),
@@ -235,7 +232,7 @@ impl CallbackTrait for DotSurroundCallback {
         if stale {
             callback_resources.insert(Resources::new(device, self.target_format));
         }
-        let Resources { surround: pipelines, composite, locals_layout, pane, .. } =
+        let Resources { surround: pipeline, composite, locals_layout, pane, .. } =
             callback_resources.get_mut::<Resources>().expect("inserted above");
         let pane = Pane::get(pane, device, locals_layout);
 
@@ -276,7 +273,7 @@ impl CallbackTrait for DotSurroundCallback {
             .targets
             .get_or_insert_with(|| (SurroundTargets::new(device, composite, size), size));
         let (locals_bind, dots, count) = (&pane.locals_bind, &pane.dots, pane.count);
-        targets.draw(device, queue, encoder, pipelines, composite, surround, |pass| {
+        targets.draw(queue, encoder, pipeline, surround, |pass| {
             pass.set_bind_group(0, locals_bind, &[]);
             pass.set_vertex_buffer(0, dots.slice(..));
             pass.draw(0..4, 0..count);
@@ -331,7 +328,7 @@ mod tests {
     /// The cut the tests below draw under: whole at the dot's edge, a straight
     /// fade over eight points, strongest-wins.
     const CUT: crate::SurroundCut =
-        crate::SurroundCut { amount: 1.0, reach: 8.0, shape: 0.0, fill: 0.0, blend: 0.0 };
+        crate::SurroundCut { amount: 1.0, reach: 8.0, shape: 0.0, fill: 0.0 };
 
     fn dot() -> SurroundDot {
         SurroundDot { center: [32.0, 32.0], radius: 4.0, aura: [255, 0, 0, 255] }
@@ -395,8 +392,7 @@ mod tests {
     /// fill says.
     ///
     /// Both frames go through ONE set of resources, black first, so the filled
-    /// frame is a fill dialled up on targets built without one: the color
-    /// target is built late and the composite's bind group swapped to it.
+    /// frame is a fill dialled up on targets already drawn without one.
     #[test]
     fn a_dots_cut_takes_the_picture_beside_it_and_fills_with_its_color() {
         let Some((device, queue)) = headless_device() else {
