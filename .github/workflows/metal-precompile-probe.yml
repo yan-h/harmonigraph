@@ -101,6 +101,7 @@ jobs:
           path: |
             target/generated-metal-assets/
             target/shader-asset-logs/**/*.log
+            target/shader-asset-logs/**/frames/diff/
           if-no-files-found: warn
           retention-days: 7
       - name: Fail on the corpus the check rejected

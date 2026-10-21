@@ -57,8 +57,8 @@ Add `-f regenerate=true` to rebuild a corpus that passes, such as one still hold
 Read the failed check's log in the artifact's `shader-asset-logs/` first:
 a missing or rejected Metal asset is a stale corpus, and anything else is not one.
 Then download the run's `production-metal-assets` artifact and run `tools/shader-assets.py import <dir>` on its `generated-metal-assets` directory.
-Its goldens are drawn without being compared, so a frame this PR also moves does not fail the regeneration;
-re-baseline it from `Full CI`'s artifact, in parallel.
+Its goldens are compared with themselves, not with a record:
+each frame drawn through the corpus must match the same frame compiled from source, so a frame this PR also moves does not fail the regeneration.
 `tools/shader-assets.py generate` does work locally and is the slow way to learn that it is the wrong path —
 it rebuilds the renderer eight times over, against the production corpus and then against three deliberately broken variants of it, and on this machine it had produced nothing after twenty minutes.
 PR #918 is the worked example, and it cost a full CI cycle on a diff whose own tests were green the whole time.
