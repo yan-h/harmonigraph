@@ -89,25 +89,15 @@ impl FrameTimer {
     /// timestamps.
     pub(crate) fn new(format: wgpu::TextureFormat) -> Option<Self> {
         crate::shader_assets::initialize();
-        let instance = wgpu::Instance::default();
-        let Ok(adapter) =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        else {
-            eprintln!("no GPU adapter; nothing timed");
-            return None;
-        };
+        let (_, adapter) = crate::test_gpu_adapter()?;
         eprintln!("adapter: {:?}", adapter.get_info());
-        let features = wgpu::Features::TIMESTAMP_QUERY;
-        if !adapter.features().contains(features) {
+        let descriptor = crate::device_descriptor(&adapter);
+        if !descriptor.required_features.contains(wgpu::Features::TIMESTAMP_QUERY) {
             eprintln!("the adapter carries no timestamps; nothing timed");
             return None;
         }
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            required_features: features,
-            ..Default::default()
-        }))
-        .expect("a device with timestamps");
+        let (device, queue) = pollster::block_on(adapter.request_device(&descriptor))
+            .expect("a device with timestamps");
         let set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("frame_timer"),
             ty: wgpu::QueryType::Timestamp,

@@ -16,14 +16,10 @@ use super::persist::EguiState;
 use super::shared::EditorShared;
 use super::MIN_SIZE;
 
-/// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
-/// timestamp queries so the performance overlay can report GPU time.
-///
-/// Requested only where the adapter already advertises them, because
-/// `request_device` FAILS on an unsupported feature — asking unconditionally
-/// would trade a missing readout for a plugin that won't open. Where they
-/// aren't granted the overlay simply says "n/a", as it already does for
-/// memory on platforms that won't report it.
+/// The wgpu setup, which is `GraphicsConfig::default()` with the device
+/// replaced by [`harmonigraph_render::device_descriptor`], the one every shell
+/// and test uses. egui's own default contributes nothing that one lacks: a
+/// label, and limits it already replaces with the adapter's.
 ///
 /// TRIED AND REVERTED: `surface.desired_maximum_frame_latency = Some(3)`,
 /// which egui-wgpu leaves unset (wgpu defaults it to 2, i.e. one frame of
@@ -36,17 +32,10 @@ use super::MIN_SIZE;
 pub(super) fn graphics_config() -> GraphicsConfig {
     harmonigraph_render::shader_assets::initialize();
     use egui_baseview::WgpuSetup;
-    use harmonigraph_render::wgpu;
 
     let mut config = GraphicsConfig::default();
     if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_options.wgpu_setup {
-        let base = setup.device_descriptor.clone();
-        setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
-            let mut descriptor = base(adapter);
-            descriptor.required_limits = harmonigraph_render::device_limits(adapter);
-            descriptor.required_features |= adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
-            descriptor
-        });
+        setup.device_descriptor = std::sync::Arc::new(harmonigraph_render::device_descriptor);
     }
     config
 }

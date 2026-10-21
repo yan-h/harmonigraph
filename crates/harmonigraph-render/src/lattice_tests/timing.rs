@@ -481,13 +481,10 @@ fn timing_editor_pipeline_startup() {
     crate::shader_assets::initialize();
     for opening in 0..3 {
         let started = std::time::Instant::now();
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_limits: crate::device_limits(&adapter),
-            ..Default::default()
-        }))
-        .unwrap();
+        let (_, adapter) = crate::test_gpu_adapter().expect("startup timing requires a GPU");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
+                .unwrap();
         eprintln!("opening {opening}: device {:?}", started.elapsed());
         let started = std::time::Instant::now();
         let resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);

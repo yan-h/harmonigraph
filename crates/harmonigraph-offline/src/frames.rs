@@ -92,10 +92,9 @@ impl Renderer {
                 instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
             )
             .ok()?;
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                required_limits: harmonigraph_render::device_limits(&adapter),
-                ..Default::default()
-            }))
+            pollster::block_on(
+                adapter.request_device(&harmonigraph_render::device_descriptor(&adapter)),
+            )
             .ok()?
         };
 
