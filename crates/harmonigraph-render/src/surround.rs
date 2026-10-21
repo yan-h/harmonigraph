@@ -280,7 +280,8 @@ pub(crate) fn surround_pipeline(
 /// A producer's surround over its rect, one texel per device pixel: the
 /// strongest note's color and cut, and the depth that picks it. Held while the
 /// cut draws, and dropped with it; [`ensure`](Self::ensure) rebuilds it when
-/// the rect resizes.
+/// the rect resizes. Its textures carry the producer's name (`roll`,
+/// `spiral`), so the GPU memory record tells the two apart.
 pub(crate) struct SurroundTargets {
     view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
@@ -294,12 +295,13 @@ impl SurroundTargets {
         device: &wgpu::Device,
         composite: &SurroundComposite,
         size: [u32; 2],
+        owner: &str,
     ) -> Self {
-        let target = |label, format, usage| {
+        let target = |label: &str, format, usage| {
             crate::gpu_memory::texture(
                 device,
                 &wgpu::TextureDescriptor {
-                    label: Some(label),
+                    label: Some(&format!("{owner}_{label}")),
                     size: wgpu::Extent3d {
                         width: size[0],
                         height: size[1],
@@ -344,11 +346,12 @@ impl SurroundTargets {
         device: &wgpu::Device,
         composite: &SurroundComposite,
         size: [u32; 2],
+        owner: &str,
     ) -> &'a Self {
         if slot.as_ref().is_some_and(|targets| targets.size != size) {
             *slot = None;
         }
-        slot.get_or_insert_with(|| Self::new(device, composite, size))
+        slot.get_or_insert_with(|| Self::new(device, composite, size, owner))
     }
 
     /// The notes' surround into these targets. `draw` binds the producer's own

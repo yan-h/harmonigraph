@@ -266,7 +266,7 @@ impl CallbackTrait for DotSurroundCallback {
             _tail_pad: Float2([0.0; 2]),
         };
         queue.write_buffer(&pane.locals, 0, bytemuck::bytes_of(&locals));
-        let targets = SurroundTargets::ensure(&mut pane.targets, device, composite, size);
+        let targets = SurroundTargets::ensure(&mut pane.targets, device, composite, size, "spiral");
         let (locals_bind, dots, count) = (&pane.locals_bind, &pane.dots, pane.count);
         targets.draw(encoder, pipeline, |pass| {
             pass.set_bind_group(0, locals_bind, &[]);
