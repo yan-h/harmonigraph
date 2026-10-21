@@ -1,5 +1,5 @@
 // Label text: one instanced quad per glyph. Every label draws its glyphs'
-// coverage into the shared shadow atlas and reads back the Gaussian made from
+// coverage into its pane's shadow atlas and reads back the Gaussian made from
 // it. The lattice reuses the same producer inside its own scene pass.
 //
 // Glyphs come from egui: it lays the text out, rasterizes into its font
@@ -502,14 +502,14 @@ struct SpectralShadowOut {
 
 /// A spectral name's shadow over its packed cell, in the skin-coloured
 /// knockout its rim names: the text compositor's own draw, over a cell in the
-/// common shadow atlas.
+/// pane's own shadow atlas.
 ///
 /// Drawn ONCE per name, at its first glyph's instance: every glyph of a name
 /// carries the name's box beside it and the name's rim, so the first stands for
 /// all of them, and a quad per glyph would lay the same shadow down once per
 /// letter. `TextCallback::paint` draws every glyph of a layer in one call, and
 /// all but the one whose box is marked first (`box_who.y`, written by
-/// `spectral_shadow::finish_for_pass`) fold to no quad.
+/// `spectral_shadow::PaneShadow::prepare`) fold to no quad.
 @vertex
 fn vs_spectral_shadow(
     @builtin(vertex_index) vertex: u32,

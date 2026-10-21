@@ -179,7 +179,7 @@ pub(crate) struct ShadowBox {
     pub cell_map: [f32; 4],
     /// x: which caster this box belongs to, as an index into
     /// [`Packed::casters`]; y: 1 on the first glyph of a spectral name in the
-    /// text's per-glyph copy (`spectral_shadow::finish_for_pass`), the one
+    /// text's per-glyph copy (`spectral_shadow::PaneShadow::prepare`), the one
     /// instance that draws the name's shadow, and zero everywhere else, which
     /// nothing reads; z: how far past the caster's ink
     /// this cell reaches, in the pane's points — the pad the rect was grown

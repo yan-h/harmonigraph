@@ -1,98 +1,27 @@
-//! One shadow atlas and one optional blur chain for each spectral surface.
+//! A spectral text pane's own shadow atlas: its names' cells, packed, inked
+//! and blurred in the pane's `prepare`, and read back by its shadow composite
+//! in `paint`, which egui runs after every callback has prepared.
 //!
-//! Text owns its glyph field, so its callbacks register the draw that can fill
-//! their cells here. (The roll's ribbons and the spiral's dots draw their
-//! backdrop cut straight off their own distance, `crate::surround`, and cast
-//! nothing here.) A final, paint-less callback runs after all producers
-//! have prepared, packs every group together, fills the common atlas and
-//! sweeps its Gaussian cells once in each direction. The visible callbacks
-//! then composite from that shared result in their original paint order.
+//! Text is the only thing on a spectral surface that casts into an atlas (the
+//! roll's ribbons and the Spiral's dots cut their backdrop straight off their
+//! own distance, `crate::surround`), so each pane holds its atlas the way it
+//! holds its glyphs, and nothing is assembled after it.
 
-use std::collections::HashMap;
-
-use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
-
-use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, shadow, wgpu};
 
 const INITIAL_CAPACITY: usize = 16;
 
-#[derive(Clone)]
-pub(crate) struct Layouts {
+/// What every casting pane shares: the layouts its atlas and casters are
+/// bound through, the atlas sampler, and the blur's two pipelines.
+pub(crate) struct Shared {
     pub atlas: wgpu::BindGroupLayout,
     pub casters: wgpu::BindGroupLayout,
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub(crate) enum ProducerKey {
-    Text(u64),
-}
-
-pub(crate) enum CellDraw {
-    /// A text pane's names, one caster each: `names` is how many glyphs each
-    /// of the submission's casters is made of, in order. The surface writes
-    /// each glyph its own name's box into `cells` once it has packed, which
-    /// is what the glyphs are drawn into their name's cell beside, and what
-    /// the pane's shadow composite reads the cell from.
-    Text {
-        pipeline: wgpu::RenderPipeline,
-        locals: wgpu::BindGroup,
-        glyphs: wgpu::Buffer,
-        cells: wgpu::Buffer,
-        names: Vec<u32>,
-    },
-    #[cfg(test)]
-    None,
-}
-
-pub(crate) struct Submission {
-    pub key: ProducerKey,
-    pub casters: Vec<shadow::Caster>,
-    pub draw: CellDraw,
-    /// The producer's uniform block and the byte offset of its atlas size.
-    pub atlas_uniform: wgpu::Buffer,
-    pub atlas_size_offset: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ProducerRange {
-    count: u32,
-    active: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ScheduleStats {
-    pub blur_chains: u32,
-    pub groups: u32,
-    /// The cells packed, and their total area in atlas texels.
-    pub cells: u32,
-    pub cell_texels: u64,
-}
-
-struct Surface {
-    boxes: wgpu::Buffer,
-    box_capacity: usize,
-    casters: wgpu::Buffer,
-    caster_bind: wgpu::BindGroup,
-    caster_capacity: usize,
-    ranges: HashMap<ProducerKey, ProducerRange>,
-    submissions: Vec<Submission>,
-    target: Option<shadow::ShadowTarget>,
-    stats: ScheduleStats,
-}
-
-pub(crate) struct Resources {
-    layouts: Layouts,
     sampler: wgpu::Sampler,
-    dummy: shadow::ShadowTarget,
-    cells: shadow::CellPipelines,
-    /// Swept at [`crate::pass_aged::TTL_PASSES`]; what a destination surface
-    /// nobody draws to any more would otherwise hold is its shadow atlas.
-    surfaces: PassAged<Surface>,
+    blur: shadow::CellPipelines,
 }
 
-impl Resources {
-    fn new(device: &wgpu::Device) -> Self {
+impl Shared {
+    pub(crate) fn new(device: &wgpu::Device) -> Self {
         let atlas = shadow::read_layout(device);
         let casters = shadow::caster_layout(device);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -103,480 +32,161 @@ impl Resources {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let dummy = shadow::ShadowTarget::new(device, &atlas, &sampler, [1, 1], "spectral_dummy");
-        let cells = shadow::create_cell_pipelines(device, &atlas);
-        Resources {
-            layouts: Layouts { atlas, casters },
-            sampler,
-            dummy,
-            cells,
-            surfaces: PassAged::new(),
+        let blur = shadow::create_cell_pipelines(device, &atlas);
+        Shared { atlas, casters, sampler, blur }
+    }
+}
+
+/// The draw that fills the pane's cells with its glyphs: the cell pipeline,
+/// the pane's own bind group (whose uniforms carry the atlas size
+/// [`PaneShadow::prepare`] returns), its glyph buffer, and beside it each
+/// glyph's own name's `ShadowBox`, which this writes.
+pub(crate) struct Ink<'a> {
+    pub pipeline: &'a wgpu::RenderPipeline,
+    pub locals: &'a wgpu::BindGroup,
+    pub glyphs: &'a wgpu::Buffer,
+    pub cells: &'a wgpu::Buffer,
+}
+
+/// The cells packed last frame, for the tests that size them.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CellStats {
+    pub cells: u32,
+    /// Their total area in atlas texels.
+    pub cell_texels: u64,
+}
+
+/// One casting pane's shadow atlas and the buffers that describe it.
+pub(crate) struct PaneShadow {
+    boxes: wgpu::Buffer,
+    box_capacity: usize,
+    casters: wgpu::Buffer,
+    caster_bind: wgpu::BindGroup,
+    caster_capacity: usize,
+    /// None while no name packed a cell, which is a pane that draws no shadow.
+    target: Option<shadow::ShadowTarget>,
+    #[cfg(test)]
+    pub(crate) stats: CellStats,
+}
+
+impl PaneShadow {
+    pub(crate) fn new(device: &wgpu::Device, shared: &Shared) -> Self {
+        let (casters, caster_bind) =
+            shadow::caster_buffer(device, &shared.casters, INITIAL_CAPACITY);
+        PaneShadow {
+            boxes: create_vertex_buffer::<shadow::ShadowBox>(
+                device,
+                "spectral_shadow_boxes",
+                INITIAL_CAPACITY,
+            ),
+            box_capacity: INITIAL_CAPACITY,
+            casters,
+            caster_bind,
+            caster_capacity: INITIAL_CAPACITY,
+            target: None,
+            #[cfg(test)]
+            stats: CellStats::default(),
         }
     }
 
-    fn surface(&mut self, device: &wgpu::Device, id: u64, pass_nr: u64) -> &mut Surface {
-        let caster_layout = &self.layouts.casters;
-        self.surfaces.touched_or_insert_with(id, pass_nr, || {
-            let (casters, caster_bind) =
-                shadow::caster_buffer(device, caster_layout, INITIAL_CAPACITY);
-            Surface {
-                boxes: create_vertex_buffer::<shadow::ShadowBox>(
-                    device,
-                    "spectral_shadow_boxes",
-                    INITIAL_CAPACITY,
-                ),
-                box_capacity: INITIAL_CAPACITY,
-                casters,
-                caster_bind,
-                caster_capacity: INITIAL_CAPACITY,
-                ranges: HashMap::new(),
-                submissions: Vec::new(),
-                target: None,
-                stats: ScheduleStats::default(),
-            }
-        })
-    }
-}
-
-pub(crate) fn layouts(
-    device: &wgpu::Device,
-    callback_resources: &mut CallbackResources,
-) -> Layouts {
-    if callback_resources.get::<Resources>().is_none() {
-        callback_resources.insert(Resources::new(device));
-    }
-    callback_resources.get::<Resources>().expect("inserted above").layouts.clone()
-}
-
-pub(crate) fn register_for_pass(
-    device: &wgpu::Device,
-    callback_resources: &mut CallbackResources,
-    surface_id: u64,
-    submission: Submission,
-    pass_nr: u64,
-) {
-    if callback_resources.get::<Resources>().is_none() {
-        callback_resources.insert(Resources::new(device));
-    }
-    let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
-    let surface = resources.surface(device, surface_id, pass_nr);
-    surface.submissions.retain(|old| old.key != submission.key);
-    surface.submissions.push(submission);
-}
-
-#[cfg(test)]
-pub(crate) fn register(
-    device: &wgpu::Device,
-    callback_resources: &mut CallbackResources,
-    surface_id: u64,
-    submission: Submission,
-) {
-    register_for_pass(device, callback_resources, surface_id, submission, 0);
-}
-
-pub(crate) struct Binding<'a> {
-    pub atlas: &'a wgpu::BindGroup,
-    pub casters: &'a wgpu::BindGroup,
-    pub active: bool,
-}
-
-pub(crate) fn binding<'a>(
-    callback_resources: &'a CallbackResources,
-    surface_id: u64,
-    key: ProducerKey,
-) -> Option<Binding<'a>> {
-    let resources = callback_resources.get::<Resources>()?;
-    let surface = resources.surfaces.get(surface_id)?;
-    let range = *surface.ranges.get(&key)?;
-    Some(Binding {
-        atlas: surface.target.as_ref().unwrap_or(&resources.dummy).read(),
-        casters: &surface.caster_bind,
-        active: range.active,
-    })
-}
-
-fn finish_for_pass(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    screen: &ScreenDescriptor,
-    encoder: &mut wgpu::CommandEncoder,
-    callback_resources: &mut CallbackResources,
-    surface_id: u64,
-    pass_nr: u64,
-) {
-    if callback_resources.get::<Resources>().is_none() {
-        callback_resources.insert(Resources::new(device));
-    }
-    let resources: &mut Resources = callback_resources.get_mut().expect("inserted above");
-    // Both touch sites below are deliberate: a producer registering for this
-    // pass keeps its destination alive, and so does this final assembly, which
-    // runs for the surface being drawn whether or not anything registered.
-    resources.surfaces.evict_unseen(pass_nr);
-
-    let layouts = resources.layouts.clone();
-    let sampler = resources.sampler.clone();
-    let blur_x = resources.cells.blur_x.clone();
-    let blur_y = resources.cells.blur_y.clone();
-    let surface = resources.surface(device, surface_id, pass_nr);
-
-    let mut casters = Vec::new();
-    let mut starts = Vec::with_capacity(surface.submissions.len());
-    for submission in &surface.submissions {
-        starts.push(casters.len() as u32);
-        casters.extend_from_slice(&submission.casters);
-    }
-    let packed = shadow::pack(
-        &casters,
-        screen.pixels_per_point.max(f32::EPSILON),
-        device.limits().max_texture_dimension_2d,
-    );
-    let has_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
-
-    if packed.boxes.len() > surface.box_capacity {
-        surface.box_capacity = packed.boxes.len().next_power_of_two();
-        surface.boxes = create_vertex_buffer::<shadow::ShadowBox>(
-            device,
-            "spectral_shadow_boxes",
-            surface.box_capacity,
+    /// Pack `casters`, one per name of `names` glyphs each, fill their cells
+    /// with `ink` and blur them, recording into `encoder`. Returns the atlas
+    /// size the pane's uniforms must carry for `vs_glyph_cell` and the
+    /// composite to find the cells.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        shared: &Shared,
+        pixels_per_point: f32,
+        casters: &[shadow::Caster],
+        names: &[u32],
+        ink: Ink,
+    ) -> [f32; 2] {
+        let packed = shadow::pack(
+            casters,
+            pixels_per_point.max(f32::EPSILON),
+            device.limits().max_texture_dimension_2d,
         );
-    }
-    if packed.casters.len() > surface.caster_capacity {
-        surface.caster_capacity = packed.casters.len().next_power_of_two();
-        (surface.casters, surface.caster_bind) =
-            shadow::caster_buffer(device, &layouts.casters, surface.caster_capacity);
-    }
-    if !packed.boxes.is_empty() {
-        queue.write_buffer(&surface.boxes, 0, bytemuck::cast_slice(&packed.boxes));
-        queue.write_buffer(&surface.casters, 0, bytemuck::cast_slice(&packed.casters));
-    }
+        if packed.boxes.len() > self.box_capacity {
+            self.box_capacity = packed.boxes.len().next_power_of_two();
+            self.boxes = create_vertex_buffer::<shadow::ShadowBox>(
+                device,
+                "spectral_shadow_boxes",
+                self.box_capacity,
+            );
+        }
+        if packed.casters.len() > self.caster_capacity {
+            self.caster_capacity = packed.casters.len().next_power_of_two();
+            (self.casters, self.caster_bind) =
+                shadow::caster_buffer(device, &shared.casters, self.caster_capacity);
+        }
+        if !packed.boxes.is_empty() {
+            queue.write_buffer(&self.boxes, 0, bytemuck::cast_slice(&packed.boxes));
+            queue.write_buffer(&self.casters, 0, bytemuck::cast_slice(&packed.casters));
+        }
 
-    surface.ranges.clear();
-    for (submission, start) in surface.submissions.iter().zip(starts) {
-        let count = submission.casters.len() as u32;
-        let active = packed.casters[start as usize..(start + count) as usize]
-            .iter()
-            .any(|caster| caster.shade[0] > 0.0);
-        surface.ranges.insert(submission.key, ProducerRange { count, active });
         // Each glyph beside its own name's box: the boxes repeated by their
         // names' lengths, as the lattice writes its `cell_buffer`. The name's
         // first glyph is marked as the one that draws the name's shadow
         // (`vs_spectral_shadow`), so a layer's composite is one instanced draw.
-        match &submission.draw {
-            CellDraw::Text { cells, names, .. } => {
-                let boxes = &packed.boxes[start as usize..(start + count) as usize];
-                let rows = boxes.iter().zip(names).flat_map(|(b, &n)| {
-                    let lead = shadow::ShadowBox { who: [b.who[0], 1.0, b.who[2], b.who[3]], ..*b };
-                    (0..n).map(move |i| if i == 0 { lead } else { *b })
-                });
-                let glyphs = names.iter().map(|&n| n as usize).sum();
-                crate::write_rows::<_, { crate::BOX_BYTES }>(queue, cells, glyphs, rows);
-            }
-            #[cfg(test)]
-            CellDraw::None => {}
-        }
-    }
-    let packed_cells = packed.boxes.iter().filter(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
-    surface.stats = ScheduleStats {
-        blur_chains: 0,
-        groups: surface.submissions.len() as u32,
-        cells: packed_cells.clone().count() as u32,
-        cell_texels: packed_cells.map(|b| (b.cell[2] * b.cell[3]) as u64).sum(),
-    };
+        let rows = packed.boxes.iter().zip(names).flat_map(|(b, &n)| {
+            let lead = shadow::ShadowBox { who: [b.who[0], 1.0, b.who[2], b.who[3]], ..*b };
+            (0..n).map(move |i| if i == 0 { lead } else { *b })
+        });
+        let glyphs = names.iter().map(|&n| n as usize).sum();
+        crate::write_rows::<_, { crate::BOX_BYTES }>(queue, ink.cells, glyphs, rows);
 
-    if has_cells {
+        let packed_cells = packed.boxes.iter().filter(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
+        #[cfg(test)]
+        {
+            self.stats = CellStats {
+                cells: packed_cells.clone().count() as u32,
+                cell_texels: packed_cells.clone().map(|b| (b.cell[2] * b.cell[3]) as u64).sum(),
+            };
+        }
+        if packed_cells.count() == 0 {
+            self.target = None;
+            return [1.0, 1.0];
+        }
         shadow::ShadowTarget::ensure(
-            &mut surface.target,
+            &mut self.target,
             device,
-            &layouts.atlas,
-            &sampler,
+            &shared.atlas,
+            &shared.sampler,
             packed.size,
             "spectral",
         );
-    } else {
-        surface.target = None;
-    }
-
-    let atlas_size =
-        surface.target.as_ref().map_or([1.0, 1.0], |target| target.size.map(|v| v as f32));
-    for submission in &surface.submissions {
-        queue.write_buffer(
-            &submission.atlas_uniform,
-            submission.atlas_size_offset,
-            bytemuck::cast_slice(&atlas_size),
-        );
-    }
-
-    if let Some(target) = surface.target.as_ref() {
+        let target = self.target.as_ref().expect("ensured above");
         {
             let mut pass = target.ink_pass(encoder);
-            for submission in &surface.submissions {
-                let range = surface.ranges[&submission.key];
-                if range.count == 0 {
-                    continue;
-                }
-                match &submission.draw {
-                    CellDraw::Text { pipeline, locals, glyphs, cells, names } => {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, locals, &[]);
-                        pass.set_vertex_buffer(0, glyphs.slice(..));
-                        pass.set_vertex_buffer(1, cells.slice(..));
-                        pass.draw(0..4, 0..names.iter().sum::<u32>());
-                    }
-                    #[cfg(test)]
-                    CellDraw::None => {}
-                }
-            }
+            pass.set_pipeline(ink.pipeline);
+            pass.set_bind_group(0, ink.locals, &[]);
+            pass.set_vertex_buffer(0, ink.glyphs.slice(..));
+            pass.set_vertex_buffer(1, ink.cells.slice(..));
+            pass.draw(0..4, 0..glyphs as u32);
         }
-        target.blur(encoder, (&blur_x, &blur_y), &surface.boxes, packed.boxes.len() as u32);
-        surface.stats.blur_chains += 1;
-    }
-    surface.submissions.clear();
-}
-
-#[cfg(test)]
-pub(crate) fn finish(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    screen: &ScreenDescriptor,
-    encoder: &mut wgpu::CommandEncoder,
-    callback_resources: &mut CallbackResources,
-    surface_id: u64,
-) {
-    finish_for_pass(device, queue, screen, encoder, callback_resources, surface_id, 0);
-}
-
-/// Finish the shared shadow field for one spectral or spiral surface.
-///
-/// This callback paints nothing. Its position after the surface's producers
-/// is significant only because egui prepares callbacks in paint order;
-/// `pass_nr` is the painter context's cumulative pass number.
-///
-/// The work stays in `prepare`: every reader of the atlas composites from it in
-/// `paint`, which egui runs after every callback has prepared.
-pub fn spectral_shadow_prepare_callback(
-    rect: egui::Rect,
-    surface_id: u64,
-    pass_nr: u64,
-) -> egui::PaintCallback {
-    egui_wgpu::Callback::new_paint_callback(rect, FinishCallback { surface_id, pass_nr })
-}
-
-struct FinishCallback {
-    surface_id: u64,
-    pass_nr: u64,
-}
-
-impl CallbackTrait for FinishCallback {
-    fn prepare(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        screen: &ScreenDescriptor,
-        encoder: &mut wgpu::CommandEncoder,
-        callback_resources: &mut CallbackResources,
-    ) -> Vec<wgpu::CommandBuffer> {
-        finish_for_pass(
-            device,
-            queue,
-            screen,
+        target.blur(
             encoder,
-            callback_resources,
-            self.surface_id,
-            self.pass_nr,
+            (&shared.blur.blur_x, &shared.blur.blur_y),
+            &self.boxes,
+            packed.boxes.len() as u32,
         );
-        Vec::new()
+        target.size.map(|v| v as f32)
     }
 
-    fn paint(
-        &self,
-        _info: egui::PaintCallbackInfo,
-        _render_pass: &mut wgpu::RenderPass<'static>,
-        _callback_resources: &CallbackResources,
-    ) {
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn stats(resources: &CallbackResources, surface_id: u64) -> ScheduleStats {
-    resources
-        .get::<Resources>()
-        .and_then(|resources| resources.surfaces.get(surface_id))
-        .map_or(ScheduleStats::default(), |surface| surface.stats)
-}
-
-#[cfg(test)]
-pub(crate) fn target_allocated(resources: &CallbackResources, surface_id: u64) -> bool {
-    resources
-        .get::<Resources>()
-        .and_then(|resources| resources.surfaces.get(surface_id))
-        .is_some_and(|surface| surface.target.is_some())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::gpu_harness::headless_device;
-
-    fn submit(device: &wgpu::Device, resources: &mut CallbackResources, key: ProducerKey) {
-        let uniform = crate::gpu_memory::buffer(
-            device,
-            &wgpu::BufferDescriptor {
-                label: Some("spectral_shadow_schedule_test_uniform"),
-                size: 16,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            },
-        );
-        register(
-            device,
-            resources,
-            7,
-            Submission {
-                key,
-                casters: vec![shadow::Caster {
-                    rect: [8.0, 8.0, 12.0, 12.0],
-                    level: 1.0,
-                    sigma_points: 2.0,
-                    spread_points: 0.0,
-                    stops: 0.0,
-                }],
-                draw: CellDraw::None,
-                atlas_uniform: uniform,
-                atlas_size_offset: 0,
-            },
-        );
+    /// What the shadow composite binds: the finished atlas at group 2 and
+    /// the casters at group 3. None when nothing cast this frame.
+    pub(crate) fn binding(&self) -> Option<(&wgpu::BindGroup, &wgpu::BindGroup)> {
+        let target = self.target.as_ref()?;
+        Some((target.read(), &self.caster_bind))
     }
 
-    /// A destination surface nobody draws to any more gives its atlas back,
-    /// and EITHER of the two things that reach a surface keeps it alive.
-    ///
-    /// Both touch sites are deliberate and neither is redundant. A producer
-    /// registering for the pass reaches its destination before the final
-    /// assembly does, and the assembly runs for the surface being drawn whether
-    /// or not anything registered — so a surface with a live producer and no
-    /// assembly, or an assembly with no producers, is still a surface somebody
-    /// is drawing. Collapse the pair to one and a real arrangement ages out
-    /// mid-run.
-    #[test]
-    fn a_surface_nobody_draws_to_gives_its_atlas_back() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
-        let uniform = || {
-            crate::gpu_memory::buffer(
-                &device,
-                &wgpu::BufferDescriptor {
-                    label: Some("spectral_shadow_retention_test_uniform"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                },
-            )
-        };
-        let register_at = |surface_id, pass_nr, resources: &mut CallbackResources| {
-            register_for_pass(
-                &device,
-                resources,
-                surface_id,
-                Submission {
-                    key: ProducerKey::Text(1),
-                    casters: vec![shadow::Caster {
-                        rect: [8.0, 8.0, 12.0, 12.0],
-                        level: 1.0,
-                        sigma_points: 2.0,
-                        spread_points: 0.0,
-                        stops: 0.0,
-                    }],
-                    draw: CellDraw::None,
-                    atlas_uniform: uniform(),
-                    atlas_size_offset: 0,
-                },
-                pass_nr,
-            );
-        };
-        let finish_at = |surface_id, pass_nr, resources: &mut CallbackResources| {
-            let mut encoder = device.create_command_encoder(&Default::default());
-            finish_for_pass(&device, &queue, &screen, &mut encoder, resources, surface_id, pass_nr);
-            queue.submit([encoder.finish()]);
-        };
-        let live = |resources: &CallbackResources, id| {
-            resources.get::<Resources>().is_some_and(|r| r.surfaces.get(id).is_some())
-        };
-
-        // Three surfaces come up together: 0 will keep both halves, 1 will be
-        // reached only by its producer, and 2 will stop being reached at all.
-        let mut resources = CallbackResources::default();
-        for surface_id in [0, 1, 2] {
-            register_at(surface_id, 0, &mut resources);
-            finish_at(surface_id, 0, &mut resources);
-        }
-        assert!(
-            [0, 1, 2].iter().all(|&id| live(&resources, id)),
-            "three drawn surfaces should hold three atlases",
-        );
-
-        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
-            register_at(0, pass_nr, &mut resources);
-            finish_at(0, pass_nr, &mut resources);
-            // Surface 1 is registered against but never assembled.
-            register_at(1, pass_nr, &mut resources);
-        }
-        assert!(live(&resources, 0), "the surface drawn through both paths lost its atlas");
-        assert!(live(&resources, 1), "a registering producer did not keep its destination alive");
-        assert!(!live(&resources, 2), "the surface nobody draws to is still holding its atlas");
-    }
-
-    #[test]
-    fn two_groups_dispatch_one_blur_chain() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let screen = ScreenDescriptor { size_in_pixels: [64, 64], pixels_per_point: 1.0 };
-        let mut resources = CallbackResources::default();
-
-        submit(&device, &mut resources, ProducerKey::Text(1));
-        submit(&device, &mut resources, ProducerKey::Text(2));
-        let mut encoder = device.create_command_encoder(&Default::default());
-        finish(&device, &queue, &screen, &mut encoder, &mut resources, 7);
-        queue.submit([encoder.finish()]);
-        let scheduled = stats(&resources, 7);
-        assert_eq!((scheduled.blur_chains, scheduled.groups), (1, 2));
-
-        for surface in [11, 12] {
-            let uniform = crate::gpu_memory::buffer(
-                &device,
-                &wgpu::BufferDescriptor {
-                    label: Some("spectral_shadow_second_surface_uniform"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                },
-            );
-            for key in [ProducerKey::Text(1), ProducerKey::Text(2)] {
-                register(
-                    &device,
-                    &mut resources,
-                    surface,
-                    Submission {
-                        key,
-                        casters: vec![shadow::Caster {
-                            rect: [8.0, 8.0, 12.0, 12.0],
-                            level: 1.0,
-                            sigma_points: 2.0,
-                            spread_points: 0.0,
-                            stops: 0.0,
-                        }],
-                        draw: CellDraw::None,
-                        atlas_uniform: uniform.clone(),
-                        atlas_size_offset: 0,
-                    },
-                );
-            }
-            let mut encoder = device.create_command_encoder(&Default::default());
-            finish(&device, &queue, &screen, &mut encoder, &mut resources, surface);
-            queue.submit([encoder.finish()]);
-            assert_eq!(stats(&resources, surface).blur_chains, 1);
-        }
+    #[cfg(test)]
+    pub(crate) fn target_allocated(&self) -> bool {
+        self.target.is_some()
     }
 }
