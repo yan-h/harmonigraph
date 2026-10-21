@@ -326,6 +326,11 @@ Every other key still passes to the host unless egui wants keyboard input.
 Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
 `translate_virtual_key` lowercases a character before matching it,
 so Shift and Caps Lock letters still produce egui key events.
+- **Patch 19** (`src/window.rs` `wheel_delta`): flip a macOS wheel's x only while Shift is up (#1536).
+Upstream negates x on every macOS wheel, but macOS has already turned a Shift+wheel into a horizontal delta carrying the vertical wheel's own sign, and egui folds a Shift wheel back to `x + y`,
+so the flip reversed every Shift-wheel and with it the lattice's zoom.
+Upstream egui-baseview 0.9.0 still flips unconditionally, so a migration carries this forward.
+`wheel_delta` is a pure function with its own tests in `vendor/egui-baseview`, which `ci.sh` runs.
 - **`[workspace]` table** (`Cargo.toml`): an empty `[workspace]` table, for the same ancestor-root-exclusion reason `vendor/baseview/Cargo.toml` carries one —
 without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
 `ci.sh` runs `cargo test --manifest-path` against this crate from exactly there.
