@@ -6,6 +6,86 @@ not an implementation launch.
 
 Recommendation: retain the current product stack for now; the published-version trigger is met and should be recorded as investigated, but this is not a low-maintenance dependency bump. The numbered resize and texture-delta patches have credible structural replacements, delayed deadlines also have an upstream equivalent, and the trivial WgpuSetup re-export can be avoided with a direct typed import. Most product-relevant obligations remain, including additional local source obligations absent from PATCHES.md's numbering. No product source, manifests, lockfile or Metal corpus were changed by this investigation.
 
+## Re-evaluation against egui-baseview 0.9.0 and baseview 0.4.1 (2026-10-21, #1529)
+
+Compared product revision `69701dc7` with egui-baseview 0.9.0, baseview 0.4.1, egui/egui-wgpu/eframe 0.37.0, wgpu/wgpu-hal 30.0.1 and nice-plug 0.4.2.
+Each archive's SHA-256 was checked against its sparse-index entry before extraction.
+The sections after this one still describe the 0.7.2/0.3.4 cohort;
+this section records only what moved since, and every disposition not named here stands.
+
+**Recommendation unchanged: retain the product stack.** Nothing upstream absorbed a carried patch, the dependency graph barely shrinks, and the one real upstream gain, display-linked pacing, could be ported into the vendored baseview without the move.
+
+### egui-baseview 0.7.2 to 0.9.0
+
+Only `src/window.rs` changed (+54/−49), to adopt baseview 0.4's redraw API:
+`on_frame` splits into `poll` and `draw`, egui's repaint callback forwards to `WindowWaker::request_redraw_after`, and a `RepaintNotifier` is polled from a 1/64 s baseview timer.
+The renderer is byte-identical, so every renderer disposition in the table below stands.
+Patch 18, added after this map, is still needed:
+`KeyCapture` offers `CaptureAll`, `IgnoreAll`, `CaptureKeys` and `IgnoreKeys`, and nothing that captures an `egui::KeyboardShortcut` while no widget has focus.
+Patch 11 is still needed (`CursorLeft` clears the pointer position, `window.rs:845-846`), as are patch 9 (`renderer.rs:201`) and patch 14 (`window.rs:410` passes the full device limit).
+
+### baseview 0.3.4 to 0.4.1
+
+The fixed 0.015 s frame timer is gone.
+Frames now come from the view's `CADisplayLink`, added to `NSRunLoopCommonModes` and paused unless a redraw has been requested (`platform/macos/view.rs:152-204`, `wrappers/appkit/view.rs:124-134`).
+Against the baseview obligations:
+
+- **1 Common-mode timer:** the frame path is covered upstream.
+  The new `WindowContext::create_timer` schedules with `scheduledTimerWithTimeInterval_repeats_block`, which registers in the default mode only,
+  so any per-tick work moved onto such a timer reintroduces exactly the stall patch 1 fixes.
+- **4 Configurable pacing:** the ~67 Hz ceiling is gone, since the link follows the panel.
+  A frame-rate cap and `display_max_fps` are still absent;
+  a cap would need `preferredFrameRateRange` on the link or throttled redraw requests.
+- **5 Withheld exit, 6 Lost-release repair:** still needed, and harder to port.
+  Both are paid from the per-frame tick, which no longer runs while the window is idle,
+  so each needs a dedicated common-mode timer.
+- **3 Occlusion:** still no occlusion event or observer.
+  Whether the display link keeps firing for an occluded window is unmeasured,
+  so egui-baseview patch 17's backoff contract stays until it is.
+- **2 Cursor ownership:** unchanged from 0.3.4.
+
+### nice-plug coupling: not required
+
+`ParentWindowHandle` is nice-plug-core's own enum of raw pointers, and the CLAP path builds it without raw-window-handle (`vendor/nice-plug/src/wrapper/clap/wrapper.rs:3160-3164`).
+nice-plug reaches raw-window-handle 0.5 only from its standalone wrapper, which Harmonigraph does not enable.
+The bridge to baseview 0.4 is the plugin's own `ParentWindowHandleAdapter` (`crates/harmonigraph-plugin/src/editor/window.rs:71`), rewritten against raw-window-handle 0.6.
+That settles the narrower route above: a move is GUI-only, and patched nice-plug 0.1.10 stays.
+
+### Dependency graph
+
+A scratch manifest with egui/egui-wgpu/eframe 0.37, egui-baseview 0.9, baseview 0.4.1, wgpu 30 and the vendored nice-plug resolved to:
+
+| Old half | After the move | Kept by |
+| --- | --- | --- |
+| objc2 0.5, block2 0.5, objc2-app-kit/foundation 0.2 | stays | winit 0.30 (eframe, egui-wgpu) and copypasta 0.10 (egui-baseview itself) |
+| core-foundation 0.9 | stays | winit 0.30 via core-graphics 0.23 |
+| raw-window-handle 0.5 | stays | nice-plug and nice-plug-core |
+| rtrb 0.3 | stays | nice-plug |
+| pollster 0.4 | moves to 1.0 | — |
+
+quick-xml is already 0.41.0 in the product lockfile, so RUSTSEC-2026-0194/0195 no longer depend on this stack;
+their ignores were removed with this re-evaluation.
+
+### Other boundaries and toolchain
+
+wgpu-hal 30.0.1 still has no `Buffer::raw_handle` (`impl Buffer`, `src/metal/mod.rs:854`, holds only a private `as_raw`) and still compiles MSL source directly (`src/metal/device.rs:283`),
+so all four patch sites reapply and the corpus regenerates.
+The workspace now pins Rust 1.99.1, so the 1.95 requirement below is no longer an obstacle.
+
+### Upstream release notes
+
+The egui 0.36–0.37 and wgpu 30.0.x changelogs carry no compelling reason to move.
+The entries nearest Harmonigraph's obligations are egui#8595 (a burst of extra repaints before `request_repaint_after` deadlines), egui#8636 (scroll modifiers stuck when `TouchPhase::End` never arrives) and wgpu#9328 (Metal `Device::wait` polled instead of waiting);
+none matches a reported Harmonigraph defect.
+The rest is API churn a move would pay for, among it `Modifiers` leaving `RawInput` (egui#8336) and `SurfaceTexture::present` becoming `Queue::present` (wgpu#9361).
+wgpu#10302, which lets Metal acquire drawables until a window has first been visible, is on trunk only and in no 30.0.x release.
+
+### Next trigger
+
+Two publication triggers have now fired with the same answer, so the next one is a need rather than a release:
+re-evaluate when a fix or feature Harmonigraph wants exists only in egui 0.36+ or wgpu 30+,
+or when a published egui-baseview leaves winit 0.30 and copypasta 0.10 behind, which is what would actually retire the objc2 0.5 duplicate.
+
 ## Exact published cohort
 
 Official sparse-index entries were freshly fetched and each archive SHA-256 checked against its entry before extraction. Current non-yanked stable releases: egui-baseview 0.7.2 (`f197eade3efd9bfe76b9cbf8357beb6a48e0a2ac262901b0f52c736e2710fdaf`), baseview 0.3.4, egui/egui-wgpu/eframe 0.36.2, egui_dock 0.21.1, wgpu-hal 30.0.1; nice-plug 0.4.2 and nice-plug-egui 0.5.1 were inspected separately. Fresh registry entries and verified archives are retained locally under `/tmp/gui-feasibility-968`;

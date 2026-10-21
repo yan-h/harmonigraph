@@ -155,7 +155,9 @@ through one the button reads down.
 `Cargo.toml` gains an empty `[workspace]` table so `cargo test --manifest-path` reaches the unit tests over the mask arithmetic;
 ci.sh runs them.
 macOS only.
-- **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
+- **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
+baseview 0.4 replaces the frame timer these patches hang on with a paused-when-idle display link.
+Download the new crates.io tarball into `vendor/baseview`,
 re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the configurable frame timer, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
 - **Upstreaming**: declined (2026-07-19).
 Kept as a local patch rather than proposed upstream.
@@ -328,8 +330,9 @@ so Shift and Caps Lock letters still produce egui key events.
 without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
 `ci.sh` runs `cargo test --manifest-path` against this crate from exactly there.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
-The egui 0.36 publication trigger is met and investigated;
-the current recommendation is to retain the product stack.
+The egui 0.36 publication trigger is met and investigated,
+and egui-baseview 0.9.0 has been re-evaluated since (#1529);
+the current recommendation is to retain the product stack until the need-driven trigger the map names.
 Published egui-baseview 0.7.2 replaces the Queue API and some old patch topologies,
 so do not mechanically reapply every numbered patch.
 The map records retained obligations,

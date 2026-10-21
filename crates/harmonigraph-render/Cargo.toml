@@ -31,7 +31,8 @@ glam = { workspace = true }
 naga = { workspace = true, optional = true }
 # Blocks on wgpu's async adapter/device setup in `SpectrogramHeadless`,
 # which is a library entry point rather than a test helper.
-# Held at 0.4, which eframe and vendored egui-baseview pin; moves with #1529.
+# Held at 0.4, which eframe and vendored egui-baseview pin; moves to 1.0
+# with the GUI stack (docs/gui-cohort-feasibility.md).
 pollster = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
