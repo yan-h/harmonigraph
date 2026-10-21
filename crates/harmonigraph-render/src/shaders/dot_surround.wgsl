@@ -63,6 +63,13 @@ fn vs_dot_cut(
 /// amount: [`surround_ramp`] of the distance past the disc's edge, nothing from
 /// the reach on, and held out by the dot's own disc, so a translucent dot shows
 /// the picture behind it uncut, as a roll ribbon does.
+///
+/// By its OWN disc only: unlike the roll, the dots draw no holdout of every
+/// body, so a neighbour's cut still darkens the picture behind a translucent
+/// dot standing inside its reach — two notes a semitone apart on an inner turn,
+/// say. That dot then reads a little darker over the strip than it is. A
+/// holdout pass, as the roll's, is what it would take, and nothing has asked
+/// for one yet.
 fn dot_cut(in: DotOut) -> f32 {
     let reach = dot_locals.surround.cut.y;
     if reach <= 0.0 {

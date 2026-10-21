@@ -1484,6 +1484,31 @@ mod tests {
         assert!(marks.iter().all(|mark| mark.color[3] > 0));
     }
 
+    /// Each dot's surround stands on the disc that was painted, cuts as
+    /// strongly as the dot is opaque, and fills with its note's own hue at the
+    /// fill's lightness rather than with the disc's color.
+    #[test]
+    fn each_dot_wears_the_notes_surround_round_its_own_disc() {
+        let mut state = fresh();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 55, 0.5));
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 76, 1.0));
+        let intensity = &mut state.appearance.view.intensity;
+        intensity.opacity_rest = 0.0;
+        intensity.velocity.opacity = Some(1.0);
+        let spiral = Spiral::new(PANE, &state.appearance.spectrum);
+        let lit = sounding(&spiral, &state, 0.1);
+        let marks = dots(&spiral, &state, &lit);
+        let cuts = surround(&spiral, &state, &lit);
+        assert_eq!(cuts.len(), 2, "the fixture's two notes are two surrounds");
+        for ((cut, mark), voice) in cuts.iter().zip(&marks).zip(&lit) {
+            assert_eq!((cut.center, cut.radius), (mark.center, mark.radius));
+            assert_eq!(cut.aura[3], mark.color[3], "the cut is not as strong as its dot is opaque");
+            let fill = super::super::spectral::roll::note_fill(&state, voice.pitch, 1.0);
+            assert_eq!(cut.aura[..3], fill[..3], "the cut does not fill with its note's hue");
+        }
+        assert!(cuts[0].aura[3] < cuts[1].aura[3], "the fixture's two dots are equally opaque");
+    }
+
     /// Opacity mapping dims the dot and its effects, while the rim name stays
     /// legible on the note envelope, like the lattice's note names.
     #[test]

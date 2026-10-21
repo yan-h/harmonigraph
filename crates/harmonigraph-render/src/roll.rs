@@ -1234,13 +1234,23 @@ impl CallbackTrait for RollCallback {
             drop(pass);
 
             let RollHoldout { surround: targets, notes_bind_group, read_bind_group, tail, .. } =
-                &*holdout;
-            targets.draw(queue, egui_encoder, surround_pipelines, surround, |pass| {
-                pass.set_bind_group(0, notes_bind_group, &[]);
-                pass.set_bind_group(1, read_bind_group, &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                draw_clipped(pass, pane.count, *tail);
-            });
+                holdout;
+            let tail = *tail;
+            let groups = (&*notes_bind_group, &*read_bind_group);
+            targets.draw(
+                device,
+                queue,
+                egui_encoder,
+                surround_pipelines,
+                surround_composite,
+                surround,
+                |pass| {
+                    pass.set_bind_group(0, groups.0, &[]);
+                    pass.set_bind_group(1, groups.1, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    draw_clipped(pass, pane.count, tail);
+                },
+            );
         }
 
         Vec::new()

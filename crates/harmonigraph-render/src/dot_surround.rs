@@ -276,7 +276,7 @@ impl CallbackTrait for DotSurroundCallback {
             .targets
             .get_or_insert_with(|| (SurroundTargets::new(device, composite, size), size));
         let (locals_bind, dots, count) = (&pane.locals_bind, &pane.dots, pane.count);
-        targets.draw(queue, encoder, pipelines, surround, |pass| {
+        targets.draw(device, queue, encoder, pipelines, composite, surround, |pass| {
             pass.set_bind_group(0, locals_bind, &[]);
             pass.set_vertex_buffer(0, dots.slice(..));
             pass.draw(0..4, 0..count);
@@ -393,6 +393,10 @@ mod tests {
     /// points at every display density, leaves its own disc and everything
     /// past the reach alone, and fills with the dot's own color as far as the
     /// fill says.
+    ///
+    /// Both frames go through ONE set of resources, black first, so the filled
+    /// frame is a fill dialled up on targets built without one: the color
+    /// target is built late and the composite's bind group swapped to it.
     #[test]
     fn a_dots_cut_takes_the_picture_beside_it_and_fills_with_its_color() {
         let Some((device, queue)) = headless_device() else {
@@ -402,6 +406,7 @@ mod tests {
             let side = (64.0 * ppp) as u32;
             let size = [side.div_ceil(64) * 64, side];
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+            let resources = std::cell::RefCell::new(CallbackResources::default());
             let draw = |cut| {
                 let cb = DotSurroundCallback {
                     rect,
@@ -410,7 +415,11 @@ mod tests {
                     target_format: wgpu::TextureFormat::Rgba8Unorm,
                 };
                 let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
-                let resources = prepared(&device, &queue, &cb, &screen);
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let buffers =
+                    cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources.borrow_mut());
+                queue.submit(buffers.into_iter().chain([encoder.finish()]));
+                let resources = resources.borrow();
                 let texture = render_to_texture(
                     &device,
                     &queue,

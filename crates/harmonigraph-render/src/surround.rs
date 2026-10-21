@@ -396,12 +396,70 @@ impl SurroundPipelines {
 /// which the producer keeps track of.
 pub(crate) struct SurroundTargets {
     cut_view: wgpu::TextureView,
-    color_view: wgpu::TextureView,
-    color_depth_view: wgpu::TextureView,
+    /// Built the first time the cut fills and held from then on, since a fill
+    /// dialled to 0 and back is one drag. A cut to black, the default, never
+    /// pays for them.
+    fill: Option<FillTargets>,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    /// The cut and the fill color as the composite reads them; the cut stands
+    /// in the color's slot until there is one, since the composite reads that
+    /// slot only while the cut fills.
     read_bind_group: wgpu::BindGroup,
+    size: [u32; 2],
 }
+
+/// The strongest note's fill color over a producer's rect, and the depth that
+/// picks it.
+struct FillTargets {
+    color_view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+}
+
+/// One of a producer's targets over its rect, `size` device pixels across.
+fn target(
+    device: &wgpu::Device,
+    label: &str,
+    format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
+    size: [u32; 2],
+) -> wgpu::TextureView {
+    crate::gpu_memory::texture(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        },
+    )
+    .create_view(&Default::default())
+}
+
+/// What the composite reads: the cut, and the fill color or the cut again.
+fn read_bind_group(
+    device: &wgpu::Device,
+    composite: &SurroundComposite,
+    cut: &wgpu::TextureView,
+    color: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    let view = |binding, view| wgpu::BindGroupEntry {
+        binding,
+        resource: wgpu::BindingResource::TextureView(view),
+    };
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("surround_read_bind_group"),
+        layout: &composite.read_layout,
+        entries: &[view(0, cut), view(1, color)],
+    })
+}
+
+const READ: wgpu::TextureUsages =
+    wgpu::TextureUsages::RENDER_ATTACHMENT.union(wgpu::TextureUsages::TEXTURE_BINDING);
 
 impl SurroundTargets {
     pub(crate) fn new(
@@ -409,34 +467,7 @@ impl SurroundTargets {
         composite: &SurroundComposite,
         size: [u32; 2],
     ) -> Self {
-        let texture = |label, format, usage| {
-            crate::gpu_memory::texture(
-                device,
-                &wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: size[0],
-                        height: size[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage,
-                    view_formats: &[],
-                },
-            )
-            .create_view(&Default::default())
-        };
-        let read = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-        let cut_view = texture("surround_cut", CUT_FORMAT, read);
-        let color_view = texture("surround_color", COLOR_FORMAT, read);
-        let color_depth_view = texture(
-            "surround_color_depth",
-            COLOR_DEPTH_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-        );
+        let cut_view = target(device, "surround_cut", CUT_FORMAT, READ, size);
         let uniform_buffer = crate::gpu_memory::buffer(
             device,
             &wgpu::BufferDescriptor {
@@ -446,10 +477,6 @@ impl SurroundTargets {
                 mapped_at_creation: false,
             },
         );
-        let view = |binding, view| wgpu::BindGroupEntry {
-            binding,
-            resource: wgpu::BindingResource::TextureView(view),
-        };
         SurroundTargets {
             uniform_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("surround_uniform_bind_group"),
@@ -459,15 +486,11 @@ impl SurroundTargets {
                     resource: uniform_buffer.as_entire_binding(),
                 }],
             }),
-            read_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("surround_read_bind_group"),
-                layout: &composite.read_layout,
-                entries: &[view(0, &cut_view), view(1, &color_view)],
-            }),
+            read_bind_group: read_bind_group(device, composite, &cut_view, &cut_view),
             cut_view,
-            color_view,
-            color_depth_view,
+            fill: None,
             uniform_buffer,
+            size,
         }
     }
 
@@ -475,20 +498,39 @@ impl SurroundTargets {
     /// fills, then the cut. `draw` binds the producer's own groups and vertex
     /// buffers and draws its notes; it is called once per pass, after the
     /// pipeline is set.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &SurroundPipelines,
+        composite: &SurroundComposite,
         uniform: SurroundUniform,
         mut draw: impl FnMut(&mut wgpu::RenderPass<'_>),
     ) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
         if uniform.fills() {
+            if self.fill.is_none() {
+                let fill = FillTargets {
+                    color_view: target(device, "surround_color", COLOR_FORMAT, READ, self.size),
+                    depth_view: target(
+                        device,
+                        "surround_color_depth",
+                        COLOR_DEPTH_FORMAT,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        self.size,
+                    ),
+                };
+                self.read_bind_group =
+                    read_bind_group(device, composite, &self.cut_view, &fill.color_view);
+                self.fill = Some(fill);
+            }
+            let fill = self.fill.as_ref().expect("built above");
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("surround_color"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.color_view,
+                    view: &fill.color_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -499,7 +541,7 @@ impl SurroundTargets {
                 // Cleared to 1, the depth of no cut at all, which no fragment
                 // of no cut can beat.
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.color_depth_view,
+                    view: &fill.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Discard,
