@@ -48,8 +48,10 @@ pub trait ParamBackend {
     fn configuration(&self) -> Option<ConfigurationView> {
         None
     }
-    /// Some(result) means the shell owns semantic transactions; None selects
-    /// the synchronous standalone/legacy adapter.
+    /// Some(result) means the shell owns semantic transactions (the plugin,
+    /// which queues them to the audio thread); None selects the synchronous
+    /// path the standalone and offline shells use, where the UI reduces the
+    /// edit itself and writes the axes through `set`.
     fn submit_tuning(&self, _edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
         None
     }
