@@ -17,7 +17,7 @@
 
 use std::cell::Cell;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{LineWriter, Write};
 use std::ptr::NonNull;
 use std::sync::Mutex;
 
@@ -31,9 +31,11 @@ const HEADER: &str = "kind,frame,t,fired,timestamp,target,refresh,tick_ms,acquir
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 
+/// Written a line at a time: the static is never dropped, so anything still
+/// buffered when the host quits or crashes would be lost, and those are the
+/// moments worth having.
 struct Log {
-    file: BufWriter<File>,
-    rows: u32,
+    file: LineWriter<File>,
 }
 
 thread_local! {
@@ -120,10 +122,6 @@ fn write(row: &str) {
     }
     let Some(log) = log.as_mut() else { return };
     let _ = writeln!(log.file, "{row}");
-    log.rows += 1;
-    if log.rows % 256 == 0 {
-        let _ = log.file.flush();
-    }
 }
 
 fn open() -> Option<Log> {
@@ -131,7 +129,7 @@ fn open() -> Option<Log> {
     std::fs::create_dir_all(&dir).ok()?;
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     let path = dir.join(format!("frames-{secs}-{}.csv", std::process::id()));
-    let mut file = BufWriter::new(File::create(path).ok()?);
+    let mut file = LineWriter::new(File::create(path).ok()?);
     writeln!(file, "{HEADER}").ok()?;
-    Some(Log { file, rows: 0 })
+    Some(Log { file })
 }
