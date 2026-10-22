@@ -351,8 +351,8 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
         shared.input.give(&mut shared.ui.picture.runtime, taken);
     }
     if !editor_state.is_open() {
-        let wall = shared.input.now();
-        let now = shared.input.display_now(wall);
+        let now = shared.input.now();
+        let now = shared.input.display_now(now);
         shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
         // A take can end itself while nobody is watching, and an audio export
         // with the plugin window shut is precisely that. Every trigger but
@@ -360,7 +360,7 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
         // makes — so a shut window meant an armed take ran to whenever it was
         // noticed and no video was ever rendered. See
         // `EditorShared::poll_take_end`.
-        shared.poll_take_end(wall);
+        shared.poll_take_end();
     }
 }
 

@@ -1575,7 +1575,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
             );
             let appearance = shared.ui.picture.appearance.serialize();
             shared.take.start(48_000.0, appearance);
-            shared.poll_take_end_now();
+            shared.poll_take_end();
             probe
         };
         let stopped = |seconds| {
@@ -1595,7 +1595,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
         assert_eq!(shared.lock().take.captured() > 0, with_note);
         device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
         assert!(shared.lock().take.hit_rewind(), "even one callback's restore ends the take");
-        shared.lock().poll_take_end_now();
+        shared.lock().poll_take_end();
         assert!(!shared.lock().take.is_recording());
         device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
         drop(shared);
@@ -2484,7 +2484,7 @@ fn camera_automation_is_captured_mid_song_and_rebased_for_each_pass() {
         // pass to rebase onto; the fresh Transport stop ends at it instead.
         shared.ui.picture.appearance.render.trigger = harmonigraph_ui::RenderTrigger::OnDisarm;
         shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
-        shared.poll_take_end_now();
+        shared.poll_take_end();
         probe
     };
     let dt = 64.0 / 48_000.0;
