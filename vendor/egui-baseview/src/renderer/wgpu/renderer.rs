@@ -652,9 +652,10 @@ impl Renderer {
             height: canvas_height,
         } = physical_size;
 
-        // Advance last frame's readback before anything else: its encoder has
-        // been submitted by now, so the map can be asked for and a landed
-        // result published.
+        // Advance the readback before anything else: a frame that recorded
+        // stamps has been submitted by now, so this can ask to hear when it
+        // completes, or, once it has, submit the resolve on its own and map
+        // it, or publish a landed result.
         if let Some(timer) = self.gpu_timer.as_mut() {
             if let Some(ms) = timer.poll(&self.render_state.device, &self.render_state.queue) {
                 self.last_gpu_ms = Some(ms);

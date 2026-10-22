@@ -177,8 +177,8 @@ impl GpuTimer {
                 let ms = {
                     let view = self.staging.slice(..).get_mapped_range();
                     let ticks: &[u64] = bytemuck::cast_slice(&view);
-                    let fresh = ticks[0] != std::mem::replace(&mut self.last_opening, ticks[0]);
-                    Self::elapsed_ms(ticks[0], ticks[1], self.period).filter(|_| fresh)
+                    let last = std::mem::replace(&mut self.last_opening, ticks[0]);
+                    Self::elapsed_ms(ticks[0], ticks[1], last, self.period)
                 };
                 self.staging.unmap();
                 self.state = TimerState::Idle;
@@ -187,8 +187,11 @@ impl GpuTimer {
         }
     }
 
-    pub(super) fn elapsed_ms(begin: u64, end: u64, period: f32) -> Option<f32> {
-        (begin != 0 && end != 0 && end >= begin)
+    /// The pair as milliseconds, or `None` where it cannot describe one frame:
+    /// a zero or reversed stamp, or an opening that repeats `last_opening`,
+    /// which is a slot left unwritten since the previous reading.
+    pub(super) fn elapsed_ms(begin: u64, end: u64, last_opening: u64, period: f32) -> Option<f32> {
+        (begin != 0 && end != 0 && end >= begin && begin != last_opening)
             .then(|| ((end - begin) as f64 * f64::from(period) / 1.0e6) as f32)
     }
 

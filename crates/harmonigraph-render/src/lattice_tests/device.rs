@@ -194,13 +194,12 @@ fn headless_device_with_timestamps() -> Option<(wgpu::Device, wgpu::Queue)> {
 ///
 /// egui-wgpu runs every callback's `prepare` on one shared encoder and submits
 /// once, at the end. The GPU timer's readback cycle is per-device and assumes
-/// its steps land in different frames: `close` records a copy into the staging
-/// buffer, and the next frame's `poll` maps that buffer. With two callbacks
-/// driving one timer, both steps happened inside a single frame — the second
-/// callback mapped the buffer the first had just recorded a copy into — and
-/// submitting that encoder is a validation error ("Buffer with
-/// 'lattice_gpu_timer_staging' label is still mapped"), fatal by default and
-/// enough to take a plugin's host process down. This is that frame.
+/// its steps land in different frames, so only the callback with the stats
+/// sink drives it (`LatticeCallback::drives_timer`); this pins that the second
+/// view leaves the timer and its reading alone. Before the resolve waited for
+/// completion, a second driver was a validation error that took the host
+/// down; now it would resolve stamps not yet written, which this frame's
+/// unchanged state rules out.
 #[test]
 fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     let Some((device, queue)) = headless_device_with_timestamps() else {
@@ -229,8 +228,9 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    // Several frames: the cycle is Idle -> Recorded -> Mapping -> Idle, so the
-    // premature map can only be recorded once a frame has armed the timer.
+    // Several frames: the cycle is Idle -> Recorded -> Completing -> Mapping
+    // -> Idle, so a second driver could only interfere once a frame has armed
+    // the timer.
     let mut measured = false;
     for _ in 0..12 {
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -553,10 +553,14 @@ fn the_lattice_timer_lands_a_reading_on_most_cycles() {
 #[test]
 fn invalid_gpu_timestamp_pairs_are_not_published_as_zero_time() {
     for (begin, end) in [(0, 10), (10, 0), (10, 9)] {
-        assert_eq!(GpuTimer::elapsed_ms(begin, end, 1.0), None);
+        assert_eq!(GpuTimer::elapsed_ms(begin, end, 0, 1.0), None);
     }
-    assert_eq!(GpuTimer::elapsed_ms(10, 10, 1.0), Some(0.0));
-    assert_eq!(GpuTimer::elapsed_ms(10, 1_000_010, 2.0), Some(2.0));
+    assert_eq!(GpuTimer::elapsed_ms(10, 10, 0, 1.0), Some(0.0));
+    assert_eq!(GpuTimer::elapsed_ms(10, 1_000_010, 0, 2.0), Some(2.0));
+    // An opening equal to the last reading's is a slot left unwritten: with a
+    // fresh closing stamp it would read as an inflated time.
+    assert_eq!(GpuTimer::elapsed_ms(10, 1_000_010, 10, 2.0), None);
+    assert_eq!(GpuTimer::elapsed_ms(10, 1_000_010, 9, 2.0), Some(2.0));
 }
 
 #[test]

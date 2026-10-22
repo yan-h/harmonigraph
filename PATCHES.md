@@ -237,6 +237,8 @@ The resolve waits for `on_submitted_work_done` and goes in its own submission:
 resolved with the frame, an M5 Pro under macOS 27 read the closing slot before its stamp landed on 98 of 100 frames,
 and the slot kept the last frame's value, so nearly every pair came out reversed and was dropped.
 A repeated opening stamp is refused for the same reason.
+The cycle duplicates `harmonigraph-render`'s lattice `GpuTimer` (`gpu_timer.rs`), which differs only in where its closing stamp goes;
+a fix to either belongs in both.
 - **Patch 9** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): split the
 upload reading, then fix what the split exposed.
 `last_ubuf_ms` times `update_buffers` on its own, because the surrounding `last_upload_ms` also spans creating the command encoder, taking the renderer's write lock, and the MSAA resize —
