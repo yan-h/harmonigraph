@@ -11,13 +11,13 @@ use super::persist::EguiState;
 use super::shared::EditorShared;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
-/// frame, drain the MIDI and audio rings, reconcile the take — and then hand
-/// the state it has just fed to [`harmonigraph_ui::shell::Frame`], which draws
-/// it and answers with whatever the folds it settled leave the window needing.
+/// frame, reconcile the take — and then hand the state the input worker has
+/// fed to [`harmonigraph_ui::shell::Frame`], which draws it and answers with
+/// whatever the folds it settled leave the window needing.
 ///
-/// What stays here is what only this shell can do: the rings are its own, and
-/// so is the frame rate at the end, since it is the only shell whose window
-/// takes one. The standalone harness's counterpart is
+/// What stays here is what only this shell can do: the take and the params
+/// are its own, and so is the frame rate at the end, since it is the only
+/// shell whose window takes one. The standalone harness's counterpart is
 /// `App::ui` in harmonigraph-standalone, and the sequence the two share is one
 /// call each rather than a list each keeps in step by hand.
 pub(super) fn frame(
@@ -27,34 +27,40 @@ pub(super) fn frame(
     egui_state: &EguiState,
     context: &dyn GuiContext,
 ) {
-    // Everything the shell does before the UI runs: draining the MIDI and
-    // audio rings and reconciling the take. Timed separately because `ui cpu`
-    // starts at the dock build, so this whole stretch — which scales with the
-    // number of events arriving, i.e. exactly with how hard you are playing —
-    // sits outside every other CPU reading.
+    // Everything the shell does before the UI runs: the lock, a restore,
+    // the camera and the take. Timed separately because `ui cpu` starts at
+    // the dock build, so this stretch sits outside every other CPU reading.
+    // The rings and their FFTs are the input worker's, off this thread.
     let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
 
-    // One lock for the whole frame. Uncontended by design: the audio
-    // thread only ever touches the rtrb producer, and the editor-drop
-    // path runs on this same GUI thread. The one other party is a host
-    // state save with the window open (`UiState`'s `map`), which takes it
-    // for one serialization: on the host's main thread, which is this
-    // thread on macOS and Windows and a different one on X11.
+    // One lock for the whole frame. The audio thread only ever touches the
+    // rtrb producers, and the editor-drop path runs on this same GUI thread.
+    // The other parties hold it briefly: the input worker, for its take and
+    // its give but never for its FFTs, and a host state save with the window
+    // open (`UiState`'s `map`), for one serialization on the host's main
+    // thread, which is this thread on macOS and Windows and a different one
+    // on X11.
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
 
     // A host restore since the last frame (a preset load, an undo), which
-    // nothing else applies to an open window. Before the drain, for the reason
-    // the background analyzer adopts one before its own: the settings decide
-    // how the samples about to be taken are analyzed.
+    // nothing else applies to an open window. The input worker's next take
+    // reads the settings it leaves, which decide how the samples taken then
+    // are analyzed.
     state.params.ui_state.apply_restore(&mut shared.ui);
 
     shared.note_frame();
 
+    // The input worker ([`crate::background`]) drains the rings and runs the
+    // analysis, and a frame reads what it left — unless it never started.
+    // New MIDI must render this tick, not at the idle poll.
     let now = shared.input.now();
-    if shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now) {
-        // New MIDI must render this tick, not at the idle poll.
+    if shared.frame_drains {
+        let runtime = &mut shared.ui.picture.runtime;
+        shared.fresh_notes |= shared.input.drain(runtime, &shared.ui.picture.appearance, now);
+    }
+    if std::mem::take(&mut shared.fresh_notes) {
         ui.ctx().request_repaint();
     }
     // Drained on the clock it arrived by, drawn at the refresh it is for.

@@ -184,7 +184,7 @@ impl Editor for LatticeEditor {
                 // restore, or on the way out, in `LatticeEditorHandle`'s Drop).
                 //
                 // Read with the state's lock held, in the order the close and
-                // the background analyzer take the two (`shared`, then the
+                // the input worker take the two (`shared`, then the
                 // blob): taking the blob also answers a pending restore, and a
                 // save on another thread must not see that answered before the
                 // state holds it (see `UiState`).
@@ -281,9 +281,9 @@ impl Drop for LatticeEditorHandle {
         // save serializes the live state instead (see `UiState`). A restore
         // no frame has drawn yet is applied first, so it is not lost here.
         // The lock is taken here with `open` still TRUE, which is what keeps
-        // the background analyzer off it for the whole of this — see
-        // [`crate::background`] on why that ordering is load-bearing rather
-        // than incidental.
+        // the input worker from adopting the blob this writes, or ageing the
+        // picture, until the window is gone — see [`crate::background`] on why
+        // that ordering is load-bearing rather than incidental.
         let mut shared = self.shared.lock();
         let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
         for (key, active) in harmonigraph_ui::params::ParamKey::ALL

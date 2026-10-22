@@ -1,21 +1,32 @@
-//! The spectrum analyzer that keeps running while the editor window is closed.
+//! The input worker: the one thread that drains the audio thread's rings and
+//! runs the spectrum analysis, whether or not the editor window is open.
 //!
-//! `process` fills both audio→GUI rings whether or not anyone is watching, and
-//! a GUI frame is otherwise the only thing that drains them — which the two
-//! rings survive very differently. The note ring holds 4096 events, minutes of
-//! playing, so a reopened window replays what it missed and the roll fills in.
-//! The audio ring holds [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY)
-//! samples, 1.37 s of stereo at 48 kHz, so it saturates within seconds and
-//! every sample after that is dropped on the floor. Without a drainer of its
-//! own, reopening a window shut for a minute would give back a roll full of
-//! notes over a heatmap with a minute-wide hole in it; removing that asymmetry
-//! is what this is for.
+//! `process` fills both audio→GUI rings whether or not anyone is watching. The
+//! note ring holds 4096 events, minutes of playing; the audio ring holds
+//! [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) samples, 1.37 s of
+//! stereo at 48 kHz, so it saturates within seconds and every sample after
+//! that is dropped. A frame used to drain both with the window open and this
+//! thread with it shut; now this thread drains them always, so the window's
+//! state decides nothing about the input (#1559).
 //!
-//! Both rings are drained here, not just the audio one, and the second is not a
-//! bonus. A full ring drops the NEWEST, so leaving the notes to the reopen
-//! would retain old events while losing the ones beside the fresh audio.
-//! Draining both also keeps their shared presentation clock current, whether
-//! the host runs in realtime or bounces faster than a window could draw.
+//! **The FFTs run with no lock held.** A step takes the editor's lock to move
+//! the notes into the tracker and the audio out of its ring (a copy), lets
+//! go, analyzes, and takes it again to hand the columns to the store
+//! ([`LiveInput::take`](crate::editor::input::LiveInput::take), `analyze`,
+//! `give`). So the host's main thread, which a frame and a window opening run
+//! on, waits on this thread for a copy or an append, never for an FFT, and no
+//! longer does any FFT itself. The notes and the clock heartbeat go with the
+//! audio, in the same hold, because the heartbeat's offset is what dates the
+//! audio: observed and then mapped in one hold, as a frame's drain did, where
+//! on two threads at two cadences a block after a callback pause could be
+//! dated with the offset from before it, a pause too early. (`process`
+//! publishes a block before its heartbeat, so a take landing between the two
+//! still maps that one block with the previous offset, as a frame's drain
+//! always could; it matters only for the first block after a pause.)
+//!
+//! Both rings are drained here, not just the audio one, and the second is not
+//! a bonus: a full ring drops the NEWEST, so a ring left to pile up would lose
+//! the events beside the fresh audio.
 //!
 //! **Analysis keeps progressing, but silence need not run an FFT.**
 //! `harmonigraph-analysis` skips transforms when the retained window is exactly
@@ -34,14 +45,12 @@
 //! possible cost reduction, and would need to preserve the store tiers,
 //! `live_slab` ladder on their shared `FFT_INTERVAL` grid.
 //!
-//! Nothing here analyzes anything itself. It calls
-//! [`LiveInput::drain`](crate::editor::input::LiveInput::drain) and
-//! [`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time),
-//! which is the frame's own drain plus the ageing a frame instead gets from
-//! `begin_frame`; see there for why sharing that one path is the point.
-//! A closed-window tick also calls [`EditorShared::poll_take_end`] so a take
-//! can finish and render without an open editor. This completion poll is
-//! separate from the GUI's full recording control synchronization; the
+//! **With the window shut, a step also does the frame's other duties:** the
+//! ageing a frame gets from `begin_frame`
+//! ([`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time)),
+//! and [`EditorShared::poll_take_end`] so a take can finish and render without
+//! an open editor. This completion poll is separate from the GUI's full
+//! recording control synchronization; the
 //! `a_take_ends_itself_while_the_editor_window_is_shut` test covers it.
 //!
 //! **The project's own settings arrive here too**, for the same reason: this
@@ -69,46 +78,51 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::editor::{EditorShared, EguiState};
 
-/// How often the analyzer looks for audio the host has left in the ring.
+/// How often the worker looks for input while the editor window is open.
+///
+/// Under the 8 ms hop, so a column is analyzed within a poll of its audio
+/// arriving, where a frame used to analyze it at the next frame: the worst
+/// case for a block is now a frame plus a poll. Cheap: a step that finds
+/// nothing is two short holds of an uncontended lock.
+pub(crate) const POLL: Duration = Duration::from_millis(4);
+
+/// How often it looks with the window shut, where nothing is drawing what it
+/// analyzes and the closed window's duties (see [`step`]) want this cadence.
 ///
 /// Bounded above by the ring itself, and tightly: it holds
 /// [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) interleaved samples,
 /// which is 1.37 s of stereo at 48 kHz but only 0.34 s at 192 kHz — and a poll
 /// that ever slipped past that span would drop audio silently and for good,
-/// which is the failure this module exists to fix, reintroduced by its own
-/// pacing. 20 ms leaves 17x margin at the worst rate a host can hand us, so the
-/// scheduler has to lose this thread for a third of a second before anything is
-/// lost. `the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers` is what
-/// keeps the two numbers in that relation.
-///
-/// The old 5%-of-a-core FFT estimate above does not establish the cost of these
-/// 50 wakeups a second on current silent input. A shorter poll can reduce the
-/// typical batch, but the worst drain is set by how full the ring got while
-/// this thread was away rather than by how often it means to look.
-/// See [`tick`] for that bound.
-pub(crate) const POLL: Duration = Duration::from_millis(20);
+/// reintroduced by this thread's own pacing. 20 ms, the longest it sleeps,
+/// leaves 17x margin at the worst rate a host can hand us, so the scheduler
+/// has to lose this thread for a third of a second before anything is lost.
+/// `the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers` is what keeps
+/// the two numbers in that relation.
+pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
-/// The thread, and the flag that ends it.
+/// The input worker's thread, and the flag that ends it.
 ///
 /// Held by the plugin purely for its [`Drop`]: a plugin removed from a project
 /// must not leave a thread behind doing FFTs on a ring nobody fills again.
-pub(crate) struct BackgroundAnalyzer {
+pub(crate) struct InputWorker {
     stop: Arc<AtomicBool>,
     /// Completed loop rounds, exposed only to tests that need an observable
     /// boundary after changing the editor-open flag.
     #[cfg(test)]
     rounds: Arc<AtomicU64>,
-    /// `None` when the thread could not be spawned, which costs this feature
-    /// and nothing else — an open editor still drains both rings itself.
+    /// `None` when the thread could not be spawned. The window's frames then
+    /// drain both rings themselves, on the host's main thread as before #1559
+    /// (see [`EditorShared::frame_drains`]), and only a shut window loses its
+    /// input.
     thread: Option<JoinHandle<()>>,
 }
 
-impl BackgroundAnalyzer {
+impl InputWorker {
     pub(crate) fn spawn(
         shared: Arc<Mutex<EditorShared>>,
         editor_state: Arc<EguiState>,
         ui_state: Arc<RwLock<String>>,
-    ) -> BackgroundAnalyzer {
+    ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let worker = shared.clone();
@@ -117,8 +131,9 @@ impl BackgroundAnalyzer {
         #[cfg(test)]
         let worker_rounds = rounds.clone();
         let thread = std::thread::Builder::new()
-            .name("harmonigraph-background-analyzer".to_string())
+            .name("harmonigraph-input-worker".to_string())
             .spawn(move || {
+                raise_to_gui_priority();
                 #[cfg(not(test))]
                 run(&worker, &editor_state, Restore::of(ui_state), &flag);
                 #[cfg(test)]
@@ -131,14 +146,17 @@ impl BackgroundAnalyzer {
             // the window was shut, and a heatmap with holes in it looks exactly
             // like one nobody was playing into.
             Err(err) => {
-                shared.lock().ui.picture.runtime.console.log(format!(
-                    "background analyzer not started ({err}) — the spectrogram \
-                     will only cover time the editor window was open",
+                let mut shared = shared.lock();
+                shared.frame_drains = true;
+                shared.ui.picture.runtime.console.log(format!(
+                    "input worker not started ({err}) — the editor window drains \
+                     its own input, and the spectrogram will only cover time it \
+                     was open",
                 ));
                 None
             }
         };
-        BackgroundAnalyzer {
+        InputWorker {
             stop,
             thread,
             #[cfg(test)]
@@ -152,14 +170,33 @@ impl BackgroundAnalyzer {
     }
 }
 
-impl Drop for BackgroundAnalyzer {
+impl Drop for InputWorker {
     /// Stops the thread and waits for it, so the plugin never outlives its own
-    /// worker. Joining can wait for the current bounded drain and restore,
-    /// one [`POLL`] sleep, and the final drain in [`run`].
+    /// worker. Joining can wait for the current step, one [`SHUT_POLL`] sleep
+    /// at most, and the final drain in [`run`].
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+    }
+}
+
+/// Run this thread at the class the host's GUI thread runs at on macOS:
+/// a frame there waits on this thread's holds of the editor lock, and
+/// `parking_lot` lends no priority to the holder, so a worker preempted inside
+/// one would hold the frame for as long as the scheduler kept it off a core.
+fn raise_to_gui_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        // <pthread/qos.h>: QOS_CLASS_USER_INTERACTIVE, the main thread's.
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        // SAFETY: changes only the calling thread's own scheduling class.
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         }
     }
 }
@@ -239,91 +276,140 @@ impl Restore {
 
 #[cfg(test)]
 thread_local! {
-    /// Pause an admitted closed-window tick before it obtains shared state.
+    /// Pause a step before it obtains shared state.
     static TICK_PAUSE: std::cell::RefCell<Option<Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
+    /// Run between a step's two holds of the lock, just before its FFTs.
+    #[allow(clippy::type_complexity)]
+    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&Mutex<EditorShared>, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// One round: adopt whatever the host has restored, then drain the rings —
-/// both of them only while no frame is doing either.
+/// One step: adopt whatever the host has restored while the window is shut,
+/// take the notes and the audio under the lock, analyze the audio without
+/// it, and give the columns back under it — then, with the window shut, the
+/// frame's other duties.
+///
+/// Those run once a step, and a shut window's steps come every [`SHUT_POLL`],
+/// the cadence they always had: `poll_take_end` counts its OnTransportStop
+/// debounce in calls ([`EditorShared::STOP_FRAMES`]), so at [`POLL`] twenty of
+/// them would be 80 ms, under one 4096-sample block — the very stall the
+/// debounce is there to ride out.
 ///
 /// Split out from the sleep loop so what it DECIDES can be tested without a
 /// clock, which is most of what there is to get wrong here.
 ///
-/// The window check carries a second job with the adopt behind it, and one that
-/// is about the USER rather than about a lock: `params.ui_state` names the last
-/// restore or window close, so re-applying it under an open window would revert
-/// whatever has been changed since. See [`Restore::adopt`].
+/// The window check carries a job that is about the USER rather than about a
+/// lock: `params.ui_state` names the last restore or window close, so
+/// re-applying it under an open window would revert whatever has been changed
+/// since. See [`Restore::adopt`]. It is made under the lock, where the
+/// window's build reads the same blob: `LatticeEditorHandle::drop` takes the
+/// lock with `open` still true, and `Editor::spawn` sets `open` after the
+/// window is built, which leaves window construction as the one overlap — a
+/// step that found the window shut a moment before it claimed itself.
 ///
-/// **The early window check and try_lock avoid waiting on a frame.**
-/// `frame` takes the `EditorShared` mutex for its whole run, on an argument
-/// spelled out there as "uncontended by design" — and issue #296's leading
-/// hypothesis for a close-time host hang is that this argument is an assumption
-/// and not a mechanism. A second party on that lock is precisely what that
-/// hypothesis is about, so this one is arranged to be a party only when the
-/// other cannot be: the window is checked BEFORE the lock is asked for, and
-/// asked for with `try_lock` — so this thread never waits on a frame at all,
-/// and a frame waits on this thread only for the width of one drain.
-///
-/// The transitions are ordered to keep even that rare.
-/// `LatticeEditorHandle::drop` takes the lock with `open` still true, so the
-/// save-and-close path is never behind this thread. `Editor::spawn` sets `open`
-/// after the window is built, which leaves window construction as the one
-/// overlap — a check that passed a moment before the window claimed itself.
-///
-/// **A drain is bounded by the RING, not by the poll**, and the difference is
-/// worth stating because the reassuring number is the wrong one. Descheduled
-/// past 1.37 s with the window shut, this wakes to a full ring and spends ~170
-/// columns of FFT — about 40 ms — under one lock; the steady state is a poll's
-/// worth, well under a millisecond. Neither is a hang, but 40 ms on the host's
-/// main thread inside `gui_create` is the figure to argue with if #296 is ever
-/// re-opened against this lock.
-/// These timings use the historical 0.23 ms/column estimate above, not a
-/// current lock-hold measurement; exactly zero retained windows skip the FFT.
-///
-/// A skipped round costs nothing: the ring carries seventeen of them even at
-/// the fastest rate a host offers.
-fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {
-    if editor_state.is_open() {
-        return;
-    }
+/// **The lock is waited for, not tried**: this thread never runs on the
+/// host's main thread, so waiting out a frame costs the host nothing, and a
+/// frame or a window opening waits on this thread only for a take (a copy of
+/// what the ring holds) or a give (appending its columns): microseconds for
+/// the two or three columns a step usually brings, and a few milliseconds at
+/// most for a full ring's 170, reachable only after this thread was starved
+/// for 1.37 s. The FFTs between them, some 40 ms for that ring at the
+/// historical estimate above, hold nothing. The thread runs at the GUI's
+/// scheduling class on macOS (see [`InputWorker::spawn`]), so a frame waiting
+/// on one of those holds is not also waiting for this thread to be scheduled.
+fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {
     #[cfg(test)]
     if let Some(gate) = TICK_PAUSE.with_borrow_mut(Option::take) {
         gate.wait();
         gate.wait();
     }
-    let Some(mut shared) = shared.try_lock() else {
-        return;
+    let taken = {
+        let mut guard = shared.lock();
+        let shared = &mut *guard;
+        // BEFORE the take: the settings decide how the samples about to be
+        // taken are analyzed, so a step that adopted them afterwards would
+        // still leave its own columns at the window the blob just replaced.
+        if !editor_state.is_open() {
+            restore.adopt(shared);
+        }
+        let now = shared.input.now();
+        let (notes, taken) =
+            shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+        shared.fresh_notes |= notes;
+        taken
     };
-    // Opening may have completed after the first check. Live edits use this
-    // same lock, so an admitted old tick must check again before restoring.
-    if editor_state.is_open() {
+    let taken = taken.map(|mut taken| {
+        #[cfg(test)]
+        BETWEEN_HOLDS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared, &taken)));
+        crate::editor::input::LiveInput::analyze(&mut taken);
+        taken
+    });
+    if taken.is_none() && editor_state.is_open() {
         return;
     }
-    let shared = &mut *shared;
-    // BEFORE the drain: the settings decide how the samples about to be taken
-    // are analyzed, so a round that adopted them afterwards would still leave
-    // its own columns at the window the blob just replaced.
-    restore.adopt(shared);
-    let now = shared.input.now();
-    shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-    let now = shared.input.display_now(now);
-    shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
-    // A take can end itself while nobody is watching, and an audio export with
-    // the plugin window shut is precisely that. Every trigger but OnDisarm is
-    // decided in this call, which until now only a GUI frame ever made — so a
-    // shut window meant an armed take ran to whenever it was noticed and no
-    // video was ever rendered. See `EditorShared::poll_take_end`.
-    shared.poll_take_end();
+    let mut guard = shared.lock();
+    let shared = &mut *guard;
+    if let Some(taken) = taken {
+        shared.input.give(&mut shared.ui.picture.runtime, taken);
+    }
+    if !editor_state.is_open() {
+        let now = shared.input.now();
+        let now = shared.input.display_now(now);
+        shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
+        // A take can end itself while nobody is watching, and an audio export
+        // with the plugin window shut is precisely that. Every trigger but
+        // OnDisarm is decided in this call, which otherwise only a GUI frame
+        // makes — so a shut window meant an armed take ran to whenever it was
+        // noticed and no video was ever rendered. See
+        // `EditorShared::poll_take_end`.
+        shared.poll_take_end();
+    }
 }
+
+/// A [`step`] that survives its own panic. One would otherwise end the
+/// thread with the analysis lent out and nothing draining either ring, which
+/// freezes the picture and every shut-window duty for the session with
+/// nothing said. Handing the drain to the frames instead would only move the
+/// same panic onto the host's main thread. So the analysis is put back fresh,
+/// the source run restarts so its columns re-anchor, the console says so
+/// once, and the next step carries on.
+///
+/// Whether the step completed.
+fn guarded_step(
+    shared: &Mutex<EditorShared>,
+    editor_state: &EguiState,
+    restore: &mut Restore,
+    panicked: &mut bool,
+) -> bool {
+    let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        step(shared, editor_state, restore)
+    }));
+    if stepped.is_err() {
+        let mut shared = shared.lock();
+        shared.input.recover_analysis();
+        if !std::mem::replace(panicked, true) {
+            shared
+                .ui
+                .picture
+                .runtime
+                .console
+                .log("input worker panicked in a step and restarted its analysis".to_string());
+        }
+        return false;
+    }
+    true
+}
+
+/// How many consecutive steps may panic before the worker stops trying.
+const MAX_PANICS_IN_A_ROW: u32 = 8;
 
 /// Drain, sleep, repeat, until the plugin goes away.
 ///
-/// The stop flag is read once per round. Joining waits for any current tick
+/// The stop flag is read once per step. Joining waits for any current step
 /// and sleep, followed by the final drain below.
 ///
 /// The [`Restore`] mirror lives here, for the length of the thread: it is what
-/// the host has already been answered about, and a fresh one every round would
-/// re-apply the same blob fifty times a second.
+/// the host has already been answered about, and a fresh one every step would
+/// re-apply the same blob hundreds of times a second.
 fn run(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,
@@ -331,11 +417,26 @@ fn run(
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
+    let mut panicked = false;
+    let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        tick(shared, editor_state, &mut restore);
+        if guarded_step(shared, editor_state, &mut restore, &mut panicked) {
+            in_a_row = 0;
+        } else {
+            in_a_row += 1;
+            // A step that panics every time would unwind every poll, printing
+            // a backtrace each, for a picture that is frozen anyway.
+            if in_a_row >= MAX_PANICS_IN_A_ROW {
+                shared.lock().ui.picture.runtime.console.log(format!(
+                    "input worker stopped after {in_a_row} panicking steps in a row — the \
+                     editor's input is frozen until the plugin is reloaded",
+                ));
+                return;
+            }
+        }
         #[cfg(test)]
         rounds.fetch_add(1, Ordering::Release);
-        std::thread::sleep(POLL);
+        std::thread::sleep(if editor_state.is_open() { POLL } else { SHUT_POLL });
     }
     // Destruction follows host callback quiescence. Consume the final owned
     // display payloads before the editor's bank is reclaimed off thread.
@@ -369,7 +470,7 @@ mod tests {
         /// The host's end of `params.ui_state`.
         ui_state: Arc<RwLock<String>>,
         /// The thread's end of it, held across rounds exactly as [`run`] holds
-        /// one — so a test can tick twice and see what the second round skips.
+        /// one — so a test can step twice and see what the second step skips.
         restore: Restore,
     }
 
@@ -416,8 +517,8 @@ mod tests {
     impl Harness {
         /// One round of the loop the thread runs, against a mirror that
         /// survives between rounds.
-        fn tick(&mut self) {
-            super::tick(&self.shared, &self.editor_state, &mut self.restore);
+        fn step(&mut self) {
+            super::step(&self.shared, &self.editor_state, &mut self.restore);
         }
 
         /// What the host does when it restores a project — or pushes a preset
@@ -486,15 +587,6 @@ mod tests {
         fn analyzed_lag(&self) -> f64 {
             self.shared.lock().ui.picture.runtime.spectrum.column_lag()
         }
-
-        /// What a GUI frame does with the rings, which is the same call this
-        /// module makes — see `LiveInput::drain`.
-        fn frame(&self) {
-            let mut shared = self.shared.lock();
-            let shared = &mut *shared;
-            let now = shared.input.now();
-            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-        }
     }
 
     /// The whole point: audio that arrives with nobody watching still becomes
@@ -505,7 +597,7 @@ mod tests {
         h.push_audio(20_000);
         assert_eq!(h.columns(), 0, "nothing is analyzed before a drain");
 
-        h.tick();
+        h.step();
 
         assert!(h.columns() > 0, "a closed window dropped its audio on the floor");
     }
@@ -520,7 +612,7 @@ mod tests {
         h.push_note(1.5, 64);
         assert_eq!(h.voices(), 0, "nothing is tracked before a drain");
 
-        h.tick();
+        h.step();
 
         assert_eq!(h.voices(), 2, "a closed window dropped its notes on the floor");
     }
@@ -550,7 +642,7 @@ mod tests {
         // the released tail rather than an empty tracker.
         h.push_note(100.0, 64);
 
-        h.tick();
+        h.step();
 
         assert_eq!(
             h.voices(),
@@ -560,27 +652,19 @@ mod tests {
         );
     }
 
-    /// And the mirror image, which is what keeps this thread off the lock a
-    /// frame holds: while the window is open the frame owns the drain, and this
-    /// leaves both rings completely alone rather than racing it for them.
+    /// And with the window open: the worker drains both rings all the same,
+    /// so an open window's picture is fed by the one path a shut one's is.
     #[test]
-    fn an_open_window_is_left_to_drain_its_own_rings() {
+    fn an_open_window_is_fed_by_the_worker_too() {
         let mut h = harness();
         h.push_audio(20_000);
         h.push_note(1.0, 60);
         h.editor_state.set_open(true);
 
-        h.tick();
-        assert_eq!(h.columns(), 0, "analyzed audio the frame was going to take");
-        assert_eq!(h.voices(), 0, "tracked notes the frame was going to take");
-
-        // Nothing was consumed either — both rings are still there for whoever
-        // drains next, which is the part a `return` after the pop would get
-        // silently wrong.
-        h.editor_state.set_open(false);
-        h.tick();
-        assert!(h.columns() > 0, "the open round ate the audio ring");
-        assert_eq!(h.voices(), 1, "the open round ate the note ring");
+        h.step();
+        assert!(h.columns() > 0, "the worker left the audio to a frame");
+        assert_eq!(h.voices(), 1, "the worker left the notes to a frame");
+        assert!(h.shared.lock().fresh_notes, "the frame was not told to draw the note");
     }
 
     /// A take ends itself with the window SHUT, which is the state a Bitwig
@@ -627,66 +711,112 @@ mod tests {
 
         h.editor_state.set_open(false);
         for round in 0..EditorShared::STOP_FRAMES - 1 {
-            h.tick();
+            h.step();
             assert!(h.shared.lock().take.is_recording(), "still debouncing at round {round}");
         }
-        h.tick();
+        h.step();
         assert!(!h.shared.lock().take.is_recording(), "the shut window ended the take");
     }
 
-    /// The handover is the user-visible half: audio split across a window
-    /// closing and reopening must yield exactly the columns it would have
-    /// yielded had the window never moved — no column dropped at the boundary,
-    /// none analyzed twice.
-    ///
-    /// Against a baseline rather than a number, because what is being claimed
-    /// is an EQUIVALENCE. A count spelled out here would go stale with the hop
-    /// or the window length, and worse, would still pass if both paths were
-    /// wrong in the same way.
-    ///
-    /// What the baseline is NOT is the real `frame`: it is `Harness::frame`,
-    /// which stands in for it by making the same `LiveInput::drain` call. So this is a
-    /// regression guard on `tick` — it catches `tick` growing an analyzer of its
-    /// own, a clock of its own, or a `return` placed after the pop — and not
-    /// evidence that `frame` still routes through `LiveInput::drain`. That claim is
-    /// `catch_up_answers_whether_notes_arrived`'s, one file over.
-    ///
-    /// It is the column GRID this pins. Timeline equivalence across delivery
-    /// speeds is covered by `fast_bounce_preserves_the_realtime_picture_timeline`
-    /// in the editor tests, with a deterministic clock instead of real sleeps.
+    /// The point of the worker: its FFTs run with the editor's lock free, so
+    /// a frame or a window opening on the host's main thread never waits for
+    /// one. Just before them the lock is free and the audio taken is not yet
+    /// analyzed, so the first hold did not run them, and the second only
+    /// gives back what they made.
     #[test]
-    fn the_handover_neither_drops_a_column_nor_repeats_one() {
-        // The same audio, drained entirely by frames.
-        let baseline = {
-            let mut h = harness();
-            h.editor_state.set_open(true);
-            h.push_audio(20_000);
-            h.frame();
-            h.push_audio(20_000);
-            h.frame();
-            h.columns()
-        };
-        assert!(baseline > 0, "the baseline analyzed nothing");
-
-        // And now split across a window that was shut for the first half.
+    fn the_analysis_runs_with_the_lock_free() {
         let mut h = harness();
         h.push_audio(20_000);
-        h.tick();
-        let while_closed = h.columns();
-        assert!(while_closed > 0, "the closed half analyzed nothing");
+        let between = std::rc::Rc::new(std::cell::Cell::new(None));
+        let seen = between.clone();
+        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>, taken| {
+            seen.set(Some((shared.try_lock().is_some(), taken.unanalyzed_audio())));
+        })));
+        h.step();
+        BETWEEN_HOLDS.set(None);
 
-        h.editor_state.set_open(true);
+        assert_eq!(between.get(), Some((true, true)), "the lock was held, or the audio analyzed");
+        assert!(h.columns() > 0, "the step analyzed nothing");
+    }
+
+    /// A Clear the window makes while a step analyzes empties the history of
+    /// that step's columns too: they come from audio before the Clear.
+    #[test]
+    fn a_clear_during_the_analysis_keeps_its_columns_out() {
+        let mut h = harness();
         h.push_audio(20_000);
-        h.frame();
-        assert!(h.columns() > while_closed, "the frame added nothing after the handover");
+        BETWEEN_HOLDS.set(Some(Box::new(|shared: &Mutex<EditorShared>, _| {
+            shared.lock().ui.picture.runtime.spectrum.clear_history();
+        })));
+        h.step();
+        BETWEEN_HOLDS.set(None);
+        assert_eq!(h.columns(), 0, "the step put back columns from before the Clear");
 
-        assert_eq!(
-            h.columns(),
-            baseline,
-            "a window that closed and reopened left {} columns where an open one leaves \
-             {baseline}: the handover is not on the same grid",
-            h.columns(),
+        h.push_audio(20_000);
+        h.step();
+        assert!(h.columns() > 0, "audio after the Clear was not kept");
+    }
+
+    /// A step that panics with the analysis lent out leaves the next one
+    /// analyzing again, with its columns dated where they belong rather than
+    /// from the frame zero of the run the panic interrupted.
+    #[test]
+    fn a_panicking_step_leaves_the_next_one_analyzing() {
+        let mut h = harness();
+        h.push_audio(20_000);
+        h.step();
+        let before = h.columns();
+        assert!(before > 0, "the first step analyzed nothing");
+        let newest = |h: &Harness| {
+            h.shared.lock().ui.picture.runtime.spectrum.history().back().unwrap().time
+        };
+        let first = newest(&h);
+
+        h.push_audio(20_000);
+        BETWEEN_HOLDS.set(Some(Box::new(|_: &Mutex<EditorShared>, _| panic!("a step's bug"))));
+        let mut panicked = false;
+        super::guarded_step(&h.shared, &h.editor_state, &mut h.restore, &mut panicked);
+        BETWEEN_HOLDS.set(None);
+        assert!(panicked, "the hook did not run");
+
+        h.push_audio(40_000);
+        h.step();
+        assert!(h.columns() > before, "nothing was analyzed after the panic");
+        // Both newest columns lag their audio's end by the same half window,
+        // and the audio ends 60 000 frames apart; the restarted run's hop
+        // grid puts its newest column up to a hop (8 ms) short of that.
+        let spacing = newest(&h) - first;
+        assert!(
+            (spacing - 60_000.0 / 48_000.0).abs() < 0.01,
+            "the newest columns are {spacing:.3} s apart where their audio is 1.25 s: the \
+             columns after the panic are dated from the interrupted run",
         );
+    }
+
+    /// A step analyzes under the settings it took the audio with, even if they
+    /// change while it analyzes, and the next step under the new ones.
+    #[test]
+    fn a_step_analyzes_under_the_settings_it_took() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let mut h = harness();
+        let first = h.configured_window();
+        let second = if first == SpectrumWindow::Precise {
+            SpectrumWindow::Fast
+        } else {
+            SpectrumWindow::Precise
+        };
+        h.push_audio(40_000);
+        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>, _| {
+            shared.lock().ui.picture.appearance.spectrum.window = second;
+        })));
+        h.step();
+        BETWEEN_HOLDS.set(None);
+        assert!((h.analyzed_lag() - lag_of(first)).abs() < 1e-9, "analyzed under the edit");
+
+        h.push_audio(40_000);
+        h.step();
+        assert!((h.analyzed_lag() - lag_of(second)).abs() < 1e-9, "the next step missed the edit");
     }
 
     /// Issue #324: the project's saved Window has to reach the analyzer with no
@@ -711,7 +841,7 @@ mod tests {
         // one windowful and the analyzer cannot come out of it empty.
         h.push_audio(40_000);
 
-        h.tick();
+        h.step();
 
         assert!(h.columns() > 0, "nothing was analyzed at all");
         assert_eq!(h.configured_window(), SpectrumWindow::Precise, "the blob never landed");
@@ -732,7 +862,7 @@ mod tests {
     /// restore that lands while the window is open reaches it through the
     /// window's own frame instead; see `UiState`.)
     ///
-    /// The guard is [`tick`]'s existing open-window check, which is why this
+    /// The guard is [`step`]'s existing open-window check, which is why this
     /// test lives next to the drain it also guards: anything that moved the
     /// adopt ahead of that check would pass every other test here.
     #[test]
@@ -745,7 +875,7 @@ mod tests {
         h.shared.lock().ui.picture.appearance.spectrum.window = SpectrumWindow::Fast;
         h.editor_state.set_open(true);
 
-        h.tick();
+        h.step();
 
         assert_eq!(
             h.configured_window(),
@@ -773,7 +903,7 @@ mod tests {
                 TICK_PAUSE.with_borrow_mut(|pause| *pause = Some(worker_gate));
                 // This worker has not adopted the blob yet.
                 let mut restore = Restore::of(ui_state);
-                tick(&shared, &editor_state, &mut restore);
+                step(&shared, &editor_state, &mut restore);
             });
             gate.wait();
             {
@@ -798,11 +928,11 @@ mod tests {
 
         let mut h = harness();
         h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.tick();
+        h.step();
         assert_eq!(h.configured_window(), SpectrumWindow::Precise);
 
         h.restore(&blob_with_window(SpectrumWindow::Fast));
-        h.tick();
+        h.step();
 
         assert_eq!(
             h.configured_window(),
@@ -827,10 +957,10 @@ mod tests {
 
         let mut h = harness();
         h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.tick();
+        h.step();
 
         h.restore("");
-        h.tick();
+        h.step();
 
         assert_eq!(
             h.shared
@@ -873,7 +1003,7 @@ mod tests {
         let saved = harmonigraph_ui::shell::close(&h.shared.lock().ui);
         h.restore(&saved);
 
-        h.tick();
+        h.step();
 
         assert_eq!(
             harmonigraph_ui::shell::close(&h.shared.lock().ui),
@@ -892,7 +1022,7 @@ mod tests {
         h.restore("this is not a persist blob");
 
         for _ in 0..5 {
-            h.tick();
+            h.step();
         }
 
         let refusals = h
@@ -920,10 +1050,10 @@ mod tests {
         const CHANNELS: f64 = 2.0;
         let span = crate::AUDIO_RING_CAPACITY as f64 / CHANNELS / FASTEST_RATE;
         assert!(
-            span > POLL.as_secs_f64() * 8.0,
+            span > SHUT_POLL.as_secs_f64() * 8.0,
             "the ring holds {span:.3} s against a {:.3} s poll: too little slack for a \
              thread the scheduler is free to ignore",
-            POLL.as_secs_f64(),
+            SHUT_POLL.as_secs_f64(),
         );
     }
 
@@ -942,12 +1072,15 @@ mod tests {
         h.push_audio(20_000);
 
         let analyzer =
-            BackgroundAnalyzer::spawn(h.shared.clone(), h.editor_state.clone(), h.ui_state.clone());
-        // Generous against POLL, so a loaded machine cannot fail this for being
-        // slow — it is asserting that rounds happen at all, not how fast.
-        std::thread::sleep(POLL * 10);
+            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), h.ui_state.clone());
+        // Polled to a deadline, so a loaded machine cannot fail this for being
+        // slow — it is asserting that steps happen at all, not how fast.
+        let started = Instant::now();
+        while h.columns() == 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "the thread never took a step");
+            std::thread::sleep(POLL);
+        }
         let analyzed = h.columns();
-        assert!(analyzed > 0, "the thread never took a round");
 
         let started = Instant::now();
         drop(analyzer);
@@ -958,7 +1091,7 @@ mod tests {
         );
 
         h.push_audio(20_000);
-        std::thread::sleep(POLL * 10);
+        std::thread::sleep(SHUT_POLL * 10);
         assert_eq!(h.columns(), analyzed, "the thread outlived the plugin that owned it");
     }
 }

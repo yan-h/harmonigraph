@@ -50,9 +50,9 @@ impl EguiState {
     /// Record that the window has opened or closed.
     ///
     /// Named rather than stored inline because it is not only the host's
-    /// business: [`crate::background`] reads it to decide whether a frame is
-    /// already draining the rings, so the two transitions are a seam between
-    /// threads and not just a bit.
+    /// business: [`crate::background`] reads it to decide whether to adopt a
+    /// restored blob and do a shut window's duties, and how often to poll, so
+    /// the two transitions are a seam between threads and not just a bit.
     pub(crate) fn set_open(&self, open: bool) {
         self.open.store(open, Ordering::Release);
     }
@@ -91,12 +91,12 @@ const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 /// `Drop`, and nothing else. A save that only read it would store the settings
 /// of the last CLOSE, so with a window open, [`PersistentField::map`](nice_plug::params::persist::PersistentField::map) — which is the
 /// one thing a host save calls — serializes what the window is showing
-/// instead. The blob itself is left alone: the background analyzer adopts it
+/// instead. The blob itself is left alone: the input worker adopts it
 /// whenever it changes with the window shut, and that has to keep meaning a
 /// host restore or a close (see [`crate::background`]).
 ///
 /// A restore also marks the blob `pending`, which is how one reaches a window
-/// that is already open (issue #1329): the background analyzer stays off an
+/// that is already open (issue #1329): the input worker adopts nothing under an
 /// open window, and `Opening` has already run. The window's next frame applies
 /// it ([`apply_restore`](Self::apply_restore)), and until then a save stores the
 /// blob, since the window is still showing what the restore replaced.
@@ -206,7 +206,7 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
     /// Called when the host restores state, on its main thread.
     ///
     /// An EMPTY blob clears the flag instead of setting it: it is a project
-    /// with nothing saved, which the window and the background analyzer both
+    /// with nothing saved, which the window and the input worker both
     /// read as "keep what you have" rather than as a reset.
     fn set(&self, new_value: String) {
         let pending = !new_value.is_empty();
