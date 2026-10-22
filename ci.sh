@@ -323,7 +323,7 @@ metal_corpus() {
     echo "✗ the committed Metal corpus does not cover this tree's shaders." >&2
     echo "  The Metal shader assets run for this push generates the replacement when its" >&2
     echo "  check fails (without a PR: gh workflow run \"Metal shader assets\" --ref <branch>)." >&2
-    echo "  Import its production-metal-assets artifact with tools/shader-assets.py import," >&2
+    echo "  Once it finishes, import that corpus with tools/shader-assets.py fetch," >&2
     echo "  into the SAME commit as the change." >&2
     return 1
   fi
