@@ -231,8 +231,12 @@ and the closing sample is the END of egui's render pass, so the bracket cannot c
 The former tail pass, whose beginning closed the bracket, could read reversed against egui's own beginning;
 the new pair measured 0 of 60 reversed on Metal.
 Queue-staged uploads and callback-owned command buffers stay outside it.
-Readback is a three-step cycle polled with `PollType::Poll`, never `Wait` —
+Readback is a four-step cycle polled with `PollType::Poll`, never `Wait` —
 blocking for the number would stall the pipeline being measured.
+The resolve waits for `on_submitted_work_done` and goes in its own submission:
+resolved with the frame, an M5 Pro under macOS 27 read the closing slot before its stamp landed on 98 of 100 frames,
+and the slot kept the last frame's value, so nearly every pair came out reversed and was dropped.
+A repeated opening stamp is refused for the same reason.
 - **Patch 9** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): split the
 upload reading, then fix what the split exposed.
 `last_ubuf_ms` times `update_buffers` on its own, because the surrounding `last_upload_ms` also spans creating the command encoder, taking the renderer's write lock, and the MSAA resize —

@@ -466,7 +466,8 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     };
 
     // Draw a real scene until a measurement lands. The cycle is
-    // Idle -> Recorded -> Mapping -> Idle, so it takes a few frames.
+    // Idle -> Recorded -> Completing -> Mapping -> Idle, so it takes a few
+    // frames.
     let lit = LatticeCallback::from_scene(
         &parity_scene(),
         LatticeLabels::default(),
@@ -484,10 +485,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
             break;
         }
     }
-    let Some(measured) = measured else {
-        // No reading ever landed, so there is no stale value to go stale.
-        return;
-    };
+    let measured = measured.expect("a reading lands within a few cycles");
     assert!(f32::from_bits(measured) >= 0.0, "a real reading, not a sentinel");
 
     // Now the same pane with nothing at all in it.
@@ -511,6 +509,47 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     );
 }
 
+/// The timer lands a reading on nearly every cycle, not on the rare one whose
+/// stamps happened to land before the resolve. An M5 Pro under macOS 27 read
+/// the closing slot early on 98 of 100 frames when the resolve went in with
+/// the frame, and dropped the reversed pair, so the overlay's 3d row sat on
+/// its pending sentinel.
+#[test]
+fn the_lattice_timer_lands_a_reading_on_most_cycles() {
+    let Some((device, queue)) = headless_device_with_timestamps() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [128, 128];
+    const FRAMES: usize = 60;
+    let stats = std::sync::Arc::new(LatticeStats::default());
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let lit = LatticeCallback::from_scene(
+        &parity_scene(),
+        LatticeLabels::default(),
+        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+        wgpu::TextureFormat::Rgba8Unorm,
+        40,
+        Some(stats.clone()),
+    );
+    let mut readings = 0;
+    for _ in 0..FRAMES {
+        stats.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = lit.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let bits = stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed);
+        if bits != GPU_TIME_PENDING {
+            assert!(f32::from_bits(bits) >= 0.0, "a real reading, not a sentinel");
+            readings += 1;
+        }
+    }
+    // A cycle is three frames: record, hear it complete, resolve and map,
+    // with the reading landing as the next one records.
+    assert!(readings >= FRAMES / 4, "{readings} readings in {FRAMES} frames");
+}
+
 #[test]
 fn invalid_gpu_timestamp_pairs_are_not_published_as_zero_time() {
     for (begin, end) in [(0, 10), (10, 0), (10, 9)] {
@@ -527,7 +566,7 @@ fn a_failed_lattice_timestamp_map_can_arm_again() {
     let old = timer.staging.clone();
     timer.state = TimerState::Mapping;
     timer.ready.store(2, std::sync::atomic::Ordering::Release);
-    assert_eq!(timer.poll(&device), None);
+    assert_eq!(timer.poll(&device, &queue), None);
     assert!(timer.arming());
     assert_ne!(timer.staging, old);
 }

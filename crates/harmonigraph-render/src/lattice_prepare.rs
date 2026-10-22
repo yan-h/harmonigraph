@@ -65,7 +65,7 @@ impl CallbackTrait for LatticeCallback {
             callback_resources.get_mut().expect("inserted above when missing");
 
         let prepare_start = std::time::Instant::now();
-        let poll_ms = self.poll_gpu_timer(device, resources);
+        let poll_ms = self.poll_gpu_timer(device, queue, resources);
 
         #[cfg(feature = "hot-reload")]
         Self::reload_shaders(device, resources);
@@ -189,7 +189,12 @@ impl CallbackTrait for LatticeCallback {
 }
 
 impl LatticeCallback {
-    fn poll_gpu_timer(&self, device: &wgpu::Device, resources: &mut LatticeResources) -> f32 {
+    fn poll_gpu_timer(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut LatticeResources,
+    ) -> f32 {
         // Advance the GPU timer's readback cycle first: a result that landed
         // is published now, and the cycle returns to Idle so this frame can be
         // the next one sampled.
@@ -199,7 +204,7 @@ impl LatticeCallback {
         let poll_start = std::time::Instant::now();
         match (resources.timer.as_mut(), &self.stats) {
             (Some(timer), Some(out)) => {
-                if let Some(ms) = timer.poll(device) {
+                if let Some(ms) = timer.poll(device, queue) {
                     out.gpu_ms.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
                 }
             }
@@ -954,7 +959,7 @@ impl LatticeCallback {
 
             if timing {
                 if let Some(timer) = resources.timer.as_mut() {
-                    timer.close(egui_encoder);
+                    timer.close();
                 }
             }
         } else if let Some(out) = &self.stats {
