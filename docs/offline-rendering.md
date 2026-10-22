@@ -222,7 +222,7 @@ it does not need to draw every video frame to preserve those proportions.
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.
 
-**Tail**, under Render, is how long the video runs past the last recorded note or automation so releases finish fading — 4 s fresh.
+**Tail**, under Render, is how long the video runs past the last recorded note or automation so releases finish fading — 0 s fresh (#1472).
 The video never ends before the recorded audio does,
 so a Tail of 0 ends an export's video at its range end rather than a few silent seconds past it.
 A take recorded under *Loop end* ignores it: that video ends with its loop.
@@ -232,8 +232,8 @@ and `--tail` overrides it.
 
 **Encoder**, under Render, picks the H.264 encoder ffmpeg runs, read the same way and overridden by `--encoder x264|hardware`.
 The picture is the same either way.
-**x264**, the fresh choice, encodes at `--crf` (10) with grain tuning, which keeps the spectrogram's noise floor from flickering at each keyframe.
-**Hardware** is the Mac's VideoToolbox encoder at a bitrate scaled to the frame —
+**x264** encodes at `--crf` (10) with grain tuning, which keeps the spectrogram's noise floor from flickering at each keyframe.
+**Hardware**, the fresh choice (#1475), is the Mac's VideoToolbox encoder at a bitrate scaled to the frame —
 60 Mb/s at 2560x1440@60, about 34 at 1080p60 and 135 at 4K60 —
 with no B-frames and no grain tuning.
 On the same raw 1440p60 frames it measured 30.47 dB SSIM against x264's 29.93,
@@ -291,7 +291,7 @@ The flags worth knowing (`--help` lists them all):
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — the appearance's **Tail**, or none for a *Loop end* take, which ends with its loop |
-| `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, x264 fresh; `--crf` applies to x264 only |
+| `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, Hardware fresh; `--crf` applies to x264 only |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts
