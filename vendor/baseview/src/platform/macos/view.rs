@@ -689,8 +689,8 @@ impl ViewImpl for BaseviewView {
         this.last_link_fire.set(fired);
         let target = link.targetTimestamp();
         let refresh = link.duration();
-        let Some(due) =
-            link_paces_frame(this.frame_divisor.get(), this.next_frame_due.get(), target, refresh)
+        let divisor = this.frame_divisor.get();
+        let Some(due) = link_paces_frame(divisor, this.next_frame_due.get(), target, refresh)
         else {
             return;
         };
@@ -700,6 +700,7 @@ impl ViewImpl for BaseviewView {
             timestamp: link.timestamp(),
             target_timestamp: target,
             refresh,
+            divisor,
         }));
         Self::trigger_frame(this);
         this.frame_timing.set(None);
