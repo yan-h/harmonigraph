@@ -1575,7 +1575,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
             );
             let appearance = shared.ui.picture.appearance.serialize();
             shared.take.start(48_000.0, appearance);
-            shared.poll_take_end();
+            shared.poll_take_end_now();
             probe
         };
         let stopped = |seconds| {
@@ -1585,9 +1585,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
         };
         for (block, seconds) in [10.0, 30.0, 5.0, 5.0].into_iter().enumerate() {
             device.run_transport(block as i64 * 64, vec![], false, None, Some(stopped(seconds)));
-            for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
-                shared.lock().poll_take_end();
-            }
+            shared.lock().poll_through_stop_debounce();
             assert!(shared.lock().take.is_recording(), "parked/scrubbed takes stay armed");
         }
         let events = if with_note { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
@@ -1597,7 +1595,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
         assert_eq!(shared.lock().take.captured() > 0, with_note);
         device.run_transport(320, vec![], false, None, Some(stopped(5.0)));
         assert!(shared.lock().take.hit_rewind(), "even one callback's restore ends the take");
-        shared.lock().poll_take_end();
+        shared.lock().poll_take_end_now();
         assert!(!shared.lock().take.is_recording());
         device.finish_notes(384, if with_note { &[(10, 60)] } else { &[] });
         drop(shared);
@@ -1970,9 +1968,7 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
         device.run_transport(raw, vec![], false, None, Some(parked));
         device.run_transport(raw + 64, vec![], false, None, Some(parked));
 
-        for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
-            shared.lock().poll_take_end();
-        }
+        shared.lock().poll_through_stop_debounce();
         assert!(
             !shared.lock().take.is_recording(),
             "a played take ends once transport stops, with or without MIDI"
@@ -2488,7 +2484,7 @@ fn camera_automation_is_captured_mid_song_and_rebased_for_each_pass() {
         // pass to rebase onto; the fresh Transport stop ends at it instead.
         shared.ui.picture.appearance.render.trigger = harmonigraph_ui::RenderTrigger::OnDisarm;
         shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
-        shared.poll_take_end();
+        shared.poll_take_end_now();
         probe
     };
     let dt = 64.0 / 48_000.0;

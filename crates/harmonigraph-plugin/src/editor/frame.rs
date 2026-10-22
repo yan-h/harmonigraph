@@ -74,7 +74,7 @@ pub(super) fn frame(
         gesture: &shared.gesture,
         configuration: None,
     });
-    shared.sync_take(sample_rate);
+    shared.sync_take(sample_rate, shared.input.now());
 
     let backend = PluginParamBackend {
         params: &state.params,
