@@ -149,6 +149,29 @@ so the stack is gone by the time anyone looks.
 writing to `~/harmonigraph-hangs/`;
 `pkill -f sample-hang.sh` stops it.
 
+### Timing frames against the display
+
+A build with the plugin's `frame-log` feature writes every editor frame's timing to `~/Library/Logs/Harmonigraph/frames-<unix seconds>-<pid>.csv`, one file per host process (macOS only; [`frame_log.rs`](../vendor/egui-baseview/src/frame_log.rs) documents the columns):
+
+```sh
+cargo build --release -p harmonigraph-plugin -p harmonigraph-offline --features harmonigraph-plugin/frame-log
+```
+
+Load it with `./load-plugin.sh <branch>` as usual, and keep the editor in one setup for at least a minute of steady state;
+runs of the same setup vary a lot, so take two.
+Then read the log:
+
+```sh
+python3 -I tools/frame-log-summary.py --misses
+```
+
+With no path it reads the newest log, and with no `--window` the window with most frames;
+`--from` and `--to` cut the run to seconds after that window's first frame.
+It splits the run into phases at each change of frame rate and at each stretch the display link was silent (a minimized editor), and reports per phase:
+missed refreshes and jumps (the content stepping further than the glass did), each as a share of refreshes, the p99 present gap, how many refreshes after the link's target frames reached the glass, and how long the host's main thread waited for drawables.
+`--misses` lists every stall with what made it late.
+The method and the measured baseline are in #1551 and #1553.
+
 ## Architecture
 
 Dependencies point downward;

@@ -359,7 +359,8 @@ The `frame-log` feature (macOS, wgpu) writes every frame's timing to `~/Library/
 the display link's timestamps and frame divisor from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
 and, through the wgpu-hal present observer, the GPU's start and end on the present's command buffer and the drawable's `presentedTime`.
 Together they classify a missed refresh as a late link callback, a wait for a drawable, late CPU or GPU work, or a late latch.
-Built only on request (`--features frame-log` on the plugin).
+Built only on request (`--features frame-log` on the plugin);
+`tools/frame-log-summary.py` reads the log.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);
