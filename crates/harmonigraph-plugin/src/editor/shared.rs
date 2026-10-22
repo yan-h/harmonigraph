@@ -5,7 +5,7 @@ use std::time::Instant;
 use harmonigraph_ui::SharedState;
 
 use super::clock::ClockMapper;
-use super::input::LiveInput;
+use super::input::{LiveInput, Taken};
 use super::ASSUMED_SURFACE_FORMAT;
 
 /// State shared between the plugin (which owns the ring buffer producer)
@@ -41,6 +41,13 @@ pub struct EditorShared {
     /// take is recording. Debounces the OnTransportStop trigger: a host
     /// reporting one still block mid-playback must not end a take.
     take_still_frames: u32,
+    /// Notes reached the tracker since the window's last frame, which then
+    /// draws now rather than at the idle repaint. Set by whoever drains them —
+    /// the input worker ([`crate::background`]) — and taken by the frame.
+    pub(crate) fresh_notes: bool,
+    /// The input worker could not be started, so the window's frames drain
+    /// the rings themselves, as they did before it existed.
+    pub(crate) frame_drains: bool,
 }
 
 impl EditorShared {
@@ -59,6 +66,8 @@ impl EditorShared {
                 clock: ClockMapper::new(),
                 audio_position: None,
                 audio_origin: 0.0,
+                analysis: Some(Default::default()),
+                spare: Taken::default(),
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             last_frame: None,
@@ -67,6 +76,8 @@ impl EditorShared {
             take_rolling: false,
             take_last_count: 0,
             take_still_frames: 0,
+            fresh_notes: false,
+            frame_drains: false,
         }
     }
 
@@ -76,9 +87,10 @@ impl EditorShared {
     /// short enough that the render feels immediate.
     ///
     /// Counted in calls to [`poll_take_end`](Self::poll_take_end) rather than
-    /// in frames as such, so with the window shut it is 20 rounds of the
-    /// background analyzer's poll instead — 0.4 s against 0.33 s at 60 fps,
-    /// which is the same fraction of a second and needs no second constant.
+    /// in frames as such, so with the window shut it is 20 of the input
+    /// worker's duty rounds instead, one per 20 ms — 0.4 s against 0.33 s at
+    /// 60 fps, which is the same fraction of a second and needs no second
+    /// constant.
     pub(crate) const STOP_FRAMES: u32 = 20;
 
     /// Reflect the Video pane's toggle into the recorder, and the
@@ -140,9 +152,9 @@ impl EditorShared {
     /// the editor window SHUT.** Every trigger but `OnDisarm` decides here,
     /// which meant a take armed and then left with the window closed — a Bitwig
     /// audio export is exactly that — never ended itself and never rendered, no
-    /// matter which trigger was chosen. The background analyzer already holds
-    /// this lock at a 20 ms poll to keep the spectrogram filling; it calls this
-    /// on the same round, so the decision no longer depends on anyone watching.
+    /// matter which trigger was chosen. The input worker calls this every
+    /// 20 ms while the window is shut, so the decision no longer depends on
+    /// anyone watching.
     ///
     /// Nothing here draws or reads a widget, which is what makes it callable
     /// from that thread: it moves settings out to the recorder and take state

@@ -1259,13 +1259,10 @@ mod tests {
             if started.elapsed() >= ANALYSIS_DEADLINE {
                 return None;
             }
-            // Deliberately NOT `POLL`. This samples under the BLOCKING lock
-            // while `tick` takes the same one with `try_lock`, so a sample
-            // landing inside the analyzer's own hold costs it that whole
-            // round — and a test written to stop being flaky should not
-            // sample in lockstep with the thread it is watching. Half the
-            // period leaves the two with no phase relationship to get wrong,
-            // and costs nothing.
+            // Deliberately NOT `POLL`: a test written to stop being flaky
+            // should not sample in lockstep with the thread it is watching.
+            // Half the period leaves the two with no phase relationship to get
+            // wrong, and costs nothing.
             std::thread::sleep(background::POLL / 2);
         }
     }
@@ -1305,71 +1302,72 @@ mod tests {
     }
 
     /// The window flag the editor announces itself through has to be the one
-    /// the background analyzer watches, and nothing but this says so.
+    /// the input worker watches, and nothing but this says so.
     ///
     /// They are two clones of one `Arc<EguiState>` today — `Default` hands one
     /// to [`background::BackgroundAnalyzer::spawn`] and `editor` hands the same
-    /// field to `editor::create`. A second `EguiState` on either side compiles,
-    /// passes every other test, and leaves the analyzer reading a flag nobody
-    /// sets: it would then race an open editor for both rings on every poll,
-    /// which is a timing bug with nothing between it and a release.
+    /// field to `editor::create`. The worker drains the rings either way
+    /// (#1559); what the flag decides is whether it applies a restored blob,
+    /// which under an open window would revert everything changed since the
+    /// window applied it. A second `EguiState` on either side compiles, passes
+    /// every other test, and leaves the worker adopting under an open window.
     ///
-    /// Driven through the REAL spawned thread rather than by calling `tick`,
+    /// Driven through the REAL spawned thread rather than by calling `step`,
     /// because the wiring is precisely what a direct call would bypass.
     #[test]
-    fn the_background_analyzer_watches_the_flag_the_editor_sets() {
-        // A settle rather than a poll, and deliberately: it waits on the
-        // assertion that NOTHING happened, and nothing is what a poll cannot
-        // wait for. Five polls of it fails safe — an
-        // analyzer that is merely late reads as one correctly holding off, so
-        // only a drain that really happened trips the assertion it guards.
-        let settle = background::POLL * 5;
-        let columns = |plugin: &Harmonigraph| {
-            plugin.editor_shared.lock().ui.picture.runtime.spectrum.history().len()
+    fn the_input_worker_watches_the_flag_the_editor_sets() {
+        use harmonigraph_ui::SpectrumWindow;
+
+        let window = |plugin: &Harmonigraph| {
+            plugin.editor_shared.lock().ui.picture.appearance.spectrum.window
+        };
+        let mut plugin = Harmonigraph::default();
+        let fresh = window(&plugin);
+        let restored = if fresh == SpectrumWindow::Precise {
+            SpectrumWindow::Fast
+        } else {
+            SpectrumWindow::Precise
+        };
+        let blob = {
+            let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+            saved.picture.appearance.spectrum.window = restored;
+            harmonigraph_ui::shell::close(&saved)
         };
 
-        let mut plugin = Harmonigraph::default();
-        // First make construction's in-flight round observable. The fill is
-        // big enough to cross hop boundaries, so its drain must grow history.
-        publish_test_audio(&mut plugin, 20_000);
-        let before = columns_after(&plugin, 0).unwrap_or_else(|| {
-            panic!(
-                "no baseline column in {ANALYSIS_DEADLINE:?}: this runner never scheduled the \
-                 analyzer"
-            )
-        });
         plugin.params.editor_state.set_open(true);
-        // A completed round after the store is the missing synchronization:
-        // even one that read `open == false` just before the store has now
-        // either drained the empty ring or lost `try_lock`, and cannot resume
-        // later to race the fill. Every following round sees the open flag.
+        // A completed step after the store: every step after it sees the flag.
         let rounds = plugin._background.completed_rounds();
         assert!(
             a_round_after(&plugin, rounds),
-            "no analyzer round in {ANALYSIS_DEADLINE:?} after the editor announced itself open: \
-             this runner never scheduled it",
+            "no worker step in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
         );
-
-        // A second reachable fill is the work an open editor must leave alone.
+        *plugin.params.ui_state.blob().write() = blob;
+        // Audio still flows into the picture under an open window.
         publish_test_audio(&mut plugin, 20_000);
-        std::thread::sleep(settle);
+        let before = columns_after(&plugin, 0).unwrap_or_else(|| {
+            panic!(
+                "no column in {ANALYSIS_DEADLINE:?} with the window open: the worker left the ring"
+            )
+        });
+        assert!(before > 0);
         assert_eq!(
-            columns(&plugin),
-            before,
-            "the analyzer grew history while the editor had claimed the ring: it is not \
-             watching the EguiState the editor sets",
+            window(&plugin),
+            fresh,
+            "the worker applied a restored blob under an open window: it is not watching \
+             the EguiState the editor sets",
         );
 
-        // Polled, not slept: this is the half that needs the thread to have
-        // DONE something, so a late round is a real failure of the test and
-        // not of the wiring.
         plugin.params.editor_state.set_open(false);
-        assert!(
-            columns_after(&plugin, before).is_some(),
-            "no new column in {ANALYSIS_DEADLINE:?} after the editor announced itself shut: \
-             either the analyzer is not watching the EguiState the editor sets, or this \
-             runner never scheduled it",
-        );
+        let started = std::time::Instant::now();
+        while window(&plugin) != restored {
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "the blob never landed in {ANALYSIS_DEADLINE:?} after the editor announced \
+                 itself shut: either the worker is not watching the EguiState the editor \
+                 sets, or this runner never scheduled it",
+            );
+            std::thread::sleep(background::POLL);
+        }
     }
 
     /// The project's saved settings have to reach the analyzer with no editor
@@ -1422,7 +1420,7 @@ mod tests {
         assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);
         assert!(
             (lag - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
-            "the background analyzer ran at a {:.1} ms window where the project saved \
+            "the input worker ran at a {:.1} ms window where the project saved \
              {:.1} ms: the restored blob reaches nothing until the editor opens",
             lag * 2000.0,
             lag_of(SpectrumWindow::Precise) * 2000.0,
@@ -1444,7 +1442,7 @@ mod tests {
         closed.picture.appearance.camera.yaw = 0.5;
         *plugin.params.ui_state.blob().write() = harmonigraph_ui::shell::close(&closed);
         // Two completed rounds: the second one began after the write, so the
-        // background analyzer has adopted the blob and will not again. The
+        // input worker has adopted the blob and will not again. The
         // live state is then turned elsewhere, so only the stored blob can
         // answer 0.5.
         let rounds = plugin._background.completed_rounds();
@@ -1456,7 +1454,7 @@ mod tests {
         assert_eq!(saved_yaw(&plugin), 0.5, "a shut window saves the stored blob");
 
         // An open window the user has since turned the camera in. A completed
-        // round after the flag is what keeps the background analyzer's adopt
+        // round after the flag is what keeps the input worker's adopt
         // of the stored blob from landing over the turn.
         plugin.params.editor_state.set_open(true);
         let rounds = plugin._background.completed_rounds();

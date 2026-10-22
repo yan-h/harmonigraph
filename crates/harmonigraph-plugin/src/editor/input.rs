@@ -21,6 +21,46 @@ pub(crate) struct LiveInput {
     pub(super) start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
     pub(super) clock: ClockMapper,
+    /// The plugin's spectrum analysis, lent to [`Self::take`]'s caller to run
+    /// off the lock and returned by [`Self::give`]; `None` only between the
+    /// two. It is this one, not `runtime.spectrum`'s own analysis half, that
+    /// the plugin's audio goes through (#1559).
+    pub(super) analysis: Option<harmonigraph_ui::SpectrumAnalysis>,
+    /// The buffers the last [`Taken`] came back in, so a step allocates only
+    /// when it needs more than any before it.
+    pub(super) spare: Taken,
+}
+
+/// The audio one [`LiveInput::take`] moved out of the ring, and the analysis
+/// lent with it: what [`LiveInput::analyze`] runs without the lock.
+#[derive(Default)]
+pub(crate) struct Taken {
+    analysis: Option<harmonigraph_ui::SpectrumAnalysis>,
+    /// The settings when the audio was taken, which analyze it and smooth
+    /// the curve it moves.
+    config: harmonigraph_ui::SpectrumConfig,
+    /// Every block's samples, interleaved, back to back.
+    samples: Vec<f32>,
+    blocks: Vec<TakenBlock>,
+    deliveries: Vec<harmonigraph_ui::Delivery>,
+}
+
+/// One callback's block of [`Taken::samples`].
+struct TakenBlock {
+    /// The block starts a new retained source run.
+    restart: bool,
+    /// Frame zero of its run on the GUI clock, mapped at take.
+    origin: f64,
+    channels: usize,
+    sample_rate: f32,
+    len: usize,
+}
+
+impl Taken {
+    /// Whether this step found audio to analyze.
+    pub(crate) fn has_audio(&self) -> bool {
+        !self.blocks.is_empty()
+    }
 }
 
 impl LiveInput {
@@ -31,8 +71,8 @@ impl LiveInput {
         f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
     }
     /// Drain exactly what the process callback sent to the live analyzer.
-    /// Test-only because production has two schedulers, here and in
-    /// [`crate::background`], that also maintain the analyzer state around it.
+    /// Test-only because production drains through [`Self::take`], which also
+    /// maintains the analyzer state around it.
     #[cfg(test)]
     pub(crate) fn drain_analysis_audio_for_test(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
@@ -63,40 +103,71 @@ impl LiveInput {
             true
         }) != 0
     }
-    /// Drain the audio sample ring into the spectrum analyzer.
+    /// Move the audio ring's blocks out, mapped to the GUI clock with the
+    /// offset [`Self::drain_into_tracker`] has just observed, and lend the
+    /// analysis with them; `None` until a heartbeat has given that offset,
+    /// leaving the audio in the ring as before.
     ///
-    /// Always drains AND always feeds. There is no display state that makes the
-    /// samples unwanted: the curve and the spectrogram read this one analyzer,
-    /// the curve is always drawn, and feeding it is also what drives smooth
-    /// repaint (via `is_flowing`). Draining without feeding would only leave the
-    /// ring holding stale audio to burst later — and gating the feed on
-    /// something being on screen is what [`crate::background`] exists to say is
-    /// wrong, since the whole point there is to analyze when nothing shows it.
-    fn drain_audio(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        appearance: &harmonigraph_ui::AppearanceDocument,
-    ) {
-        // One existing clock conversion per drain, shared with note delivery.
-        // Source timestamps are exact; changing heartbeat observations can
-        // still correct their GUI placement, including initial delivery bias.
-        let Some(offset) = self.clock.offset else { return };
+    /// Always drains AND (in [`Self::analyze`]) always feeds. There is no
+    /// display state that makes the samples unwanted: the curve and the
+    /// spectrogram read this one analyzer, the curve is always drawn, and
+    /// feeding it is also what drives smooth repaint (via `is_flowing`).
+    fn take_audio(&mut self, appearance: &harmonigraph_ui::AppearanceDocument) -> Option<Taken> {
+        // One clock conversion per take, shared with note delivery and made
+        // in the same hold, so no block is mapped before its heartbeat is.
+        let offset = self.clock.offset?;
+        let mut taken = std::mem::take(&mut self.spare);
+        taken.analysis = self.analysis.take();
+        debug_assert!(taken.analysis.is_some(), "the analysis was given back");
+        taken.config = appearance.spectrum;
         self.audio_consumer.drain(|block, samples| {
             let position = (block.epoch, block.first_frame);
-            if self.audio_position != Some(position) {
-                runtime.spectrum.restart_source();
+            let restart = self.audio_position != Some(position);
+            if restart {
                 self.audio_origin =
                     block.origin + block.first_frame as f64 / f64::from(block.format.sample_rate);
             }
-            runtime.spectrum.push_source_samples(
-                samples,
-                block.format.channels,
-                block.format.sample_rate,
-                self.audio_origin + offset,
-                &appearance.spectrum,
-            );
+            taken.samples.extend_from_slice(samples);
+            taken.blocks.push(TakenBlock {
+                restart,
+                origin: self.audio_origin + offset,
+                channels: block.format.channels,
+                sample_rate: block.format.sample_rate,
+                len: samples.len(),
+            });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
         });
+        Some(taken)
+    }
+    /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
+    pub(crate) fn analyze(taken: &mut Taken) {
+        let Some(analysis) = taken.analysis.as_mut() else { return };
+        let mut start = 0;
+        for block in &taken.blocks {
+            if block.restart {
+                analysis.restart();
+                taken.deliveries.push(harmonigraph_ui::Delivery::Restart);
+            }
+            let samples = &taken.samples[start..start + block.len];
+            start += block.len;
+            analysis.feed_source(
+                samples,
+                block.channels,
+                block.sample_rate,
+                block.origin,
+                &taken.config,
+                |delivery| taken.deliveries.push(delivery),
+            );
+        }
+    }
+    /// Hand what [`Self::analyze`] made to the store, and the analysis back.
+    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, mut taken: Taken) {
+        let Some(analysis) = taken.analysis.take() else { return };
+        runtime.spectrum.apply(taken.deliveries.drain(..), &taken.config, analysis.lag());
+        self.analysis = Some(analysis);
+        taken.samples.clear();
+        taken.blocks.clear();
+        self.spare = taken;
     }
     /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
@@ -140,18 +211,35 @@ impl LiveInput {
     pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
         self.clock.now(wall_now)
     }
-    /// Drain the sole note and audio streams into borrowed runtime storage.
-    /// Both the open frame and closed scheduler use this ordering. Input feeding
-    /// does not prune against stale parameters: callers advance time after
-    /// observing their parameters, or retain the last mirrors while closed.
+    /// The locked half of a step: the notes into the tracker, then the
+    /// audio out of its ring with the analysis lent alongside. Whether notes
+    /// arrived, and the audio for [`Self::analyze`] then [`Self::give`].
+    /// Input feeding does not prune against stale parameters: callers advance
+    /// time after observing their parameters, or retain the last mirrors while
+    /// closed.
+    pub(crate) fn take(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        appearance: &harmonigraph_ui::AppearanceDocument,
+        now: f64,
+    ) -> (bool, Option<Taken>) {
+        let notes = self.drain_into_tracker(runtime, now);
+        (notes, self.take_audio(appearance))
+    }
+    /// A whole step with the lock held throughout: take, analyze, give. The
+    /// input worker splits the same three around its lock; this is them in
+    /// one, for its final drain and for tests. Whether notes arrived.
     pub(crate) fn drain(
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,
         appearance: &harmonigraph_ui::AppearanceDocument,
         now: f64,
     ) -> bool {
-        let notes = self.drain_into_tracker(runtime, now);
-        self.drain_audio(runtime, appearance);
+        let (notes, taken) = self.take(runtime, appearance, now);
+        if let Some(mut taken) = taken {
+            Self::analyze(&mut taken);
+            self.give(runtime, taken);
+        }
         notes
     }
 }

@@ -67,7 +67,9 @@ pub use harmonigraph_take::{
     LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, SpectrogramRender,
     VideoEncoder, STOP_BAR_RANGE, TAIL_RANGE,
 };
-pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
+pub use spectrum::{
+    AnalyzedColumn, AudioSpectrum, Delivery, SpectrogramColumn, SpectrumAnalysis, SpectrumHistory,
+};
 pub use state::{
     CameraPreset, Console, ExportAction, FrameRate, Interaction, PictureState, SharedState,
     SurfaceState, TakeState,

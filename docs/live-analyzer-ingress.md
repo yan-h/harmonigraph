@@ -28,14 +28,18 @@ joining wrapped sample slices in reusable bounded scratch before analysis.
 A missing source interval or a new epoch resets the streaming analyzer and its hop phase,
 requiring a complete new FFT window.
 Previously measured history remains available.
-The editor and closed-window scheduler share this same consumer and analyzer;
-opening or closing the editor introduces no source epoch.
+One input worker drains this consumer, open window or shut (#1559):
+it takes the notes and the audio under the editor's lock,
+runs the FFTs with the lock free,
+and hands the columns to the store under it again.
+Opening or closing the editor introduces no source epoch and moves no drain.
 Offline seeking remains a separate access mechanism.
 
 The first retained frame establishes the source origin of each continuous run.
 Every FFT boundary then follows integer frame counts at the existing hop interval,
 and every column retains the existing half-window center offset and channel power combination.
-The current note `ClockMapper` offset converts the source origin to GUI seconds once per drain.
+The current note `ClockMapper` offset converts the source origin to GUI seconds once per drain,
+in the same hold that observes the heartbeat it comes from.
 The analyzer does not estimate another offset from arrival time or smooth at callback boundaries.
 Consequently complete columns are identical across callback/drain partitions and consumer delays when the shared heartbeat mapping is held equal.
 The mapper fixes its offset at the first heartbeat, which includes initial delivery latency,
