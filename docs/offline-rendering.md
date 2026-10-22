@@ -233,18 +233,20 @@ and `--tail` overrides it.
 **Encoder**, under Render, picks the H.264 encoder ffmpeg runs, read the same way and overridden by `--encoder x264|hardware`.
 The picture is the same either way.
 **x264** encodes at `--crf` (10) with grain tuning, which keeps the spectrogram's noise floor from flickering at each keyframe.
-**Hardware**, the fresh choice (#1475), is the Mac's VideoToolbox encoder at a bitrate scaled to the frame —
-60 Mb/s at 2560x1440@60, about 34 at 1080p60 and 135 at 4K60 —
+**Hardware**, the fresh choice (#1475), is the Mac's VideoToolbox encoder at constant quality 88 on its 0-100 scale (#1561),
 with no B-frames and no grain tuning.
-On the same raw 1440p60 frames it measured 30.47 dB SSIM against x264's 29.93,
-better on luma and worse on chroma (U 28.7 dB against 30.7),
-for a file 1.8x the size.
-A machine with no hardware encoder fails the export and says so rather than falling back to Apple's slower software encoder.
+It replaced a bitrate scaled to the frame, 60 Mb/s at 1440p60, which it matches in SSIM for a file a fifth smaller.
+A machine with no hardware encoder fails the export and says so rather than falling back to Apple's slower software encoder,
+and so does an Intel Mac, whose encoder has no constant-quality mode.
 
-At 1440p the encoder is what an export waits on.
-A 9.9 s take drew in about 2.8 s with nothing encoding it, and took 12-14 s end to end through x264 against about 6 s through the hardware encoder.
-So the overlap of drawing and readback below only shortens an export that goes through the hardware encoder, a PNG sequence or a raw stream;
-under x264 the drawing already finishes well ahead of the encoder.
+At 1440p the encoder is what an export waits on, whichever it is.
+On an M5 Pro an 82.6 s take at 2560x1440@60 took 90.2 s end to end through x264 and 31.5 s through the hardware encoder,
+for 460 MB against 502.
+The hardware encoder runs at about 155 fps there, the same given ready-made YUV as given RGBA to convert,
+so converting colour on the GPU would not shorten an export;
+and with one encode engine on the chip, two encodes at once are no faster than one.
+The overlap of drawing and readback below shortens a PNG sequence or a raw stream;
+under either encoder the drawing finishes ahead of it.
 
 ffmpeg is found automatically —
 on `PATH`, then in the usual install locations.
