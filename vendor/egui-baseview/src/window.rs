@@ -353,6 +353,8 @@ where
     egui_ctx: egui::Context,
     viewport_id: egui::ViewportId,
     start_time: Instant,
+    /// The last time handed to egui, which a frame never goes back past.
+    egui_time: f64,
     egui_input: egui::RawInput,
     /// Where the pointer was last seen, which is where a button event happens:
     /// baseview reports a press and a release without one. `None` only before
@@ -531,6 +533,7 @@ where
             egui_ctx,
             viewport_id,
             start_time,
+            egui_time: 0.0,
             egui_input,
             pointer_pos_in_points: None,
             current_cursor_icon: baseview::MouseCursor::Default,
@@ -775,9 +778,52 @@ mod wheel_delta_tests {
     }
 }
 
+/// The time egui animates a frame at: the display link's target refresh when
+/// it asked for the frame, so egui's own animations step by whole refreshes as
+/// the plugin's picture does, however late the callback ran; otherwise now.
+/// Never before `previous`, since a frame the link did not ask for, between
+/// two it did, is behind the last target, and egui reads time going backwards
+/// as a negative frame time.
+fn egui_time(previous: f64, start: Instant, timing: Option<baseview::FrameTiming>) -> f64 {
+    let at = timing.and_then(|timing| timing.target_at()).unwrap_or_else(Instant::now);
+    at.saturating_duration_since(start).as_secs_f64().max(previous)
+}
+
 #[cfg(test)]
 mod wants_render_tests {
     use super::*;
+
+    /// Link frames whose callbacks ran 0.3–9 ms late animate egui one refresh
+    /// apart; a frame the link did not ask for, between them, does not take
+    /// egui's time back, and the next link frame steps on from its target.
+    #[test]
+    fn egui_animates_at_the_refresh_and_never_goes_back() {
+        let start = Instant::now();
+        let refresh = 1.0 / 144.0;
+        let link = |vsync: f64, late_ms: f64| {
+            let fired = vsync + late_ms / 1000.0;
+            baseview::FrameTiming {
+                fired: 500.0 + fired,
+                fired_at: start + Duration::from_secs_f64(fired),
+                timestamp: 500.0 + vsync,
+                target_timestamp: 500.0 + vsync + refresh,
+                refresh,
+                divisor: 1,
+            }
+        };
+        let mut time = 0.0;
+        let mut times = Vec::new();
+        for (frame, late_ms) in [0.3, 5.1, 0.4, 9.0, 0.6].into_iter().enumerate() {
+            time = egui_time(time, start, Some(link(1.0 + frame as f64 * refresh, late_ms)));
+            times.push(time);
+        }
+        for step in times.windows(2).map(|pair| pair[1] - pair[0]) {
+            assert!((step - refresh).abs() < 1e-6, "stepped {step} s against {refresh} s");
+        }
+        // Run well before the last target, as a reveal repaint between link
+        // frames is.
+        assert_eq!(egui_time(time, start + Duration::from_secs(1), None), time);
+    }
 
     #[test]
     fn draw_gpu_queue_consumes_each_completion_once() {
@@ -926,7 +972,8 @@ where
             self.physical_size = adopted;
         }
 
-        self.egui_input.time = Some(self.start_time.elapsed().as_secs_f64());
+        self.egui_time = egui_time(self.egui_time, self.start_time, window.frame_timing());
+        self.egui_input.time = Some(self.egui_time);
         let screen_rect = calculate_screen_rect(self.physical_size, self.points_per_pixel);
         self.egui_input.screen_rect = Some(screen_rect);
         if let Some(viewport) = self.egui_input.viewports.get_mut(&self.viewport_id) {

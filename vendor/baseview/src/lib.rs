@@ -32,6 +32,30 @@ pub struct FrameTiming {
     pub divisor: u32,
 }
 
+impl FrameTiming {
+    /// How far a target may lie from the fire and still be this frame's: past
+    /// any panel's refresh, and the link's own silence threshold before the
+    /// watchdog takes over.
+    const MAX_TARGET_SECONDS: f64 = 0.1;
+
+    /// `target_timestamp` on `Instant`'s clock, or `None` when the link's
+    /// times put it further than a tenth of a second from the fire, or are not
+    /// numbers. The times come from AppKit, and a consumer that never rewinds
+    /// its clock would hold its picture still behind one target far ahead.
+    pub fn target_at(&self) -> Option<std::time::Instant> {
+        let ahead = self.target_timestamp - self.fired;
+        if ahead.is_nan() || ahead.abs() > Self::MAX_TARGET_SECONDS {
+            return None;
+        }
+        let span = std::time::Duration::from_secs_f64(ahead.abs());
+        if ahead >= 0.0 {
+            self.fired_at.checked_add(span)
+        } else {
+            self.fired_at.checked_sub(span)
+        }
+    }
+}
+
 pub use clipboard::*;
 pub use event::*;
 pub use mouse_cursor::MouseCursor;
