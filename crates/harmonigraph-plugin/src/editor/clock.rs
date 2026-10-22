@@ -64,8 +64,10 @@ impl Lead {
     const MIN_BUCKET_SECONDS: f64 = 0.25;
 
     /// The longest a lead the audio dropped is held for, at up to three
-    /// buckets. Large blocks at the slowest frame rate reach it, and their few
-    /// phases repeat within it: 4096 samples against 66.7 ms every 2.1 s.
+    /// buckets. Large blocks at slow frame rates reach it, as do 512-sample
+    /// ones at 15 fps, whose advance overstates the block. At exact rates
+    /// 4096 samples against 66.7 ms repeat their phases every 2.1 s, within
+    /// it; off them the best phase drifts, and steps stay near 2 ms.
     const MAX_BUCKET_SECONDS: f64 = 3.0;
 
     /// How close to the best possible wait the window's best one should be.
@@ -79,8 +81,10 @@ impl Lead {
     const MAX_WAIT_SECONDS: f64 = 0.1;
 
     /// How much later one block may be delivered than another, past the wait
-    /// for its frame, before the ceiling holds the drawn time back.
-    const JITTER_SECONDS: f64 = 0.02;
+    /// for its frame, before the ceiling holds the drawn time back. A 4096-
+    /// sample block's processing can vary by tens of milliseconds, and 20 ms
+    /// stepped a 144 Hz picture by 25 ms when one in ten came 20–50 ms late.
+    const JITTER_SECONDS: f64 = 0.045;
 
     /// A heartbeat of `lead`, drained `gap` after the drain before it and
     /// `advance` of audio past the heartbeat before it.
@@ -151,10 +155,17 @@ impl ClockMapper {
         let offset = match (self.offset, self.observed_audio) {
             (Some(offset), Some(previous)) if newest_audio_time >= previous => {
                 let pause = (gui_now - self.observed_wall) - (newest_audio_time - previous);
-                offset + if pause > Self::PAUSE_SECONDS { pause } else { 0.0 }
+                if pause > Self::PAUSE_SECONDS {
+                    self.lead = None;
+                    offset + pause
+                } else {
+                    offset
+                }
             }
             // A re-anchor moves the lead by however far it moved the offset,
-            // so the leads before it describe a different mapping.
+            // so the leads before it describe a different mapping. So does a
+            // pause, by the difference between the waits of the heartbeats
+            // either side of it.
             _ => {
                 self.lead = None;
                 candidate
@@ -204,9 +215,8 @@ mod tests {
     /// rates make every frame find its block waited a different length of
     /// time, and the run cycles through those phases many times.
     ///
-    /// Returns, for each frame after the first second — long enough for the
-    /// window to have seen the best phase — its drawn time and how far that
-    /// was drawn past the newest audio it had.
+    /// Returns, for each frame after the first half second, its drawn time
+    /// and how far that was drawn past the newest audio it had.
     fn frames_at(
         frame: f64,
         block: f64,
@@ -227,7 +237,7 @@ mod tests {
                 clock.observe(newest, wall);
             }
             let now = clock.now(wall);
-            if wall >= 1.0 {
+            if wall >= 0.5 {
                 frames.push((now, now - (newest + clock.offset.unwrap())));
             }
         }
@@ -283,12 +293,14 @@ mod tests {
     /// a quarter second held three heartbeats, too few for one of them to
     /// have met its frame at once. Every rollover let go of the best phase and
     /// stepped a 66.7 ms frame by up to 10.7 ms, and a 16.7 ms one by 8.7 ms.
-    /// Twelve seconds roll the longest window over several times.
+    /// Twelve seconds roll the longest window over several times. The frames
+    /// of the first second are skipped, while the window first fills.
     #[test]
     fn large_blocks_at_a_slow_frame_rate_do_not_step_the_drawn_time() {
         let block = 4096.0 / 48_000.0;
         for frame in [1.0 / 15.0, 1.0 / 60.0] {
-            let worst = worst_step(&frames_at(frame, block, 12.0, on_time(block)), frame);
+            let frames = frames_at(frame, block, 12.0, on_time(block));
+            let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
             assert!(worst < 1.5e-3, "a {frame:.4} s frame advanced {worst:.4} s away from it");
         }
     }
