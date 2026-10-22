@@ -22,6 +22,7 @@ Per phase, counted in the display's refreshes:
   main thread waited for a drawable.
 
 Each stall is put down to the frame that arrived late, checked in order:
+dropped before it (a rendered frame in between never reached the glass),
 late fire (the link callback ran over half a refresh late), late latch (its
 GPU work was done by the link's target), waited for drawable (it submitted
 after the target having waited over half a refresh in acquire), late CPU (it
@@ -42,7 +43,7 @@ from collections import Counter
 # baseview's `LINK_SILENCE`: past this, the watchdog draws instead of the link.
 LINK_SILENCE = 0.1
 RATES = {1: 'Display', 2: 'Half', 3: 'Third', 4: 'Quarter'}
-CAUSES = ('late fire', 'waited for drawable', 'late CPU', 'late GPU', 'late latch')
+CAUSES = ('dropped before it', 'late fire', 'waited for drawable', 'late CPU', 'late GPU', 'late latch')
 
 
 def rate(divisor):
@@ -61,7 +62,7 @@ def read(path):
     ticks, gpu_end, presented = {}, {}, {}
     with open(path, newline='') as file:
         reader = csv.DictReader(file)
-        has_divisor = 'divisor' in reader.fieldnames
+        has_divisor = 'divisor' in (reader.fieldnames or ())
         for row in reader:
             frame = int(row['frame'])
             if row['kind'] == 'tick':
@@ -142,14 +143,15 @@ def measure(phase):
         'gaps_ms': [],
         'depth': Counter(),
     }
-    previous = None
+    previous, dropped = None, False
     for fr in phase:
         if not fr['submitted']:
             # Nothing to draw: the next glass gap is idle time, not a miss.
-            previous = None
+            previous, dropped = None, False
             continue
         if not fr['presented']:
             m['unshown'] += 1
+            dropped = True
             continue
         m['depth'][round((fr['presented'] - fr['target']) / refresh)] += 1
         if previous is not None:
@@ -159,10 +161,12 @@ def measure(phase):
             m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
             if glass > divisor:
                 m['missed'] += glass - divisor
-                m['stalls'].append((fr, glass, cause(fr, refresh)))
+                why = 'dropped before it' if dropped else cause(fr, refresh)
+                m['stalls'].append((fr, glass, why))
             elif link > divisor:
                 m['jumps'] += 1
         previous = fr
+        dropped = False
     return m
 
 
