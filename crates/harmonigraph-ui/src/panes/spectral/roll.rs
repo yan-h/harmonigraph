@@ -295,7 +295,7 @@ pub(super) fn draw_roll(
     let mut instances = notes;
     instances.extend(detached);
     let painter = painter.with_clip_rect(painter.clip_rect().intersect(history_region));
-    painter.add(harmonigraph_render::roll_paint_callback_with_clipped_tail(
+    painter.add(harmonigraph_render::roll_paint_callback(
         history_region,
         axes_size,
         instances,
