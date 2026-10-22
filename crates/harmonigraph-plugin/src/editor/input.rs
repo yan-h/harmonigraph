@@ -146,6 +146,13 @@ impl LiveInput {
             });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
         });
+        // Nothing to analyze: keep the analysis where it is, and spare the
+        // caller a second hold to give back nothing.
+        if taken.blocks.is_empty() {
+            self.analysis = taken.analysis.take();
+            self.spare = taken;
+            return None;
+        }
         Some(taken)
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
@@ -170,9 +177,14 @@ impl LiveInput {
         }
     }
     /// Put a fresh analysis back if a panic between [`Self::take`] and
-    /// [`Self::give`] lost the lent one, so a drain after it can still analyze.
+    /// [`Self::give`] lost the lent one, and start the source run over, so the
+    /// next block re-anchors the fresh analyzer's grid instead of extending
+    /// the interrupted run's.
     pub(crate) fn recover_analysis(&mut self) {
-        self.analysis.get_or_insert_with(Default::default);
+        if self.analysis.is_none() {
+            self.analysis = Some(Default::default());
+            self.audio_position = None;
+        }
     }
     /// Hand what [`Self::analyze`] made to the store, and the analysis back.
     pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, mut taken: Taken) {

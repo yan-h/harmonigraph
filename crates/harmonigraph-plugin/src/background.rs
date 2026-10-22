@@ -316,6 +316,9 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
         crate::editor::input::LiveInput::analyze(&mut taken);
         taken
     });
+    if taken.is_none() && editor_state.is_open() {
+        return;
+    }
     let mut guard = shared.lock();
     let shared = &mut *guard;
     if let Some(taken) = taken {
@@ -335,6 +338,36 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
     }
 }
 
+/// A [`step`] that survives its own panic. One would otherwise end the
+/// thread with the analysis lent out and nothing draining either ring, which
+/// freezes the picture and every shut-window duty for the session with
+/// nothing said. Handing the drain to the frames instead would only move the
+/// same panic onto the host's main thread. So the analysis is put back fresh,
+/// the source run restarts so its columns re-anchor, the console says so
+/// once, and the next step carries on.
+fn guarded_step(
+    shared: &Mutex<EditorShared>,
+    editor_state: &EguiState,
+    restore: &mut Restore,
+    panicked: &mut bool,
+) {
+    let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        step(shared, editor_state, restore)
+    }));
+    if stepped.is_err() {
+        let mut shared = shared.lock();
+        shared.input.recover_analysis();
+        if !std::mem::replace(panicked, true) {
+            shared
+                .ui
+                .picture
+                .runtime
+                .console
+                .log("input worker panicked in a step and restarted its analysis".to_string());
+        }
+    }
+}
+
 /// Drain, sleep, repeat, until the plugin goes away.
 ///
 /// The stop flag is read once per step. Joining waits for any current step
@@ -350,24 +383,9 @@ fn run(
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
+    let mut panicked = false;
     while !stop.load(Ordering::Relaxed) {
-        // A panic would otherwise end the thread with the analysis lent out
-        // and nothing draining either ring, freezing an open window's picture
-        // for the session with nothing said. Hand the job back to the frames.
-        let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            step(shared, editor_state, &mut restore)
-        }));
-        if stepped.is_err() {
-            let mut shared = shared.lock();
-            shared.input.recover_analysis();
-            shared.frame_drains = true;
-            shared.ui.picture.runtime.console.log(
-                "input worker stopped by a panic — the editor window drains its own input \
-                 from here, and the spectrogram will only cover time it is open"
-                    .to_string(),
-            );
-            return;
-        }
+        guarded_step(shared, editor_state, &mut restore, &mut panicked);
         #[cfg(test)]
         rounds.fetch_add(1, Ordering::Release);
         std::thread::sleep(if editor_state.is_open() { POLL } else { SHUT_POLL });
@@ -689,6 +707,42 @@ mod tests {
         h.push_audio(20_000);
         h.step();
         assert!(h.columns() > 0, "audio after the Clear was not kept");
+    }
+
+    /// A step that panics with the analysis lent out leaves the next one
+    /// analyzing again, with its columns dated where they belong rather than
+    /// from the frame zero of the run the panic interrupted.
+    #[test]
+    fn a_panicking_step_leaves_the_next_one_analyzing() {
+        let mut h = harness();
+        h.push_audio(20_000);
+        h.step();
+        let before = h.columns();
+        assert!(before > 0, "the first step analyzed nothing");
+        let newest = |h: &Harness| {
+            h.shared.lock().ui.picture.runtime.spectrum.history().back().unwrap().time
+        };
+        let first = newest(&h);
+
+        h.push_audio(20_000);
+        BETWEEN_HOLDS.set(Some(Box::new(|_: &Mutex<EditorShared>, _| panic!("a step's bug"))));
+        let mut panicked = false;
+        super::guarded_step(&h.shared, &h.editor_state, &mut h.restore, &mut panicked);
+        BETWEEN_HOLDS.set(None);
+        assert!(panicked, "the hook did not run");
+
+        h.push_audio(40_000);
+        h.step();
+        assert!(h.columns() > before, "nothing was analyzed after the panic");
+        // Both newest columns lag their audio's end by the same half window,
+        // and the audio ends 60 000 frames apart; the restarted run's hop
+        // grid puts its newest column up to a hop (8 ms) short of that.
+        let spacing = newest(&h) - first;
+        assert!(
+            (spacing - 60_000.0 / 48_000.0).abs() < 0.01,
+            "the newest columns are {spacing:.3} s apart where their audio is 1.25 s: the \
+             columns after the panic are dated from the interrupted run",
+        );
     }
 
     /// A step analyzes under the settings it took the audio with, even if they
