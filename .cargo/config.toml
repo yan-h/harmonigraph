@@ -22,3 +22,10 @@ xtask-debug = "run --package xtask --"
 # line out to fall back to plain rustc.
 [build]
 rustc-wrapper = "sccache"
+
+# The macOS editor's frames come from a view's display link, which needs
+# macOS 14 (#1551). Raising the floor here stamps it into the dylib, so an
+# older system refuses to load the plugin rather than failing inside it.
+# nice-plug-xtask's Info.plist carries no LSMinimumSystemVersion of its own.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
