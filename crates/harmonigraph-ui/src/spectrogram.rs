@@ -82,7 +82,7 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 /// pane buys nothing, so the picture can hold half the slabs the depth axis has
 /// pixels. What that gives up depends on the Span, and the two ends differ in
 /// kind. At a close-up — a 12 s window cuts into 16 ms slabs — the slab is well
-/// under the analysis window (171 ms at the fresh Balanced setting and 48 kHz), so
+/// under the analysis window (85 ms at the fresh Fast setting and 48 kHz), so
 /// the stepping loses detail the FFT never had. At a three-minute Span the
 /// slab is 256 ms and the CAP is what sets the resolution: those slabs merge detail the FFT did
 /// resolve. That is what a long Span is for rather than a flaw in it — the
