@@ -18,6 +18,9 @@ pub mod gl;
 pub struct FrameTiming {
     /// When the callback actually ran.
     pub fired: f64,
+    /// `fired` on `Instant`'s clock, read beside it: the anchor that puts
+    /// any of these times on `Instant`'s clock, as `fired_at + (t - fired)`.
+    pub fired_at: std::time::Instant,
     /// The refresh the callback was issued for.
     pub timestamp: f64,
     /// The refresh the frame is meant to be on screen by.

@@ -121,6 +121,7 @@ pub struct Queue<'a> {
     physical_size: &'a mut PhySize,
     key_capture: &'a mut KeyCapture,
     frame_divisor: &'a mut Option<u32>,
+    frame_timing: Option<baseview::FrameTiming>,
     tess_ms: f32,
     draw_gpu_ms: Option<f32>,
     acquire_ms: f32,
@@ -142,6 +143,7 @@ impl<'a> Queue<'a> {
         physical_size: &'a mut PhySize,
         key_capture: &'a mut KeyCapture,
         frame_divisor: &'a mut Option<u32>,
+        frame_timing: Option<baseview::FrameTiming>,
         tess_ms: f32,
         draw_gpu_ms: Option<f32>,
         acquire_ms: f32,
@@ -163,6 +165,7 @@ impl<'a> Queue<'a> {
             physical_size,
             key_capture,
             frame_divisor,
+            frame_timing,
             tess_ms,
             draw_gpu_ms,
             acquire_ms,
@@ -258,6 +261,12 @@ impl<'a> Queue<'a> {
     /// turn into triangles, and the two happen in different places.
     pub fn tess_ms(&self) -> f32 {
         self.tess_ms
+    }
+
+    /// When the display asked for this frame, or `None` for a frame it did not
+    /// ask for. See [`baseview::Window::frame_timing`].
+    pub fn frame_timing(&self) -> Option<baseview::FrameTiming> {
+        self.frame_timing
     }
 
     /// Run the frame callback on every `divisor`th refresh of the display
@@ -472,6 +481,8 @@ where
             &mut physical_size,
             &mut key_capture,
             &mut frame_divisor,
+            // The build runs outside any frame the display asked for.
+            None,
             // No frame has been measured yet: tess, draw gpu, acquire, tick,
             // render, upload, ubuf, texture, encode, submit, then the two
             // geometry counts.
@@ -778,7 +789,7 @@ mod wants_render_tests {
         let mut completed = Vec::new();
         for sample in [Some(2.0), None, None, None, None, Some(10.0), None] {
             let mut queue = Queue::new(
-                &mut color, &mut close, &mut size, &mut capture, &mut divisor,
+                &mut color, &mut close, &mut size, &mut capture, &mut divisor, None,
                 0.0, sample, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0,
             );
             completed.extend(queue.take_draw_gpu_ms());
@@ -930,6 +941,7 @@ where
             &mut self.physical_size,
             &mut self.key_capture,
             &mut frame_divisor,
+            window.frame_timing(),
             self.tess_ms,
             self.draw_gpu_ms.take(),
             self.acquire_ms,

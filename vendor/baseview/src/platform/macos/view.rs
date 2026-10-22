@@ -686,6 +686,7 @@ impl ViewImpl for BaseviewView {
 
     fn display_link_fired(this: ViewRef<Self>, link: &CADisplayLink) {
         let fired = CACurrentMediaTime();
+        let fired_at = std::time::Instant::now();
         this.last_link_fire.set(fired);
         let target = link.targetTimestamp();
         let refresh = link.duration();
@@ -697,6 +698,7 @@ impl ViewImpl for BaseviewView {
         this.next_frame_due.set(due);
         this.frame_timing.set(Some(crate::FrameTiming {
             fired,
+            fired_at,
             timestamp: link.timestamp(),
             target_timestamp: target,
             refresh,
