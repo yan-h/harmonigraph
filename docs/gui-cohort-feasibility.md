@@ -33,15 +33,15 @@ Against the baseview obligations:
 - **1 Common-mode timer:** the frame path is covered upstream.
   The new `WindowContext::create_timer` schedules with `scheduledTimerWithTimeInterval_repeats_block`, which registers in the default mode only,
   so any per-tick work moved onto such a timer reintroduces exactly the stall patch 1 fixes.
-- **4 Configurable pacing:** the ~67 Hz ceiling is gone, since the link follows the panel.
-  A frame-rate cap and `display_max_fps` are still absent;
-  a cap would need `preferredFrameRateRange` on the link or throttled redraw requests.
+- **4 Display-link pacing:** the local patch now drives frames from a display link as well (#1551), so the link itself is upstream.
+  Still absent upstream: the frame divisor, the watchdog that runs frames while the link is paused, and `frame_timing`.
+  `preferredFrameRateRange` is no substitute for the divisor: measured on a 144 Hz panel it rounds to divisors of the panel's rate.
 - **5 Withheld exit, 6 Lost-release repair:** still needed, and harder to port.
   Both are paid from the per-frame tick, which no longer runs while the window is idle,
   so each needs a dedicated common-mode timer.
 - **3 Occlusion:** still no occlusion event or observer.
-  Whether the display link keeps firing for an occluded window is unmeasured,
-  so egui-baseview patch 17's backoff contract stays until it is.
+  A view's display link keeps firing while its window is covered and stops while the view is hidden or the window minimized or ordered out (measured for #1551),
+  so egui-baseview patch 17's backoff contract stays.
 - **2 Cursor ownership:** unchanged from 0.3.4.
 
 ### nice-plug coupling: not required
@@ -108,7 +108,7 @@ and [baseview macOS view](https://docs.rs/crate/baseview/0.3.4/source/src/platfo
 | 1 Common-mode timer | Still needed | `src/wrappers/appkit/timer.rs:4,23,36` still uses kCFRunLoopDefaultMode. |
 | 2 Cursor ownership | Uncertain; partial upstream replacement | New `platform/macos/cursor.rs:9-62` retains desired/current cursor, applies immediately while inside, and `view.rs:633-643` handles cursorUpdate. No resetCursorRects ownership override. Validate first-click, tracking-area/cursor-rect rebuild and host overlap in Bitwig before deciding equivalence; do not blindly reapply the old addCursorRect fix. |
 | 3 Occlusion event/immediate frame | Adaptation | No Occluded event or occlusion observer in new event/handler contract; key-change observer at `view.rs:155ff` only. Need a new hook plus recovery in egui-baseview. |
-| 4 Configurable/rearmable pacing + display FPS | Adaptation | `view.rs:143` still hardcodes 0.015; new WindowContext API has no set_frame_interval/display_max_fps. |
+| 4 Display-link pacing, divisor, watchdog | Adaptation | `view.rs:143` still hardcodes a 0.015 s timer; no display link, divisor or frame timing in the WindowContext API. |
 | 5 Withheld drag-time pointer exit | Still needed | `view.rs:628-631` immediately emits CursorLeft with no pressedMouseButtons gating. |
 | 6 Repair lost button release | Still needed | Timer invokes frame directly; no pressedMouseButtons reconciliation, two-tick repair, or duplicate-release suppression. Preserve standalone test workspace wiring when vendoring. |
 

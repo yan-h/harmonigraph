@@ -515,9 +515,11 @@ mod tests {
                 (4, "write"),
                 (4, "scene"),
                 (3, "around"),
-                (2, "wait"),
                 (2, "encode"),
                 (2, "submit"),
+                // The drawable wait: inside the callback, but left out of
+                // `tick` and `render`, so beside them rather than under.
+                (0, "wait"),
                 // The GPU pair share this one line, so `draw gpu`'s own label
                 // and depth never reach the screen.
                 (0, "gpu"),

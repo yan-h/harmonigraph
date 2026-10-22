@@ -616,6 +616,10 @@ impl crate::Queue for Queue {
                 command_buffer.presentDrawable(&texture.drawable);
             }
 
+            if let Some(observe) = PRESENT_OBSERVER.get() {
+                observe(&command_buffer, &texture.drawable);
+            }
+
             command_buffer.commit();
 
             if texture.present_with_transaction {
@@ -1176,3 +1180,16 @@ pub enum OsType {
 
 /// Optional compiled-library provider, preserving normal shader translation and reflection.
 pub mod shader_library;
+
+/// Called with each present's command buffer and drawable, before the commit.
+pub type PresentObserver =
+    fn(&ProtocolObject<dyn MTLCommandBuffer>, &ProtocolObject<dyn MTLDrawable>);
+
+static PRESENT_OBSERVER: std::sync::OnceLock<PresentObserver> = std::sync::OnceLock::new();
+
+/// Install a process-wide observer of presents, for timing them: the
+/// command buffer's `GPUStartTime`/`GPUEndTime` and the drawable's
+/// `presentedTime`. Returns false if one is already installed.
+pub fn set_present_observer(observer: PresentObserver) -> bool {
+    PRESENT_OBSERVER.set(observer).is_ok()
+}

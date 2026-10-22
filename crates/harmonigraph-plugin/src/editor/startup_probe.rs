@@ -93,17 +93,16 @@ impl WindowHandler for Host {
         if self.opening == OPENINGS || self.started.elapsed().as_secs() > 90 {
             self.shared.lock().picture.editor_graphics().shutdown_startup();
             window.close();
-            // Wake NSApplication after baseview calls stop() from its timer.
+            // Wake NSApplication after baseview calls stop() from a frame.
             use objc2::MainThreadMarker;
             use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
             use objc2_foundation::NSPoint;
             let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-            if let Some(event) = {
-                NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-                    NSEventType::ApplicationDefined, NSPoint::ZERO, NSEventModifierFlags::empty(),
-                    0.0, 0, None, 0, 0, 0,
-                )
-            } {
+            let event = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                NSEventType::ApplicationDefined, NSPoint::ZERO, NSEventModifierFlags::empty(),
+                0.0, 0, None, 0, 0, 0,
+            );
+            if let Some(event) = event {
                 app.postEvent_atStart(&event, true);
             }
             return;
@@ -142,7 +141,6 @@ impl WindowHandler for Host {
                 full: false,
                 painted: Arc::new(AtomicBool::new(false)),
                 ready: Arc::new(AtomicBool::new(false)),
-                interval: None,
             },
             move |ctx, _, probe: &mut Probe| {
                 harmonigraph_ui::use_renderer_font_texture(ctx);
@@ -185,14 +183,7 @@ impl WindowHandler for Host {
                 }
                 .draw();
                 assert!(requested.is_none(), "startup fixture unexpectedly resized");
-                let interval = super::frame::target_frame_interval(
-                    shared.workspace.interaction.fps_cap,
-                    queue.display_max_fps(),
-                );
-                if probe.interval != Some(interval) {
-                    queue.set_frame_interval(interval);
-                    probe.interval = Some(interval);
-                }
+                queue.set_frame_divisor(shared.workspace.interaction.frame_rate.divisor());
                 let ready = harmonigraph_ui::editor_loading_status(ui.ctx()).is_none();
                 egui::Area::new(egui::Id::new("startup-measurement-marker"))
                     .fixed_pos(egui::pos2(10.0, 10.0))
@@ -224,7 +215,6 @@ struct Probe {
     full: bool,
     painted: Arc<AtomicBool>,
     ready: Arc<AtomicBool>,
-    interval: Option<f64>,
 }
 
 impl Drop for Probe {

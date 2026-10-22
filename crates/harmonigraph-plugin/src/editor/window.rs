@@ -21,14 +21,13 @@ use super::MIN_SIZE;
 /// and test uses. egui's own default contributes nothing that one lacks: a
 /// label, and limits it already replaces with the adapter's.
 ///
-/// TRIED AND REVERTED: `surface.desired_maximum_frame_latency = Some(3)`,
-/// which egui-wgpu leaves unset (wgpu defaults it to 2, i.e. one frame of
-/// slack). The theory was that a deeper queue would let the CPU work through
-/// a delayed present instead of stalling in `get_current_texture`, which is
-/// where the overlay puts the time. It made no appreciable difference, and it
-/// costs a frame of latency (~7 ms at 144 Hz) on a picture meant to track
-/// what you just played — so it is not worth carrying. 3 was the whole knob
-/// anyway: wgpu-hal clamps to 2..=3 for `CAMetalLayer.maximumDrawableCount`.
+/// The surface keeps egui-wgpu's `desired_maximum_frame_latency` of 2, which
+/// on Metal is already three drawables: wgpu clamps the latency to 1..=2 and
+/// wgpu-hal sets `maximumDrawableCount` to latency + 1. So `Some(3)` changes
+/// nothing (an earlier note here reported trying it, and tested a no-op), and
+/// the only other setting, `Some(1)`, gives two drawables: a frame less
+/// latency, bought with a missed refresh whenever a frame runs long. The
+/// choice is smoothness (#1551).
 pub(super) fn graphics_config() -> GraphicsConfig {
     harmonigraph_render::shader_assets::initialize();
     use egui_baseview::WgpuSetup;

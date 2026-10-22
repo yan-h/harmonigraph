@@ -165,11 +165,17 @@ const EGUI_TIMER_BYTES: u64 = 16;
 /// outside the bracket; the shipping spectrogram and lattice callbacks return
 /// no separate command buffers.
 ///
-/// The readback is a three-step cycle (record, map once the encoder is
-/// submitted, read when the driver is done) and every poll is `Poll`, never
-/// `Wait`: blocking for the number would stall the pipeline being measured.
-/// The published value is a few frames old, which for "where is the frame
-/// going" costs nothing.
+/// The readback is a four-step cycle (record; once the encoder is submitted,
+/// ask to hear when it completes; then resolve and map; read when the driver
+/// is done) and every poll is `Poll`, never `Wait`: blocking for the number
+/// would stall the pipeline being measured. The published value is a few
+/// frames old, which for "where is the frame going" costs nothing.
+///
+/// The resolve waits for the frame to complete because a resolve submitted
+/// with the frame can read a slot before its stamp lands: an M5 Pro under
+/// macOS 27 does, nearly every frame and most often for the closing stamp.
+/// Such a slot keeps the last frame's value rather than reading 0, so a
+/// repeated opening stamp is refused as well.
 struct DrawGpuTimer {
     set: egui_wgpu::wgpu::QuerySet,
     resolve: egui_wgpu::wgpu::Buffer,
@@ -178,14 +184,19 @@ struct DrawGpuTimer {
     head: TextureView,
     period: f32,
     state: EguiTimerState,
+    /// Set once the timed frame's work has completed.
+    done: Arc<std::sync::atomic::AtomicBool>,
     /// 0 while pending, 1 for a mapped result, 2 for a failed map.
     ready: Arc<std::sync::atomic::AtomicU8>,
+    /// The last opening stamp read, which an unwritten slot 0 would repeat.
+    last_opening: u64,
 }
 
 #[derive(PartialEq, Clone, Copy)]
 enum EguiTimerState {
     Idle,
     Recorded,
+    Completing,
     Mapping,
 }
 
@@ -222,7 +233,9 @@ impl DrawGpuTimer {
                 .create_view(&TextureViewDescriptor::default()),
             period: queue.get_timestamp_period(),
             state: EguiTimerState::Idle,
+            done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ready: Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            last_opening: 0,
         })
     }
 
@@ -265,12 +278,33 @@ impl DrawGpuTimer {
         });
     }
 
-    fn poll(&mut self, device: &egui_wgpu::wgpu::Device) -> Option<f32> {
+    fn poll(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+    ) -> Option<f32> {
         use egui_wgpu::wgpu;
         use std::sync::atomic::Ordering;
         match self.state {
             EguiTimerState::Idle => None,
             EguiTimerState::Recorded => {
+                // The encoder holding the stamps has been submitted by now,
+                // so this hears about that frame's completion.
+                let done = self.done.clone();
+                queue.on_submitted_work_done(move || done.store(true, Ordering::Release));
+                let _ = device.poll(wgpu::PollType::Poll);
+                self.state = EguiTimerState::Completing;
+                None
+            }
+            EguiTimerState::Completing => {
+                let _ = device.poll(wgpu::PollType::Poll);
+                if !self.done.swap(false, Ordering::Acquire) {
+                    return None;
+                }
+                let mut encoder = device.create_command_encoder(&Default::default());
+                encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
+                encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, EGUI_TIMER_BYTES);
+                queue.submit([encoder.finish()]);
                 let ready = self.ready.clone();
                 self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                     ready.store(if result.is_ok() { 1 } else { 2 }, Ordering::Release);
@@ -302,9 +336,10 @@ impl DrawGpuTimer {
                         u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap_or_default())
                     };
                     let (begin, end) = (at(0), at(1));
+                    let fresh = begin != std::mem::replace(&mut self.last_opening, begin);
                     // Metal can return zero for unsupported pass boundaries;
                     // a reversed pair also cannot describe elapsed GPU time.
-                    (begin != 0 && end != 0 && end >= begin)
+                    (fresh && begin != 0 && end != 0 && end >= begin)
                         .then(|| ((end - begin) as f64 * self.period as f64 / 1.0e6) as f32)
                 };
                 self.staging.unmap();
@@ -314,10 +349,8 @@ impl DrawGpuTimer {
         }
     }
 
-    /// Resolve a completed bracket and stage its nonblocking readback.
-    fn close(&mut self, encoder: &mut egui_wgpu::wgpu::CommandEncoder) {
-        encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, EGUI_TIMER_BYTES);
+    /// Close the bracket; a later frame resolves it once this one completes.
+    fn close(&mut self) {
         self.state = EguiTimerState::Recorded;
     }
 }
@@ -376,6 +409,8 @@ impl Renderer {
 
         #[cfg(target_os = "macos")]
         let layer_present = layer_present::LayerPresent::new(&surface);
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        wgpu::hal::metal::set_present_observer(crate::frame_log::observe_present);
 
         let msaa_samples = config.renderer_options.msaa_samples;
 
@@ -442,6 +477,12 @@ impl Renderer {
     /// slow" and "we are early" — and it appears in no cost measurement.
     pub fn last_acquire_ms(&self) -> f32 {
         self.last_acquire_ms
+    }
+
+    /// The layer's `maximumDrawableCount`, read back for the frame log.
+    #[cfg(all(feature = "frame-log", target_os = "macos"))]
+    pub(crate) fn max_drawables(&self) -> Option<usize> {
+        self.layer_present.max_drawables()
     }
 
     /// The renderer's remaining stages, in milliseconds: uploads (including
@@ -619,11 +660,12 @@ impl Renderer {
             height: canvas_height,
         } = physical_size;
 
-        // Advance last frame's readback before anything else: its encoder has
-        // been submitted by now, so the map can be asked for and a landed
-        // result published.
+        // Advance the readback before anything else: a frame that recorded
+        // stamps has been submitted by now, so this can ask to hear when it
+        // completes, or, once it has, submit the resolve on its own and map
+        // it, or publish a landed result.
         if let Some(timer) = self.gpu_timer.as_mut() {
-            if let Some(ms) = timer.poll(&self.render_state.device) {
+            if let Some(ms) = timer.poll(&self.render_state.device, &self.render_state.queue) {
                 self.last_gpu_ms = Some(ms);
             }
         }
@@ -767,7 +809,7 @@ impl Renderer {
                 // queue's pending writes, and those staging buffers are only
                 // reclaimed by a submit() (via wgpu-core's pre_submit). Returning
                 // without submitting strands them: a backgrounded window whose
-                // surface reports Occluded/Timeout on every timer tick then piles
+                // surface reports Occluded/Timeout on every frame then piles
                 // up staging buffers at the frame rate — gigabytes within minutes
                 // — freed only when it regains focus and the next presented
                 // frame's submit drains the whole backlog at once. No drawable
@@ -873,7 +915,7 @@ impl Renderer {
 
         if timing {
             if let Some(timer) = self.gpu_timer.as_mut() {
-                timer.close(&mut encoder);
+                timer.close();
             }
         }
 
@@ -892,6 +934,8 @@ impl Renderer {
         #[cfg(target_os = "macos")]
         self.layer_present.before_present();
 
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        crate::frame_log::submitted();
         output_frame.present();
         self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -1061,6 +1105,11 @@ mod layer_present {
             if hidden {
                 self.occluded();
             }
+        }
+
+        #[cfg(feature = "frame-log")]
+        pub(super) fn max_drawables(&self) -> Option<usize> {
+            self.layer.as_ref().map(|layer| layer.maximumDrawableCount())
         }
 
         pub(super) fn new(surface: &wgpu::Surface) -> Self {
