@@ -73,10 +73,10 @@ in_group() {
 # a whole CI round to learn of while taking well under a minute here once the
 # worktree has built: formatting, prose, clippy and rustdoc. Clippy and rustdoc
 # were five of the 27 Full CI failures on 2026-10-19..21, each a ~10 min round
-# on a macOS runner. The tests are left out on purpose: they are the minutes,
-# and a golden frame can only be judged on the runner anyway. So is the Metal
-# corpus, a build of its own: knowing it is stale saves no round, since the
-# PR's own Metal shader assets run generates the replacement either way.
+# on a macOS runner. The tests are left out on purpose: they are the minutes.
+# So is the Metal corpus, a build of its own: knowing it is stale saves no
+# round, since the PR's own Metal shader assets run generates the replacement
+# either way.
 quick=
 quick() {
   quick=1
@@ -117,11 +117,6 @@ run() {
     failures="$failures  ✗ $*"$'\n'
   fi
 }
-
-# Read by harmonigraph-golden, and each would turn every golden gate below into
-# a pass: DRAW_ONLY (tools/shader-assets.py's) draws a frame without comparing
-# it, and BLESS writes it over the one on record.
-unset HARMONIGRAPH_GOLDEN_DRAW_ONLY HARMONIGRAPH_BLESS
 
 group workspace
 
@@ -254,6 +249,24 @@ run cargo check --release --workspace --all-targets
 # these two share. So this line is load-bearing for all 284, not just for the
 # two the `cfg` deletes — narrowing it to a filter would silently drop the rest.
 run cargo test --no-fail-fast -p harmonigraph-render
+
+# ...and the golden frames, drawn from the base and from this tree on this
+# machine and compared byte-exactly. It reports rather than fails: a moved frame
+# is a picture change to state, and Full CI's summary job is what requires the
+# PR body to name each changed frame, so a forgotten statement costs a re-run of
+# that Linux job rather than of this one. It fails only when either side cannot
+# draw its frames. CI sets GOLDEN_BASE to HEAD^1 on a PR, the main its merge
+# commit stands on, and to `none` on a push; locally the base is the merge-base
+# with origin/main. The mechanism, and why it replaced a committed record, is in
+# harmonigraph-golden.
+golden_diff() {
+  if [ "${GOLDEN_BASE:-}" = none ]; then
+    echo "  skipped — no PR to state a moved frame in"
+    return
+  fi
+  python3 -B tools/golden-diff.py ${GOLDEN_BASE:+--base "$GOLDEN_BASE"}
+}
+run golden_diff
 
 # ...and the one question none of the runs above can ask: is the committed Metal
 # corpus still valid for THIS tree's shaders? A key the corpus is missing makes

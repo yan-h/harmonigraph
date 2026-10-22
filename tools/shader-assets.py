@@ -99,14 +99,12 @@ def build(package, logs, assets=EMBEDDED):
     return binary
 
 
-def run(binary, arguments, mode, name, logs, export=None, failure=False):
+def run(binary, arguments, mode, name, logs, export=None, failure=False, frames=None):
     environment = dict(os.environ, HARMONIGRAPH_REQUIRE_GPU="1", WGPU_BACKEND="metal",
                        HARMONIGRAPH_SHADER_ASSETS=mode)
-    environment.pop("HARMONIGRAPH_BLESS", None)
-    # The golden runs here are about whether every pipeline loads from the
-    # corpus, not whether the picture moved; comparing frames would fail a
-    # regeneration on any PR that also moves one (harmonigraph-golden's docs).
-    environment["HARMONIGRAPH_GOLDEN_DRAW_ONLY"] = "1"
+    environment.pop("HARMONIGRAPH_GOLDEN_WRITE", None)
+    if frames is not None:
+        environment["HARMONIGRAPH_GOLDEN_WRITE"] = str(frames)
     if export is not None:
         environment["HARMONIGRAPH_SHADER_EXPORT_DIR"] = str(export)
     result = subprocess.run([binary, *arguments, "--nocapture", "--test-threads=1"], cwd=ROOT,
@@ -127,11 +125,25 @@ def run(binary, arguments, mode, name, logs, export=None, failure=False):
 
 def check(logs, assets=EMBEDDED):
     verify(assets)
+    frames = logs / "frames"
+    shutil.rmtree(frames, ignore_errors=True)
     renderer = build("harmonigraph-render", logs, assets)
     run(renderer, ["production_metal_asset_catalog", "--ignored"], "strict", "strict-catalog", logs)
-    run(renderer, ["golden"], "strict", "strict-renderer-goldens", logs)
     offline = build("harmonigraph-offline", logs, assets)
-    run(offline, ["golden"], "strict", "strict-offline-goldens", logs)
+    # Every golden drawn through the corpus and again compiled from source, which
+    # must agree byte for byte. tools/golden-diff.py draws both of a PR's sides
+    # from source so a stale corpus cannot read as a picture change; this is
+    # where a corpus that loads but draws differently is caught instead.
+    for binary, package in ((renderer, "renderer"), (offline, "offline")):
+        run(binary, ["golden"], "strict", f"strict-{package}-goldens", logs, frames=frames / "corpus")
+        run(binary, ["golden"], "source", f"source-{package}-goldens", logs, frames=frames / "source")
+    compare = ["cargo", "run", "--locked", "-q", "-p", "harmonigraph-golden", "--bin",
+               "golden-compare", "--", str(frames / "corpus"), str(frames / "source"), "-",
+               str(frames / "diff")]
+    report = subprocess.run(compare, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
+    assert not (frames / "diff" / "changed").read_text(), \
+        f"the corpus draws differently from source-compiled shaders:\n{report}"
+    print("Passed corpus-draws-as-source", flush=True)
 
 
 def install(directory):

@@ -40,9 +40,9 @@ python3 tools/shader-assets.py check
 ```
 
 This requires zero source fallback in the constructor catalog and draws the real-path renderer and offline goldens in strict mode.
-It draws them without comparing frames (`HARMONIGRAPH_GOLDEN_DRAW_ONLY`):
-whether the picture moved is `Full CI`'s question,
-and asking it here failed every regeneration on a PR that also moves a frame.
+It draws each golden twice, through the corpus and compiled from source, and requires the two byte-identical:
+whether the picture moved is `Full CI`'s question (`tools/golden-diff.py`, which draws both sides from source),
+and whether the corpus draws what its source does is this one's.
 Ordinary reference tests retain normal fallback, so their test-only shaders do not pollute the shipping corpus.
 The regular workspace gates remain required too.
 Generation also builds a separate temporary storage-array diagnostic corpus and verifies strict rejection/source fallback for missing, mismatched and invalid libraries.
@@ -69,8 +69,6 @@ inspect and commit the changed source/options/manifest together with the binary 
 The ordinary PR workflow checks the committed corpus before generating anything,
 and fails on a stale one even after generating its replacement,
 so generation cannot conceal stale coverage.
-Its goldens are drawn and not compared, so a corpus that loads but draws differently is caught by `Full CI` after import:
-a golden that moves again after an import, on a frame just re-baselined, is the corpus and not the picture.
 Its path filter covers assets, renderer code, graphics setup and dependencies;
 ordinary tuning implementation edits do not schedule a third macOS job.
 New pushes cancel superseded asset-validation runs.

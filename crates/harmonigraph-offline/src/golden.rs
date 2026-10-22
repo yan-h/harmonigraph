@@ -53,14 +53,11 @@
 //! fresh defaults, so a capture of a new DAW look moves none of these frames
 //! and a diff here is something a PR's own code did.
 //!
-//! **A changed golden is a stated picture change**: re-baseline with
-//! `HARMONIGRAPH_BLESS=1 cargo test --workspace golden`, read the
-//! contact sheet it names, and say in the PR body what moved and why. The
-//! comparison and the sheet are [`harmonigraph_golden::Gate`].
-//!
-//! The frames are Metal-on-this-Mac specific, like the lattice set's. A driver
-//! or OS update re-baselines all of them at once, and its signature is every
-//! frame moving a little rather than one moving a lot.
+//! **A moved golden is a stated picture change**: `tools/golden-diff.py`
+//! draws these frames from the base and from the branch and names each that
+//! moved with a contact sheet, and the PR body says what moved and why. The
+//! mechanism is [`harmonigraph_golden`]'s; what is here is the scenes, and
+//! "the frame on record" in their names is the one the base draws.
 
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 use harmonigraph_render::wgpu::TextureFormat;
@@ -226,8 +223,8 @@ const ZOOMED_IN: (u32, u32) = (66, 90);
 ///
 /// Checked where the constants are rather than where the frame is drawn: a
 /// range that quietly stopped reaching the lerp arm would still render, still
-/// bless, and still read as coverage — which is the failure #450 named and the
-/// one a golden is least able to report on itself. It has already happened
+/// agree with its base, and still read as coverage — which is the failure #450
+/// named and the one a golden is least able to report on itself. It has already happened
 /// once here: at six semitones over 384 rows the arithmetic said every row was
 /// a lerp, the floor above widened the range to twenty-four, and the frame
 /// took the mean on all of them.
