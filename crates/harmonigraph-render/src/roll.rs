@@ -266,7 +266,7 @@ pub struct RollAxes {
 /// roll whose leading extensions occupy a stricter region than its scrolling
 /// history.
 #[allow(clippy::too_many_arguments)]
-pub fn roll_paint_callback_with_clipped_tail(
+pub fn roll_paint_callback(
     rect: egui::Rect,
     pane_size: egui::Vec2,
     instances: Vec<RollInstance>,
