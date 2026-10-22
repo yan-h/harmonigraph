@@ -168,23 +168,6 @@ fn every_settings_tab_fits_on_its_tab_bar() {
     }
 }
 
-#[test]
-fn frame_interval_converts_a_cap_to_a_spacing() {
-    assert_eq!(frame_interval(None), None, "uncapped asks for no spacing");
-    assert_eq!(frame_interval(Some(30.0)), Some(std::time::Duration::from_secs_f32(1.0 / 30.0)),);
-    assert_eq!(frame_interval(Some(144.0)), Some(std::time::Duration::from_secs_f32(1.0 / 144.0)),);
-}
-
-#[test]
-fn nonsense_caps_read_as_uncapped() {
-    // The control cannot produce these, but a hand-edited persist blob can.
-    // Uncapped is the safe reading: a zero interval is the uncapped
-    // behaviour with extra steps, and a huge one would freeze the UI.
-    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-        assert_eq!(frame_interval(Some(bad)), None, "{bad} should read as uncapped");
-    }
-}
-
 /// A line that stops in open space ends round: a disc half its width over each
 /// end, in the stroke's own color, laid where egui actually draws the line — a
 /// level line off the pixel grid is snapped onto it first, caps and all. A

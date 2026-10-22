@@ -1848,7 +1848,7 @@ fn headings_tabs_and_block_titles_alone_take_the_heading_weight() {
     for text in ["PERFORMANCE", "System", "Editor and exports"] {
         assert_eq!(family(text), heading, "{text} is not in the heading weight");
     }
-    for text in ["Lattice resolution", "Editor frame limit (fps)", "Uncapped"] {
+    for text in ["Lattice resolution", "Editor frame rate", "Display rate"] {
         assert_eq!(
             family(text),
             egui::FontFamily::Proportional,

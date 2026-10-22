@@ -18,6 +18,7 @@ use objc2_app_kit::{
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowOcclusionState,
 };
 use objc2_foundation::{NSArray, NSNotification, NSPoint, NSRect, NSSize, NSString};
+use objc2_quartz_core::{CACurrentMediaTime, CADisplayLink};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -60,7 +61,7 @@ pub(crate) struct BaseviewView {
     /// ordinary fast click, and it deserves the gap it takes to arrive.
     ///
     /// A settle rather than a frame interval, because a settle is what this
-    /// counts: `trigger_frame` runs it, and the frame timer is not
+    /// counts: `trigger_frame` runs it, and the display link is not
     /// `trigger_frame`'s only caller — `handle_occlusion_notification` paints
     /// from inside a notification. Two settles can land microseconds apart
     /// there, leaving a queued release almost no gap at all. What that costs is
@@ -68,7 +69,27 @@ pub(crate) struct BaseviewView {
     /// modifiers, on a window coming back from occlusion.
     buttons_seen_up: Cell<u8>,
 
-    frame_timer: Cell<Option<TimerHandle>>,
+    /// What runs frames: one call per refresh of the view's screen, created
+    /// once the view is parented and invalidated by `close`. It retains the
+    /// view, so a link that is never invalidated leaks it.
+    display_link: Cell<Option<Retained<CADisplayLink>>>,
+    /// A slow timer that runs frames while the link is silent.
+    ///
+    /// A view's link stops dead while the view is hidden, or its window is
+    /// minimized or ordered out (measured; it keeps firing while merely
+    /// covered). The frame is also what drains the plugin's MIDI and audio
+    /// rings and repairs a stuck button or a withheld exit, and an editor
+    /// that is open but out of sight must go on doing all three.
+    link_watchdog: Cell<Option<TimerHandle>>,
+    /// `CACurrentMediaTime` at the last link callback, which the watchdog
+    /// reads to tell a paused link from a running one.
+    last_link_fire: Cell<f64>,
+    /// Draw on every Nth refresh; 1 is every refresh. See `link_paces_frame`.
+    frame_divisor: Cell<u32>,
+    /// The earliest target timestamp the next divided frame may aim at.
+    next_frame_due: Cell<Option<f64>>,
+    /// The link callback running the current frame, if one is.
+    frame_timing: Cell<Option<crate::FrameTiming>>,
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
     occlusion_observer: Cell<Option<NotificationCenterObserver>>,
 
@@ -103,7 +124,12 @@ impl BaseviewView {
             buttons_reported_down: 0.into(),
             buttons_seen_up: 0.into(),
             keyboard_state: KeyboardState::new(),
-            frame_timer: None.into(),
+            display_link: None.into(),
+            link_watchdog: None.into(),
+            last_link_fire: 0.0.into(),
+            frame_divisor: 1.into(),
+            next_frame_due: None.into(),
+            frame_timing: None.into(),
             window_handler: None.into(),
             notification_center_observer: None.into(),
             occlusion_observer: None.into(),
@@ -145,7 +171,15 @@ impl BaseviewView {
             let ns_filenames_pboard_type = unsafe { NSFilenamesPboardType };
             view.view.registerForDraggedTypes(&NSArray::from_slice(&[ns_filenames_pboard_type]));
 
-            Self::arm_frame_timer(view.view, options.frame_interval);
+            // Parented by now, so the link starts on the screen the view is
+            // on; it follows the view to another one by itself.
+            view.display_link.set(Some(view.view.setup_display_link()));
+            let watchdog_view = Weak::new(view.view);
+            view.link_watchdog.set(TimerHandle::new(LINK_WATCHDOG_INTERVAL, move || {
+                if let Some(view) = watchdog_view.load() {
+                    Self::link_watchdog_fired(view.inner_ref());
+                }
+            }));
 
             let notifier_view = Weak::new(view.view);
             let observer = NotificationCenterObserver::register_window_key_change(move |n| {
@@ -183,6 +217,12 @@ impl BaseviewView {
 
     pub fn close(this: ViewRef<Self>) {
         this.state.closed.set(true);
+        // Invalidating releases the link's retain on the view. Safe from
+        // inside a link callback, which holds a reference of its own.
+        if let Some(link) = this.display_link.take() {
+            link.invalidate();
+        }
+        this.link_watchdog.take();
         this.view.removeFromSuperview();
 
         if let ViewParentingType::Windowed { owned_window: parent_window, running_app } =
@@ -251,24 +291,26 @@ impl BaseviewView {
         Self::send_deferred_events(this, handler.as_mut());
     }
 
-    /// (Re)arm the frame timer at `interval` seconds.
-    ///
-    /// Storing the new handle drops the old one, whose `Drop` removes it from
-    /// the run loop — so this replaces the cadence rather than stacking a
-    /// second timer on top of it, and is safe to call from inside a frame.
-    pub(crate) fn arm_frame_timer(view: &View<Self>, interval: f64) {
-        let interval = interval.clamp(crate::MIN_FRAME_INTERVAL, crate::MAX_FRAME_INTERVAL);
-        let timer_view = Weak::new(view);
-        view.inner_ref().frame_timer.set(TimerHandle::new(interval, move || {
-            if let Some(view) = timer_view.load() {
-                Self::trigger_frame(view.inner_ref());
-            }
-        }));
+    /// Draw on every `divisor`th refresh from here on; 0 and 1 are every one.
+    pub(crate) fn set_frame_divisor(this: ViewRef<Self>, divisor: u32) {
+        this.frame_divisor.set(divisor.max(1));
+    }
+
+    /// When the display asked for the frame now running, if the link did.
+    pub(crate) fn frame_timing(this: ViewRef<Self>) -> Option<crate::FrameTiming> {
+        this.frame_timing.get()
+    }
+
+    fn link_watchdog_fired(this: ViewRef<Self>) {
+        let silent = CACurrentMediaTime() - this.last_link_fire.get();
+        if silent > LINK_SILENCE {
+            Self::trigger_frame(this);
+        }
     }
 
     /// Run one frame, unless one is already running.
     ///
-    /// The timer is not the only caller — `handle_occlusion_notification`
+    /// The link is not the only caller — `handle_occlusion_notification`
     /// paints from inside a notification, and a notification can in principle
     /// be delivered while a frame holds the handler. Taking the borrow
     /// fallibly rather than with `borrow_mut` is what makes that safe: a
@@ -465,12 +507,12 @@ impl BaseviewView {
             // request checks, so no earlier signal — activation, key window —
             // buys a frame that would be allowed to present.
             //
-            // Painting HERE rather than leaving it to the next timer tick is
-            // therefore the whole of the fix. The event above marks the
-            // handler for repaint; the tick that would act on it is up to a
-            // frame interval away, and that interval IS the ghost: measured
-            // at 11-14 ms against a ~15 ms timer, and it scales with the
-            // interval, so a frame-rate cap makes it worse.
+            // Painting HERE rather than leaving it to the next link callback
+            // is therefore the whole of the fix. The event above marks the
+            // handler for repaint; the callback that would act on it is up to
+            // a frame away, and that wait IS the ghost: measured at 11-14 ms
+            // under the ~15 ms frame timer the link replaced, and it scales
+            // with the frame divisor.
             //
             // The dirty mark is for whatever AppKit draws itself, which for a
             // surface-backed window is nothing; the frame is what puts new
@@ -492,6 +534,37 @@ impl BaseviewView {
             scale_factor,
         )
     }
+}
+
+/// How often the watchdog checks on the display link, and so the frame rate
+/// of a view whose link has paused: enough to keep the plugin's rings drained
+/// and a stuck button repaired.
+const LINK_WATCHDOG_INTERVAL: f64 = 0.1;
+
+/// How long the link must have been silent before the watchdog runs a frame
+/// itself. Far above any refresh interval, so a running link is never doubled.
+const LINK_SILENCE: f64 = 0.1;
+
+/// Whether a link callback aimed at `target` runs a frame under `divisor`, and
+/// if so the earliest target the next one may aim at (`None` when undivided).
+///
+/// Paced on the link's target timestamp rather than by counting callbacks: a
+/// callback the host's run loop delays or coalesces would shift a count, while
+/// the timestamps stay on the display's grid. The next frame is due half a
+/// refresh short of `divisor` refreshes ahead, so jitter in the timestamps
+/// cannot push it a whole refresh late. After a move to a slower display the
+/// due time is at most `divisor` of the old refreshes away, so the cadence
+/// recovers by itself.
+fn link_paces_frame(
+    divisor: u32, due: Option<f64>, target: f64, refresh: f64,
+) -> Option<Option<f64>> {
+    if divisor <= 1 {
+        return Some(None);
+    }
+    if due.is_some_and(|due| target < due) {
+        return None;
+    }
+    Some(Some(target + (f64::from(divisor) - 0.5) * refresh))
 }
 
 impl Drop for BaseviewView {
@@ -609,6 +682,27 @@ impl ViewImpl for BaseviewView {
 
             let () = msg_send![super(this.view, superclass), viewWillMoveToWindow: new_window];
         }
+    }
+
+    fn display_link_fired(this: ViewRef<Self>, link: &CADisplayLink) {
+        let fired = CACurrentMediaTime();
+        this.last_link_fire.set(fired);
+        let target = link.targetTimestamp();
+        let refresh = link.duration();
+        let Some(due) =
+            link_paces_frame(this.frame_divisor.get(), this.next_frame_due.get(), target, refresh)
+        else {
+            return;
+        };
+        this.next_frame_due.set(due);
+        this.frame_timing.set(Some(crate::FrameTiming {
+            fired,
+            timestamp: link.timestamp(),
+            target_timestamp: target,
+            refresh,
+        }));
+        Self::trigger_frame(this);
+        this.frame_timing.set(None);
     }
 
     fn view_did_move_to_window(this: ViewRef<Self>) {
@@ -951,8 +1045,72 @@ fn buttons_owed_release(reported_down: u8, os_pressed: usize) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{button_bit, buttons_owed_release};
+    use super::{button_bit, buttons_owed_release, link_paces_frame};
     use crate::MouseButton;
+
+    /// The refreshes a divided link draws on, out of `callbacks` at 144 Hz
+    /// whose target timestamps carry `jitter(i)` seconds of noise.
+    fn drawn(divisor: u32, callbacks: u32, jitter: impl Fn(u32) -> f64) -> Vec<u32> {
+        let refresh = 1.0 / 144.0;
+        let mut due = None;
+        (0..callbacks)
+            .filter(|&i| {
+                let target = 1000.0 + f64::from(i) * refresh + jitter(i);
+                link_paces_frame(divisor, due, target, refresh).map(|next| due = next).is_some()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_divisor_draws_every_nth_refresh() {
+        for divisor in 1..=4 {
+            let expected: Vec<u32> = (0..48).step_by(divisor as usize).collect();
+            assert_eq!(drawn(divisor, 48, |_| 0.0), expected, "divisor {divisor}");
+        }
+    }
+
+    /// Timestamps a fraction of a refresh off the grid must not move a frame
+    /// to the next refresh, which would turn a half rate into a third. The
+    /// drawn frames swing early and late by turns, which is the case a due
+    /// time of exactly `divisor` refreshes ahead gets wrong.
+    #[test]
+    fn timestamp_jitter_does_not_slip_a_divided_frame() {
+        let refresh = 1.0 / 144.0;
+        let wobble = |i: u32| if (i / 2) % 2 == 0 { 0.2 * refresh } else { -0.2 * refresh };
+        assert_eq!(drawn(2, 12, wobble), [0, 2, 4, 6, 8, 10]);
+    }
+
+    /// A callback the run loop never delivered costs that refresh alone: the
+    /// next one draws, rather than waiting for the old phase to come round.
+    #[test]
+    fn a_missed_callback_draws_at_the_next_one() {
+        let refresh = 1.0 / 144.0;
+        let mut due = None;
+        let mut drew = Vec::new();
+        for i in [0u32, 1, 3, 4, 5, 6] {
+            let target = f64::from(i) * refresh;
+            if let Some(next) = link_paces_frame(2, due, target, refresh) {
+                due = next;
+                drew.push(i);
+            }
+        }
+        assert_eq!(drew, [0, 3, 5]);
+    }
+
+    /// A move to a slower display leaves the due time on the old grid, and the
+    /// cadence picks up on the new one within the old divisor's reach rather
+    /// than waiting on a count that no longer means anything.
+    #[test]
+    fn a_slower_display_does_not_stall_a_divided_link() {
+        let fast = 1.0 / 144.0;
+        let slow = 1.0 / 60.0;
+        let due = link_paces_frame(4, None, 0.0, fast).unwrap();
+        let first = (1..)
+            .map(|k| f64::from(k) * slow)
+            .find(|&target| link_paces_frame(4, due, target, slow).is_some())
+            .unwrap();
+        assert!(first <= 4.0 * fast + slow, "first 60 Hz frame at {first}");
+    }
 
     /// A button held is a button owed nothing, however long the drag runs.
     #[test]

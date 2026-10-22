@@ -16,7 +16,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
-| System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
+| System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame rate (a fraction of the display's) and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
 | Console | The log, the held-note count and Clear. When this build refuses a project's saved editor settings, the editor opens on this tab with the reason. |
 
 Settings opens on Tuning in a fresh workspace.
@@ -242,7 +242,7 @@ Tab takes priority over focus traversal except while editing text.
 | Audio level colors | Shared palette; lattice rings substitute gray at Silent slice brightness for its quiet endpoint. |
 | Glow pattern, material and breathing | Require nonzero Background glow reach and gain. Pattern varies the glow; material reshapes the result. Each effect retains its own settings when bypassed. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
-| Editor frame limit, interface scale, Hide tab bars | Editor only; exports run at 60 fps. |
+| Editor frame rate, interface scale, Hide tab bars | Editor only; exports run at 60 fps. The frame rate applies on macOS only. |
 
 Fresh projects use **Balanced** frequency resolution (8192 samples); saved Fast selections remain Fast.
 Fast trades pitch precision for response time,

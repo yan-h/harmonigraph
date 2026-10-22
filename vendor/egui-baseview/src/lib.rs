@@ -1,3 +1,5 @@
+#[cfg(all(feature = "frame-log", target_os = "macos"))]
+mod frame_log;
 mod renderer;
 mod translate;
 mod window;

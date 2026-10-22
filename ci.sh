@@ -204,6 +204,9 @@ run cargo check -p harmonigraph-plugin
 # failure mode is a compile break, and nothing here can RUN a parented native
 # editor anyway — that needs a window server and takes 90s of frames.
 run cargo check -p harmonigraph-plugin --example editor-startup --features startup-probe
+# The frame log is the same kind of opt-in: built only for a measurement, so a
+# compile break would surface on the day someone needs it.
+run cargo check -p harmonigraph-plugin --features frame-log
 
 # Every other gate here runs the dev profile, and the profile hides a class of
 # break by itself. `nice-assert-no-alloc` compiles its allocation guard out when

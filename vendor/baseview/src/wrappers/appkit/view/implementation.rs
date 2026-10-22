@@ -59,6 +59,10 @@ pub unsafe fn create_view_class<V: ViewImpl>() -> &'static AnyClass {
             sel!(viewDidMoveToWindow),
             view_did_move_to_window::<V> as extern "C-unwind" fn(_, _),
         );
+        class.add_method(
+            sel!(displayLinkFired:),
+            display_link_fired::<V> as extern "C-unwind" fn(_, _, _),
+        );
         class.add_method(sel!(hitTest:), hit_test::<V> as extern "C-unwind" fn(_, _, _) -> _);
         class.add_method(
             sel!(updateTrackingAreas:),
@@ -204,6 +208,17 @@ extern "C-unwind" fn view_will_move_to_window<V: ViewImpl>(
 
 extern "C-unwind" fn view_did_move_to_window<V: ViewImpl>(this: &View<V>, _self: Sel) {
     V::view_did_move_to_window(this.inner_ref());
+}
+
+extern "C-unwind" fn display_link_fired<V: ViewImpl>(
+    this: &View<V>, _sel: Sel, link: &objc2_quartz_core::CADisplayLink,
+) {
+    // Held for the whole callback: the frame can close the window, `close`
+    // invalidates the link, and the link's retain may have been the view's
+    // last one. The frame timer this replaced held a strong reference the
+    // same way.
+    let _view = this.retain();
+    V::display_link_fired(this.inner_ref(), link);
 }
 
 extern "C-unwind" fn update_tracking_areas<V: ViewImpl>(this: &View<V>, _self: Sel, _: &AnyObject) {
