@@ -95,30 +95,29 @@ impl<'a> Window<'a> {
         self.window.set_mouse_cursor(cursor);
     }
 
-    /// Re-arm the frame timer at `interval` seconds, changing how often
-    /// `on_frame` runs from here on.
+    /// Run `on_frame` on every `divisor`th refresh of the display from here
+    /// on; 0 and 1 are every refresh.
     ///
     /// This is the only hard bound on the frame rate: a handler that asks to
-    /// be repainted more often simply isn't asked. The interval is clamped to
-    /// [`MIN_FRAME_INTERVAL`]..=[`MAX_FRAME_INTERVAL`], so a nonsense value
-    /// cannot spin the run loop or stall the window outright.
+    /// be repainted more often simply isn't asked. A fraction of the refresh
+    /// rather than a rate, because frames are driven by the display and can
+    /// only land on its refreshes.
     ///
-    /// macOS only; a no-op elsewhere, where frames are driven differently.
-    pub fn set_frame_interval(&mut self, interval: f64) {
+    /// macOS only; a no-op elsewhere, where frames come from a fixed timer.
+    pub fn set_frame_divisor(&mut self, divisor: u32) {
         #[cfg(target_os = "macos")]
-        self.window.set_frame_interval(interval);
+        self.window.set_frame_divisor(divisor);
         #[cfg(not(target_os = "macos"))]
-        let _ = interval;
+        let _ = divisor;
     }
 
-    /// The highest refresh rate, in Hz, that the display showing this window
-    /// can present at — the rate above which painting is wasted work.
-    ///
-    /// `None` when the platform won't say (every non-macOS backend, or a
-    /// window not on a screen yet).
-    pub fn display_max_fps(&self) -> Option<f64> {
+    /// When the display asked for the frame now running, or `None` for a
+    /// frame nothing vsync-locked asked for: a repaint from a notification,
+    /// a frame the watchdog ran while the display link was paused, and every
+    /// frame off macOS.
+    pub fn frame_timing(&self) -> Option<crate::FrameTiming> {
         #[cfg(target_os = "macos")]
-        return self.window.display_max_fps();
+        return self.window.frame_timing();
         #[cfg(not(target_os = "macos"))]
         return None;
     }

@@ -142,7 +142,6 @@ impl WindowHandler for Host {
                 full: false,
                 painted: Arc::new(AtomicBool::new(false)),
                 ready: Arc::new(AtomicBool::new(false)),
-                interval: None,
             },
             move |ctx, _, probe: &mut Probe| {
                 harmonigraph_ui::use_renderer_font_texture(ctx);
@@ -185,14 +184,7 @@ impl WindowHandler for Host {
                 }
                 .draw();
                 assert!(requested.is_none(), "startup fixture unexpectedly resized");
-                let interval = super::frame::target_frame_interval(
-                    shared.workspace.interaction.fps_cap,
-                    queue.display_max_fps(),
-                );
-                if probe.interval != Some(interval) {
-                    queue.set_frame_interval(interval);
-                    probe.interval = Some(interval);
-                }
+                queue.set_frame_divisor(shared.workspace.interaction.frame_rate.divisor());
                 let ready = harmonigraph_ui::editor_loading_status(ui.ctx()).is_none();
                 egui::Area::new(egui::Id::new("startup-measurement-marker"))
                     .fixed_pos(egui::pos2(10.0, 10.0))
@@ -224,7 +216,6 @@ struct Probe {
     full: bool,
     painted: Arc<AtomicBool>,
     ready: Arc<AtomicBool>,
-    interval: Option<f64>,
 }
 
 impl Drop for Probe {

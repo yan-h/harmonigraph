@@ -108,14 +108,17 @@ pub struct ShellTimings {
     /// build: this stretch scales with events ARRIVING rather than with what
     /// is drawn, and there was no reading it could show up in.
     pub shell_ms: f32,
-    /// Milliseconds blocked acquiring the surface — the vsync wait. Large
-    /// here with every cost small means the frame is early, not slow.
+    /// Milliseconds blocked acquiring the surface — waiting for the display
+    /// to free a drawable. Large here with every cost small means the frame
+    /// is early, not slow.
     pub acquire_ms: f32,
-    /// Milliseconds the frame callback took end to end.
+    /// Milliseconds the frame callback took end to end, less `acquire_ms`.
     ///
-    /// The other readings are stages of it. This is the total, and against the
-    /// interval between frames it answers what no stage can: whether a long
-    /// frame was SLOW, or just late being asked for.
+    /// The other readings are stages of it. This is the total of the work,
+    /// and against the interval between frames it answers what no stage can:
+    /// whether a long frame was SLOW, or just late being asked for. The wait
+    /// is left out because it is not work, and with three drawables a frame
+    /// the display paces waits most of a refresh for one in steady state.
     pub tick_ms: f32,
     /// Milliseconds of that callback spent inside the renderer. `tick_ms`
     /// minus this is the egui half — the UI closure plus egui's own
@@ -308,7 +311,8 @@ pub enum Stage {
     /// readout. Held in the same unit as every other row so one shared helper
     /// can format both number columns.
     Frame,
-    /// The frame callback end to end. `egui` and `render` are its two halves
+    /// The frame callback end to end, less the drawable wait (`wait`, at the
+    /// top level beside it). `egui` and `render` are its two halves
     /// by construction, so those three always add up; the rows under THOSE do
     /// not have to, and what is missing there is work nothing measures yet.
     Tick,
@@ -348,12 +352,14 @@ pub enum Stage {
     Scene,
     /// What the upload spans AROUND `update_buffers`, which is not nothing.
     Around,
-    /// Blocked acquiring the surface: the vsync wait, which is not work.
-    Acquire,
     /// Encoding egui's draw calls.
     Encode,
     /// Finish, submit and present.
     Submit,
+    /// Blocked acquiring the surface: waiting for a drawable, which is not
+    /// work. Inside the callback but outside `tick` and `render`, which both
+    /// leave it out, so it sits at the top level.
+    Acquire,
     /// GPU milliseconds for callback preparation and egui composition;
     /// includes the lattice's narrower GPU interval.
     DrawGpu,
@@ -382,14 +388,14 @@ impl Stage {
         const fn covered(s: Stage) {
             match s {
                 Frame | Tick | Egui | Shell | Ui | Render | Tess | Texture | BufUp | Ubuf
-                | Prepare | Poll | Write | Scene | Around | Acquire | Encode | Submit | DrawGpu
+                | Prepare | Poll | Write | Scene | Around | Encode | Submit | Acquire | DrawGpu
                 | Gpu => (),
             }
         }
         covered(Gpu);
         [
             Frame, Tick, Egui, Shell, Ui, Render, Tess, Texture, BufUp, Ubuf, Prepare, Poll, Write,
-            Scene, Around, Acquire, Encode, Submit, DrawGpu, Gpu,
+            Scene, Around, Encode, Submit, Acquire, DrawGpu, Gpu,
         ]
         .len()
     };
@@ -504,9 +510,9 @@ pub const STAGES: [StageInfo; Stage::COUNT] = [
     // What the upload spans outside `update_buffers`: creating the command
     // encoder, taking the renderer's write lock, and the MSAA resize.
     measured(Stage::Around, 3, "around", |c| (c.upload_ms - c.texture_ms - c.ubuf_ms).max(0.0)),
-    measured(Stage::Acquire, 2, "wait", |c| c.acquire_ms),
     measured(Stage::Encode, 2, "encode", |c| c.encode_ms),
     measured(Stage::Submit, 2, "submit", |c| c.submit_ms),
+    measured(Stage::Acquire, 0, "wait", |c| c.acquire_ms),
     // The GPU pair, at the TOP level: they run alongside the CPU stages rather
     // than inside any of them, so nesting either under `tick` would be a lie
     // about what contains what. They share one printed line, which is `gpu`'s,

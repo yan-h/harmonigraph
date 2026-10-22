@@ -967,7 +967,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "appearance",
         "camera_presets",
         "look_slots",
-        "fps_cap",
+        "frame_rate",
         "ui_scale",
         "frameless",
         "skin_dials",
@@ -1044,7 +1044,7 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     state.workspace.layout.right.lattice = 320.0;
     state.workspace.interaction.folded_sections.insert("System/Performance".into());
     state.workspace.interaction.ui_scale = 1.25;
-    state.workspace.interaction.fps_cap = Some(30.0);
+    state.workspace.interaction.frame_rate = crate::FrameRate::Half;
     assert_ne!(state.save_persist(), editor);
     assert_eq!(state.picture.appearance.serialize(), appearance);
     let mut restored = fresh();
@@ -1191,15 +1191,15 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
 }
 
 #[test]
-fn persist_round_trips_the_frame_rate_cap() {
+fn persist_round_trips_the_frame_rate() {
     let mut state = fresh();
-    // Not one of the button values, so it proves the number round-trips
-    // rather than being re-derived from a default.
-    state.workspace.interaction.fps_cap = Some(45.0);
+    // Not the default, so it proves the choice round-trips rather than being
+    // re-derived from one.
+    state.workspace.interaction.frame_rate = crate::FrameRate::Third;
 
     let mut restored = fresh();
     restored.load_persist(&state.save_persist());
-    assert_eq!(restored.workspace.interaction.fps_cap, Some(45.0));
+    assert_eq!(restored.workspace.interaction.frame_rate, crate::FrameRate::Third);
 }
 
 /// A blob saved before the control existed loads at the design size. `f32`'s

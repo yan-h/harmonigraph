@@ -801,7 +801,7 @@ impl Renderer {
                 // queue's pending writes, and those staging buffers are only
                 // reclaimed by a submit() (via wgpu-core's pre_submit). Returning
                 // without submitting strands them: a backgrounded window whose
-                // surface reports Occluded/Timeout on every timer tick then piles
+                // surface reports Occluded/Timeout on every frame then piles
                 // up staging buffers at the frame rate — gigabytes within minutes
                 // — freed only when it regains focus and the next presented
                 // frame's submit drains the whole backlog at once. No drawable

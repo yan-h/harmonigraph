@@ -1,9 +1,10 @@
 use objc2::__framework_prelude::{Allocated, AnyClass, ProtocolObject, Retained};
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, Encoding, Message, RefEncode};
+use objc2::{msg_send, sel, Encoding, Message, RefEncode};
 use objc2_app_kit::{NSDragOperation, NSDraggingInfo, NSEvent, NSView, NSWindow};
 use objc2_core_foundation::CGRect;
-use objc2_foundation::{NSNotification, NSPoint};
+use objc2_foundation::{NSNotification, NSPoint, NSRunLoop, NSRunLoopCommonModes};
+use objc2_quartz_core::CADisplayLink;
 use raw_window_handle::{AppKitWindowHandle, HasRawWindowHandle, RawWindowHandle};
 use std::ffi::{c_void, CStr};
 use std::marker::PhantomData;
@@ -83,6 +84,19 @@ impl<V: ViewImpl> View<V> {
     pub fn inner_ref(&self) -> ViewRef<'_, V> {
         ViewRef { view: self, inner: self.inner() }
     }
+
+    /// A display link calling `displayLinkFired:` on this view once per
+    /// refresh of whichever screen the view is on, scheduled on the main run
+    /// loop in common modes so menus and drags do not stop it.
+    ///
+    /// The link retains the view until it is invalidated.
+    pub fn setup_display_link(&self) -> Retained<CADisplayLink> {
+        // SAFETY: the target is this view, whose class implements the selector.
+        let link = unsafe { self.displayLinkWithTarget_selector(self, sel!(displayLinkFired:)) };
+        // SAFETY: the main run loop outlives any view, and the mode is a constant.
+        unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+        link
+    }
 }
 
 pub struct ViewInner<V> {
@@ -118,6 +132,7 @@ pub trait ViewImpl: Sized {
     fn hit_test(this: ViewRef<'_, Self>, point: NSPoint) -> Option<&NSView>;
     fn view_will_move_to_window(this: ViewRef<Self>, new_window: Option<&NSWindow>);
     fn view_did_move_to_window(this: ViewRef<Self>);
+    fn display_link_fired(this: ViewRef<Self>, link: &CADisplayLink);
     fn update_tracking_areas(this: ViewRef<Self>);
     fn reset_cursor_rects(this: ViewRef<Self>);
     fn cursor_update(this: ViewRef<Self>, event: &NSEvent);

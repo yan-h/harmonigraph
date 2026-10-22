@@ -78,8 +78,9 @@ No tuning or sequencing policy belongs in this framework patch.
 egui-baseview 0.3 pins;
 wired in via `[patch.crates-io]` in the workspace `Cargo.toml`, which covers both our direct dependency and egui-baseview's).
 - **Patch** (3 lines, `src/wrappers/appkit/timer.rs`): register the macOS
-frame timer in `kCFRunLoopCommonModes` instead of `kCFRunLoopDefaultMode`.
+run-loop timer in `kCFRunLoopCommonModes` instead of `kCFRunLoopDefaultMode`.
 Default-mode timers stop firing while the run loop is in an event-tracking mode (native drags/resizes, menu tracking), freezing plugin GUIs until mouse release.
+The timer was upstream's frame timer; since patch 4 it is only the display link's watchdog, and the link itself is added in common modes too.
 - **Patch 2** (4 sites: `src/platform/macos/{window,view}.rs`,
 `src/wrappers/appkit/view.rs` + `view/implementation.rs`):
 own the mouse cursor properly.
@@ -113,17 +114,24 @@ Together with the egui-baseview patch below, this fixes the outdated ghost image
 macOS only;
 other platforms never emit the event.
 - **Patch 4** (`src/lib.rs`, `src/window_open_options.rs`, `src/window.rs`,
-`src/platform/macos/{view,window}.rs`, `Cargo.toml`):
-make the frame timer configurable and re-armable, and report the display's refresh rate.
-The interval was the hardcoded `0.015` at the `TimerHandle::new` call site, so the window could never run faster than ~67 Hz —
-invisible on a 60 Hz panel, a hard ceiling on a 120/144 Hz one.
-Now `WindowOpenOptions::frame_interval` sets it at open and `Window::set_frame_interval` re-arms it live (storing the new `TimerHandle` drops the old, whose `Drop` unregisters it, so the cadence is replaced rather than stacked).
-`Window::display_max_fps` exposes `NSScreen::maximumFramesPerSecond` —
-needs the `NSScreen` feature on `objc2-app-kit` —
-so a caller can pace to the actual panel instead of guessing, and re-reading it per frame means the window follows a drag to another monitor.
-Intervals are clamped to `MIN_FRAME_INTERVAL` ..=`MAX_FRAME_INTERVAL` so a bad value can neither spin the run loop nor stall the window.
+`src/platform/macos/{view,window}.rs`, `src/wrappers/appkit/view.rs` + `view/implementation.rs`, `Cargo.toml`):
+drive frames from the view's display link instead of a fixed timer (#1551).
+Upstream's timer fired every 15 ms with no relation to vsync, so a frame was ready whenever it was ready and the display asked when it asked;
+at 144 Hz in Bitwig that missed about 4% of refreshes, and a timer at twice the refresh rate did not help.
+Now `NSView.displayLinkWithTarget:selector:` (macOS 14) calls a new `displayLinkFired:` method once per refresh of whichever screen the view is on,
+from the main run loop in common modes, created once the view is parented and invalidated in `close`.
+The link retains the view, so a missed `invalidate` leaks it (the plugin's `editor-startup` probe catches that),
+and the callback holds its own reference to the view because a frame can close the window and drop the link's.
+`Window::set_frame_divisor` draws on every Nth refresh, paced on the link's `targetTimestamp` rather than by counting callbacks, with the next frame due half a refresh short of N ahead so jitter cannot slip it.
+A divisor rather than a rate because the link's `preferredFrameRateRange` rounds to divisors of the panel's rate: measured on a 144 Hz panel, 120 ran at 144 and 90 and 60 at 72.
+A link stops while its view is hidden or its window minimized or ordered out (measured; it keeps firing while the window is merely covered),
+so the common-mode timer from patch 1 survives as a 10 Hz watchdog that runs a frame whenever the link has been silent for 100 ms:
+the frame is also what drains the plugin's rings and repairs a stuck button or a withheld exit.
+`Window::frame_timing` hands the frame callback the link's timestamps, for egui-baseview's frame log.
+The earlier version of this patch made the timer's interval configurable and reported `NSScreen::maximumFramesPerSecond`;
+`WindowOpenOptions::frame_interval`, `set_frame_interval`, `display_max_fps` and the interval constants are gone with the timer.
 macOS only;
-`set_frame_interval` is a no-op elsewhere and `display_max_fps` returns `None`.
+`set_frame_divisor` is a no-op elsewhere, where frames still come from a fixed 15 ms timer, and `frame_timing` returns `None`.
 - **Patch 5** (`src/platform/macos/view.rs`): hold the pointer's exit back
 while a mouse button is down.
 The tracking area carries `EnabledDuringMouseDrag`, so `mouseExited:` arrives mid-drag —
@@ -156,9 +164,9 @@ through one the button reads down.
 ci.sh runs them.
 macOS only.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
-baseview 0.4 replaces the frame timer these patches hang on with a paused-when-idle display link.
+baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
 Download the new crates.io tarball into `vendor/baseview`,
-re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the configurable frame timer, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
+re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor, watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
 - **Upstreaming**: declined (2026-07-19).
 Kept as a local patch rather than proposed upstream.
 
@@ -204,16 +212,15 @@ the idle poll included, which went unnoticed because the plugin shell requests a
 Fix:
 keep the EARLIEST pending deadline rather than overwriting it, and schedule the next one from the instant a frame actually painted instead of leaving it unset (clearing it to `None` cost a whole tick, so every capped interval ran one tick long).
 Found while adding the System pane's frame-rate cap, which is built on exactly this mechanism and did nothing at all without the fix.
-- **Patch 6** (`src/window.rs`): plumb the frame timer through, so the app
-can pace its own window.
-`EguiWindowSettings::frame_interval` sets the opening cadence;
-`Queue::set_frame_interval` changes it from inside a frame (applied after the frame returns, where the `Window` is reachable —
-the same deferred shape `resize` already uses), and `Queue::display_max_fps` passes baseview's reading through.
-Re-arming from `on_frame` replaces the very timer whose callback is running;
-that is safe because the handle's `Drop` only unregisters it from the run loop and the closure is owned by the timer, not borrowed from the frame.
-This is what makes a frame-rate cap enforceable:
+- **Patch 6** (`src/window.rs`): pass baseview's frame divisor through, so the
+app can pace its own window.
+`Queue::set_frame_divisor` sets it from inside a frame (applied after the frame returns, where the `Window` is reachable —
+the same deferred shape `resize` already uses).
+This is what makes a frame rate setting enforceable:
 egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a host draining MIDI) also forces the next pass to zero —
 so a cap built on it evaporates exactly when the UI is busy.
+Nor can the two be combined: a repaint delay of one frame skips every frame that arrives a hair early, halving the rate (#1551).
+Before #1551 this plumbed a configurable frame timer interval and the display's maximum rate instead.
 - **Patch 7** (2 lines, `src/renderer.rs` + `src/lib.rs`): re-export
 `WgpuSetup` alongside `GraphicsConfig`.
 `WgpuConfiguration` was already public, but its `wgpu_setup` field cannot be matched without the enum, so there was no way to reach the `device_descriptor` hook and request an extra device feature (we ask for timestamp queries, for the overlay's GPU-time row).
@@ -341,6 +348,9 @@ Unchecked on a trackpad: a sideways swipe with Shift held keeps its raw sign too
 - **`[workspace]` table** (`Cargo.toml`): an empty `[workspace]` table, for the same ancestor-root-exclusion reason `vendor/baseview/Cargo.toml` carries one —
 without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
 `ci.sh` runs `cargo test --manifest-path` against this crate from exactly there.
+- **Patch 20** (`src/window.rs`): leave the drawable wait out of the frame's totals (#1551).
+`tick_ms` and `render_ms` leave out the drawable wait, which `acquire_ms` reports on its own:
+with three drawables, a frame the display paces waits most of a refresh for one in steady state, and a total counting that read as a frame that was always nearly too slow.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);

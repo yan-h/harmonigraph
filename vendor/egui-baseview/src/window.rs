@@ -64,11 +64,6 @@ pub struct EguiWindowSettings {
 
     pub graphics: GraphicsConfig,
 
-    /// Seconds between frame-timer ticks the window opens with. See
-    /// [`baseview::WindowOpenOptions::frame_interval`]; change it later
-    /// through [`Queue::set_frame_interval`].
-    pub frame_interval: f64,
-
     /// Where a size given to this window from outside arrives, if anywhere.
     /// See [`SizeSource`].
     pub size_source: Option<SizeSource>,
@@ -99,11 +94,6 @@ impl EguiWindowSettings {
         self
     }
 
-    pub fn with_frame_interval(mut self, frame_interval: f64) -> Self {
-        self.frame_interval = frame_interval;
-        self
-    }
-
     pub fn with_size_source(mut self, source: SizeSource) -> Self {
         self.size_source = Some(source);
         self
@@ -120,7 +110,6 @@ impl Default for EguiWindowSettings {
             },
             scale_policy: WindowScalePolicy::default(),
             graphics: GraphicsConfig::default(),
-            frame_interval: baseview::DEFAULT_FRAME_INTERVAL,
             size_source: None,
         }
     }
@@ -131,8 +120,7 @@ pub struct Queue<'a> {
     close_requested: &'a mut bool,
     physical_size: &'a mut PhySize,
     key_capture: &'a mut KeyCapture,
-    frame_interval: &'a mut Option<f64>,
-    display_max_fps: Option<f64>,
+    frame_divisor: &'a mut Option<u32>,
     tess_ms: f32,
     draw_gpu_ms: Option<f32>,
     acquire_ms: f32,
@@ -153,8 +141,7 @@ impl<'a> Queue<'a> {
         close_requested: &'a mut bool,
         physical_size: &'a mut PhySize,
         key_capture: &'a mut KeyCapture,
-        frame_interval: &'a mut Option<f64>,
-        display_max_fps: Option<f64>,
+        frame_divisor: &'a mut Option<u32>,
         tess_ms: f32,
         draw_gpu_ms: Option<f32>,
         acquire_ms: f32,
@@ -175,8 +162,7 @@ impl<'a> Queue<'a> {
             close_requested,
             physical_size,
             key_capture,
-            frame_interval,
-            display_max_fps,
+            frame_divisor,
             tess_ms,
             draw_gpu_ms,
             acquire_ms,
@@ -228,18 +214,20 @@ impl<'a> Queue<'a> {
     }
 
     /// Milliseconds the previous frame spent inside the renderer: tessellate,
-    /// buffer and texture uploads, encoding egui's pass, acquire, submit and
-    /// present. `tick_ms` minus this is the egui half.
+    /// buffer and texture uploads, encoding egui's pass, submit and present,
+    /// less the acquire wait as in [`Self::tick_ms`]. `tick_ms` minus this is
+    /// the egui half.
     pub fn render_ms(&self) -> f32 {
         self.render_ms
     }
 
-    /// Milliseconds the previous frame callback took, end to end.
+    /// Milliseconds the previous frame callback took end to end, less the
+    /// time it spent blocked waiting for a drawable ([`Self::acquire_ms`]).
     ///
-    /// Every other reading is a STAGE; this is the whole thing, and it is what
-    /// the frame timer has to fit inside its period. Compared against the
-    /// interval between frames it answers the only question the stages cannot:
-    /// whether a long frame was slow, or simply late being asked for.
+    /// Every other reading is a STAGE; this is the whole of the work. The
+    /// wait is left out because it is not work: with three drawables a frame
+    /// paced by the display routinely waits most of a refresh for one, and a
+    /// total counting that reads as a frame that is always nearly too slow.
     pub fn tick_ms(&self) -> f32 {
         self.tick_ms
     }
@@ -272,24 +260,16 @@ impl<'a> Queue<'a> {
         self.tess_ms
     }
 
-    /// The highest refresh rate the display showing this window can present
-    /// at, in Hz, or `None` where the platform won't say.
-    ///
-    /// Re-read every frame, so it follows the window to another monitor
-    /// rather than being fixed at whatever it was when the window opened.
-    pub fn display_max_fps(&self) -> Option<f64> {
-        self.display_max_fps
-    }
-
-    /// Re-arm the window's frame timer at `interval` seconds, bounding how
-    /// often the app is asked to draw from here on.
+    /// Run the frame callback on every `divisor`th refresh of the display
+    /// from here on; 0 and 1 are every refresh. See
+    /// [`baseview::Window::set_frame_divisor`].
     ///
     /// Applied once the frame returns (the window isn't reachable from
     /// inside), so calling it repeatedly within one frame keeps only the last
-    /// value. Cheap to call every frame with an unchanged interval — the
-    /// caller-side comparison is left to the app, which knows what it set.
-    pub fn set_frame_interval(&mut self, interval: f64) {
-        *self.frame_interval = Some(interval);
+    /// value, and calling it every frame with an unchanged divisor costs
+    /// nothing.
+    pub fn set_frame_divisor(&mut self, divisor: u32) {
+        *self.frame_divisor = Some(divisor);
     }
 
     /// Set the background color.
@@ -485,14 +465,13 @@ where
         let mut close_requested = false;
         let old_physical_size = physical_size;
         let mut key_capture = KeyCapture::default();
-        let mut frame_interval = None;
+        let mut frame_divisor = None;
         let mut queue = Queue::new(
             &mut bg_color,
             &mut close_requested,
             &mut physical_size,
             &mut key_capture,
-            &mut frame_interval,
-            window.display_max_fps(),
+            &mut frame_divisor,
             // No frame has been measured yet: tess, draw gpu, acquire, tick,
             // render, upload, ubuf, texture, encode, submit, then the two
             // geometry counts.
@@ -510,8 +489,8 @@ where
             0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
-        if let Some(interval) = frame_interval {
-            window.set_frame_interval(interval);
+        if let Some(divisor) = frame_divisor {
+            window.set_frame_divisor(divisor);
         }
 
         if physical_size != old_physical_size {
@@ -603,7 +582,6 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
-                frame_interval: settings.frame_interval,
                 #[cfg(feature = "opengl")]
                 gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
@@ -633,7 +611,6 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
-                frame_interval: settings.frame_interval,
                 #[cfg(feature = "opengl")]
                 gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
@@ -685,7 +662,7 @@ const SURFACE_RETRY: Duration = Duration::from_millis(250);
 /// is ALSO where a presenting frame waits for vsync,
 /// and that wait is the only backpressure in this loop. Refused immediately
 /// instead of waited on, it leaves the tick free to encode and submit a whole
-/// scene every timer tick while the GPU is still working through the last one.
+/// scene every frame while the GPU is still working through the last one.
 /// wgpu reclaims a frame's staged uploads when its submission COMPLETES — the
 /// poll at the end of `Queue::submit` is non-blocking, so it frees only what
 /// has already landed — so submitting faster than the device drains grows the
@@ -797,12 +774,12 @@ mod wants_render_tests {
         let mut close = false;
         let mut size = PhySize { width: 1, height: 1 };
         let mut capture = KeyCapture::default();
-        let mut interval = None;
+        let mut divisor = None;
         let mut completed = Vec::new();
         for sample in [Some(2.0), None, None, None, None, Some(10.0), None] {
             let mut queue = Queue::new(
-                &mut color, &mut close, &mut size, &mut capture, &mut interval,
-                None, 0.0, sample, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0,
+                &mut color, &mut close, &mut size, &mut capture, &mut divisor,
+                0.0, sample, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0,
             );
             completed.extend(queue.take_draw_gpu_ms());
             assert_eq!(queue.take_draw_gpu_ms(), None);
@@ -913,11 +890,12 @@ where
     U: 'static + Send,
 {
     fn on_frame(&mut self, window: &mut Window) {
-        // The whole callback, end to end. Every other reading measures a STAGE
-        // of it; this measures the thing the frame timer actually has to fit
-        // inside its period, so `tick` against the interval between ticks
-        // separates "the work is slow" from "we are not being called".
+        // The whole callback, end to end, less the drawable wait (see
+        // `Queue::tick_ms`). Every other reading measures a STAGE of it, so
+        // `tick` against the interval between frames separates "the work is
+        // slow" from "we are not being called".
         let tick_start = Instant::now();
+        let mut waited_ms = 0.0;
         let Some(state) = &mut self.user_state else {
             return;
         };
@@ -943,14 +921,13 @@ where
         }
 
         //let mut repaint_requested = false;
-        let mut frame_interval = None;
+        let mut frame_divisor = None;
         let mut queue = Queue::new(
             &mut self.bg_color,
             &mut self.close_requested,
             &mut self.physical_size,
             &mut self.key_capture,
-            &mut frame_interval,
-            window.display_max_fps(),
+            &mut frame_divisor,
             self.tess_ms,
             self.draw_gpu_ms.take(),
             self.acquire_ms,
@@ -969,12 +946,8 @@ where
             (self.user_update)(ui, &mut queue, state)
         });
 
-        // Re-arming replaces the timer that is currently firing this very
-        // callback. Its `Drop` only unregisters it from the run loop, which is
-        // documented as safe from within a timer callback, and the closure is
-        // owned by the timer rather than borrowed from here.
-        if let Some(interval) = frame_interval {
-            window.set_frame_interval(interval);
+        if let Some(divisor) = frame_divisor {
+            window.set_frame_divisor(divisor);
         }
 
         if self.close_requested {
@@ -1041,7 +1014,8 @@ where
                 &mut full_output,
             );
 
-            self.render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
+            waited_ms = self.renderer.last_acquire_ms();
+            self.render_ms = render_start.elapsed().as_secs_f32() * 1000.0 - waited_ms;
 
             // A skipped present (occluded window, lost/outdated surface)
             // must not consume the repaint request: retry next tick, so
@@ -1127,7 +1101,7 @@ where
                 window.focus();
             }
         }
-        self.tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0;
+        self.tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0 - waited_ms;
     }
 
     #[allow(unused_variables)]

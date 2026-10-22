@@ -69,8 +69,8 @@ pub use harmonigraph_take::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
 pub use state::{
-    CameraPreset, Console, ExportAction, Interaction, PictureState, SharedState, SurfaceState,
-    TakeState,
+    CameraPreset, Console, ExportAction, FrameRate, Interaction, PictureState, SharedState,
+    SurfaceState, TakeState,
 };
 pub use text::use_renderer_font_texture;
 
@@ -328,13 +328,12 @@ pub fn root_ui(
         || releasing(state, now)
         || state.picture.runtime.spectrum.is_flowing(now);
     if animating {
-        // Uncapped means "as fast as the shell offers"; a cap turns that into
-        // a minimum spacing between repaints. Only the request changes — the
-        // frame that does get drawn is identical either way.
-        match frame_interval(state.workspace.interaction.fps_cap) {
-            Some(interval) => ui.ctx().request_repaint_after(interval),
-            None => ui.ctx().request_repaint(),
-        }
+        // As fast as the shell offers. The frame rate setting is the shell's
+        // to apply, by offering fewer frames: a repaint delay cannot bound it,
+        // because egui takes the smallest delay asked for in a pass and any
+        // input or hover asks for zero, and a delay of exactly one frame drops
+        // every frame that arrives a hair early, halving the rate.
+        ui.ctx().request_repaint();
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
     }
@@ -477,23 +476,6 @@ pub fn draw_pane(
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// The minimum spacing between repaints implied by a frame-rate cap, or
-/// `None` when uncapped.
-///
-/// A cap that isn't a positive, finite rate is treated as uncapped rather
-/// than turned into a zero or absurd interval. The control cannot produce
-/// one, but a hand-edited persisted blob can, and "no cap" is the safe
-/// reading of a nonsense value — a zero interval would merely be the
-/// uncapped behaviour with extra steps, while a huge one would freeze the UI.
-fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
-    match fps_cap {
-        Some(fps) if fps.is_finite() && fps > 0.0 => {
-            Some(std::time::Duration::from_secs_f32(1.0 / fps))
-        }
-        _ => None,
-    }
-}
 
 /// Whether a lattice note is still departing after its voice was pruned: an
 /// ordered release holds its presence for the stagger, so it runs

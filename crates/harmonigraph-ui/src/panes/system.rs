@@ -3,7 +3,7 @@
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
-use crate::AppearanceDocument;
+use crate::{AppearanceDocument, FrameRate};
 use harmonigraph_scene::skin::{self, SkinDials};
 use harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE;
 
@@ -59,28 +59,31 @@ pub(super) fn system_pane(
             });
         });
         // The other half of the cost dial: render scale sets what each frame
-        // costs, this sets how many of them there are. Presented as a ceiling
-        // rather than a target — the shell decides the actual cadence, and a
-        // ceiling above what it can offer simply doesn't bind.
+        // costs, this sets how many of them there are. Fractions of the
+        // display's rate, because those are the only rates a display-driven
+        // window can hold (see `FrameRate`).
         super::block(ui, "Editor only", |ui| {
             choice_row(
                 ui,
-                "Editor frame limit (fps)",
-                &mut interaction.fps_cap,
+                "Editor frame rate",
+                &mut interaction.frame_rate,
                 &[
-                    (None, "Uncapped", "Repaint as often as the host window allows."),
+                    (FrameRate::Display, "Display rate", "Draw on every refresh of the display."),
                     (
-                        Some(30.0),
-                        "30",
-                        "Limit redraws to 30 frames per second to reduce display processing cost.",
+                        FrameRate::Half,
+                        "Half",
+                        "Draw on every second refresh: 72 fps on a 144 Hz display, 30 on a 60 Hz one.",
                     ),
                     (
-                        Some(60.0),
-                        "60",
-                        "Limit editor redraws to 60 frames per second. Video exports always use 60 fps.",
+                        FrameRate::Third,
+                        "Third",
+                        "Draw on every third refresh: 48 fps on a 144 Hz display, 20 on a 60 Hz one.",
                     ),
-                    (Some(120.0), "120", "For a high-refresh display."),
-                    (Some(144.0), "144", "For a high-refresh display."),
+                    (
+                        FrameRate::Quarter,
+                        "Quarter",
+                        "Draw on every fourth refresh: 36 fps on a 144 Hz display, 15 on a 60 Hz one.",
+                    ),
                 ],
             );
             crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")

@@ -867,7 +867,7 @@ mod tests {
             let ui = &mut h.shared.lock().ui;
             ui.picture.appearance.spectrum.window = SpectrumWindow::Precise;
             ui.picture.appearance.spectrum.floor_db = -72.0;
-            ui.workspace.interaction.fps_cap = Some(90.0);
+            ui.workspace.interaction.frame_rate = harmonigraph_ui::FrameRate::Third;
         }
         // What the close writes into `params.ui_state`.
         let saved = harmonigraph_ui::shell::close(&h.shared.lock().ui);

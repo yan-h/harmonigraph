@@ -239,31 +239,16 @@ pub struct Interaction {
     /// header reads and writes it through the hand-off
     /// [`panes::section`] describes.
     pub folded_sections: std::collections::BTreeSet<String>,
-    /// Upper bound on how often the UI is drawn, in frames per second;
-    /// `None` leaves it uncapped (as fast as the display can present).
-    /// Persisted.
-    ///
-    /// Read by the plugin to pace its window, and by [`root_ui`](crate::root_ui)
-    /// only to schedule repaints — never by any drawing code. The offline renderer
-    /// steps its own clock and never reaches `root_ui`, so a recorded frame
-    /// cannot depend on this and the determinism test stays honest.
-    ///
-    /// The repaint request alone cannot enforce this, and shells must not
-    /// rely on it: egui takes the SMALLEST delay any caller asks for in a
-    /// pass, and a zero-delay `request_repaint` (an input event, a hover
-    /// animation, the plugin's own MIDI-drain repaint) additionally forces
-    /// the following pass to zero. A cap expressed that way evaporates
-    /// exactly when the UI is busy — the case it exists for. The plugin
-    /// therefore drives its window's frame timer from this value, which is a
-    /// hard bound because a frame that is never asked for is never drawn.
-    pub fps_cap: Option<f32>,
+    /// How often the editor draws, as a fraction of the display's refresh
+    /// rate. Persisted. See [`FrameRate`].
+    pub frame_rate: FrameRate,
     /// How big the panel chrome draws — type, spacing, control heights, tab
     /// bars — as a multiple of the design size. Persisted. See
     /// [`crate::theme::ui_scale`], which is where it takes effect and where
     /// the reasoning lives.
     ///
     /// A property of the SCREEN the plugin is open on rather than of the
-    /// piece, which is why it is here beside `fps_cap` and not in `view`:
+    /// piece, which is why it is here beside `frame_rate` and not in `view`:
     /// `ViewConfig` is what a recorded frame is composed from, and a laptop
     /// dialling its panel down must not change what a render of the same
     /// project comes out looking like. [`root_ui`](crate::root_ui) is the
@@ -447,6 +432,39 @@ impl Default for Instruments {
     }
 }
 
+/// How often the editor draws, as a fraction of the display's refresh rate.
+///
+/// A fraction rather than a number of frames per second because the plugin's
+/// frames come from the display, one per refresh, and can only land on one.
+/// macOS takes a preferred rate as a hint and rounds it to a divisor of the
+/// panel's rate: measured on a 144 Hz panel, 120 ran at 144, and 90 and 60 at
+/// 72 (#1551). A fraction is the rate the editor will actually run at.
+///
+/// Read by the plugin to pace its window, never by any drawing code: the
+/// offline renderer steps its own clock and never reaches the editor, so a
+/// recorded frame cannot depend on this. The standalone harness and the
+/// non-macOS shells draw when their windowing stack asks, whatever this says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FrameRate {
+    #[default]
+    Display,
+    Half,
+    Third,
+    Quarter,
+}
+
+impl FrameRate {
+    /// Draw on every this-many refreshes.
+    pub fn divisor(self) -> u32 {
+        match self {
+            FrameRate::Display => 1,
+            FrameRate::Half => 2,
+            FrameRate::Third => 3,
+            FrameRate::Quarter => 4,
+        }
+    }
+}
+
 /// A saved camera angle: what the built-in Flat/Isometric buttons are,
 /// but user-defined. Only the orbit angles — projection, zoom, and pan
 /// are deliberately not captured, so a preset composes with any of them.
@@ -508,7 +526,7 @@ impl SharedState {
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
             look_slots: self.workspace.interaction.appearance_editor.slots.clone(),
-            fps_cap: self.workspace.interaction.fps_cap,
+            frame_rate: self.workspace.interaction.frame_rate,
             ui_scale: self.workspace.interaction.ui_scale,
             frameless: self.workspace.interaction.frameless,
             skin_dials: self.workspace.interaction.skin_dials,
@@ -573,7 +591,7 @@ impl SharedState {
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
         }
-        self.workspace.interaction.fps_cap = persist.fps_cap;
+        self.workspace.interaction.frame_rate = persist.frame_rate;
         self.workspace.interaction.frameless = persist.frameless;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
@@ -663,8 +681,8 @@ pub(crate) struct UiPersist {
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
     pub(crate) look_slots: crate::appearance_edit::Slots,
-    /// A missing cap reads as uncapped.
-    pub(crate) fps_cap: Option<f32>,
+    /// A blob without it draws at the display's rate.
+    pub(crate) frame_rate: FrameRate,
     /// Chrome defaults to the design size, shared with Interaction.
     pub(crate) ui_scale: f32,
     pub(crate) frameless: bool,
@@ -692,7 +710,7 @@ impl Default for UiPersist {
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
             look_slots: Default::default(),
-            fps_cap: None,
+            frame_rate: FrameRate::default(),
             ui_scale: default_ui_scale(),
             frameless: false,
             skin_dials: Default::default(),
@@ -743,7 +761,7 @@ impl Default for Interaction {
             preset_name: String::new(),
             take: TakeState::default(),
             folded_sections: Default::default(),
-            fps_cap: None,
+            frame_rate: FrameRate::default(),
             ui_scale: default_ui_scale(),
             frameless: false,
             skin_dials: Default::default(),
