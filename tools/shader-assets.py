@@ -141,7 +141,7 @@ def check(logs, assets=EMBEDDED):
                "golden-compare", "--", str(frames / "corpus"), str(frames / "source"), "-",
                str(frames / "diff")]
     report = subprocess.run(compare, cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE).stdout
-    assert (frames / "diff" / "changed").read_text() == "false", \
+    assert not (frames / "diff" / "changed").read_text(), \
         f"the corpus draws differently from source-compiled shaders:\n{report}"
     print("Passed corpus-draws-as-source", flush=True)
 

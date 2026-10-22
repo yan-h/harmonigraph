@@ -50,7 +50,7 @@ jobs:
       # checkout is the PR merged into main, so its first parent is that main.
       # Hence fetch-depth 2 below. A push to main has no PR body to state a
       # move in, so it does not draw the goldens twice for nobody to read.
-      GOLDEN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^2' || 'none' }}
+      GOLDEN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || 'none' }}
     # A green run takes about 10 minutes; the margin is for a cold cache.
     timeout-minutes: 30
     strategy:
