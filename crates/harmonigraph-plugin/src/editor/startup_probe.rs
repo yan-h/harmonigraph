@@ -93,17 +93,16 @@ impl WindowHandler for Host {
         if self.opening == OPENINGS || self.started.elapsed().as_secs() > 90 {
             self.shared.lock().picture.editor_graphics().shutdown_startup();
             window.close();
-            // Wake NSApplication after baseview calls stop() from its timer.
+            // Wake NSApplication after baseview calls stop() from a frame.
             use objc2::MainThreadMarker;
             use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
             use objc2_foundation::NSPoint;
             let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
-            if let Some(event) = {
-                NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-                    NSEventType::ApplicationDefined, NSPoint::ZERO, NSEventModifierFlags::empty(),
-                    0.0, 0, None, 0, 0, 0,
-                )
-            } {
+            let event = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+                NSEventType::ApplicationDefined, NSPoint::ZERO, NSEventModifierFlags::empty(),
+                0.0, 0, None, 0, 0, 0,
+            );
+            if let Some(event) = event {
                 app.postEvent_atStart(&event, true);
             }
             return;
