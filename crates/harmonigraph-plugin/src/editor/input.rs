@@ -21,21 +21,22 @@ pub(crate) struct LiveInput {
     pub(super) start: Instant,
     /// Audio->GUI clock mapping (see ClockMapper).
     pub(super) clock: ClockMapper,
-    /// The plugin's spectrum analysis, lent to [`Self::take`]'s caller to run
-    /// off the lock and returned by [`Self::give`]; `None` only between the
-    /// two. It is this one, not `runtime.spectrum`'s own analysis half, that
-    /// the plugin's audio goes through (#1559).
-    pub(super) analysis: Option<harmonigraph_ui::SpectrumAnalysis>,
     /// The buffers the last [`Taken`] came back in, so a step allocates only
     /// when it needs more than any before it.
-    pub(super) spare: Taken,
+    pub(super) spare: TakenAudio,
 }
 
-/// The audio one [`LiveInput::take`] moved out of the ring, and the analysis
-/// lent with it: what [`LiveInput::analyze`] runs without the lock.
-#[derive(Default)]
+/// The audio one [`LiveInput::take`] moved out of the ring, and
+/// `runtime.spectrum`'s analysis lent with it: what [`LiveInput::analyze`]
+/// runs without the lock.
 pub(crate) struct Taken {
-    analysis: Option<harmonigraph_ui::SpectrumAnalysis>,
+    lent: harmonigraph_ui::LentAnalysis,
+    audio: TakenAudio,
+}
+
+/// [`Taken`]'s buffers, which outlive it in [`LiveInput::spare`].
+#[derive(Default)]
+pub(crate) struct TakenAudio {
     /// The settings when the audio was taken, which analyze it and smooth
     /// the curve it moves.
     config: harmonigraph_ui::SpectrumConfig,
@@ -43,12 +44,9 @@ pub(crate) struct Taken {
     samples: Vec<f32>,
     blocks: Vec<TakenBlock>,
     deliveries: Vec<harmonigraph_ui::Delivery>,
-    /// Which clear of the history the audio was taken under: a Clear between
-    /// the take and the give must not have these columns put back.
-    epoch: u32,
 }
 
-/// One callback's block of [`Taken::samples`].
+/// One callback's block of [`TakenAudio::samples`].
 struct TakenBlock {
     /// The block starts a new retained source run.
     restart: bool,
@@ -63,7 +61,7 @@ impl Taken {
     /// Whether this step found audio, and has analyzed none of it yet.
     #[cfg(test)]
     pub(crate) fn unanalyzed_audio(&self) -> bool {
-        !self.blocks.is_empty() && self.deliveries.is_empty()
+        !self.audio.blocks.is_empty() && self.audio.deliveries.is_empty()
     }
 }
 
@@ -118,17 +116,14 @@ impl LiveInput {
     /// feeding it is also what drives smooth repaint (via `is_flowing`).
     fn take_audio(
         &mut self,
-        runtime: &harmonigraph_ui::VisualRuntime,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
         appearance: &harmonigraph_ui::AppearanceDocument,
     ) -> Option<Taken> {
         // One clock conversion per take, shared with note delivery and made
         // in the same hold, observed and then mapped as a frame's drain did.
         let offset = self.clock.offset?;
-        let mut taken = std::mem::take(&mut self.spare);
-        taken.analysis = self.analysis.take();
-        debug_assert!(taken.analysis.is_some(), "the analysis was given back");
-        taken.config = appearance.spectrum;
-        taken.epoch = runtime.spectrum.history_epoch();
+        let mut audio = std::mem::take(&mut self.spare);
+        audio.config = appearance.spectrum;
         self.audio_consumer.drain(|block, samples| {
             let position = (block.epoch, block.first_frame);
             let restart = self.audio_position != Some(position);
@@ -136,8 +131,8 @@ impl LiveInput {
                 self.audio_origin =
                     block.origin + block.first_frame as f64 / f64::from(block.format.sample_rate);
             }
-            taken.samples.extend_from_slice(samples);
-            taken.blocks.push(TakenBlock {
+            audio.samples.extend_from_slice(samples);
+            audio.blocks.push(TakenBlock {
                 restart,
                 origin: self.audio_origin + offset,
                 channels: block.format.channels,
@@ -146,33 +141,34 @@ impl LiveInput {
             });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
         });
-        // Nothing to analyze: keep the analysis where it is, and spare the
+        // Nothing to analyze: leave the analysis where it is, and spare the
         // caller a second hold to give back nothing.
-        if taken.blocks.is_empty() {
-            self.analysis = taken.analysis.take();
-            self.spare = taken;
+        if audio.blocks.is_empty() {
+            self.spare = audio;
             return None;
         }
-        Some(taken)
+        let lent = runtime.spectrum.lend();
+        debug_assert!(lent.is_some(), "the analysis was given back");
+        Some(Taken { lent: lent?, audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {
-        let Some(analysis) = taken.analysis.as_mut() else { return };
+        let Taken { lent, audio } = taken;
         let mut start = 0;
-        for block in &taken.blocks {
+        for block in &audio.blocks {
             if block.restart {
-                analysis.restart();
-                taken.deliveries.push(harmonigraph_ui::Delivery::Restart);
+                lent.analysis.restart();
+                audio.deliveries.push(harmonigraph_ui::Delivery::Restart);
             }
-            let samples = &taken.samples[start..start + block.len];
+            let samples = &audio.samples[start..start + block.len];
             start += block.len;
-            analysis.feed_source(
+            lent.analysis.feed_source(
                 samples,
                 block.channels,
                 block.sample_rate,
                 block.origin,
-                &taken.config,
-                |delivery| taken.deliveries.push(delivery),
+                &audio.config,
+                |delivery| audio.deliveries.push(delivery),
             );
         }
     }
@@ -180,25 +176,18 @@ impl LiveInput {
     /// [`Self::give`] lost the lent one, and start the source run over, so the
     /// next block re-anchors the fresh analyzer's grid instead of extending
     /// the interrupted run's.
-    pub(crate) fn recover_analysis(&mut self) {
-        if self.analysis.is_none() {
-            self.analysis = Some(Default::default());
+    pub(crate) fn recover_analysis(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime) {
+        if runtime.spectrum.recover() {
             self.audio_position = None;
         }
     }
     /// Hand what [`Self::analyze`] made to the store, and the analysis back.
-    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, mut taken: Taken) {
-        let Some(analysis) = taken.analysis.take() else { return };
-        runtime.spectrum.apply(
-            taken.deliveries.drain(..),
-            &taken.config,
-            analysis.lag(),
-            taken.epoch,
-        );
-        self.analysis = Some(analysis);
-        taken.samples.clear();
-        taken.blocks.clear();
-        self.spare = taken;
+    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
+        let Taken { lent, mut audio } = taken;
+        runtime.spectrum.give_back(lent, audio.deliveries.drain(..), &audio.config);
+        audio.samples.clear();
+        audio.blocks.clear();
+        self.spare = audio;
     }
     /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.

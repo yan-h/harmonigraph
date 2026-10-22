@@ -68,7 +68,8 @@ pub use harmonigraph_take::{
     VideoEncoder, STOP_BAR_RANGE, TAIL_RANGE,
 };
 pub use spectrum::{
-    AnalyzedColumn, AudioSpectrum, Delivery, SpectrogramColumn, SpectrumAnalysis, SpectrumHistory,
+    AnalyzedColumn, AudioSpectrum, Delivery, LentAnalysis, SpectrogramColumn, SpectrumAnalysis,
+    SpectrumHistory,
 };
 pub use state::{
     CameraPreset, Console, ExportAction, FrameRate, Interaction, PictureState, SharedState,

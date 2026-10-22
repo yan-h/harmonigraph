@@ -384,8 +384,9 @@ fn guarded_step(
         step(shared, editor_state, restore)
     }));
     if stepped.is_err() {
-        let mut shared = shared.lock();
-        shared.input.recover_analysis();
+        let mut guard = shared.lock();
+        let shared = &mut *guard;
+        shared.input.recover_analysis(&mut shared.ui.picture.runtime);
         if !std::mem::replace(panicked, true) {
             shared
                 .ui
