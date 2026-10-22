@@ -147,9 +147,14 @@ impl LiveInput {
             self.spare = audio;
             return None;
         }
-        let lent = runtime.spectrum.lend();
-        debug_assert!(lent.is_some(), "the analysis was given back");
-        Some(Taken { lent: lent?, audio })
+        // A lend never given back, which no step leaves, would otherwise drop
+        // this audio and every take's after it. Healed as a panicking step is,
+        // with a fresh analysis starting a fresh run at this audio.
+        let lost = runtime.spectrum.recover();
+        debug_assert!(!lost, "the analysis was given back");
+        audio.blocks[0].restart |= lost;
+        let lent = runtime.spectrum.lend().expect("the analysis is home");
+        Some(Taken { lent, audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {

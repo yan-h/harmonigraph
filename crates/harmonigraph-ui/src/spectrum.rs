@@ -54,8 +54,9 @@ pub struct SpectrumAnalysis {
     /// grid exists to remove: at an 8 ms hop, +-5 ms of it is enough to leave a
     /// 12.8 ms slab empty. Smoothed, the grid is exactly even and still follows
     /// the shell clock. The plugin instead supplies exact source timestamps
-    /// through [`push_source_samples`](AudioSpectrum::push_source_samples), which uses
-    /// its shared presentation-clock mapping without this smoothing.
+    /// through [`feed_source`](SpectrumAnalysis::feed_source) on a
+    /// [`lend`](AudioSpectrum::lend), from its shared presentation-clock
+    /// mapping without this smoothing.
     pub(crate) anchor: Option<f64>,
 }
 
@@ -192,8 +193,11 @@ pub(crate) struct SpectrogramSurface {
 /// floats of power, and why old ones are merged.
 pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 
-impl Default for SpectrumAnalysis {
-    fn default() -> Self {
+impl SpectrumAnalysis {
+    /// Private, as is building one: the only analysis is
+    /// [`AudioSpectrum`]'s, and anything that runs it borrows it through
+    /// [`lend`](AudioSpectrum::lend) (#1568).
+    fn new() -> Self {
         SpectrumAnalysis {
             analyzer: harmonigraph_analysis::ChannelBank::new(Default::default(), 1),
             frames_seen: 0,
@@ -206,7 +210,7 @@ impl Default for SpectrumAnalysis {
 impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
-            analysis: Some(SpectrumAnalysis::default()),
+            analysis: Some(SpectrumAnalysis::new()),
             lent_lag: 0.0,
             store: SpectrumStore {
                 display_revision: 0,
@@ -314,8 +318,9 @@ impl SpectrumAnalysis {
         })
     }
 
-    /// [`AudioSpectrum::push_source_samples`]'s analysis half: the batch's
-    /// arrival, then each column it completes, to `deliver`.
+    /// Source-dated input, for a [`lend`](AudioSpectrum::lend): the batch's
+    /// arrival, then each column it completes, to `deliver`, for
+    /// [`give_back`](AudioSpectrum::give_back) to apply.
     pub fn feed_source(
         &mut self,
         samples: &[f32],
@@ -350,7 +355,7 @@ impl SpectrumAnalysis {
     }
 
     /// Half the running analyzer's window: see [`AudioSpectrum::column_lag`].
-    pub fn lag(&self) -> f64 {
+    fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
 
@@ -574,8 +579,9 @@ impl AudioSpectrum {
     /// physical callback/chunk boundaries never influence that conversion.
     ///
     /// The plugin's [`lend`](Self::lend), feed and
-    /// [`give_back`](Self::give_back) in one call.
-    pub fn push_source_samples(
+    /// [`give_back`](Self::give_back) in one call, for tests of that path.
+    #[cfg(test)]
+    pub(crate) fn push_source_samples(
         &mut self,
         samples: &[f32],
         channels: usize,
@@ -628,7 +634,7 @@ impl AudioSpectrum {
     pub fn recover(&mut self) -> bool {
         let lost = self.analysis.is_none();
         if lost {
-            self.analysis = Some(SpectrumAnalysis::default());
+            self.analysis = Some(SpectrumAnalysis::new());
         }
         lost
     }
