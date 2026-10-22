@@ -37,10 +37,11 @@ pub struct EditorShared {
     /// The recorder's note count for the current take, as of the last
     /// [`poll_take_end`](Self::poll_take_end), for the status line.
     take_last_count: u64,
-    /// Consecutive frames the transport has been stopped for, while a
-    /// take is recording. Debounces the OnTransportStop trigger: a host
-    /// reporting one still block mid-playback must not end a take.
-    take_still_frames: u32,
+    /// When [`poll_take_end`](Self::poll_take_end) first found the transport
+    /// stopped, on [`LiveInput::now`]'s clock, while a take is recording and
+    /// it has stayed stopped since. Debounces the OnTransportStop trigger: a
+    /// host reporting one still block mid-playback must not end a take.
+    take_still_since: Option<f64>,
     /// Notes reached the tracker since the window's last frame, which then
     /// draws now rather than at the idle repaint. Set by whoever drains them —
     /// the input worker ([`crate::background`]) — and taken by the frame.
@@ -75,23 +76,25 @@ impl EditorShared {
             take,
             take_rolling: false,
             take_last_count: 0,
-            take_still_frames: 0,
+            take_still_since: None,
             fresh_notes: false,
             frame_drains: false,
         }
     }
 
-    /// Frames the transport must be still before OnTransportStop ends a
-    /// take. At the editor's repaint rate this is a fraction of a second
-    /// — long enough to ride out a host reporting one stalled block,
-    /// short enough that the render feels immediate.
+    /// Seconds the transport must be still before OnTransportStop ends a
+    /// take: long enough to ride out a host reporting one stalled block (a
+    /// 4096-sample block at 48 kHz is 85 ms), short enough that the render
+    /// feels immediate.
     ///
-    /// Counted in calls to [`poll_take_end`](Self::poll_take_end) rather than
-    /// in frames as such, so with the window shut it is 20 of the input
-    /// worker's duty rounds instead, one per 20 ms — 0.4 s against 0.33 s at
-    /// 60 fps, which is the same fraction of a second and needs no second
-    /// constant.
-    pub(crate) const STOP_FRAMES: u32 = 20;
+    /// Counted in seconds rather than in calls to
+    /// [`poll_take_end`](Self::poll_take_end), because who calls it decides
+    /// how often: a frame at 144 Hz or at a quarter of 60 Hz, or the input
+    /// worker every [`SHUT_POLL`](crate::background::SHUT_POLL) with the window
+    /// shut. Counted in calls, the same debounce ran from 139 ms to 1.3 s
+    /// (#1567). It starts at the first poll to find the transport still, so a
+    /// take ends up to one poll interval after this.
+    pub(crate) const STOP_SECONDS: f64 = 0.4;
 
     /// Reflect the Video pane's toggle into the recorder, and the
     /// recorder's progress back into the pane. Called once per frame,
@@ -153,14 +156,22 @@ impl EditorShared {
     /// which meant a take armed and then left with the window closed — a Bitwig
     /// audio export is exactly that — never ended itself and never rendered, no
     /// matter which trigger was chosen. The input worker calls this every
-    /// 20 ms while the window is shut, so the decision no longer depends on
-    /// anyone watching.
+    /// [`SHUT_POLL`](crate::background::SHUT_POLL) while the window is shut, so
+    /// the decision no longer depends on anyone watching.
     ///
     /// Nothing here draws or reads a widget, which is what makes it callable
     /// from that thread: it moves settings out to the recorder and take state
     /// back into `Interaction`, and the next frame — whenever there is one —
     /// draws what it left.
     pub(crate) fn poll_take_end(&mut self) {
+        self.poll_take_end_at(self.input.now());
+    }
+
+    /// [`poll_take_end`](Self::poll_take_end) at `now` on [`LiveInput::now`]'s
+    /// clock, which times the OnTransportStop debounce
+    /// ([`STOP_SECONDS`](Self::STOP_SECONDS)): tests date polls rather than
+    /// wait for them.
+    fn poll_take_end_at(&mut self, now: f64) {
         // Counted by the recorder, which every note reaches the take through:
         // the Hub publishes it there, and nothing in `process` sees it (#818).
         let count = self.take.captured();
@@ -197,17 +208,28 @@ impl EditorShared {
             // Only after something was actually captured: arming ahead of
             // the downbeat must not immediately end the take.
             if self.take_rolling || (!self.take.has_rolled() && count == 0) {
-                self.take_still_frames = 0;
+                self.take_still_since = None;
             } else {
-                self.take_still_frames += 1;
-                if self.take_still_frames >= Self::STOP_FRAMES {
+                let since = *self.take_still_since.get_or_insert(now);
+                if now >= since + Self::STOP_SECONDS {
                     self.ui.workspace.interaction.take.recording = false;
                     self.take.stop(harmonigraph_record::RenderRequest::recorded());
                 }
             }
         } else {
-            self.take_still_frames = 0;
+            self.take_still_since = None;
         }
+    }
+
+    /// Two [`poll_take_end`](Self::poll_take_end)s a whole OnTransportStop
+    /// debounce apart, the second dated that far ahead rather than waited for.
+    /// Ahead of the running input worker's own polls, so it cannot be the one
+    /// whose clock the debounce started on and leave this one short.
+    #[cfg(test)]
+    pub(crate) fn poll_through_stop_debounce(&mut self) {
+        let now = self.input.now();
+        self.poll_take_end_at(now);
+        self.poll_take_end_at(now + Self::STOP_SECONDS);
     }
 
     /// Record a GUI frame, logging a console warning when the event loop
@@ -259,8 +281,11 @@ mod tests {
     use harmonigraph_core::notes::SourceId;
     use std::sync::Arc;
 
+    /// The OnTransportStop debounce ends a take a fixed time after the
+    /// transport was first seen still, however many polls fall in between:
+    /// here a 144 Hz window's worth, which counted in calls ended it at 139 ms.
     #[test]
-    fn recording_stop_debounce_counts_gui_callbacks_not_runtime_ticks() {
+    fn recording_stop_debounce_counts_seconds_not_calls() {
         let (_notes, consumer) = harmonigraph_record::publication::channel();
         let (_audio, audio_consumer) = crate::audio_ingress::channel(64);
         let (mut recorder, control) = harmonigraph_record::channel();
@@ -290,22 +315,17 @@ mod tests {
         };
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = recorder.publish_note(on.into(), route);
-        for tick in 0..100 {
-            let now = tick as f64 * 0.02;
-            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-            shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
+        let first_still = 1.0;
+        let frame = 1.0 / 144.0;
+        let mut now = first_still;
+        while now < first_still + EditorShared::STOP_SECONDS - frame / 2.0 {
+            shared.poll_take_end_at(now);
+            assert!(shared.take.is_recording(), "ended {:.3} s after the stop", now - first_still);
+            now += frame;
         }
-        assert_eq!(
-            shared.take_still_frames, 0,
-            "closed runtime ticks must not count toward debounce"
-        );
-        for _ in 0..EditorShared::STOP_FRAMES - 1 {
-            shared.sync_take(48_000.0);
-            assert!(shared.take.is_recording());
-        }
-        assert_eq!(shared.take_still_frames, EditorShared::STOP_FRAMES - 1);
-        shared.sync_take(48_000.0);
-        assert!(!shared.take.is_recording(), "the twentieth stopped GUI callback ends the take");
+        assert_eq!(shared.take_still_since, Some(first_still));
+        shared.poll_take_end_at(first_still + EditorShared::STOP_SECONDS);
+        assert!(!shared.take.is_recording(), "still for the whole debounce, the take ends");
         drop(shared);
         drop(recorder);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
