@@ -794,8 +794,8 @@ mod wants_render_tests {
     use super::*;
 
     /// Link frames whose callbacks ran 0.3–9 ms late animate egui one refresh
-    /// apart; a frame the link did not ask for, between them, does not take
-    /// egui's time back, and the next link frame steps on from its target.
+    /// apart, and neither a frame the link did not ask for nor one whose
+    /// target is not this frame's takes egui's time back.
     #[test]
     fn egui_animates_at_the_refresh_and_never_goes_back() {
         let start = Instant::now();
@@ -820,9 +820,12 @@ mod wants_render_tests {
         for step in times.windows(2).map(|pair| pair[1] - pair[0]) {
             assert!((step - refresh).abs() < 1e-6, "stepped {step} s against {refresh} s");
         }
-        // Run well before the last target, as a reveal repaint between link
-        // frames is.
-        assert_eq!(egui_time(time, start + Duration::from_secs(1), None), time);
+        // The link frames ran a second past `start`, so now is well before the
+        // last target, as a reveal repaint between link frames is.
+        assert_eq!(egui_time(time, start, None), time, "a frame the link did not ask for");
+        // Five seconds ahead is not this frame's, so it falls back to now too.
+        let far = baseview::FrameTiming { target_timestamp: 500.0 + 7.0, ..link(1.1, 0.3) };
+        assert_eq!(egui_time(time, start, Some(far)), time, "a target AppKit got wrong");
     }
 
     #[test]

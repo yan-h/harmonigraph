@@ -129,8 +129,8 @@ impl LiveInput {
     /// past the drawn time. Every drawn time moves about a refresh later than
     /// the callback's, which is when the glass shows it.
     ///
-    /// A target [`FrameTiming::target_at`] refuses, as too far from its
-    /// callback to be this frame's, draws at `observed` too: the drawn time
+    /// A target [`FrameTiming::target_at`] refuses, as too far from the link's
+    /// fire to be this frame's, draws at `observed` too: the drawn time
     /// never rewinds, so one far ahead would hold the picture still.
     pub(crate) fn frame_wall(&self, timing: Option<FrameTiming>, observed: f64) -> f64 {
         timing
