@@ -701,9 +701,9 @@ impl PerfStats {
     /// `RawInput::predicted_dt`, and egui-baseview never sets that, so it
     /// stays at egui's 1/60 default forever. Uncapped that went unnoticed —
     /// every frame asks for an immediate repaint, so every reading was real.
-    /// Under a frame-rate cap the request is a delayed one, so the readout
-    /// blended a hardcoded 60 with the true rate and reported ~45 fps for a
-    /// perfectly steady 30.
+    /// Under the frame-rate cap of the time the request was a delayed one, so
+    /// the readout blended a hardcoded 60 with the true rate and reported
+    /// ~45 fps for a perfectly steady 30; the idle poll still asks that way.
     pub fn record(&mut self, costs: FrameCosts, now: f64, workload: Workload) {
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);

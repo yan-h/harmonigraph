@@ -873,8 +873,8 @@ mod wants_render_tests {
     fn a_presenting_window_keeps_its_deadline() {
         let now = Instant::now();
         let capped = Duration::from_millis(16);
-        // A frame-rate cap, with no backoff because the surface is taking
-        // frames: the deadline is ahead, so this tick waits.
+        // A delayed repaint (the idle poll), with no backoff because the
+        // surface is taking frames: the deadline is ahead, so this tick waits.
         assert!(!wants_render(false, now.checked_add(capped), None, capped, now));
         // Reached, so it paints.
         assert!(wants_render(false, now.checked_sub(capped), None, capped, now));
@@ -1059,8 +1059,8 @@ where
             // each tick, so for any N longer than the tick interval `now`
             // never caught up and the deadline receded forever: the window
             // stopped painting until an input event or a texture upload forced
-            // it. That silently disabled every delayed repaint, from the idle
-            // poll to a frame-rate cap.
+            // it. That silently disabled every delayed repaint, the idle poll
+            // included.
             self.repaint_after =
                 Some(self.repaint_after.map_or(candidate, |pending| pending.min(candidate)));
         }

@@ -444,6 +444,9 @@ impl Default for Instruments {
 /// offline renderer steps its own clock and never reaches the editor, so a
 /// recorded frame cannot depend on this. The standalone harness and the
 /// non-macOS shells draw when their windowing stack asks, whatever this says.
+///
+/// Persisted in the editor blob, so dropping a variant fails the whole parse
+/// and drops layout and camera with it (see the persistence-contract skill).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FrameRate {
     #[default]
