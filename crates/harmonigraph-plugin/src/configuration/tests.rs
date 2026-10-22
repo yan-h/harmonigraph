@@ -1585,9 +1585,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
         };
         for (block, seconds) in [10.0, 30.0, 5.0, 5.0].into_iter().enumerate() {
             device.run_transport(block as i64 * 64, vec![], false, None, Some(stopped(seconds)));
-            for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
-                shared.lock().poll_take_end();
-            }
+            shared.lock().poll_through_stop_debounce();
             assert!(shared.lock().take.is_recording(), "parked/scrubbed takes stay armed");
         }
         let events = if with_note { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
@@ -1970,9 +1968,7 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
         device.run_transport(raw, vec![], false, None, Some(parked));
         device.run_transport(raw + 64, vec![], false, None, Some(parked));
 
-        for _ in 0..crate::editor::EditorShared::STOP_FRAMES {
-            shared.lock().poll_take_end();
-        }
+        shared.lock().poll_through_stop_debounce();
         assert!(
             !shared.lock().take.is_recording(),
             "a played take ends once transport stops, with or without MIDI"

@@ -40,10 +40,10 @@ so a restored analysis window affects the first consumed audio.
 An open window's unsaved controls are never replaced by its last saved blob.
 
 Full recording control synchronization remains once per GUI callback in [`EditorShared::sync_take`](../crates/harmonigraph-plugin/src/editor/shared.rs).
-Closed-window [`background::tick`](../crates/harmonigraph-plugin/src/background.rs) separately calls `EditorShared::poll_take_end`,
+Closed-window [`background::step`](../crates/harmonigraph-plugin/src/background.rs) separately calls `EditorShared::poll_take_end`,
 so a completed take can finish and render without reopening the editor.
-Both paths advance the shared twenty-poll stopped-transport debounce;
-with the window closed those are background polls rather than GUI callbacks.
+Both paths share one stopped-transport debounce, timed in seconds on `LiveInput::now`'s clock (`EditorShared::STOP_SECONDS`),
+so it lasts as long whichever of them polls it, and however often.
 The completion poll does not run the GUI's full start/control synchronization.
 This boundary is covered by `a_take_ends_itself_while_the_editor_window_is_shut` in the background module.
 The open check, `try_lock`, window/context construction and restore boundaries remain in the host shell.

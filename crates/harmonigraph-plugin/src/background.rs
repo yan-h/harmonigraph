@@ -87,7 +87,8 @@ use crate::editor::{EditorShared, EguiState};
 pub(crate) const POLL: Duration = Duration::from_millis(4);
 
 /// How often it looks with the window shut, where nothing is drawing what it
-/// analyzes and the closed window's duties (see [`step`]) want this cadence.
+/// analyzes, so it need not wake as often; the closed window's duties (see
+/// [`step`]) are content with any cadence this bound allows.
 ///
 /// Bounded above by the ring itself, and tightly: it holds
 /// [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) interleaved samples,
@@ -288,11 +289,9 @@ thread_local! {
 /// it, and give the columns back under it — then, with the window shut, the
 /// frame's other duties.
 ///
-/// Those run once a step, and a shut window's steps come every [`SHUT_POLL`],
-/// the cadence they always had: `poll_take_end` counts its OnTransportStop
-/// debounce in calls ([`EditorShared::STOP_FRAMES`]), so at [`POLL`] twenty of
-/// them would be 80 ms, under one 4096-sample block — the very stall the
-/// debounce is there to ride out.
+/// Those run once a step, and a shut window's steps come every [`SHUT_POLL`].
+/// `poll_take_end` times its OnTransportStop debounce in seconds
+/// ([`EditorShared::STOP_SECONDS`]), so it holds at whatever rate it is polled.
 ///
 /// Split out from the sleep loop so what it DECIDES can be tested without a
 /// clock, which is most of what there is to get wrong here.
@@ -674,8 +673,8 @@ mod tests {
     /// Every trigger but `OnDisarm` is decided in `poll_take_end`, and until
     /// this call that only ever ran inside a GUI frame — so an armed take with
     /// nobody watching ran on and rendered nothing, whichever trigger was
-    /// chosen. Driven here through `OnTransportStop`'s frame-counted debounce
-    /// rather than the bar, because that path needs no audio thread to latch
+    /// chosen. Driven here through `OnTransportStop`'s debounce rather than the
+    /// bar, because that path needs no audio thread to latch
     /// anything: what is being claimed is that the DECISION runs at all, not
     /// which signal reaches it.
     #[test]
@@ -711,10 +710,9 @@ mod tests {
         let _ = h.recorder.publish_note(on.into(), route);
 
         h.editor_state.set_open(false);
-        for round in 0..EditorShared::STOP_FRAMES - 1 {
-            h.step();
-            assert!(h.shared.lock().take.is_recording(), "still debouncing at round {round}");
-        }
+        h.step();
+        assert!(h.shared.lock().take.is_recording(), "ended before the debounce");
+        std::thread::sleep(Duration::from_secs_f64(EditorShared::STOP_SECONDS));
         h.step();
         assert!(!h.shared.lock().take.is_recording(), "the shut window ended the take");
     }
