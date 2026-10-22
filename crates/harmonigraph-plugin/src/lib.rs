@@ -102,8 +102,8 @@ use tuning::plugin::HarmonigraphTune;
 /// what bounds the GUI's catch-up work after a stall, see
 /// `AudioSpectrum::push_samples` — stayed where it was.
 ///
-/// It is also what paces [`background`], whose poll has to stay well inside the
-/// span this holds; see `POLL` there.
+/// It is also what paces [`background`], whose longest poll has to stay well
+/// inside the span this holds; see `SHUT_POLL` there.
 pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 
 /// Sample rate assumed until the host reports the real one in `initialize`.
@@ -118,9 +118,9 @@ pub struct Harmonigraph {
     /// nothing records.
     configuration: Option<Box<configuration::Owner>>,
     aggregation: Option<Box<tuning::hub::Hub>>,
-    /// Keeps the spectrogram's history running while the editor window is
-    /// closed (see [`background`]). Held only to be dropped with the plugin,
-    /// which is what stops its thread.
+    /// The input worker, the one thing that drains the audio thread's rings
+    /// and runs the analysis, window open or shut (see [`background`]). Held
+    /// only to be dropped with the plugin, which is what stops its thread.
     ///
     /// FIRST, because fields drop in declaration order and this one has to stop
     /// before any of what it touches is torn down. Declared last instead, the

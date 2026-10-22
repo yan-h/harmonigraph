@@ -19,7 +19,10 @@
 //! audio, in the same hold, because the heartbeat's offset is what dates the
 //! audio: observed and then mapped in one hold, as a frame's drain did, where
 //! on two threads at two cadences a block after a callback pause could be
-//! dated with the offset from before it, a pause too early.
+//! dated with the offset from before it, a pause too early. (`process`
+//! publishes a block before its heartbeat, so a take landing between the two
+//! still maps that one block with the previous offset, as a frame's drain
+//! always could; it matters only for the first block after a pause.)
 //!
 //! Both rings are drained here, not just the audio one, and the second is not
 //! a bonus: a full ring drops the NEWEST, so a ring left to pile up would lose
@@ -130,6 +133,7 @@ impl InputWorker {
         let thread = std::thread::Builder::new()
             .name("harmonigraph-input-worker".to_string())
             .spawn(move || {
+                raise_to_gui_priority();
                 #[cfg(not(test))]
                 run(&worker, &editor_state, Restore::of(ui_state), &flag);
                 #[cfg(test)]
@@ -174,6 +178,25 @@ impl Drop for InputWorker {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+    }
+}
+
+/// Run this thread at the class the host's GUI thread runs at on macOS:
+/// a frame there waits on this thread's holds of the editor lock, and
+/// `parking_lot` lends no priority to the holder, so a worker preempted inside
+/// one would hold the frame for as long as the scheduler kept it off a core.
+fn raise_to_gui_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        // <pthread/qos.h>: QOS_CLASS_USER_INTERACTIVE, the main thread's.
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        // SAFETY: changes only the calling thread's own scheduling class.
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         }
     }
 }
@@ -286,9 +309,13 @@ thread_local! {
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
 /// frame or a window opening waits on this thread only for a take (a copy of
-/// what the ring holds) or a give (appending its columns), each well under a
-/// millisecond even for a full ring's 170 columns. The FFTs between them, some
-/// 40 ms for that ring at the historical estimate above, hold nothing.
+/// what the ring holds) or a give (appending its columns): microseconds for
+/// the two or three columns a step usually brings, and a few milliseconds at
+/// most for a full ring's 170, reachable only after this thread was starved
+/// for 1.37 s. The FFTs between them, some 40 ms for that ring at the
+/// historical estimate above, hold nothing. The thread runs at the GUI's
+/// scheduling class on macOS (see [`InputWorker::spawn`]), so a frame waiting
+/// on one of those holds is not also waiting for this thread to be scheduled.
 fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {
     #[cfg(test)]
     if let Some(gate) = TICK_PAUSE.with_borrow_mut(Option::take) {
@@ -345,12 +372,14 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
 /// same panic onto the host's main thread. So the analysis is put back fresh,
 /// the source run restarts so its columns re-anchor, the console says so
 /// once, and the next step carries on.
+///
+/// Whether the step completed.
 fn guarded_step(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,
     restore: &mut Restore,
     panicked: &mut bool,
-) {
+) -> bool {
     let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         step(shared, editor_state, restore)
     }));
@@ -365,8 +394,13 @@ fn guarded_step(
                 .console
                 .log("input worker panicked in a step and restarted its analysis".to_string());
         }
+        return false;
     }
+    true
 }
+
+/// How many consecutive steps may panic before the worker stops trying.
+const MAX_PANICS_IN_A_ROW: u32 = 8;
 
 /// Drain, sleep, repeat, until the plugin goes away.
 ///
@@ -384,8 +418,22 @@ fn run(
     #[cfg(test)] rounds: &AtomicU64,
 ) {
     let mut panicked = false;
+    let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        guarded_step(shared, editor_state, &mut restore, &mut panicked);
+        if guarded_step(shared, editor_state, &mut restore, &mut panicked) {
+            in_a_row = 0;
+        } else {
+            in_a_row += 1;
+            // A step that panics every time would unwind every poll, printing
+            // a backtrace each, for a picture that is frozen anyway.
+            if in_a_row >= MAX_PANICS_IN_A_ROW {
+                shared.lock().ui.picture.runtime.console.log(format!(
+                    "input worker stopped after {in_a_row} panicking steps in a row — the \
+                     editor's input is frozen until the plugin is reloaded",
+                ));
+                return;
+            }
+        }
         #[cfg(test)]
         rounds.fetch_add(1, Ordering::Release);
         std::thread::sleep(if editor_state.is_open() { POLL } else { SHUT_POLL });

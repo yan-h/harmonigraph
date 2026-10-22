@@ -59,9 +59,9 @@ Factual note timestamps and take/export clocks are unchanged.
 
 This is a timing and ownership contract improvement,
 not an FPS claim.
-No extra callback batching or worker was added.
+No extra callback batching was added.
 Live display latency still includes callback delivery,
-the existing scheduler cadence,
+the input worker's poll,
 FFT window coverage and presentation scheduling.
 
 ## Verification
@@ -75,8 +75,7 @@ wrapped stereo frames,
 sample/descriptor exhaustion,
 source advancement through loss,
 reset window refilling,
-actual process transport loops/stops/unavailable positions,
-and the existing open/closed scheduler handover.
+and actual process transport loops/stops/unavailable positions.
 
 `fast_bounce_preserves_the_realtime_picture_timeline` holds the mapper to audio time through a faster-than-realtime bounce,
 comparing the real analyzer and note publication paths.

@@ -50,9 +50,9 @@ impl EguiState {
     /// Record that the window has opened or closed.
     ///
     /// Named rather than stored inline because it is not only the host's
-    /// business: [`crate::background`] reads it to decide whether a frame is
-    /// already draining the rings, so the two transitions are a seam between
-    /// threads and not just a bit.
+    /// business: [`crate::background`] reads it to decide whether to adopt a
+    /// restored blob and do a shut window's duties, and how often to poll, so
+    /// the two transitions are a seam between threads and not just a bit.
     pub(crate) fn set_open(&self, open: bool) {
         self.open.store(open, Ordering::Release);
     }
