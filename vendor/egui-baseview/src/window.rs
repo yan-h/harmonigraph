@@ -1106,6 +1106,7 @@ where
         self.tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0 - waited_ms;
         #[cfg(all(feature = "frame-log", target_os = "macos"))]
         crate::frame_log::end(crate::frame_log::Tick {
+            window: std::ptr::from_ref(self) as usize,
             start: log_start,
             timing: window.frame_timing(),
             tick_ms: self.tick_ms,

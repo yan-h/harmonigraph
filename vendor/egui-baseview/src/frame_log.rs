@@ -27,7 +27,7 @@ use objc2_metal::{MTLCommandBuffer, MTLDrawable};
 use objc2_quartz_core::CACurrentMediaTime;
 
 const HEADER: &str = "kind,frame,t,fired,timestamp,target,refresh,tick_ms,acquire_ms,\
-                      render_ms,submitted,drawables,gpu_start,gpu_end,presented";
+                      render_ms,submitted,drawables,gpu_start,gpu_end,presented,window";
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 
@@ -44,6 +44,9 @@ thread_local! {
 
 /// One frame callback's main-thread readings.
 pub(crate) struct Tick {
+    /// Which window the frame was for, so two open editors can be told apart.
+    /// Only tick rows carry it; a gpu or present row joins on `frame`.
+    pub window: usize,
     pub start: f64,
     pub timing: Option<baseview::FrameTiming>,
     pub tick_ms: f32,
@@ -72,13 +75,14 @@ pub(crate) fn end(tick: Tick) {
     let submitted = if tick.rendered { SUBMITTED.get() } else { 0.0 };
     write(&format!(
         "tick,{},{:.6},{fired:.6},{timestamp:.6},{target:.6},{refresh:.6},{:.3},{:.3},{:.3},\
-         {submitted:.6},{},,,",
+         {submitted:.6},{},,,,{:x}",
         FRAME.get(),
         tick.start,
         tick.tick_ms,
         tick.acquire_ms,
         tick.render_ms,
         tick.drawables.map_or(String::new(), |n| n.to_string()),
+        tick.window,
     ));
 }
 
@@ -92,7 +96,7 @@ pub(crate) fn observe_present(
         // SAFETY: Metal hands the handler the buffer it is attached to.
         let buffer = unsafe { buffer.as_ref() };
         write(&format!(
-            "gpu,{frame},,,,,,,,,,,{:.6},{:.6},",
+            "gpu,{frame},,,,,,,,,,,{:.6},{:.6},,",
             buffer.GPUStartTime(),
             buffer.GPUEndTime()
         ));
@@ -100,7 +104,7 @@ pub(crate) fn observe_present(
     let presented = RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
         // SAFETY: Metal hands the handler the drawable it is attached to.
         let drawable = unsafe { drawable.as_ref() };
-        write(&format!("present,{frame},,,,,,,,,,,,,{:.6}", drawable.presentedTime()));
+        write(&format!("present,{frame},,,,,,,,,,,,,{:.6},", drawable.presentedTime()));
     });
     // SAFETY: both blocks are 'static and Metal copies them before returning.
     unsafe {
