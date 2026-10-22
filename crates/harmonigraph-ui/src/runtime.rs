@@ -83,7 +83,7 @@ impl VisualRuntime {
     /// retained data, not the capacity of every surface cache.
     pub fn advance_time(&mut self, now: f64, appearance: &crate::AppearanceDocument) {
         self.tracker.prune(now, &appearance.view.envelope(&self.frame_params));
-        self.spectrum.history.trim_older_than(now - AudioSpectrum::HISTORY_MAX_SECONDS);
+        self.spectrum.store.history.trim_older_than(now - AudioSpectrum::HISTORY_MAX_SECONDS);
     }
 
     /// The synchronous reducer's last complete value, for standalone recording.

@@ -33,7 +33,7 @@ fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
     let samples: Vec<_> = (0..24_000).map(|i| (i as f32 * 0.047).sin()).collect();
     spectrum.push_source_samples(&samples, 1, 48_000.0, 0.25, &config);
     let before = spectrum.history().len();
-    let before_curve = spectrum.display;
+    let before_curve = spectrum.store.display;
     assert!(before > 10, "fixture must measure before correcting its clock");
     let mut agg = super::SpectrogramAgg::new();
     let bucket = 0.016;
@@ -50,13 +50,16 @@ fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
         assert!(times.windows(2).all(|w| w[0] < w[1]), "backward correction at hop {hop}");
         if hop == 0 {
             assert_eq!(history.len(), before, "overlapping history is explicitly suppressed");
-            assert_eq!(spectrum.frames_seen, 24_384, "analysis still consumes every frame");
-            assert_ne!(spectrum.display, before_curve, "the current curve still advances");
+            assert_eq!(
+                spectrum.analysis.frames_seen, 24_384,
+                "analysis still consumes every frame"
+            );
+            assert_ne!(spectrum.store.display, before_curve, "the current curve still advances");
         }
         if hop == 23 {
             assert_eq!(history.len(), before, "a whole new window still overlaps history");
             assert_eq!(
-                spectrum.display, [0.0; SPECTRUM_BINS],
+                spectrum.store.display, [0.0; SPECTRUM_BINS],
                 "the current curve measured silence"
             );
             assert!(spectrum.is_flowing(corrected + 33_216.0 / 48_000.0));
@@ -1481,8 +1484,8 @@ fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
     {
         let mut spectrum = crate::AudioSpectrum::default();
         let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-        spectrum.history.push(col(0.0, &[(1000, 1.0)]));
-        spectrum.history.push(col(newest, &[(1000, 0.5)]));
+        spectrum.store.history.push(col(0.0, &[(1000, 1.0)]));
+        spectrum.store.history.push(col(newest, &[(1000, 0.5)]));
         let columns = Columns { first: 0, len: 2, newest };
         let mut view = PaneView {
             ppp: 1.0,
@@ -1552,7 +1555,7 @@ fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
             // the million-second gap still bounded to the pane's budget.
             let mut fresh = SpectrogramAgg::new();
             let (centers, power) =
-                fresh.window(&spectrum.history, 0, resize.bucket, resize.capacity);
+                fresh.window(&spectrum.store.history, 0, resize.bucket, resize.capacity);
             assert_eq!(recovered.t_origin, centers[0] - resize.bucket * 0.5);
             assert_eq!(recovered.tex_span, centers.len() as f64 * resize.bucket);
             assert_eq!(run, power);
@@ -1567,9 +1570,9 @@ fn retention_changes_reuse_a_run_that_already_covers_its_columns() {
     let mut spectrum = crate::AudioSpectrum::default();
     let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
     for i in 0..=250 {
-        spectrum.history.push(col(i as f64 * 0.008, &[(1000, 0.5)]));
+        spectrum.store.history.push(col(i as f64 * 0.008, &[(1000, 0.5)]));
     }
-    let columns = Columns { first: 0, len: spectrum.history.len(), newest: 2.0 };
+    let columns = Columns { first: 0, len: spectrum.store.history.len(), newest: 2.0 };
     let mut view = PaneView {
         ppp: 1.0,
         pitch_len: 300.0,
@@ -2280,7 +2283,7 @@ mod gpu {
             let plan = Plan::new(view, &columns, None);
             let uploads = surfaces.at(0).folded.full_uploads();
             let refolds = surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
-            let hit = surfaces.at(0).folded.hit(&plan, &spectrum.history).is_some();
+            let hit = surfaces.at(0).folded.hit(&plan, &spectrum.store.history).is_some();
             run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
             t.folds += u32::from(!hit);
             t.backwards += u32::from(
@@ -2420,7 +2423,7 @@ mod gpu {
         for i in 0..238 {
             let time = -1.5 + i as f64 * interval;
             let key = (time / bucket).floor() as i64;
-            spectrum.history.push(flat_column(time, 60 + key.rem_euclid(190) as u8));
+            spectrum.store.history.push(flat_column(time, 60 + key.rem_euclid(190) as u8));
             times.push(time);
         }
 

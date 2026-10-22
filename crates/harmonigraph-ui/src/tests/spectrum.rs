@@ -613,10 +613,12 @@ fn clearing_everything_empties_all_four_accumulations() {
     state.picture.runtime.tracker.prune(600.0, &env);
     // One analyzed column is enough; how audio becomes columns is the
     // spectrogram's own business and tested there.
-    state.picture.runtime.spectrum.history.push(harmonigraph_core::SpectrogramColumn::from_power(
-        0.0,
-        &[1.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
-    ));
+    state.picture.runtime.spectrum.store.history.push(
+        harmonigraph_core::SpectrogramColumn::from_power(
+            0.0,
+            &[1.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
+        ),
+    );
     // A surface's glow state, standing in for whatever a lit lattice pane
     // would have handed a row by now — how it gets there is `glow_fade`'s
     // own business and tested there.
@@ -770,7 +772,7 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
     );
     assert!(passes >= 2, "the fixture must actually discard a pass");
     assert!(state.picture.surfaces.glow_fade.len() >= 2, "both lattice surfaces must draw");
-    assert_eq!(state.picture.runtime.spectrum.fold_measurements, 1);
+    assert_eq!(state.picture.runtime.spectrum.store.fold_measurements, 1);
 }
 
 #[test]
@@ -786,15 +788,15 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     let first = spectrum.folded(1.0, 2.0).unwrap().to_vec();
     assert!(first.iter().any(|v| *v > 0.0), "the fixture must contain measured energy");
     assert_eq!(spectrum.folded(1.0, 2.0).unwrap().as_slice(), first);
-    assert_eq!(spectrum.fold_measurements, 1);
+    assert_eq!(spectrum.store.fold_measurements, 1);
     let wide = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(wide, first, "a changed width must change this fixture's measurement");
     spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.0, &cfg);
     let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(next, wide, "same-time audio must invalidate the measured grid");
-    assert_eq!(spectrum.fold_measurements, 3);
+    assert_eq!(spectrum.store.fold_measurements, 3);
     assert!(spectrum.folded(2.0, 50.0).is_none(), "expired audio must not reuse a Fold");
-    assert_eq!(spectrum.fold_measurements, 3);
+    assert_eq!(spectrum.store.fold_measurements, 3);
 }
 
 #[test]
@@ -853,10 +855,10 @@ fn physical_chunks_preserve_the_complete_logical_batch() {
                             Ok::<_, ()>(())
                         })
                         .unwrap();
-                    assert_eq!(whole.anchor, chunked.anchor);
-                    assert_eq!(whole.display, chunked.display);
-                    assert_eq!(whole.frames_seen, chunked.frames_seen);
-                    assert_eq!(whole.last_samples, chunked.last_samples);
+                    assert_eq!(whole.analysis.anchor, chunked.analysis.anchor);
+                    assert_eq!(whole.store.display, chunked.store.display);
+                    assert_eq!(whole.analysis.frames_seen, chunked.analysis.frames_seen);
+                    assert_eq!(whole.store.last_samples, chunked.store.last_samples);
                     let columns = |s: &AudioSpectrum| {
                         s.history().iter().map(|c| (c.time, c.db().clone())).collect::<Vec<_>>()
                     };
