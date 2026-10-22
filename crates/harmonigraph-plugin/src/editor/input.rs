@@ -72,16 +72,20 @@ impl LiveInput {
     /// ring holding stale audio to burst later — and gating the feed on
     /// something being on screen is what [`crate::background`] exists to say is
     /// wrong, since the whole point there is to analyze when nothing shows it.
-    fn drain_audio(
+    ///
+    /// At most about `seconds` of it, for a caller that holds the lock a frame
+    /// would wait on; true when audio remains.
+    pub(crate) fn drain_audio_for(
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,
         appearance: &harmonigraph_ui::AppearanceDocument,
-    ) {
+        seconds: f64,
+    ) -> bool {
         // One existing clock conversion per drain, shared with note delivery.
         // Source timestamps are exact; changing heartbeat observations can
         // still correct their GUI placement, including initial delivery bias.
-        let Some(offset) = self.clock.offset else { return };
-        self.audio_consumer.drain(|block, samples| {
+        let Some(offset) = self.clock.offset else { return false };
+        self.audio_consumer.drain_for(seconds, |block, samples| {
             let position = (block.epoch, block.first_frame);
             if self.audio_position != Some(position) {
                 runtime.spectrum.restart_source();
@@ -96,7 +100,7 @@ impl LiveInput {
                 &appearance.spectrum,
             );
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
-        });
+        })
     }
     /// The wall clock used to observe incoming batches: seconds since
     /// the PLUGIN was instantiated, not since the window opened.
@@ -160,9 +164,19 @@ impl LiveInput {
         appearance: &harmonigraph_ui::AppearanceDocument,
         now: f64,
     ) -> bool {
+        self.drain_for(runtime, appearance, now, f64::INFINITY).0
+    }
+    /// [`Self::drain`] with the audio bounded as [`Self::drain_audio_for`]
+    /// bounds it: whether notes arrived, and whether audio remains.
+    pub(crate) fn drain_for(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        appearance: &harmonigraph_ui::AppearanceDocument,
+        now: f64,
+        seconds: f64,
+    ) -> (bool, bool) {
         let notes = self.drain_into_tracker(runtime, now);
-        self.drain_audio(runtime, appearance);
-        notes
+        (notes, self.drain_audio_for(runtime, appearance, seconds))
     }
 }
 

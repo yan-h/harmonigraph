@@ -108,12 +108,26 @@ impl Producer {
 }
 
 impl Consumer {
-    pub fn drain(&mut self, mut feed: impl FnMut(Block, &[f32])) {
+    /// Everything in the ring. Production drains go through [`Self::drain_for`].
+    #[cfg(test)]
+    pub fn drain(&mut self, feed: impl FnMut(Block, &[f32])) {
+        self.drain_for(f64::INFINITY, feed);
+    }
+
+    /// Drain blocks until at least `seconds` of audio have been fed, or the
+    /// ring is empty; true when blocks remain. A block is never split, so a
+    /// call feeds at least one whenever there is one.
+    pub fn drain_for(&mut self, seconds: f64, mut feed: impl FnMut(Block, &[f32])) -> bool {
         // Bound a tick to its initial descriptor snapshot even if callbacks
         // continue publishing while analysis is catching up.
         let available = self.blocks.slots();
-        for _ in 0..available {
+        let mut fed = 0.0;
+        for taken in 0..available {
+            if fed >= seconds {
+                return taken < available;
+            }
             let block = self.blocks.pop().unwrap();
+            fed += block.frames as f64 / f64::from(block.format.sample_rate);
             let chunk = self.samples.read_chunk(block.frames * block.format.channels).unwrap();
             let (a, b) = chunk.as_slices();
             self.scratch.clear();
@@ -122,6 +136,7 @@ impl Consumer {
             chunk.commit_all();
             feed(block, &self.scratch);
         }
+        false
     }
 }
 
@@ -130,6 +145,22 @@ mod tests {
     use super::*;
 
     const MONO: Format = Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
+
+    /// A bounded drain stops once its span is fed, whole blocks only, and the
+    /// next one resumes at the block after.
+    #[test]
+    fn a_bounded_drain_resumes_where_it_stopped() {
+        let (mut tx, mut rx) = channel(64);
+        for block in 0..4 {
+            tx.publish(4, MONO, 0.0, std::iter::repeat(block as f32));
+        }
+        let mut fed = Vec::new();
+        // Each block is 4 / 48 000 s; ask for a little over one.
+        assert!(rx.drain_for(5.0 / 48_000.0, |_, s| fed.push(s[0])));
+        assert_eq!(fed, [0.0, 1.0]);
+        assert!(!rx.drain_for(1.0, |_, s| fed.push(s[0])));
+        assert_eq!(fed, [0.0, 1.0, 2.0, 3.0]);
+    }
 
     #[test]
     fn bounded_publication_keeps_format_frames_and_gaps_coherent() {

@@ -65,7 +65,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::editor::{EditorShared, EguiState};
 
@@ -87,6 +87,11 @@ use crate::editor::{EditorShared, EguiState};
 /// this thread was away rather than by how often it means to look.
 /// See [`tick`] for that bound.
 pub(crate) const POLL: Duration = Duration::from_millis(20);
+
+/// Audio analyzed per hold of the lock: about six columns at the 8 ms hop,
+/// so a waiter waits a millisecond or two at the default window rather than
+/// a full ring's 40 ms. See [`tick`].
+const CHUNK_SECONDS: f64 = 0.05;
 
 /// The thread, and the flag that ends it.
 ///
@@ -241,6 +246,8 @@ impl Restore {
 thread_local! {
     /// Pause an admitted closed-window tick before it obtains shared state.
     static TICK_PAUSE: std::cell::RefCell<Option<Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
+    /// Run between two chunks of a drain, where a waiter would take the lock.
+    static BETWEEN_CHUNKS: std::cell::RefCell<Option<Box<dyn FnMut()>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// One round: adopt whatever the host has restored, then drain the rings —
@@ -270,15 +277,17 @@ thread_local! {
 /// after the window is built, which leaves window construction as the one
 /// overlap — a check that passed a moment before the window claimed itself.
 ///
-/// **A drain is bounded by the RING, not by the poll**, and the difference is
-/// worth stating because the reassuring number is the wrong one. Descheduled
-/// past 1.37 s with the window shut, this wakes to a full ring and spends ~170
-/// columns of FFT — about 40 ms — under one lock; the steady state is a poll's
-/// worth, well under a millisecond. Neither is a hang, but 40 ms on the host's
-/// main thread inside `gui_create` is the figure to argue with if #296 is ever
-/// re-opened against this lock.
-/// These timings use the historical 0.23 ms/column estimate above, not a
-/// current lock-hold measurement; exactly zero retained windows skip the FFT.
+/// **A drain is bounded by the RING, not by the poll, so the lock is handed
+/// over between chunks of it.** Descheduled past 1.37 s with the window shut,
+/// this wakes to a full ring: about 170 columns of FFT, some 40 ms at the
+/// historical 0.23 ms/column estimate above, which under one lock was 40 ms a
+/// window opening on the host's main thread (`gui_create`, #296's suspect)
+/// or a host save would wait. So the audio goes in [`CHUNK_SECONDS`] at a time,
+/// and between chunks `MutexGuard::bump` hands the lock to whoever is waiting
+/// for it, fairly, and takes it back. A waiter waits one chunk at most, and no
+/// audio is dropped: one an opening window interrupted is the window's frames
+/// to drain, as when this thread finds it open. The steady state is a poll's
+/// worth, under one chunk, and never bumps.
 ///
 /// A skipped round costs nothing: the ring carries seventeen of them even at
 /// the fastest rate a host offers.
@@ -291,7 +300,7 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
         gate.wait();
         gate.wait();
     }
-    let Some(mut shared) = shared.try_lock() else {
+    let Some(mut guard) = shared.try_lock() else {
         return;
     };
     // Opening may have completed after the first check. Live edits use this
@@ -299,13 +308,36 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
     if editor_state.is_open() {
         return;
     }
-    let shared = &mut *shared;
     // BEFORE the drain: the settings decide how the samples about to be taken
     // are analyzed, so a round that adopted them afterwards would still leave
     // its own columns at the window the blob just replaced.
-    restore.adopt(shared);
-    let now = shared.input.now();
-    shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    restore.adopt(&mut guard);
+    let now = guard.input.now();
+    let shared = &mut *guard;
+    let (_, mut more) = shared.input.drain_for(
+        &mut shared.ui.picture.runtime,
+        &shared.ui.picture.appearance,
+        now,
+        CHUNK_SECONDS,
+    );
+    while more {
+        MutexGuard::bump(&mut guard);
+        #[cfg(test)]
+        BETWEEN_CHUNKS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook()));
+        // Whoever took the lock may have opened the window, whose frames
+        // drain the rest, or restored settings the rest is analyzed under.
+        if editor_state.is_open() {
+            return;
+        }
+        restore.adopt(&mut guard);
+        let shared = &mut *guard;
+        more = shared.input.drain_audio_for(
+            &mut shared.ui.picture.runtime,
+            &shared.ui.picture.appearance,
+            CHUNK_SECONDS,
+        );
+    }
+    let shared = &mut *guard;
     let now = shared.input.display_now(now);
     shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
     // A take can end itself while nobody is watching, and an audio export with
@@ -687,6 +719,60 @@ mod tests {
              {baseline}: the handover is not on the same grid",
             h.columns(),
         );
+    }
+
+    /// A second of audio in host-sized blocks, twenty chunks of it: what a
+    /// thread descheduled for a second wakes to.
+    fn a_second_of_blocks(h: &mut Harness) {
+        for _ in 0..94 {
+            h.push_audio(512);
+        }
+    }
+
+    /// The columns a frame analyzes from the same second, in one hold.
+    fn a_second_drained_by_a_frame() -> usize {
+        let mut h = harness();
+        h.editor_state.set_open(true);
+        a_second_of_blocks(&mut h);
+        h.frame();
+        h.columns()
+    }
+
+    /// A ring a descheduled thread wakes to goes in chunks, with the lock
+    /// offered between them, and comes out as the same columns a single
+    /// drain makes of it.
+    #[test]
+    fn a_full_ring_is_analyzed_whole_across_chunks() {
+        let mut h = harness();
+        a_second_of_blocks(&mut h);
+        let chunks = std::rc::Rc::new(std::cell::Cell::new(1));
+        let seen = chunks.clone();
+        BETWEEN_CHUNKS.set(Some(Box::new(move || seen.set(seen.get() + 1))));
+        h.tick();
+        BETWEEN_CHUNKS.set(None);
+
+        assert!(chunks.get() >= 15, "a second went in {} chunks", chunks.get());
+        assert_eq!(h.columns(), a_second_drained_by_a_frame());
+    }
+
+    /// A window that opens while the lock is offered between chunks takes
+    /// the rest: this thread stops there, and the window's frame drains what
+    /// it left, so nothing is dropped and nothing analyzed twice.
+    #[test]
+    fn a_window_opened_between_chunks_drains_the_rest() {
+        let mut h = harness();
+        a_second_of_blocks(&mut h);
+        let editor_state = h.editor_state.clone();
+        BETWEEN_CHUNKS.set(Some(Box::new(move || editor_state.set_open(true))));
+        h.tick();
+        BETWEEN_CHUNKS.set(None);
+        let by_the_tick = h.columns();
+
+        h.frame();
+
+        let whole = a_second_drained_by_a_frame();
+        assert!(by_the_tick < whole, "the tick went on after the window opened");
+        assert_eq!(h.columns(), whole);
     }
 
     /// Issue #324: the project's saved Window has to reach the analyzer with no
