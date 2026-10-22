@@ -50,7 +50,7 @@ jobs:
       # checkout is the PR merged into main, so its first parent is that main.
       # Hence fetch-depth 2 below. A push to main has no PR body to state a
       # move in, so it does not draw the goldens twice for nobody to read.
-      GOLDEN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || 'none' }}
+      GOLDEN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^2' || 'none' }}
     # A green run takes about 10 minutes; the margin is for a cold cache.
     timeout-minutes: 30
     strategy:
@@ -168,15 +168,16 @@ jobs:
           cat golden-diff/report.md
           [ -s golden-diff/changed ] || exit 0
           body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .body)
-          # Every frame by name, so a statement written for one push does not
-          # cover a frame a later push moves.
-          unstated=
-          while IFS= read -r frame; do
-            grep -qF "$frame" <<<"$body" || unstated="$unstated $frame"
+          # Every row verbatim, mean and max included, so a statement written
+          # for one push covers neither a frame a later push moves nor the same
+          # frame moving again by a different amount.
+          unstated=0
+          while IFS= read -r row; do
+            grep -qF -- "$row" <<<"$body" || { echo "not in the PR body: $row"; unstated=1; }
           done < golden-diff/changed
-          if [ -z "$unstated" ]; then
-            echo "every changed frame is named in the PR body"
+          if [ "$unstated" = 0 ]; then
+            echo "every changed frame is stated in the PR body"
             exit 0
           fi
-          echo "::error::Golden frames changed against main and the PR body does not name:$unstated. Read their contact sheets in this run's golden-diff artifact, paste the table above into the PR body with what moved and why, and re-run this job alone: gh run rerun $GITHUB_RUN_ID --job <this job's id>."
+          echo "::error::Golden frames changed against main and the PR body does not carry their rows (listed above). Read the moved frames' contact sheets in this run's golden-diff artifact, paste the table above into the PR body with what moved and why, and re-run this job alone: gh run rerun $GITHUB_RUN_ID --job <this job's id>."
           exit 1

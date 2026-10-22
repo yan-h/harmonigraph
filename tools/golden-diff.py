@@ -13,9 +13,10 @@ directory, which shares every registry dependency (about 20 s for the base and
 stale Metal corpus on a shader PR cannot pass for a picture change.
 
 Writes `target/golden-diff/`: `base/` and `head/` (the frames), `sheets/` (a
-contact sheet per moved frame), `report.md`, and `changed`: one frame per
-line, empty when nothing changed, each of which Full CI's summary job requires
-the PR body to name.
+contact sheet per moved frame), `report.md`, and `changed`: the table's rows,
+empty when nothing changed, each of which Full CI's summary job requires the PR
+body to carry verbatim. `--strict` also fails when the base predates the tool,
+since then nothing was compared.
 When anything moved the head is drawn twice, and a frame that differs between
 the two is reported as unstable rather than moved. That second draw exists to
 measure nondeterminism the old committed record never separated from a change;
@@ -72,9 +73,6 @@ def draw(tree, into):
     return subprocess.run(TESTS, cwd=tree, env=environment).returncode
 
 
-def frame_count(directory):
-    return sum(1 for _ in directory.glob("*/*.png"))
-
 
 def skip(report):
     OUT.mkdir(parents=True, exist_ok=True)
@@ -108,15 +106,16 @@ def main():
         stamp.write_text(base)
 
     # Only a base whose gate cannot write frames is skipped. One that can and
-    # fails to is an error: read as "nothing to compare", it would pass every
-    # moved frame, and hand --strict a false proof.
+    # fails to draw some is compared for what it did draw: each frame it did
+    # not reads as new, so it has to be stated like any change, and a broken
+    # main cannot block the PR that fixes it.
     gate = BASE_SRC / "crates/harmonigraph-golden/src/lib.rs"
-    if "HARMONIGRAPH_GOLDEN_WRITE" not in gate.read_text():
+    if not gate.is_file() or "HARMONIGRAPH_GOLDEN_WRITE" not in gate.read_text():
         skip(f"Golden frames not compared: the base {base[:10]} predates tools/golden-diff.py.\n")
-        return 0
-    if draw(BASE_SRC, OUT / "base") != 0 or frame_count(OUT / "base") == 0:
-        sys.exit(f"✗ the base {base[:10]} failed to draw its golden frames, so there is "
-                 "nothing to compare against")
+        return 1 if args.strict else 0
+    if draw(BASE_SRC, OUT / "base") != 0:
+        print(f"⚠ the base {base[:10]} failed some golden tests; the frames it did not draw "
+              "read as new", flush=True)
     if draw(ROOT, OUT / "head") != 0:
         sys.exit("✗ the working tree's golden tests failed; the frames they did not draw "
                  "would read as removed, so there is no comparison to make")

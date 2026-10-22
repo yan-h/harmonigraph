@@ -139,18 +139,6 @@ pub struct Report {
     pub unstable: Vec<String>,
 }
 
-impl Report {
-    /// Every frame that needs stating: anything but an unchanged frame.
-    pub fn changed(&self) -> Vec<&str> {
-        let named = self.moved.iter().map(|(f, ..)| f).chain(&self.new).chain(&self.removed);
-        named
-            .chain(self.resized.iter().map(|(f, ..)| f))
-            .chain(&self.unstable)
-            .map(String::as_str)
-            .collect()
-    }
-}
-
 /// Compare the frames under `head` against `base` (each `<crate>/<name>.png`),
 /// writing a contact sheet of each moved frame under `sheets`.
 ///
@@ -158,18 +146,23 @@ impl Report {
 /// branch's and not the platform's, and a tolerance wide enough for noise
 /// would pass a uniform two-level shift, which is #453's shape (a mean of
 /// 3.3/255) and the signal rather than the noise. `again`, when given, is the
-/// head drawn a second time; a frame that differs between the two is unstable.
+/// head drawn a second time; a frame the two draw differently, or that only
+/// one of them draws, is unstable, and is still compared with the base.
 pub fn compare(base: &Path, head: &Path, again: Option<&Path>, sheets: &Path) -> Report {
     let (base_frames, head_frames) = (frames(base), frames(head));
     let mut report = Report::default();
     for name in base_frames.difference(&head_frames) {
         report.removed.push(name.clone());
     }
+    if let Some(again) = again {
+        for name in frames(again).difference(&head_frames) {
+            report.unstable.push(name.clone());
+        }
+    }
     for name in &head_frames {
         let drawn = read_png(&head.join(name)).expect("a frame just listed");
         if again.is_some_and(|again| read_png(&again.join(name)).as_ref() != Some(&drawn)) {
             report.unstable.push(name.clone());
-            continue;
         }
         let Some(expected) = read_png(&base.join(name)) else {
             report.new.push(name.clone());
@@ -316,8 +309,8 @@ mod tests {
     }
 
     /// One level on one channel is a move, a frame on one side only is new or
-    /// removed, a new size is a resize, and a head that draws differently
-    /// twice is unstable rather than moved.
+    /// removed, a new size is a resize, and a head that draws a frame
+    /// differently twice, or only once, is unstable as well.
     #[test]
     fn compare_names_what_moved_appeared_vanished_and_wavered() {
         let dir = scratch("compare");
@@ -329,6 +322,7 @@ mod tests {
             ("gone", Some(0), None, None),
             ("added", None, Some(0), Some(0)),
             ("wavers", Some(0), Some(1), Some(2)),
+            ("flickers", None, None, Some(0)),
         ] {
             for (side, shift) in [(&base, b), (&head, h), (&again, a)] {
                 if let Some(shift) = shift {
@@ -346,15 +340,15 @@ mod tests {
         assert_eq!(
             report,
             Report {
-                moved: vec![("k/moved.png".into(), mean, 1)],
+                moved: vec![("k/moved.png".into(), mean, 1), ("k/wavers.png".into(), mean, 1)],
                 new: vec!["k/added.png".into()],
                 removed: vec!["k/gone.png".into()],
                 resized: vec![("k/reshaped.png".into(), [8, 8], [4, 16])],
-                unstable: vec!["k/wavers.png".into()],
+                unstable: vec!["k/flickers.png".into(), "k/wavers.png".into()],
             }
         );
         assert!(sheets.join("k/moved.png").is_file(), "no contact sheet for the moved frame");
-        assert!(compare(&base, &base, None, &sheets).changed().is_empty());
+        assert_eq!(compare(&base, &base, None, &sheets), Report::default());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
