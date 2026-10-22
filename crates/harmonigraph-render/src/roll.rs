@@ -286,7 +286,7 @@ pub fn roll_paint_callback_with_clipped_tail(
             rect,
             pane_size,
             instances,
-            clipped_tail: Some((clipped_start as u32, tail_rect)),
+            clipped_tail: (clipped_start as u32, tail_rect),
             axes,
             bloom,
             cut,
@@ -308,7 +308,8 @@ struct RollCallback {
     instances: Vec<RollInstance>,
     /// A trailing range whose sharp ink is clipped more tightly than `rect`.
     /// Kept in the same callback so every surround still precedes every body.
-    clipped_tail: Option<(u32, egui::Rect)>,
+    /// A start at or past the instance count means no tail.
+    clipped_tail: (u32, egui::Rect),
     axes: RollAxes,
     bloom: f32,
     cut: crate::SurroundCut,
@@ -475,16 +476,14 @@ struct RollHoldout {
     /// target rather than a cut blended per note, so where two notes' cuts meet
     /// the picture is cut as the two together say and not twice over.
     surround: crate::surround::SurroundTargets,
-    /// Where `paint` cuts the clipped tail off, which the passes into these
-    /// textures cut it off at too.
-    tail: Option<TailClip>,
     /// The roll's size in device pixels this was built for.
     size: [u32; 2],
 }
 
 /// The instances from `start` on, drawn only inside `scissor` (in the roll's
 /// own pixels), and not at all when that is `None`: the clipped tail, as a
-/// texture over the roll's rect sees it.
+/// texture over the roll's rect sees it. A `start` at or past the instance
+/// count means no tail.
 #[derive(Clone, Copy)]
 struct TailClip {
     start: u32,
@@ -492,12 +491,13 @@ struct TailClip {
 }
 
 /// Every instance into a texture over the roll's rect, the clipped tail only
-/// as far as `paint` lets it draw.
-fn draw_clipped(pass: &mut wgpu::RenderPass<'_>, count: u32, tail: Option<TailClip>) {
-    let Some(tail) = tail.filter(|tail| tail.start < count) else {
+/// as far as `paint` lets it draw. A tail starting at or past `count` is no
+/// tail, and everything draws.
+fn draw_clipped(pass: &mut wgpu::RenderPass<'_>, count: u32, tail: TailClip) {
+    if tail.start >= count {
         pass.draw(0..4, 0..count);
         return;
-    };
+    }
     pass.draw(0..4, 0..tail.start);
     if let Some([left, top, width, height]) = tail.scissor {
         pass.set_scissor_rect(left, top, width, height);
@@ -812,7 +812,6 @@ impl RollHoldout {
             surround: crate::surround::SurroundTargets::new(device, composite, size),
             view,
             notes_uniform,
-            tail: None,
             size,
         }
     }
@@ -1194,7 +1193,8 @@ impl CallbackTrait for RollCallback {
             queue.write_buffer(&holdout.notes_uniform, 0, bytemuck::bytes_of(&roll_uniforms));
             // A clipped tail holds out, and cuts, only where `paint` lets it
             // draw.
-            holdout.tail = self.clipped_tail.map(|(start, tail_rect)| {
+            let tail = {
+                let (start, tail_rect) = self.clipped_tail;
                 let clip = egui::epaint::ViewportInPixels::from_points(
                     &tail_rect.intersect(self.rect),
                     ppp,
@@ -1208,7 +1208,7 @@ impl CallbackTrait for RollCallback {
                     start: start.min(pane.count),
                     scissor: (width > 0 && height > 0).then_some([left, top, width, height]),
                 }
-            });
+            };
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("roll_holdout"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1228,14 +1228,14 @@ impl CallbackTrait for RollCallback {
             pass.set_pipeline(holdout_pipeline);
             pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-            draw_clipped(&mut pass, pane.count, holdout.tail);
+            draw_clipped(&mut pass, pane.count, tail);
             drop(pass);
 
             holdout.surround.draw(egui_encoder, surround_pipeline, |pass| {
                 pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
                 pass.set_bind_group(1, &holdout.read_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                draw_clipped(pass, pane.count, holdout.tail);
+                draw_clipped(pass, pane.count, tail);
             });
         }
 
@@ -1316,17 +1316,13 @@ impl CallbackTrait for RollCallback {
             }
         };
         render_pass.set_pipeline(&resources.core_pipeline);
-        if let Some((start, tail_rect)) =
-            self.clipped_tail.map(|(start, rect)| (start.min(pane.count), rect))
-        {
-            if start > 0 && set_clip(render_pass, info.clip_rect) {
-                render_pass.draw(0..4, 0..start);
-            }
-            if start < pane.count && set_clip(render_pass, tail_rect) {
-                render_pass.draw(0..4, start..pane.count);
-            }
-        } else {
-            render_pass.draw(0..4, 0..pane.count);
+        let (start, tail_rect) = self.clipped_tail;
+        let start = start.min(pane.count);
+        if start > 0 && set_clip(render_pass, info.clip_rect) {
+            render_pass.draw(0..4, 0..start);
+        }
+        if start < pane.count && set_clip(render_pass, tail_rect) {
+            render_pass.draw(0..4, start..pane.count);
         }
 
         // The callback owns the scissor while it paints. Put egui's clip back
@@ -1419,7 +1415,7 @@ mod tests {
             rect,
             pane_size: rect.size(),
             instances,
-            clipped_tail: None,
+            clipped_tail: (u32::MAX, rect),
             axes: TOP,
             bloom: 0.0,
             cut,
@@ -1548,7 +1544,7 @@ mod tests {
         clear: wgpu::Color,
     ) -> Vec<u8> {
         let cb = RollCallback {
-            clipped_tail: Some((clipped_start, surface_rect())),
+            clipped_tail: (clipped_start, surface_rect()),
             ..callback(instances, HARNESS_CUT)
         };
         draw_callback(device, queue, cb, clear).0
@@ -1925,7 +1921,7 @@ mod tests {
             RollCallback {
                 rect,
                 pane_size: rect.size(),
-                clipped_tail: Some((1, tail)),
+                clipped_tail: (1, tail),
                 ..callback(vec![left, right], HARNESS_CUT)
             },
             bg_color(),

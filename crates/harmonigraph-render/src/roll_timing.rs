@@ -145,7 +145,7 @@ fn a_frame_of_the_roll_costs_this_much() {
             rect,
             pane_size: rect.size(),
             instances,
-            clipped_tail: None,
+            clipped_tail: (u32::MAX, rect),
             axes: AXES,
             bloom,
             cut,
