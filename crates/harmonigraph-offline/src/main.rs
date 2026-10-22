@@ -66,16 +66,17 @@ OPTIONS:
                            for a take recorded under the Loop end trigger,
                            which ends with its loop]
         --encoder <E>      x264 or hardware. hardware is the machine's
-                           H.264 encoder (VideoToolbox): about twice as fast
-                           at 1440p, a larger file at a bitrate scaled to the
-                           frame, and no grain tuning; it fails rather than
-                           falling back where there is no hardware encoder.
+                           H.264 encoder (VideoToolbox) at a constant
+                           quality: about three times as fast at 1440p, a
+                           slightly larger file, and no grain tuning; it fails
+                           rather than falling back where there is no hardware
+                           encoder, and needs Apple Silicon.
                            A frame over 4096 px a side goes through x264.
                            [default: the appearance's Encoder (hardware fresh)]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
                            720p; at 4K, lower it to get there. x264 only:
-                           the hardware encoder takes a bitrate instead.
+                           the hardware encoder has its own quality.
                            [default: 10]
         --appearance <FILE>  Override the look recorded in the take with a
                            versioned appearance RON (read-plugin-state.py --appearance).

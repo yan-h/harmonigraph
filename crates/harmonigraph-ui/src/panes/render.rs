@@ -438,7 +438,7 @@ fn render_controls(
                 (
                     crate::VideoEncoder::Hardware,
                     "Hardware",
-                    "This Mac's hardware H.264 encoder: about twice as fast as x264 at 1440p, for a file nearly twice the size and no grain tuning. An export fails on a machine without one.",
+                    "This Mac's hardware H.264 encoder: about three times as fast as x264 at 1440p, for a slightly larger file and no grain tuning. An export fails on a Mac without one or without Apple Silicon.",
                 ),
             ],
         );

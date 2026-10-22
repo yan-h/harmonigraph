@@ -383,26 +383,22 @@ impl Sink {
     }
 }
 
-/// What the hardware encoder spends per pixel per frame, in bits: 60 Mb/s at
-/// 2560x1440@60, so about 0.27.
+/// The hardware encoder's constant quality, VideoToolbox's 0-100 scale (#1561).
 ///
-/// VideoToolbox has no constant-quality mode to match x264's CRF, so it gets a
-/// bitrate, and a bitrate has to scale with what it covers. 60 Mb/s at 1440p60
-/// measured 30.47 dB SSIM over a real take against x264's 29.93 at CRF 10
-/// (luma better, chroma U 28.7 dB against 30.7), for a file 1.8x the size. The
-/// same density is about 34 Mb/s at 1080p60 and 134 Mb/s at 4K60.
-const HARDWARE_BITS_PER_PIXEL: f64 = 60e6 / (2560.0 * 1440.0 * 60.0);
+/// It replaces a bitrate scaled to the frame, 60 Mb/s at 2560x1440@60, which
+/// it matches in SSIM for a smaller file: over an 82.6 s take at 1440p60 it
+/// measured 23.29 dB against 23.33 (luma 23.20 against 23.40, chroma U 22.10
+/// against 21.83) for 501.6 MB against 621.6. 86 fell further behind, 90 was
+/// bigger than the bitrate's file. A quality needs no scaling with size or
+/// rate, where the bitrate's density was stingy at 720p and lavish at 4K: on
+/// slices of the same take 88 is 0.47 dB better at 720p for 19% more, and
+/// 0.30 dB worse at 4K for 31% less. VideoToolbox offers this mode on Apple Silicon only.
+const HARDWARE_QUALITY: u32 = 88;
 
 /// The longest side VideoToolbox's H.264 encoder takes, either way round: on
 /// an M1 Pro under ffmpeg 7.1, 4096x2160 and 2160x4096 encode while 4098x2160
 /// and 5040x2160 refuse to open a compression session (-12903).
 const HARDWARE_MAX_SIDE: u32 = 4096;
-
-/// The hardware encoder's bitrate for this output, in kb/s.
-fn hardware_kbps(options: &VideoOptions) -> u64 {
-    let [w, h] = options.size;
-    (HARDWARE_BITS_PER_PIXEL * f64::from(w) * f64::from(h) * options.fps / 1000.0).round() as u64
-}
 
 /// Every argument ffmpeg is started with, bar the program itself.
 ///
@@ -476,7 +472,7 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
                 ["-c:v", "h264_videotoolbox", "-profile:v", "high", "-allow_sw", "0"]
                     .map(String::from),
             );
-            args.extend(["-b:v".to_string(), format!("{}k", hardware_kbps(options))]);
+            args.extend(["-q:v".to_string(), HARDWARE_QUALITY.to_string()]);
             // No B-frames. Asked for two, VideoToolbox reorders three deep
             // behind a reported delay of two, and ffmpeg 7 "replaces by guess"
             // the decode stamps that come out invalid — a frame's presentation
@@ -1017,24 +1013,8 @@ mod tests {
         assert_eq!(x264[x_to..], hardware[h_to..], "the GOP, colour, audio or muxer moved");
         assert_eq!(
             hardware[h_from..h_to].join(" "),
-            "-c:v h264_videotoolbox -profile:v high -allow_sw 0 -b:v 60000k -bf 0",
+            "-c:v h264_videotoolbox -profile:v high -allow_sw 0 -q:v 88 -bf 0",
         );
-        // The bitrate keeps 1440p60's density at other sizes and rates.
-        let kbps = |size, fps| {
-            hardware_kbps(&VideoOptions {
-                size,
-                fps,
-                frames: 1,
-                audio: None,
-                encoder: VideoEncoder::Hardware,
-                crf: 10,
-                ffmpeg: None,
-                audio_offset: 0.0,
-            })
-        };
-        assert_eq!(kbps([1920, 1080], 60.0), 33_750);
-        assert_eq!(kbps([3840, 2160], 60.0), 135_000);
-        assert_eq!(kbps([2560, 1440], 30.0), 30_000);
     }
 
     /// VideoToolbox's H.264 encoder refuses a frame over 4096 px on either
