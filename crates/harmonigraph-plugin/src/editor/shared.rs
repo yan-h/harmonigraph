@@ -5,7 +5,7 @@ use std::time::Instant;
 use harmonigraph_ui::SharedState;
 
 use super::clock::ClockMapper;
-use super::input::{LiveInput, Taken};
+use super::input::LiveInput;
 use super::ASSUMED_SURFACE_FORMAT;
 
 /// State shared between the plugin (which owns the ring buffer producer)
@@ -67,8 +67,7 @@ impl EditorShared {
                 clock: ClockMapper::new(),
                 audio_position: None,
                 audio_origin: 0.0,
-                analysis: Some(Default::default()),
-                spare: Taken::default(),
+                spare: Default::default(),
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             last_frame: None,

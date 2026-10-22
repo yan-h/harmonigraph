@@ -51,7 +51,8 @@ fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
         if hop == 0 {
             assert_eq!(history.len(), before, "overlapping history is explicitly suppressed");
             assert_eq!(
-                spectrum.analysis.frames_seen, 24_384,
+                spectrum.analysis.as_ref().unwrap().frames_seen,
+                24_384,
                 "analysis still consumes every frame"
             );
             assert_ne!(spectrum.store.display, before_curve, "the current curve still advances");

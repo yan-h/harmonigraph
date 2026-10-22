@@ -285,6 +285,22 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
     assert!((spectrum.column_lag() - window * 0.5).abs() < 1e-9);
 }
 
+/// The plugin's frame reads the lag while its input worker has the analysis
+/// out, and is answered with the window it was lent at — the Fast one here,
+/// half a fresh analyzer's.
+#[test]
+fn the_column_lag_answers_while_the_analysis_is_lent() {
+    let mut spectrum = AudioSpectrum::default();
+    let config = SpectrumConfig { window: SpectrumWindow::Fast, ..Default::default() };
+    spectrum.push_source_samples(&[0.0; 64], 1, 48_000.0, 0.0, &config);
+    let lag = config.window.samples() as f64 / 2.0 / 48_000.0;
+    assert!((spectrum.column_lag() - lag).abs() < 1e-12, "the feed did not set the window");
+
+    let lent = spectrum.lend().expect("the analysis is home");
+    assert!((spectrum.column_lag() - lag).abs() < 1e-12, "the lag was lent out with it");
+    spectrum.give_back(lent, [], &config);
+}
+
 #[test]
 fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     let mut spectrum = AudioSpectrum::default();
@@ -855,9 +871,11 @@ fn physical_chunks_preserve_the_complete_logical_batch() {
                             Ok::<_, ()>(())
                         })
                         .unwrap();
-                    assert_eq!(whole.analysis.anchor, chunked.analysis.anchor);
+                    let (w, c) =
+                        (whole.analysis.as_ref().unwrap(), chunked.analysis.as_ref().unwrap());
+                    assert_eq!(w.anchor, c.anchor);
                     assert_eq!(whole.store.display, chunked.store.display);
-                    assert_eq!(whole.analysis.frames_seen, chunked.analysis.frames_seen);
+                    assert_eq!(w.frames_seen, c.frames_seen);
                     assert_eq!(whole.store.last_samples, chunked.store.last_samples);
                     let columns = |s: &AudioSpectrum| {
                         s.history().iter().map(|c| (c.time, c.db().clone())).collect::<Vec<_>>()

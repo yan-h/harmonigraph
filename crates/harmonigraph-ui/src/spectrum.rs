@@ -15,14 +15,20 @@ pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BI
 /// mock synth). Analysis advances on the sample clock without drawing. Runtime-only.
 pub struct AudioSpectrum {
     /// Samples to columns: the analyzer, its hop grid and its clock anchor.
-    pub(crate) analysis: SpectrumAnalysis,
+    /// `None` while [`lend`](Self::lend) has it out.
+    pub(crate) analysis: Option<SpectrumAnalysis>,
+    /// The analysis's [`lag`](SpectrumAnalysis::lag) when it was lent, which
+    /// [`column_lag`](Self::column_lag) answers with until it comes back:
+    /// the plugin's frame reads it while the input worker holds the analysis.
+    /// Set only by `lend`, and read only while the analysis is out.
+    lent_lag: f64,
     /// What the columns become: the curve, the history and their memos.
     pub(crate) store: SpectrumStore,
 }
 
 /// The analysis half of [`AudioSpectrum`]: samples in, raw columns out, on
 /// an exact grid of sample counts. It never reads what it has produced, so
-/// it can run where the store is not (#1559).
+/// it can run where the store is not (#1559): see [`AudioSpectrum::lend`].
 pub struct SpectrumAnalysis {
     /// One analyzer per input channel, combined in the power domain — see
     /// [`ChannelBank`](harmonigraph_analysis::ChannelBank).
@@ -48,8 +54,9 @@ pub struct SpectrumAnalysis {
     /// grid exists to remove: at an 8 ms hop, +-5 ms of it is enough to leave a
     /// 12.8 ms slab empty. Smoothed, the grid is exactly even and still follows
     /// the shell clock. The plugin instead supplies exact source timestamps
-    /// through [`push_source_samples`](AudioSpectrum::push_source_samples), which uses
-    /// its shared presentation-clock mapping without this smoothing.
+    /// through [`feed_source`](SpectrumAnalysis::feed_source) on a
+    /// [`lend`](AudioSpectrum::lend), from its shared presentation-clock
+    /// mapping without this smoothing.
     pub(crate) anchor: Option<f64>,
 }
 
@@ -60,7 +67,7 @@ pub(crate) struct SpectrumStore {
     /// the measurement keyed on it, so replacing the store, or resetting it
     /// with [`SpectrumStore::restart`], drops both together and no fold
     /// outlives the display it was measured from. Resetting the analysis alone
-    /// does not; [`AudioSpectrum::restart_source`] resets both.
+    /// does not, so whoever restarts it delivers a [`Delivery::Restart`] too.
     display_revision: u64,
     /// One lazy Fold, keyed on everything its value is measured from and
     /// nothing else. `Fold::measure` is a pure function of `display` and the
@@ -86,10 +93,15 @@ pub(crate) struct SpectrumStore {
     /// Counts [`clear_history`](AudioSpectrum::clear_history) calls, so the heatmap's
     /// colour memory can tell a cleared picture from one that scrolled on.
     history_epoch: u32,
-    /// The running analyzer's half window, as of the last feed: see
-    /// [`AudioSpectrum::column_lag`]. Held here rather than read off the
-    /// analyzer because the plugin's analyzer runs on its input worker.
-    lag: f64,
+}
+
+/// The analysis [`AudioSpectrum::lend`] took out, to run where the store is
+/// not, until [`AudioSpectrum::give_back`] returns it with what it made.
+pub struct LentAnalysis {
+    pub analysis: SpectrumAnalysis,
+    /// Which clear of the history it was lent under: a Clear before it comes
+    /// back must not have its columns put back.
+    epoch: u32,
 }
 
 /// What the analysis hands the store, in the order it happened: a source
@@ -181,8 +193,11 @@ pub(crate) struct SpectrogramSurface {
 /// floats of power, and why old ones are merged.
 pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 
-impl Default for SpectrumAnalysis {
-    fn default() -> Self {
+impl SpectrumAnalysis {
+    /// Private, as is building one: the only analysis is
+    /// [`AudioSpectrum`]'s, and anything that runs it borrows it through
+    /// [`lend`](AudioSpectrum::lend) (#1568).
+    fn new() -> Self {
         SpectrumAnalysis {
             analyzer: harmonigraph_analysis::ChannelBank::new(Default::default(), 1),
             frames_seen: 0,
@@ -194,10 +209,9 @@ impl Default for SpectrumAnalysis {
 
 impl Default for AudioSpectrum {
     fn default() -> Self {
-        let analysis = SpectrumAnalysis::default();
-        let lag = analysis.lag();
         AudioSpectrum {
-            analysis,
+            analysis: Some(SpectrumAnalysis::new()),
+            lent_lag: 0.0,
             store: SpectrumStore {
                 display_revision: 0,
                 frame_fold: None,
@@ -207,7 +221,6 @@ impl Default for AudioSpectrum {
                 last_samples: None,
                 history: SpectrumHistory::default(),
                 history_epoch: 0,
-                lag,
             },
         }
     }
@@ -305,8 +318,9 @@ impl SpectrumAnalysis {
         })
     }
 
-    /// [`AudioSpectrum::push_source_samples`]'s analysis half: the batch's
-    /// arrival, then each column it completes, to `deliver`.
+    /// Source-dated input, for a [`lend`](AudioSpectrum::lend): the batch's
+    /// arrival, then each column it completes, to `deliver`, for
+    /// [`give_back`](AudioSpectrum::give_back) to apply.
     pub fn feed_source(
         &mut self,
         samples: &[f32],
@@ -341,12 +355,12 @@ impl SpectrumAnalysis {
     }
 
     /// Half the running analyzer's window: see [`AudioSpectrum::column_lag`].
-    pub fn lag(&self) -> f64 {
+    fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
 
     /// Forget the retained run: the analyzer's window, the hop grid and the
-    /// anchor. See [`AudioSpectrum::restart_source`].
+    /// anchor. The store's half is a [`Delivery::Restart`].
     pub fn restart(&mut self) {
         self.analyzer.restart();
         self.frames_seen = 0;
@@ -413,7 +427,7 @@ impl SpectrumStore {
         self.history.trim_older_than(now - AudioSpectrum::HISTORY_MAX_SECONDS);
     }
 
-    /// Apply one delivery, as [`AudioSpectrum::apply`] describes.
+    /// Apply one delivery, as [`AudioSpectrum::give_back`] describes.
     /// `keep` false moves the curve without keeping the column as history.
     fn apply(
         &mut self,
@@ -430,7 +444,7 @@ impl SpectrumStore {
     }
 
     /// Forget the curve along with the run it was measured from; the history
-    /// stays. See [`AudioSpectrum::restart_source`].
+    /// stays. See [`Delivery::Restart`].
     pub(crate) fn restart(&mut self) {
         self.last_samples = None;
         self.display.fill(0.0);
@@ -558,19 +572,16 @@ impl AudioSpectrum {
         .unwrap();
     }
 
-    /// Start a new retained source run after loss, reset or a format change.
-    /// Keep historical columns, but never combine samples across the boundary.
-    pub fn restart_source(&mut self) {
-        self.analysis.restart();
-        self.store.restart();
-    }
-
     /// Feed complete source frames on an exact sample grid. `origin` is frame
     /// zero of this retained run converted to the shell clock by its owner.
     /// Unlike arrival-dated input, it needs no second clock estimate/smoothing.
     /// The shell may update its conversion once per drain, shared with notes;
     /// physical callback/chunk boundaries never influence that conversion.
-    pub fn push_source_samples(
+    ///
+    /// The plugin's [`lend`](Self::lend), feed and
+    /// [`give_back`](Self::give_back) in one call, for tests of that path.
+    #[cfg(test)]
+    pub(crate) fn push_source_samples(
         &mut self,
         samples: &[f32],
         channels: usize,
@@ -578,34 +589,54 @@ impl AudioSpectrum {
         origin: f64,
         config: &SpectrumConfig,
     ) {
-        let AudioSpectrum { analysis, store } = self;
-        analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
-            store.apply(delivery, config, true, true)
+        let mut lent = self.lend().expect("an inline shell never lends its analysis");
+        let mut deliveries = Vec::new();
+        lent.analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
+            deliveries.push(delivery)
         });
-        store.lag = analysis.lag();
+        self.give_back(lent, deliveries, config);
     }
 
-    /// Apply what a [`SpectrumAnalysis`] running elsewhere delivered, in
-    /// order, from a source-dated feed; `config` is the one it analyzed under.
-    /// The plugin's input worker analyzes off the editor's lock and hands the
-    /// result here under it, with `lag` its analyzer's.
+    /// Take the analysis out, to run where the store is not; `None` while it
+    /// is already out. The plugin's input worker analyzes off the editor's
+    /// lock and gives the result back under it.
+    pub fn lend(&mut self) -> Option<LentAnalysis> {
+        let analysis = self.analysis.take()?;
+        self.lent_lag = analysis.lag();
+        Some(LentAnalysis { analysis, epoch: self.store.history_epoch })
+    }
+
+    /// Return a [`lend`](Self::lend)'s analysis with what it delivered from a
+    /// source-dated feed, applied in order; `config` is the one it analyzed
+    /// under.
     ///
-    /// `epoch` is [`Self::history_epoch`] when the audio was taken. If the
-    /// history has been cleared since, its columns still move the curve but
-    /// do not join the history, which the Clear was asked to empty of
-    /// everything before it.
-    pub fn apply(
+    /// If the history has been cleared since the lend, its columns still move
+    /// the curve but do not join the history, which the Clear was asked to
+    /// empty of everything before it.
+    pub fn give_back(
         &mut self,
+        lent: LentAnalysis,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
-        lag: f64,
-        epoch: u32,
     ) {
-        let keep = epoch == self.store.history_epoch;
+        debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
+        let keep = lent.epoch == self.store.history_epoch;
         for delivery in deliveries {
             self.store.apply(delivery, config, true, keep);
         }
-        self.store.lag = lag;
+        self.analysis = Some(lent.analysis);
+    }
+
+    /// Replace a lent analysis that will never be given back, as after a
+    /// panic between [`lend`](Self::lend) and [`give_back`](Self::give_back).
+    /// Whether one was lost: the fresh one starts no run, so its caller owes
+    /// the source a restart.
+    pub fn recover(&mut self) -> bool {
+        let lost = self.analysis.is_none();
+        if lost {
+            self.analysis = Some(SpectrumAnalysis::new());
+        }
+        lost
     }
 
     /// Feed one logical batch through bounded physical chunks. Update the clock
@@ -622,34 +653,12 @@ impl AudioSpectrum {
         config: &SpectrumConfig,
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.feed_sample_chunks(batch, channels, sample_rate, now, config, None, consume)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn feed_sample_chunks<E>(
-        &mut self,
-        batch: usize,
-        channels: usize,
-        sample_rate: f32,
-        now: f64,
-        config: &SpectrumConfig,
-        source_origin: Option<f64>,
-        consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
-    ) -> Result<(), E> {
-        let AudioSpectrum { analysis, store } = self;
+        let AudioSpectrum { analysis, store, .. } = self;
+        let analysis = analysis.as_mut().expect("an inline shell never lends its analysis");
         store.last_samples = Some(now);
-        let fed = analysis.feed(
-            batch,
-            channels,
-            sample_rate,
-            now,
-            config,
-            source_origin,
-            consume,
-            |column| store.take(column, config, source_origin.is_some(), true),
-        );
-        store.lag = analysis.lag();
-        fed
+        analysis.feed(batch, channels, sample_rate, now, config, None, consume, |column| {
+            store.take(column, config, false, true)
+        })
     }
 
     /// The curve to draw, or None while no audio is flowing. The levels are
@@ -710,7 +719,7 @@ impl AudioSpectrum {
     /// fresh enough to extend their newest color to the now-line. This also
     /// reports the running analyzer's window, rather than the requested config.
     pub fn column_lag(&self) -> f64 {
-        self.store.lag
+        self.analysis.as_ref().map_or(self.lent_lag, SpectrumAnalysis::lag)
     }
 
     /// Whether audio has arrived within the hold window — i.e. the spectrum is
