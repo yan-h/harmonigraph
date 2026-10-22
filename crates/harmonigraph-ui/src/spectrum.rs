@@ -1,6 +1,6 @@
 //! The audio-derived spectrum behind the Spectral pane: the analyzer that
-//! turns incoming samples into columns, the store those columns age out of,
-//! Separate surface storage describes the uploaded heatmap textures.
+//! turns incoming samples into columns, and the store those columns age out
+//! of. Separate surface storage describes the uploaded heatmap textures.
 //! Runtime-only — none of this is persisted.
 
 use crate::SpectrumConfig;
@@ -57,9 +57,10 @@ pub(crate) struct SpectrumAnalysis {
 /// history it joins, and the memo of the curve's fold.
 pub(crate) struct SpectrumStore {
     /// Changed only when the smoothed grid changes. This identity lives beside
-    /// the measurement keyed on it, so replacing or resetting the analyzer
-    /// drops both together and no fold outlives the display it was measured
-    /// from.
+    /// the measurement keyed on it, so replacing the store, or resetting it
+    /// with [`SpectrumStore::restart`], drops both together and no fold
+    /// outlives the display it was measured from. Resetting the analysis alone
+    /// does not; [`AudioSpectrum::restart_source`] resets both.
     display_revision: u64,
     /// One lazy Fold, keyed on everything its value is measured from and
     /// nothing else. `Fold::measure` is a pure function of `display` and the
@@ -88,10 +89,10 @@ pub(crate) struct SpectrumStore {
 }
 
 /// One raw spectrum the analysis produced, for the store to take.
-pub(crate) struct AnalyzedColumn<'a> {
+pub(crate) struct AnalyzedColumn {
     /// Shell time of the middle of the window it measured.
     pub(crate) time: f64,
-    pub(crate) power: &'a SpectrumBuckets,
+    pub(crate) power: SpectrumBuckets,
     /// Seconds of audio since the column before, which the curve's time
     /// constants are converted at.
     pub(crate) step: f64,
@@ -196,7 +197,7 @@ impl SpectrumAnalysis {
         config: &SpectrumConfig,
         source_origin: Option<f64>,
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
-        mut column: impl FnMut(AnalyzedColumn<'_>),
+        mut column: impl FnMut(AnalyzedColumn),
     ) -> Result<(), E> {
         // Any configuration change empties the analyzers' rings, so nothing comes out
         // until they have refilled. The hop grid keeps its phase across that gap
@@ -270,7 +271,7 @@ impl SpectrumAnalysis {
                 // consecutive columns are exactly `hop` frames apart.
                 let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
                 let center = boundary - self.analyzer.window_center_offset();
-                column(AnalyzedColumn { time: center, power: &fresh, step: hop as f64 / sr });
+                column(AnalyzedColumn { time: center, power: fresh, step: hop as f64 / sr });
             }
         })
     }
@@ -291,7 +292,7 @@ impl SpectrumStore {
     /// must stay strictly increasing (see below).
     pub(crate) fn take(
         &mut self,
-        column: AnalyzedColumn<'_>,
+        column: AnalyzedColumn,
         config: &SpectrumConfig,
         source_dated: bool,
     ) {
@@ -301,7 +302,7 @@ impl SpectrumStore {
         self.display_revision = self.display_revision.wrapping_add(1);
         let attack = hop_alpha(config.attack, column.step);
         let release = hop_alpha(config.release, column.step);
-        for (shown, new) in self.display.iter_mut().zip(column.power) {
+        for (shown, new) in self.display.iter_mut().zip(&column.power) {
             // Invalid input must not poison the carried smoothing state
             // after clean audio has replaced the analyzer's window.
             let new = if new.is_finite() { *new } else { 0.0 };
@@ -322,7 +323,7 @@ impl SpectrumStore {
         // samples or skipping any FFT/curve progression above. Offline
         // arrival-dated feeding retains its existing append behavior.
         if !source_dated || self.history.back().is_none_or(|c| column.time > c.time) {
-            self.push_history(column.time, column.power);
+            self.push_history(column.time, &column.power);
         }
     }
 
