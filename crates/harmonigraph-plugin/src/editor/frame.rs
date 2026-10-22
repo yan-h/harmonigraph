@@ -57,7 +57,9 @@ pub(super) fn frame(
         // New MIDI must render this tick, not at the idle poll.
         ui.ctx().request_repaint();
     }
-    let now = shared.input.display_now(now);
+    // Drained on the clock it arrived by, drawn at the refresh it is for.
+    let wall = shared.input.frame_wall(queue.frame_timing(), now);
+    let now = shared.input.display_now(wall);
     let sample_rate = shared.input.sample_rate();
     // Snapshot current host movement before arming or queuing a render.
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {

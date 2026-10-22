@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use egui_baseview::baseview::FrameTiming;
+
 use super::clock::ClockMapper;
 
 /// The sole display and analyzer ingress, retained for the plugin lifetime.
@@ -106,6 +108,45 @@ impl LiveInput {
     pub(crate) fn now(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
+    /// The wall time a frame draws at: the refresh the display link means it
+    /// to be on screen by, on [`Self::now`]'s clock, or `observed` for a frame
+    /// the link did not ask for. Such a frame between link frames is behind
+    /// the last target, so [`Self::display_now`] holds it at the time already
+    /// drawn, for that one frame.
+    ///
+    /// The refresh rather than when the callback got to run, because the
+    /// callback runs on the host's main thread whenever the host lets it —
+    /// in a Bitwig session from under a millisecond to nearly two refreshes
+    /// after the vsync it was issued for. Timed by the callback, 8.8% of the
+    /// frames that reached the glass one refresh after the last stepped their
+    /// content more than a millisecond off that, and the roll scrolled
+    /// unevenly with no frame missed. Timed by the refresh, 2.2% did, which
+    /// are the switches in drawable depth (#1551).
+    ///
+    /// The target, not the vsync the callback was issued for, because the
+    /// target is still ahead when the frame starts (on all but 2 of 11,425
+    /// frames in that log), so content the drain just stamped is never dated
+    /// past the drawn time. Every drawn time moves about a refresh later than
+    /// the callback's, which is when the glass shows it.
+    ///
+    /// A target further than [`Self::MAX_TARGET_SECONDS`] from the callback is
+    /// not this frame's — the link's times come from AppKit — and the drawn
+    /// time never rewinds, so one far ahead would hold the picture still until
+    /// the wall caught up. Such a frame, or one whose times are not numbers,
+    /// draws at `observed`.
+    pub(crate) fn frame_wall(&self, timing: Option<FrameTiming>, observed: f64) -> f64 {
+        let Some(timing) = timing else { return observed };
+        let fired = timing.fired_at.saturating_duration_since(self.start).as_secs_f64();
+        let target = fired + (timing.target_timestamp - timing.fired);
+        if (target - observed).abs() <= Self::MAX_TARGET_SECONDS {
+            target
+        } else {
+            observed
+        }
+    }
+    /// Past any panel's refresh, and the display link's own silence
+    /// threshold before the watchdog takes over.
+    const MAX_TARGET_SECONDS: f64 = 0.1;
     pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
         self.clock.now(wall_now)
     }
@@ -128,6 +169,7 @@ impl LiveInput {
 #[cfg(test)]
 mod tests {
     use super::super::shared::EditorShared;
+    use super::FrameTiming;
     use harmonigraph_core::notes::{NoteEvent, SourceId};
     use std::sync::Arc;
 
@@ -147,6 +189,57 @@ mod tests {
 
     fn drain_audio(shared: &mut EditorShared, now: f64) {
         shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    }
+
+    /// Callbacks a 144 Hz display link ran late by these amounts — the spread
+    /// a Bitwig session's frame log shows, p50 0.65 ms to over a refresh — draw
+    /// one refresh apart, as the glass shows them, and no earlier than they ran
+    /// unless they ran over a refresh late; a frame the link did not ask for
+    /// draws when it ran.
+    #[test]
+    fn frames_draw_at_their_refresh_however_late_the_callback_ran() {
+        let (_audio, mut shared) = audio_harness(1024);
+        let refresh = 1.0 / 144.0;
+        let start = shared.input.start;
+        // The media clock's origin is unrelated to the plugin's.
+        let media = 322_510.0;
+        let mut drawn = Vec::new();
+        for (frame, late_ms) in [0.3, 5.1, 0.4, 9.0, 0.6, 2.2, 0.2].into_iter().enumerate() {
+            let vsync = 1.0 + frame as f64 * refresh;
+            let fired = vsync + late_ms / 1000.0;
+            let timing = FrameTiming {
+                fired: media + fired,
+                fired_at: start + std::time::Duration::from_secs_f64(fired),
+                timestamp: media + vsync,
+                target_timestamp: media + vsync + refresh,
+                refresh,
+                divisor: 1,
+            };
+            let wall = shared.input.frame_wall(Some(timing), fired);
+            if late_ms / 1000.0 < refresh {
+                assert!(wall >= fired, "drawn before its own callback ran, at {late_ms} ms late");
+            }
+            drawn.push(shared.input.display_now(wall));
+        }
+        for step in drawn.windows(2).map(|pair| pair[1] - pair[0]) {
+            assert!((step - refresh).abs() < 1e-6, "stepped {step} s against {refresh} s");
+        }
+
+        let observed = drawn.last().unwrap() + 0.05;
+        assert_eq!(shared.input.frame_wall(None, observed), observed);
+        // A target AppKit got wrong, which would hold the picture still.
+        for target_timestamp in [media + observed + 5.0, f64::NAN] {
+            let fired_at = start + std::time::Duration::from_secs_f64(observed);
+            let timing = FrameTiming {
+                fired: media + observed,
+                fired_at,
+                timestamp: media + observed,
+                target_timestamp,
+                refresh,
+                divisor: 1,
+            };
+            assert_eq!(shared.input.frame_wall(Some(timing), observed), observed);
+        }
     }
 
     #[test]

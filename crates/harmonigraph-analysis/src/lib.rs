@@ -10,8 +10,8 @@ use harmonigraph_core::spectrum::{
     midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
 };
 
-/// The default window length (~0.17 s at 48 kHz), the UI's fresh Balanced
-/// setting. The UI changes it through [`SpectrumAnalyzer::configure`], trading response time against
+/// The default window length (~0.17 s at 48 kHz), the UI's Balanced setting;
+/// its fresh one is Fast. The UI changes it through [`SpectrumAnalyzer::configure`], trading response time against
 /// bass precision at runtime. At the axis floor (20 Hz) one FFT bin spans
 /// several semitones, so the lowest octave reads coarse; that is inherent to
 /// the window length, not a bug.

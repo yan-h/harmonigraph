@@ -11,13 +11,16 @@ pub(crate) mod platform;
 #[cfg(feature = "opengl")]
 pub mod gl;
 
-/// When the display asked for the frame `on_frame` is running, in seconds on
-/// the media clock (`CACurrentMediaTime` on macOS). See
-/// [`Window::frame_timing`].
+/// When the display asked for the frame `on_frame` is running: in seconds on
+/// the media clock (`CACurrentMediaTime` on macOS), but for `fired_at`, which
+/// is on `Instant`'s. See [`Window::frame_timing`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameTiming {
     /// When the callback actually ran.
     pub fired: f64,
+    /// `fired` on `Instant`'s clock, read beside it: the anchor that puts
+    /// any of these times on `Instant`'s clock, as `fired_at + (t - fired)`.
+    pub fired_at: std::time::Instant,
     /// The refresh the callback was issued for.
     pub timestamp: f64,
     /// The refresh the frame is meant to be on screen by.

@@ -244,7 +244,7 @@ Tab takes priority over focus traversal except while editing text.
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
 | Editor frame rate, interface scale, Hide tab bars | Editor only; exports run at 60 fps. The frame rate applies on macOS only. |
 
-Fresh projects use **Balanced** frequency resolution (8192 samples); saved Fast selections remain Fast.
+Fresh projects use **Fast** frequency resolution (4096 samples), captured from the DAW look in #1475.
 Fast trades pitch precision for response time,
 and its wider bins can lose low audio-ring fundamental wedges while their harmonics still light the pitch class.
 The cutoff depends on sample rate and the material.

@@ -9,3 +9,8 @@
 
 - Transport stop finishes a Bitwig audio export: with the editor closed, the video covers the whole arrangement range. At bar is for ending at a chosen bar, not the export trigger. #1314 Video Q1
 - The video runs a few silent seconds past the range end. Read as the renderer's default 4 s fade after the last note (`tail_of_render`), not checked against the take's WAV length. Whether export takes keep that fade, or it becomes a setting, is undecided.
+
+## 2026-10-07
+
+- The fade past the range end is the **Tail** setting, 0 s fresh, so a fresh export ends with its range or its recorded audio (#1472). This settles the 2026-10-06 open question.
+- Hardware (VideoToolbox) is the fresh Encoder, captured with the DAW look (#1475).
