@@ -154,6 +154,43 @@ def install(directory):
     shutil.copytree(directory, EMBEDDED)
 
 
+def fetch(directory):
+    """Import the corpus `Metal shader assets` generated for the checked-out commit.
+
+    Keyed on `HEAD` rather than a PR or branch, so a run on an older push can
+    never be the one imported: push, let the run fail, then fetch.
+    """
+    def gh(*arguments):
+        result = subprocess.run(["gh", *arguments], cwd=ROOT, text=True, stdout=subprocess.PIPE)
+        if result.returncode != 0:
+            raise SystemExit(f"gh {arguments[0]} {arguments[1]} failed")
+        return result.stdout
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, text=True,
+                          stdout=subprocess.PIPE).stdout.strip()
+    runs = json.loads(gh("run", "list", "--workflow", "Metal shader assets", "--commit", head,
+                         "--json", "databaseId,status,conclusion,url", "--limit", "20"))
+    if not runs:
+        raise SystemExit(f"no Metal shader assets run on {head[:12]}: push it, or dispatch one "
+                         "with `gh workflow run \"Metal shader assets\" --ref <branch>`")
+    latest = runs[0]
+    if latest["status"] != "completed":
+        raise SystemExit(f"the run on {head[:12]} has not finished: {latest['url']}")
+    directory = directory or ROOT / f"target/ci-metal-assets/{latest['databaseId']}"
+    shutil.rmtree(directory, ignore_errors=True)
+    gh("run", "download", str(latest["databaseId"]), "--name", "production-metal-assets",
+       "--dir", str(directory))
+    generated = directory / "generated-metal-assets"
+    logs = directory / "shader-asset-logs"
+    if not generated.is_dir():
+        raise SystemExit(f"the run on {head[:12]} ({latest['conclusion']}) generated no corpus: "
+                         f"the committed one passed its check. Its logs: {logs}")
+    install(generated)
+    print(f"Imported the corpus from {latest['url']}.\n"
+          f"Read why its check failed in {logs} before committing: a missing or rejected Metal "
+          "asset is a stale corpus, anything else is not, and "
+          "`git checkout crates/harmonigraph-metal-assets` undoes this import.")
+
+
 def generate(directory, logs):
     assert not directory.exists(), "export requires a fresh directory"
     assert EMBEDDED.resolve() not in directory.resolve().parents
@@ -217,7 +254,7 @@ def binding_controls(production, logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("generate", "check", "controls", "verify", "import"))
+    parser.add_argument("action", choices=("generate", "check", "controls", "verify", "import", "fetch"))
     parser.add_argument("directory", nargs="?", type=Path)
     parser.add_argument("--logs", type=Path, default=ROOT / "target/shader-asset-logs")
     args = parser.parse_args()
@@ -235,6 +272,8 @@ def main():
     elif args.action == "import":
         assert args.directory is not None
         install(directory)
+    elif args.action == "fetch":
+        fetch(args.directory and args.directory.resolve())
     else:
         verify(directory)
 

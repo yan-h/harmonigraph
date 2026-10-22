@@ -107,5 +107,5 @@ jobs:
       - name: Fail on the corpus the check rejected
         if: ${{ steps.check.outcome == 'failure' }}
         run: |
-          echo "::error::The committed Metal corpus failed its check, and this run generated and validated a replacement. Read why in the artifact's shader-asset-logs/ (generate/ holds the replacement's own). A missing or rejected Metal asset is a stale corpus: download this run's production-metal-assets artifact and run tools/shader-assets.py import <download>/generated-metal-assets, into the same commit as the change. Anything else is not the corpus, and the replacement is not the fix."
+          echo "::error::The committed Metal corpus failed its check, and this run generated and validated a replacement. Read why in the artifact's shader-asset-logs/ (generate/ holds the replacement's own). A missing or rejected Metal asset is a stale corpus: with this commit checked out, run tools/shader-assets.py fetch, into the same commit as the change. Anything else is not the corpus, and the replacement is not the fix."
           exit 1
