@@ -989,20 +989,22 @@ impl LatticeCallback {
     /// Whether this callback may drive the shared [`GpuTimer`] — true only for
     /// the one carrying a stats sink, i.e. the pane that publishes the reading.
     ///
-    /// There is ONE timer per device, and its three-step readback cycle assumes
-    /// each step lands in a different frame — specifically that the encoder
-    /// holding `close`'s `copy_buffer_to_buffer` has been submitted before the
-    /// next `poll` asks the staging buffer to map. egui-wgpu submits once per
+    /// There is ONE timer per device, and its readback cycle assumes each step
+    /// lands in a different frame — specifically that the encoder holding the
+    /// stamps `close` brackets has been submitted before the next `poll` asks
+    /// to hear when the submitted work completes. egui-wgpu submits once per
     /// frame, AFTER running every callback's `prepare` on one shared encoder,
-    /// so that only holds while a single callback drives the cycle.
+    /// so that only holds while a single callback drives the cycle. With two,
+    /// the second would ask in the same frame the first closed in, hear about
+    /// the PREVIOUS frame's completion, and resolve stamps not yet written: a
+    /// reading quietly dropped or wrong, with nothing to say so.
     ///
-    /// Two do exist: the Video tab's preview is a second live lattice, and the
-    /// frame it first appears in ran `prepare` twice — the docked pane
-    /// recording the copy, then the preview immediately calling `map_async` on
-    /// the buffer that copy still had to write. Submitting that encoder is a
-    /// wgpu validation error ("Buffer with 'lattice_gpu_timer_staging' label is
-    /// still mapped"), which is fatal by default and took the plugin down with
-    /// it — reproducibly, the moment the preview came into view.
+    /// Two do exist: the Video tab's preview is a second live lattice. Before
+    /// the resolve waited for completion, the same double drive mapped a
+    /// staging buffer whose copy was still unsubmitted, a wgpu validation
+    /// error ("Buffer with 'lattice_gpu_timer_staging' label is still
+    /// mapped") that took the plugin down the moment the preview came into
+    /// view.
     ///
     /// Gating on the stats sink is also what the reading MEANS: the overlay
     /// reports the cost of the docked lattice, and letting the preview consume

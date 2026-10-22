@@ -10,7 +10,7 @@ use super::*;
 /// is submitted (egui-wgpu owns the submit, one `prepare` later), and the map
 /// completes whenever the driver gets to it. Blocking on any of that would
 /// stall the very pipeline being measured, and the reading would then describe
-/// a frame that was slow *because* it was timed. So it runs as a three-step
+/// a frame that was slow *because* it was timed. So it runs as a four-step
 /// cycle and publishes a result a few frames old. For "is the GPU the
 /// bottleneck", stale and honest beats fresh and self-inflicted.
 pub(super) struct GpuTimer {
@@ -21,8 +21,12 @@ pub(super) struct GpuTimer {
     /// Nanoseconds per timestamp tick.
     pub(super) period: f32,
     pub(super) state: TimerState,
+    /// Set once the timed frame's work has completed.
+    pub(super) done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// 0 pending, 1 mapped, 2 failed; written by the map callback.
     pub(super) ready: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// The last opening stamp read, which an unwritten slot 0 would repeat.
+    pub(super) last_opening: u64,
     /// 1x1 target carrying the opening timestamp.
     pub(super) head: wgpu::TextureView,
 }
@@ -33,7 +37,9 @@ pub(super) enum TimerState {
     Idle,
     /// Queries sit in an encoder that has not been submitted yet.
     Recorded,
-    /// Submitted, and the staging buffer has been asked to map.
+    /// Submitted, and waiting to hear that the frame has completed.
+    Completing,
+    /// Resolved, and the staging buffer has been asked to map.
     Mapping,
 }
 
@@ -79,7 +85,9 @@ impl GpuTimer {
             staging: Self::staging(device),
             period: queue.get_timestamp_period(),
             state: TimerState::Idle,
+            done: Default::default(),
             ready: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            last_opening: 0,
             head: crate::gpu_memory::texture(
                 device,
                 &wgpu::TextureDescriptor {
@@ -111,17 +119,37 @@ impl GpuTimer {
 
     /// Advance the readback cycle, returning a measurement in milliseconds on
     /// the frame one finally lands.
-    pub(super) fn poll(&mut self, device: &wgpu::Device) -> Option<f32> {
+    ///
+    /// The stamps are resolved only once the timed frame has completed: a
+    /// resolve submitted with the frame can read a slot before its stamp
+    /// lands, which an M5 Pro under macOS 27 does nearly every frame, most
+    /// often for the closing stamp. Such a slot keeps the last frame's value
+    /// rather than reading 0, so a repeated opening stamp is refused too.
+    pub(super) fn poll(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<f32> {
         use std::sync::atomic::Ordering;
         match self.state {
             TimerState::Idle => None,
             TimerState::Recorded => {
                 // The encoder holding those queries has been submitted by now,
-                // so the map can be asked for. That is true because egui-wgpu
-                // submits once per frame and only ONE callback per frame gets
-                // here — see `LatticeCallback::drives_timer`, which is what
-                // keeps a second lattice view from mapping this buffer between
-                // the copy being recorded and the submit that performs it.
+                // so this hears about that frame's completion. That is true
+                // because egui-wgpu submits once per frame and only ONE
+                // callback per frame gets here — see
+                // `LatticeCallback::drives_timer`.
+                let done = self.done.clone();
+                queue.on_submitted_work_done(move || done.store(true, Ordering::Release));
+                let _ = device.poll(wgpu::PollType::Poll);
+                self.state = TimerState::Completing;
+                None
+            }
+            TimerState::Completing => {
+                let _ = device.poll(wgpu::PollType::Poll);
+                if !self.done.swap(false, Ordering::Acquire) {
+                    return None;
+                }
+                let mut encoder = device.create_command_encoder(&Default::default());
+                encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
+                encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, TIMER_BYTES);
+                queue.submit([encoder.finish()]);
                 let ready = self.ready.clone();
                 self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                     ready.store(if result.is_ok() { 1 } else { 2 }, Ordering::Release);
@@ -149,7 +177,8 @@ impl GpuTimer {
                 let ms = {
                     let view = self.staging.slice(..).get_mapped_range();
                     let ticks: &[u64] = bytemuck::cast_slice(&view);
-                    Self::elapsed_ms(ticks[0], ticks[1], self.period)
+                    let last = std::mem::replace(&mut self.last_opening, ticks[0]);
+                    Self::elapsed_ms(ticks[0], ticks[1], last, self.period)
                 };
                 self.staging.unmap();
                 self.state = TimerState::Idle;
@@ -158,8 +187,11 @@ impl GpuTimer {
         }
     }
 
-    pub(super) fn elapsed_ms(begin: u64, end: u64, period: f32) -> Option<f32> {
-        (begin != 0 && end != 0 && end >= begin)
+    /// The pair as milliseconds, or `None` where it cannot describe one frame:
+    /// a zero or reversed stamp, or an opening that repeats `last_opening`,
+    /// which is a slot left unwritten since the previous reading.
+    pub(super) fn elapsed_ms(begin: u64, end: u64, last_opening: u64, period: f32) -> Option<f32> {
+        (begin != 0 && end != 0 && end >= begin && begin != last_opening)
             .then(|| ((end - begin) as f64 * f64::from(period) / 1.0e6) as f32)
     }
 
@@ -196,10 +228,9 @@ impl GpuTimer {
         });
     }
 
-    /// Resolve the completed preparation bracket for a later frame to map.
-    pub(super) fn close(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
-        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, TIMER_BYTES);
+    /// Close the preparation bracket; a later frame resolves it once this
+    /// one completes.
+    pub(super) fn close(&mut self) {
         self.state = TimerState::Recorded;
     }
 }
