@@ -48,6 +48,15 @@ default = [
     "tracing",
 ]
 keyboard_focus_workaround = []
+# A per-frame timing log for diagnosing missed refreshes (src/frame_log.rs).
+# macOS only; it does nothing elsewhere.
+frame-log = [
+    "wgpu",
+    "dep:block2",
+    "dep:objc2-metal",
+    "objc2-quartz-core/CABase",
+    "objc2-quartz-core/objc2-core-foundation",
+]
 nice-log = ["dep:nice-plug-core"]
 opengl = [
     "dep:egui_glow",
@@ -156,6 +165,23 @@ features = [
     "CALayer",
     "CAMetalLayer",
 ]
+
+# The `frame-log` feature's Metal completion and presented handlers.
+[target.'cfg(target_os = "macos")'.dependencies.objc2-metal]
+version = "0.3"
+optional = true
+default-features = false
+features = [
+    "std",
+    "block2",
+    "objc2-core-foundation",
+    "MTLCommandBuffer",
+    "MTLDrawable",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies.block2]
+version = "0.6"
+optional = true
 
 [dev-dependencies.egui]
 version = "0.35.0"

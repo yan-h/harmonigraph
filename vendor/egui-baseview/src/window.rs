@@ -896,6 +896,8 @@ where
         // slow" from "we are not being called".
         let tick_start = Instant::now();
         let mut waited_ms = 0.0;
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        let log_start = crate::frame_log::begin();
         let Some(state) = &mut self.user_state else {
             return;
         };
@@ -1102,6 +1104,16 @@ where
             }
         }
         self.tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0 - waited_ms;
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        crate::frame_log::end(crate::frame_log::Tick {
+            start: log_start,
+            timing: window.frame_timing(),
+            tick_ms: self.tick_ms,
+            acquire_ms: waited_ms,
+            render_ms: self.render_ms,
+            rendered: do_repaint_now,
+            drawables: self.renderer.max_drawables(),
+        });
     }
 
     #[allow(unused_variables)]

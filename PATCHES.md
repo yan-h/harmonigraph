@@ -14,12 +14,16 @@ A fourth, separate site: `src/metal/mod.rs` gives `Buffer` a public `raw_handle(
 The GPU memory record (`harmonigraph_render::gpu_memory`) reads each buffer's liveness and `allocatedSize` through it.
 It changes no generated MSL or compiler option, so the shader corpus does not depend on it.
 
+A fifth site, also separate: `src/metal/mod.rs` gains `set_present_observer`, a process-wide hook `Queue::present` calls with the present's command buffer and drawable just before the commit (#1551).
+egui-baseview's `frame-log` feature installs it to read `GPUStartTime`/`GPUEndTime` and the drawable's `presentedTime`, which no wgpu API reaches because the drawable is private to the hal.
+With no observer installed it costs one `OnceLock` read per present, and it changes no generated MSL or compiler option.
+
 The provider is installed before device creation, so backend-internal shaders use the same path.
 Installation is unsafe because wgpu cannot validate arbitrary Metal bytecode; the application must establish exact source/options equivalence and artifact integrity.
 Harmonigraph does that with build-time hashes and exact immutable-input lookup.
 Unavailable native compiler-option APIs are guarded before access, and unsupported profiles retain source fallback.
 
-**Upgrade:** replace the upstream package, retain the workspace exclusion, and reapply only those four sites (dropping `Buffer::raw_handle` if upstream has gained it).
+**Upgrade:** replace the upstream package, retain the workspace exclusion, and reapply only those five sites (dropping `Buffer::raw_handle` if upstream has gained it).
 Inspect all compiler options and changes around the normal reflection boundary, then regenerate the corpus through the real production constructors.
 Require strict catalog/real-path golden coverage, storage-binding behavior, native lifecycle checks and rendering-performance validation.
 The optional provider is a candidate upstream boundary, not a reason to accumulate renderer-specific logic in the backend.
@@ -348,9 +352,14 @@ Unchecked on a trackpad: a sideways swipe with Shift held keeps its raw sign too
 - **`[workspace]` table** (`Cargo.toml`): an empty `[workspace]` table, for the same ancestor-root-exclusion reason `vendor/baseview/Cargo.toml` carries one —
 without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
 `ci.sh` runs `cargo test --manifest-path` against this crate from exactly there.
-- **Patch 20** (`src/window.rs`): leave the drawable wait out of the frame's totals (#1551).
+- **Patch 20** (`src/window.rs`, `src/renderer/wgpu/renderer.rs`, `src/frame_log.rs`, `Cargo.toml`): time frames against the display (#1551).
 `tick_ms` and `render_ms` leave out the drawable wait, which `acquire_ms` reports on its own:
 with three drawables, a frame the display paces waits most of a refresh for one in steady state, and a total counting that read as a frame that was always nearly too slow.
+The `frame-log` feature (macOS, wgpu) writes every frame's timing to `~/Library/Logs/Harmonigraph/`:
+the display link's timestamps from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
+and, through the wgpu-hal present observer, the GPU's start and end on the present's command buffer and the drawable's `presentedTime`.
+Together they classify a missed refresh as a late link callback, late CPU or GPU work, or a late latch.
+Built only on request (`--features frame-log` on the plugin).
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);

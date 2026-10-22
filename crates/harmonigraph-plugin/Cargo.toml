@@ -15,7 +15,11 @@ crate-type = ["cdylib", "lib"]
 doctest = false
 
 [features]
-startup-probe = ["dep:egui-wgpu", "objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-app-kit/NSGraphicsContext"]
+# Log every editor frame's timing to ~/Library/Logs/Harmonigraph (macOS), for
+# diagnosing missed refreshes. A diagnostic build only; see
+# vendor/egui-baseview/src/frame_log.rs.
+frame-log = ["egui-baseview/frame-log"]
+startup-probe =["dep:egui-wgpu", "objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-app-kit/NSGraphicsContext"]
 
 [[example]]
 name = "editor-startup"

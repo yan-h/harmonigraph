@@ -851,12 +851,14 @@ name = "egui-baseview"
 version = "0.3.0"
 dependencies = [
  "baseview",
+ "block2 0.6.2",
  "copypasta",
  "egui",
  "egui-wgpu",
  "keyboard-types",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
  "open",
  "pollster",
@@ -2537,6 +2539,7 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "objc2 0.6.4",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
 ]
 

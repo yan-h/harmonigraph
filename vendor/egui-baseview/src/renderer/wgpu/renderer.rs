@@ -409,6 +409,8 @@ impl Renderer {
 
         #[cfg(target_os = "macos")]
         let layer_present = layer_present::LayerPresent::new(&surface);
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        wgpu::hal::metal::set_present_observer(crate::frame_log::observe_present);
 
         let msaa_samples = config.renderer_options.msaa_samples;
 
@@ -475,6 +477,12 @@ impl Renderer {
     /// slow" and "we are early" — and it appears in no cost measurement.
     pub fn last_acquire_ms(&self) -> f32 {
         self.last_acquire_ms
+    }
+
+    /// The layer's `maximumDrawableCount`, read back for the frame log.
+    #[cfg(all(feature = "frame-log", target_os = "macos"))]
+    pub(crate) fn max_drawables(&self) -> Option<usize> {
+        self.layer_present.max_drawables()
     }
 
     /// The renderer's remaining stages, in milliseconds: uploads (including
@@ -926,6 +934,8 @@ impl Renderer {
         #[cfg(target_os = "macos")]
         self.layer_present.before_present();
 
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        crate::frame_log::submitted();
         output_frame.present();
         self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -1095,6 +1105,11 @@ mod layer_present {
             if hidden {
                 self.occluded();
             }
+        }
+
+        #[cfg(feature = "frame-log")]
+        pub(super) fn max_drawables(&self) -> Option<usize> {
+            self.layer.as_ref().map(|layer| layer.maximumDrawableCount())
         }
 
         pub(super) fn new(surface: &wgpu::Surface) -> Self {
