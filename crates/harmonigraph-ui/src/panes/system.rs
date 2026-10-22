@@ -68,7 +68,12 @@ pub(super) fn system_pane(
                 "Editor frame rate",
                 &mut interaction.frame_rate,
                 &[
-                    (FrameRate::Display, "Display rate", "Draw on every refresh of the display."),
+                    (
+                        FrameRate::Display,
+                        "Display rate",
+                        "Draw on every refresh of the display. The frame rate applies to the \
+                         plugin's editor on macOS; elsewhere the window draws when its system asks.",
+                    ),
                     (
                         FrameRate::Half,
                         "Half",
