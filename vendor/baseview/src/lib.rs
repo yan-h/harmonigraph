@@ -24,6 +24,9 @@ pub struct FrameTiming {
     pub target_timestamp: f64,
     /// Seconds between the display's refreshes.
     pub refresh: f64,
+    /// The frame rate the frame was paced at: one frame every `divisor`th
+    /// refresh, as set by [`Window::set_frame_divisor`].
+    pub divisor: u32,
 }
 
 pub use clipboard::*;

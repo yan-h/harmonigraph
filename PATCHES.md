@@ -131,7 +131,7 @@ A divisor rather than a rate because the link's `preferredFrameRateRange` rounds
 A link stops while its view is hidden or its window minimized or ordered out (measured; it keeps firing while the window is merely covered),
 so the common-mode timer from patch 1 survives as a 10 Hz watchdog that runs a frame whenever the link has been silent for 100 ms:
 the frame is also what drains the plugin's rings and repairs a stuck button or a withheld exit.
-`Window::frame_timing` hands the frame callback the link's timestamps, for egui-baseview's frame log.
+`Window::frame_timing` hands the frame callback the link's timestamps and the divisor it paced the frame at, for egui-baseview's frame log.
 The earlier version of this patch made the timer's interval configurable and reported `NSScreen::maximumFramesPerSecond`;
 `WindowOpenOptions::frame_interval`, `set_frame_interval`, `display_max_fps` and the interval constants are gone with the timer.
 macOS only;
@@ -356,10 +356,11 @@ without it, a worktree under `.claude/worktrees/` walks past its own root to the
 `tick_ms` and `render_ms` leave out the drawable wait, which `acquire_ms` reports on its own:
 with three drawables, a frame the display paces waits most of a refresh for one in steady state, and a total counting that read as a frame that was always nearly too slow.
 The `frame-log` feature (macOS, wgpu) writes every frame's timing to `~/Library/Logs/Harmonigraph/`:
-the display link's timestamps from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
+the display link's timestamps and frame divisor from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
 and, through the wgpu-hal present observer, the GPU's start and end on the present's command buffer and the drawable's `presentedTime`.
-Together they classify a missed refresh as a late link callback, late CPU or GPU work, or a late latch.
-Built only on request (`--features frame-log` on the plugin).
+Together they classify a missed refresh as a late link callback, a wait for a drawable, late CPU or GPU work, or a late latch.
+Built only on request (`--features frame-log` on the plugin);
+`tools/frame-log-summary.py` reads the log.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);

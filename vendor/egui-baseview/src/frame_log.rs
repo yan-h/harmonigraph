@@ -8,7 +8,9 @@
 //! the clock the display link, Metal's GPU times and `presentedTime` share).
 //!
 //! Three kinds of row share one header and are joined on `frame`:
-//! - `tick`, from the main thread at the end of every frame callback;
+//! - `tick`, from the main thread at the end of every frame callback. A frame
+//!   the display link did not ask for (the watchdog's, or the one painted as
+//!   the window is revealed) has 0 for the link's times and no `divisor`;
 //! - `gpu`, from Metal's completion handler on the present's command buffer.
 //!   That buffer only presents, and the queue reaches it once the frame's own
 //!   work is through, so its `gpu_end` is when the GPU finished the frame;
@@ -27,7 +29,7 @@ use objc2_metal::{MTLCommandBuffer, MTLDrawable};
 use objc2_quartz_core::CACurrentMediaTime;
 
 const HEADER: &str = "kind,frame,t,fired,timestamp,target,refresh,tick_ms,acquire_ms,\
-                      render_ms,submitted,drawables,gpu_start,gpu_end,presented,window";
+                      render_ms,submitted,drawables,gpu_start,gpu_end,presented,window,divisor";
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 
@@ -77,7 +79,7 @@ pub(crate) fn end(tick: Tick) {
     let submitted = if tick.rendered { SUBMITTED.get() } else { 0.0 };
     write(&format!(
         "tick,{},{:.6},{fired:.6},{timestamp:.6},{target:.6},{refresh:.6},{:.3},{:.3},{:.3},\
-         {submitted:.6},{},,,,{:x}",
+         {submitted:.6},{},,,,{:x},{}",
         FRAME.get(),
         tick.start,
         tick.tick_ms,
@@ -85,6 +87,7 @@ pub(crate) fn end(tick: Tick) {
         tick.render_ms,
         tick.drawables.map_or(String::new(), |n| n.to_string()),
         tick.window,
+        tick.timing.map_or(String::new(), |t| t.divisor.to_string()),
     ));
 }
 
@@ -98,7 +101,7 @@ pub(crate) fn observe_present(
         // SAFETY: Metal hands the handler the buffer it is attached to.
         let buffer = unsafe { buffer.as_ref() };
         write(&format!(
-            "gpu,{frame},,,,,,,,,,,{:.6},{:.6},,",
+            "gpu,{frame},,,,,,,,,,,{:.6},{:.6},,,",
             buffer.GPUStartTime(),
             buffer.GPUEndTime()
         ));
@@ -106,7 +109,7 @@ pub(crate) fn observe_present(
     let presented = RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
         // SAFETY: Metal hands the handler the drawable it is attached to.
         let drawable = unsafe { drawable.as_ref() };
-        write(&format!("present,{frame},,,,,,,,,,,,,{:.6},", drawable.presentedTime()));
+        write(&format!("present,{frame},,,,,,,,,,,,,{:.6},,", drawable.presentedTime()));
     });
     // SAFETY: both blocks are 'static and Metal copies them before returning.
     unsafe {
