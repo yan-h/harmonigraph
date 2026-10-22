@@ -129,24 +129,14 @@ impl LiveInput {
     /// past the drawn time. Every drawn time moves about a refresh later than
     /// the callback's, which is when the glass shows it.
     ///
-    /// A target further than [`Self::MAX_TARGET_SECONDS`] from the callback is
-    /// not this frame's — the link's times come from AppKit — and the drawn
-    /// time never rewinds, so one far ahead would hold the picture still until
-    /// the wall caught up. Such a frame, or one whose times are not numbers,
-    /// draws at `observed`.
+    /// A target [`FrameTiming::target_at`] refuses, as too far from the link's
+    /// fire to be this frame's, draws at `observed` too: the drawn time
+    /// never rewinds, so one far ahead would hold the picture still.
     pub(crate) fn frame_wall(&self, timing: Option<FrameTiming>, observed: f64) -> f64 {
-        let Some(timing) = timing else { return observed };
-        let fired = timing.fired_at.saturating_duration_since(self.start).as_secs_f64();
-        let target = fired + (timing.target_timestamp - timing.fired);
-        if (target - observed).abs() <= Self::MAX_TARGET_SECONDS {
-            target
-        } else {
-            observed
-        }
+        timing
+            .and_then(|timing| timing.target_at())
+            .map_or(observed, |target| target.saturating_duration_since(self.start).as_secs_f64())
     }
-    /// Past any panel's refresh, and the display link's own silence
-    /// threshold before the watchdog takes over.
-    const MAX_TARGET_SECONDS: f64 = 0.1;
     pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
         self.clock.now(wall_now)
     }

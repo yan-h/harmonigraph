@@ -132,7 +132,8 @@ A link stops while its view is hidden or its window minimized or ordered out (me
 so the common-mode timer from patch 1 survives as a 10 Hz watchdog that runs a frame whenever the link has been silent for 100 ms:
 the frame is also what drains the plugin's rings and repairs a stuck button or a withheld exit.
 `Window::frame_timing` hands the frame callback the link's timestamps and the divisor it paced the frame at, for egui-baseview's frame log,
-and the fire on `Instant`'s clock beside the media clock's (`fired_at`), which puts the target the plugin draws the frame at on its own clock.
+and the fire on `Instant`'s clock beside the media clock's (`fired_at`);
+`FrameTiming::target_at` puts the target on `Instant`'s clock, refusing one more than 0.1 s from the fire, for the plugin's picture and egui's clock to time the frame by.
 The earlier version of this patch made the timer's interval configurable and reported `NSScreen::maximumFramesPerSecond`;
 `WindowOpenOptions::frame_interval`, `set_frame_interval`, `display_max_fps` and the interval constants are gone with the timer.
 macOS only;
@@ -225,7 +226,8 @@ This is what makes a frame rate setting enforceable:
 egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a host draining MIDI) also forces the next pass to zero —
 so a cap built on it evaporates exactly when the UI is busy.
 Nor can the two be combined: a repaint delay of one frame skips every frame that arrives a hair early, halving the rate (#1551).
-`Queue::frame_timing` hands the frame its link timing from baseview patch 4, so the app can time its content by the refresh rather than by when the callback ran.
+`Queue::frame_timing` hands the frame its link timing from baseview patch 4, so the app can time its content by the refresh rather than by when the callback ran,
+and egui's own `input.time` is the link's target too (never going back past the last one), so egui's animations step with the picture (#1562).
 Before #1551 this plumbed a configurable frame timer interval and the display's maximum rate instead.
 - **Patch 7** (2 lines, `src/renderer.rs` + `src/lib.rs`): re-export
 `WgpuSetup` alongside `GraphicsConfig`.
