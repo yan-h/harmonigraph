@@ -223,7 +223,7 @@ const ZOOMED_IN: (u32, u32) = (66, 90);
 ///
 /// Checked where the constants are rather than where the frame is drawn: a
 /// range that quietly stopped reaching the lerp arm would still render, still
-/// bless, and still read as coverage — which is the failure #450 named and the
+/// agree with its base, and still read as coverage — which is the failure #450 named and the
 /// one a golden is least able to report on itself. It has already happened
 /// once here: at six semitones over 384 rows the arithmetic said every row was
 /// a lerp, the floor above widened the range to twenty-four, and the frame

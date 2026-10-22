@@ -415,7 +415,7 @@ fn a_name_on_a_nodes_band() -> Shot {
 /// name's shadow is suspected of coming out `1/S` of its dialled width while
 /// every ring and cross keeps theirs. Nothing in the suite can see it, because
 /// no claim test compares one Render scale against another; this frame records
-/// what the build actually draws, and the PR that fixes it re-baselines here.
+/// what the build actually draws, and the PR that fixes it moves it here.
 fn a_name_at_render_scale_2() -> Shot {
     let mut shot = a_name_on_a_nodes_band();
     shot.scene.view.render_scale = 2.0;

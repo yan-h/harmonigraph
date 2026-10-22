@@ -253,12 +253,17 @@ run cargo test --no-fail-fast -p harmonigraph-render
 # ...and the golden frames, drawn from the base and from this tree on this
 # machine and compared byte-exactly. It reports rather than fails: a moved frame
 # is a picture change to state, and Full CI's summary job is what requires the
-# PR body to state it (`Golden frames moved:`), so a forgotten statement costs a
-# re-run of that Linux job rather than of this one. It fails only when the head
-# cannot draw its frames. CI sets GOLDEN_BASE to HEAD^1, the main a PR's merge
-# commit stands on; locally the base is the merge-base with origin/main. The
-# mechanism, and why it replaced a committed record, is in harmonigraph-golden.
+# PR body to name each changed frame, so a forgotten statement costs a re-run of
+# that Linux job rather than of this one. It fails only when either side cannot
+# draw its frames. CI sets GOLDEN_BASE to HEAD^1 on a PR, the main its merge
+# commit stands on, and to `none` on a push; locally the base is the merge-base
+# with origin/main. The mechanism, and why it replaced a committed record, is in
+# harmonigraph-golden.
 golden_diff() {
+  if [ "${GOLDEN_BASE:-}" = none ]; then
+    echo "  skipped — no PR to state a moved frame in"
+    return
+  fi
   python3 -B tools/golden-diff.py ${GOLDEN_BASE:+--base "$GOLDEN_BASE"}
 }
 run golden_diff

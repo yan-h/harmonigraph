@@ -47,10 +47,12 @@ jobs:
       # install below fails rather than skipping.
       HARMONIGRAPH_REQUIRE_FFMPEG: "1"
       # The base tools/golden-diff.py draws against: on a pull_request the
-      # checkout is the PR merged into main, so its first parent is that main;
-      # on a push to main it is the commit before. Hence fetch-depth 2 below.
-      GOLDEN_BASE: HEAD^1
-    timeout-minutes: 20
+      # checkout is the PR merged into main, so its first parent is that main.
+      # Hence fetch-depth 2 below. A push to main has no PR body to state a
+      # move in, so it does not draw the goldens twice for nobody to read.
+      GOLDEN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || 'none' }}
+    # A green run takes about 10 minutes; the margin is for a cold cache.
+    timeout-minutes: 30
     strategy:
       # Both groups always report. A failure in one says nothing about the
       # other, and cancelling the survivor would hide half the answer behind a
@@ -97,8 +99,9 @@ jobs:
           # that this key cannot gate. Pruning that is its own job.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # The runner image has no ffmpeg, and only `workspace` runs
-      # harmonigraph-offline's tests.
+      # The runner image has no ffmpeg, and only `workspace` runs the
+      # harmonigraph-offline tests that need it; the golden ones `isolated`
+      # draws do not.
       - name: Install ffmpeg
         if: matrix.group == 'workspace'
         env:
@@ -162,15 +165,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          if [ "$(cat golden-diff/changed)" != true ]; then
-            cat golden-diff/report.md
-            exit 0
-          fi
           cat golden-diff/report.md
+          [ -s golden-diff/changed ] || exit 0
           body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .body)
-          if grep -q '^Golden frames moved:' <<<"$body"; then
-            echo "stated in the PR body"
+          # Every frame by name, so a statement written for one push does not
+          # cover a frame a later push moves.
+          unstated=
+          while IFS= read -r frame; do
+            grep -qF "$frame" <<<"$body" || unstated="$unstated $frame"
+          done < golden-diff/changed
+          if [ -z "$unstated" ]; then
+            echo "every changed frame is named in the PR body"
             exit 0
           fi
-          echo "::error::Golden frames moved against main (table above; contact sheets in this run's golden-diff artifact). Read the sheets, then add a line starting 'Golden frames moved:' to the PR body with the table and why, and re-run this job alone: gh run rerun $GITHUB_RUN_ID --job <this job's id>."
+          echo "::error::Golden frames changed against main and the PR body does not name:$unstated. Read their contact sheets in this run's golden-diff artifact, paste the table above into the PR body with what moved and why, and re-run this job alone: gh run rerun $GITHUB_RUN_ID --job <this job's id>."
           exit 1

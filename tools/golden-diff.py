@@ -13,8 +13,9 @@ directory, which shares every registry dependency (about 20 s for the base and
 stale Metal corpus on a shader PR cannot pass for a picture change.
 
 Writes `target/golden-diff/`: `base/` and `head/` (the frames), `sheets/` (a
-contact sheet per moved frame), `report.md` and `changed`, which Full CI's
-summary job reads to require a `Golden frames moved:` line in the PR body.
+contact sheet per moved frame), `report.md`, and `changed`: one frame per
+line, empty when nothing changed, each of which Full CI's summary job requires
+the PR body to name.
 When anything moved the head is drawn twice, and a frame that differs between
 the two is reported as unstable rather than moved. That second draw exists to
 measure nondeterminism the old committed record never separated from a change;
@@ -50,7 +51,9 @@ def git(*args):
 
 
 def changed_files(base):
-    tracked = git("diff", "--name-only", base).splitlines()
+    # --no-renames: a file moved out of `crates/` into an excluded directory
+    # lists its old path too, so the move still counts as a change that draws.
+    tracked = git("diff", "--no-renames", "--name-only", base).splitlines()
     untracked = git("ls-files", "--others", "--exclude-standard").splitlines()
     return [f for f in tracked + untracked if f]
 
@@ -73,10 +76,10 @@ def frame_count(directory):
     return sum(1 for _ in directory.glob("*/*.png"))
 
 
-def finish(report, changed):
+def skip(report):
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "report.md").write_text(report)
-    (OUT / "changed").write_text("true" if changed else "false")
+    (OUT / "changed").write_text("")
     print(report, end="")
 
 
@@ -90,7 +93,7 @@ def main():
     shutil.rmtree(OUT, ignore_errors=True)
 
     if not any(draws(f) for f in changed_files(base)):
-        finish(f"Golden frames not drawn: nothing that draws changed since {base[:10]}.\n", False)
+        skip(f"Golden frames not drawn: nothing that draws changed since {base[:10]}.\n")
         return 0
 
     # Reused while the base is unchanged, so its build stays incremental.
@@ -104,12 +107,16 @@ def main():
             sys.exit(f"git archive {base} failed")
         stamp.write_text(base)
 
-    if draw(BASE_SRC, OUT / "base") != 0:
-        print(f"⚠ the base's golden tests failed at {base[:10]}; comparing what it drew", flush=True)
-    if frame_count(OUT / "base") == 0:
-        finish(f"Golden frames not compared: the base {base[:10]} writes no frames "
-               "(it predates tools/golden-diff.py).\n", False)
+    # Only a base whose gate cannot write frames is skipped. One that can and
+    # fails to is an error: read as "nothing to compare", it would pass every
+    # moved frame, and hand --strict a false proof.
+    gate = BASE_SRC / "crates/harmonigraph-golden/src/lib.rs"
+    if "HARMONIGRAPH_GOLDEN_WRITE" not in gate.read_text():
+        skip(f"Golden frames not compared: the base {base[:10]} predates tools/golden-diff.py.\n")
         return 0
+    if draw(BASE_SRC, OUT / "base") != 0 or frame_count(OUT / "base") == 0:
+        sys.exit(f"✗ the base {base[:10]} failed to draw its golden frames, so there is "
+                 "nothing to compare against")
     if draw(ROOT, OUT / "head") != 0:
         sys.exit("✗ the working tree's golden tests failed; the frames they did not draw "
                  "would read as removed, so there is no comparison to make")
@@ -121,7 +128,7 @@ def main():
                               stdout=subprocess.PIPE).stdout
 
     report = compare("-")
-    if (OUT / "changed").read_text() == "true":
+    if (OUT / "changed").read_text():
         if draw(ROOT, OUT / "again") != 0:
             sys.exit("✗ the working tree's golden tests failed on their second draw")
         report = compare(str(OUT / "again"))
@@ -131,9 +138,7 @@ def main():
     if summary:
         with open(summary, "a") as f:
             f.write(f"## Golden frames against {base[:10]}\n\n{report}\n")
-    changed = (OUT / "changed").read_text() == "true"
-    unstable = "Unstable" in report
-    return 1 if args.strict and (changed or unstable) else 0
+    return 1 if args.strict and (OUT / "changed").read_text() else 0
 
 
 if __name__ == "__main__":

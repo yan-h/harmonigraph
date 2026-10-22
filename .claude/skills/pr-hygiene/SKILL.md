@@ -40,8 +40,8 @@ Nothing is committed and nothing is blessed:
 `tools/golden-diff.py` draws every golden frame from the base and from the branch on one machine, byte-exactly, and names each frame that moved with its mean, max and a contact sheet.
 Run it locally under `./session-lifecycle.sh run --` (about 40 s);
 `Full CI` runs it in `isolated` against `HEAD^1` and uploads the `golden-diff` artifact.
-When a frame moved, read its sheet, then put a line starting `Golden frames moved:` in the PR body with the table and why.
-`Full CI`'s Linux summary job fails without that line;
+When a frame moved, read its sheet, then paste the report's table into the PR body with what moved and why.
+`Full CI`'s Linux summary job fails while any changed frame goes unnamed in the body, a frame a later push moves included;
 after adding it, re-run that job alone (`gh run rerun <run> --job <job id>`), not the macOS groups.
 Reading the sheet is the session's job, not Yan's:
 he judges a look in the DAW, and the PR body's line is the record of what moved.

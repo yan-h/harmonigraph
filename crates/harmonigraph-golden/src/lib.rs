@@ -131,15 +131,23 @@ pub struct Report {
     pub new: Vec<String>,
     /// Frames the base draws and the head does not.
     pub removed: Vec<String>,
+    /// `(frame, base size, head size)` for each frame drawn at a new size.
+    pub resized: Vec<(String, [u32; 2], [u32; 2])>,
     /// Frames the head drew differently on its second draw: nondeterminism,
-    /// which is reported apart so it never reads as a picture change.
+    /// reported apart so it never reads as a picture change, and never compared
+    /// with the base, so it is stated like one.
     pub unstable: Vec<String>,
 }
 
 impl Report {
-    /// Whether the head's picture differs from the base's at all.
-    pub fn changed(&self) -> bool {
-        !(self.moved.is_empty() && self.new.is_empty() && self.removed.is_empty())
+    /// Every frame that needs stating: anything but an unchanged frame.
+    pub fn changed(&self) -> Vec<&str> {
+        let named = self.moved.iter().map(|(f, ..)| f).chain(&self.new).chain(&self.removed);
+        named
+            .chain(self.resized.iter().map(|(f, ..)| f))
+            .chain(&self.unstable)
+            .map(String::as_str)
+            .collect()
     }
 }
 
@@ -172,7 +180,7 @@ pub fn compare(base: &Path, head: &Path, again: Option<&Path>, sheets: &Path) ->
         }
         let ((expected, before), (actual, size)) = (expected, drawn);
         if before != size {
-            report.moved.push((name.clone(), f64::NAN, u8::MAX));
+            report.resized.push((name.clone(), before, size));
             continue;
         }
         let (mean, max) = drift(&expected, &actual);
@@ -252,8 +260,8 @@ fn write_png(path: &Path, size: [u32; 2], rgba: &[u8]) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("golden directory");
     }
-    // Written beside the target and renamed over it, so a reader in another
-    // process sees the old frame or the new one, never a truncated file (#1361).
+    // Written beside the target and renamed over it, so an interrupted run
+    // leaves the old frame or the new one, never a truncated file to compare.
     let tmp = path.with_extension(format!("png.{}.tmp", std::process::id()));
     let file = std::fs::File::create(&tmp).expect("create png");
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
@@ -308,8 +316,8 @@ mod tests {
     }
 
     /// One level on one channel is a move, a frame on one side only is new or
-    /// removed, and a head that draws differently twice is unstable rather
-    /// than moved.
+    /// removed, a new size is a resize, and a head that draws differently
+    /// twice is unstable rather than moved.
     #[test]
     fn compare_names_what_moved_appeared_vanished_and_wavered() {
         let dir = scratch("compare");
@@ -328,6 +336,10 @@ mod tests {
                 }
             }
         }
+        gate.check_into(Some(&base), "reshaped", [8, 8], &frame(0));
+        for side in [&head, &again] {
+            gate.check_into(Some(side), "reshaped", [4, 16], &frame(0));
+        }
         let sheets = dir.join("sheets");
         let report = compare(&base, &head, Some(&again), &sheets);
         let mean = 64.0 / 256.0;
@@ -337,11 +349,12 @@ mod tests {
                 moved: vec![("k/moved.png".into(), mean, 1)],
                 new: vec!["k/added.png".into()],
                 removed: vec!["k/gone.png".into()],
+                resized: vec![("k/reshaped.png".into(), [8, 8], [4, 16])],
                 unstable: vec!["k/wavers.png".into()],
             }
         );
         assert!(sheets.join("k/moved.png").is_file(), "no contact sheet for the moved frame");
-        assert!(!compare(&base, &base, None, &sheets).changed());
+        assert!(compare(&base, &base, None, &sheets).changed().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
