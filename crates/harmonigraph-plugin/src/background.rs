@@ -17,8 +17,9 @@
 //! on, waits on this thread for a copy or an append, never for an FFT, and no
 //! longer does any FFT itself. The notes and the clock heartbeat go with the
 //! audio, in the same hold, because the heartbeat's offset is what dates the
-//! audio: observing one and mapping the other on two threads would let a
-//! block be dated before its heartbeat is seen.
+//! audio: observed and then mapped in one hold, as a frame's drain did, where
+//! on two threads at two cadences a block after a callback pause could be
+//! dated with the offset from before it, a pause too early.
 //!
 //! Both rings are drained here, not just the audio one, and the second is not
 //! a bonus: a full ring drops the NEWEST, so a ring left to pile up would lose
@@ -74,18 +75,16 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::editor::{EditorShared, EguiState};
 
-/// How often the worker looks for input while the host is sending it.
+/// How often the worker looks for input while the editor window is open.
 ///
 /// Under the 8 ms hop, so a column is analyzed within a poll of its audio
-/// arriving, where a frame used to analyze it at the next frame: at 144 Hz
-/// within 6.9 ms, at a quarter of 60 Hz within 66.7 ms. The worst case for a
-/// block is now a frame plus a poll. Cheap: a step that finds nothing is two
-/// short holds of an uncontended lock.
+/// arriving, where a frame used to analyze it at the next frame: the worst
+/// case for a block is now a frame plus a poll. Cheap: a step that finds
+/// nothing is two short holds of an uncontended lock.
 pub(crate) const POLL: Duration = Duration::from_millis(4);
 
-/// How often it looks while the audio ring has been empty, which is a host
-/// that has stopped calling `process` at all (one that is merely stopped still
-/// streams silence).
+/// How often it looks with the window shut, where nothing is drawing what it
+/// analyzes and the closed window's duties (see [`step`]) want this cadence.
 ///
 /// Bounded above by the ring itself, and tightly: it holds
 /// [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) interleaved samples,
@@ -96,17 +95,13 @@ pub(crate) const POLL: Duration = Duration::from_millis(4);
 /// has to lose this thread for a third of a second before anything is lost.
 /// `the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers` is what keeps
 /// the two numbers in that relation.
-pub(crate) const IDLE_POLL: Duration = Duration::from_millis(20);
-
-/// How often, at most, a step with the window shut also ages the picture and
-/// polls the take's end. See [`step`].
-const DUTY_INTERVAL: Duration = Duration::from_millis(20);
+pub(crate) const SHUT_POLL: Duration = Duration::from_millis(20);
 
 /// The input worker's thread, and the flag that ends it.
 ///
 /// Held by the plugin purely for its [`Drop`]: a plugin removed from a project
 /// must not leave a thread behind doing FFTs on a ring nobody fills again.
-pub(crate) struct BackgroundAnalyzer {
+pub(crate) struct InputWorker {
     stop: Arc<AtomicBool>,
     /// Completed loop rounds, exposed only to tests that need an observable
     /// boundary after changing the editor-open flag.
@@ -119,12 +114,12 @@ pub(crate) struct BackgroundAnalyzer {
     thread: Option<JoinHandle<()>>,
 }
 
-impl BackgroundAnalyzer {
+impl InputWorker {
     pub(crate) fn spawn(
         shared: Arc<Mutex<EditorShared>>,
         editor_state: Arc<EguiState>,
         ui_state: Arc<RwLock<String>>,
-    ) -> BackgroundAnalyzer {
+    ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let worker = shared.clone();
@@ -157,7 +152,7 @@ impl BackgroundAnalyzer {
                 None
             }
         };
-        BackgroundAnalyzer {
+        InputWorker {
             stop,
             thread,
             #[cfg(test)]
@@ -171,10 +166,10 @@ impl BackgroundAnalyzer {
     }
 }
 
-impl Drop for BackgroundAnalyzer {
+impl Drop for InputWorker {
     /// Stops the thread and waits for it, so the plugin never outlives its own
-    /// worker. Joining can wait for the current bounded drain and restore,
-    /// one [`POLL`] sleep, and the final drain in [`run`].
+    /// worker. Joining can wait for the current step, one [`SHUT_POLL`] sleep
+    /// at most, and the final drain in [`run`].
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
@@ -260,22 +255,21 @@ impl Restore {
 thread_local! {
     /// Pause a step before it obtains shared state.
     static TICK_PAUSE: std::cell::RefCell<Option<Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
-    /// Run between a step's two holds of the lock, where its FFTs run.
+    /// Run between a step's two holds of the lock, just before its FFTs.
     #[allow(clippy::type_complexity)]
-    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&Mutex<EditorShared>)>>> = const { std::cell::RefCell::new(None) };
+    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&Mutex<EditorShared>, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// One step: adopt whatever the host has restored while the window is shut,
 /// take the notes and the audio under the lock, analyze the audio without
 /// it, and give the columns back under it — then, with the window shut, the
-/// frame's other duties when `duties` says they are due. Whether the step
-/// found audio, which keeps the worker at [`POLL`] rather than [`IDLE_POLL`].
+/// frame's other duties.
 ///
-/// The duties run at [`DUTY_INTERVAL`], the closed window's cadence before
-/// the worker polled faster, not at every step: `poll_take_end` counts its
-/// OnTransportStop debounce in calls ([`EditorShared::STOP_FRAMES`]), and at
-/// [`POLL`] twenty of them would be 80 ms, under one 4096-sample block —
-/// the very stall the debounce is there to ride out.
+/// Those run once a step, and a shut window's steps come every [`SHUT_POLL`],
+/// the cadence they always had: `poll_take_end` counts its OnTransportStop
+/// debounce in calls ([`EditorShared::STOP_FRAMES`]), so at [`POLL`] twenty of
+/// them would be 80 ms, under one 4096-sample block — the very stall the
+/// debounce is there to ride out.
 ///
 /// Split out from the sleep loop so what it DECIDES can be tested without a
 /// clock, which is most of what there is to get wrong here.
@@ -295,12 +289,7 @@ thread_local! {
 /// what the ring holds) or a give (appending its columns), each well under a
 /// millisecond even for a full ring's 170 columns. The FFTs between them, some
 /// 40 ms for that ring at the historical estimate above, hold nothing.
-fn step(
-    shared: &Mutex<EditorShared>,
-    editor_state: &EguiState,
-    restore: &mut Restore,
-    duties: bool,
-) -> bool {
+fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {
     #[cfg(test)]
     if let Some(gate) = TICK_PAUSE.with_borrow_mut(Option::take) {
         gate.wait();
@@ -321,19 +310,18 @@ fn step(
         shared.fresh_notes |= notes;
         taken
     };
-    let found = taken.as_ref().is_some_and(|taken| taken.has_audio());
     let taken = taken.map(|mut taken| {
+        #[cfg(test)]
+        BETWEEN_HOLDS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared, &taken)));
         crate::editor::input::LiveInput::analyze(&mut taken);
         taken
     });
-    #[cfg(test)]
-    BETWEEN_HOLDS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared)));
     let mut guard = shared.lock();
     let shared = &mut *guard;
     if let Some(taken) = taken {
         shared.input.give(&mut shared.ui.picture.runtime, taken);
     }
-    if duties && !editor_state.is_open() {
+    if !editor_state.is_open() {
         let now = shared.input.now();
         let now = shared.input.display_now(now);
         shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
@@ -345,7 +333,6 @@ fn step(
         // `EditorShared::poll_take_end`.
         shared.poll_take_end();
     }
-    found
 }
 
 /// Drain, sleep, repeat, until the plugin goes away.
@@ -363,16 +350,27 @@ fn run(
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
-    let mut last_duties: Option<std::time::Instant> = None;
     while !stop.load(Ordering::Relaxed) {
-        let due = last_duties.is_none_or(|at| at.elapsed() >= DUTY_INTERVAL);
-        if due {
-            last_duties = Some(std::time::Instant::now());
+        // A panic would otherwise end the thread with the analysis lent out
+        // and nothing draining either ring, freezing an open window's picture
+        // for the session with nothing said. Hand the job back to the frames.
+        let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            step(shared, editor_state, &mut restore)
+        }));
+        if stepped.is_err() {
+            let mut shared = shared.lock();
+            shared.input.recover_analysis();
+            shared.frame_drains = true;
+            shared.ui.picture.runtime.console.log(
+                "input worker stopped by a panic — the editor window drains its own input \
+                 from here, and the spectrogram will only cover time it is open"
+                    .to_string(),
+            );
+            return;
         }
-        let found = step(shared, editor_state, &mut restore, due);
         #[cfg(test)]
         rounds.fetch_add(1, Ordering::Release);
-        std::thread::sleep(if found { POLL } else { IDLE_POLL });
+        std::thread::sleep(if editor_state.is_open() { POLL } else { SHUT_POLL });
     }
     // Destruction follows host callback quiescence. Consume the final owned
     // display payloads before the editor's bank is reclaimed off thread.
@@ -454,7 +452,7 @@ mod tests {
         /// One round of the loop the thread runs, against a mirror that
         /// survives between rounds.
         fn step(&mut self) {
-            super::step(&self.shared, &self.editor_state, &mut self.restore, true);
+            super::step(&self.shared, &self.editor_state, &mut self.restore);
         }
 
         /// What the host does when it restores a project — or pushes a preset
@@ -654,54 +652,43 @@ mod tests {
         assert!(!h.shared.lock().take.is_recording(), "the shut window ended the take");
     }
 
-    /// The window opening or shutting changes nothing about the columns: audio
-    /// split across a window that opened midway yields exactly the columns it
-    /// yields with the window shut throughout, because the same worker drains
-    /// it either way (#1559). Against a baseline rather than a number, because
-    /// what is claimed is an EQUIVALENCE, and a count spelled out here would go
-    /// stale with the hop or the window length.
-    #[test]
-    fn opening_the_window_changes_nothing_about_the_columns() {
-        let baseline = {
-            let mut h = harness();
-            h.push_audio(20_000);
-            h.step();
-            h.push_audio(20_000);
-            h.step();
-            h.columns()
-        };
-        assert!(baseline > 0, "the baseline analyzed nothing");
-
-        let mut h = harness();
-        h.push_audio(20_000);
-        h.step();
-        let while_closed = h.columns();
-        assert!(while_closed > 0, "the closed half analyzed nothing");
-        h.editor_state.set_open(true);
-        h.push_audio(20_000);
-        h.step();
-        assert_eq!(h.columns(), baseline);
-    }
-
     /// The point of the worker: its FFTs run with the editor's lock free, so
     /// a frame or a window opening on the host's main thread never waits for
-    /// one. Between its two holds the lock is free, and the step's columns
-    /// have not reached the store yet, so they were analyzed in between.
+    /// one. Just before them the lock is free and the audio taken is not yet
+    /// analyzed, so the first hold did not run them, and the second only
+    /// gives back what they made.
     #[test]
     fn the_analysis_runs_with_the_lock_free() {
         let mut h = harness();
         h.push_audio(20_000);
         let between = std::rc::Rc::new(std::cell::Cell::new(None));
         let seen = between.clone();
-        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>| {
-            let free = shared.try_lock().map(|s| s.ui.picture.runtime.spectrum.history().len());
-            seen.set(Some(free));
+        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>, taken| {
+            seen.set(Some((shared.try_lock().is_some(), taken.unanalyzed_audio())));
         })));
         h.step();
         BETWEEN_HOLDS.set(None);
 
-        assert_eq!(between.get(), Some(Some(0)), "the lock was held, or columns arrived, mid-step");
+        assert_eq!(between.get(), Some((true, true)), "the lock was held, or the audio analyzed");
         assert!(h.columns() > 0, "the step analyzed nothing");
+    }
+
+    /// A Clear the window makes while a step analyzes empties the history of
+    /// that step's columns too: they come from audio before the Clear.
+    #[test]
+    fn a_clear_during_the_analysis_keeps_its_columns_out() {
+        let mut h = harness();
+        h.push_audio(20_000);
+        BETWEEN_HOLDS.set(Some(Box::new(|shared: &Mutex<EditorShared>, _| {
+            shared.lock().ui.picture.runtime.spectrum.clear_history();
+        })));
+        h.step();
+        BETWEEN_HOLDS.set(None);
+        assert_eq!(h.columns(), 0, "the step put back columns from before the Clear");
+
+        h.push_audio(20_000);
+        h.step();
+        assert!(h.columns() > 0, "audio after the Clear was not kept");
     }
 
     /// A step analyzes under the settings it took the audio with, even if they
@@ -718,7 +705,7 @@ mod tests {
             SpectrumWindow::Precise
         };
         h.push_audio(40_000);
-        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>| {
+        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>, _| {
             shared.lock().ui.picture.appearance.spectrum.window = second;
         })));
         h.step();
@@ -814,7 +801,7 @@ mod tests {
                 TICK_PAUSE.with_borrow_mut(|pause| *pause = Some(worker_gate));
                 // This worker has not adopted the blob yet.
                 let mut restore = Restore::of(ui_state);
-                step(&shared, &editor_state, &mut restore, true);
+                step(&shared, &editor_state, &mut restore);
             });
             gate.wait();
             {
@@ -961,10 +948,10 @@ mod tests {
         const CHANNELS: f64 = 2.0;
         let span = crate::AUDIO_RING_CAPACITY as f64 / CHANNELS / FASTEST_RATE;
         assert!(
-            span > POLL.as_secs_f64() * 8.0,
+            span > SHUT_POLL.as_secs_f64() * 8.0,
             "the ring holds {span:.3} s against a {:.3} s poll: too little slack for a \
              thread the scheduler is free to ignore",
-            POLL.as_secs_f64(),
+            SHUT_POLL.as_secs_f64(),
         );
     }
 
@@ -983,12 +970,15 @@ mod tests {
         h.push_audio(20_000);
 
         let analyzer =
-            BackgroundAnalyzer::spawn(h.shared.clone(), h.editor_state.clone(), h.ui_state.clone());
-        // Generous against POLL, so a loaded machine cannot fail this for being
-        // slow — it is asserting that rounds happen at all, not how fast.
-        std::thread::sleep(POLL * 10);
+            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), h.ui_state.clone());
+        // Polled to a deadline, so a loaded machine cannot fail this for being
+        // slow — it is asserting that steps happen at all, not how fast.
+        let started = Instant::now();
+        while h.columns() == 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "the thread never took a step");
+            std::thread::sleep(POLL);
+        }
         let analyzed = h.columns();
-        assert!(analyzed > 0, "the thread never took a round");
 
         let started = Instant::now();
         drop(analyzer);
@@ -999,7 +989,7 @@ mod tests {
         );
 
         h.push_audio(20_000);
-        std::thread::sleep(POLL * 10);
+        std::thread::sleep(SHUT_POLL * 10);
         assert_eq!(h.columns(), analyzed, "the thread outlived the plugin that owned it");
     }
 }

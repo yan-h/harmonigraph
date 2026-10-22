@@ -18,9 +18,12 @@ pub(crate) struct ClockMapper {
 /// The drawn time's lead over the wall clock: the best a recent heartbeat has
 /// supported, rather than the latest one's.
 ///
-/// A heartbeat is seen at the frame that drains it, not when its block was
-/// due, and how long it waited for that frame varies block to block — by up
-/// to a whole frame, since blocks and frames run at unrelated rates. Taking
+/// A heartbeat is seen at the drain that finds it, not when its block was
+/// due, and how long it waited for that drain varies block to block — by up
+/// to a whole drain interval, since blocks and drains run at unrelated rates.
+/// Drains were frames when this was measured; since #1559 they are the input
+/// worker's steps, every 4 ms with the window open and 20 ms with it shut,
+/// which shrinks the wait this window exists to absorb. Taking
 /// each heartbeat's own lead made that wait the drawn time's: at 144 Hz over
 /// 512-sample blocks it advanced 10.7, 6.9 and 3.7 ms on successive frames,
 /// and anything scrolling on that clock moved in steps. The least-delayed
@@ -74,10 +77,10 @@ impl Lead {
     /// Losing that much at a rollover is a step of that much.
     const RESOLUTION_SECONDS: f64 = 0.0005;
 
-    /// The longest drain gap taken as a heartbeat's wait for its frame. The
-    /// slowest frame rate, a quarter of 60 Hz, drains every 66.7 ms and the
-    /// closed window's analyzer every 20 ms; a longer gap is a hitch, and
-    /// taken whole it would let the ceiling hold a lead the audio dropped.
+    /// The longest drain gap taken as a heartbeat's wait for its drain. The
+    /// input worker drains every 4 ms with the window open and every 20 ms
+    /// with it shut; a longer gap is a hitch, and taken whole it would let the
+    /// ceiling hold a lead the audio dropped.
     const MAX_WAIT_SECONDS: f64 = 0.1;
 
     /// How much later one block may be delivered than another, past the wait

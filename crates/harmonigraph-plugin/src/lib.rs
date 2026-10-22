@@ -130,7 +130,7 @@ pub struct Harmonigraph {
     /// the analyzer thread rather than on the one dropping the plugin. That
     /// appears to be sound, but PR #112 was a texture freed from the wrong point
     /// and it cost a crash; ordering the field is cheaper than being sure.
-    _background: background::BackgroundAnalyzer,
+    _input_worker: background::InputWorker,
     params: Arc<HarmonigraphParams>,
     /// Coherent, bounded audio and source metadata for the live analyzer.
     audio_producer: audio_ingress::Producer,
@@ -676,7 +676,7 @@ impl Default for Harmonigraph {
         // saved settings: the host restores them into that field at a moment of
         // its own choosing, and nothing but this thread is there to read them
         // before a window is built. See `background::Restore`.
-        let _background = background::BackgroundAnalyzer::spawn(
+        let _input_worker = background::InputWorker::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
             params.ui_state.blob().clone(),
@@ -693,7 +693,7 @@ impl Default for Harmonigraph {
             samples_processed: 0,
             presentation_seconds: 0.0,
             take: RecorderSlot(Some(take)),
-            _background,
+            _input_worker,
         }
     }
 }
@@ -1276,7 +1276,7 @@ mod tests {
     fn a_round_after(plugin: &Harmonigraph, before: u64) -> bool {
         let started = Instant::now();
         loop {
-            if plugin._background.completed_rounds() > before {
+            if plugin._input_worker.completed_rounds() > before {
                 return true;
             }
             if started.elapsed() >= ANALYSIS_DEADLINE {
@@ -1305,7 +1305,7 @@ mod tests {
     /// the input worker watches, and nothing but this says so.
     ///
     /// They are two clones of one `Arc<EguiState>` today — `Default` hands one
-    /// to [`background::BackgroundAnalyzer::spawn`] and `editor` hands the same
+    /// to [`background::InputWorker::spawn`] and `editor` hands the same
     /// field to `editor::create`. The worker drains the rings either way
     /// (#1559); what the flag decides is whether it applies a restored blob,
     /// which under an open window would revert everything changed since the
@@ -1336,7 +1336,7 @@ mod tests {
 
         plugin.params.editor_state.set_open(true);
         // A completed step after the store: every step after it sees the flag.
-        let rounds = plugin._background.completed_rounds();
+        let rounds = plugin._input_worker.completed_rounds();
         assert!(
             a_round_after(&plugin, rounds),
             "no worker step in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
@@ -1445,7 +1445,7 @@ mod tests {
         // input worker has adopted the blob and will not again. The
         // live state is then turned elsewhere, so only the stored blob can
         // answer 0.5.
-        let rounds = plugin._background.completed_rounds();
+        let rounds = plugin._input_worker.completed_rounds();
         assert!(
             a_round_after(&plugin, rounds + 1),
             "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
@@ -1457,7 +1457,7 @@ mod tests {
         // round after the flag is what keeps the input worker's adopt
         // of the stored blob from landing over the turn.
         plugin.params.editor_state.set_open(true);
-        let rounds = plugin._background.completed_rounds();
+        let rounds = plugin._input_worker.completed_rounds();
         assert!(
             a_round_after(&plugin, rounds),
             "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
@@ -1514,7 +1514,7 @@ mod tests {
     /// pass a test of the window's own path for the wrong reason.
     fn open_window(plugin: &Harmonigraph) {
         plugin.params.editor_state.set_open(true);
-        let rounds = plugin._background.completed_rounds();
+        let rounds = plugin._input_worker.completed_rounds();
         assert!(
             a_round_after(plugin, rounds),
             "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",

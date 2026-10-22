@@ -356,14 +356,15 @@ impl SpectrumAnalysis {
 }
 
 impl SpectrumStore {
-    /// Advance the curve by one analyzed column and keep it as history.
-    /// `source_dated` is the plugin's exact source-time feed, whose history
-    /// must stay strictly increasing (see below).
+    /// Advance the curve by one analyzed column and, if `keep`, keep it as
+    /// history. `source_dated` is the plugin's exact source-time feed, whose
+    /// history must stay strictly increasing (see below).
     pub(crate) fn take(
         &mut self,
         column: AnalyzedColumn,
         config: &SpectrumConfig,
         source_dated: bool,
+        keep: bool,
     ) {
         // Two coefficients, chosen per bucket by which way it is moving.
         // Derived from the hop actually in use rather than set on the bar,
@@ -391,7 +392,7 @@ impl SpectrumStore {
         // history until mapped time passes its tail, without re-dating
         // samples or skipping any FFT/curve progression above. Offline
         // arrival-dated feeding retains its existing append behavior.
-        if !source_dated || self.history.back().is_none_or(|c| column.time > c.time) {
+        if keep && (!source_dated || self.history.back().is_none_or(|c| column.time > c.time)) {
             self.push_history(column.time, &column.power);
         }
     }
@@ -413,11 +414,18 @@ impl SpectrumStore {
     }
 
     /// Apply one delivery, as [`AudioSpectrum::apply`] describes.
-    fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig, source_dated: bool) {
+    /// `keep` false moves the curve without keeping the column as history.
+    fn apply(
+        &mut self,
+        delivery: Delivery,
+        config: &SpectrumConfig,
+        source_dated: bool,
+        keep: bool,
+    ) {
         match delivery {
             Delivery::Restart => self.restart(),
             Delivery::Arrival(newest) => self.last_samples = Some(newest),
-            Delivery::Column(column) => self.take(column, config, source_dated),
+            Delivery::Column(column) => self.take(column, config, source_dated, keep),
         }
     }
 
@@ -572,7 +580,7 @@ impl AudioSpectrum {
     ) {
         let AudioSpectrum { analysis, store } = self;
         analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
-            store.apply(delivery, config, true)
+            store.apply(delivery, config, true, true)
         });
         store.lag = analysis.lag();
     }
@@ -581,14 +589,21 @@ impl AudioSpectrum {
     /// order, from a source-dated feed; `config` is the one it analyzed under.
     /// The plugin's input worker analyzes off the editor's lock and hands the
     /// result here under it, with `lag` its analyzer's.
+    ///
+    /// `epoch` is [`Self::history_epoch`] when the audio was taken. If the
+    /// history has been cleared since, its columns still move the curve but
+    /// do not join the history, which the Clear was asked to empty of
+    /// everything before it.
     pub fn apply(
         &mut self,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
         lag: f64,
+        epoch: u32,
     ) {
+        let keep = epoch == self.store.history_epoch;
         for delivery in deliveries {
-            self.store.apply(delivery, config, true);
+            self.store.apply(delivery, config, true, keep);
         }
         self.store.lag = lag;
     }
@@ -631,7 +646,7 @@ impl AudioSpectrum {
             config,
             source_origin,
             consume,
-            |column| store.take(column, config, source_origin.is_some()),
+            |column| store.take(column, config, source_origin.is_some(), true),
         );
         store.lag = analysis.lag();
         fed
