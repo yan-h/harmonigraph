@@ -110,7 +110,9 @@ impl LiveInput {
     }
     /// The wall time a frame draws at: the refresh the display link means it
     /// to be on screen by, on [`Self::now`]'s clock, or `observed` for a frame
-    /// the link did not ask for.
+    /// the link did not ask for. Such a frame between link frames is behind
+    /// the last target, so [`Self::display_now`] holds it at the time already
+    /// drawn, for that one frame.
     ///
     /// The refresh rather than when the callback got to run, because the
     /// callback runs on the host's main thread whenever the host lets it —
@@ -126,18 +128,25 @@ impl LiveInput {
     /// frames in that log), so content the drain just stamped is never dated
     /// past the drawn time. Every drawn time moves about a refresh later than
     /// the callback's, which is when the glass shows it.
+    ///
+    /// A target further than [`Self::MAX_TARGET_SECONDS`] from the callback is
+    /// not this frame's — the link's times come from AppKit — and the drawn
+    /// time never rewinds, so one far ahead would hold the picture still until
+    /// the wall caught up. Such a frame, or one whose times are not numbers,
+    /// draws at `observed`.
     pub(crate) fn frame_wall(&self, timing: Option<FrameTiming>, observed: f64) -> f64 {
         let Some(timing) = timing else { return observed };
         let fired = timing.fired_at.saturating_duration_since(self.start).as_secs_f64();
         let target = fired + (timing.target_timestamp - timing.fired);
-        // The link's times come from AppKit; one that is not a number must
-        // not become the drawn time, which never rewinds.
-        if target.is_finite() {
+        if (target - observed).abs() <= Self::MAX_TARGET_SECONDS {
             target
         } else {
             observed
         }
     }
+    /// Past any panel's refresh, and the display link's own silence
+    /// threshold before the watchdog takes over.
+    const MAX_TARGET_SECONDS: f64 = 0.1;
     pub(crate) fn display_now(&mut self, wall_now: f64) -> f64 {
         self.clock.now(wall_now)
     }
@@ -218,6 +227,19 @@ mod tests {
 
         let observed = drawn.last().unwrap() + 0.05;
         assert_eq!(shared.input.frame_wall(None, observed), observed);
+        // A target AppKit got wrong, which would hold the picture still.
+        for target_timestamp in [media + observed + 5.0, f64::NAN] {
+            let fired_at = start + std::time::Duration::from_secs_f64(observed);
+            let timing = FrameTiming {
+                fired: media + observed,
+                fired_at,
+                timestamp: media + observed,
+                target_timestamp,
+                refresh,
+                divisor: 1,
+            };
+            assert_eq!(shared.input.frame_wall(Some(timing), observed), observed);
+        }
     }
 
     #[test]
