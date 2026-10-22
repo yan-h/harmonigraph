@@ -647,25 +647,11 @@ impl AudioSpectrum {
         config: &SpectrumConfig,
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.feed_sample_chunks(batch, channels, sample_rate, now, config, None, consume)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn feed_sample_chunks<E>(
-        &mut self,
-        batch: usize,
-        channels: usize,
-        sample_rate: f32,
-        now: f64,
-        config: &SpectrumConfig,
-        source_origin: Option<f64>,
-        consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
-    ) -> Result<(), E> {
         let AudioSpectrum { analysis, store, .. } = self;
         let analysis = analysis.as_mut().expect("an inline shell never lends its analysis");
         store.last_samples = Some(now);
-        analysis.feed(batch, channels, sample_rate, now, config, source_origin, consume, |column| {
-            store.take(column, config, source_origin.is_some(), true)
+        analysis.feed(batch, channels, sample_rate, now, config, None, consume, |column| {
+            store.take(column, config, false, true)
         })
     }
 
