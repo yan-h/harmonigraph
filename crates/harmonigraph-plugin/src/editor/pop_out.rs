@@ -61,7 +61,7 @@ mod macos {
     use baseview::WindowHandle;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
+    use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
     use objc2_app_kit::{
         NSBackingStoreType, NSView, NSWindow, NSWindowLevel, NSWindowOrderingMode,
         NSWindowStyleMask, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
@@ -112,7 +112,9 @@ mod macos {
         /// Docked since the last size source.
         redocked: bool,
         /// An app that came forward and has not yet raised its windows, and
-        /// how many more times to look ([`SETTLE_TRIES`]).
+        /// how many more times to look ([`SETTLE_TRIES`]). Kept at zero once
+        /// the looks run out with the window still raised over everything,
+        /// so the next app to come forward tucks it instead.
         settling: Option<(i32, u8)>,
     }
 
@@ -512,10 +514,10 @@ mod macos {
         /// everything else; and from one other app to the next, stay put, as
         /// any window would, under whatever had already covered it.
         fn front_changed(&self, exe: &Path) {
-            let (window, agent, host) = {
+            let (window, agent, host, unplaced) = {
                 let mut state = self.0.lock();
-                state.settling = None;
-                (state.window.clone(), state.agent.clone(), state.host.clone())
+                let unplaced = state.settling.take().is_some();
+                (state.window.clone(), state.agent.clone(), state.host.clone(), unplaced)
             };
             let Some(window) = window else { return };
             let Some(pid) = other_in_front(exe) else {
@@ -527,7 +529,9 @@ mod macos {
                 window.setLevel(FLOATING);
                 return;
             };
-            if window.level() != FLOATING {
+            // Still raised from leaving the host, and never tucked: placed
+            // behind this app instead, as it would have been behind that one.
+            if window.level() != FLOATING && !unplaced {
                 return;
             }
             window.setLevel(NORMAL);
@@ -547,16 +551,21 @@ mod macos {
         fn settle(&self) {
             let (window, agent, pid, tries) = {
                 let mut state = self.0.lock();
-                let (Some((pid, tries)), Some(window)) = (state.settling.take(), &state.window)
+                let (Some((pid, tries @ 1..)), Some(window)) =
+                    (state.settling, state.window.clone())
                 else {
                     return;
                 };
-                (window.clone(), state.agent.clone(), pid, tries)
+                state.settling = None;
+                (window, state.agent.clone(), pid, tries)
             };
-            if tuck(&window, pid) || tries <= 1 {
+            if tuck(&window, pid) {
                 return;
             }
             self.0.lock().settling = Some((pid, tries - 1));
+            if tries == 1 {
+                return;
+            }
             if let Some(agent) = agent {
                 agent.settle_later();
             }
@@ -607,8 +616,18 @@ mod macos {
 
     impl Agent {
         fn settle_later(&self) {
-            // SAFETY: `settle:` is this class's own method, taking an object
-            // it ignores; the run loop retains the target until then.
+            // One chain of looks at a time: a switch mid-chain starts afresh.
+            // SAFETY: cancelling this object's own pending `settle:`, then
+            // scheduling it; the method takes an object it ignores, and the
+            // run loop retains the target until then.
+            let () = unsafe {
+                msg_send![
+                    NSObject::class(),
+                    cancelPreviousPerformRequestsWithTarget: self,
+                    selector: sel!(settle:),
+                    object: None::<&AnyObject>
+                ]
+            };
             let () = unsafe {
                 msg_send![
                     self,
