@@ -951,12 +951,14 @@ mod tests {
         tracker.handle_event(on(1.0, 60));
         let mut note = tracker.roll().notes().next().unwrap().clone();
         let point = |t, pressure| (t, crate::Expressions { pressure, ..Default::default() });
-        note.expressions = vec![point(1.0, 0.2), point(2.0, 0.4), point(3.0, 0.4), point(3.0, 1.0)];
+        // Two seconds between the first points, so a line's fraction of the
+        // way is not the seconds it has run.
+        note.expressions = vec![point(1.0, 0.2), point(3.0, 0.6), point(4.0, 0.6), point(4.0, 1.0)];
         let at = |t| note.expressions_at(t).pressure;
         assert_eq!(at(0.0), 0.2, "before the first point, it holds");
-        assert!((at(1.5) - 0.3).abs() < 1e-6, "a line between two points: {}", at(1.5));
-        assert_eq!(at(2.9), 0.4, "a held level stays level up to its step");
-        assert_eq!(at(3.0), 1.0, "and takes the new value at the step itself");
+        assert!((at(2.0) - 0.4).abs() < 1e-6, "a line between two points: {}", at(2.0));
+        assert_eq!(at(3.9), 0.6, "a held level stays level up to its step");
+        assert_eq!(at(4.0), 1.0, "and takes the new value at the step itself");
         assert_eq!(at(9.0), 1.0, "after the last, the last holds");
     }
 
@@ -989,6 +991,7 @@ mod tests {
     fn clear_forgets_everything() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
+        assert!(!tracker.roll().is_empty(), "a sounding note alone is something");
         tracker.handle_event(off(1.0, 60));
         tracker.handle_event(on(1.0, 64));
         assert!(!tracker.roll().is_empty());
