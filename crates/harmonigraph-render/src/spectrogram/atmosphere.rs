@@ -830,6 +830,11 @@ struct MemoryFrame {
 /// the sound under each texel or star, and what it held there is the old
 /// picture's, so carrying it would smear the old picture into the new one.
 /// The same goes for a cleared history.
+///
+/// The level mapping and the softnesses are not in it. A Level, Tilt or
+/// softness drag re-reads the same texels through a new mapping, so the held
+/// colour eases toward the new reading rather than snapping for the length of
+/// the drag (#1578).
 fn memory_key(
     atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
@@ -842,8 +847,8 @@ fn memory_key(
     let s = atmosphere.settings.sanitized();
     let pitch_vertical = atmosphere.pitch_vertical;
     let harmonigraph_scene::SpectralAtmosphere {
-        pitch_softness,
-        time_softness,
+        pitch_softness: _, // re-reads the same texels through a wider blur
+        time_softness: _,  // re-reads the same texels through a wider blur
         blur_time_step: _, // response/coverage changes do not change material identity
         cloud_depth: _,    // response/coverage changes do not change material identity
         color_pickup: _,   // response/coverage changes do not change material identity
@@ -887,18 +892,8 @@ fn memory_key(
                 wash_randomness: _, // display brightness does not change held color
             },
     } = s;
-    let mut values = vec![
-        size[0],
-        size[1],
-        u32::from(pitch_vertical) as f32,
-        read.min_midi,
-        read.span,
-        read.level0,
-        read.level_per_step,
-        read.level_per_midi,
-        pitch_softness,
-        time_softness,
-    ];
+    let mut values =
+        vec![size[0], size[1], u32::from(pitch_vertical) as f32, read.min_midi, read.span];
     match cloud_style {
         CloudStyle::Stars => {
             values.extend([2.0, star_randomness]);
