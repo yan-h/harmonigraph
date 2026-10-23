@@ -9,7 +9,7 @@
 //! **It costs one transform, not one per length.** Shortening a window is
 //! multiplying the frame by a narrower envelope, and multiplying in time is
 //! convolving in frequency. So each column takes the ordinary transform of the
-//! whole frame through the configured tapers, and each bucket then reads it
+//! whole frame through its Hann window, and each bucket then reads it
 //! through its own small kernel: the frame times a Gaussian of spread `sigma`
 //! is the frame's transform convolved with that Gaussian's transform, which is
 //! another Gaussian, `fft_size / (2 pi sigma)` bins wide. A wide Gaussian in
@@ -91,8 +91,8 @@ struct Point {
     at: u32,
 }
 
-/// Which kernels each bucket reads, for one sweep, frame length, sample rate and
-/// taper set. Rebuilt by [`plan`](Self::plan) whenever any of those change, and
+/// Which kernels each bucket reads, for one sweep, frame length and sample
+/// rate. Rebuilt by [`plan`](Self::plan) whenever any of those change, and
 /// read unchanged by every column between.
 pub(crate) struct SweepPlan {
     /// Per bucket, the range of [`points`](Self::points) it reads; empty is a
@@ -101,8 +101,8 @@ pub(crate) struct SweepPlan {
     points: Vec<Point>,
     weights: Vec<f32>,
     /// Per bucket, the scale that puts a full-scale sine at 1.0 through that
-    /// bucket's own window — the counterpart of `taper_norm_power`, which a
-    /// shortened window needs bucket by bucket.
+    /// bucket's own window — the counterpart of the analyzer's `norm_power`,
+    /// which a shortened window needs bucket by bucket.
     norm: Box<[f32; SPECTRUM_BINS]>,
 }
 
@@ -116,16 +116,9 @@ impl SweepPlan {
         }
     }
 
-    /// Settle every bucket's kernels. `tapers` is the analyzer's flat taper
-    /// table, `taper_count` of them each `fft_size` long.
-    pub(crate) fn plan(
-        &mut self,
-        sweep: Sweep,
-        sample_rate: f32,
-        fft_size: usize,
-        tapers: &[f32],
-        taper_count: usize,
-    ) {
+    /// Settle every bucket's kernels. `window` is the analyzer's Hann window,
+    /// `fft_size` long.
+    pub(crate) fn plan(&mut self, sweep: Sweep, sample_rate: f32, fft_size: usize, window: &[f32]) {
         let n = fft_size as f64;
         let sr = f64::from(sample_rate);
         let (first, last) = usable_bins(fft_size);
@@ -179,45 +172,35 @@ impl SweepPlan {
                 self.points.push(Point { k0: k0 as u32, taps: (k1 + 1 - k0) as u32, at: offset });
             }
             self.spans[b] = (start, self.points.len() as u32);
-            self.norm[b] = norm_power(tapers, fft_size, taper_count, sigma);
+            self.norm[b] = norm_power(window, sigma);
         }
     }
 
-    /// Fill `out` from the frame's transforms, `taper_count` of them laid end to
-    /// end, `bins` each. A bucket read at several frequencies takes the loudest,
-    /// so its level does not grow with how many readings it took.
-    pub(crate) fn read(
-        &self,
-        spectra: &[Complex32],
-        bins: usize,
-        taper_count: usize,
-        out: &mut [f32; SPECTRUM_BINS],
-    ) {
+    /// Fill `out` from the frame's transform. A bucket read at several
+    /// frequencies takes the loudest, so its level does not grow with how many
+    /// readings it took.
+    pub(crate) fn read(&self, spectrum: &[Complex32], out: &mut [f32; SPECTRUM_BINS]) {
         for ((out, &(p0, p1)), norm) in out.iter_mut().zip(self.spans.iter()).zip(self.norm.iter())
         {
             let mut loudest = 0.0f32;
             for point in &self.points[p0 as usize..p1 as usize] {
                 let weights = &self.weights[point.at as usize..(point.at + point.taps) as usize];
-                let mut power = 0.0f32;
-                for t in 0..taper_count {
-                    let from = t * bins + point.k0 as usize;
-                    let bins = &spectra[from..from + weights.len()];
-                    let mut acc = Complex32::new(0.0, 0.0);
-                    for (x, &w) in bins.iter().zip(weights) {
-                        acc += x * w;
-                    }
-                    power += acc.norm_sqr();
+                let bins = &spectrum[point.k0 as usize..point.k0 as usize + weights.len()];
+                let mut acc = Complex32::new(0.0, 0.0);
+                for (x, &w) in bins.iter().zip(weights) {
+                    acc += x * w;
                 }
-                loudest = loudest.max(power);
+                loudest = loudest.max(acc.norm_sqr());
             }
             *out = loudest * norm;
         }
     }
 }
 
-/// The scale that puts a full-scale sine at 1.0 through the tapers each shaped
-/// by a Gaussian of spread `sigma` about the frame's middle — the reasoning of
-/// `taper_norm_power`, with each taper's sum taken under the Gaussian.
+/// The scale that puts a full-scale sine at 1.0 through the Hann `window`
+/// shaped by a Gaussian of spread `sigma` about the frame's middle — the
+/// reasoning of the analyzer's `norm_power`, with the window's sum taken under
+/// the Gaussian.
 ///
 /// The sum is taken every `STRIDE` samples. It runs once per bucket per plan,
 /// which is every slider tick, and a strided sum of a smooth integrand that
@@ -225,30 +208,28 @@ impl SweepPlan {
 /// transform at the stride's own frequency, `exp(-2 pi^2 sigma^2 / STRIDE^2)`,
 /// which at the shortest listen allowed ([`SWEEP_MIN_LENGTH`], a spread of 46
 /// samples) is under `exp(-160)`.
-fn norm_power(tapers: &[f32], n: usize, taper_count: usize, sigma: f64) -> f32 {
+fn norm_power(window: &[f32], sigma: f64) -> f32 {
     const STRIDE: usize = 16;
+    let n = window.len();
     let centre = n / 2;
     // The Gaussian at whole multiples of the stride out from the middle, by
     // recurrence rather than an `exp` per sample: each step's ratio is the last
     // one's times a constant.
     let s = STRIDE as f64;
     let q = (-s * s / (sigma * sigma)).exp();
-    let mut response = 0.0f64;
-    for taper in tapers.chunks_exact(n).take(taper_count) {
-        let mut sum = f64::from(taper[centre]);
-        let (mut g, mut ratio) = (1.0f64, (-s * s / (2.0 * sigma * sigma)).exp());
-        let mut d = STRIDE;
-        while d <= centre {
-            g *= ratio;
-            ratio *= q;
-            let below = f64::from(taper[centre - d]);
-            let above = if centre + d < n { f64::from(taper[centre + d]) } else { 0.0 };
-            sum += g * (below + above);
-            d += STRIDE;
-        }
-        sum *= s;
-        response += sum * sum;
+    let mut sum = f64::from(window[centre]);
+    let (mut g, mut ratio) = (1.0f64, (-s * s / (2.0 * sigma * sigma)).exp());
+    let mut d = STRIDE;
+    while d <= centre {
+        g *= ratio;
+        ratio *= q;
+        let below = f64::from(window[centre - d]);
+        let above = if centre + d < n { f64::from(window[centre + d]) } else { 0.0 };
+        sum += g * (below + above);
+        d += STRIDE;
     }
+    sum *= s;
+    let response = sum * sum;
     (4.0 / response) as f32
 }
 
@@ -265,8 +246,8 @@ mod tests {
     /// Fast at the top, which is Fast's listen by 2 kHz.
     const FRESH: Sweep = Sweep { bass: 13_500.0, treble: 2048.0 };
 
-    fn config(sweep: Sweep, tapers: usize) -> AnalyzerConfig {
-        AnalyzerConfig { sample_rate: RATE, fft_size: FRAME, tapers, sweep: Some(sweep) }
+    fn config(sweep: Sweep) -> AnalyzerConfig {
+        AnalyzerConfig { sample_rate: RATE, fft_size: FRAME, sweep: Some(sweep) }
     }
 
     fn analyze(config: AnalyzerConfig, hz: f32) -> [f32; SPECTRUM_BINS] {
@@ -304,7 +285,7 @@ mod tests {
     #[test]
     fn a_low_partial_reads_at_its_own_pitch() {
         for hz in [41.2, 55.0, 61.7, 98.0] {
-            let off = cents_off(peak(&analyze(config(FRESH, 1), hz)), hz);
+            let off = cents_off(peak(&analyze(config(FRESH), hz)), hz);
             assert!(off.abs() < 5.0, "{hz} Hz reads {off:+.1} cents off");
         }
     }
@@ -317,12 +298,10 @@ mod tests {
         // A partial on the boundary between two of the widest buckets, the one
         // place a single reading per bucket would be furthest from it.
         let top = &BUCKET_FREQUENCIES[SPECTRUM_BINS - 40];
-        for tapers in [1, 3] {
-            for hz in [30.0, 110.0, 440.0, 1999.0, 7531.0, 15_000.0, top.upper_hz] {
-                let level = analyze(config(FRESH, tapers), hz);
-                let db = 10.0 * level[peak(&level)].log10();
-                assert!((-1.2..0.2).contains(&db), "{hz} Hz, {tapers} tapers: {db:+.2} dB");
-            }
+        for hz in [30.0, 110.0, 440.0, 1999.0, 7531.0, 15_000.0, top.upper_hz] {
+            let level = analyze(config(FRESH), hz);
+            let db = 10.0 * level[peak(&level)].log10();
+            assert!((-1.2..0.2).contains(&db), "{hz} Hz: {db:+.2} dB");
         }
     }
 
@@ -337,7 +316,7 @@ mod tests {
             let length = (sweep.bass.ln() + (sweep.treble.ln() - sweep.bass.ln()) * u).exp();
             // Hann's half-power width is 1.44 bins of its own length.
             let hann = 1.44 * RATE / length;
-            let width = width_hz(&analyze(config(sweep, 1), hz));
+            let width = width_hz(&analyze(config(sweep), hz));
             assert!(
                 (width / hann - 1.0).abs() < 0.2,
                 "{hz} Hz: {width:.2} Hz wide, a {length:.0}-sample Hann is {hann:.2}"
@@ -356,16 +335,16 @@ mod tests {
             (0..FRAME).map(|i| (std::f32::consts::TAU * 3000.0 * i as f32 / RATE).sin()).collect();
         let read = |analyzer: &mut SpectrumAnalyzer| *analyzer.pitch_spectrum().expect("a window");
         let other = Sweep { bass: 8000.0, treble: 4096.0 };
-        let mut analyzer = SpectrumAnalyzer::new(config(FRESH, 1));
+        let mut analyzer = SpectrumAnalyzer::new(config(FRESH));
         analyzer.push_samples(&audio);
         let before = read(&mut analyzer);
-        analyzer.configure(config(other, 1));
+        analyzer.configure(config(other));
         let after = read(&mut analyzer);
-        let mut fresh = SpectrumAnalyzer::new(config(other, 1));
+        let mut fresh = SpectrumAnalyzer::new(config(other));
         fresh.push_samples(&audio);
         assert_eq!(after, read(&mut fresh), "the window was kept but read through the old sweep");
         assert_ne!(after, before, "the fixture does not tell the two sweeps apart");
-        analyzer.configure(AnalyzerConfig { sweep: None, ..config(FRESH, 1) });
+        analyzer.configure(AnalyzerConfig { sweep: None, ..config(FRESH) });
         assert!(analyzer.pitch_spectrum().is_some(), "leaving the sweep dropped the window");
     }
 }

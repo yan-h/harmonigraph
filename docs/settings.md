@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
+| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution, level mapping and tilt, live response. **Spiral** bloom. **Shadows**: the **Note surround** around MIDI ribbons and Spiral dots, and the label shadow. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame rate (a fraction of the display's) and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -231,7 +231,7 @@ Tab takes priority over focus traversal except while editing text.
 | Setting | Scope |
 | --- | --- |
 | Frequency range | Analyzer and Spiral views; does not limit which frequencies are analyzed. |
-| Audio input, Frequency resolution, Spectrum averaging | All audio views, including spectrogram history. They do not alter pass-through sound. |
+| Audio input, Frequency resolution | All audio views, including spectrogram history. They do not alter pass-through sound. |
 | Spectrum level range | Analyzer height and lattice audio-ring levels. Audio colors, including the Spiral's, have a separate Level color range. |
 | Live attack/release | Live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps unsmoothed measurements. |
 | Ring attack/release | Additional audio-ring smoothing after the shared live response. |

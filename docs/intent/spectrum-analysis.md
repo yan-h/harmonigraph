@@ -22,3 +22,7 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-10-23 (PR #1572)
 
 - A video export draws the spectrum in step with its soundtrack: it reads half a window past each frame, so the newest column sits at the now-line rather than half a window behind it, at every resolution. The live view keeps its wait, since it cannot read ahead.
+
+## 2026-10-23 (after #1572)
+
+- No multitaper averaging: the analyzer reads one Hann window (or Sweep's kernels over it). Averaging steadied noise-like sound but widened every partial, raised the floor toward the lines, cost two to four times per column, and did almost nothing under Sweep's short treble listens.

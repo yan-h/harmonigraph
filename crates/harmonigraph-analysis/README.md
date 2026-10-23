@@ -1,17 +1,16 @@
 # harmonigraph-analysis
 
 Rolling real-input audio analysis shared by the live UI and offline renderer.
-`SpectrumAnalyzer` windows one channel and resamples accumulated taper power onto the fixed pitch axis in `harmonigraph-core`;
+`SpectrumAnalyzer` windows one channel and resamples Hann-windowed power onto the fixed pitch axis in `harmonigraph-core`;
 `ChannelBank` averages independent channel power without phase cancellation.
 
 RealFFT owns the planned half-size complex transform and real-input postprocessing.
 Each channel retains its own plan and reusable input, output and scratch buffers.
 Callers adopt one final `AnalyzerConfig` for all channels.
-Only a window-size change replans the transform;
-taper changes rebuild the estimator weights,
+Only a window-size change replans the transform and rebuilds the window,
 and sample-rate changes rebuild the pitch-bucket reads.
-Any configuration change resets the audio window;
-unchanged settings do nothing.
+A window-size or sample-rate change resets the audio window;
+a Sweep change only replans its kernels, and unchanged settings do nothing.
 New channels start at the requested settings,
 while a source restart clears retained audio and keeps its estimator resources.
 There is no retained planner or shared plan cache.
