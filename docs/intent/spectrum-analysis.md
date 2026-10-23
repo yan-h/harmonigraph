@@ -10,3 +10,11 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-10-07 (DAW look capture, #1475)
 
 - Fast (4096 samples) is the fresh Frequency resolution, captured with the rest of the DAW look; this replaces #1314 Analysis Q1.
+
+## 2026-10-22 (look prototype, #1560)
+
+- Sweep is a fourth Frequency resolution, beside Fast, Balanced and Precise rather than replacing them; Fast stays the fresh setting.
+- Its listen glides log-linearly across the whole audible range, 20 Hz to 20 kHz, with no band edges: piecewise multi-resolution bands were picked on the sheets and then rejected for their seams.
+- The live edge waits for the bass, so a column stays aligned across the whole axis; its latency is Precise's.
+- No spectral reassignment, alone or on top of a sweep.
+- Two sliders, bass and treble listen, start exposed and are to be pruned after use.
