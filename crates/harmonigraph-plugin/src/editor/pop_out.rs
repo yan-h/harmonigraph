@@ -140,13 +140,18 @@ mod macos {
     /// `None` when it is the host, or else the frontmost app's process.
     fn other_in_front(exe: &Path) -> Option<i32> {
         let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+        // SAFETY: `processIdentifier` is a `pid_t` property of every running
+        // application, read by hand to spare the binding its `libc` feature.
+        let pid: i32 = unsafe { msg_send![&*app, processIdentifier] };
+        // This process by its pid, since a plugin host need not be a bundle.
+        if pid as u32 == std::process::id() {
+            return None;
+        }
         let bundle = app.bundleURL().and_then(|url| url.path());
         if bundle.is_some_and(|bundle| exe.starts_with(PathBuf::from(bundle.to_string()))) {
             return None;
         }
-        // SAFETY: `processIdentifier` is a `pid_t` property of every running
-        // application, read by hand to spare the binding its `libc` feature.
-        Some(unsafe { msg_send![&*app, processIdentifier] })
+        Some(pid)
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -174,14 +179,19 @@ mod macos {
                 0,
             ))
         }?;
-        let number = |info: &AnyObject, key: &str| -> Option<isize> {
+        let value = |info: &AnyObject, key: &str| -> Option<Retained<NSNumber>> {
             let info = info.downcast_ref::<NSDictionary>()?;
-            let value = info.objectForKey(&*NSString::from_str(key))?;
-            Some(value.downcast_ref::<NSNumber>()?.as_isize())
+            info.objectForKey(&*NSString::from_str(key))?.downcast::<NSNumber>().ok()
         };
+        let number = |info: &AnyObject, key: &str| value(info, key).map(|n| n.as_isize());
         let mut front_run = None;
         for info in list.iter() {
             if number(&info, "kCGWindowLayer") != Some(NORMAL) {
+                continue;
+            }
+            // An invisible window (an overlay, or Bitwig's concealed one) is
+            // in front of nothing.
+            if value(&info, "kCGWindowAlpha").is_some_and(|alpha| alpha.as_f64() == 0.0) {
                 continue;
             }
             let Some(window) = number(&info, "kCGWindowNumber") else { continue };
@@ -342,15 +352,18 @@ mod macos {
         /// after the editor opened.
         pub(in crate::editor) fn take_size(&self) -> Option<Sized> {
             let _ = main_thread();
-            let mut state = self.0.lock();
-            if std::mem::take(&mut state.redocked) {
-                return Some(Sized::Docked);
-            }
-            let window = state.window.clone()?;
-            if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
+            let (window, host) = {
+                let mut state = self.0.lock();
+                if std::mem::take(&mut state.redocked) {
+                    return Some(Sized::Docked);
+                }
+                (state.window.clone()?, state.host.clone())
+            };
+            if let Some(host_window) = host.and_then(|host| host.window()) {
                 conceal(&host_window);
             }
             let size = logical(window.contentView()?.frame().size);
+            let mut state = self.0.lock();
             (size != state.size).then(|| {
                 state.size = size;
                 Sized::Own(size)
