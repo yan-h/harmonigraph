@@ -207,16 +207,31 @@ pub(crate) fn listen_centre(fft_size: usize, sweep: bool) -> usize {
 /// window pulls its centroid back toward the middle a little, which only the
 /// sum says by how much.
 pub(crate) fn lag_samples(fft_size: usize, sweep: bool) -> f64 {
-    let centre = listen_centre(fft_size, sweep);
-    let centroid = if sweep {
-        centre as f64
-    } else {
-        let n = fft_size as f64;
-        let hann = |i: usize| 0.5 * (1.0 - (2.0 * PI * i as f64 / n).cos());
-        let [sum, first, _] = listen_moments(fft_size, centre, FIXED_SPREAD * n, hann);
-        centre as f64 + first / sum
-    };
+    let centre = listen_centre(fft_size, sweep) as f64;
+    let centroid = if sweep { centre } else { centre + fixed_moments(fft_size).1 };
     (fft_size - 1) as f64 - centroid
+}
+
+/// The fixed listen through a frame of `fft_size`, as the length of the plain
+/// Hann window with its spread in time: two thirds of the frame, to a fifth of a
+/// percent, by the choice of [`FIXED_SPREAD`] and [`FIXED_CENTRE`].
+///
+/// Read off the window rather than restated, so that what the settings call
+/// each fixed resolution follows the pair if it is ever retuned.
+pub fn fixed_listen(fft_size: usize) -> f32 {
+    (fixed_moments(fft_size).2 / HANN_SPREAD) as f32
+}
+
+/// The fixed listen's window — the frame's Hann window under the fixed
+/// Gaussian — summed once for everything that asks about it: its sum, where its
+/// weight is centred relative to the listen's centre, and its spread about that.
+fn fixed_moments(fft_size: usize) -> (f64, f64, f64) {
+    let centre = listen_centre(fft_size, false);
+    let hann = |i: usize| f64::from(crate::hann_weight(i, fft_size));
+    let [sum, first, second] =
+        listen_moments(fft_size, centre, FIXED_SPREAD * fft_size as f64, hann);
+    let mean = first / sum;
+    (sum, mean, (second / sum - mean * mean).sqrt())
 }
 
 /// The bins of the padded transform of a frame of `fft_size` a kernel may read,
@@ -302,10 +317,8 @@ impl Kernels {
         // once: the Gaussian's spread, the spread of the window it makes with
         // the Hann window, and the scale that window owes.
         let fixed = sweep.is_none().then(|| {
-            let sigma = FIXED_SPREAD * n;
-            let [sum, moment, second] = listen_moments(fft_size, centre, sigma, window);
-            let mean = moment / sum;
-            (sigma, (second / sum - mean * mean).sqrt(), norm_power(sum))
+            let (sum, _, spread) = fixed_moments(fft_size);
+            (FIXED_SPREAD * n, spread, norm_power(sum))
         });
         self.points.clear();
         self.weights.clear();
@@ -601,6 +614,19 @@ mod tests {
         let mut fresh = SpectrumAnalyzer::new(fixed);
         fresh.push_samples(&audio);
         assert_eq!(left, read(&mut fresh), "leaving the sweep kept the window but not its read");
+    }
+
+    /// The fixed listen is as long as two thirds of its frame, the plain Hann
+    /// window each fixed resolution was before #1575 and what the settings name
+    /// it by, so a retuned [`FIXED_SPREAD`] or [`FIXED_CENTRE`] that changed
+    /// the look fails here rather than leaving the settings describing the
+    /// old one.
+    #[test]
+    fn the_fixed_listen_is_two_thirds_of_its_frame() {
+        for n in [6144, 12_288, 24_576] {
+            let ratio = fixed_listen(n) / (n as f32 * 2.0 / 3.0);
+            assert!((ratio - 1.0).abs() < 0.01, "{n}-sample frame: {ratio:.4} of two thirds");
+        }
     }
 
     /// The shipped analyzer, ring wrap and padding included, against an

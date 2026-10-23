@@ -397,13 +397,15 @@ pub(crate) fn analysis_section(
         let hints: Vec<_> = windows
             .iter()
             .map(|(window, _, hint)| match window {
-                // A fixed window's frame is half as long again as the Hann window it is as
-                // sharp as, so name both rather than a frame length that reads as blurrier.
+                // A fixed window's frame is longer than the Hann window it is as sharp as,
+                // so name both rather than a frame length that reads as blurrier. The
+                // analyzer says which window that is; it is named as the power of two it
+                // matches to a fifth of a percent.
                 SpectrumWindow::Sweep => format!("{} samples: {hint}", window.samples()),
                 _ => format!(
                     "{}-sample frame, as sharp as a {}-sample window: {hint}",
                     window.samples(),
-                    window.samples() * 2 / 3
+                    harmonigraph_analysis::fixed_listen(window.samples()).log2().round().exp2()
                 ),
             })
             .collect();

@@ -15,7 +15,7 @@ use harmonigraph_core::spectrum::{
 };
 
 mod kernels;
-pub use kernels::{max_length as sweep_max_length, Sweep, SWEEP_MIN_LENGTH};
+pub use kernels::{fixed_listen, max_length as sweep_max_length, Sweep, SWEEP_MIN_LENGTH};
 
 /// The default frame length (~0.26 s at 48 kHz), the UI's Balanced setting;
 /// its fresh one is Fast. The UI changes it through
@@ -445,12 +445,15 @@ impl ChannelBank {
 
 /// A periodic Hann window of `n` samples.
 fn hann(n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| {
-            let phase = std::f32::consts::TAU * i as f32 / n as f32;
-            0.5 * (1.0 - phase.cos())
-        })
-        .collect()
+    (0..n).map(|i| hann_weight(i, n)).collect()
+}
+
+/// Sample `i` of [`hann`], the one definition of the window: the kernels' sums
+/// about the fixed listen read it too, so they describe the window the frame is
+/// actually multiplied by, bit for bit.
+fn hann_weight(i: usize, n: usize) -> f32 {
+    let phase = std::f32::consts::TAU * i as f32 / n as f32;
+    0.5 * (1.0 - phase.cos())
 }
 
 #[cfg(test)]
