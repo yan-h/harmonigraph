@@ -470,12 +470,14 @@ mod macos {
             window.close();
         }
 
-        /// The editor closing, called before baseview closes the view: dock,
-        /// and let go of everything. The last is not tidiness: the view owns
-        /// the size source, which owns this, so held views would keep the
-        /// whole editor alive after it closed.
+        /// The editor closing, called before baseview closes the view, which
+        /// takes it out of whichever window it is in: show the host's window
+        /// again, should the host reuse it, close the editor's own, and let go
+        /// of everything. The last is not tidiness: the view owns the size
+        /// source, which owns this, so held views would keep the whole editor
+        /// alive after it closed.
         pub(in crate::editor) fn close(&self) {
-            self.dock();
+            let _ = main_thread();
             let state = std::mem::take(&mut *self.0.lock());
             if let Some(agent) = &state.agent {
                 // SAFETY: removing an observer this added, still alive.
@@ -483,23 +485,38 @@ mod macos {
                     NSWorkspace::sharedWorkspace().notificationCenter().removeObserver(agent)
                 };
             }
+            if let Some(window) = &state.window {
+                if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
+                    reveal(&host_window);
+                }
+                window.close();
+            }
         }
 
         /// Another app came to the front, or the host did: float above the
-        /// host's windows while the host is, and otherwise sit among the
-        /// normal ones, just behind the app that came forward and above
-        /// everything else.
+        /// host's windows while the host is. Leaving the host, sit among the
+        /// normal windows, just behind the app that came forward and above
+        /// everything else; and from one other app to the next, stay put, as
+        /// any window would, under whatever had already covered it.
         fn front_changed(&self, exe: &Path) {
-            let (window, agent) = {
+            let (window, agent, host) = {
                 let mut state = self.0.lock();
                 state.settling = None;
-                (state.window.clone(), state.agent.clone())
+                (state.window.clone(), state.agent.clone(), state.host.clone())
             };
             let Some(window) = window else { return };
             let Some(pid) = other_in_front(exe) else {
+                // Bitwig puts its window back in front as it comes forward:
+                // hidden again now rather than at the next frame.
+                if let Some(host_window) = host.and_then(|host| host.window()) {
+                    conceal(&host_window);
+                }
                 window.setLevel(FLOATING);
                 return;
             };
+            if window.level() != FLOATING {
+                return;
+            }
             window.setLevel(NORMAL);
             if tuck(&window, pid) {
                 return;
