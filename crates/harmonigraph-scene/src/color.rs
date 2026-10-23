@@ -594,6 +594,7 @@ pub(crate) const LUT_SLOTS: usize = 4;
 #[cfg(test)]
 thread_local! {
     pub(crate) static REBUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    pub(crate) static GLOW_REBUILDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Run `read` over one gradient's table, without copying it.
@@ -928,12 +929,19 @@ fn with_glow_lut<R>(
         static MEMO: std::cell::RefCell<Option<(GlowKey, Box<[Vec4; PITCH_LUT_N]>)>> =
             const { std::cell::RefCell::new(None) };
     }
-    let gradient = gradient.sanitized();
+    // The ribbon's own brightness reads nowhere in a glow, which takes its hue
+    // and chroma at a lightness of its own, so it is set to one value before
+    // the key is taken: a brightness drag would otherwise rebuild the table on
+    // every frame. The bend stays whole, since its lightness flag reaches the
+    // table's spacing.
+    let gradient = Gradient { lightness: 50.0, lightness_ramp: 0.0, ..gradient.sanitized() };
     let lightness = if lightness.is_finite() { lightness.clamp(0.0, 100.0) } else { 0.0 };
     let chroma = if chroma.is_finite() { chroma.clamp(0.0, 1.0) } else { 0.0 };
     let key = GlowKey { gradient, lightness, chroma };
     MEMO.with(|memo| {
         if memo.borrow().as_ref().is_none_or(|(built, _)| *built != key) {
+            #[cfg(test)]
+            GLOW_REBUILDS.with(|n| n.set(n.get() + 1));
             let spacing = LutSpacing::of(gradient);
             let l_star = f64::from(lightness);
             let lut = Box::new(std::array::from_fn(|k| {

@@ -17,8 +17,8 @@
 //! what a value test cannot see about it is not eviction but whether it looks
 //! at its key at all.
 
-use crate::color::{LUT_SLOTS, REBUILDS};
-use crate::{gradient_color, hue_circle, Gradient, ViewConfig};
+use crate::color::{GLOW_REBUILDS, LUT_SLOTS, REBUILDS};
+use crate::{gradient_color, hue_circle, pitch_glow_color, Gradient, ViewConfig};
 
 /// One gradient per number, differing in a knob that certainly changes the
 /// table — a hue arc nothing else in the tree opens on.
@@ -262,4 +262,20 @@ fn gradients_drawing_one_picture_are_one_entry() {
         0,
         "and again, not just once"
     );
+}
+
+/// The glow table holds the ribbon's hue and chroma at the glow's own
+/// lightness, so the gradient's brightness and its ramp decide nothing in it:
+/// a drag of either, with the roll on screen, is no reason to rebuild it.
+#[test]
+fn a_brightness_drag_leaves_the_glow_table_alone() {
+    let glow = |g: Gradient| pitch_glow_color(64.0, 24.0, 108.0, g, 30.0, 0.6);
+    let first = glow(Gradient::default());
+    let before = GLOW_REBUILDS.with(|n| n.get());
+    for step in 0..10 {
+        let lightness = 40.0 + step as f32;
+        let gradient = Gradient { lightness, lightness_ramp: step as f32, ..Gradient::default() };
+        assert_eq!(glow(gradient), first, "the glow moved with the ribbon's brightness");
+    }
+    assert_eq!(GLOW_REBUILDS.with(|n| n.get()) - before, 0, "a brightness drag rebuilt the table");
 }
