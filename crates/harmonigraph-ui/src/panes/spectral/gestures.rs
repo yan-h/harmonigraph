@@ -86,7 +86,9 @@ fn lean_id(surface: usize) -> egui::Id {
 ///
 /// Held in egui's temp store, because the committed axis is the one thing here
 /// a frame cannot see for itself. `drag_stopped` forgets it, or the next press
-/// inherits this one's axis.
+/// inherits this one's axis, and `drag_started` forgets it too, for a drag let
+/// go of on a frame the pane was not drawn
+/// (`a_zoom_let_go_of_unseen_does_not_turn_the_next_pan_into_one`).
 fn lean_is_depth(
     ui: &egui::Ui,
     surface: usize,
@@ -552,6 +554,12 @@ pub(super) fn drag_zoom(
             low = held - anchor * span;
             moved = true;
         }
+    }
+
+    // A drag let go of while this pane was not drawn never saw its own
+    // `drag_stopped`, so its axis is still held; it is not this drag's.
+    if response.drag_started() {
+        ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
     }
 
     // Grab the picture. Per-frame deltas rather than the absolute tracking the
