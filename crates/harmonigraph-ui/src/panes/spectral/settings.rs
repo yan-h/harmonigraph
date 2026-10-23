@@ -362,7 +362,7 @@ pub(crate) fn analysis_section(
     cfg: &mut crate::SpectrumConfig,
     params: &dyn ParamBackend,
 ) {
-    use crate::{SpectrumTapers, SpectrumWindow};
+    use crate::SpectrumWindow;
 
     hinted_section(ui, "Analysis", ANALYSIS_HINT, |ui| {
         if let Some(mut input) = params.analysis_input() {
@@ -424,11 +424,6 @@ pub(crate) fn analysis_section(
                     ));
             }
         }
-        choice_row(ui, "Spectrum averaging", &mut cfg.tapers, &[
-            (SpectrumTapers::One, "1", "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost."),
-            (SpectrumTapers::Three, "3", "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."),
-            (SpectrumTapers::Five, "5", "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."),
-        ]);
         block(ui, "Level mapping", |ui| {
             // Both ends of the height scale on one control, like the pitch range: the
             // window on the spectrum's dynamics rather than just where it bottoms out.

@@ -249,7 +249,6 @@ impl SpectrumAnalysis {
             harmonigraph_analysis::AnalyzerConfig {
                 sample_rate,
                 fft_size: config.window.samples(),
-                tapers: config.tapers.count(),
                 sweep: (config.window == SpectrumWindow::Sweep).then_some(
                     harmonigraph_analysis::Sweep {
                         bass: config.sweep_bass,

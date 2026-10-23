@@ -47,8 +47,8 @@ pub use layout::{Layout, Placement};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumTapers, SpectrumWindow,
-    SCALE_BAR_RANGE, TILT_STEPS,
+    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
+    TILT_STEPS,
 };
 // The render settings live in `harmonigraph-take` because they are take
 // payload: a take carries the frame it was composed at, so a re-render

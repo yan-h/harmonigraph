@@ -1582,54 +1582,15 @@ mod tests {
     /// differences are characterized separately in docs/realfft-adoption.md.
     #[test]
     fn analyzed_audio_crosses_the_gate_and_carries_its_hysteresis_fade() {
-        use crate::{SpectrumTapers, SpectrumWindow};
-        for (window, tapers, reading, strict, held) in [
-            (
-                SpectrumWindow::Fast,
-                SpectrumTapers::One,
-                SpectralReading::Fold,
-                0.001724211,
-                0.00089501316,
-            ),
-            (
-                SpectrumWindow::Fast,
-                SpectrumTapers::One,
-                SpectralReading::Spectrum,
-                0.0017096889,
-                0.0008874749,
-            ),
-            (
-                SpectrumWindow::Balanced,
-                SpectrumTapers::One,
-                SpectralReading::Fold,
-                0.0017949624,
-                0.0009317393,
-            ),
-            (
-                SpectrumWindow::Balanced,
-                SpectrumTapers::One,
-                SpectralReading::Spectrum,
-                0.0017388298,
-                0.0009026015,
-            ),
-            (
-                SpectrumWindow::Precise,
-                SpectrumTapers::Five,
-                SpectralReading::Fold,
-                0.0017120556,
-                0.0008887034,
-            ),
-            (
-                SpectrumWindow::Precise,
-                SpectrumTapers::Five,
-                SpectralReading::Spectrum,
-                0.0017113218,
-                0.0008883227,
-            ),
+        use crate::SpectrumWindow;
+        for (window, reading, strict, held) in [
+            (SpectrumWindow::Fast, SpectralReading::Fold, 0.001724211, 0.00089501316),
+            (SpectrumWindow::Fast, SpectralReading::Spectrum, 0.0017096889, 0.0008874749),
+            (SpectrumWindow::Balanced, SpectralReading::Fold, 0.0017949624, 0.0009317393),
+            (SpectrumWindow::Balanced, SpectralReading::Spectrum, 0.0017388298, 0.0009026015),
         ] {
             let mut state = ringing();
             state.appearance.spectrum.window = window;
-            state.appearance.spectrum.tapers = tapers;
             state.appearance.spectrum.attack = 0.0;
             state.appearance.spectrum.release = 0.0;
             state.appearance.spectrum.tilt = 0.0;
