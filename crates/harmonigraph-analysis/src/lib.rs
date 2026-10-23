@@ -10,6 +10,9 @@ use harmonigraph_core::spectrum::{
     midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
 };
 
+mod sweep;
+pub use sweep::{max_length as sweep_max_length, Sweep, SWEEP_MIN_LENGTH};
+
 /// The default window length (~0.17 s at 48 kHz), the UI's Balanced setting;
 /// its fresh one is Fast. The UI changes it through [`SpectrumAnalyzer::configure`], trading response time against
 /// bass precision at runtime. At the axis floor (20 Hz) one FFT bin spans
@@ -34,11 +37,15 @@ pub struct AnalyzerConfig {
     pub sample_rate: f32,
     pub fft_size: usize,
     pub tapers: usize,
+    /// Read every bucket through its own listen length, gliding with pitch,
+    /// rather than through the whole frame; see [`Sweep`]. `fft_size` is then
+    /// the FRAME, which bounds the longest listen and sets the latency.
+    pub sweep: Option<Sweep>,
 }
 
 impl Default for AnalyzerConfig {
     fn default() -> Self {
-        Self { sample_rate: 48_000.0, fft_size: DEFAULT_FFT_SIZE, tapers: 1 }
+        Self { sample_rate: 48_000.0, fft_size: DEFAULT_FFT_SIZE, tapers: 1, sweep: None }
     }
 }
 
@@ -152,6 +159,13 @@ pub struct SpectrumAnalyzer {
     /// none can be left reading the previous column. Nothing reads it that did
     /// not just write it.
     buckets: Box<[f32; SPECTRUM_BINS]>,
+    /// The sweep this analyzer reads through, if any, and the kernels it was
+    /// planned into. Planned only while one is set.
+    sweep: Option<Sweep>,
+    sweep_plan: sweep::SweepPlan,
+    /// The frame's full complex transform per taper, laid end to end, which a
+    /// sweep reads through its kernels. Empty without a sweep.
+    sweep_spectra: Vec<realfft::num_complex::Complex32>,
 }
 
 impl SpectrumAnalyzer {
@@ -173,6 +187,9 @@ impl SpectrumAnalyzer {
             bin_power: Vec::new(),
             bin_mag: Vec::new(),
             buckets: Box::new([0.0; SPECTRUM_BINS]),
+            sweep: None,
+            sweep_plan: sweep::SweepPlan::new(),
+            sweep_spectra: Vec::new(),
         };
         analyzer.configure(config);
         analyzer
@@ -182,7 +199,7 @@ impl SpectrumAnalyzer {
     /// decide. A changed estimator deliberately requires a fresh audio window;
     /// unchanged settings preserve readiness and allocate nothing.
     pub fn configure(&mut self, config: AnalyzerConfig) {
-        let AnalyzerConfig { sample_rate, fft_size, tapers } = config;
+        let AnalyzerConfig { sample_rate, fft_size, tapers, sweep } = config;
         assert!(
             fft_size >= 4 && fft_size.is_power_of_two(),
             "a power of two, four up: real-input analysis requires an even window"
@@ -192,7 +209,16 @@ impl SpectrumAnalyzer {
         let size_changed = fft_size != self.fft_size;
         let tapers_changed = taper_count != self.taper_count;
         let rate_changed = (sample_rate - self.sample_rate).abs() > f32::EPSILON;
+        let sweep_changed = sweep != self.sweep;
         if !size_changed && !tapers_changed && !rate_changed {
+            // A sweep's lengths alone change no frame, taper or rate, so the
+            // window it is reading stays good: only the kernels are replanned.
+            // That keeps a slider drag drawing rather than going dark for a
+            // frame's worth of audio at every step of it.
+            if sweep_changed {
+                self.sweep = sweep;
+                self.plan_sweep();
+            }
             return;
         }
         self.fft_size = fft_size;
@@ -222,6 +248,26 @@ impl SpectrumAnalyzer {
         if size_changed || rate_changed {
             self.plan_buckets();
         }
+        self.sweep = sweep;
+        self.plan_sweep();
+    }
+
+    /// Plan the sweep's kernels for the current frame, rate and tapers, or
+    /// release them when there is no sweep.
+    fn plan_sweep(&mut self) {
+        let Some(sweep) = self.sweep else {
+            self.sweep_spectra = Vec::new();
+            return;
+        };
+        self.sweep_plan.plan(
+            sweep,
+            self.sample_rate,
+            self.fft_size,
+            &self.tapers,
+            self.taper_count,
+        );
+        let bins = self.fft_output.len();
+        self.sweep_spectra.resize(bins * self.taper_count, Default::default());
     }
 
     /// Settle which bins every bucket reads for the current window length and
@@ -382,7 +428,8 @@ impl SpectrumAnalyzer {
         // then its head up to `write`: two straight runs rather than an index
         // wrapped per sample, which the compiler cannot vectorize.
         let (newer, older) = self.ring.split_at(self.write);
-        for taper in self.tapers.chunks_exact(self.fft_size) {
+        let bins = self.fft_output.len();
+        for (t, taper) in self.tapers.chunks_exact(self.fft_size).enumerate() {
             let (taper_older, taper_newer) = taper.split_at(older.len());
             let (input_older, input_newer) = self.fft_input.split_at_mut(older.len());
             for ((x, s), w) in input_older.iter_mut().zip(older).zip(taper_older) {
@@ -400,11 +447,21 @@ impl SpectrumAnalyzer {
                     &mut self.fft_scratch,
                 )
                 .unwrap();
+            if self.sweep.is_some() {
+                // A sweep reads the transform through kernels that need its
+                // phase, so it keeps the whole thing rather than its power.
+                self.sweep_spectra[t * bins..(t + 1) * bins].copy_from_slice(&self.fft_output);
+                continue;
+            }
             // Preserve usable bins 2..=N/2-2; the boundary bins are not resampled.
             for j in first..=last {
                 let c = self.fft_output[j];
                 self.bin_power[j] += c.re * c.re + c.im * c.im;
             }
+        }
+        if self.sweep.is_some() {
+            self.sweep_plan.read(&self.sweep_spectra, bins, self.taper_count, &mut self.buckets);
+            return Some(&self.buckets);
         }
 
         // Amplitude normalization so a unit sine reads as ~1.0, precomputed
@@ -1364,8 +1421,12 @@ mod tests {
     fn noise_levels(tapers: usize, trials: usize, bucket: usize) -> Vec<f32> {
         let sample_rate = 48_000.0f32;
         let window = 1024;
-        let mut analyzer =
-            SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, fft_size: window, tapers });
+        let mut analyzer = SpectrumAnalyzer::new(AnalyzerConfig {
+            sample_rate,
+            fft_size: window,
+            tapers,
+            sweep: None,
+        });
         let mut noise = Noise(0x1234_5678);
         (0..trials)
             .map(|_| {
@@ -1544,7 +1605,8 @@ mod tests {
         let mut bank = ChannelBank::new(Default::default(), 1);
         bank.push_frames(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(bank.power_sum().is_some());
-        let config = AnalyzerConfig { sample_rate: 22_050.0, fft_size: 4096, tapers: 3 };
+        let config =
+            AnalyzerConfig { sample_rate: 22_050.0, fft_size: 4096, tapers: 3, sweep: None };
         // First replace the mono layout; then update both retained channels.
         for config in [config, AnalyzerConfig { tapers: 5, ..config }] {
             bank.configure(config, 2);
