@@ -181,6 +181,20 @@ fn play(h: &mut Harness, keys: &[(&str, i32, i32, i64)]) -> Option<LatticePos> {
 fn meantone() -> [i32; 3] {
     crate::tuning::fifth_generated(crate::tuning::microcents(696.578))
 }
+/// With the seventh axis on, the B♭ key over a held C major triad is the
+/// harmonic seventh 7/4, not the Pythagorean 16/9 its fifths would spell. No
+/// simulator fixture runs three axes, so this is what reaches prime 7.
+#[test]
+fn the_seventh_axis_spells_a_dominant_seventh_harmonically() {
+    let mut h = Harness::new();
+    h.config.policy.axes = 3;
+    play(&mut h, &[("c", 0, 0, 0), ("e", 0, 1, 0), ("g", 1, 0, 0)]);
+    let seventh = LatticePos::new(0, 0, 1);
+    let voice = h.on("bb", 4_800_000_000 + keyboard_class(h.config.policy.keyboard, seventh));
+    assert_eq!(voice.node, Some(seventh));
+    let just = 4_800_000_000 + i64::from(crate::tuning::microcents(crate::tuning::SEVEN_JUST));
+    assert!(voice.pitch.abs_diff(just) < 1000, "{}", voice.pitch);
+}
 #[test]
 fn a_meantone_keyboards_c_key_cannot_become_b_sharp() {
     // E spells the G♯ as a third above it; with E released, the held G♯
@@ -296,15 +310,18 @@ fn an_unsnapped_attack_preserves_drift_and_interrupts_a_repeated_node() {
 
 #[test]
 fn a_slightly_mislearned_fifth_still_keeps_the_b_sharp_key() {
-    // A fifth learned 0.2¢ sharp, as pitch-bend steps can leave it, renders
-    // B♯ twelve fifths out 2.4¢ from the pitch the key sends. The held C pulls
-    // that key to C unless the filter still recognises it.
-    let mut h = Harness::new();
-    h.config.policy.keyboard = crate::tuning::fifth_generated(crate::tuning::microcents(696.778));
-    play(&mut h, &[("c", 0, 0, 0)]);
-    let b_sharp = LatticePos::new(0, 3, 0);
-    let pitch = 4_800_000_000 + keyboard_class(meantone(), b_sharp);
-    assert_eq!(h.on("b#", pitch).node, Some(b_sharp));
+    // A fifth learned 0.2¢ sharp or flat, as pitch-bend steps can leave it,
+    // renders B♯ twelve fifths out 2.4¢ either side of the pitch the key
+    // sends. The held C pulls that key to C unless the filter still
+    // recognises it, whichever way round the octave the miss falls.
+    for fifth in [696.778, 696.378] {
+        let mut h = Harness::new();
+        h.config.policy.keyboard = crate::tuning::fifth_generated(crate::tuning::microcents(fifth));
+        play(&mut h, &[("c", 0, 0, 0)]);
+        let b_sharp = LatticePos::new(0, 3, 0);
+        let pitch = 4_800_000_000 + keyboard_class(meantone(), b_sharp);
+        assert_eq!(h.on("b#", pitch).node, Some(b_sharp), "fifth {fifth}");
+    }
 }
 #[test]
 fn an_attack_bent_off_every_key_is_scored_against_every_node() {
@@ -347,8 +364,15 @@ fn memory_refreshes_actual_register_pitch_and_orders_by_attack() {
         h.now,
     );
     assert_eq!(h.memory.len, 4);
+    let other = ContextPitch { pitch: c.pitch + 700_000_000, ..c };
+    h.memory.release(other, 2, h.config.policy, h.now);
     h.memory.forget_source(1);
-    assert_eq!(h.memory.len, 0);
+    assert_eq!((h.memory.len, h.memory.recent[0].pitch), (1, other), "another source's stays");
+}
+#[test]
+fn a_zero_half_life_never_decays() {
+    let config = PolicyConfig { half_life_ms: 0, ..CONFIG };
+    assert_eq!([decay(config, 0, 1000.0), decay(config, 60_000, 1000.0)], [1.0, 1.0]);
 }
 #[test]
 fn octave_copies_of_a_note_add_no_vote() {
@@ -374,19 +398,29 @@ fn octave_copies_of_a_note_add_no_vote() {
 #[test]
 fn hard_boundary_and_configured_axes_ignore_exact_remote_pitch() {
     let mut c = just();
-    c.policy.axes = 1;
     let mut s = PolicyScratch::default();
     let remote = LatticePos::new(10, 0, 0);
-    let d = assign_new_note(
-        c,
-        &[],
-        &Memory::default(),
-        OrderedOnset { pitch: (c.cents(remote) * 1e6) as i64 },
-        &mut s,
-    )
-    .unwrap();
-    assert!(s.candidates.iter().all(|n| n.fives == 0 && n.sevens == 0 && n.threes.abs() <= 3));
-    assert_ne!(d.assignment.node(), Some(remote));
+    // The ball of radius 3 around C, on one, two and three axes: a box would
+    // pass with one axis alone.
+    for (axes, count) in [(1, 7), (2, 25), (3, 63)] {
+        c.policy.axes = axes;
+        let d = assign_new_note(
+            c,
+            &[],
+            &Memory::default(),
+            OrderedOnset { pitch: (c.cents(remote) * 1e6) as i64 },
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(s.candidates.len(), count, "axes {axes}");
+        assert!(
+            s.candidates.iter().all(|n| n.threes.abs() + n.fives.abs() + n.sevens.abs() <= 3
+                && (axes >= 2 || n.fives == 0)
+                && (axes >= 3 || n.sevens == 0)),
+            "axes {axes}"
+        );
+        assert_ne!(d.assignment.node(), Some(remote));
+    }
 }
 #[test]
 fn resource_exhaustion_is_explicit_and_never_truncates_to_a_winner() {
@@ -421,6 +455,15 @@ fn channel_bend_and_rpn_sensitivity_are_resolved_before_attack() {
     channel.apply([0xb0, 100, 0]);
     channel.apply([0xb0, 6, 12]);
     channel.apply([0xb0, 38, 50]);
+    assert_eq!(channel.microcents(), 625_000_000);
+    // Data entry for any other parameter, registered (fine tuning) or not,
+    // leaves the sensitivity alone, and says nothing changed.
+    channel.apply([0xb0, 100, 1]);
+    assert!(!channel.apply([0xb0, 6, 48]));
+    channel.apply([0xb0, 100, 0]);
+    channel.apply([0xb0, 99, 0]);
+    assert!(!channel.apply([0xb0, 6, 48]));
+    assert!(!channel.apply([0xb0, 38, 0]));
     assert_eq!(channel.microcents(), 625_000_000);
     channel.apply([0xb0, 121, 0]);
     assert_eq!(channel.microcents(), 0);
