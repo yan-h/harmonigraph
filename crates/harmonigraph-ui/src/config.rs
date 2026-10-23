@@ -14,82 +14,45 @@ pub use harmonigraph_scene::SCALE_BAR_RANGE;
 /// respond more slowly (the tradeoff is physics, not implementation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
-    /// 4096 samples (~85 ms at 48 kHz).
+    /// A 6144-sample frame (~128 ms at 48 kHz), every pitch listening through
+    /// the same window toward its newest end: as sharp as a 4096-sample Hann
+    /// window, and drawn as soon after the sound (43 ms), but at each partial's
+    /// own pitch. Longer frames than the Hann windows they match are what that
+    /// costs; see `harmonigraph_analysis::AnalyzerConfig`.
     Fast,
-    /// 8192 samples (~171 ms): the balance between the two.
+    /// A 12,288-sample frame, as sharp as an 8192-sample Hann window (86 ms
+    /// behind the sound): the balance between the two.
     Balanced,
-    /// 16384 samples (~341 ms).
+    /// A 24,576-sample frame, as sharp as a 16,384-sample Hann window (172 ms
+    /// behind the sound).
     Precise,
     /// A 16384-sample frame read through a listen that glides with pitch, from
     /// [`SpectrumConfig::sweep_bass`] at 20 Hz to
     /// [`SpectrumConfig::sweep_treble`] at 20 kHz (#1560). One window cannot
     /// suit both ends of a pitch axis; this gives each bucket its own, with no
-    /// bands to leave seams. Latency is the frame's, the same as Precise, and
-    /// the column stays aligned across the whole axis. See
+    /// bands to leave seams. It listens about the frame's middle, so its
+    /// columns are drawn half the frame behind the sound (171 ms), about as far
+    /// as Precise's, and stay aligned across the whole axis. See
     /// `harmonigraph_analysis::Sweep`.
     Sweep,
 }
 
 /// The listens a [`Sweep`](SpectrumWindow::Sweep) end can ask for, in
 /// Hann-equivalent samples: from the analyzer's shortest to the longest its
-/// frame can give, a little over four fifths of the frame.
+/// frame can give, 0.89 of the frame.
 pub fn sweep_length_range() -> std::ops::RangeInclusive<f32> {
     harmonigraph_analysis::SWEEP_MIN_LENGTH
         ..=harmonigraph_analysis::sweep_max_length(SpectrumWindow::Sweep.samples()).floor()
 }
 
 impl SpectrumWindow {
+    /// The analyzer's frame: how many samples one column is read from.
     pub fn samples(self) -> usize {
         match self {
-            SpectrumWindow::Fast => 4096,
-            SpectrumWindow::Balanced => 8192,
-            SpectrumWindow::Precise | SpectrumWindow::Sweep => 16384,
-        }
-    }
-}
-
-/// How many tapers the analyzer averages, picked in the Analyzer settings
-/// section beside the window length.
-///
-/// The window length above trades TIME against PITCH and leaves the estimate's
-/// noise exactly where it is; this trades COST and CONTRAST against that noise,
-/// which is a different axis and the reason it is a second control rather than
-/// more entries on the first. `harmonigraph_analysis::build_tapers`
-/// carries the mechanism; what a reader of this needs is the shape of the
-/// trade, measured at a mid-axis bucket under white noise:
-///
-/// | tapers | noise sd | floor | per column |
-/// |---|---|---|---|
-/// | 1 | 4.55 dB | — | 0.12 ms |
-/// | 3 | 2.67 dB | +4.7 dB | 0.24 ms |
-/// | 5 | 2.01 dB | +7.1 dB | 0.37 ms |
-///
-/// The floor column is the catch, and it is not a defect: holding a full-scale
-/// sine at 0 dB means a line spread over a wider main lobe is scaled back up to
-/// reach it, and flat noise rises with it. So more tapers draw a steadier
-/// picture with LESS room between a partial and the haze. At three tapers the
-/// audio ring's Gate wants about `+0.08` to select the same nodes it does at
-/// one, since the Gate is a fraction of a 60 dB Level window.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectrumTapers {
-    /// One Hann window: the estimator with no averaging in it, and the picture
-    /// this analyzer draws with the control untouched.
-    #[default]
-    One,
-    /// Three sine tapers — the count where the noise roughly halves and the
-    /// main lobe is still about a Hann window wide.
-    Three,
-    /// Five sine tapers: steadier again, and wide enough that the bottom of the
-    /// axis loses pitch it does not have to spare.
-    Five,
-}
-
-impl SpectrumTapers {
-    pub fn count(self) -> usize {
-        match self {
-            SpectrumTapers::One => 1,
-            SpectrumTapers::Three => 3,
-            SpectrumTapers::Five => 5,
+            SpectrumWindow::Fast => 6144,
+            SpectrumWindow::Balanced => 12_288,
+            SpectrumWindow::Precise => 24_576,
+            SpectrumWindow::Sweep => 16_384,
         }
     }
 }
@@ -310,10 +273,6 @@ pub struct SpectrumConfig {
     /// flip.
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
-    /// How many tapers the estimate averages; see [`SpectrumTapers`]. The
-    /// window above says how much AUDIO one column is measured over, this says
-    /// how many independent looks are taken at it.
-    pub tapers: SpectrumTapers,
     /// The [`Sweep`](SpectrumWindow::Sweep) setting's listen at 20 Hz and at
     /// 20 kHz, in samples of an equivalent Hann window, so 4096 is Fast's
     /// listen and 16384 Precise's. Between them it glides log-linearly in
@@ -642,6 +601,28 @@ impl SpectrumConfig {
         }
     }
 
+    /// The analyzer these settings ask for at `sample_rate`: the window's
+    /// frame, and its sweep when the window is [`Sweep`](SpectrumWindow::Sweep).
+    pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
+        harmonigraph_analysis::AnalyzerConfig {
+            sample_rate,
+            fft_size: self.window.samples(),
+            sweep: (self.window == SpectrumWindow::Sweep).then_some(harmonigraph_analysis::Sweep {
+                bass: self.sweep_bass,
+                treble: self.sweep_treble,
+            }),
+        }
+    }
+
+    /// How far before its newest sample a column analyzed under these settings
+    /// belongs on a time axis, in seconds — see
+    /// [`AnalyzerConfig::column_lag`](harmonigraph_analysis::AnalyzerConfig::column_lag).
+    /// For what a RUNNING analysis lags, which can be a step behind a setting
+    /// just changed, ask [`AudioSpectrum::column_lag`](crate::AudioSpectrum::column_lag).
+    pub fn column_lag(&self, sample_rate: f32) -> f64 {
+        self.analyzer(sample_rate).column_lag()
+    }
+
     /// Span the history over `seconds` — a render's own length, for
     /// [`SpectrogramRender::WholeVideo`](crate::SpectrogramRender::WholeVideo)
     /// — held to the History duration bar's ends, so the span a render draws
@@ -959,13 +940,10 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Right,
             window: SpectrumWindow::Fast,
-            // One taper — the picture with no averaging in it. The steadier
-            // counts cost contrast as well as CPU (see `SpectrumTapers`), so
-            // which of them is worth it is a judgement about material, and the
-            // fresh look is the one that presumes nothing.
-            tapers: SpectrumTapers::One,
-            // As long a listen as the frame allows at the bottom, and half of
-            // Fast's at the top, which is Fast's own by 2 kHz: the bass of
+            // A little under the longest listen the frame allows at the bottom
+            // (about 14,600 samples since #1575 padded the transform; 13,500
+            // was the longest when it was picked), and half of Fast's listen at
+            // the top, which is a 4096-sample Hann window's: the bass of
             // Precise with the treble of Fast, as picked on #1560's sheets.
             sweep_bass: 13_500.0,
             sweep_treble: 2048.0,

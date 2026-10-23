@@ -34,45 +34,47 @@ fn display_recovers_after_nonfinite_audio() {
     assert!(shown.iter().any(|p| *p > 0.01), "the curve recovers, not just the history");
 }
 
-/// Sweep and Precise share a frame and so a lag; what tells them apart is the
-/// read. Precise draws a 55 Hz A1 on its nearest bin, 55.66 Hz; Sweep's
-/// kernels sit on the bucket's own pitch. A Sweep setting that stopped at the
-/// config would read exactly like Precise.
+/// Every window reads each partial at its own pitch, so what tells Sweep from
+/// a fixed window is how long it listens: the fresh sweep's listen at 1 kHz is
+/// under a third of Precise's, so its peak is that much wider. Ten buckets (31
+/// cents) off a 1 kHz tone, Sweep still reads it 17 dB down, Precise 68. A
+/// Sweep setting that stopped at the config would read its 16,384-sample frame
+/// through the fixed listen instead, 58 dB down there.
 #[test]
 fn the_sweep_setting_reaches_the_analyzer() {
-    let a1 = ((harmonigraph_core::spectrum::hz_to_midi(55.0)
+    let khz = ((harmonigraph_core::spectrum::hz_to_midi(1000.0)
         - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
-    for (window, within) in [(SpectrumWindow::Sweep, 2), (SpectrumWindow::Precise, 40)] {
+        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
+    for (window, skirt) in
+        [(SpectrumWindow::Sweep, -30.0..0.0), (SpectrumWindow::Precise, -120.0..-40.0)]
+    {
         let mut spectrum = AudioSpectrum::default();
         let config = SpectrumConfig { window, attack: 0.0, ..SpectrumConfig::default() };
         let sine: Vec<f32> = (0..2 * window.samples())
-            .map(|i| 0.5 * (std::f32::consts::TAU * 55.0 * i as f32 / 48_000.0).sin())
+            .map(|i| 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin())
             .collect();
         spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
         let last = spectrum.history().back().expect("the frame filled");
         let power: Vec<f32> = last.power_sum().collect();
-        let peak = (0..power.len()).max_by(|&a, &b| power[a].total_cmp(&power[b])).unwrap() as i32;
-        let off = (peak - a1).abs();
-        assert!(off <= within, "{window:?} peaks {off} buckets from A1");
-        if window == SpectrumWindow::Precise {
-            assert!(off > 4, "the fixture no longer tells the two reads apart: {off}");
-        }
+        let peak = (khz - 2..=khz + 2).max_by(|&a, &b| power[a].total_cmp(&power[b])).unwrap();
+        let off = 10.0 * (power[peak - 10].max(power[peak + 10]) / power[peak]).log10();
+        assert!(skirt.contains(&off), "{window:?} reads 31 cents off a 1 kHz tone at {off:+.1} dB");
     }
 }
 
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
-    // The Fast 4096-sample window draws A4 on its nearest bin, about 21¢
-    // (seven buckets) sharp; the 8192-sample one resolves it to within a
-    // bucket.
-    for (window, buckets) in [(SpectrumWindow::Fast, 8), (SpectrumWindow::Balanced, 1)] {
+    // Each window reads A4 at its own pitch, to within a bucket, the Fast one
+    // included: reading the transform's bins drew it about 21¢ (seven buckets)
+    // sharp through the old Fast window (#1575).
+    for window in [SpectrumWindow::Fast, SpectrumWindow::Balanced] {
+        let buckets = 1;
         let mut spectrum = AudioSpectrum::default();
         let config = SpectrumConfig { window, ..SpectrumConfig::default() };
         assert!(spectrum.display(0.0).is_none(), "no audio yet");
 
         // A 440 Hz sine, long enough to fill the analysis window.
-        let sine: Vec<f32> = (0..9_000)
+        let sine: Vec<f32> = (0..window.samples() + 1000)
             .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
             .collect();
         spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
@@ -197,50 +199,6 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     );
 }
 
-/// The Tapers setting reaches the analyzer: the same audio measured at one
-/// taper and at three does not come out as the same curve.
-///
-/// Nothing else in the workspace constructs `Three` or `Five` — the button row
-/// names them and `count()` maps them, and every taper claim in
-/// `harmonigraph-analysis` is made against a bare `SpectrumAnalyzer`. So
-/// without this, omitting tapers from the configuration in `feed_sample_chunks` leaves
-/// the control inert with the whole suite green.
-///
-/// WHAT the difference is stays in harmonigraph-analysis, where it is measured
-/// (`more_tapers_steady_a_bucket_against_noise` and
-/// `the_noise_floor_reads_higher_as_tapers_are_added`). This holds only that
-/// the setting is connected to something.
-#[test]
-fn the_tapers_setting_reaches_the_analyzer() {
-    let sr = 48_000.0;
-    // Deterministic white noise: something in every bucket, which is what makes
-    // a change of estimator show up across the axis rather than in the skirts
-    // of one partial.
-    let mut seed = 0x1234_5678u32;
-    let noise: Vec<f32> = (0..24_000)
-        .map(|_| {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
-        })
-        .collect();
-
-    let curve = |tapers| {
-        let cfg = SpectrumConfig { tapers, ..SpectrumConfig::default() };
-        let mut spectrum = AudioSpectrum::default();
-        spectrum.push_samples(&noise, 1, sr, 1.0, &cfg);
-        spectrum.display(1.0).expect("audio is flowing").to_vec()
-    };
-    let one = curve(SpectrumTapers::One);
-    for more in [SpectrumTapers::Three, SpectrumTapers::Five] {
-        // Counted rather than compared whole: the grid is 3828 buckets, and an
-        // `assert_ne!` on the pair prints both of them.
-        let moved = one.iter().zip(curve(more)).filter(|(a, b)| **a != *b).count();
-        assert!(moved > 0, "{more:?} tapers measured what one taper did, in every bucket");
-    }
-}
-
 #[test]
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
@@ -281,10 +239,10 @@ fn spectrogram_history_stays_bounded() {
 
 /// The live path stamps its columns the same way the offline one does, and
 /// the near-edge grace knows about the lag that creates. Two halves of one
-/// thing: a column half a window old is not a stale column, it is the newest
-/// there can be, and the heatmap must still reach the now-line.
+/// thing: a column a lag old is not a stale column, it is the newest there
+/// can be, and the heatmap must still reach the now-line.
 #[test]
-fn a_live_column_is_stamped_at_the_middle_of_its_window() {
+fn a_live_column_is_stamped_at_the_centre_of_its_window() {
     let mut spectrum = AudioSpectrum::default();
     let config = SpectrumConfig::default();
     // A WHOLE number of hops, so the last column's window ends exactly at `now`
@@ -293,7 +251,7 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
     // leaves its newest column up to one hop further back than this — correctly,
     // since that is where the window it measured ends.
     let hop = (AudioSpectrum::FFT_INTERVAL * 48_000.0).round() as usize;
-    let samples = hop * (9_000 / hop + 1); // enough to fill the 8192 window
+    let samples = hop * (config.window.samples() / hop + 1); // enough to fill the frame
     let sine: Vec<f32> = (0..samples)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
@@ -301,26 +259,30 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
     spectrum.push_samples(&sine, 1, 48_000.0, now, &config);
     spectrum.display(now).expect("audio is flowing");
 
-    let window = f64::from(config.window.samples() as u32) / 48_000.0;
+    // Where the window's weight is centred: about a third of the Fast frame
+    // back, since its listen sits toward the newest end.
+    let lag = config.column_lag(48_000.0);
+    let frame = f64::from(config.window.samples() as u32) / 48_000.0;
+    assert!((0.3..0.4).contains(&(lag / frame)), "a {lag} s lag on a {frame} s frame");
     let stamped = spectrum.history().back().expect("a column was kept").time;
     assert!(
-        (stamped - (now - window * 0.5)).abs() < 1e-9,
-        "a column measured over [{:.3}, {now}] was stamped {stamped}, not its middle",
-        now - window,
+        (stamped - (now - lag)).abs() < 1e-9,
+        "a column measured over [{:.3}, {now}] was stamped {stamped}, not {lag} s back",
+        now - frame,
     );
     // The pane allows for this lag when extending fresh data to the now-line.
-    assert!((spectrum.column_lag() - window * 0.5).abs() < 1e-9);
+    assert!((spectrum.column_lag() - lag).abs() < 1e-9);
 }
 
 /// The plugin's frame reads the lag while its input worker has the analysis
 /// out, and is answered with the window it was lent at — the Fast one here,
-/// half a fresh analyzer's.
+/// about half a fresh analyzer's.
 #[test]
 fn the_column_lag_answers_while_the_analysis_is_lent() {
     let mut spectrum = AudioSpectrum::default();
     let config = SpectrumConfig { window: SpectrumWindow::Fast, ..Default::default() };
     spectrum.push_source_samples(&[0.0; 64], 1, 48_000.0, 0.0, &config);
-    let lag = config.window.samples() as f64 / 2.0 / 48_000.0;
+    let lag = config.column_lag(48_000.0);
     assert!((spectrum.column_lag() - lag).abs() < 1e-12, "the feed did not set the window");
 
     let lent = spectrum.lend().expect("the analysis is home");
@@ -340,8 +302,7 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     assert!(columns > 0);
     let last = spectrum.history().back().unwrap().time;
 
-    let config =
-        SpectrumConfig { window: SpectrumWindow::Fast, tapers: SpectrumTapers::Three, ..config };
+    let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..config };
     let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
     let first_ready = (initial + config.window.samples()).div_ceil(hop) * hop;
     spectrum.push_source_samples(
@@ -355,8 +316,8 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     assert_eq!(spectrum.history().back().unwrap().time, last);
     spectrum.push_source_samples(&[0.2], 1, sample_rate, origin, &config);
     assert_eq!(spectrum.history().len(), columns + 1);
-    let expected = origin + (first_ready - 1) as f64 / f64::from(sample_rate)
-        - config.window.samples() as f64 / (2.0 * f64::from(sample_rate));
+    let expected =
+        origin + (first_ready - 1) as f64 / f64::from(sample_rate) - config.column_lag(sample_rate);
     assert!((spectrum.history().back().unwrap().time - expected).abs() < 1e-9);
 }
 
@@ -462,9 +423,9 @@ fn stereo_analysis_preserves_an_antiphase_partial() {
 }
 
 /// A spectrum is measured over a WINDOW, not at an instant, so where it lands
-/// on the time axis is a choice — and the only defensible one is the middle of
-/// what it measured. Stamping it when the FFT ran (the end of that window) drew
-/// every sound half a window late: at the default 8192 that is 85 ms, so a note
+/// on the time axis is a choice — and the only defensible one is where the
+/// weight of what it measured sits. Stamping it when the FFT ran (the end of
+/// that window) drew every sound late: at the then-default 8192 that was 85 ms, so a note
 /// ribbon sat 85 ms further from the now-line than the energy it made, and
 /// reached the far edge — and vanished — that much before its own audio did.
 ///
@@ -502,8 +463,8 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
     assert!(db_of(loudest) > -10.0, "the tone should read loudly at its own bin");
 
     // Where the ridge reaches half power is what the eye reads as the onset:
-    // the window is Hann-weighted, so it crosses half when it is half over the
-    // start of the tone. That must be the moment the tone started.
+    // the window is tapered, so it crosses half when about half its weight is
+    // over the tone. That must be the moment the tone started.
     let half_power = loudest.saturating_sub((3.01 / DB_STEP).round() as u8);
     let half = spectrum
         .history()
@@ -514,7 +475,7 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
     assert!(
         (half.time - onset).abs() < window * 0.25,
         "the tone starts at {onset} s but its energy reads as starting at {} s \
-         (a {window:.3} s window; half of one late would be the old end-stamping)",
+         (a {window:.3} s frame; a third of one late would be the old end-stamping)",
         half.time,
     );
 }

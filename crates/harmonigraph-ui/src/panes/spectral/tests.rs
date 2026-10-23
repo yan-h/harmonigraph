@@ -2171,7 +2171,7 @@ fn the_live_strip_fills_the_analysis_gap_only_while_fresh() {
     let (split, now) = (0.35, 90.0);
     let time = super::axes::TimeAxis::new(&state, split, now);
     for window in [SpectrumWindow::Fast, SpectrumWindow::Balanced, SpectrumWindow::Precise] {
-        let lag = 0.5 * window.samples() as f64 / 48_000.0;
+        let lag = SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0);
         for extra_age in [0.0, 0.1, 0.2] {
             let newest = now - lag - extra_age;
             let layout = crate::spectrogram::TexLayout {

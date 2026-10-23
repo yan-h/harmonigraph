@@ -1012,6 +1012,16 @@ impl MemoryFrame {
     /// The history carries only forward in time, within six of the longest
     /// response time, over source history that has not been seeked back, under
     /// the same key and the same palette.
+    ///
+    /// The step is exact for a target that holds still, and a moving one is
+    /// read as if it had already been there for the whole `dt`: the memory
+    /// runs half a frame ahead, so it depends on the frame rate. On a real
+    /// take with 0.2 s pickup and release, a 30 fps export drew the heatmap
+    /// 0.15/255 brighter on average than a 60 fps one at the same instants,
+    /// under 0.2% of pixels by more than 8 levels; with memory off the two
+    /// matched to a level. Holding the previous target to integrate the
+    /// segment between them would close it, at a second texture for a
+    /// difference no one sees.
     fn follow(&self, previous: Option<&Self>, fraction: [f32; 2], taus: [f32; 2]) -> MemoryStep {
         let step = MemoryStep { fraction, ..MemoryStep::fresh(self.slices, self.life) };
         let Some(previous) = previous else { return step };

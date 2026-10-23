@@ -3,7 +3,7 @@
 //! of. Separate surface storage describes the uploaded heatmap textures.
 //! Runtime-only — none of this is persisted.
 
-use crate::{SpectrumConfig, SpectrumWindow};
+use crate::SpectrumConfig;
 
 /// One power value per pitch-spectrum bucket, the array the analyzer fills
 /// and the pane draws. See [`harmonigraph_core::spectrum::SPECTRUM_BINS`].
@@ -119,7 +119,8 @@ pub enum Delivery {
 
 /// One raw spectrum the analysis produced, for the store to take.
 pub struct AnalyzedColumn {
-    /// Shell time of the middle of the window it measured.
+    /// Shell time its window listened at: its amplitude centroid, which is the
+    /// column lag before the newest sample it read.
     pub(crate) time: f64,
     pub(crate) power: SpectrumBuckets,
     /// Seconds of audio since the column before, which the curve's time
@@ -241,20 +242,7 @@ impl SpectrumAnalysis {
         // nothing comes out until they have refilled; a changed sweep only
         // replans how the same frame is read. The hop grid keeps its phase
         // across any gap rather than restarting on it.
-        self.analyzer.configure(
-            harmonigraph_analysis::AnalyzerConfig {
-                sample_rate,
-                fft_size: config.window.samples(),
-                tapers: config.tapers.count(),
-                sweep: (config.window == SpectrumWindow::Sweep).then_some(
-                    harmonigraph_analysis::Sweep {
-                        bass: config.sweep_bass,
-                        treble: config.sweep_treble,
-                    },
-                ),
-            },
-            channels,
-        );
+        self.analyzer.configure(config.analyzer(sample_rate), channels);
 
         // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
         // time. A partial frame at the end is left for the next batch, so the
@@ -308,7 +296,7 @@ impl SpectrumAnalysis {
                 self.next_hop = self.frames_seen + hop;
                 let Some(fresh) = self.analyzer.power_sum() else { continue };
 
-                // Stamped at the middle of the window it measured, not at the
+                // Stamped where the window it measured is centred, not at the
                 // boundary itself — see `window_center_offset`. This is what lets a
                 // ridge sit under the note ribbon that made it, which is the entire
                 // point of drawing the two on one time axis. The boundary is where
@@ -357,7 +345,7 @@ impl SpectrumAnalysis {
         .unwrap();
     }
 
-    /// Half the running analyzer's window: see [`AudioSpectrum::column_lag`].
+    /// The running analyzer's lag: see [`AudioSpectrum::column_lag`].
     fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
@@ -714,13 +702,14 @@ impl AudioSpectrum {
     }
 
     /// How far behind `now` the newest column sits even when nothing is wrong:
-    /// half the analysis window, because that is where a spectrum belongs on a
-    /// time axis (see
-    /// [`window_center_offset`](harmonigraph_analysis::SpectrumAnalyzer::window_center_offset)).
+    /// where the weight of the window it was read through is centred, because
+    /// that is where a spectrum belongs on a time axis (see
+    /// [`AnalyzerConfig::column_lag`](harmonigraph_analysis::AnalyzerConfig::column_lag)).
     ///
     /// The heatmap allows for this delay when deciding whether columns are
     /// fresh enough to extend their newest color to the now-line. This also
-    /// reports the running analyzer's window, rather than the requested config.
+    /// reports the running analyzer's lag, rather than the requested config's
+    /// ([`SpectrumConfig::column_lag`]).
     pub fn column_lag(&self) -> f64 {
         self.analysis.as_ref().map_or(self.lent_lag, SpectrumAnalysis::lag)
     }

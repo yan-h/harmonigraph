@@ -167,7 +167,6 @@
     spectrum: (
         orientation: Right,
         window: Fast,
-        tapers: One,
         floor_db: -80.18797,
         ceiling_db: -18.606335,
         attack: 0.08658867,

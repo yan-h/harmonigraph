@@ -285,14 +285,15 @@ fn hand_over(
 /// Advance one export frame through the same replay/audio path the renderer
 /// draws, with the spectrum in step with the soundtrack.
 ///
-/// A column belongs at the middle of the window it measured, so live it can
-/// only be drawn half a window after the sound — 171 ms at the longest window.
-/// An export has the whole recording, so it reads that half window past the
-/// frame instead: the newest column is centred on `now`, under the note that
-/// sounds there, and the soundtrack muxed against the same clock is heard with
-/// it. The first frame also reads a whole window before itself: the hop grid
-/// needs a little more than one window for its first column, and with only the
-/// half window the opening frame would have none.
+/// A column belongs where the weight of the window it measured is centred, so
+/// live it can only be drawn that long after the sound — the analyzer's
+/// column lag, 172 ms at the longest window. An export has the whole
+/// recording, so it reads that lag past the frame instead: the newest column
+/// is centred on `now`, under the note that sounds there, and the soundtrack
+/// muxed against the same clock is heard with it. The first frame also reads a
+/// whole frame before itself: the hop grid needs a little more than one frame
+/// for its first column, and with only the lag the opening frame would have
+/// none.
 ///
 /// Never further than that: a column dated after `now` would advance live
 /// retention past the picture's far edge at low frame rates.
@@ -311,9 +312,10 @@ fn prepare_frame(
         let config = state.appearance.spectrum;
         // The appearance is installed once per render, so this is the same
         // every frame and consecutive slices meet exactly.
-        let lead = 0.5 * config.window.samples() as f64 / f64::from(audio.sample_rate);
+        let lead = config.column_lag(audio.sample_rate);
+        let frame_seconds = config.window.samples() as f64 / f64::from(audio.sample_rate);
         let from = match frame {
-            0 => now - 2.0 * lead,
+            0 => now - frame_seconds,
             _ => settings.start + (frame - 1) as f64 * step + lead,
         };
         let range =
@@ -484,12 +486,13 @@ mod tests {
                 let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
                 state.runtime.learn_active = false;
                 let window = state.appearance.spectrum.window.samples();
-                let lag = window as f64 / (2.0 * SR);
+                let lag = state.appearance.spectrum.column_lag(SR as f32);
+                let frame_seconds = window as f64 / SR;
                 let audio_end = origin + FRAMES as f64 / SR;
-                // The first frame reads from a whole window before the start,
+                // The first frame reads from a whole frame before the start,
                 // clamped to the recording.
                 let start = settings.start;
-                let first = ((start - 2.0 * lag - origin) * SR).round().max(0.0) as usize;
+                let first = ((start - frame_seconds - origin) * SR).round().max(0.0) as usize;
                 let mut partial_tail = false;
                 for frame in 0..settings.frame_count() {
                     let before = state.runtime.spectrum.history().len();
@@ -498,7 +501,7 @@ mod tests {
                             .unwrap();
                     let history = state.runtime.spectrum.history();
                     let (from, to) = match frame {
-                        0 => (now - 2.0 * lag, now + lag),
+                        0 => (now - frame_seconds, now + lag),
                         _ => (start + (frame - 1) as f64 / fps + lag, now + lag),
                     };
                     if from < audio_end && to > audio_end {
@@ -515,10 +518,10 @@ mod tests {
                         assert_eq!(history.len(), before, "empty tail added data");
                     }
                     // In step with the soundtrack: wherever the recording holds
-                    // a whole window around the frame, and the hop the grid
-                    // needs past it, the newest column is centred on it to
-                    // within a hop.
-                    if now - lag - origin >= HOP as f64 / SR && to <= audio_end {
+                    // the whole frame a column at `now` is read from, and the
+                    // hop the grid needs past it, the newest column is centred
+                    // on it to within a hop.
+                    if now + lag - frame_seconds - origin >= HOP as f64 / SR && to <= audio_end {
                         let newest = history.iter().last().expect("a column by now").time;
                         assert!(
                             now - newest <= (HOP + 1) as f64 / SR,
