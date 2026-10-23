@@ -99,6 +99,12 @@ struct Reached {
     lit_after_entering: usize,
 }
 #[derive(Clone)]
+/// Two index spaces share these arrays. `progress`, `delay` and `order_delay`
+/// count the slices a node draws, lowest first (slot `ring.base + i`), as
+/// `delays` ranks them and the shader reads them: an 11-slice ring can draw a
+/// slice below slot 0, which no slot index holds. `levels`, `targets`,
+/// `readings` and `level_wait` count octave slots, as `NodeInstance::octaves`
+/// and the marks do.
 struct Motion {
     progress: [f32; 11],
     delay: [f32; 11],
@@ -390,10 +396,7 @@ impl NodeMotion {
         for node in &scene.nodes {
             let node_class = PitchClass::from_cents(node.cents);
             let (lo, hi) = scene.octave_layout.slots(node.cents);
-            // `targets`, `levels` and `level_wait` are indexed by octave slot,
-            // and `delay` and `progress` by the slice drawn, lowest first, as
-            // `delays` ranks them and the shader reads them: the slice a slot
-            // is drawn as, if it is drawn.
+            // The slice a slot is drawn as, if it is drawn (see `Motion`).
             let displayed = |slot: usize| {
                 usize::try_from(slot as i32 - lo).ok().filter(|&i| i < (hi - lo + 1) as usize)
             };
