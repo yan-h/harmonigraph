@@ -18,3 +18,7 @@ Yan’s decisions recorded for future drift audits.
 - The live edge waits for the bass, so a column stays aligned across the whole axis; its latency is Precise's.
 - No spectral reassignment, alone or on top of a sweep.
 - Two sliders, bass and treble listen, start exposed and are to be pruned after use.
+
+## 2026-10-23 (PR #1572)
+
+- A video export draws the spectrum in step with its soundtrack: it reads half a window past each frame, so the newest column sits at the now-line rather than half a window behind it, at every resolution. The live view keeps its wait, since it cannot read ahead.
