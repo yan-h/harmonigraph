@@ -20,6 +20,22 @@ pub enum SpectrumWindow {
     Balanced,
     /// 16384 samples (~341 ms).
     Precise,
+    /// A 16384-sample frame read through a listen that glides with pitch, from
+    /// [`SpectrumConfig::sweep_bass`] at 20 Hz to
+    /// [`SpectrumConfig::sweep_treble`] at 20 kHz (#1560). One window cannot
+    /// suit both ends of a pitch axis; this gives each bucket its own, with no
+    /// bands to leave seams. Latency is the frame's, the same as Precise, and
+    /// the column stays aligned across the whole axis. See
+    /// `harmonigraph_analysis::Sweep`.
+    Sweep,
+}
+
+/// The listens a [`Sweep`](SpectrumWindow::Sweep) end can ask for, in
+/// Hann-equivalent samples: from the analyzer's shortest to the longest its
+/// frame can give, a little over four fifths of the frame.
+pub fn sweep_length_range() -> std::ops::RangeInclusive<f32> {
+    harmonigraph_analysis::SWEEP_MIN_LENGTH
+        ..=harmonigraph_analysis::sweep_max_length(SpectrumWindow::Sweep.samples()).floor()
 }
 
 impl SpectrumWindow {
@@ -27,7 +43,7 @@ impl SpectrumWindow {
         match self {
             SpectrumWindow::Fast => 4096,
             SpectrumWindow::Balanced => 8192,
-            SpectrumWindow::Precise => 16384,
+            SpectrumWindow::Precise | SpectrumWindow::Sweep => 16384,
         }
     }
 }
@@ -298,6 +314,13 @@ pub struct SpectrumConfig {
     /// window above says how much AUDIO one column is measured over, this says
     /// how many independent looks are taken at it.
     pub tapers: SpectrumTapers,
+    /// The [`Sweep`](SpectrumWindow::Sweep) setting's listen at 20 Hz and at
+    /// 20 kHz, in samples of an equivalent Hann window, so 4096 is Fast's
+    /// listen and 16384 Precise's. Between them it glides log-linearly in
+    /// frequency. Inert under the other settings. Bounded by
+    /// [`sweep_length_range`].
+    pub sweep_bass: f32,
+    pub sweep_treble: f32,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
     pub floor_db: f32,
@@ -676,6 +699,10 @@ impl SpectrumConfig {
         } else {
             fresh.tilt
         };
+        let sweep = sweep_length_range();
+        self.sweep_bass = bounded(self.sweep_bass, fresh.sweep_bass, *sweep.start(), *sweep.end());
+        self.sweep_treble =
+            bounded(self.sweep_treble, fresh.sweep_treble, *sweep.start(), *sweep.end());
         self.keyline_lift = bounded(self.keyline_lift, fresh.keyline_lift, 0.0, 1.0);
         self.backdrop_strength = bounded(self.backdrop_strength, fresh.backdrop_strength, 0.0, 1.0);
         self.backdrop_height = bounded(
@@ -937,6 +964,11 @@ impl Default for SpectrumConfig {
             // which of them is worth it is a judgement about material, and the
             // fresh look is the one that presumes nothing.
             tapers: SpectrumTapers::One,
+            // As long a listen as the frame allows at the bottom, and half of
+            // Fast's at the top, which is Fast's own by 2 kHz: the bass of
+            // Precise with the treble of Fast, as picked on #1560's sheets.
+            sweep_bass: 13_500.0,
+            sweep_treble: 2048.0,
             // The analyzer's level window as captured from the DAW on
             // 2026-09-10. Its floor and ceiling are independent of the
             // heatmap's colour window below.
