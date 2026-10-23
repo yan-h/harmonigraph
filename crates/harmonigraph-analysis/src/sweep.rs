@@ -57,8 +57,13 @@ pub const SWEEP_MIN_LENGTH: f32 = 256.0;
 const HANN_SPREAD: f64 = 0.180_773_6;
 
 /// The narrowest kernel, in bins: a Gaussian sampled at whole bins reads a
-/// frequency BETWEEN them faithfully only while it is at least this wide. It is
-/// what bounds the longest listen a frame can give — see [`max_length`].
+/// frequency BETWEEN them faithfully only while it is wide enough, and this is
+/// where that starts to give. Measured against known tones on a 16384-sample
+/// frame, a partial reads up to 0.06 of a bin off its pitch at this width, 0.01
+/// at 0.75 bins and nothing measurable from 0.9 — so the fresh sweep's bass end,
+/// which sits on this floor, puts a 21 Hz partial about 11 cents flat, and is
+/// within 3 cents from 22 Hz up. It is what bounds the longest listen a frame
+/// can give — see [`max_length`].
 const MIN_KERNEL_STD: f64 = 0.6;
 
 /// How far out each kernel is kept, in its own standard deviations. The tail
