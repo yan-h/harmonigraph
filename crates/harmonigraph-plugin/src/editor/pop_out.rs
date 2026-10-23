@@ -111,6 +111,9 @@ mod macos {
         wanted: Option<bool>,
         /// Docked since the last size source.
         redocked: bool,
+        /// An app that came forward and has not yet raised its windows, and
+        /// how many more times to look ([`SETTLE_TRIES`]).
+        settling: Option<(i32, u8)>,
     }
 
     fn main_thread() -> MainThreadMarker {
@@ -156,8 +159,8 @@ mod macos {
     /// The window to put the editor's just below when `pid` comes to the
     /// front: the last of the run of its windows at the front of the normal
     /// level (this one's own excepted), so the app that came forward covers
-    /// it and nothing that was behind it does. Failing that, the app's
-    /// frontmost window anywhere.
+    /// it and nothing that was behind it does. `None` while that app's windows
+    /// are not at the front yet.
     ///
     /// Only the owner, layer and number of each window are read, which need
     /// no screen-recording permission.
@@ -177,8 +180,6 @@ mod macos {
             Some(value.downcast_ref::<NSNumber>()?.as_isize())
         };
         let mut front_run = None;
-        let mut first = None;
-        let mut in_run = true;
         for info in list.iter() {
             if number(&info, "kCGWindowLayer") != Some(NORMAL) {
                 continue;
@@ -187,36 +188,29 @@ mod macos {
             if window == own {
                 continue;
             }
-            let ours = number(&info, "kCGWindowOwnerPID") == Some(pid as isize);
-            if ours {
-                first = first.or(Some(window));
-            }
-            if in_run && ours {
-                front_run = Some(window);
-            } else {
-                in_run = false;
-            }
-            if !in_run && first.is_some() {
+            if number(&info, "kCGWindowOwnerPID") != Some(pid as isize) {
                 break;
             }
+            front_run = Some(window);
         }
-        front_run.or(first)
+        front_run
     }
 
-    /// Set the window for whichever app is now in front: floating above the
-    /// host's windows while the host is, and otherwise among the normal ones,
-    /// just behind the app that came forward.
-    fn place(window: &NSWindow, exe: &Path) {
-        let Some(pid) = other_in_front(exe) else {
-            window.setLevel(FLOATING);
-            return;
-        };
-        window.setLevel(NORMAL);
-        match below_front_of(pid, window.windowNumber()) {
-            Some(other) => window.orderWindow_relativeTo(NSWindowOrderingMode::Below, other),
-            None => window.orderFront(None),
-        }
+    /// Put the window just behind the windows `pid` brought forward, if they
+    /// are at the front yet. Returns whether they were.
+    fn tuck(window: &NSWindow, pid: i32) -> bool {
+        let Some(other) = below_front_of(pid, window.windowNumber()) else { return false };
+        window.orderWindow_relativeTo(NSWindowOrderingMode::Below, other);
+        true
     }
+
+    /// How often, and how many times, to look again for the windows of an
+    /// app that came forward. The activation is announced before that app has
+    /// raised them, at least when it was clicked in the Dock (seen in Bitwig,
+    /// #1580): looked for at once, they are still wherever they were, and the
+    /// editor tucked behind them would land behind whatever covered them.
+    const SETTLE_DELAY: f64 = 0.05;
+    const SETTLE_TRIES: u8 = 10;
 
     /// Keep the host's window out of sight and out of the way, but open:
     /// closing or hiding it is the host's to undo, and Bitwig does.
@@ -491,10 +485,50 @@ mod macos {
             }
         }
 
+        /// Another app came to the front, or the host did: float above the
+        /// host's windows while the host is, and otherwise sit among the
+        /// normal ones, just behind the app that came forward and above
+        /// everything else.
         fn front_changed(&self, exe: &Path) {
-            let window = self.0.lock().window.clone();
-            if let Some(window) = window {
-                place(&window, exe);
+            let (window, agent) = {
+                let mut state = self.0.lock();
+                state.settling = None;
+                (state.window.clone(), state.agent.clone())
+            };
+            let Some(window) = window else { return };
+            let Some(pid) = other_in_front(exe) else {
+                window.setLevel(FLOATING);
+                return;
+            };
+            window.setLevel(NORMAL);
+            if tuck(&window, pid) {
+                return;
+            }
+            // Above everything it covered, until that app's windows arrive in
+            // front of it.
+            window.orderFront(None);
+            self.0.lock().settling = Some((pid, SETTLE_TRIES));
+            if let Some(agent) = agent {
+                agent.settle_later();
+            }
+        }
+
+        /// Look again for the windows of the app that came forward.
+        fn settle(&self) {
+            let (window, agent, pid, tries) = {
+                let mut state = self.0.lock();
+                let (Some((pid, tries)), Some(window)) = (state.settling.take(), &state.window)
+                else {
+                    return;
+                };
+                (window.clone(), state.agent.clone(), pid, tries)
+            };
+            if tuck(&window, pid) || tries <= 1 {
+                return;
+            }
+            self.0.lock().settling = Some((pid, tries - 1));
+            if let Some(agent) = agent {
+                agent.settle_later();
             }
         }
     }
@@ -531,8 +565,30 @@ mod macos {
                     pop_out.apply();
                 }
             }
+
+            #[unsafe(method(settle:))]
+            fn settle(&self, _: Option<&AnyObject>) {
+                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
+                    pop_out.settle();
+                }
+            }
         }
     );
+
+    impl Agent {
+        fn settle_later(&self) {
+            // SAFETY: `settle:` is this class's own method, taking an object
+            // it ignores; the run loop retains the target until then.
+            let () = unsafe {
+                msg_send![
+                    self,
+                    performSelector: sel!(settle:),
+                    withObject: None::<&AnyObject>,
+                    afterDelay: SETTLE_DELAY
+                ]
+            };
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
