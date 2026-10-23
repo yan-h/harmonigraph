@@ -392,6 +392,7 @@ pub(crate) fn analysis_section(
             (SpectrumWindow::Fast, "Fast", "snappy response, coarse pitch especially in the bass; low audio-ring fundamentals can disappear while their harmonics remain"),
             (SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
             (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
+            (SpectrumWindow::Sweep, "Sweep", "a listen that glides with pitch: long in the bass for sharp pitch, short in the treble for fast response, with no seams between. Set its two ends below"),
         ];
         let hints: Vec<_> = windows
             .iter()
@@ -403,6 +404,26 @@ pub(crate) fn analysis_section(
             .map(|(&(window, label, _), hint)| (window, label, hint.as_str()))
             .collect();
         choice_row(ui, "Frequency resolution", &mut cfg.window, &options);
+        if cfg.window == SpectrumWindow::Sweep {
+            let range = crate::config::sweep_length_range();
+            for (value, label, end) in [
+                (&mut cfg.sweep_bass, "Bass listen", "20 Hz"),
+                (&mut cfg.sweep_treble, "Treble listen", "20 kHz"),
+            ] {
+                ValueBar::new(value, range.clone(), label)
+                    .unit(1.0, " samples")
+                    .integer()
+                    .show(ui)
+                    .on_hover_text(format!(
+                        "How long the analyzer listens at {end}, as the length of an equivalent \
+                         window: 4096 samples is Fast's listen and 16384 Precise's, a little past \
+                         the longest the bass can reach. Longer \
+                         separates close pitches; shorter shows changes sooner. The listen glides \
+                         evenly in pitch between the two ends. Live, the picture waits as long as \
+                         Precise does whatever these are; a video export does not wait."
+                    ));
+            }
+        }
         choice_row(ui, "Spectrum averaging", &mut cfg.tapers, &[
             (SpectrumTapers::One, "1", "Sharpest frequency detail, with the most flicker and speckle. Lowest processing cost."),
             (SpectrumTapers::Three, "3", "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."),

@@ -34,6 +34,33 @@ fn display_recovers_after_nonfinite_audio() {
     assert!(shown.iter().any(|p| *p > 0.01), "the curve recovers, not just the history");
 }
 
+/// Sweep and Precise share a frame and so a lag; what tells them apart is the
+/// read. Precise draws a 55 Hz A1 on its nearest bin, 55.66 Hz; Sweep's
+/// kernels sit on the bucket's own pitch. A Sweep setting that stopped at the
+/// config would read exactly like Precise.
+#[test]
+fn the_sweep_setting_reaches_the_analyzer() {
+    let a1 = ((harmonigraph_core::spectrum::hz_to_midi(55.0)
+        - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
+        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
+    for (window, within) in [(SpectrumWindow::Sweep, 2), (SpectrumWindow::Precise, 40)] {
+        let mut spectrum = AudioSpectrum::default();
+        let config = SpectrumConfig { window, attack: 0.0, ..SpectrumConfig::default() };
+        let sine: Vec<f32> = (0..2 * window.samples())
+            .map(|i| 0.5 * (std::f32::consts::TAU * 55.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
+        let last = spectrum.history().back().expect("the frame filled");
+        let power: Vec<f32> = last.power_sum().collect();
+        let peak = (0..power.len()).max_by(|&a, &b| power[a].total_cmp(&power[b])).unwrap() as i32;
+        let off = (peak - a1).abs();
+        assert!(off <= within, "{window:?} peaks {off} buckets from A1");
+        if window == SpectrumWindow::Precise {
+            assert!(off > 4, "the fixture no longer tells the two reads apart: {off}");
+        }
+    }
+}
+
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
     // The Fast 4096-sample window draws A4 on its nearest bin, about 21¢

@@ -3,7 +3,7 @@
 //! of. Separate surface storage describes the uploaded heatmap textures.
 //! Runtime-only — none of this is persisted.
 
-use crate::SpectrumConfig;
+use crate::{SpectrumConfig, SpectrumWindow};
 
 /// One power value per pitch-spectrum bucket, the array the analyzer fills
 /// and the pane draws. See [`harmonigraph_core::spectrum::SPECTRUM_BINS`].
@@ -241,14 +241,21 @@ impl SpectrumAnalysis {
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
         mut column: impl FnMut(AnalyzedColumn),
     ) -> Result<(), E> {
-        // Any configuration change empties the analyzers' rings, so nothing comes out
-        // until they have refilled. The hop grid keeps its phase across that gap
-        // rather than restarting on it.
+        // A changed frame, taper set or rate empties the analyzers' rings, so
+        // nothing comes out until they have refilled; a changed sweep only
+        // replans how the same frame is read. The hop grid keeps its phase
+        // across any gap rather than restarting on it.
         self.analyzer.configure(
             harmonigraph_analysis::AnalyzerConfig {
                 sample_rate,
                 fft_size: config.window.samples(),
                 tapers: config.tapers.count(),
+                sweep: (config.window == SpectrumWindow::Sweep).then_some(
+                    harmonigraph_analysis::Sweep {
+                        bass: config.sweep_bass,
+                        treble: config.sweep_treble,
+                    },
+                ),
             },
             channels,
         );

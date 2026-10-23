@@ -283,9 +283,19 @@ fn hand_over(
 }
 
 /// Advance one export frame through the same replay/audio path the renderer
-/// draws. Feed through the frame clock and preserve the analyzer's half-window
-/// lag. Future columns would advance live retention past the picture's far edge
-/// at low frame rates; the first frame therefore feeds an empty slice.
+/// draws, with the spectrum in step with the soundtrack.
+///
+/// A column belongs at the middle of the window it measured, so live it can
+/// only be drawn half a window after the sound — 171 ms at the longest window.
+/// An export has the whole recording, so it reads that half window past the
+/// frame instead: the newest column is centred on `now`, under the note that
+/// sounds there, and the soundtrack muxed against the same clock is heard with
+/// it. The first frame also reads a whole window before itself: the hop grid
+/// needs a little more than one window for its first column, and with only the
+/// half window the opening frame would have none.
+///
+/// Never further than that: a column dated after `now` would advance live
+/// retention past the picture's far edge at low frame rates.
 fn prepare_frame(
     replay: &mut Replay,
     state: &mut PictureState,
@@ -298,12 +308,19 @@ fn prepare_frame(
     let now = settings.start + frame as f64 * step;
     replay.advance_to(&mut state.runtime, now);
     if let Some(audio) = audio {
-        let from = settings.start + frame.saturating_sub(1) as f64 * step;
-        let range = audio.range_seconds(from - settings.audio_start, now - settings.audio_start);
+        let config = state.appearance.spectrum;
+        // The appearance is installed once per render, so this is the same
+        // every frame and consecutive slices meet exactly.
+        let lead = 0.5 * config.window.samples() as f64 / f64::from(audio.sample_rate);
+        let from = match frame {
+            0 => now - 2.0 * lead,
+            _ => settings.start + (frame - 1) as f64 * step + lead,
+        };
+        let range =
+            audio.range_seconds(from - settings.audio_start, now + lead - settings.audio_start);
         if !range.is_empty() {
             let end = range.end;
             let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
-            let config = state.appearance.spectrum;
             state.runtime.spectrum.push_sample_chunks(
                 range.len(),
                 audio.channels,
@@ -453,9 +470,7 @@ mod tests {
         const FRAMES: usize = 62_271;
         const HOP: usize = 384;
         let mut audio = transient_audio();
-        for (origin, offset, first) in
-            [(0.0, 0.0, 0usize), (7.125, 0.0, 0), (7.125, 0.41731, 20_031), (7.125, -0.00713, 0)]
-        {
+        for (origin, offset) in [(0.0, 0.0), (7.125, 0.0), (7.125, 0.41731), (7.125, -0.00713)] {
             let mut previous_bins: Option<Vec<Vec<u8>>> = None;
             for fps in [1.0, 4.0, 30.0, 60.0, 120.0, 30_000.0 / 1001.0] {
                 let settings = Settings {
@@ -471,36 +486,49 @@ mod tests {
                 let window = state.appearance.spectrum.window.samples();
                 let lag = window as f64 / (2.0 * SR);
                 let audio_end = origin + FRAMES as f64 / SR;
+                // The first frame reads from a whole window before the start,
+                // clamped to the recording.
+                let start = settings.start;
+                let first = ((start - 2.0 * lag - origin) * SR).round().max(0.0) as usize;
                 let mut partial_tail = false;
                 for frame in 0..settings.frame_count() {
                     let before = state.runtime.spectrum.history().len();
                     let now =
                         prepare_frame(&mut replay, &mut state, Some(&mut audio), &settings, frame)
                             .unwrap();
-                    let from = settings.start + frame.saturating_sub(1) as f64 / fps;
-                    if from < audio_end && now > audio_end {
+                    let history = state.runtime.spectrum.history();
+                    let (from, to) = match frame {
+                        0 => (now - 2.0 * lag, now + lag),
+                        _ => (start + (frame - 1) as f64 / fps + lag, now + lag),
+                    };
+                    if from < audio_end && to > audio_end {
+                        // Read, and drawn from if a hop ends inside it.
                         partial_tail = true;
+                        let read_from = ((from - origin) * SR).round() as usize;
+                        let last_hop = first + (FRAMES - first) / HOP * HOP;
                         assert!(
-                            state.runtime.spectrum.history().len() > before,
+                            last_hop <= read_from || history.len() > before,
                             "partial tail must emit a column: {fps}, {offset}"
                         );
                     }
                     if from >= audio_end {
-                        assert_eq!(
-                            state.runtime.spectrum.history().len(),
-                            before,
-                            "empty tail added data"
-                        );
+                        assert_eq!(history.len(), before, "empty tail added data");
                     }
-                    if frame == 0 {
-                        assert_eq!(
-                            state.runtime.spectrum.history().len(),
-                            0,
-                            "no pre-roll on the first frame"
+                    // In step with the soundtrack: wherever the recording holds
+                    // a whole window around the frame, and the hop the grid
+                    // needs past it, the newest column is centred on it to
+                    // within a hop.
+                    if now - lag - origin >= HOP as f64 / SR && to <= audio_end {
+                        let newest = history.iter().last().expect("a column by now").time;
+                        assert!(
+                            now - newest <= (HOP + 1) as f64 / SR,
+                            "the newest column is {:.1} ms behind the frame at {fps} fps, \
+                             start {offset}",
+                            (now - newest) * 1e3
                         );
                     }
                     assert!(
-                        state.runtime.spectrum.history().iter().all(|c| c.time <= now),
+                        history.iter().all(|c| c.time <= now),
                         "future columns would evict visible history at {fps} fps"
                     );
                 }
