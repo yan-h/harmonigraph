@@ -934,6 +934,46 @@ mod tests {
         );
     }
 
+    /// Above the crossover a bucket is wider than a bin and reads the loudest
+    /// one inside it, which no partial below 3.2 kHz at the default window
+    /// reaches: every other test here sits under it.
+    #[test]
+    fn a_treble_partial_reads_at_its_own_pitch_and_level() {
+        for hz in [4500.0, 9000.0, 15_000.0] {
+            let buckets = analyze(&[(hz, 1.0)], 48_000.0);
+            let peak = peak_bucket(&buckets);
+            let at = bucket_of_midi(hz_to_midi(hz));
+            assert!(dist(peak, at) <= 1, "{hz} Hz peaks at bucket {peak}, not {at}");
+            // Scalloping takes up to 1.42 dB off a partial between two bins.
+            let db = 10.0 * buckets[peak].max(1e-12).log10();
+            assert!((-1.6..0.2).contains(&db), "{hz} Hz reads {db:+.2} dB, not 0");
+        }
+    }
+
+    /// Below the crossover the buckets between two bins are reconstructed from
+    /// the bins either side, and the magnitudes that reads are only filled up
+    /// to [`INTERP_BIN_CEILING`]. A partial in the upper part of that range, at
+    /// bin 300 of 554, is where a short fill shows: the buckets beside the
+    /// peak's own read a held magnitude from far down the skirt. The peak
+    /// bucket alone cannot tell, since it holds a bin and reads it directly.
+    #[test]
+    fn the_buckets_beside_a_partial_are_drawn_up_to_the_crossover() {
+        let sample_rate = 48_000.0f32;
+        let bin_hz = sample_rate / DEFAULT_FFT_SIZE as f32;
+        let hz = 300.0 * bin_hz;
+        let buckets = analyze(&[(hz, 1.0)], sample_rate);
+        let top = buckets[peak_bucket(&buckets)];
+        // A Hann window's main lobe is 9 dB down 1.2 bins out.
+        let near: Vec<_> = (0..SPECTRUM_BINS)
+            .filter(|&b| (BUCKET_FREQUENCIES[b].center_hz - hz).abs() < 1.2 * bin_hz)
+            .collect();
+        assert!(near.len() >= 4, "the fixture should span buckets either side of the peak's");
+        for b in near {
+            let db = 10.0 * (buckets[b] / top).max(1e-12).log10();
+            assert!(db > -12.0, "bucket {b}, near {hz} Hz, reads {db:+.1} dB");
+        }
+    }
+
     /// The bottom of the axis draws at every window length, not just the one
     /// the rest of these tests use.
     ///
