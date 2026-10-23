@@ -461,6 +461,13 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
             // 720p60.
             args.extend(["-tune", "grain"].map(String::from));
             args.extend(["-bf".to_string(), "2".to_string()]);
+            // The 4:2:0 conversion below averages each pair of columns, so
+            // chroma sits between them; untagged, x264 states H.264's default,
+            // half a pixel left, and a player that honours it shifts every
+            // thin line's colour that way. Decoded as stated rather than as
+            // tagged, a 1440p export gains 0.5-0.75 dB. VideoToolbox drops this
+            // tag however it is given, so the hardware export still says left.
+            args.extend(["-chroma_sample_location", "center"].map(String::from));
         }
         VideoEncoder::Hardware => {
             // `-allow_sw 0` (VideoToolbox's own default, stated so it reads as
@@ -963,6 +970,44 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// What an x264 export says about its colour is what its pixels hold, read
+    /// back from the file rather than the arguments: ffmpeg 7 has dropped
+    /// colour options given in the wrong place without a word.
+    #[test]
+    fn real_x264_export_states_the_colour_it_holds() {
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-real-tags-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("tags.mp4");
+        let options = VideoOptions {
+            size: [16, 16],
+            fps: 20.0,
+            frames: 4,
+            audio: None,
+            encoder: VideoEncoder::X264,
+            crf: 20,
+            ffmpeg: ffmpeg.to_str(),
+            audio_offset: 0.0,
+        };
+        encode(&options, &out, None);
+        let output = Command::new(ffmpeg.with_file_name("ffprobe"))
+            .args(["-v", "error", "-select_streams", "v", "-of", "flat", "-show_entries"])
+            .arg("stream=color_space,color_primaries,color_transfer,chroma_location")
+            .arg(&out)
+            .output()
+            .unwrap();
+        let info = String::from_utf8(output.stdout).unwrap();
+        for tag in
+            ["color_space=\"bt709\"", "color_primaries=\"bt709\"", "color_transfer=\"bt709\""]
+        {
+            assert!(info.contains(tag), "{tag}: {info}");
+        }
+        // swscale's 4:2:0 puts chroma between its two luma columns.
+        assert!(info.contains("chroma_location=\"center\""), "{info}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A 1440p60 export with a soundtrack, which reaches every branch of
     /// [`video_args`] but the delayed-audio one.
     fn export_at_1440p(encoder: VideoEncoder) -> Vec<String> {
@@ -987,7 +1032,8 @@ mod tests {
     fn the_x264_export_keeps_its_arguments() {
         let expected = "-hide_banner -loglevel warning -y -progress pipe:1 -f rawvideo \
              -pix_fmt rgba -s 2560x1440 -r 60 -i - -ss 0.021333 -i /takes/take.wav \
-             -c:v libx264 -preset medium -profile:v high -crf 10 -tune grain -bf 2 -g 30 \
+             -c:v libx264 -preset medium -profile:v high -crf 10 -tune grain -bf 2 \
+             -chroma_sample_location center -g 30 \
              -vf scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,\
              setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv \
              -r 60 -af aresample=48000,apad,atrim=end_sample=478976 -c:a aac -b:a 384k \
