@@ -27,6 +27,12 @@ pub struct EguiState {
     pub(super) host_resized: AtomicCell<Option<(u32, u32)>>,
     #[serde(skip)]
     open: AtomicBool,
+    /// The editor kept in the host's window rather than its own (see
+    /// `PopOut`), from the System tab. Saved with the project; a project
+    /// from before it was opens in the editor's own window, which is the
+    /// default.
+    #[serde(default)]
+    docked: AtomicBool,
 }
 
 impl EguiState {
@@ -36,11 +42,20 @@ impl EguiState {
             requested_size: AtomicCell::new(None),
             host_resized: AtomicCell::new(None),
             open: AtomicBool::new(false),
+            docked: AtomicBool::new(false),
         })
     }
 
     pub fn size(&self) -> (u32, u32) {
         self.size.load()
+    }
+
+    pub(super) fn docked(&self) -> bool {
+        self.docked.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn set_docked(&self, docked: bool) {
+        self.docked.store(docked, Ordering::Relaxed);
     }
 
     pub fn is_open(&self) -> bool {
@@ -61,6 +76,7 @@ impl EguiState {
 impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<EguiState> {
     fn set(&self, new_value: EguiState) {
         self.size.store(new_value.size.load());
+        self.set_docked(new_value.docked());
     }
 
     fn map<F, R>(&self, f: F) -> R
@@ -245,5 +261,31 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
             }
         }
         f(&self.blob.read())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nice_plug::params::persist::PersistentField;
+
+    use super::*;
+
+    /// The System tab's Own window choice is saved with the window size, and a
+    /// project saved before it existed opens in the editor's own window.
+    #[test]
+    fn the_own_window_choice_is_saved_and_defaults_to_own() {
+        let docked = EguiState::from_size(800, 600);
+        docked.set_docked(true);
+        let saved = serde_json::to_string(&*docked).unwrap();
+        let restored = EguiState::from_size(1, 1);
+        restored.set(serde_json::from_str(&saved).unwrap());
+        assert!(restored.docked());
+        assert_eq!(restored.size(), (800, 600));
+
+        let mut old: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        old.as_object_mut().unwrap().remove("docked");
+        let restored = EguiState::from_size(1, 1);
+        restored.set(serde_json::from_value(old).unwrap());
+        assert!(!restored.docked());
     }
 }

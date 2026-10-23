@@ -206,6 +206,15 @@ Drag the separators to resize visible sections.
 Tabs and sections cannot be dragged into arbitrary arrangements.
 **System → Reset layout** restores the default arrangement and unfolds everything.
 
+On macOS the editor opens in a window of its own rather than in the host's,
+so it stays on screen while another app is in front:
+Bitwig takes its plugin windows off screen whenever it is in the background.
+**System → Own window** turns this off, and the project remembers the choice.
+The window floats above the host while the host is in front.
+When another app comes forward, it goes just behind that app's windows and stays above the rest.
+It remembers where it was; its size is the editor size the project saves.
+The host still opens and closes it, so it has no close button.
+
 ## Folding the Analyzer
 
 The arrows at the outer ends of the Analyzer's spectrum and history regions fold them independently.
