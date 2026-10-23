@@ -506,6 +506,10 @@ mod tests {
         assert_eq!(tracker.held_count(), 65);
         assert!(tracker.voices().any(|v| v.source == SourceId(2) && v.on_time == 0.0));
         assert!(
+            tracker.roll().notes().any(|n| n.source == SourceId(2) && n.is_live()),
+            "one source's baseline leaves another's ribbons sounding"
+        );
+        assert!(
             tracker.roll().notes().filter(|n| n.source == SourceId(1)).all(|n| {
                 !n.history_complete && n.start == 1.0 && n.segments(3.0).next().unwrap().0 .0 == 2.0
             }),
@@ -529,6 +533,170 @@ mod tests {
                 sample_rate: 48000.0,
             }),
             pitch_microcents: None,
+        }
+    }
+
+    /// Every clause of the publication boundary refuses on its own: a delta,
+    /// a gap or a baseline voice that would be valid but for one field. Each
+    /// fixture starts from one that passes, so a refusal is that field's.
+    #[test]
+    fn one_malformed_field_refuses_a_delta_a_gap_or_a_baseline_voice() {
+        let source = SourceId(1);
+        let good = NoteDelta {
+            assignment: Some(AssignmentMetadata {
+                decision: 1,
+                node: None,
+                correction_microcents: 0,
+                player_tuning: 0.0,
+            }),
+            partial_output: true,
+            ..delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1)
+        };
+        let direct = NoteDelta::from(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8));
+        assert_eq!((good.validate(), direct.validate()), (Ok(()), Ok(())));
+        let event = |kind| NoteDelta { event: NoteEvent { kind, ..good.event }, ..good };
+        let timing = |sample_rate| Some(EventTiming { sample_rate, ..good.timing.unwrap() });
+        let assignment = |decision, player_tuning| {
+            Some(AssignmentMetadata { decision, player_tuning, ..good.assignment.unwrap() })
+        };
+        let pressure =
+            |value| NoteEventKind::Expression { expression: crate::Expression::Pressure, value };
+        for (what, bad) in [
+            ("time", NoteDelta { event: NoteEvent { time: f64::NAN, ..good.event }, ..good }),
+            ("channel", NoteDelta { event: NoteEvent { channel: 16, ..good.event }, ..good }),
+            ("note", NoteDelta { event: NoteEvent { note: 128, ..good.event }, ..good }),
+            ("velocity NaN", event(NoteEventKind::On { velocity: f32::NAN })),
+            ("velocity above one", event(NoteEventKind::On { velocity: 1.5 })),
+            (
+                "tuning",
+                NoteDelta {
+                    partial_output: false,
+                    ..event(NoteEventKind::Tuning { semitones: f32::INFINITY })
+                },
+            ),
+            ("expression", NoteDelta { partial_output: false, ..event(pressure(1.5)) }),
+            (
+                "direct from a source",
+                NoteDelta {
+                    provenance: PitchProvenance::ObservedDirect,
+                    partial_output: false,
+                    ..good
+                },
+            ),
+            ("output sequence", NoteDelta { sequence: 0, ..good }),
+            ("output lifetime", NoteDelta { lifetime: 0, ..good }),
+            ("output timing", NoteDelta { timing: None, ..good }),
+            ("zero rate", NoteDelta { timing: timing(0.0), ..good }),
+            ("NaN rate", NoteDelta { timing: timing(f64::NAN), ..good }),
+            ("decision", NoteDelta { assignment: assignment(0, 0.0), ..good }),
+            ("player tuning", NoteDelta { assignment: assignment(1, f64::NAN), ..good }),
+            ("partial direct", NoteDelta { partial_output: true, ..direct }),
+            ("partial off", event(NoteEventKind::Off)),
+        ] {
+            assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
+        }
+
+        let gap = PublicationGap {
+            source: Some(source),
+            time: 1.0,
+            through: 1.0,
+            first: 2,
+            last: 2,
+            reason: GapReason::PublicationFull,
+        };
+        assert_eq!(gap.validate(), Ok(()));
+        for (what, bad) in [
+            ("time", PublicationGap { time: f64::NAN, ..gap }),
+            ("through", PublicationGap { through: f64::NAN, ..gap }),
+            ("through before time", PublicationGap { through: 0.5, ..gap }),
+            ("first", PublicationGap { first: 0, ..gap }),
+            ("last before first", PublicationGap { first: 3, ..gap }),
+        ] {
+            assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
+        }
+
+        // A voice onset exactly at the frame's time is still in its past.
+        let row = VoiceBaseline { actual_onset: 2.0, ..voice(60) };
+        assert!(frame(&[row, voice(64)]).is_ok());
+        let direct = VoiceBaseline {
+            provenance: PitchProvenance::ObservedDirect,
+            lifetime: 0,
+            onset: None,
+            ..row
+        };
+        let direct_frame = |voices: &[VoiceBaseline]| {
+            SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, voices)
+        };
+        assert!(direct_frame(&[direct, VoiceBaseline { note: 64, ..direct }]).is_ok());
+        let expressions = Expressions { pressure: 2.0, ..Expressions::NEUTRAL };
+        for (what, bad) in [
+            ("channel", VoiceBaseline { channel: 16, ..row }),
+            ("note", VoiceBaseline { note: 128, ..row }),
+            ("port", VoiceBaseline { port: 1, ..row }),
+            ("host note id", VoiceBaseline { host_note_id: -2, ..row }),
+            ("input onset", VoiceBaseline { input_onset: f64::NAN, ..row }),
+            ("actual onset", VoiceBaseline { actual_onset: f64::NAN, ..row }),
+            ("onset after the frame", VoiceBaseline { actual_onset: 3.0, ..row }),
+            ("player tuning", VoiceBaseline { player_tuning: f64::NAN, ..row }),
+            ("velocity NaN", VoiceBaseline { velocity: f32::NAN, ..row }),
+            ("velocity above one", VoiceBaseline { velocity: 1.5, ..row }),
+            ("expressions", VoiceBaseline { expressions, ..row }),
+            (
+                "onset rate",
+                VoiceBaseline {
+                    onset: Some(EventTiming { sample_rate: 0.0, ..row.onset.unwrap() }),
+                    ..row
+                },
+            ),
+            (
+                "direct from a source",
+                VoiceBaseline { provenance: PitchProvenance::ObservedDirect, ..row },
+            ),
+            ("output lifetime", VoiceBaseline { lifetime: 0, ..row }),
+            ("output onset", VoiceBaseline { onset: None, ..row }),
+            ("same key", VoiceBaseline { lifetime: 99, ..row }),
+            ("same lifetime", VoiceBaseline { note: 64, ..row }),
+        ] {
+            // Beside a distinct voice, so only the duplicate cases are duplicates.
+            let beside = if what.starts_with("same") { row } else { voice(64) };
+            assert_eq!(frame(&[beside, bad]).err(), Some(InvalidCanonical), "{what}");
+        }
+        let mut envelope = frame(&[row]).unwrap();
+        envelope.id = 0;
+        assert_eq!(envelope.validate(), Err(InvalidCanonical), "id");
+        envelope.id = 1;
+        envelope.time = f64::NAN;
+        assert_eq!(envelope.validate(), Err(InvalidCanonical), "time");
+    }
+
+    /// Accepted output is the same voice by lifetime, and direct observation,
+    /// which has none, by its onset. A row naming another voice at a held key
+    /// starts a new note rather than continuing the held one.
+    #[test]
+    fn a_baseline_row_continues_only_the_voice_it_names() {
+        let direct = |actual_onset| VoiceBaseline {
+            provenance: PitchProvenance::ObservedDirect,
+            lifetime: 0,
+            onset: None,
+            actual_onset,
+            ..voice(60)
+        };
+        for (source, row, notes) in [
+            (SourceId(1), voice(60), 1),
+            (SourceId(1), VoiceBaseline { lifetime: 99, ..voice(60) }, 2),
+            (SourceId::DIRECT, direct(1.0), 1),
+            (SourceId::DIRECT, direct(1.5), 2),
+        ] {
+            let mut tracker = NoteTracker::new();
+            let on = NoteEvent::on(1.0, source, 0, 60, 0.8);
+            if source == SourceId::DIRECT {
+                tracker.handle_event(on);
+            } else {
+                tracker.handle_canonical(CanonicalEvent::Note(delta(on, 1))).unwrap();
+            }
+            let baseline = SourceBaseline::new(source, 1, 2.0, 64, true, &[row]).unwrap();
+            tracker.replace_source(&baseline).unwrap();
+            assert_eq!(tracker.roll().notes().count(), notes, "{source:?} {row:?}");
         }
     }
 
@@ -633,6 +801,8 @@ mod tests {
         off.shown = false;
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
+        assert_eq!(tracker.roll().notes().count(), 0, "a hidden source draws nothing");
+        assert_eq!(tracker.roll().latest_activity(2.05), None, "and keeps nothing animating");
         let mut tuning = delta(
             NoteEvent {
                 time: 2.1,
