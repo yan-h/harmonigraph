@@ -21,9 +21,14 @@ pub const SPECTRUM_MAX_MIDI: f32 = 135.076_23; // 20 kHz
 /// grid itself becoming the thing you see. What the FFT can actually
 /// distinguish is set by the window length, not by this.
 pub const BINS_PER_SEMITONE: usize = 32;
-/// Enough buckets to cover the axis, plus slack: the span is not a whole
-/// number of semitones, and `pitch_spectrum` writes to `b0 + 1`, so the top
-/// partial needs a bucket above the one it lands in or it would be dropped.
+/// Enough buckets to cover the axis, plus one: the span is not a whole number
+/// of semitones, so truncating it drops the partial bucket at the top, which
+/// the first `+ 1` restores. The second is a bucket centred just past 20 kHz,
+/// read like any other. Its old job is gone — the peak-only fill that wrote a
+/// partial into `b0 + 1` was replaced by resampling every bucket — and it stays
+/// because the count is mirrored as a literal in `lattice.wgsl` and asserted
+/// in `harmonigraph-render`, so dropping it is a shader change that moves
+/// nothing anyone can see.
 pub const SPECTRUM_BINS: usize =
     ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
 

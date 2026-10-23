@@ -361,6 +361,15 @@ impl SpectrumAnalyzer {
     /// semitone, where before it was two buckets wide wherever it sat.
     /// The refinement had been hiding how little the FFT actually
     /// resolves down low; this shows it.
+    ///
+    /// The other cost is PLACE, and it is the larger one for a pitch
+    /// display: [`reconstruct`] keeps a peak on the bin it was measured at,
+    /// so below the crossover a partial is drawn up to half a bin off its own
+    /// pitch. Measured against known tones at 48 kHz, through the Fast window
+    /// that is up to 370 cents at 25-50 Hz, 180 at 50-100 Hz and 65 at
+    /// 100-200 Hz; Balanced roughly halves those and Precise quarters them. A Sweep
+    /// reads every bucket at its own frequency and is within 3 cents above
+    /// 22 Hz.
     pub fn pitch_spectrum(&mut self) -> Option<&[f32; SPECTRUM_BINS]> {
         if self.filled < self.fft_size {
             return None;
