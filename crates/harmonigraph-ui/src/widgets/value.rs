@@ -381,7 +381,8 @@ impl<'a> ValueBar<'a> {
             // TextEdit never takes focus by itself; grab it on the first
             // edit-mode frame so typing (and focus-loss commit) works at
             // all.
-            if ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
+            let pending = ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false);
+            if pending {
                 output.request_focus();
                 ui.data_mut(|d| d.remove_temp::<bool>(focus_id));
             }
@@ -389,8 +390,13 @@ impl<'a> ValueBar<'a> {
             // — egui surrenders TextEdit focus on both) commits. Enter is
             // NOT checked globally: that would commit every bar in edit
             // mode at once, focused or not.
+            //
+            // Asked as "no focus" rather than `lost_focus`, which looks back
+            // only two frames: egui drops the focus of a widget that goes a
+            // frame undrawn (a folded section, another tab), so a bar away
+            // longer would come back an unfocused field that nothing closes.
             let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-            if cancelled || output.lost_focus() {
+            if cancelled || !pending && !output.has_focus() {
                 if !cancelled {
                     if let Some(v) = self.parse(&text) {
                         let v = self.snapped(v.clamp(self.min(), self.max()));
@@ -1000,6 +1006,52 @@ mod tests {
             });
             assert!((value - expected).abs() < 1e-6, "typing {typed:?} stored {value}");
         }
+    }
+
+    /// An entry whose bar goes undrawn — its section folded, its tab switched
+    /// away — loses its focus to egui unseen, and is committed when the bar
+    /// is next drawn rather than left as an unfocused text field.
+    ///
+    /// Two frames away, because `lost_focus` looks back two: a gap of one
+    /// commits through it already.
+    #[test]
+    fn an_entry_whose_bar_went_undrawn_commits_on_return() {
+        use crate::tests::probe::{events_into, press, themed};
+        let ctx = themed();
+        let size = egui::vec2(300.0, 100.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut value = 0.5;
+        let bar = std::cell::Cell::new((egui::Id::NULL, egui::Rect::NOTHING));
+        let mut draw = |events, shown: bool| {
+            events_into(&ctx, size, rect, events, |ui| {
+                if shown {
+                    let response = ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(ui);
+                    bar.set((response.id, response.rect));
+                }
+            })
+        };
+        draw(vec![], true);
+        let (id, at) = (bar.get().0, bar.get().1.center());
+        draw(vec![egui::Event::PointerMoved(at)], true);
+        for _ in 0..2 {
+            draw(vec![press(at, true)], true);
+            draw(vec![press(at, false)], true);
+        }
+        draw(vec![], true);
+        let edit_id = id.with("edit");
+        let open = ctx.data(|d| d.get_temp::<String>(edit_id)).is_some();
+        assert!(open && ctx.memory(|m| m.focused()).is_some(), "the double-click opened no entry");
+        ctx.data_mut(|d| d.insert_temp(edit_id, "0.25".to_owned()));
+        for _ in 0..2 {
+            draw(vec![], false);
+        }
+        draw(vec![], true);
+        assert_eq!(
+            ctx.data(|d| d.get_temp::<String>(edit_id)),
+            None,
+            "the entry outlived its focus"
+        );
+        assert_eq!(value, 0.25);
     }
 
     /// Paint one value bar across a `width`-point row and return what it
