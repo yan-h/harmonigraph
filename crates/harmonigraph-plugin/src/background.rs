@@ -58,11 +58,10 @@
 //! window's build closure is otherwise the only thing that applies
 //! `params.ui_state` to the state (a host save reads it only to store it).
 //! Left to it, every column analyzed before the first open is analyzed at
-//! [`SpectrumConfig::default`]'s window whatever the project saved — and since
-//! `INTERP_BIN_CEILING` is a fixed BIN index, the two stretches differ in the
-//! reconstruction rule a band of the spectrum is drawn under and not merely in
-//! resolution, so their join scrolls across the heatmap as a seam. See
-//! [`Restore`].
+//! [`SpectrumConfig::default`]'s window whatever the project saved — and the
+//! two stretches then differ in how long every pitch listened and how far
+//! behind its audio each column is dated, so their join scrolls across the
+//! heatmap as a seam. See [`Restore`].
 //!
 //! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
 //! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
@@ -505,13 +504,13 @@ mod tests {
         harmonigraph_ui::shell::close(&state)
     }
 
-    /// Half the analysis window, in seconds, at the harness's rate: what
-    /// [`AudioSpectrum::column_lag`] reads back out of the analyzer, and so the
-    /// one window size observable from outside it.
+    /// The analysis window's column lag, in seconds, at the harness's rate:
+    /// what [`AudioSpectrum::column_lag`] reads back out of the analyzer, and
+    /// so the one window setting observable from outside it.
     ///
     /// [`AudioSpectrum::column_lag`]: harmonigraph_ui::AudioSpectrum::column_lag
     fn lag_of(window: harmonigraph_ui::SpectrumWindow) -> f64 {
-        0.5 * window.samples() as f64 / 48_000.0
+        harmonigraph_ui::SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0)
     }
 
     impl Harness {
@@ -781,7 +780,7 @@ mod tests {
         h.push_audio(40_000);
         h.step();
         assert!(h.columns() > before, "nothing was analyzed after the panic");
-        // Both newest columns lag their audio's end by the same half window,
+        // Both newest columns lag their audio's end by the same column lag,
         // and the audio ends 60 000 frames apart; the restarted run's hop
         // grid puts its newest column up to a hop (8 ms) short of that.
         let spacing = newest(&h) - first;
@@ -822,7 +821,7 @@ mod tests {
     /// editor anywhere in the picture, because the stretch before the first
     /// open is exactly what this thread exists to cover.
     ///
-    /// Asserted on [`AudioSpectrum::column_lag`] — half the analysis window —
+    /// Asserted on [`AudioSpectrum::column_lag`] — the analysis window's lag —
     /// rather than on the config, because the two are a step apart and only the
     /// second one is the picture. Nothing but `push_samples` carries the setting
     /// across that step, so a load placed after the drain satisfies an assertion
@@ -836,8 +835,8 @@ mod tests {
 
         let mut h = harness();
         h.restore(&blob_with_window(SpectrumWindow::Precise));
-        // A Precise window is 16384 samples, so this is comfortably more than
-        // one windowful and the analyzer cannot come out of it empty.
+        // A Precise frame is 24,576 samples, so this is comfortably more than
+        // one frameful and the analyzer cannot come out of it empty.
         h.push_audio(40_000);
 
         h.step();
@@ -846,10 +845,10 @@ mod tests {
         assert_eq!(h.configured_window(), SpectrumWindow::Precise, "the blob never landed");
         assert!(
             (h.analyzed_lag() - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
-            "columns analyzed at a {:.1} ms window where the project saved {:.1} ms: the \
+            "columns analyzed at a {:.1} ms lag where the project's window lags {:.1} ms: the \
              restored setting reached the config and not the analyzer",
-            h.analyzed_lag() * 2000.0,
-            lag_of(SpectrumWindow::Precise) * 2000.0,
+            h.analyzed_lag() * 1000.0,
+            lag_of(SpectrumWindow::Precise) * 1000.0,
         );
     }
 

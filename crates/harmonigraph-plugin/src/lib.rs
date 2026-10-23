@@ -1385,10 +1385,11 @@ mod tests {
     fn a_projects_saved_window_reaches_the_analyzer_with_no_editor_built() {
         use harmonigraph_ui::SpectrumWindow;
 
-        // Half the analysis window: what `column_lag` reads back out of the
-        // analyzer, on the rate a plugin runs at until a host reports its own.
+        // What `column_lag` reads back out of the analyzer, on the rate a
+        // plugin runs at until a host reports its own.
         let lag_of = |window: SpectrumWindow| {
-            0.5 * window.samples() as f64 / f64::from(DEFAULT_SAMPLE_RATE as f32)
+            harmonigraph_ui::SpectrumConfig { window, ..Default::default() }
+                .column_lag(DEFAULT_SAMPLE_RATE as f32)
         };
         let blob = {
             let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
@@ -1403,7 +1404,7 @@ mod tests {
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
         *plugin.params.ui_state.blob().write() = blob;
-        // A Precise window is 16384 samples; this is more than one windowful,
+        // A Precise frame is 24,576 samples; this is more than one frameful,
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
         assert!(
@@ -1420,10 +1421,10 @@ mod tests {
         assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);
         assert!(
             (lag - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
-            "the input worker ran at a {:.1} ms window where the project saved \
-             {:.1} ms: the restored blob reaches nothing until the editor opens",
-            lag * 2000.0,
-            lag_of(SpectrumWindow::Precise) * 2000.0,
+            "the input worker ran at a {:.1} ms lag where the project's saved window \
+             lags {:.1} ms: the restored blob reaches nothing until the editor opens",
+            lag * 1000.0,
+            lag_of(SpectrumWindow::Precise) * 1000.0,
         );
     }
 
