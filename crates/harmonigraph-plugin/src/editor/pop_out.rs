@@ -10,6 +10,12 @@
 //! already follows its view to a new window (tracking area, first responder,
 //! occlusion, and the display link, which follows the screen).
 //!
+//! The move itself is never made inside a frame. Making the new window key
+//! sends baseview a focus event on the spot, and baseview's handler is
+//! borrowed for the whole frame, so a move from the frame that asked for it
+//! panics across AppKit and takes the host process down. A request is
+//! performed instead on the run loop's next turn ([`PopOut::request`]).
+//!
 //! The view's size is the size source's to set, as for a host resize: the
 //! size source asks [`PopOut::take_size`] first, at the top of the frame it
 //! will be laid out in. Every AppKit call here is on the main thread, which is
@@ -32,8 +38,8 @@ mod macos {
 
     use baseview::WindowHandle;
     use objc2::rc::Retained;
-    use objc2::runtime::ProtocolObject;
-    use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
+    use objc2::runtime::{AnyObject, ProtocolObject};
+    use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
     use objc2_app_kit::{
         NSAutoresizingMaskOptions, NSBackingStoreType, NSTextField, NSView, NSWindow,
         NSWindowDelegate, NSWindowStyleMask,
@@ -62,8 +68,11 @@ mod macos {
         host: Option<Retained<NSView>>,
         /// baseview's view, the one that moves.
         view: Option<Retained<NSView>>,
+        /// The pop-out window's delegate, and where a requested move is
+        /// performed from, outside the frame that asked for it.
+        delegate: Option<Retained<Delegate>>,
         out: Option<Out>,
-        /// What the UI asked for and the size source has not yet done.
+        /// What the UI asked for and the run loop has not yet done.
         wanted: Option<bool>,
         /// Docked since the last size source, which owes the view the host's
         /// size back.
@@ -72,8 +81,6 @@ mod macos {
 
     struct Out {
         window: Retained<NSWindow>,
-        /// Held because a window's delegate is a weak reference.
-        _delegate: Retained<Delegate>,
         /// Left in the host's window, saying where the editor went.
         note: Retained<NSTextField>,
         /// The content size last given to the view, in logical points.
@@ -102,14 +109,22 @@ mod macos {
 
         /// Learn the two views once the editor is open: the host's, and the
         /// one baseview put inside it.
-        pub(in crate::editor) fn attach(&self, parent: ParentWindowHandle, window: &WindowHandle) {
-            let _ = main_thread();
+        pub(in crate::editor) fn attach(
+            self: &Arc<Self>,
+            parent: ParentWindowHandle,
+            window: &WindowHandle,
+        ) {
+            let mtm = main_thread();
             let ParentWindowHandle::AppKitNsView(host) = parent else { return };
             let mut handle = raw_window_handle::AppKitWindowHandle::empty();
             handle.ns_view = host;
+            let delegate = Delegate::alloc(mtm).set_ivars(Arc::downgrade(self));
+            // SAFETY: NSObject's init on a freshly allocated subclass instance.
+            let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
             let mut state = self.0.lock();
             state.host = ns_view(RawWindowHandle::AppKit(handle));
             state.view = ns_view(window.raw_window_handle());
+            state.delegate = Some(delegate);
         }
 
         /// Whether the editor is out, or `None` where it cannot be.
@@ -119,9 +134,40 @@ mod macos {
                 .then(|| state.wanted.unwrap_or(state.out.is_some()))
         }
 
-        /// Ask for the editor in or out, done by the next size source.
+        /// Ask for the editor in or out, done on the run loop's next turn:
+        /// asked from a frame, which is no place to move it (see the module
+        /// documentation).
         pub(in crate::editor) fn request(&self, out: bool) {
-            self.0.lock().wanted = Some(out);
+            let _ = main_thread();
+            let delegate = {
+                let mut state = self.0.lock();
+                state.wanted = Some(out);
+                state.delegate.clone()
+            };
+            if let Some(delegate) = delegate {
+                // SAFETY: `apply:` is the delegate's own method, taking an
+                // object it ignores; the run loop retains the target until
+                // then.
+                let () = unsafe {
+                    msg_send![
+                        &*delegate,
+                        performSelector: sel!(apply:),
+                        withObject: None::<&AnyObject>,
+                        afterDelay: 0.0f64
+                    ]
+                };
+            }
+        }
+
+        /// The requested move, off the run loop.
+        fn apply(&self) {
+            let mtm = main_thread();
+            let wanted = self.0.lock().wanted.take();
+            match wanted {
+                Some(true) => self.pop(mtm),
+                Some(false) => self.take_back(true),
+                None => {}
+            }
         }
 
         /// The window's size while it is out, which is then the editor's.
@@ -132,17 +178,8 @@ mod macos {
         /// The size source's question, asked before the host's: the size
         /// the view has to take this frame, if this decides it. `docked` is
         /// the host's size, which the view goes back to.
-        pub(in crate::editor) fn take_size(
-            self: &Arc<Self>,
-            docked: (u32, u32),
-        ) -> Option<(u32, u32)> {
-            let mtm = main_thread();
-            let wanted = self.0.lock().wanted.take();
-            match wanted {
-                Some(true) => self.pop(mtm),
-                Some(false) => self.take_back(true),
-                None => {}
-            }
+        pub(in crate::editor) fn take_size(&self, docked: (u32, u32)) -> Option<(u32, u32)> {
+            let _ = main_thread();
             let mut state = self.0.lock();
             if std::mem::take(&mut state.redocked) {
                 return Some(docked);
@@ -171,13 +208,15 @@ mod macos {
             true
         }
 
-        fn pop(self: &Arc<Self>, mtm: MainThreadMarker) {
-            let (host, view) = {
+        fn pop(&self, mtm: MainThreadMarker) {
+            let (host, view, delegate) = {
                 let state = self.0.lock();
-                let (None, Some(host), Some(view)) = (&state.out, &state.host, &state.view) else {
+                let (None, Some(host), Some(view), Some(delegate)) =
+                    (&state.out, &state.host, &state.view, &state.delegate)
+                else {
                     return;
                 };
-                (host.clone(), view.clone())
+                (host.clone(), view.clone(), delegate.clone())
             };
             let size = view.frame().size;
             let style = NSWindowStyleMask::Titled
@@ -216,9 +255,6 @@ mod macos {
                 None => window.center(),
             }
 
-            let delegate = Delegate::alloc(mtm).set_ivars(Arc::downgrade(self));
-            // SAFETY: NSObject's init on a freshly allocated subclass instance.
-            let delegate: Retained<Delegate> = unsafe { msg_send![super(delegate), init] };
             window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
             let note = NSTextField::wrappingLabelWithString(
@@ -249,8 +285,7 @@ mod macos {
             view.setFrameOrigin(NSPoint::ZERO);
             host.addSubview(&note);
             window.makeKeyAndOrderFront(None);
-            self.0.lock().out =
-                Some(Out { window, _delegate: delegate, note, size: logical(size) });
+            self.0.lock().out = Some(Out { window, note, size: logical(size) });
         }
 
         /// The editor closing, called before baseview closes the view: put
@@ -260,11 +295,11 @@ mod macos {
         /// views would keep the whole editor alive after it closed.
         pub(in crate::editor) fn close(&self) {
             self.take_back(true);
-            let views = {
+            let held = {
                 let mut state = self.0.lock();
-                (state.host.take(), state.view.take())
+                (state.host.take(), state.view.take(), state.delegate.take())
             };
-            drop(views);
+            drop(held);
         }
 
         /// The docking itself; `close` is false when the window is closing
@@ -315,6 +350,16 @@ mod macos {
                 }
             }
         }
+
+        impl Delegate {
+            /// A move [`PopOut::request`] deferred to here.
+            #[unsafe(method(apply:))]
+            fn apply(&self, _: Option<&AnyObject>) {
+                if let Some(pop_out) = self.ivars().upgrade() {
+                    pop_out.apply();
+                }
+            }
+        }
     );
 }
 
@@ -330,7 +375,12 @@ mod elsewhere {
         pub(in crate::editor) fn new() -> Arc<Self> {
             Arc::new(Self)
         }
-        pub(in crate::editor) fn attach(&self, _: ParentWindowHandle, _: &baseview::WindowHandle) {}
+        pub(in crate::editor) fn attach(
+            self: &Arc<Self>,
+            _: ParentWindowHandle,
+            _: &baseview::WindowHandle,
+        ) {
+        }
         pub(in crate::editor) fn is_out(&self) -> Option<bool> {
             None
         }
@@ -338,7 +388,7 @@ mod elsewhere {
         pub(in crate::editor) fn size(&self) -> Option<(u32, u32)> {
             None
         }
-        pub(in crate::editor) fn take_size(self: &Arc<Self>, _: (u32, u32)) -> Option<(u32, u32)> {
+        pub(in crate::editor) fn take_size(&self, _: (u32, u32)) -> Option<(u32, u32)> {
             None
         }
         pub(in crate::editor) fn resize(&self, _: (u32, u32)) -> bool {

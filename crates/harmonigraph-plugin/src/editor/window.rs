@@ -300,6 +300,11 @@ unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
+        // Back into the host's view before anything else, so the editor's
+        // own window closes with the editor rather than outliving it empty.
+        // First because docking can draw a frame on the spot, which belongs
+        // before the state below is stored and the window marked closed.
+        self.pop_out.close();
         // Store the UI state (layout, camera, view settings) as the blob a
         // host save reads once the window is shut; while it is open, the
         // save serializes the live state instead (see `UiState`). A restore
@@ -321,9 +326,6 @@ impl Drop for LatticeEditorHandle {
         self.params.ui_state.store_close(&mut shared.ui);
         drop(shared);
         self.egui_state.set_open(false);
-        // Back into the host's view first, so the editor's own window closes
-        // with the editor rather than outliving it empty.
-        self.pop_out.close();
         self.window.close();
     }
 }
