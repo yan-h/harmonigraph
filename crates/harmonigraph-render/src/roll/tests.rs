@@ -1761,7 +1761,7 @@ fn a_rest_keeps_the_rolls_targets_and_draws_nothing() {
     });
     let frame = readback(&device, &queue, &texture, SIZE);
     assert!(
-        frame.chunks_exact(4).all(|p| p == BG),
+        frame.as_chunks::<4>().0.iter().all(|p| p == &BG),
         "an empty frame painted the last note's surround or halo",
     );
 }
