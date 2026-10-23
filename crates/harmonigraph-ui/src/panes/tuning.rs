@@ -774,8 +774,16 @@ fn instance_controls(
     }
     if let Some(tuner) = instances.iter().find(|row| !row.is_hub) {
         subsection(ui, "Tuning delay", |ui| {
+            // A draft of the delay to spread, held only while what it was
+            // seeded from still stands: a new first tuner, or its own delay
+            // changed in Source details, re-seeds it rather than applying a
+            // value nobody chose for the tuners as they now are.
             let id = ui.id().with("all-delay-draft");
-            let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(tuner.delay);
+            let seed = (tuner.id, tuner.delay);
+            let mut delay = ui
+                .data(|data| data.get_temp::<((u64, u32), u32)>(id))
+                .filter(|&(from, _)| from == seed)
+                .map_or(tuner.delay, |(_, draft)| draft);
             ui.horizontal_wrapped(|ui| {
                 crate::widgets::label(ui, "Buffers");
                 ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
@@ -794,7 +802,7 @@ fn instance_controls(
                     }
                 }
             });
-            ui.data_mut(|data| data.insert_temp(id, delay));
+            ui.data_mut(|data| data.insert_temp(id, (seed, delay)));
         });
     }
     if ui
