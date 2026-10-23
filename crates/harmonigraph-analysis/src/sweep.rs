@@ -350,11 +350,21 @@ mod tests {
     /// changes how the frame is read and nothing about the frame either.
     #[test]
     fn changing_the_sweep_keeps_the_window() {
+        // A treble partial, where the two sweeps' listens differ by an octave,
+        // so a reading through the old kernels cannot pass for the new one.
+        let audio: Vec<f32> =
+            (0..FRAME).map(|i| (std::f32::consts::TAU * 3000.0 * i as f32 / RATE).sin()).collect();
+        let read = |analyzer: &mut SpectrumAnalyzer| *analyzer.pitch_spectrum().expect("a window");
+        let other = Sweep { bass: 8000.0, treble: 4096.0 };
         let mut analyzer = SpectrumAnalyzer::new(config(FRESH, 1));
-        analyzer.push_samples(&vec![0.25; FRAME]);
-        assert!(analyzer.pitch_spectrum().is_some());
-        analyzer.configure(config(Sweep { bass: 8000.0, treble: 4096.0 }, 1));
-        assert!(analyzer.pitch_spectrum().is_some(), "a new sweep dropped the window");
+        analyzer.push_samples(&audio);
+        let before = read(&mut analyzer);
+        analyzer.configure(config(other, 1));
+        let after = read(&mut analyzer);
+        let mut fresh = SpectrumAnalyzer::new(config(other, 1));
+        fresh.push_samples(&audio);
+        assert_eq!(after, read(&mut fresh), "the window was kept but read through the old sweep");
+        assert_ne!(after, before, "the fixture does not tell the two sweeps apart");
         analyzer.configure(AnalyzerConfig { sweep: None, ..config(FRESH, 1) });
         assert!(analyzer.pitch_spectrum().is_some(), "leaving the sweep dropped the window");
     }

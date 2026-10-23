@@ -241,9 +241,10 @@ impl SpectrumAnalysis {
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
         mut column: impl FnMut(AnalyzedColumn),
     ) -> Result<(), E> {
-        // Any configuration change empties the analyzers' rings, so nothing comes out
-        // until they have refilled. The hop grid keeps its phase across that gap
-        // rather than restarting on it.
+        // A changed frame, taper set or rate empties the analyzers' rings, so
+        // nothing comes out until they have refilled; a changed sweep only
+        // replans how the same frame is read. The hop grid keeps its phase
+        // across any gap rather than restarting on it.
         self.analyzer.configure(
             harmonigraph_analysis::AnalyzerConfig {
                 sample_rate,

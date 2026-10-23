@@ -419,8 +419,8 @@ pub(crate) fn analysis_section(
                          window: 4096 samples is Fast's listen and 16384 Precise's, a little past \
                          the longest the bass can reach. Longer \
                          separates close pitches; shorter shows changes sooner. The listen glides \
-                         evenly in pitch between the two ends. The picture's delay is Precise's \
-                         whatever these are."
+                         evenly in pitch between the two ends. Live, the picture waits as long as \
+                         Precise does whatever these are; a video export does not wait."
                     ));
             }
         }

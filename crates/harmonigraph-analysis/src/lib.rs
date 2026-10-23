@@ -196,8 +196,10 @@ impl SpectrumAnalyzer {
     }
 
     /// Adopt the final estimator, rebuilding only what its changed inputs
-    /// decide. A changed estimator deliberately requires a fresh audio window;
-    /// unchanged settings preserve readiness and allocate nothing.
+    /// decide. A changed frame, taper set or rate deliberately requires a fresh
+    /// audio window; a changed sweep, entered or left included, only replans
+    /// how the same frame is read, so it keeps the window. Unchanged settings
+    /// preserve readiness and allocate nothing.
     pub fn configure(&mut self, config: AnalyzerConfig) {
         let AnalyzerConfig { sample_rate, fft_size, tapers, sweep } = config;
         assert!(
