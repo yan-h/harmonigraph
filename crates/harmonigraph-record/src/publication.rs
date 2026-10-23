@@ -399,6 +399,69 @@ mod tests {
         SourceBaseline::new(SourceId::DIRECT, id, time, 0, true, voices).unwrap()
     }
 
+    /// Publish releases until only `free` ordinary cells are left.
+    fn fill(publisher: &mut Publisher, free: usize) {
+        let mut time = 0.0;
+        while publisher.free() > free {
+            time += 1.0;
+            let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
+            publisher.note(release, Route::default()).unwrap();
+        }
+    }
+
+    /// A snapshot needs one ordinary cell, like any item: it takes the last
+    /// one, and once only the reserve is left it is refused as Busy rather
+    /// than spending the cell an outage's gap would need.
+    #[test]
+    fn a_snapshot_takes_the_last_ordinary_cell_and_never_the_reserve() {
+        let (mut publisher, _consumer) = channel();
+        fill(&mut publisher, 1);
+        publisher.baseline(&frame(1, 9000.0, &[]), Route::default()).unwrap();
+        assert_eq!(publisher.free(), 0);
+        assert_eq!(
+            publisher.baseline(&frame(2, 9000.0, &[]), Route::default()),
+            Err(PublishError::Busy)
+        );
+    }
+
+    /// Losses that go on while the first one's gap still holds the reserve
+    /// become ONE later gap: it spans every serial lost after the first gap,
+    /// runs through the latest loss, and keeps a pass address only if every
+    /// loss in it shared that address.
+    #[test]
+    fn an_outage_behind_a_queued_gap_grows_into_one_gap() {
+        let pass =
+            |pass| Route { address: Some(RecordAddress { epoch: 1, pass }), time_offset: 0.0 };
+        for (last_route, merged) in [(pass(1), pass(1)), (pass(2), Route::default())] {
+            let (mut publisher, mut consumer) = channel();
+            fill(&mut publisher, 0);
+            for (time, route) in [(9000.0, pass(1)), (9100.0, pass(1)), (9200.0, last_route)] {
+                let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
+                assert_eq!(publisher.note(release, route), Err(PublishError::Lost));
+            }
+            let mut gaps = Vec::new();
+            let mut drain = |consumer: &mut Consumer| {
+                consumer.drain(|delivery, route| {
+                    if let Delivery::Event(CanonicalEvent::Gap(gap)) = delivery {
+                        gaps.push((gap, route));
+                    }
+                    true
+                });
+            };
+            drain(&mut consumer);
+            // The held outage reaches the ring ahead of the next publication.
+            let attack = NoteEvent::on(9300.0, SourceId::DIRECT, 0, 60, 0.8).into();
+            publisher.note(attack, Route::default()).unwrap();
+            drain(&mut consumer);
+            let [(queued, _), (grown, route)] = gaps[..] else { panic!("{gaps:?}") };
+            let lost = PUBLICATION_RING as u64;
+            assert_eq!((queued.first, queued.last), (lost, lost), "the fill's next serial");
+            assert_eq!((grown.first, grown.last), (lost + 1, lost + 2));
+            assert_eq!((grown.time, grown.through), (9100.0, 9200.0));
+            assert_eq!(route, merged, "{last_route:?}");
+        }
+    }
+
     #[test]
     fn a_full_lane_reports_its_outage_without_another_audio_callback() {
         let (mut publisher, mut consumer) = channel();

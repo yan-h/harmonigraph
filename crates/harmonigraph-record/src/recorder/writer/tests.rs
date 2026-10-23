@@ -50,6 +50,13 @@ fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
     // has to fall through the extra day rather than assume 28.
     assert_eq!(stamp_for(1_709_229_909), "2024-02-29_18-05-09");
     assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
+    // The algorithm's year starts in March, so January and February above
+    // never reach the months after it.
+    assert_eq!(stamp_for(1_700_000_000), "2023-11-14_22-13-20", "a month from March on");
+    // The first day of a March-based year after a century day, and the last
+    // day of a 400-year era: the two corrections the year-of-era term makes.
+    assert_eq!(stamp_for(36_633_600), "1971-03-01_00-00-00");
+    assert_eq!(stamp_for(951_782_400), "2000-02-29_00-00-00");
 }
 
 /// Independent workers receive the same candidate before either creates it.
@@ -150,6 +157,7 @@ fn collision_and_initialization_failure_remove_only_owned_files() {
 struct Bench {
     rec: Recorder,
     entries: rtrb::Consumer<Entry>,
+    publications: publication::Consumer,
     samples: rtrb::Consumer<f32>,
     end_at_rewind: Arc<AtomicBool>,
     latches: Arc<TakeLatches>,
@@ -160,13 +168,14 @@ impl Bench {
     fn new() -> Bench {
         let (producer, entries) = rtrb::RingBuffer::new(1024);
         let (audio, samples) = rtrb::RingBuffer::new(1024);
+        let (take_lane, publications) = publication::channel();
         let end_at_rewind = Arc::new(AtomicBool::new(false));
         let latches = Arc::new(TakeLatches::default());
         let dropped = Arc::new(AtomicU64::new(0));
         Bench {
             rec: Recorder {
                 _writer_lifetime: None,
-                publication: publication::channel().0,
+                publication: take_lane,
                 display: publication::channel().0,
                 outage: publication::Lanes::default(),
                 fence: Arc::new(RecordFence::default()),
@@ -187,6 +196,7 @@ impl Bench {
                 latches: latches.clone(),
             },
             entries,
+            publications,
             samples,
             end_at_rewind,
             latches,
@@ -1371,4 +1381,135 @@ fn the_first_pass_keeps_the_takes_name_and_later_passes_are_suffixed() {
     assert_eq!(Pass::path_for(base, 1), base);
     assert_eq!(Pass::path_for(base, 2), std::path::Path::new("/takes/take-1700000000-2.take"));
     assert_eq!(Pass::path_for(base, 3), std::path::Path::new("/takes/take-1700000000-3.take"));
+}
+
+/// A recorder dropped before all three of an epoch's closures — its own,
+/// the configuration's and the source publication's — fails the recording,
+/// whichever one is missing, rather than leaving the writer to wait on it.
+#[test]
+fn dropping_a_recorder_before_any_closure_of_its_epoch_fails_the_recording() {
+    for missing in 0..4 {
+        let mut b = Bench::new();
+        let fence = b.rec.fence.clone();
+        b.rec.record_epoch = 1;
+        b.rec.closed_epoch = u64::from(missing != 0);
+        fence.configuration_closed.store(u64::from(missing != 1), Ordering::Release);
+        fence.source_closed.store(u64::from(missing != 2), Ordering::Release);
+        drop(b);
+        assert_eq!(fence.failed.load(Ordering::Acquire), missing < 3, "closure {missing} missing");
+    }
+}
+
+/// `Invalid` is the one take-lane outcome with no gap to describe it, so a
+/// refused publication that addresses a pass fails the recording rather than
+/// leaving a silent hole. One addressing nothing is only counted.
+#[test]
+fn an_invalid_publication_into_a_pass_fails_the_recording() {
+    let mut b = Bench::new();
+    let note = harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8).into();
+    let unrouted = publication::Route { address: None, time_offset: f64::NAN };
+    let invalid = Err(publication::PublishError::Invalid);
+    assert_eq!(b.rec.publish_note(note, unrouted).take, invalid, "an unusable offset");
+    assert_eq!(b.dropped.load(Ordering::Relaxed), 1);
+    assert!(!b.rec.fence.failed.load(Ordering::Acquire));
+    let routed =
+        publication::Route { address: Some(RecordAddress { epoch: 1, pass: 1 }), ..unrouted };
+    assert_eq!(b.rec.publish_note(note, routed).take, invalid);
+    assert!(b.rec.fence.failed.load(Ordering::Acquire), "a hole in a pass fails it");
+}
+
+/// Only a note that lands in a pass counts toward the take, and only a lane
+/// that actually lost a publication owes its sources a snapshot.
+#[test]
+fn only_a_routed_note_is_captured_and_only_a_loss_latches_an_outage() {
+    let mut b = Bench::new();
+    let routed =
+        publication::Route { address: Some(RecordAddress { epoch: 1, pass: 1 }), time_offset: 0.0 };
+    let on = harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8);
+    let reset = harmonigraph_core::NoteEvent { kind: NoteEventKind::SessionReset, ..on };
+    b.rec.publish_note(on.into(), publication::Route::default()).expect_both();
+    b.rec.publish_note(reset.into(), routed).expect_both();
+    for _ in 0..2 {
+        b.rec.publish_note(on.into(), routed).expect_both();
+    }
+    assert_eq!(b.latches.captured.load(Ordering::Relaxed), 2, "the routed attacks alone");
+    assert_eq!(b.rec.take_publication_outage(), publication::Lanes::both(false));
+    // Both lanes carry every note, so they fill on the same publication.
+    while b.rec.publish_note(on.into(), publication::Route::default()).take.is_ok() {}
+    assert_eq!(b.rec.take_publication_outage(), publication::Lanes::both(true));
+}
+
+/// The run changes when the take is armed, when it records again after a
+/// block it did not, and at a split — and at nothing else, since each change
+/// costs a snapshot of every sounding note (#1129).
+#[test]
+fn the_recording_run_changes_at_arming_a_resume_and_a_split_only() {
+    let mut b = Bench::new();
+    b.arm();
+    let armed = b.rec.recording_run();
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    let first = b.rec.recording_run();
+    assert_ne!(first, armed, "the first block recorded opens a run");
+    assert!(b.rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS));
+    assert_eq!(b.rec.recording_run(), first, "playback continues it");
+    // Stopped where it was: not even the contiguous block an export plays.
+    for _ in 0..2 {
+        assert!(!b.rec.observe_transport(1.0 + BLOCK_SECONDS, false, BLOCK_SECONDS));
+        assert_eq!(b.rec.recording_run(), first, "a pause records nothing to start a run");
+    }
+    assert!(b.rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS));
+    let resumed = b.rec.recording_run();
+    assert_ne!(resumed, first, "the resume opens one");
+    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
+    assert!(b.rec.observe_transport(0.0, true, BLOCK_SECONDS), "a plain wrap keeps recording");
+    assert_eq!(b.pushed().iter().filter(|e| *e == "new-pass").count(), 1, "the wrap splits");
+    assert_ne!(b.rec.recording_run(), resumed, "and the split opens a run of its own");
+}
+
+/// The GUI's stop bar reaches the audio thread through `Control`, and the
+/// end comes back the same way: the round trip the stop-bar tests above
+/// stand in for by touching the shared latches directly.
+#[test]
+fn the_guis_stop_bar_reaches_the_audio_thread_and_its_end_comes_back() {
+    let (mut rec, ctrl) = channel();
+    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    assert!(rec.is_armed());
+    ctrl.set_stop_bar(Some(5.0));
+    assert!(!rec.observe_bar(Some(5.0 - BLOCK_BARS)));
+    assert!(!ctrl.hit_stop_bar(), "short of the bar");
+    assert!(rec.observe_bar(Some(5.0)));
+    assert!(ctrl.hit_stop_bar(), "the GUI is told to stop and render");
+}
+
+/// Each of an epoch's two closures is published once however often the
+/// audio thread reports it, and never for epoch 0: a repeat would reach the
+/// writer after that recording had finished, and fail the next one.
+#[test]
+fn an_epochs_closures_are_published_once() {
+    let mut b = Bench::new();
+    for epoch in [1, 1, 0] {
+        b.rec.source_epoch_complete(epoch, 10.0);
+        b.rec.configuration_epoch_complete(epoch);
+    }
+    let mut closed = Vec::new();
+    b.publications.drain(|delivery, _| {
+        if let publication::Delivery::EpochComplete(epoch) = delivery {
+            closed.push(epoch);
+        }
+        true
+    });
+    assert_eq!(closed, [1], "the source closure");
+    assert_eq!(b.pushed(), ["configuration-protocol"], "the configuration closure");
+}
+
+/// A take that cannot be created for any reason but a name collision is
+/// reported, rather than retried under the next suffix forever.
+#[test]
+fn a_take_that_cannot_be_created_is_reported_rather_than_renamed() {
+    let status = Mutex::new(String::new());
+    let base = std::env::temp_dir()
+        .join(format!("harmonigraph-missing-directory-{}", std::process::id()))
+        .join("take.take");
+    assert!(Recording::create(Default::default(), base, 1, FIXTURE_SPEC, &status).is_none());
+    assert!(status.lock().starts_with("cannot create"), "{}", status.lock());
 }
