@@ -1180,10 +1180,13 @@ impl CallbackTrait for RollCallback {
             );
         }
 
-        // Kept while the cut draws, and dropped with it, since only the
-        // surround draws into it and reads it. The surround's own targets are
-        // drawn straight after, reading the holdout just finished.
-        if !wants_holdout || pane.holdout.as_ref().is_some_and(|h| h.size != roll_size) {
+        // Kept while the cut is on, and dropped with it, since only the
+        // surround draws into it and reads it. Kept through a frame with no
+        // notes, as the bloom is: the pane calls back through every rest, and
+        // `paint` declines a frame with nothing in it before it reaches what
+        // these still hold. The surround's own targets are drawn straight
+        // after, reading the holdout just finished.
+        if !surround.draws() || pane.holdout.as_ref().is_some_and(|h| h.size != roll_size) {
             pane.holdout = None;
         }
         if wants_holdout {
@@ -1264,7 +1267,8 @@ impl CallbackTrait for RollCallback {
         //
         // The surrounds are the targets `prepare` drew, laid over the roll's
         // rect as the halo is below, inside egui's own clip. `prepare` keeps a
-        // holdout, and draws its targets, exactly while the cut draws.
+        // holdout while the cut is on and draws its targets on every frame
+        // with notes in it, which past the `count` check above is this one.
         if let Some(holdout) = &pane.holdout {
             let vp = info.viewport_in_pixels();
             render_pass.set_viewport(
