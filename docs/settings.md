@@ -244,9 +244,11 @@ Tab takes priority over focus traversal except while editing text.
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
 | Editor frame rate, interface scale, Hide tab bars | Editor only; exports run at 60 fps. The frame rate applies on macOS only. |
 
-Fresh projects use **Fast** frequency resolution (4096 samples), captured from the DAW look in #1475.
-Fast trades pitch precision for response time,
-and its wider bins can lose low audio-ring fundamental wedges while their harmonics still light the pitch class.
+Fresh projects use **Fast** frequency resolution, captured from the DAW look in #1475:
+a 6144-sample frame read as sharply as a 4096-sample Hann window.
+Every resolution draws a partial at its own pitch;
+Fast trades how sharply it resolves neighbouring pitches for response time,
+and its wider peaks can lose low audio-ring fundamental wedges while their harmonics still light the pitch class.
 The cutoff depends on sample rate and the material.
 **Silent slice brightness** lives in Note layers and colours silent MIDI octave slices on sounding or fading nodes,
 plus the audio ring’s quiet endpoint.

@@ -1,16 +1,21 @@
 # harmonigraph-analysis
 
 Rolling real-input audio analysis shared by the live UI and offline renderer.
-`SpectrumAnalyzer` windows one channel and resamples Hann-windowed power onto the fixed pitch axis in `harmonigraph-core`;
+`SpectrumAnalyzer` takes one transform of a Hann-windowed frame per column, zero-padded to twice its length,
+and reads every bucket of the fixed pitch axis in `harmonigraph-core` at its own frequency through a Gaussian kernel;
 `ChannelBank` averages independent channel power without phase cancellation.
+The kernel also narrows the frame to the bucket's listen:
+a fixed window listens through one Gaussian toward the frame's newest end, as sharp as a Hann window two thirds of the frame and lagging as little,
+and a Sweep through a Gaussian about the frame's middle whose length glides with pitch.
+`AnalyzerConfig::column_lag` says where on a time axis a column belongs, for the analyzer and the export alike.
 
 RealFFT owns the planned half-size complex transform and real-input postprocessing.
 Each channel retains its own plan and reusable input, output and scratch buffers.
 Callers adopt one final `AnalyzerConfig` for all channels.
 Only a window-size change replans the transform and rebuilds the window,
-and sample-rate changes rebuild the pitch-bucket reads.
+and a window-size, sample-rate or Sweep change replans the kernels.
 A window-size or sample-rate change resets the audio window;
-a Sweep change only replans its kernels, and unchanged settings do nothing.
+a Sweep change keeps it, and unchanged settings do nothing.
 New channels start at the requested settings,
 while a source restart clears retained audio and keeps its estimator resources.
 There is no retained planner or shared plan cache.

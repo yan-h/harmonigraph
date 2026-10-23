@@ -1,35 +1,74 @@
 //! Rolling audio analysis on Harmonigraph's dependency-free pitch axis.
 //!
 //! Each channel owns a planned RealFFT real-input transform (a half-size
-//! complex FFT plus postprocessing), with reusable input/output/scratch.
-//! Windowing, power accumulation and pitch resampling are shared verbatim by
-//! live and offline consumers. Exact-zero retained windows still emit zero
-//! columns without transforming, so history and release continue advancing.
+//! complex FFT plus postprocessing), with reusable input/output/scratch. One
+//! column is one transform of the latest frame through a Hann window, zero-
+//! padded to twice its length, and every pitch bucket then reads that transform
+//! at its OWN frequency through a small kernel, which also narrows the frame to
+//! that bucket's listen — see [`kernels`]. Live and
+//! offline consumers share all of it verbatim. Exact-zero retained windows
+//! still emit zero columns without transforming, so history and release
+//! continue advancing.
 
 use harmonigraph_core::spectrum::{
     midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
 };
 
-mod sweep;
-pub use sweep::{max_length as sweep_max_length, Sweep, SWEEP_MIN_LENGTH};
+mod kernels;
+pub use kernels::{fixed_listen, max_length as sweep_max_length, Sweep, SWEEP_MIN_LENGTH};
 
-/// The default window length (~0.17 s at 48 kHz), the UI's Balanced setting;
-/// its fresh one is Fast. The UI changes it through [`SpectrumAnalyzer::configure`], trading response time against
-/// bass precision at runtime. At the axis floor (20 Hz) one FFT bin spans
-/// several semitones, so the lowest octave reads coarse; that is inherent to
-/// the window length, not a bug.
-pub const DEFAULT_FFT_SIZE: usize = 8192;
+/// The default frame length (~0.26 s at 48 kHz), the UI's Balanced setting;
+/// its fresh one is Fast. The UI changes it through
+/// [`SpectrumAnalyzer::configure`], trading response time against bass
+/// precision at runtime. At the axis floor (20 Hz) a frame this long still
+/// resolves only a few semitones, so the lowest octave reads wide; that is
+/// inherent to the frame length, not a bug.
+///
+/// Not a power of two: a fixed window listens through about two thirds of its
+/// frame (see `kernels::FIXED_SPREAD`), so the frame is half as long again as
+/// the 8192-sample Hann window Balanced is as sharp as.
+pub const DEFAULT_FFT_SIZE: usize = 12_288;
 
 /// All inputs that determine an analyzer's estimator. Adopt them together so
 /// a caller never builds resources for intermediate settings.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalyzerConfig {
     pub sample_rate: f32,
+    /// The FRAME: how much audio one column is taken from, in every mode, and
+    /// so how long a listen it can give. A fixed window listens through about
+    /// two thirds of it.
     pub fft_size: usize,
-    /// Read every bucket through its own listen length, gliding with pitch,
-    /// rather than through the whole frame; see [`Sweep`]. `fft_size` is then
-    /// the FRAME, which bounds the longest listen and sets the latency.
+    /// How long each bucket listens: gliding with pitch under a [`Sweep`],
+    /// about the frame's middle, and the same at every pitch without one,
+    /// toward the frame's newest end — see [`kernels`].
     pub sweep: Option<Sweep>,
+}
+
+impl AnalyzerConfig {
+    /// How far BEFORE the newest sample a column belongs on a time axis, in
+    /// seconds: where the weight of the window it is read through is centred.
+    ///
+    /// The analyzer always looks BACKWARD — `pitch_spectrum` reads the most
+    /// recent `fft_size` samples — so a column taken at time `t` describes
+    /// audio before `t`, weighted most where its window is. Stamping it `t`
+    /// would draw every sound late by this much, the whole of its energy
+    /// placed at the moment the LAST of it arrived.
+    ///
+    /// The window's amplitude centroid, which is about where a tone that starts
+    /// or stops reads half its level: exactly under a symmetric window, and
+    /// within a hundredth of the frame under the fixed one, whose half-weight
+    /// point is a little newer. It is the same at every pitch
+    /// because every bucket listens about the same instant, so one lag places
+    /// the whole column. Under a [`Sweep`] it is half the frame; a fixed window
+    /// listens toward its newest end, so its lag is about a third of its frame,
+    /// as long as the plain Hann window it is as sharp as.
+    ///
+    /// The one source of it: the analyzer stamps its columns with this and an
+    /// export reads this far past each frame, so the two agree by construction.
+    pub fn column_lag(&self) -> f64 {
+        kernels::lag_samples(self.fft_size, self.sweep.is_some())
+            / f64::from(self.sample_rate.max(1.0))
+    }
 }
 
 impl Default for AnalyzerConfig {
@@ -37,27 +76,6 @@ impl Default for AnalyzerConfig {
         Self { sample_rate: 48_000.0, fft_size: DEFAULT_FFT_SIZE, sweep: None }
     }
 }
-
-/// How far up the spectrum magnitudes are taken: a few bins past the crossover
-/// below which a pitch bucket is narrower than the FFT's bin spacing, and so the
-/// spectrum between the bins has to be reconstructed rather than sampled.
-///
-/// The CROSSOVER is a fixed BIN INDEX whatever the sample rate and the window
-/// length are, which is what makes any of this a constant: a bucket spans a
-/// constant RATIO of its own
-/// frequency (`ln 2 / (12 * BINS_PER_SEMITONE)` of it) while a bin spans a
-/// constant number of Hz, so the two are equal where `f / bin_hz =
-/// 12 * BINS_PER_SEMITONE / ln 2` — and `f / bin_hz` IS the bin coordinate, with
-/// `bin_hz` cancelling out of both sides. At 32 buckets to the semitone that is
-/// bin 554, which at 48 kHz is 3.2 kHz through an 8192-point window and 6.5 kHz
-/// through a 4096-point one.
-///
-/// It decides only how much of the spectrum is reduced to magnitudes up front,
-/// never which branch a bucket takes — that is still settled per bucket, by the
-/// bins that actually fall inside it. So the slack is there to cover the buckets
-/// straddling the crossover, and costs a few square roots.
-const INTERP_BIN_CEILING: usize =
-    ((12 * BINS_PER_SEMITONE) as f32 / std::f32::consts::LN_2) as usize + 8;
 
 /// The pitch axis is fixed; only its conversion from Hz to FFT bins changes
 /// with the analyzer configuration. Share these frequencies across analyzers.
@@ -80,32 +98,11 @@ static BUCKET_FREQUENCIES: std::sync::LazyLock<[BucketFrequencies; SPECTRUM_BINS
         })
     });
 
-/// How one pitch bucket reads the transform, settled by
-/// [`plan_buckets`](SpectrumAnalyzer::plan_buckets) from the window length and
-/// the sample rate alone — every column asks each bucket the same question, so
-/// the divisions and roundings that answer it are paid once per configuration
-/// rather than 3,828 times a column.
-#[derive(Clone, Copy)]
-enum BucketRead {
-    /// Outside the usable bins: the bucket reads as nothing.
-    Silent,
-    /// Wider than the bin spacing: the loudest of bins `k0..=k1`.
-    Loudest { k0: u32, k1: u32 },
-    /// Narrower: reconstructed `t` of the way from bin `k` to `k + 1`.
-    Between { k: u32, t: f32 },
-}
-
 /// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
     sample_rate: f32,
     fft_size: usize,
-    /// Which bins each bucket reads, derived from exactly `sample_rate` and
-    /// `fft_size` and rebuilt by [`configure`] whenever either changes, so
-    /// there is no key to check per column.
-    ///
-    /// [`configure`]: Self::configure
-    bucket_reads: Box<[BucketRead; SPECTRUM_BINS]>,
     /// The most recent `fft_size` samples, as a circular buffer.
     ring: Vec<f32>,
     write: usize,
@@ -113,26 +110,15 @@ pub struct SpectrumAnalyzer {
     filled: usize,
     /// The Hann window, precomputed, `fft_size` long. See [`hann`].
     window: Vec<f32>,
-    /// The scale that puts a full-scale sine at 1.0, precomputed alongside the
-    /// window it is a property of — see [`norm_power`].
-    norm_power: f32,
-    /// A plan and its reusable buffers, owned by this channel. The planner is
-    /// dropped after configuration; no cross-channel or global plan cache.
+    /// Its sum, which the frame's weighted mean is divided by.
+    window_sum: f32,
+    /// A plan and its reusable buffers, owned by this channel, for a transform
+    /// [`kernels::PAD`] frames long. The planner is dropped after
+    /// configuration; no cross-channel or global plan cache.
     fft: Option<std::sync::Arc<dyn realfft::RealToComplex<f32>>>,
     fft_input: Vec<f32>,
     fft_output: Vec<realfft::num_complex::Complex32>,
     fft_scratch: Vec<realfft::num_complex::Complex32>,
-    /// Power per bin, filled by
-    /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) across the usable
-    /// bins. Half the window long: the bins above Nyquist mirror the ones below
-    /// and no branch reads them.
-    bin_power: Vec<f32>,
-    /// Magnitude per bin, filled by
-    /// [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum) for the bins its
-    /// reconstructing branch reads — see [`INTERP_BIN_CEILING`]. Only the low
-    /// end is ever written; the rest is allocated once so the fill never has to
-    /// grow it.
-    bin_mag: Vec<f32>,
     /// The pitch buckets [`pitch_spectrum`](SpectrumAnalyzer::pitch_spectrum)
     /// hands back, owned here rather than returned by value: at 32 buckets to
     /// the semitone one spectrum is 15.3 KB, and returning it copied that much
@@ -143,10 +129,16 @@ pub struct SpectrumAnalyzer {
     /// none can be left reading the previous column. Nothing reads it that did
     /// not just write it.
     buckets: Box<[f32; SPECTRUM_BINS]>,
-    /// The sweep this analyzer reads through, if any, and the kernels it was
-    /// planned into. Planned only while one is set.
+    /// The sweep each bucket's listen follows, if any; `None` listens through
+    /// the fixed listen toward the frame's newest end (see `kernels`).
     sweep: Option<Sweep>,
-    sweep_plan: sweep::SweepPlan,
+    /// Which kernels each bucket reads, derived from exactly the frame, the
+    /// rate and the sweep, and replanned by [`configure`](Self::configure)
+    /// whenever any of those changes, so there is no key to check per column.
+    kernels: kernels::Kernels,
+    /// [`AnalyzerConfig::column_lag`] for the same three, settled with the
+    /// kernels.
+    lag: f64,
 }
 
 impl SpectrumAnalyzer {
@@ -154,21 +146,19 @@ impl SpectrumAnalyzer {
         let mut analyzer = SpectrumAnalyzer {
             sample_rate: config.sample_rate.max(1.0),
             fft_size: 0,
-            bucket_reads: Box::new([BucketRead::Silent; SPECTRUM_BINS]),
             ring: Vec::new(),
             write: 0,
             filled: 0,
             window: Vec::new(),
-            norm_power: 0.0,
+            window_sum: 0.0,
             fft: None,
             fft_input: Vec::new(),
             fft_output: Vec::new(),
             fft_scratch: Vec::new(),
-            bin_power: Vec::new(),
-            bin_mag: Vec::new(),
             buckets: Box::new([0.0; SPECTRUM_BINS]),
             sweep: None,
-            sweep_plan: sweep::SweepPlan::new(),
+            kernels: kernels::Kernels::new(),
+            lag: 0.0,
         };
         analyzer.configure(config);
         analyzer
@@ -182,8 +172,9 @@ impl SpectrumAnalyzer {
     pub fn configure(&mut self, config: AnalyzerConfig) {
         let AnalyzerConfig { sample_rate, fft_size, sweep } = config;
         assert!(
-            fft_size >= 4 && fft_size.is_power_of_two(),
-            "a power of two, four up: real-input analysis requires an even window"
+            fft_size >= 4 && fft_size % 2 == 0,
+            "an even frame, four up: a real-input transform needs an even length, and realfft \
+             plans any even one, which is what lets a frame be half as long again as its listen"
         );
         let sample_rate = sample_rate.max(1.0);
         let size_changed = fft_size != self.fft_size;
@@ -196,7 +187,7 @@ impl SpectrumAnalyzer {
             // frame's worth of audio at every step of it.
             if sweep_changed {
                 self.sweep = sweep;
-                self.plan_sweep();
+                self.plan_kernels();
             }
             return;
         }
@@ -207,106 +198,44 @@ impl SpectrumAnalyzer {
         if size_changed {
             self.ring = vec![0.0; fft_size];
             // No global cache or retained planner: each channel owns its plan.
-            let fft = realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size);
+            let fft =
+                realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size * kernels::PAD);
             self.fft_input = fft.make_input_vec();
             self.fft_output = fft.make_output_vec();
             self.fft_scratch = fft.make_scratch_vec();
             self.fft = Some(fft);
-            self.bin_power = vec![0.0; fft_size / 2];
-            self.bin_mag = vec![0.0; fft_size / 2];
             self.window = hann(fft_size);
-            self.norm_power = norm_power(&self.window);
+            self.window_sum = self.window.iter().sum();
         } else {
             self.ring.fill(0.0);
         }
         self.write = 0;
         self.filled = 0;
-        if size_changed || rate_changed {
-            self.plan_buckets();
-        }
         self.sweep = sweep;
-        self.plan_sweep();
+        self.plan_kernels();
     }
 
-    /// Plan the sweep's kernels for the current frame and rate, if there is a
-    /// sweep.
-    fn plan_sweep(&mut self) {
-        if let Some(sweep) = self.sweep {
-            self.sweep_plan.plan(sweep, self.sample_rate, self.fft_size, &self.window);
-        }
-    }
-
-    /// Settle which bins every bucket reads for the current window length and
-    /// sample rate — see [`BucketRead`]. Rewrites the plan in place, so a
-    /// sample-rate change allocates nothing.
-    fn plan_buckets(&mut self) {
-        let bin_hz = self.sample_rate / self.fft_size as f32;
-        let (first, last) = usable_bins(self.fft_size);
-        for (read, frequencies) in self.bucket_reads.iter_mut().zip(BUCKET_FREQUENCIES.iter()) {
-            // The bucket's own frequency band, in bins.
-            let x0 = frequencies.lower_hz / bin_hz;
-            let x1 = frequencies.upper_hz / bin_hz;
-            // The top is CLAMPED rather than required to be in range. A bucket
-            // whose upper edge reaches past the last usable bin still CONTAINS
-            // usable bins, and the loudest of those is what it means; rejecting
-            // it sent it to the branch below instead, which is a bucket wider
-            // than a bin asking to be read BETWEEN two of them. Only reachable
-            // where the axis runs to Nyquist, so at half rates.
-            let (k0, k1) = (x0.ceil(), x1.floor().min(last as f32));
-            *read = if k1 >= k0 && k0 >= first as f32 {
-                // Wider than the bin spacing: the loudest bin it contains.
-                BucketRead::Loudest { k0: k0 as u32, k1: k1 as u32 }
-            } else {
-                // Narrower: reconstruct the spectrum between the bins either
-                // side of the bucket's center, so the log axis comes out smooth
-                // instead of combed where it outruns the FFT.
-                let x = frequencies.center_hz / bin_hz;
-                let k = x.floor();
-                // Exactly the pair being read between, and no wider: the cubic
-                // wants a bin either side of that pair too, but it takes those
-                // by holding the endpoint where the usable range runs out
-                // rather than by demanding them. Requiring them instead put the
-                // bottom of the axis outside its own analyzer — at the Fast
-                // window the first two usable bins span 23 to 35 Hz, and the
-                // seven semitones between them went dark.
-                if k < first as f32 || k + 1.0 > last as f32 {
-                    BucketRead::Silent
-                } else {
-                    let k = k as usize;
-                    BucketRead::Between { k: k as u32, t: x - k as f32 }
-                }
-            };
-        }
-    }
-
-    /// Seconds of audio one spectrum is measured over.
-    ///
-    /// A spectrum is not an instant: it is everything that happened across
-    /// this much time, weighted toward the middle by the window. Anything placing a spectrum on a time axis has to know how wide it
-    /// is — see [`window_center_offset`](Self::window_center_offset).
-    pub fn window_seconds(&self) -> f64 {
-        f64::from(self.fft_size as u32) / f64::from(self.sample_rate)
+    /// Plan every bucket's kernels, and the column's lag, for the current
+    /// frame, rate and sweep.
+    fn plan_kernels(&mut self) {
+        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size, &self.window);
+        let config = AnalyzerConfig {
+            sample_rate: self.sample_rate,
+            fft_size: self.fft_size,
+            sweep: self.sweep,
+        };
+        self.lag = config.column_lag();
     }
 
     /// How far BEFORE the newest sample the spectrum it produces belongs on a
-    /// time axis: half the window.
-    ///
-    /// The analyzer always looks BACKWARD — `pitch_spectrum` reads the most
-    /// recent `fft_size` samples — so a spectrum taken at time `t` describes
-    /// `[t - window, t]`, and the window weights the middle of that most.
-    /// Stamping it `t` would draw every sound half a window later than it
-    /// happened, which is the whole of its energy placed at the moment the
-    /// LAST of it arrived.
-    ///
-    /// HALF the window, because what decides the centroid is that the window is
-    /// SYMMETRIC and not what shape it has; a sweep's envelopes are centred on
-    /// the frame's middle too.
+    /// time axis, in seconds: [`AnalyzerConfig::column_lag`] for the settings
+    /// it is running.
     pub fn window_center_offset(&self) -> f64 {
-        0.5 * self.window_seconds()
+        self.lag
     }
 
-    /// Forget the retained audio, keeping the plan, the window and its
-    /// normalization — none of which the window's CONTENTS decide.
+    /// Forget the retained audio, keeping the plan, the window and the
+    /// kernels — none of which the window's CONTENTS decide.
     ///
     /// This is what a source restart owes (see
     /// [`ChannelBank::restart`](ChannelBank::restart)): the analyzer must not
@@ -339,37 +268,20 @@ impl SpectrumAnalyzer {
     /// its pitch, so successive frames are comparable and the display can
     /// apply a fixed mapping.
     ///
-    /// Every bucket is filled — this resamples the whole magnitude
-    /// spectrum onto the log-pitch axis, rather than depositing only the
-    /// peaks. A bucket wider than the FFT's bin spacing takes the loudest
-    /// bin inside it; a narrower one (which is most of the axis: buckets
-    /// and bins are equal width at [`INTERP_BIN_CEILING`], and below that
-    /// the bucket is finer) reconstructs the spectrum between the bins —
-    /// see [`reconstruct`]. MAX and not a sum, so the level a bucket
-    /// reports doesn't grow with how many bins happen to fall in it and
-    /// 0 dB keeps meaning a full-scale sine at every pitch.
+    /// Every bucket is filled — this reads the whole spectrum onto the
+    /// log-pitch axis, rather than depositing only the peaks, so broadband
+    /// sound draws as a floor and an envelope rather than as speckle. Each
+    /// bucket is read AT ITS OWN FREQUENCY ([`kernels`]), so a partial is drawn
+    /// at its pitch wherever it falls between the transform's bins. This
+    /// replaced a resample of the bins themselves, which kept every peak on the
+    /// bin it was measured at: through the Fast window that drew a 55 Hz A1 a
+    /// semitone sharp and lit A♯ on the lattice brighter than A (#1575).
     ///
-    /// This replaced a peak-only fill, which deposited each local maximum
-    /// at a parabolically refined frequency across the two nearest
-    /// buckets. That drew every partial as a thin, exactly-placed line —
-    /// but a spectrum is not only its partials. Broadband sound has no
-    /// peaks to find, so noise, breath and cymbals came out as flickering
-    /// speckle; there was no noise floor to read dynamics against, no
-    /// spectral envelope, and quiet content vanished at a hard threshold
-    /// instead of fading. The cost of the change is width: a partial is
-    /// now as wide as the window's main lobe, which at C4 spans about a
-    /// semitone, where before it was two buckets wide wherever it sat.
-    /// The refinement had been hiding how little the FFT actually
-    /// resolves down low; this shows it.
-    ///
-    /// The other cost is PLACE, and it is the larger one for a pitch
-    /// display: [`reconstruct`] keeps a peak on the bin it was measured at,
-    /// so below the crossover a partial is drawn up to half a bin off its own
-    /// pitch. Measured against known tones at 48 kHz, through the Fast window
-    /// that is up to 370 cents at 25-50 Hz, 180 at 50-100 Hz and 65 at
-    /// 100-200 Hz; Balanced roughly halves those and Precise quarters them. A Sweep
-    /// reads every bucket at its own frequency and is within 3 cents above
-    /// 22 Hz.
+    /// The frame's window-weighted MEAN is removed before the transform. A
+    /// constant offset otherwise reaches the bottom of the axis through the
+    /// skirt of the listen's own response, which the kernels read down to the
+    /// first bin above DC (−21 dB for a 0.5 offset through the Fast frame);
+    /// without it, the kernels could not reach as close to DC as they do.
     pub fn pitch_spectrum(&mut self) -> Option<&[f32; SPECTRUM_BINS]> {
         if self.filled < self.fft_size {
             return None;
@@ -382,174 +294,37 @@ impl SpectrumAnalyzer {
             return Some(&self.buckets);
         }
 
-        let (first, last) = usable_bins(self.fft_size);
         // The ring in time order is its tail from `write` (oldest first) and
         // then its head up to `write`: two straight runs rather than an index
         // wrapped per sample, which the compiler cannot vectorize.
         let (newer, older) = self.ring.split_at(self.write);
         let (window_older, window_newer) = self.window.split_at(older.len());
-        let (input_older, input_newer) = self.fft_input.split_at_mut(older.len());
+        let weighted = older.iter().zip(window_older).map(|(s, w)| s * w).sum::<f32>()
+            + newer.iter().zip(window_newer).map(|(s, w)| s * w).sum::<f32>();
+        let mean = weighted / self.window_sum;
+        // The frame sits where its listen's centre is the padded transform's
+        // middle, so the kernels stay real (see `Kernels::offset`). The padding
+        // is rewritten every column, because realfft uses its input as scratch.
+        let offset = self.kernels.offset();
+        let (before, rest) = self.fft_input.split_at_mut(offset);
+        let (frame, after) = rest.split_at_mut(self.fft_size);
+        before.fill(0.0);
+        after.fill(0.0);
+        let (input_older, input_newer) = frame.split_at_mut(older.len());
         for ((x, s), w) in input_older.iter_mut().zip(older).zip(window_older) {
-            *x = s * w;
+            *x = (s - mean) * w;
         }
         for ((x, s), w) in input_newer.iter_mut().zip(newer).zip(window_newer) {
-            *x = s * w;
+            *x = (s - mean) * w;
         }
         self.fft
             .as_ref()
             .unwrap()
             .process_with_scratch(&mut self.fft_input, &mut self.fft_output, &mut self.fft_scratch)
             .unwrap();
-        if self.sweep.is_some() {
-            // A sweep reads the transform through kernels that need its phase,
-            // so it reads the transform itself rather than its power.
-            self.sweep_plan.read(&self.fft_output, &mut self.buckets);
-            return Some(&self.buckets);
-        }
-        // Preserve usable bins 2..=N/2-2; the boundary bins are not resampled.
-        for j in first..=last {
-            let c = self.fft_output[j];
-            self.bin_power[j] = c.re * c.re + c.im * c.im;
-        }
-
-        // Amplitude normalization so a unit sine reads as ~1.0, precomputed
-        // with the window it is a property of (`norm_power`). The buckets
-        // are POWER and every branch below produces `|X|^2` without ever taking
-        // a root, so it is squared there rather than here.
-        let norm_power = self.norm_power;
-
-        // Magnitudes for the reconstructing branch alone (hence
-        // [`INTERP_BIN_CEILING`] rather than the whole spectrum). Once per BIN
-        // and not once per bucket: below the crossover the axis is finer than
-        // the FFT, by a hundredfold and more at the bottom of it, so a great
-        // many buckets read the same four bins and each would otherwise pay for
-        // the same four square roots.
-        let mag_to = (INTERP_BIN_CEILING + 1).min(last + 1);
-        for k in first..mag_to {
-            self.bin_mag[k] = self.bin_power[k].sqrt();
-        }
-        // The bin below the first usable one, HELD at its value rather than
-        // measured. `reconstruct` reads one bin either side of the pair it
-        // interpolates, so a bucket sitting on the first usable bin needs a
-        // sample below it — and the two candidates are both wrong: bin 1 is
-        // where the window's own leakage dominates, which is why `first` starts
-        // above it, and leaving the entry unwritten reads whatever the previous
-        // call left there. Holding the endpoint is the third answer, and it
-        // makes the tangent there zero, which is what "the curve stops here"
-        // should look like.
-        if mag_to > first {
-            self.bin_mag[first - 1] = self.bin_mag[first];
-        }
-        let bin_mag = &self.bin_mag[..mag_to];
-
-        // Every bucket is written, silent ones included, so nothing the
-        // previous column left in the retained buffer survives into this one.
-        for (out, read) in self.buckets.iter_mut().zip(self.bucket_reads.iter()) {
-            *out = match *read {
-                BucketRead::Silent => 0.0,
-                BucketRead::Loudest { k0, k1 } => {
-                    let loudest = self.bin_power[k0 as usize..=k1 as usize]
-                        .iter()
-                        .fold(0.0f32, |acc, &p| acc.max(p));
-                    loudest * norm_power
-                }
-                BucketRead::Between { k, t } => {
-                    let m = reconstruct(bin_mag, k as usize, t);
-                    m * m * norm_power
-                }
-            };
-        }
+        self.kernels.read(&self.fft_output, &mut self.buckets);
         Some(&self.buckets)
     }
-}
-
-/// The bins a window of `fft_size` samples can be read at, inclusive: skip DC
-/// and bin 1 (where the window's own leakage dominates) and stay clear of
-/// Nyquist. Anything the axis asks for outside this reads as nothing, which is
-/// the truth — a 4096-point window at 48 kHz cannot see 20 Hz at all. It is
-/// also the only range the transform fills, so a widening here is work as well
-/// as axis.
-fn usable_bins(fft_size: usize) -> (usize, usize) {
-    (2, fft_size / 2 - 2)
-}
-
-/// The spectrum's magnitude between bins `k` and `k + 1`, `t` of the way across:
-/// a SHAPE-PRESERVING cubic through the four bins `k - 1 ..= k + 2` of
-/// `bin_mag`.
-///
-/// A straight line between the two bins is the obvious form and reads visibly
-/// wrong, because it is the CHORD of a curve that is convex almost everywhere
-/// across a main lobe: it under-reads between every pair of bins and then snaps
-/// back onto the curve at each of them. That is a facet per bin along the whole
-/// stretch of the axis the FFT does not resolve — which is most of it — and it
-/// is worst exactly where the axis is finest.
-///
-/// **Monotone tangents** (Fritsch-Carlson: the harmonic mean of the secants
-/// either side, zeroed wherever they disagree in sign) are what make a cubic
-/// safe here, and they are not a refinement — an ordinary cubic is unusable.
-/// The transform's NULLS are why. A partial sitting exactly on a bin puts a
-/// Hann window's zeros on every other bin around it, so runs of three zero bins
-/// beside a nonzero one are the ordinary case rather than a contrived one — and
-/// a Catmull-Rom through `(0, 0, 0, x)` reaches `-2x/27` at a third of the way
-/// across. That is a NEGATIVE magnitude, which the caller squares into a bright
-/// phantom sitting exactly where the transform is silent.
-///
-/// Shape-preserving tangents bound every value inside the pair it sits between,
-/// so no reconstruction can invent a level neither bin holds — and in particular
-/// none can invent one below zero, which is the case a magnitude cannot survive.
-///
-/// Continuity across the knots is the other half, and rules out the textbook
-/// three-point parabola about the NEAREST bin: right for locating a peak, wrong
-/// for drawing a curve, being discontinuous wherever the nearest bin changes —
-/// it would trade a facet at every bin for a STEP at every half-bin. This passes
-/// through the bins and matches slope across them.
-///
-/// **In magnitude, and that is measured rather than assumed.** dB is the
-/// tempting domain, being the one the picture is drawn in and the one a main
-/// lobe is nearly parabolic in, and it is indeed slightly better ACROSS THE TOP
-/// of a ridge. It is catastrophic anywhere else: a windowed sinusoid's transform
-/// has true zeros between bins, and a zero in dB is a pole, so at a partial
-/// sitting exactly on a bin — where a Hann window nulls at every OTHER bin — the
-/// reconstruction of its skirt collapses. Against the exact windowed transform,
-/// over the buckets within 25 dB of the peak, RMS error in dB:
-///
-/// | partial's offset from a bin | 0 | 0.2 | 0.35 | 0.5 |
-/// |---|---|---|---|---|
-/// | straight line, in magnitude | 2.16 | 2.13 | 1.85 | 1.62 |
-/// | this, in magnitude | **0.54** | **1.30** | **1.38** | **1.39** |
-/// | this, in power | 2.64 | 2.25 | 1.94 | 1.84 |
-/// | this, in dB | 81.63 | 1.46 | 1.22 | 1.25 |
-///
-/// Magnitude is the only one of the three better than a straight line at every
-/// offset. `the_reconstruction_beats_a_straight_line_between_bins` is that table
-/// as an assertion.
-///
-/// What none of them do is undo the window's scalloping loss: a partial exactly
-/// between two bins reads up to 1.42 dB under its true height, because that is
-/// what the bins either side of it report and nothing between them says
-/// otherwise. Recovering it means reaching ABOVE the bins, which is the ringing
-/// above — and 1.42 dB is 2% of the display's default range, against a ring that
-/// is a feature the sound does not have.
-fn reconstruct(bin_mag: &[f32], k: usize, t: f32) -> f32 {
-    // Reads past the top HOLD the last magnitude, which is the same boundary
-    // the caller writes below its first usable bin — the four-point form wants
-    // an outer sample the measured range does not have at either end, and a
-    // held endpoint gives it one with a zero tangent, which is what "the curve
-    // stops here" should look like. Insurance at THIS end rather than a live
-    // path: the caller's own bound keeps `k + 2` inside the filled range at
-    // every supported rate and window length, with bins to spare.
-    let mag = |i: usize| bin_mag[i.min(bin_mag.len() - 1)];
-    let (a, b, c, d) = (mag(k - 1), mag(k), mag(k + 1), mag(k + 2));
-    // Zero at a turning point, so an extremum stays where the bins put it.
-    let tangent = |p: f32, q: f32| if p * q > 0.0 { 2.0 * p * q / (p + q) } else { 0.0 };
-    let (m0, m1) = (tangent(b - a, c - b), tangent(c - b, d - c));
-    let (t2, t3) = (t * t, t * t * t);
-    debug_assert!((0.0..=1.0).contains(&t), "the cubic is only monotone on its own interval");
-    // Cubic Hermite on the unit interval: value and tangent at each end.
-    b * (2.0 * t3 - 3.0 * t2 + 1.0)
-        + m0 * (t3 - 2.0 * t2 + t)
-        + c * (3.0 * t2 - 2.0 * t3)
-        + m1 * (t3 - t2)
 }
 
 /// One [`SpectrumAnalyzer`] per input channel, combined into the single
@@ -624,15 +399,11 @@ impl ChannelBank {
         }
     }
 
-    /// Seconds of audio one spectrum is measured over, and how far before the
-    /// newest frame it belongs on a time axis. Every channel shares a window, so
-    /// these are the bank's as much as any one analyzer's.
+    /// How far before the newest frame a column belongs on a time axis. Every
+    /// channel shares its settings, so this is the bank's as much as any one
+    /// analyzer's.
     pub fn window_center_offset(&self) -> f64 {
         self.per_channel[0].window_center_offset()
-    }
-
-    pub fn window_seconds(&self) -> f64 {
-        self.per_channel[0].window_seconds()
     }
 
     /// The channels' MEAN POWER per bucket — the total energy at each pitch,
@@ -674,27 +445,15 @@ impl ChannelBank {
 
 /// A periodic Hann window of `n` samples.
 fn hann(n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| {
-            let phase = std::f32::consts::TAU * i as f32 / n as f32;
-            0.5 * (1.0 - phase.cos())
-        })
-        .collect()
+    (0..n).map(|i| hann_weight(i, n)).collect()
 }
 
-/// The scale that puts a full-scale sine at 1.0 through `window`, as a power.
-///
-/// A real sine of amplitude `A` at a bin centre transforms, through a window
-/// `w`, to `|X| = A * sum(w) / 2`, so `(2/sum(w))^2` returns `A^2`.
-///
-/// What this holds is the contract the rest of the plugin rests on — 0 dB is a
-/// full-scale sine at every pitch, which is what makes the Level window's ends
-/// absolute dB, what the tilt pivots against, and what makes the audio ring's
-/// Gate a fixed position rather than a drifting one.
-fn norm_power(window: &[f32]) -> f32 {
-    let sum: f32 = window.iter().sum();
-    let norm = 2.0 / sum;
-    norm * norm
+/// Sample `i` of [`hann`], the one definition of the window: the kernels' sums
+/// about the fixed listen read it too, so they describe the window the frame is
+/// actually multiplied by, bit for bit.
+fn hann_weight(i: usize, n: usize) -> f32 {
+    let phase = std::f32::consts::TAU * i as f32 / n as f32;
+    0.5 * (1.0 - phase.cos())
 }
 
 #[cfg(test)]
@@ -804,28 +563,26 @@ mod tests {
         );
     }
 
-    /// The bottom of the axis draws at every window length, not just the one
+    /// The bottom of the axis draws at every frame length, not just the one
     /// the rest of these tests use.
     ///
-    /// Where the usable bins START is a fixed BIN (2, below which the window's
-    /// own leakage dominates) and therefore a moving FREQUENCY: 23 Hz through an
-    /// 8192-point window at 48 kHz, but 47 Hz through a 4096-point one, and
-    /// 94 Hz at 96 kHz. So the buckets that read the first usable bins are only
-    /// on the axis AT ALL at the shorter windows and the higher rates, and a
-    /// bound that quietly excludes them is invisible at 8192/48 kHz — which is
-    /// every other test here.
+    /// Where the kernels can read STARTS at a fixed BIN of the frame (1, the
+    /// first above DC, and a kernel's clearance above that, 2.8 bins in all)
+    /// and therefore at a moving FREQUENCY: about 22 Hz through the Fast frame
+    /// at 48 kHz, but 44 Hz at 96 kHz. So the buckets that read the first
+    /// usable bins are only on the axis AT ALL at the shorter frames and the
+    /// higher rates, and a bound that quietly excludes them is invisible at
+    /// 12288/48 kHz — which is every other test here.
     ///
     /// The failure this pins is a band of the axis reading as silence with the
-    /// tone in it: a run of buckets returning nothing while the buckets either
-    /// side of them, which reach the same bins through the other branch, stay
-    /// lit. Two static lines with a hole between them, and the hole does not
-    /// move when the tone does.
+    /// tone in it: two static lines with a hole between them, and the hole does
+    /// not move when the tone does.
     #[test]
     fn the_lowest_buckets_draw_at_every_window_length() {
-        for (fft_size, sr) in [(4096, 48_000.0f32), (4096, 96_000.0), (8192, 96_000.0)] {
+        for (fft_size, sr) in [(6144, 48_000.0f32), (6144, 96_000.0), (12_288, 96_000.0)] {
             let bin_hz = sr / fft_size as f32;
-            // A tone on the first usable bin, which is where this band sits.
-            let hz = 2.5 * bin_hz;
+            // Three bins up, just inside where the kernels start to read.
+            let hz = 3.0 * bin_hz;
             let buckets = analyze_with(fft_size, &[(hz, 0.8)], sr);
             let at = bucket_of_midi(hz_to_midi(hz));
             let near = (at.saturating_sub(2)..=(at + 2).min(SPECTRUM_BINS - 1))
@@ -834,156 +591,103 @@ mod tests {
             assert!(
                 near > 1e-6,
                 "{fft_size}-point window at {sr} Hz: a tone at {hz:.1} Hz \
-                 (bin 2.5) left bucket {at} and its neighbours silent",
+                 (bin 3) left bucket {at} and its neighbours silent",
             );
         }
     }
 
-    /// The reconstruction is continuous where it changes which bins it reads,
-    /// and passes through them.
+    /// Every frame draws a partial at its own pitch, the bass included (#1575).
     ///
-    /// The first rules out the textbook three-point parabola about the NEAREST
-    /// bin, which is discontinuous at every half-bin and would trade the facet
-    /// it was brought in to remove for a step of its own. The second is what
-    /// stops the first from being satisfied by a form that agrees with itself
-    /// and with nothing else.
+    /// Reading the transform's bins kept each peak on the bin it was measured
+    /// at, which through the Fast frame drew a 55 Hz A1 more than a semitone
+    /// sharp and lit A♯ on the lattice brighter than A. The tones here are
+    /// where that was worst, none of them on a bin of any of the three fixed
+    /// frames.
     #[test]
-    fn the_reconstruction_has_no_seam_at_a_bin() {
-        // Curvature and asymmetry either side of every knot, so a form with a
-        // seam in it has nowhere to hide.
-        let bins: Vec<f32> = (0..12).map(|k| ((k * k * 7 % 23) as f32) * 0.1).collect();
-        for k in 1..bins.len() - 3 {
-            let end = reconstruct(&bins, k, 1.0);
-            let start = reconstruct(&bins, k + 1, 0.0);
-            assert_eq!(end, start, "a seam at bin {}", k + 1);
-            assert!((end - bins[k + 1]).abs() <= 1e-6, "bin {} reads {end}", k + 1);
-        }
-    }
-
-    /// The reconstruction never invents a level neither of the bins it sits
-    /// between holds — and in particular never a negative one.
-    ///
-    /// The property that makes a cubic usable at all here, and the one an
-    /// ordinary cubic fails. The named case below is the one that matters: a
-    /// partial sitting exactly ON a bin puts a Hann window's zeros on every
-    /// other bin around it, and a Catmull-Rom through three of those and a
-    /// fourth nonzero bin goes NEGATIVE — a magnitude the caller squares into a
-    /// phantom where the transform is silent. The sweep after it covers every
-    /// shape three steps can make, so a form that only misbehaves on the steep
-    /// ones is caught too.
-    #[test]
-    fn the_reconstruction_never_overshoots_the_bins_it_reads() {
-        // A null beside a rise: `(0, 0, 0, x)`. A Catmull-Rom reaches -2x/27
-        // here, a third of the way across; anything shape-preserving is pinned
-        // to the zeros it sits between.
-        for x in [0.05f32, 0.4, 1.0] {
-            for i in 0..=20 {
-                let v = reconstruct(&[0.0, 0.0, 0.0, x], 1, i as f32 / 20.0);
-                assert_eq!(v, 0.0, "a null beside a rise of {x} reconstructed {v}");
-            }
-        }
-
-        // Every shape three steps can make, up and down, gentle and cliff-edged
-        // — so a form that only rings on the steep ones is caught too.
-        let steps = [0.0f32, 0.001, 0.05, 0.4, 1.0];
-        let signed = |v: f32, up: bool| if up { v } else { -v };
-        for &p in &steps {
-            for &q in &steps {
-                for &r in &steps {
-                    for dirs in 0..8u8 {
-                        let up = |i: u8| dirs & (1 << i) == 0;
-                        let mut bins = [1.0f32; 4];
-                        for (i, &d) in [p, q, r].iter().enumerate() {
-                            bins[i + 1] = bins[i] + signed(d, up(i as u8));
-                        }
-                        if bins.iter().any(|v| *v < 0.0) {
-                            continue; // magnitudes only
-                        }
-                        let (lo, hi) = (bins[1].min(bins[2]), bins[1].max(bins[2]));
-                        for i in 0..=20 {
-                            let v = reconstruct(&bins, 1, i as f32 / 20.0);
-                            assert!(
-                                v >= lo - 1e-5 && v <= hi + 1e-5,
-                                "{bins:?} reconstructed {v} outside {lo}..{hi}",
-                            );
-                        }
-                    }
-                }
+    fn a_partial_reads_at_its_own_pitch_through_every_frame() {
+        for fft_size in [6144, 12_288, 24_576] {
+            for hz in [27.5f32, 41.2, 55.0, 110.0, 220.0] {
+                let peak = peak_bucket(&analyze_with(fft_size, &[(hz, 0.8)], 48_000.0));
+                let midi = SPECTRUM_MIN_MIDI + (peak as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+                let cents = 100.0 * (midi - hz_to_midi(hz));
+                // A bucket is 3.125 cents, so a peak in the right one is within
+                // half of that; one bucket either side is rounding, not place.
+                assert!(
+                    cents.abs() <= 100.0 / BINS_PER_SEMITONE as f32,
+                    "{fft_size}-sample frame: {hz} Hz peaks {cents:+.1} cents off",
+                );
             }
         }
     }
 
-    /// The reconstruction tracks the exact windowed transform BETTER THAN A
-    /// STRAIGHT LINE between the bins, at every offset a partial can sit at.
+    /// A constant offset stays off the axis through every frame.
     ///
-    /// This is the whole claim [`reconstruct`] makes, and the table in its docs
-    /// is this measurement written out. The reference is the analyzed window's
-    /// own transform evaluated at each bucket's exact frequency — the curve the
-    /// FFT sampled and the reconstruction is trying to put back — rather than a
-    /// second approximation of it.
-    ///
-    /// Judged over the buckets within `RIDGE_DB` of the peak, which is the ridge
-    /// as the picture draws it. Further down, the transform dives into nulls
-    /// that fall BETWEEN bins: nothing reading only the bins can reconstruct
-    /// those, so every candidate is equally wrong about a stretch that is drawn
-    /// as silence either way, and including it would compare noise.
+    /// The kernels read down to the first bin above DC, where the skirt of the
+    /// listen's own response still carries a DC offset onto the bottom of the
+    /// axis — −21 dB for this one through the Fast frame — unless the frame's
+    /// mean is removed first, which is what this pins.
     #[test]
-    fn the_reconstruction_beats_a_straight_line_between_bins() {
-        const RIDGE_DB: f64 = -25.0;
-        let sr = 48_000.0f64;
-        let n = DEFAULT_FFT_SIZE;
-        let bin_hz = sr / n as f64;
-        let amp = 0.8f64;
-        for &off in &[0.0f64, 0.2, 0.35, 0.5] {
-            let f = (75.0 + off) * bin_hz;
-            let got = analyze(&[(f as f32, amp as f32)], sr as f32);
-            // The exact windowed transform at any bin coordinate, over the same
-            // 8192 samples the analyzer kept (`analyze` pushes 1234 past them).
-            let exact = |x: f64| -> f64 {
-                let (mut re, mut im) = (0.0, 0.0);
-                for i in 0..n {
-                    let w = 0.5 * (1.0 - (std::f64::consts::TAU * i as f64 / n as f64).cos());
-                    let s = amp * (std::f64::consts::TAU * f * (i + 1234) as f64 / sr).sin();
-                    let ang = -std::f64::consts::TAU * x * i as f64 / n as f64;
-                    re += w * s * ang.cos();
-                    im += w * s * ang.sin();
+    fn a_dc_offset_stays_off_the_axis() {
+        for fft_size in [6144, 12_288, 24_576] {
+            let mut analyzer =
+                SpectrumAnalyzer::new(AnalyzerConfig { fft_size, ..Default::default() });
+            analyzer.push_samples(&vec![0.5; fft_size + 777]);
+            let spectrum = analyzer.pitch_spectrum().expect("window filled");
+            let loudest = spectrum.iter().fold(0.0f32, |a, &b| a.max(b));
+            assert!(loudest < 1e-9, "{fft_size}-sample frame: DC read {loudest:e} somewhere");
+        }
+    }
+
+    /// A column belongs where its window listens ([`AnalyzerConfig::column_lag`]):
+    /// a tone that starts at a known sample reads half its level in the column
+    /// stamped there, through every fixed frame and a sweep, to within a
+    /// hundredth of the frame. Not exactly: half the level is where half the
+    /// window's weight is over the tone, its median, and the fixed window is
+    /// lopsided enough to put that 0.6, 1.3 and 2.8 ms newer than the centroid
+    /// the column is stamped at, so its onsets read that much early.
+    ///
+    /// Half the frame, which is where every column was stamped while every
+    /// window was centred on its frame, would put a fixed window's onsets 21 to
+    /// 84 ms early, its listen being toward the frame's newest end.
+    #[test]
+    fn a_column_is_stamped_where_its_window_listens() {
+        let rate = 48_000.0f32;
+        let sweep = Some(Sweep { bass: 13_500.0, treble: 2048.0 });
+        for (fft_size, sweep) in [(6144, None), (12_288, None), (24_576, None), (16_384, sweep)] {
+            let config = AnalyzerConfig { sample_rate: rate, fft_size, sweep };
+            let lag = config.column_lag() * f64::from(rate);
+            let onset = fft_size;
+            let tone: Vec<f32> = (0..3 * fft_size)
+                .map(|i| match i < onset {
+                    true => 0.0,
+                    false => (std::f32::consts::TAU * 1000.0 * i as f32 / rate).sin(),
+                })
+                .collect();
+            let at = bucket_of_midi(hz_to_midi(1000.0));
+            let mut analyzer = SpectrumAnalyzer::new(config);
+            // From a fiftieth of the frame before the expected crossing, a
+            // column every eight samples until the tone reads half its
+            // full-scale level.
+            let slack = fft_size / 50;
+            let mut fed = (onset as f64 + lag) as usize - slack;
+            analyzer.push_samples(&tone[..fed]);
+            loop {
+                let level = analyzer.pitch_spectrum().expect("window filled")[at - 2..=at + 2]
+                    .iter()
+                    .fold(0.0f32, |a, &b| a.max(b));
+                if level.sqrt() >= 0.5 {
+                    break;
                 }
-                let norm = 4.0 / n as f64;
-                (re * re + im * im) * norm * norm
-            };
-            let (mut mine, mut chord_sq, mut count) = (0.0f64, 0.0f64, 0usize);
-            let peak = peak_bucket(&got);
-            let lowest = peak - 40;
-            for (i, &reading) in got[lowest..=peak + 40].iter().enumerate() {
-                let b = lowest + i;
-                let midi = SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32;
-                let x = midi_to_hz(midi) as f64 / bin_hz;
-                let truth = exact(x);
-                if 10.0 * (truth / (amp * amp)).log10() < RIDGE_DB {
-                    continue;
-                }
-                let (k, frac) = (x.floor(), x - x.floor());
-                // What a straight line between the two bins would have said.
-                let chord = exact(k).sqrt() * (1.0 - frac) + exact(k + 1.0).sqrt() * frac;
-                let err_db = |v: f64| (10.0 * (v / truth).log10()).powi(2);
-                mine += err_db(reading as f64);
-                chord_sq += err_db(chord * chord);
-                count += 1;
+                assert!(fed < onset + lag as usize + slack, "{fft_size}, {sweep:?}: never crossed");
+                analyzer.push_samples(&tone[fed..fed + 8]);
+                fed += 8;
             }
-            let rms = |s: f64| (s / count as f64).sqrt();
-            // A MARGIN, not just "better". This is the only test that fails if
-            // `reconstruct` is reverted to a straight line — the continuity and
-            // overshoot tests both pass for one, a line being continuous through
-            // its knots and bounded by them. Reverted, the two quantities here
-            // become the same one computed twice (f32 FFT against f64 direct
-            // transform, agreeing to about 1e-6), and a bare `<` would then be
-            // decided by rounding noise. The worst measured ratio is 0.86.
+            let stamped = (fed - 1) as f64 - lag;
+            let early_ms = (onset as f64 - stamped) / f64::from(rate) * 1e3;
+            let frame_ms = fft_size as f64 / f64::from(rate) * 1e3;
             assert!(
-                rms(mine) < 0.9 * rms(chord_sq),
-                "at offset {off} from a bin: {:.2} dB RMS over {count} buckets, \
-                 against a straight line's {:.2} dB",
-                rms(mine),
-                rms(chord_sq),
+                early_ms.abs() < frame_ms / 100.0,
+                "{fft_size}, {sweep:?}: the onset reads {early_ms:+.2} ms off"
             );
         }
     }
@@ -1099,9 +803,9 @@ mod tests {
         assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
     }
 
-    /// The bottom of the axis sits BELOW the first usable bin at short
-    /// windows — 20 Hz against a first usable bin at 23.4 Hz through a
-    /// 4096-point window at 48 kHz — so those buckets are skipped rather than
+    /// The bottom of the axis sits too near DC for a short frame to place —
+    /// 20 Hz is under two of its kernel's widths above the Fast frame's first
+    /// usable bin at 48 kHz — so those buckets are skipped rather than
     /// measured, and skipped has to read as silence.
     ///
     /// It is a test rather than an obvious property because
@@ -1113,16 +817,15 @@ mod tests {
     #[test]
     fn shortening_the_window_darkens_the_buckets_it_can_no_longer_reach() {
         let mut analyzer = SpectrumAnalyzer::new(Default::default());
-        // 20 Hz: the axis floor, and the bucket whose centre a 4096-point
-        // window puts below its own first usable bin.
-        let tone: Vec<f32> = (0..20_000)
+        // 20 Hz: the axis floor, and a bucket the Fast frame cannot place.
+        let tone: Vec<f32> = (0..30_000)
             .map(|i| 0.5 * (std::f32::consts::TAU * 20.0 * i as f32 / 48_000.0).sin())
             .collect();
-        analyzer.configure(AnalyzerConfig { fft_size: 16_384, ..Default::default() });
+        analyzer.configure(AnalyzerConfig { fft_size: 24_576, ..Default::default() });
         analyzer.push_samples(&tone);
         let lit = analyzer.pitch_spectrum().expect("window filled")[0];
         assert!(lit > 0.0, "fixture must light the bottom bucket at the long window");
-        analyzer.configure(AnalyzerConfig { fft_size: 4096, ..Default::default() });
+        analyzer.configure(AnalyzerConfig { fft_size: 6144, ..Default::default() });
         analyzer.push_samples(&tone);
         assert_eq!(
             analyzer.pitch_spectrum().expect("window filled")[0],
@@ -1211,39 +914,6 @@ mod tests {
             mono[peak],
             centered[peak],
         );
-    }
-
-    /// Exercise the shipped analyzer (including wrap and usable endpoints), against an independent f64 DFT of its f32-windowed input.
-    #[test]
-    fn configured_analyzer_matches_direct_dft_after_ring_wrap() {
-        for n in [4096, 8192, 16384] {
-            let mut a = SpectrumAnalyzer::new(AnalyzerConfig { fft_size: n, ..Default::default() });
-            let input: Vec<_> = (0..n + 997)
-                .map(|i| {
-                    let t = i as f64 / 48_000.0;
-                    ((std::f64::consts::TAU * 440.0 * t).sin() * 0.4
-                        + (std::f64::consts::TAU * 7137.0 * t).cos() * 0.2
-                        + if i % 113 == 0 { 0.3 } else { 0.0 }) as f32
-                })
-                .collect();
-            a.push_samples(&input);
-            let buckets = a.pitch_spectrum().expect("a full window plus wrap");
-            assert!(buckets.iter().all(|x| x.is_finite() && *x >= 0.0));
-            assert_eq!(a.write, 997);
-            let peak = a.bin_power.iter().copied().fold(0.0f32, f32::max) as f64;
-            for bin in [2, 3, 7, 37, 75, 113, 301, 554, 555, n / 4, n / 2 - 2] {
-                let (mut re, mut im) = (0.0, 0.0);
-                for i in 0..n {
-                    let x = (a.ring[(a.write + i) % n] * a.window[i]) as f64;
-                    let angle = std::f64::consts::TAU * bin as f64 * i as f64 / n as f64;
-                    re += x * angle.cos();
-                    im -= x * angle.sin();
-                }
-                let expected = re * re + im * im;
-                let error = (a.bin_power[bin] as f64 - expected).abs();
-                assert!(error / peak < 1e-6, "N={n}, bin={bin}: scaled error {}", error / peak);
-            }
-        }
     }
 
     /// A changed sample rate requires a fresh window, while the transform,

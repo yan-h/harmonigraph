@@ -22,12 +22,12 @@ fn aggregate_slabs<'a>(
 #[test]
 fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
     let mut spectrum = crate::AudioSpectrum::default();
-    // The hop counts below (23 hops to a whole new window, 8384 samples
-    // to a first column) are the 8192-sample window's.
+    // The hop counts below (17 hops to a whole new window, 6288 samples
+    // to a first column at 32,768 Hz) are the 6144-sample Fast frame's.
     let config = crate::SpectrumConfig {
         attack: 0.0,
         release: 0.0,
-        window: crate::SpectrumWindow::Balanced,
+        window: crate::SpectrumWindow::Fast,
         ..Default::default()
     };
     let samples: Vec<_> = (0..24_000).map(|i| (i as f32 * 0.047).sin()).collect();
@@ -57,13 +57,13 @@ fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
             );
             assert_ne!(spectrum.store.display, before_curve, "the current curve still advances");
         }
-        if hop == 23 {
+        if hop == 17 {
             assert_eq!(history.len(), before, "a whole new window still overlaps history");
             assert_eq!(
                 spectrum.store.display, [0.0; SPECTRUM_BINS],
                 "the current curve measured silence"
             );
-            assert!(spectrum.is_flowing(corrected + 33_216.0 / 48_000.0));
+            assert!(spectrum.is_flowing(corrected + 30_912.0 / 48_000.0));
         }
         assert_eq!(
             agg.window(history, 0, bucket, keep),
@@ -77,7 +77,7 @@ fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
     // Power-of-two rate makes this a bit-exact equality at the old tail:
     // one hop of audio and a correction backwards by exactly one hop.
     let mut equal = crate::AudioSpectrum::default();
-    equal.push_source_samples(&samples[..8384], 1, 32_768.0, 0.25, &config);
+    equal.push_source_samples(&samples[..6288], 1, 32_768.0, 0.25, &config);
     assert_eq!(equal.history().len(), 1);
     equal.push_source_samples(&samples[..262], 1, 32_768.0, 0.25 - 262.0 / 32_768.0, &config);
     assert_eq!(equal.history().len(), 1, "equal timestamps must also be suppressed");
@@ -914,13 +914,16 @@ fn the_plan_decides_the_layout_without_a_frame() {
 /// Actual upload behavior is checked by the headless renderer tests.
 #[test]
 fn no_cache_layer_falls_back_as_the_window_scrolls() {
-    // Every FFT window the pane offers, by the lag it gives a column: a
-    // column is stamped at the middle of the window it measured.
+    // Every fixed window the pane offers, by the lag it gives a column (Sweep
+    // lags as Precise does, within a fraction of a percent).
     let windows = [
-        ("Fast", 0.5 * 4096.0 / 48000.0),
-        ("Balanced", 0.5 * 8192.0 / 48000.0),
-        ("Precise", 0.5 * 16384.0 / 48000.0),
-    ];
+        ("Fast", crate::SpectrumWindow::Fast),
+        ("Balanced", crate::SpectrumWindow::Balanced),
+        ("Precise", crate::SpectrumWindow::Precise),
+    ]
+    .map(|(name, window)| {
+        (name, crate::SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0))
+    });
     // Depth pixels the image is cut into: a full-width pane (which the cap
     // holds at LIVE_SLAB_CAP) and a narrow one.
     let panes = [("wide", LIVE_SLAB_CAP as f64), ("narrow", 384.0)];
