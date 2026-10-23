@@ -473,7 +473,8 @@ pub struct NodeInstance {
     /// record that takes over when the release finishes, and reserving that
     /// on the way IN draws a name ahead of the note it names.
     pub departing: bool,
-    /// Continuous geometric pose by displayed slot; one means settled.
+    /// Continuous geometric pose by drawn slice, lowest first (slot
+    /// `ring.base + i`), not by octave slot; one means settled.
     pub slice_progress: [f32; OCTAVE_SLOTS],
     /// Per-octave activation (slot = MIDI octave + 1, clamped into the span
     /// the view shows — see [`octaves`]): each octave's indicator fades on
