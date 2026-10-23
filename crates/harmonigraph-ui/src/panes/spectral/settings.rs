@@ -389,14 +389,23 @@ pub(crate) fn analysis_section(
             }
         }
         let windows = [
-            (SpectrumWindow::Fast, "Fast", "snappy response, coarse pitch especially in the bass; low audio-ring fundamentals can disappear while their harmonics remain"),
+            (SpectrumWindow::Fast, "Fast", "snappy response, blurry bass where close notes merge; low audio-ring fundamentals can disappear while their harmonics remain"),
             (SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
             (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
             (SpectrumWindow::Sweep, "Sweep", "a listen that glides with pitch: long in the bass for sharp pitch, short in the treble for fast response, with no seams between. Set its two ends below"),
         ];
         let hints: Vec<_> = windows
             .iter()
-            .map(|(window, _, hint)| format!("{} samples: {hint}", window.samples()))
+            .map(|(window, _, hint)| match window {
+                // A fixed window's frame is half as long again as the Hann window it is as
+                // sharp as, so name both rather than a frame length that reads as blurrier.
+                SpectrumWindow::Sweep => format!("{} samples: {hint}", window.samples()),
+                _ => format!(
+                    "{}-sample frame, as sharp as a {}-sample window: {hint}",
+                    window.samples(),
+                    window.samples() * 2 / 3
+                ),
+            })
             .collect();
         let options: Vec<_> = windows
             .iter()
