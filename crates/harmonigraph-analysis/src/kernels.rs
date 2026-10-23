@@ -570,9 +570,14 @@ mod tests {
     /// The lengths are Hann-equivalent: a sweep's peak at either end is as wide
     /// as a single Hann window of the length the sweep asks for there, which is
     /// what lets the sliders be read against Fast, Balanced and Precise.
+    ///
+    /// The treble end is the shortest listen allowed, whose peak spans eight
+    /// buckets at 17 kHz. A 1024-sample one there is 64 Hz wide against 31 Hz
+    /// buckets, so its measured width is two buckets whatever the listen, and
+    /// the same two for a sweep three times as long.
     #[test]
     fn the_listen_at_each_end_matches_a_hann_window_of_that_length() {
-        let sweep = Sweep { bass: 12_000.0, treble: 1024.0 };
+        let sweep = Sweep { bass: 12_000.0, treble: SWEEP_MIN_LENGTH };
         for hz in [24.0f32, 17_000.0] {
             let u = (hz / 20.0).ln() / 1000.0f32.ln();
             let length = (sweep.bass.ln() + (sweep.treble.ln() - sweep.bass.ln()) * u).exp();
