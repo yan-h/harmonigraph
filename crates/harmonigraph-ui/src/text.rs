@@ -741,24 +741,34 @@ impl TextBatch {
         shadow: Option<harmonigraph_scene::ShadowStyle>,
         point_scale: f32,
     ) {
-        if self.glyphs.is_empty() {
-            return;
-        }
         #[cfg(test)]
         {
             self.pieces.clear();
             self.marks.clear();
         }
-        let atlas = if self.publishes_font_texture(painter.ctx()) {
-            None
+        // Added with no glyphs as well. The renderer holds this pane's buffers
+        // and shadow atlas only while it prepares (`harmonigraph_render`'s
+        // `pass_aged`), so a pane naming only what sounds would age them out
+        // over a rest and rebuild them in the frame its next name arrives in;
+        // an empty callback keeps them and draws nothing.
+        //
+        // It publishes nothing, for the reason `lattice_labels` gives: with
+        // nothing drawn, `atlas_if_changed` would hand back the whole atlas
+        // until the first glyph seeds the mirror.
+        let (atlas, marks) = if self.glyphs.is_empty() {
+            (None, None)
         } else {
-            atlas_if_changed(
-                painter.ctx(),
-                &state.instruments.font_atlas,
-                std::mem::take(&mut self.drawn),
-            )
+            let atlas = if self.publishes_font_texture(painter.ctx()) {
+                None
+            } else {
+                atlas_if_changed(
+                    painter.ctx(),
+                    &state.instruments.font_atlas,
+                    std::mem::take(&mut self.drawn),
+                )
+            };
+            (atlas, marks_snapshot(painter.ctx()))
         };
-        let marks = marks_snapshot(painter.ctx());
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
@@ -798,9 +808,9 @@ impl TextBatch {
             self.pieces.clear();
             self.marks.clear();
         }
-        // A batch that drew nothing publishes nothing. [`flush`](Self::flush)
-        // says this by returning outright; this has a value to hand back, so
-        // it skips the publication alone — and it has to skip it explicitly,
+        // A batch that drew nothing publishes nothing, here as in
+        // [`flush`](Self::flush): both still hand their callback a batch, so
+        // each skips the publication alone — and has to skip it explicitly,
         // because `atlas_if_changed` cannot tell "no glyphs to check" from "a
         // mirror holding nothing". Until the first lattice name is drawn its
         // `seen` is empty, which is the arm that reports a resize, so an
@@ -1885,29 +1895,11 @@ mod tests {
         assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");
     }
 
-    /// A character the atlas has never rasterized THERE is a glyph the mirror
-    /// has never uploaded, whatever its (size, character) says.
-    ///
-    /// epaint bins a glyph's subpixel position into four cells and caches each
-    /// separately, so one character at one size is up to four images at four
-    /// texels — chosen by what precedes it in the string. This is the ordinary
-    /// case, not a corner: the lattice's cents readout reformats as a note
-    /// bends, a digit shifts column, and it lands in a cell nothing has
-    /// uploaded. Keyed on the pair alone the mirror reports "seen" and that
-    /// digit samples blank space — it drops out of the readout and comes back
-    /// a frame later, when some genuinely new pair happens to force a refresh.
-    ///
-    /// Both strings are laid out BEFORE the mirror is made, so every glyph is
-    /// already in the atlas and its dimensions have settled. Without that the
-    /// second draw grows the atlas and the size guard refreshes for it — which
-    /// is what happens in a fresh editor for a few seconds, and is exactly why
-    /// this went unnoticed: the bug needs an atlas that has stopped growing,
-    /// which is every session after the first moments.
     /// A lattice that drew no names hands over no atlas.
     ///
-    /// [`TextBatch::flush`] returns early on an empty batch, and
-    /// [`TextBatch::lattice_labels`] has to do the same on its own —
-    /// `atlas_if_changed` cannot cover for it. `seen` is empty until the
+    /// [`TextBatch::lattice_labels`] has to skip the publication on its own,
+    /// as [`TextBatch::flush`] does — `atlas_if_changed` cannot cover for it.
+    /// `seen` is empty until the
     /// first lattice glyph is handed over, so `resized` is true, an empty
     /// `drawn` finds nothing fresh but takes that arm anyway, and every call
     /// publishes: a whole `ColorImage` cloned out of egui and a new key,
@@ -1941,6 +1933,45 @@ mod tests {
             });
         }
         assert_eq!(published, 0, "an empty batch publishes no atlas, on any frame");
+    }
+
+    /// A text pane with nothing to say still hands the renderer its callback,
+    /// and publishes no atlas in it.
+    ///
+    /// The renderer keeps each pane's glyph buffer and shadow atlas only while
+    /// that pane prepares (`harmonigraph_render::pass_aged`), so the Spiral's
+    /// names, which name only what sounds, would have them evicted a couple
+    /// of seconds into any rest by adding nothing. The fallback shell is the
+    /// one that could publish: its mirror is unseeded until a glyph is drawn,
+    /// which is exactly where an empty batch would hand over the whole atlas.
+    #[test]
+    fn an_empty_batch_still_calls_back_and_publishes_nothing() {
+        let ctx = egui::Context::default();
+        let state = crate::tests::probe::fresh();
+        let mut callbacks = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                TextBatch::default().flush(
+                    ui.painter(),
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0)),
+                    &state.picture,
+                    SPIRAL_NAMES,
+                    harmonigraph_render::SlideAxis::Across,
+                    Some(state.picture.appearance.view.shadow.spectral_text),
+                    1.0,
+                );
+            });
+            callbacks.push(
+                output
+                    .shapes
+                    .iter()
+                    .filter(|s| matches!(s.shape, egui::Shape::Callback(_)))
+                    .count(),
+            );
+        }
+        assert_eq!(callbacks, [1; 3], "an empty batch stopped calling back, so its pane ages out");
+        let mirror = state.picture.instruments.font_atlas.lock().expect("unpoisoned");
+        assert_eq!(mirror.key, 0, "an empty batch published the whole atlas");
     }
 
     /// A stacked name is ONE shadow caster however many pieces it is drawn
@@ -2043,6 +2074,24 @@ mod tests {
         assert_eq!(probed, result.0, "the fallback shell must probe every glyph it drew");
     }
 
+    /// A character the atlas has never rasterized THERE is a glyph the mirror
+    /// has never uploaded, whatever its (size, character) says.
+    ///
+    /// epaint bins a glyph's subpixel position into four cells and caches each
+    /// separately, so one character at one size is up to four images at four
+    /// texels — chosen by what precedes it in the string. This is the ordinary
+    /// case, not a corner: the lattice's cents readout reformats as a note
+    /// bends, a digit shifts column, and it lands in a cell nothing has
+    /// uploaded. Keyed on the pair alone the mirror reports "seen" and that
+    /// digit samples blank space — it drops out of the readout and comes back
+    /// a frame later, when some genuinely new pair happens to force a refresh.
+    ///
+    /// Both strings are laid out BEFORE the mirror is made, so every glyph is
+    /// already in the atlas and its dimensions have settled. Without that the
+    /// second draw grows the atlas and the size guard refreshes for it — which
+    /// is what happens in a fresh editor for a few seconds, and is exactly why
+    /// this went unnoticed: the bug needs an atlas that has stopped growing,
+    /// which is every session after the first moments.
     #[test]
     fn a_glyph_at_a_new_texel_refreshes_the_mirror() {
         let ctx = egui::Context::default();
