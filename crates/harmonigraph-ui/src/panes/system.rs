@@ -151,6 +151,11 @@ pub(super) fn system_pane(
         crate::widgets::checkbox(ui, &mut interaction.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );
+        if let Some(out) = &mut interaction.pop_out {
+            crate::widgets::checkbox(ui, out, "Pop out").on_hover_text(
+                "Move the editor into a window of its own, which stays on screen while the host is in the background. Close that window to bring it back.",
+            );
+        }
         button_row(ui, |ui| {
             // Escape hatch for the persisted dock arrangement (it survives
             // every reopen, so a new default layout is otherwise unreachable).

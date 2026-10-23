@@ -8,6 +8,7 @@ mod clock;
 mod frame;
 pub(crate) mod input;
 mod persist;
+mod pop_out;
 mod shared;
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub(crate) mod startup_probe;

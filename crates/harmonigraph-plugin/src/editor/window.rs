@@ -13,6 +13,7 @@ use crate::HarmonigraphParams;
 
 use super::frame::{frame, WindowState};
 use super::persist::EguiState;
+use super::pop_out::PopOut;
 use super::shared::EditorShared;
 use super::MIN_SIZE;
 
@@ -114,7 +115,16 @@ impl Editor for LatticeEditor {
         let resized = self.egui_state.clone();
         let logging = self.shared.clone();
         let asking = context.clone();
+        let pop_out = PopOut::new();
+        let popping = pop_out.clone();
         let size_source = SizeSource::new(move || {
+            // The editor going into or out of its own window, or that window
+            // resized: the view takes the window's size, or the host's back.
+            let as_size =
+                |(width, height): (u32, u32)| Some(Size::new(f64::from(width), f64::from(height)));
+            if let Some(size) = popping.take_size(resized.size()) {
+                return as_size(size);
+            }
             // OUR ask first, and from here rather than from inside the frame,
             // for the same reason the host's is collected here: the round trip
             // is synchronous, so asking now means the frame about to be built
@@ -123,6 +133,12 @@ impl Editor for LatticeEditor {
             // the layout that wanted it and the arrangement wears an extra
             // frame stretched across the old window.
             if let Some(size) = resized.requested_size.load() {
+                // Out of the host's window, the ask is the editor's own
+                // window's to grant, and the host's size stays as it was.
+                if popping.resize(size) {
+                    resized.requested_size.store(None);
+                    return as_size(size);
+                }
                 let started = Instant::now();
                 let accepted = asking.request_resize();
                 let roundtrip = started.elapsed().as_secs_f64() * 1000.0;
@@ -143,6 +159,11 @@ impl Editor for LatticeEditor {
                     resized.host_resized.swap(None);
                     return Some(Size::new(f64::from(size.0), f64::from(size.1)));
                 }
+            }
+            // The host's window resized while the editor is out of it: left
+            // pending, and moot once the editor docks at the host's size.
+            if popping.size().is_some() {
+                return None;
             }
             let (width, height) = resized.host_resized.swap(None)?;
             // The one diagnostic this path had, kept. try_lock rather than
@@ -169,7 +190,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics)
                 .with_size_source(size_source),
-            WindowState::new(self.shared.clone(), self.params.clone()),
+            WindowState::new(self.shared.clone(), self.params.clone(), pop_out.clone()),
             |egui_ctx: &Context, queue, state: &mut WindowState| {
                 queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
                     harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec(),
@@ -206,8 +227,10 @@ impl Editor for LatticeEditor {
             },
         );
 
+        pop_out.attach(parent, &window);
         self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
+            pop_out,
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
             params: self.params.clone(),
@@ -263,6 +286,7 @@ impl Editor for LatticeEditor {
 }
 
 struct LatticeEditorHandle {
+    pop_out: Arc<PopOut>,
     egui_state: Arc<EguiState>,
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
@@ -297,6 +321,9 @@ impl Drop for LatticeEditorHandle {
         self.params.ui_state.store_close(&mut shared.ui);
         drop(shared);
         self.egui_state.set_open(false);
+        // Back into the host's view first, so the editor's own window closes
+        // with the editor rather than outliving it empty.
+        self.pop_out.close();
         self.window.close();
     }
 }

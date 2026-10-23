@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use crate::{HarmonigraphParams, PluginParamBackend};
 
 use super::persist::EguiState;
+use super::pop_out::PopOut;
 use super::shared::EditorShared;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
@@ -110,7 +111,12 @@ pub(super) fn frame(
     // since the window's size source clears it on refusal as well as on
     // accept, and `size` is only updated when the host agrees. So two folds in
     // consecutive frames add up rather than the second cancelling the first.
-    let (window_width, window_height) = egui_state.size();
+    // Out of the host's window, the window the editor is in is its own.
+    let (window_width, window_height) = state.pop_out.size().unwrap_or_else(|| egui_state.size());
+    // Offered only where the shell can pop out, and read back after the UI
+    // has had the chance to flip it.
+    let popped = state.pop_out.is_out();
+    shared.ui.workspace.interaction.pop_out = popped;
     let ask = harmonigraph_ui::shell::Frame {
         ui,
         state: &mut shared.ui,
@@ -120,6 +126,13 @@ pub(super) fn frame(
         window_size: egui::vec2(window_width as f32, window_height as f32),
     }
     .draw();
+
+    if let (Some(was), Some(wanted)) = (popped, shared.ui.workspace.interaction.pop_out) {
+        if was != wanted {
+            state.pop_out.request(wanted);
+            ui.ctx().request_repaint();
+        }
+    }
 
     // A pane folded sideways (or came back) leaves every other pane its width
     // and asks the WINDOW for the difference. Queued rather than applied:
@@ -140,10 +153,15 @@ pub(super) fn frame(
 pub(super) struct WindowState {
     pub(super) shared: Arc<Mutex<EditorShared>>,
     pub(super) params: Arc<HarmonigraphParams>,
+    pub(super) pop_out: Arc<PopOut>,
 }
 
 impl WindowState {
-    pub(super) fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params }
+    pub(super) fn new(
+        shared: Arc<Mutex<EditorShared>>,
+        params: Arc<HarmonigraphParams>,
+        pop_out: Arc<PopOut>,
+    ) -> Self {
+        WindowState { shared, params, pop_out }
     }
 }
