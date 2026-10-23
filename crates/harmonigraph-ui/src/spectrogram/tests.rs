@@ -574,6 +574,30 @@ fn completed_averages_and_jitter_holds_survive_oldest_column_changes() {
     assert_eq!(agg.rebuilds(), 1);
 }
 
+/// A Clear during playback keeps the columns before it out of the grid, as it
+/// keeps them out of the history. The first column after it lands in the slab
+/// the last one before it was folded into, where the open slab's running sum
+/// would otherwise carry the old power on: the slab is 0.25 s and the columns
+/// either side of the Clear 0.05 s apart.
+#[test]
+fn a_clear_keeps_the_open_slab_from_averaging_in_what_came_before() {
+    let bucket = 0.25;
+    let mut history = crate::SpectrumHistory::default();
+    let mut agg = SpectrogramAgg::new();
+    for t in [0.0, 0.05, 0.1] {
+        history.push(col(t, &[(4, 1.0)]));
+    }
+    agg.window(&history, 0, bucket, 8);
+    history.clear();
+    for (t, energy) in [(0.15, 0.2), (0.2, 0.2), (0.3, 0.5)] {
+        history.push(col(t, &[(4, energy)]));
+    }
+    let (centers, power) = agg.window(&history, 0, bucket, 8);
+    assert_eq!(centers, [0.125, 0.375], "the fixture keeps the slab open across the Clear");
+    assert_eq!(power[0][4], q(0.2), "the open slab averaged in power from before the Clear");
+    assert_eq!((centers, power), SpectrogramAgg::new().window(&history, 0, bucket, 8));
+}
+
 /// Reaching back past a TIER MERGE — which the step-for-step test above
 /// never does, because it pushes 14 columns and tier 0 holds
 /// [`crate::SpectrumHistory::FINE_COLUMNS`] of them.

@@ -205,6 +205,7 @@ pub struct SpectrumHistory {
     /// so the flat order is `tiers[TIERS-1] .. tiers[0]`.
     tiers: [VecDeque<SpectrogramColumn>; SpectrumHistory::TIERS],
     len: usize,
+    clears: u32,
 }
 
 impl SpectrumHistory {
@@ -308,6 +309,14 @@ impl SpectrumHistory {
             tier.clear();
         }
         self.len = 0;
+        self.clears = self.clears.wrapping_add(1);
+    }
+
+    /// How many times this history has been [cleared](Self::clear), so work
+    /// derived from it can tell a cleared history from one that scrolled on:
+    /// columns pushed after a Clear can carry on from the same time.
+    pub fn clears(&self) -> u32 {
+        self.clears
     }
 
     pub fn len(&self) -> usize {

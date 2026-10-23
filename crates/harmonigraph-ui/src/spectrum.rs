@@ -90,9 +90,6 @@ pub(crate) struct SpectrumStore {
     /// [`SpectrumHistory`] and
     /// [`SpectrumStore::push_history`].
     pub(crate) history: SpectrumHistory,
-    /// Counts [`clear_history`](AudioSpectrum::clear_history) calls, so the heatmap's
-    /// colour memory can tell a cleared picture from one that scrolled on.
-    history_epoch: u32,
 }
 
 /// The analysis [`AudioSpectrum::lend`] took out, to run where the store is
@@ -220,7 +217,6 @@ impl Default for AudioSpectrum {
                 display: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
                 last_samples: None,
                 history: SpectrumHistory::default(),
-                history_epoch: 0,
             },
         }
     }
@@ -610,7 +606,7 @@ impl AudioSpectrum {
     pub fn lend(&mut self) -> Option<LentAnalysis> {
         let analysis = self.analysis.take()?;
         self.lent_lag = analysis.lag();
-        Some(LentAnalysis { analysis, epoch: self.store.history_epoch })
+        Some(LentAnalysis { analysis, epoch: self.store.history.clears() })
     }
 
     /// Return a [`lend`](Self::lend)'s analysis with what it delivered from a
@@ -627,7 +623,7 @@ impl AudioSpectrum {
         config: &SpectrumConfig,
     ) {
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
-        let keep = lent.epoch == self.store.history_epoch;
+        let keep = lent.epoch == self.store.history.clears();
         for delivery in deliveries {
             self.store.apply(delivery, config, true, keep);
         }
@@ -709,12 +705,12 @@ impl AudioSpectrum {
     /// Forget the spectrogram history (paired with clearing the roll).
     pub fn clear_history(&mut self) {
         self.store.history.clear();
-        self.store.history_epoch = self.store.history_epoch.wrapping_add(1);
     }
 
-    /// Which clear of the history this is (see `history_epoch`).
+    /// Which clear of the history this is, so the heatmap's colour memory can
+    /// tell a cleared picture from one that scrolled on.
     pub fn history_epoch(&self) -> u32 {
-        self.store.history_epoch
+        self.store.history.clears()
     }
 
     /// How far behind `now` the newest column sits even when nothing is wrong:
