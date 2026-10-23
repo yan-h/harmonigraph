@@ -444,3 +444,61 @@ pub struct IncompleteRecord {
     pub last_publication: u64,
     pub reason: GapReasonRecord,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A frame read back out of a take is the frame that went in: all 64 voices
+    /// a source can hold, each still at the expressions it was sounding with.
+    #[test]
+    fn a_full_baseline_record_reads_back_as_the_frame_it_came_from() {
+        let voices: Vec<_> = (0..64)
+            .map(|note| VoiceBaseline {
+                note,
+                velocity: 0.8,
+                pitch_microcents: i64::from(note) * 100_000_000,
+                expressions: Expressions { pressure: 0.25, gain: 0.5, timbre: 0.75 },
+                ..Default::default()
+            })
+            .collect();
+        let frame = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &voices).unwrap();
+        assert_eq!(BaselineRecord::from(&frame).baseline(), Ok(frame));
+    }
+
+    /// A route's offset moves every time a record carries onto the take's
+    /// clock, not only the record's own stamp: a held voice's two onsets and
+    /// its assignment, and the far end of a gap.
+    #[test]
+    fn translation_moves_every_time_a_record_carries() {
+        let voice = VoiceRecord {
+            input_onset: 1.0,
+            actual_onset: 1.5,
+            assignment: Some(ConfigurationRecord { t: 1.5, ..Default::default() }),
+            ..Default::default()
+        };
+        let baseline = BaselineRecord { t: 2.0, voices: vec![voice], ..Default::default() };
+        let mut records = [
+            CanonicalRecord::Baseline(Box::new(baseline)),
+            CanonicalRecord::Gap(GapRecord { t: 2.0, through: 3.0, ..Default::default() }),
+            CanonicalRecord::Note(NoteRecord {
+                source: 0,
+                t: 2.0,
+                channel: 0,
+                note: 60,
+                kind: crate::NoteKind::Off,
+            }),
+        ];
+        for record in &mut records {
+            record.translate(19.0);
+            assert_eq!(record.time(), 21.0);
+        }
+        let [CanonicalRecord::Baseline(baseline), CanonicalRecord::Gap(gap), _] = &records else {
+            unreachable!()
+        };
+        let voice = &baseline.voices[0];
+        assert_eq!((voice.input_onset, voice.actual_onset), (20.0, 20.5));
+        assert_eq!(voice.assignment.unwrap().t, 20.5);
+        assert_eq!(gap.through, 22.0);
+    }
+}

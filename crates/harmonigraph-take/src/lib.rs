@@ -711,6 +711,10 @@ mod tests {
     #[test]
     fn duration_is_the_last_thing_that_happened() {
         assert_eq!(round_trip("duration").duration(), 2.0);
+        // A gap stamped at 3 s that runs through 5 s ends the take at 5 s.
+        let gap = canonical::GapRecord { t: 3.0, through: 5.0, ..Default::default() };
+        let take = Take { events: vec![CanonicalRecord::Gap(gap)], ..Default::default() };
+        assert_eq!(take.duration(), 5.0, "a gap counts to where it runs through");
     }
 
     /// The format is line-oriented precisely so a take cut short by a
@@ -843,6 +847,65 @@ mod tests {
 
     /// A newer take must fail loudly rather than render something subtly
     /// wrong — the failure mode that would waste a whole render.
+    /// A note line is checked field by field, and a bad one is refused at its
+    /// own line number rather than replayed: each field one step past its
+    /// edge, beside a note at every edge that is still inside.
+    #[test]
+    fn a_malformed_note_line_is_refused_at_its_line() {
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let parse = |note: NoteRecord| {
+            let line = ron::to_string(&Record::Note(note)).unwrap();
+            Take::parse(std::io::Cursor::new(format!("{header}\n{line}\n")))
+        };
+        let edge = NoteRecord {
+            source: 0,
+            t: 1.0,
+            channel: 15,
+            note: 127,
+            kind: NoteKind::On { velocity: 1.0 },
+        };
+        parse(edge).expect("the last channel, key and velocity are in range");
+        let pressure = |value| NoteKind::Expression { expression: ExpressionKind::Pressure, value };
+        for bad in [
+            NoteRecord { t: f64::INFINITY, ..edge },
+            NoteRecord { channel: 16, ..edge },
+            NoteRecord { note: 128, ..edge },
+            NoteRecord { kind: NoteKind::On { velocity: 1.5 }, ..edge },
+            NoteRecord { kind: NoteKind::Tuning { semitones: f32::NAN }, ..edge },
+            NoteRecord { kind: pressure(2.0), ..edge },
+        ] {
+            let parsed = parse(bad);
+            assert!(matches!(parsed, Err(ReadError::InvalidCanonical(2))), "{bad:?}: {parsed:?}");
+        }
+    }
+
+    /// Queueing an export reads the header alone, and has to agree with the
+    /// whole parse about it: comments skipped, another version refused, a
+    /// broken line named by its number, and an appearance document of any
+    /// realistic size read whole.
+    #[test]
+    fn reading_only_the_header_agrees_with_the_whole_parse() {
+        let dir = std::env::temp_dir().join(format!("take-header-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("header.take");
+        let read = |text: String| {
+            std::fs::write(&path, text).unwrap();
+            Header::read(&path)
+        };
+        let appearance = "x".repeat(2 << 20);
+        let header = Header { appearance: Some(appearance.clone()), ..Default::default() };
+        let line = ron::to_string(&Record::Header(header)).unwrap();
+        let header = read(format!("# recorded by hand\n\n{line}\n")).unwrap();
+        assert_eq!(header.appearance.as_deref(), Some(appearance.as_str()));
+
+        let newer = Header { version: FORMAT_VERSION + 1, ..Default::default() };
+        let newer = ron::to_string(&Record::Header(newer)).unwrap();
+        assert!(matches!(read(newer), Err(ReadError::Version(v)) if v == FORMAT_VERSION + 1));
+        let broken = read("# a comment\nHeader((version:".into());
+        assert!(matches!(broken, Err(ReadError::Parse(2, _))), "{broken:?}");
+        std::fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn a_take_from_the_future_is_refused() {
         let header = Header { version: FORMAT_VERSION + 1, ..Default::default() };
@@ -1302,6 +1365,10 @@ mod wav_tests {
         assert!((max + 1) * 8 <= u64::from(u32::MAX), "data still fits, RIFF does not");
         assert!(WavWriter::sizes(max + 1, 2).is_err());
         assert!(WavWriter::sizes(u64::MAX, 2).is_err());
+        // The writer admits exactly the frames those sizes can describe.
+        let path = temp("limit.wav");
+        assert_eq!(WavWriter::create(&path, 48_000.0, 2).unwrap().max_frames, max);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
