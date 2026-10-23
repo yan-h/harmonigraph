@@ -296,6 +296,11 @@ pub struct Interaction {
     /// you want sitting over the picture. Inert while `show_perf` is off.
     pub show_perf_detail: bool,
     pub(crate) reset_layout: bool,
+    /// Whether the editor is in a window of its own rather than the host's,
+    /// which the System tab flips; `None` in a shell that cannot do that.
+    /// Runtime only here: the plugin saves the setting with its window size,
+    /// writes it here before every frame, and reads it back after.
+    pub own_window: Option<bool>,
     /// Where the Analyzer section is docked, copied from the workspace layout
     /// before the panes draw and back after. Runtime only: the layout persists
     /// it; this copy lets the Analyzer settings page set it.
@@ -772,6 +777,7 @@ impl Default for Interaction {
             show_perf: false,
             show_perf_detail: false,
             reset_layout: false,
+            own_window: None,
             dock: workspace::Position::default(),
             open_settings: None,
         }

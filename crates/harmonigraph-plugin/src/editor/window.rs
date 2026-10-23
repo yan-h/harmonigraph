@@ -13,7 +13,7 @@ use crate::HarmonigraphParams;
 
 use super::frame::{frame, WindowState};
 use super::persist::EguiState;
-use super::pop_out::PopOut;
+use super::pop_out::{PopOut, Sized};
 use super::shared::EditorShared;
 use super::MIN_SIZE;
 
@@ -122,9 +122,15 @@ impl Editor for LatticeEditor {
             // takes its size, and the project saves it as the editor's.
             let as_size =
                 |(width, height): (u32, u32)| Some(Size::new(f64::from(width), f64::from(height)));
-            if let Some(size) = popping.take_size() {
-                resized.size.store(size);
-                return as_size(size);
+            match popping.take_size() {
+                Some(Sized::Own(size)) => {
+                    resized.size.store(size);
+                    return as_size(size);
+                }
+                // Back in the host's window, which is asked for the editor's
+                // size just below, as a fold's ask is.
+                Some(Sized::Docked) => resized.requested_size.store(Some(resized.size())),
+                None => {}
             }
             // OUR ask first, and from here rather than from inside the frame,
             // for the same reason the host's is collected here: the round trip
@@ -196,7 +202,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics)
                 .with_size_source(size_source),
-            WindowState::new(self.shared.clone(), self.params.clone()),
+            WindowState::new(self.shared.clone(), self.params.clone(), pop_out.clone()),
             |egui_ctx: &Context, queue, state: &mut WindowState| {
                 queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
                     harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec(),
@@ -233,7 +239,7 @@ impl Editor for LatticeEditor {
             },
         );
 
-        pop_out.open(parent, &window, (unscaled_width, unscaled_height));
+        pop_out.open(parent, &window, self.egui_state.docked());
         self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
             pop_out,

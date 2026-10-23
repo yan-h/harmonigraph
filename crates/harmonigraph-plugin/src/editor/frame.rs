@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use crate::{HarmonigraphParams, PluginParamBackend};
 
 use super::persist::EguiState;
+use super::pop_out::PopOut;
 use super::shared::EditorShared;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
@@ -111,6 +112,10 @@ pub(super) fn frame(
     // accept, and `size` is only updated when the host agrees. So two folds in
     // consecutive frames add up rather than the second cancelling the first.
     let (window_width, window_height) = egui_state.size();
+    // Offered only where the shell can give the editor its own window, and
+    // read back after the UI has had the chance to flip it.
+    shared.ui.workspace.interaction.own_window =
+        state.pop_out.offered().then(|| !egui_state.docked());
     let ask = harmonigraph_ui::shell::Frame {
         ui,
         state: &mut shared.ui,
@@ -120,6 +125,12 @@ pub(super) fn frame(
         window_size: egui::vec2(window_width as f32, window_height as f32),
     }
     .draw();
+
+    // Also where a host restore that moved the setting reaches an open editor.
+    if let Some(own) = shared.ui.workspace.interaction.own_window {
+        egui_state.set_docked(!own);
+        state.pop_out.want(own);
+    }
 
     // A pane folded sideways (or came back) leaves every other pane its width
     // and asks the WINDOW for the difference. Queued rather than applied:
@@ -140,10 +151,15 @@ pub(super) fn frame(
 pub(super) struct WindowState {
     pub(super) shared: Arc<Mutex<EditorShared>>,
     pub(super) params: Arc<HarmonigraphParams>,
+    pub(super) pop_out: Arc<PopOut>,
 }
 
 impl WindowState {
-    pub(super) fn new(shared: Arc<Mutex<EditorShared>>, params: Arc<HarmonigraphParams>) -> Self {
-        WindowState { shared, params }
+    pub(super) fn new(
+        shared: Arc<Mutex<EditorShared>>,
+        params: Arc<HarmonigraphParams>,
+        pop_out: Arc<PopOut>,
+    ) -> Self {
+        WindowState { shared, params, pop_out }
     }
 }
