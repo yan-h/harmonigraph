@@ -390,6 +390,13 @@ impl NodeMotion {
         for node in &scene.nodes {
             let node_class = PitchClass::from_cents(node.cents);
             let (lo, hi) = scene.octave_layout.slots(node.cents);
+            // `targets`, `levels` and `level_wait` are indexed by octave slot,
+            // and `delay` and `progress` by the slice drawn, lowest first, as
+            // `delays` ranks them and the shader reads them: the slice a slot
+            // is drawn as, if it is drawn.
+            let displayed = |slot: usize| {
+                usize::try_from(slot as i32 - lo).ok().filter(|&i| i < (hi - lo + 1) as usize)
+            };
             let mut targets = [0.0; 11];
             let mut melody = None;
             let mut bass = None;
@@ -522,9 +529,9 @@ impl NodeMotion {
                 // the slice that retracts last is the one whose ink outlasts
                 // the others. One released earlier keeps its order's delay.
                 if view.note_animation.lit_first {
-                    for (delay, &level) in motion.delay.iter_mut().zip(&motion.levels) {
-                        if level >= 1.0 {
-                            *delay = last;
+                    for (slot, &level) in motion.levels.iter().enumerate() {
+                        if let Some(i) = displayed(slot).filter(|_| level >= 1.0) {
+                            motion.delay[i] = last;
                         }
                     }
                 }
@@ -540,9 +547,9 @@ impl NodeMotion {
             // always zero (`delays` normalizes its ranks), so this starts it
             // with the first.
             if view.note_animation.lit_first && gate {
-                for (delay, &target) in motion.delay.iter_mut().zip(&motion.targets) {
-                    if target > 0.0 {
-                        *delay = 0.0;
+                for (slot, &target) in motion.targets.iter().enumerate() {
+                    if let Some(i) = displayed(slot).filter(|_| target > 0.0) {
+                        motion.delay[i] = 0.0;
                     }
                 }
             }
@@ -1642,7 +1649,10 @@ mod tests {
             tracker.handle_event(on(0.0, 48));
             let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
             let targets = motion.at(LatticePos::ORIGIN).targets;
-            let lit = targets.iter().position(|&t| t > 0.0).expect("lit slot");
+            let slot = targets.iter().position(|&t| t > 0.0).expect("lit slot");
+            // The slice that slot is drawn as, which is what `slice_progress`
+            // is indexed by.
+            let lit = slot - first.octave_layout.slots(origin(&first).cents).0 as usize;
             let span = first.octave_layout.span as usize;
             let mut frames = Vec::new();
             let mut now = 0.0;
@@ -1845,7 +1855,8 @@ mod tests {
         view.note_animation.lit_first = true;
         let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
         tracker.handle_event(on(0.0, 48));
-        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let base = first.octave_layout.slots(origin(&first).cents).0;
         let early = motion.at(LatticePos::ORIGIN).targets;
         // C4 a rolled moment later, on the slot Bidirectional delays by 0.3:
         // the arrival is already running, so it is never scheduled afresh.
@@ -1853,7 +1864,10 @@ mod tests {
         draw(&mut motion, &mut tracker, &view, 0.05, false);
         let order = motion.at(LatticePos::ORIGIN).order_delay;
         let late = motion.at(LatticePos::ORIGIN).targets;
-        let second = (0..11).find(|&i| late[i] > early[i]).expect("C4's slot");
+        let slot = (0..11).find(|&i| late[i] > early[i]).expect("C4's slot");
+        // The slice that slot is drawn as, which `order_delay` and
+        // `slice_progress` are indexed by.
+        let second = slot - base as usize;
         assert!(order[second] > 0.2, "C4's slot would start first anyway: {order:?}");
         let scene = draw(&mut motion, &mut tracker, &view, 0.1, false);
         assert!(origin(&scene).slice_progress[second] > 0.0, "the later lit slot waited");
