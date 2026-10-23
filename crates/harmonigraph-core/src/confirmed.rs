@@ -217,6 +217,69 @@ mod tests {
         assert_eq!(result, crate::learn_tuning(classes));
         assert_eq!(learning.infer(&confirmed, true).unwrap(), None);
         assert_eq!(learning.last_pair_visits, 0);
+        // A different chord of the same size is not the remembered one.
+        let mut moved = ConfirmedPitches::default();
+        for source in 0..HELD_SESSION / HELD_PER_SOURCE {
+            let rows: Vec<_> = confirmed
+                .rows()
+                .filter(|row| row.key.source == SourceId(1 + source as u64))
+                .map(|row| ConfirmedPitch { pitch_microcents: row.pitch_microcents + 1, ..*row })
+                .collect();
+            moved.replace_source(SourceId(1 + source as u64), &rows).unwrap();
+        }
+        assert!(learning.infer(&moved, true).unwrap().is_some());
+    }
+
+    /// One malformed row refuses the whole batch and leaves the source
+    /// incomplete rather than half replaced; so does a batch the session has
+    /// no room for once every other source's rows are counted.
+    #[test]
+    fn a_malformed_or_oversized_batch_is_refused_whole() {
+        let source = SourceId(1);
+        let row = |note: u8| ConfirmedPitch {
+            key: VoiceKey { source, channel: 0, note },
+            lifetime: Some(u64::from(note) + 1),
+            pitch_microcents: i64::from(note) * 100_000_000,
+            provenance: PitchProvenance::AcceptedOutput,
+        };
+        let good = [row(60), row(64)];
+        let key = good[1].key;
+        let accepted = good[1].provenance;
+        for (what, key, provenance) in [
+            ("another source's row", VoiceKey { source: SourceId(2), ..key }, accepted),
+            ("channel", VoiceKey { channel: 16, ..key }, accepted),
+            ("note", VoiceKey { note: 128, ..key }, accepted),
+            ("direct from a source", key, PitchProvenance::ObservedDirect),
+            ("same key", good[0].key, accepted),
+        ] {
+            let bad = ConfirmedPitch { key, provenance, ..good[1] };
+            let mut confirmed = ConfirmedPitches::default();
+            confirmed.replace_source(source, &good).unwrap();
+            assert_eq!(
+                confirmed.replace_source(source, &[good[0], bad]),
+                Err(ConfirmedError::InvalidBatch),
+                "{what}"
+            );
+            assert!(!confirmed.is_complete(), "{what}");
+        }
+        let direct = ConfirmedPitch {
+            key: VoiceKey { source: SourceId::DIRECT, ..key },
+            lifetime: None,
+            provenance: PitchProvenance::ObservedDirect,
+            ..good[1]
+        };
+        let mut confirmed = ConfirmedPitches::default();
+        assert_eq!(confirmed.replace_source(SourceId::DIRECT, &[direct]), Ok(()));
+        // Four other sources fill the session: a fifth has no room for one row.
+        let mut full = ConfirmedPitches::default();
+        for other in 2..2 + (HELD_SESSION / HELD_PER_SOURCE) as u64 {
+            let rows: [_; HELD_PER_SOURCE] = std::array::from_fn(|note| ConfirmedPitch {
+                key: VoiceKey { source: SourceId(other), channel: 0, note: note as u8 },
+                ..row(0)
+            });
+            full.replace_source(SourceId(other), &rows).unwrap();
+        }
+        assert_eq!(full.replace_source(source, &good[..1]), Err(ConfirmedError::Capacity));
     }
 
     #[test]

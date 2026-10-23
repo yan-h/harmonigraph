@@ -456,6 +456,19 @@ mod tests {
         assert_eq!(reducer.resolved().revision, learned.revision + 1);
     }
 
+    /// The synchronous shell's adapter carries the switch the display flipped
+    /// and leaves the other where it was.
+    #[test]
+    fn sync_display_carries_a_flipped_temper_switch() {
+        let mut reducer = ConfigReducer::default();
+        let resolved = reducer.resolved();
+        assert!(resolved.modes.tempered.syntonic && resolved.modes.tempered.septimal_kleisma);
+        let mut modes = resolved.modes;
+        modes.tempered.syntonic = false;
+        assert!(reducer.sync_display(reducer.raw(), modes, resolved.policy));
+        assert_eq!(reducer.resolved().modes.tempered, modes.tempered);
+    }
+
     fn enter(reducer: &mut ConfigReducer, index: usize, cents: f32) {
         assert!(reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(index, microcents(cents)))));
     }

@@ -805,4 +805,20 @@ mod tests {
         let classes = [PitchClass::from_cents(1190.0)];
         assert_eq!(learn_tuning(&classes).c_offset, Some(-10.0));
     }
+
+    #[test]
+    fn learning_keeps_the_candidate_closest_to_just_not_the_first_found() {
+        // Two Cs within range: the nearer, 5c flat, comes second in class order.
+        let classes = [PitchClass::from_cents(20.0), PitchClass::from_cents(1195.0)];
+        let c_offset = learn_tuning(&classes).c_offset.unwrap();
+        assert!((c_offset + 5.0).abs() < 0.01, "c_offset = {c_offset}");
+        // Two fifths above C, 4c and 1c flat of just: the nearer is found last.
+        let classes = [
+            PitchClass::from_cents(0.0),
+            PitchClass::from_cents(698.0),
+            PitchClass::from_cents(701.0),
+        ];
+        let three = learn_tuning(&classes).three.unwrap();
+        assert!((three - 701.0).abs() < 0.01, "three = {three}");
+    }
 }
