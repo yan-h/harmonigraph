@@ -118,11 +118,12 @@ impl Editor for LatticeEditor {
         let pop_out = PopOut::new();
         let popping = pop_out.clone();
         let size_source = SizeSource::new(move || {
-            // The editor going into or out of its own window, or that window
-            // resized: the view takes the window's size, or the host's back.
+            // The editor's own window resized (see `PopOut`): the editor
+            // takes its size, and the project saves it as the editor's.
             let as_size =
                 |(width, height): (u32, u32)| Some(Size::new(f64::from(width), f64::from(height)));
-            if let Some(size) = popping.take_size(resized.size()) {
+            if let Some(size) = popping.take_size() {
+                resized.size.store(size);
                 return as_size(size);
             }
             // OUR ask first, and from here rather than from inside the frame,
@@ -133,10 +134,10 @@ impl Editor for LatticeEditor {
             // the layout that wanted it and the arrangement wears an extra
             // frame stretched across the old window.
             if let Some(size) = resized.requested_size.load() {
-                // Out of the host's window, the ask is the editor's own
-                // window's to grant, and the host's size stays as it was.
+                // In its own window, the ask is that window's to grant.
                 if popping.resize(size) {
                     resized.requested_size.store(None);
+                    resized.size.store(size);
                     return as_size(size);
                 }
                 let started = Instant::now();
@@ -160,9 +161,14 @@ impl Editor for LatticeEditor {
                     return Some(Size::new(f64::from(size.0), f64::from(size.1)));
                 }
             }
-            // The host's window resized while the editor is out of it: left
-            // pending, and moot once the editor docks at the host's size.
-            if popping.size().is_some() {
+            // The host's window, concealed, has no say over the editor's size,
+            // and what arrives from it is mostly its echo of the editor's own.
+            // `set_size` has already stored it as the size the project saves,
+            // which is the editor's own window's again.
+            if let Some(own) = popping.size() {
+                if resized.host_resized.swap(None).is_some() {
+                    resized.size.store(own);
+                }
                 return None;
             }
             let (width, height) = resized.host_resized.swap(None)?;
@@ -190,7 +196,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics)
                 .with_size_source(size_source),
-            WindowState::new(self.shared.clone(), self.params.clone(), pop_out.clone()),
+            WindowState::new(self.shared.clone(), self.params.clone()),
             |egui_ctx: &Context, queue, state: &mut WindowState| {
                 queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
                     harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec(),
@@ -227,7 +233,7 @@ impl Editor for LatticeEditor {
             },
         );
 
-        pop_out.attach(parent, &window);
+        pop_out.open(parent, &window, (unscaled_width, unscaled_height));
         self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
             pop_out,

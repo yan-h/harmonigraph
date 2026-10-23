@@ -296,11 +296,6 @@ pub struct Interaction {
     /// you want sitting over the picture. Inert while `show_perf` is off.
     pub show_perf_detail: bool,
     pub(crate) reset_layout: bool,
-    /// Whether the editor is out of the host's window in one of its own,
-    /// which the System tab can flip; `None` in a shell that cannot do that.
-    /// Runtime only: the shell writes it before every frame and reads it back
-    /// after, and an editor reopens docked.
-    pub pop_out: Option<bool>,
     /// Where the Analyzer section is docked, copied from the workspace layout
     /// before the panes draw and back after. Runtime only: the layout persists
     /// it; this copy lets the Analyzer settings page set it.
@@ -777,7 +772,6 @@ impl Default for Interaction {
             show_perf: false,
             show_perf_detail: false,
             reset_layout: false,
-            pop_out: None,
             dock: workspace::Position::default(),
             open_settings: None,
         }

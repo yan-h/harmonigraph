@@ -206,12 +206,12 @@ Drag the separators to resize visible sections.
 Tabs and sections cannot be dragged into arbitrary arrangements.
 **System → Reset layout** restores the default arrangement and unfolds everything.
 
-**System → Pop out** (macOS plugin only) moves the editor into a window of its own,
-which stays on screen while the host is in the background:
-Bitwig takes its plugin windows off screen whenever another app is in front.
-Close that window, or untick Pop out, to bring the editor back into the host's window;
-closing the plugin in the host closes it too.
-The editor always reopens docked.
+On macOS the editor opens in a window of its own rather than in the host's,
+so it stays on screen while another app is in front:
+Bitwig takes its plugin windows off screen whenever it is in the background.
+The window floats above the host while the host is in front, and sits at the normal level otherwise.
+It remembers where it was; its size is the editor size the project saves.
+The host still opens and closes it, so it has no close button.
 
 ## Folding the Analyzer
 
