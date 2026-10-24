@@ -1786,6 +1786,41 @@ fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
         }
     }
 
+    // The curve's switches, folded the same three ways: a straight curve
+    // applies to nothing, so which channels it is on decides nothing; a pair
+    // closed on a wall is one colour whatever the curve; and without tone the
+    // hue and chroma switches decide only the spacing, through whether either
+    // is on. Each pair is a key AND a table, as above.
+    let bend = |at, hue, lightness, chroma| harmonigraph_scene::Bend {
+        at,
+        share: 0.5,
+        hue,
+        lightness,
+        chroma,
+    };
+    let with = |c: SpectrumConfig, b| SpectrumConfig {
+        spectrogram_gradient: Gradient { bend: b, ..c.spectrogram_gradient },
+        ..c
+    };
+    let unlit = SpectrumConfig {
+        spectrogram_gradient: Gradient { lightness: 0.0, lightness_ramp: 0.0, ..mono },
+        ..cfg
+    };
+    for (base, a, b, why) in [
+        (cfg, bend(0.5, true, false, false), bend(0.5, false, true, true), "a straight curve"),
+        (unlit, bend(0.2, true, true, true), bend(0.8, false, false, true), "a closed pair"),
+        (toneless, bend(0.2, true, false, false), bend(0.2, true, false, true), "no tone, hue"),
+        (toneless, bend(0.2, false, false, true), bend(0.2, true, false, true), "no tone, chroma"),
+    ] {
+        let (a, b) = (with(base, a), with(base, b));
+        assert_eq!(
+            what_decides_a_texel(a.spectrogram_gradient.sanitized()),
+            what_decides_a_texel(b.spectrogram_gradient.sanitized()),
+            "{why}: a switch that decides no texel rebuilds the table",
+        );
+        assert_eq!(table(&a), table(&b), "{why}: ...and the table really is the same");
+    }
+
     // The converses, so neither fold can be a blanket "ignore the hues": a
     // picture WITH chroma watches them, and so does a brightness pair closed
     // anywhere BETWEEN the ends, which still draws a colour.
