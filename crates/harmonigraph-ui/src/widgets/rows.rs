@@ -358,23 +358,25 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
             tighten(ui);
-            // One button's fill under every option, laid down first and sized
-            // once they are: an unselected option draws no fill of its own, and
+            // A button's fill under each option, laid down first and sized once
+            // they are: an unselected option draws no fill of its own, and
             // without one the options read as more words after the row's name
-            // rather than as the control beside it. A button's fill rather than
-            // a value bar's well, which says "a range to drag" and is the one
+            // rather than as the control beside it. One fill per option rather
+            // than one spanning them all, so the page shows through the gap
+            // between two options and a label of several words reads as one
+            // choice rather than as several. A button's fill rather than a
+            // value bar's well, which says "a range to drag" and is the one
             // thing a bar is found by.
-            let fill = ui.painter().add(egui::Shape::Noop);
-            let mut span = egui::Rect::NOTHING;
+            let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
             for &(choice, label, hint) in options {
+                let fill = ui.painter().add(egui::Shape::Noop);
                 let response = ui.selectable_value(value, choice, label);
-                span = span.union(response.rect);
+                ui.painter()
+                    .set(fill, egui::Shape::rect_filled(response.rect, radius, theme::widget()));
                 if !hint.is_empty() {
                     response.on_hover_text(hint).on_disabled_hover_text(hint);
                 }
             }
-            let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
-            ui.painter().set(fill, egui::Shape::rect_filled(span, radius, theme::widget()));
         });
     } else {
         choice_menu(ui, id, value, options);
@@ -574,11 +576,12 @@ mod tests {
     const OPTIONS: [(u8, &str, &str); 3] =
         [(0, "Perspective", ""), (1, "Orthographic", ""), (2, "30", "")];
 
-    /// A choice row's options stand on one button fill spanning them all, so
+    /// Each of a choice row's options stands on a button fill of its own, so
     /// they read as the control beside the row's name rather than as more words
-    /// after it; the name stands on the page.
+    /// after it, and the page between two fills marks where one option ends;
+    /// the name stands on the page.
     #[test]
-    fn a_choice_rows_options_share_one_fill_and_its_name_none() {
+    fn a_choice_rows_options_each_stand_on_a_fill_and_its_name_none() {
         let mut value = 0;
         let out = painted_in(egui::vec2(600.0, 100.0), |ui| {
             choice_row(ui, "Projection", &mut value, &OPTIONS)
@@ -603,10 +606,17 @@ mod tests {
             fills.iter().copied().filter(|fill| fill.contains(at)).collect()
         };
         assert_eq!(under("Projection"), [], "the name stands on a fill");
-        let fill = under("Perspective");
-        assert_eq!(fill.len(), 1, "the first option stands on {fill:?}");
-        for (_, option, _) in &OPTIONS[1..] {
-            assert_eq!(under(option), fill, "{option} is not on the first option's fill");
+        let mut previous: Option<egui::Rect> = None;
+        for (_, option, _) in &OPTIONS {
+            let fill = under(option);
+            assert_eq!(fill.len(), 1, "{option} stands on {fill:?}");
+            if let Some(previous) = previous {
+                assert!(
+                    previous.max.x < fill[0].min.x,
+                    "{option}'s fill touches the one before it"
+                );
+            }
+            previous = Some(fill[0]);
         }
     }
 
