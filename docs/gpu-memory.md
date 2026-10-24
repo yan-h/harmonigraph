@@ -15,6 +15,19 @@ a second Harmonigraph in the same host adds to `ours` and `peak`,
 another Metal plugin adds to `dev`,
 and `peak` covers the whole host session.
 
+## What a pane off screen still holds
+
+Every pane's targets are kept per surface for as long as the renderer is,
+and nothing frees them when a pane stops drawing (#1587).
+So `ours` counts a hidden docked tab and a closed Render preview until the editor window closes,
+and an export's placements until that export ends.
+Per surface, that is roughly:
+
+- the roll's instance buffer, bloom chain and cut targets, about 15–20 MB (61131fd1);
+- the spectrogram's grid copy and the cloud's targets: the star atlas (about 19 MB), the tone target, and the baked tile, up to 75 MB at its 2048-texel ceiling;
+- each text batch's glyph buffer and shadow atlas, not measured;
+- the lattice's own targets, which have always been kept this way.
+
 ## Reading it against `footprint`
 
 `footprint <pid>` charges GPU memory to three categories, and none of them is the record.
