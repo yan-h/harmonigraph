@@ -30,6 +30,7 @@ pub(super) fn system_pane(
     section(ui, "Performance", |ui| {
         super::block(ui, "Editor and exports", |ui| {
             ValueBar::new(&mut appearance.view.render_scale, LATTICE_RENDER_SCALE_RANGE, "Lattice resolution")
+                .default_value(super::fresh_view().render_scale)
                 .percent()
                 .show(ui)
                 .on_hover_text(
@@ -49,6 +50,7 @@ pub(super) fn system_pane(
                 .unit(1.0, "×")
                 .decimals(1)
                 .step(0.5)
+                .default_value(super::fresh_spectrum().atmosphere.blur_time_step)
                 .show(ui)
                 .on_hover_text(
                     "Sample spacing along time for spectrogram softness and cloud effects, as a multiple of one displayed history column. \
@@ -117,6 +119,7 @@ pub(super) fn system_pane(
         // offline renderer draws the picture panes and never this.
         ValueBar::new(&mut interaction.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
             .percent()
+            .default_value(crate::state::default_ui_scale())
             .show(ui)
             .on_hover_text(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
@@ -127,6 +130,7 @@ pub(super) fn system_pane(
         let dials = &mut interaction.skin_dials;
         ValueBar::new(&mut dials.lightness, skin::LIGHTNESS_RANGE, "Interface lightness")
             .decimals(3)
+            .default_value(SkinDials::default().lightness)
             .show(ui)
             .on_hover_text(
                 "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
@@ -137,6 +141,7 @@ pub(super) fn system_pane(
             "Interface tint",
             &mut dials.tint_hue,
             &mut dials.tint,
+            (SkinDials::default().tint_hue, SkinDials::default().tint),
             ["Tint hue", "Tint amount"],
             |hue, tint| rgb(skin::text_dim_color(SkinDials { tint_hue: hue, tint, ..held })),
         );
@@ -145,6 +150,7 @@ pub(super) fn system_pane(
             "Interface accent",
             &mut dials.accent_hue,
             &mut dials.accent_saturation,
+            (SkinDials::default().accent_hue, SkinDials::default().accent_saturation),
             ["Accent hue", "Accent saturation"],
             |hue, amount| rgb(skin::accent_color(hue, amount)),
         );

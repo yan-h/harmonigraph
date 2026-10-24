@@ -84,6 +84,7 @@ fn camera_rows(
             ui,
             &mut appearance.camera.cabinet_angle,
             &mut appearance.camera.cabinet_scale,
+            (Camera::default().cabinet_angle, Camera::default().cabinet_scale),
         );
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
@@ -96,6 +97,7 @@ fn camera_rows(
         if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Horizontal angle")
             .unit(1.0, "°")
             .decimals(1)
+            .default_value(normalize_deg(Camera::default().yaw.to_degrees()))
             .show(ui)
             .on_hover_text(
                 "Rotate left or right around the lattice. 0° faces the fifths/thirds layer.",
@@ -109,6 +111,7 @@ fn camera_rows(
         if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Vertical angle")
             .unit(1.0, "°")
             .decimals(1)
+            .default_value(Camera::default().pitch.to_degrees())
             .show(ui)
             .on_hover_text("Tilt the view up or down. 0° looks straight at the lattice.")
             .changed()
@@ -272,6 +275,7 @@ fn sevens_rows(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     let has_depth = appearance.view.max_sevens != appearance.view.min_sevens;
     ui.add_enabled_ui(has_depth, |ui| {
             ValueBar::new(&mut appearance.view.sevens_size, SEVENS_SIZE_RANGE, "Size per depth step")
+            .default_value(super::fresh_view().sevens_size)
             .unit(1.0, "×")
                 .show(ui)
                 .on_hover_text(

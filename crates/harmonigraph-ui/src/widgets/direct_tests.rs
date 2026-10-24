@@ -7,10 +7,20 @@ fn frame(
     events: Vec<Event>,
     draw: &mut impl FnMut(&mut Ui),
 ) -> egui::FullOutput {
+    held(ctx, Modifiers::NONE, events, draw)
+}
+/// [`frame`] with `modifiers` held, as `probe::held_into` does.
+fn held(
+    ctx: &egui::Context,
+    modifiers: Modifiers,
+    events: Vec<Event>,
+    draw: &mut impl FnMut(&mut Ui),
+) -> egui::FullOutput {
     ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 1000.0))),
             events,
+            modifiers,
             ..Default::default()
         },
         |ui| draw(ui),
@@ -49,24 +59,24 @@ fn drag(mut draw: impl FnMut(&mut Ui), handle: usize, delta: Vec2) {
 #[test]
 fn drift_edits_vector_and_compass_keeps_speed_independent() {
     let (mut angle, mut speed) = (0.0, 5.0);
-    drag(|ui| drift(ui, &mut angle, Some(&mut speed)), 0, egui::vec2(-12.0, 20.0));
+    drag(|ui| drift(ui, &mut angle, Some(&mut speed), (0.0, 0.0)), 0, egui::vec2(-12.0, 20.0));
     assert!(angle > 30.0 && angle < 150.0, "{angle}");
     assert_ne!(speed, 5.0);
     let before = speed;
-    drag(|ui| drift(ui, &mut angle, None), 0, egui::vec2(-20.0, -20.0));
+    drag(|ui| drift(ui, &mut angle, None, (0.0, 0.0)), 0, egui::vec2(-20.0, -20.0));
     assert_eq!(speed, before);
 }
 #[test]
 fn cabinet_endpoint_sets_angle_and_length_within_the_quadrant() {
     let (mut a, mut l) = (0.3, 0.4);
-    drag(|ui| cabinet(ui, &mut a, &mut l), 0, egui::vec2(40.0, -60.0));
+    drag(|ui| cabinet(ui, &mut a, &mut l, (0.0, 0.0)), 0, egui::vec2(40.0, -60.0));
     assert!((0.0..=std::f32::consts::FRAC_PI_2).contains(&a));
     assert!(a > 0.3 && l > 0.4 && l <= 1.0);
 }
 #[test]
 fn softness_handle_edits_both_axes() {
     let (mut p, mut t) = (20.0, 20.0);
-    drag(|ui| softness(ui, &mut p, &mut t), 0, egui::vec2(30.0, -20.0));
+    drag(|ui| softness(ui, &mut p, &mut t, (0.0, 0.0)), 0, egui::vec2(30.0, -20.0));
     assert!(p > 20.0 && t > 20.0);
 }
 #[test]
@@ -74,7 +84,7 @@ fn threshold_can_keep_a_band_below_zero_without_changing_the_gate() {
     let (mut gate, mut band) = (0.05, 0.1);
     drag(
         |ui| {
-            threshold(ui, &mut gate, &mut band);
+            threshold(ui, &mut gate, &mut band, (0.0, 0.0));
         },
         1,
         egui::vec2(-80.0, 0.0),
@@ -88,7 +98,7 @@ fn fade_duration_gesture_is_bracketed_and_shape_does_not_edit_time() {
     let (mut starts, mut stops) = (0, 0);
     drag(
         |ui| {
-            let r = fade(ui, &mut t, &mut shape);
+            let r = fade(ui, &mut t, &mut shape, (0.0, 0.0));
             starts += usize::from(r.drag_started());
             stops += usize::from(r.drag_stopped());
         },
@@ -100,7 +110,7 @@ fn fade_duration_gesture_is_bracketed_and_shape_does_not_edit_time() {
     let before = t;
     drag(
         |ui| {
-            fade(ui, &mut t, &mut shape);
+            fade(ui, &mut t, &mut shape, (0.0, 0.0));
         },
         1,
         egui::vec2(0.0, 12.0),
@@ -113,7 +123,7 @@ fn response_times_are_independent_and_zero_is_reachable() {
     let (mut rise, mut fall) = (0.4, 0.7);
     drag(
         |ui| {
-            response(ui, &mut rise, &mut fall, 2.0, ["Rise", "Fall"], 1000.0);
+            response(ui, &mut rise, &mut fall, 2.0, ["Rise", "Fall"], 1000.0, (0.0, 0.0));
         },
         0,
         egui::vec2(-150.0, 0.0),
@@ -260,7 +270,7 @@ fn shadow_sliders_update_the_preview() {
 fn shadow_sliders_update_the_preview_of(text: bool) {
     let mut s = harmonigraph_scene::ShadowStyle { width: 0.2, depth: 0.3, ..Default::default() };
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| shadow(ui, &mut s, 1.0, true, text);
+    let mut draw = |ui: &mut Ui| shadow(ui, &mut s, &Default::default(), 1.0, true, text);
     let mut output = frame(&ctx, vec![], &mut draw);
     for row in 0..3 {
         let colors = |output: &egui::FullOutput| {
@@ -363,7 +373,7 @@ fn color_popup_edits_its_real_skin_coordinates() {
     let (mut hue, mut amount) = (180.0, 0.3);
     let mut draw = |ui: &mut Ui| {
         ui.set_max_width(120.0);
-        skin_color(ui, "Accent", &mut hue, &mut amount, ["Hue", "Amount"], |h, s| {
+        skin_color(ui, "Accent", &mut hue, &mut amount, (0.0, 0.0), ["Hue", "Amount"], |h, s| {
             let [r, g, b] = harmonigraph_scene::skin::accent_color(h, s);
             egui::Color32::from_rgb(r, g, b)
         })
@@ -404,18 +414,23 @@ fn numeric_entries_use_display_units_and_reject_non_finite_input() {
             let plot = plot::Plot::with_fields(ui, "Exact entry", 1);
             plot.fields(ui, |ui| {
                 field.set(
-                    plot::value_bar(ui, &mut value, 0.0..=1.0, ["Value", "Value"], unit, suffix)
-                        .rect,
+                    plot::value_bar(
+                        ui,
+                        (&mut value, 0.0),
+                        0.0..=1.0,
+                        ["Value", "Value"],
+                        unit,
+                        suffix,
+                    )
+                    .rect,
                 );
             });
         };
         frame(&ctx, vec![], &mut draw);
         let at = field.get().center();
         frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
-        for _ in 0..2 {
-            frame(&ctx, vec![press(at, true)], &mut draw);
-            frame(&ctx, vec![press(at, false)], &mut draw);
-        }
+        held(&ctx, Modifiers::COMMAND, vec![press(at, true)], &mut draw);
+        held(&ctx, Modifiers::COMMAND, vec![press(at, false)], &mut draw);
         frame(&ctx, vec![], &mut draw);
         let key = |key, modifiers| Event::Key {
             key,
@@ -451,7 +466,7 @@ fn compact_values_fit_beside_the_picture() {
                                 .push_id(i, |ui| {
                                     plot::value_bar(
                                         ui,
-                                        &mut 6.0,
+                                        (&mut 6.0, 6.0),
                                         0.0..=6.0,
                                         ["Exact value", "Value"],
                                         1000.0,

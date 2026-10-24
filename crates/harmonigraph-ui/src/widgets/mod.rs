@@ -1,5 +1,5 @@
 //! Custom controls. `ValueBar` is the workhorse: a flat, DAW-style
-//! parameter bar (drag anywhere to set, double-click to type a value)
+//! parameter bar (drag anywhere to set, double-click to reset, Cmd-click to type a value)
 //! that replaces egui's rail-and-knob `Slider` + separate `DragValue`.
 //! `RangeBar` is its two-handle sibling, for a pair of values that bound a
 //! span rather than one value on a scale. `LayerStrip` is the septimal stack's,
@@ -49,6 +49,7 @@ pub(crate) use rows::{
 };
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
+pub(crate) use value::type_gesture;
 pub use value::{progress_bar, ValueBar};
 
 // The rest of the crate's own surface, and all of it is reached for from the

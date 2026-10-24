@@ -3,7 +3,14 @@ use super::plot::{value_bar, Plot};
 use crate::theme;
 use egui::Ui;
 
-pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>) {
+/// `fresh` is where a double-click puts each field back: the direction, and
+/// the speed when there is one.
+pub(crate) fn drift(
+    ui: &mut Ui,
+    degrees: &mut f32,
+    mut speed: Option<&mut f32>,
+    fresh: (f32, f32),
+) {
     ui.push_id("drift", |ui| {
         let plot=Plot::square_with_fields(ui, "Drift", if speed.is_some() { 2 } else { 1 });
         let max=harmonigraph_scene::CLOUD_SPEED_MAX;
@@ -20,10 +27,10 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
             if let Some(s)=speed.as_deref_mut() { *s=v.length().min(1.0).powi(2)*max; }
         }
         plot.fields(ui, |ui| {
-        if value_bar(ui,degrees,0.0..=360.0,["Drift direction", "Direction"],1.0,"°").changed() {
+        if value_bar(ui,(degrees,fresh.0),0.0..=360.0,["Drift direction", "Direction"],1.0,"°").changed() {
             *degrees = harmonigraph_scene::wrap_degrees(*degrees);
         }
-        if let Some(s)=speed.as_deref_mut() { value_bar(ui,s,0.0..=max,["Drift speed", "Speed"],1.0,"×"); }
+        if let Some(s)=speed.as_deref_mut() { value_bar(ui,(s,fresh.1),0.0..=max,["Drift speed", "Speed"],1.0,"×"); }
         });
         let radius=speed.as_deref().map_or(1.0, |s| (*s/max).sqrt());
         let a=degrees.to_radians();
@@ -51,7 +58,8 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
     });
 }
 
-pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
+/// `fresh` is where a double-click puts the angle and the length back.
+pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32, fresh: (f32, f32)) {
     ui.push_id("cabinet", |ui| {
         let plot = Plot::square_with_fields(ui, "Depth axis", 2);
         let (_, next) = plot.handle(ui, "Depth axis", *length * angle.cos(), *length * angle.sin());
@@ -63,10 +71,19 @@ pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
         }
         plot.fields(ui, |ui| {
             let mut deg = angle.to_degrees();
-            if value_bar(ui, &mut deg, 0.0..=90.0, ["Depth angle", "Angle"], 1.0, "°").changed() {
+            if value_bar(
+                ui,
+                (&mut deg, fresh.0.to_degrees()),
+                0.0..=90.0,
+                ["Depth angle", "Angle"],
+                1.0,
+                "°",
+            )
+            .changed()
+            {
                 *angle = deg.to_radians();
             }
-            value_bar(ui, length, 0.1..=1.0, ["Depth step scale", "Length"], 1.0, "×");
+            value_bar(ui, (length, fresh.1), 0.1..=1.0, ["Depth step scale", "Length"], 1.0, "×");
         });
         plot.line(
             ui,
@@ -82,7 +99,8 @@ pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
     });
 }
 
-pub(crate) fn softness(ui: &mut Ui, pitch: &mut f32, time: &mut f32) {
+/// `fresh` is where a double-click puts the pitch and the time back.
+pub(crate) fn softness(ui: &mut Ui, pitch: &mut f32, time: &mut f32, fresh: (f32, f32)) {
     use harmonigraph_scene::{PITCH_SOFTNESS_MAX, TIME_SOFTNESS_MAX};
     ui.push_id("softness", |ui| {
         let plot = Plot::with_fields(ui, "Softness · time → / pitch ↑", 2);
@@ -97,8 +115,22 @@ pub(crate) fn softness(ui: &mut Ui, pitch: &mut f32, time: &mut f32) {
             *pitch = p.y * p.y * PITCH_SOFTNESS_MAX;
         }
         plot.fields(ui, |ui| {
-            value_bar(ui, pitch, 0.0..=PITCH_SOFTNESS_MAX, ["Pitch softness", "Pitch"], 1.0, "¢");
-            value_bar(ui, time, 0.0..=TIME_SOFTNESS_MAX, ["Time softness", "Time"], 1.0, " ms");
+            value_bar(
+                ui,
+                (pitch, fresh.0),
+                0.0..=PITCH_SOFTNESS_MAX,
+                ["Pitch softness", "Pitch"],
+                1.0,
+                "¢",
+            );
+            value_bar(
+                ui,
+                (time, fresh.1),
+                0.0..=TIME_SOFTNESS_MAX,
+                ["Time softness", "Time"],
+                1.0,
+                " ms",
+            );
         });
         let w = (*time / TIME_SOFTNESS_MAX).sqrt();
         let h = (*pitch / PITCH_SOFTNESS_MAX).sqrt();

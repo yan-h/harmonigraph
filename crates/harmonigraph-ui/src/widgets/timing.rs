@@ -3,7 +3,8 @@ use super::plot::{curve, value_bar, Plot};
 use crate::theme;
 use egui::{Response, Ui};
 
-pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32) -> Response {
+/// `fresh` is where a double-click puts the time and the curve back.
+pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32, fresh: (f32, f32)) -> Response {
     let plot = Plot::with_fields(ui, "Note fade", 2);
     let (duration_response, next) = plot.handle(ui, "Fade duration", *seconds, 1.0);
     if let Some(p) = next {
@@ -27,8 +28,9 @@ pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32) -> Response 
         *shape = (lo + hi) * 0.5;
     }
     let numeric = plot.fields(ui, |ui| {
-        let numeric = value_bar(ui, seconds, 0.0..=1.0, ["Note fade", "Time"], 1000.0, " ms");
-        value_bar(ui, shape, 0.0..=1.0, ["Fade curve", "Curve"], 100.0, "%");
+        let numeric =
+            value_bar(ui, (seconds, fresh.0), 0.0..=1.0, ["Note fade", "Time"], 1000.0, " ms");
+        value_bar(ui, (shape, fresh.1), 0.0..=1.0, ["Fade curve", "Curve"], 100.0, "%");
         numeric
     });
     curve(&plot, ui, |p| (p * *seconds, sample(*shape, p as f64)), super::value::curve_color());
@@ -45,6 +47,7 @@ pub(crate) fn response(
     max: f32,
     labels: [&str; 2],
     unit: f32,
+    fresh: (f32, f32),
 ) -> egui::Response {
     ui.push_id(labels[0], |ui| {
         let plot = Plot::with_fields(ui, "Response", 2);
@@ -56,8 +59,8 @@ pub(crate) fn response(
         if let Some(p)=next { *fall=((p.x-0.55)/0.45).clamp(0.0,1.0).powi(2)*max; }
         let suffix=if unit==1000.0 {" ms"}else{" s"};
         plot.fields(ui, |ui| {
-        value_bar(ui,rise,0.0..=max,[labels[0], "Rise"],unit,suffix);
-        value_bar(ui,fall,0.0..=max,[labels[1], "Fall"],unit,suffix);
+        value_bar(ui,(rise,fresh.0),0.0..=max,[labels[0], "Rise"],unit,suffix);
+        value_bar(ui,(fall,fresh.1),0.0..=max,[labels[1], "Fall"],unit,suffix);
         });
         curve(&plot,ui,|p| {let t=p*p*max; (0.45*p,if *rise==0.0 {1.0}else{1.0-(-t / *rise).exp()})},theme::accent());
         curve(&plot,ui,|p| {let t=p*p*max; (0.55+0.45*p,if *fall==0.0 {0.0}else{(-t / *fall).exp()})},theme::accent());

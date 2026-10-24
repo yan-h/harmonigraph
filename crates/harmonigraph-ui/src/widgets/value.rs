@@ -76,6 +76,16 @@ fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
     curve_paths(shapes).into_iter().flatten().collect()
 }
 
+/// The click that opens a [`ValueBar`]'s number for typing, named the way
+/// this platform's keyboard is: egui's `command` is Cmd on macOS and Ctrl
+/// elsewhere.
+pub(crate) fn type_gesture(ctx: &egui::Context) -> &'static str {
+    match ctx.os() {
+        egui::os::OperatingSystem::Mac => "Cmd-click",
+        _ => "Ctrl-click",
+    }
+}
+
 pub struct ValueBar<'a> {
     value: &'a mut f32,
     color: Option<Color32>,
@@ -98,6 +108,8 @@ pub struct ValueBar<'a> {
     /// `(target, tolerance)`: a value the bar is pulled to while an edit
     /// lands within `tolerance` of it (see [`ValueBar::magnet`]).
     magnet: Option<(f32, f32)>,
+    /// Where a double-click puts the value (see [`ValueBar::default_value`]).
+    default: Option<f32>,
     /// How the value READS OUT, when plain decimals won't say it (see
     /// [`ValueBar::display`]). Never how it is typed in.
     display: Option<fn(f32) -> String>,
@@ -127,6 +139,7 @@ impl<'a> ValueBar<'a> {
             step: 0.0,
             badge: None,
             magnet: None,
+            default: None,
             display: None,
             unit_scale: 1.0,
             unit_suffix: "",
@@ -185,6 +198,15 @@ impl<'a> ValueBar<'a> {
     /// escape the magnet" is the same question as "did the value change".
     pub fn magnet(mut self, target: f32, tolerance: f32) -> Self {
         self.magnet = Some((target, tolerance));
+        self
+    }
+
+    /// The value a double-click puts back: the setting's fresh value, which
+    /// is what a DAW's own controls reset to on the same gesture. A bar with
+    /// none ignores the double-click; Cmd-click (Ctrl off macOS) types a
+    /// number on every bar either way.
+    pub fn default_value(mut self, default: f32) -> Self {
+        self.default = Some(default);
         self
     }
 
@@ -336,7 +358,7 @@ impl<'a> ValueBar<'a> {
         self.quantized(v)
     }
 
-    /// Numeric entry carries its unit so a double-click never exposes the
+    /// Numeric entry carries its unit so a Cmd-click never exposes the
     /// internal fraction or seconds behind a percentage or millisecond value.
     fn format(&self, v: f32) -> String {
         format!("{:.*}{}", self.decimals, v * self.unit_scale, self.unit_suffix)
@@ -359,7 +381,7 @@ impl<'a> ValueBar<'a> {
 
     pub fn show(mut self, ui: &mut Ui) -> Response {
         #[cfg(test)]
-        super::range_probe::record(self.label, &[*self.value], &self.range);
+        super::range_probe::record_value_bar(self.label, *self.value, &self.range, self.default);
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
         let (rect, mut response) = ui.allocate_exact_size(
@@ -370,7 +392,7 @@ impl<'a> ValueBar<'a> {
         let edit_id = response.id.with("edit");
         let focus_id = edit_id.with("focus_pending");
 
-        // ---- Text-entry mode (double-click) ---------------------------------
+        // ---- Text-entry mode (Cmd-click) ------------------------------------
         if let Some(mut text) = ui.data(|d| d.get_temp::<String>(edit_id)) {
             let output = ui.put(
                 rect,
@@ -412,10 +434,22 @@ impl<'a> ValueBar<'a> {
         }
 
         // ---- Interaction ----------------------------------------------------
-        if response.double_clicked() {
+        // The DAW's own gestures, so a bar answers the way the host's knobs
+        // beside it do: Cmd-click types, double-click resets. `command` is
+        // Cmd on macOS and Ctrl elsewhere.
+        if response.clicked() && ui.input(|i| i.modifiers.command) {
             ui.data_mut(|d| d.insert_temp(edit_id, self.format(*self.value)));
             ui.data_mut(|d| d.insert_temp(focus_id, true));
             return response;
+        }
+        // Submitted like a typed entry, through the same clamp and even when
+        // it lands on the value already there: a caller can read the gesture
+        // as an edit (an interval bar releasing a temperament's link).
+        if response.double_clicked() {
+            if let Some(default) = self.default {
+                *self.value = self.quantized(self.snapped(default.clamp(self.min(), self.max())));
+                response.mark_changed();
+            }
         }
         // Drag-to-set only (no click-jump): a stray click can't yank a
         // carefully tuned parameter, and it can't fight the double-click.
@@ -932,8 +966,9 @@ mod tests {
     use crate::widgets::probe::{
         filled_polys, filled_rects, painted, painted_text, shapes, shapes_at,
     };
+    use egui::Modifiers;
 
-    /// Enter the units the bar actually paints, through its double-click and
+    /// Enter the units the bar actually paints, through its Cmd-click and
     /// focus-loss path. Fractions, time and screen lengths all share this seam.
     #[test]
     fn a_singleton_range_has_a_finite_fill_and_cannot_move() {
@@ -949,7 +984,7 @@ mod tests {
 
     #[test]
     fn numeric_entry_uses_the_displayed_unit() {
-        use crate::tests::probe::{events_into, press, themed};
+        use crate::tests::probe::{events_into, held_into, press, themed};
         for (scale, suffix, start, shown, typed, expected) in [
             (100.0, "%", 0.5, "50.0%", "25%", 0.25),
             (1000.0, " ms", 0.1, "100.0 ms", "250", 0.25),
@@ -963,8 +998,8 @@ mod tests {
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
             let mut value = start;
             let mut response = None;
-            let mut draw = |events| {
-                events_into(&ctx, size, rect, events, |ui| {
+            let mut draw = |modifiers, events| {
+                held_into(&ctx, size, rect, modifiers, events, |ui| {
                     response = Some(
                         ValueBar::new(&mut value, 0.0..=1.0, "Amount")
                             .unit(scale, suffix)
@@ -973,7 +1008,7 @@ mod tests {
                     );
                 })
             };
-            let out = draw(vec![]);
+            let out = draw(Modifiers::NONE, vec![]);
             let target = out
                 .shapes
                 .iter()
@@ -982,12 +1017,10 @@ mod tests {
                     _ => None,
                 })
                 .expect("the bar must paint the unit we intend to type");
-            draw(vec![egui::Event::PointerMoved(target)]);
-            for _ in 0..2 {
-                draw(vec![press(target, true)]);
-                draw(vec![press(target, false)]);
-            }
-            draw(vec![]);
+            draw(Modifiers::NONE, vec![egui::Event::PointerMoved(target)]);
+            draw(Modifiers::COMMAND, vec![press(target, true)]);
+            draw(Modifiers::COMMAND, vec![press(target, false)]);
+            draw(Modifiers::NONE, vec![]);
             let edit_id = response.unwrap().id.with("edit");
             assert_eq!(ctx.data(|d| d.get_temp::<String>(edit_id)).as_deref(), Some(shown));
             ctx.data_mut(|d| d.insert_temp(edit_id, typed.to_owned()));
@@ -1016,42 +1049,77 @@ mod tests {
     /// commits through it already.
     #[test]
     fn an_entry_whose_bar_went_undrawn_commits_on_return() {
-        use crate::tests::probe::{events_into, press, themed};
+        use crate::tests::probe::{held_into, press, themed};
         let ctx = themed();
         let size = egui::vec2(300.0, 100.0);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         let mut value = 0.5;
         let bar = std::cell::Cell::new((egui::Id::NULL, egui::Rect::NOTHING));
-        let mut draw = |events, shown: bool| {
-            events_into(&ctx, size, rect, events, |ui| {
+        let mut held = |modifiers, events, shown: bool| {
+            held_into(&ctx, size, rect, modifiers, events, |ui| {
                 if shown {
                     let response = ValueBar::new(&mut value, 0.0..=1.0, "Amount").show(ui);
                     bar.set((response.id, response.rect));
                 }
             })
         };
-        draw(vec![], true);
+        held(Modifiers::NONE, vec![], true);
         let (id, at) = (bar.get().0, bar.get().1.center());
-        draw(vec![egui::Event::PointerMoved(at)], true);
-        for _ in 0..2 {
-            draw(vec![press(at, true)], true);
-            draw(vec![press(at, false)], true);
-        }
-        draw(vec![], true);
+        held(Modifiers::NONE, vec![egui::Event::PointerMoved(at)], true);
+        held(Modifiers::COMMAND, vec![press(at, true)], true);
+        held(Modifiers::COMMAND, vec![press(at, false)], true);
+        held(Modifiers::NONE, vec![], true);
         let edit_id = id.with("edit");
         let open = ctx.data(|d| d.get_temp::<String>(edit_id)).is_some();
-        assert!(open && ctx.memory(|m| m.focused()).is_some(), "the double-click opened no entry");
+        assert!(open && ctx.memory(|m| m.focused()).is_some(), "the Cmd-click opened no entry");
         ctx.data_mut(|d| d.insert_temp(edit_id, "0.25".to_owned()));
         for _ in 0..2 {
-            draw(vec![], false);
+            held(Modifiers::NONE, vec![], false);
         }
-        draw(vec![], true);
+        held(Modifiers::NONE, vec![], true);
         assert_eq!(
             ctx.data(|d| d.get_temp::<String>(edit_id)),
             None,
             "the entry outlived its focus"
         );
         assert_eq!(value, 0.25);
+    }
+
+    /// A double-click puts the value back on its default, held to the range,
+    /// and opens no entry; a bar given none keeps its value. A reset onto the
+    /// value already there still reports a change, as a typed entry does.
+    #[test]
+    fn a_double_click_resets_to_the_default() {
+        use crate::tests::probe::{events_into, press, themed};
+        for (default, want) in [(Some(0.3), 0.3), (Some(5.0), 1.0), (Some(0.8), 0.8), (None, 0.8)] {
+            let ctx = themed();
+            let size = egui::vec2(300.0, 100.0);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut value = 0.8;
+            let mut changed = false;
+            let bar = std::cell::Cell::new((egui::Id::NULL, egui::Rect::NOTHING));
+            let mut draw = |events| {
+                events_into(&ctx, size, rect, events, |ui| {
+                    let mut built = ValueBar::new(&mut value, 0.0..=1.0, "Amount");
+                    if let Some(default) = default {
+                        built = built.default_value(default);
+                    }
+                    let response = built.show(ui);
+                    changed |= response.changed();
+                    bar.set((response.id, response.rect));
+                })
+            };
+            draw(vec![]);
+            let (id, at) = (bar.get().0, bar.get().1.center());
+            draw(vec![egui::Event::PointerMoved(at)]);
+            for _ in 0..2 {
+                draw(vec![press(at, true)]);
+                draw(vec![press(at, false)]);
+            }
+            draw(vec![]);
+            assert_eq!(ctx.data(|d| d.get_temp::<String>(id.with("edit"))), None);
+            assert_eq!((value, changed), (want, default.is_some()), "default {default:?}");
+        }
     }
 
     /// Paint one value bar across a `width`-point row and return what it

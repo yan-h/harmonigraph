@@ -8,6 +8,7 @@ pub(crate) fn skin_color(
     label: &str,
     hue: &mut f32,
     amount: &mut f32,
+    fresh: (f32, f32),
     labels: [&str; 2],
     color: impl Fn(f32, f32) -> Color32,
 ) {
@@ -65,8 +66,8 @@ pub(crate) fn skin_color(
             }
             // Test the real entries when the popup is opened, as well as its closed state.
             plot.fields(ui, |ui| {
-                value_bar(ui, hue, 0.0..=360.0, [labels[0], "Hue"], 1.0, "°");
-                value_bar(ui, amount, 0.0..=1.0, [labels[1], "Amount"], 100.0, "%");
+                value_bar(ui, (hue, fresh.0), 0.0..=360.0, [labels[0], "Hue"], 1.0, "°");
+                value_bar(ui, (amount, fresh.1), 0.0..=1.0, [labels[1], "Amount"], 100.0, "%");
             });
             plot.dot(ui, *hue / 360.0, *amount);
         });

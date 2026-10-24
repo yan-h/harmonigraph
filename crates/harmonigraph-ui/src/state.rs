@@ -638,7 +638,7 @@ impl SharedState {
 ///
 /// Named rather than `#[serde(default)]`, which for an `f32` is 0.0 — a scale
 /// of nothing.
-fn default_ui_scale() -> f32 {
+pub(crate) fn default_ui_scale() -> f32 {
     1.0
 }
 

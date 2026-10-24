@@ -3,7 +3,13 @@ use super::plot::{value_bar, Plot};
 use crate::theme;
 use egui::Ui;
 
-pub(crate) fn threshold(ui: &mut Ui, gate: &mut f32, hysteresis: &mut f32) -> egui::Response {
+/// `fresh` is where a double-click puts the gate and the band back.
+pub(crate) fn threshold(
+    ui: &mut Ui,
+    gate: &mut f32,
+    hysteresis: &mut f32,
+    fresh: (f32, f32),
+) -> egui::Response {
     use harmonigraph_scene::SPECTRAL_HYSTERESIS_MAX;
     let plot = Plot::with_fields(ui, "Ring threshold", 3);
     // Include the full negative extent of the stored band. Clipping it at zero
@@ -19,10 +25,10 @@ pub(crate) fn threshold(ui: &mut Ui, gate: &mut f32, hysteresis: &mut f32) -> eg
         *hysteresis = (*gate - value(p.x)).clamp(0.0, SPECTRAL_HYSTERESIS_MAX);
     }
     plot.fields(ui, |ui| {
-        value_bar(ui, gate, 0.0..=1.0, ["Ring threshold", "On"], 100.0, "%");
+        value_bar(ui, (gate, fresh.0), 0.0..=1.0, ["Ring threshold", "On"], 100.0, "%");
         value_bar(
             ui,
-            hysteresis,
+            (hysteresis, fresh.1),
             0.0..=SPECTRAL_HYSTERESIS_MAX,
             ["Threshold hysteresis", "Band"],
             100.0,

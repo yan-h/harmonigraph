@@ -9,6 +9,9 @@ pub(crate) struct Visit {
     pub label: String,
     pub values: Vec<f32>,
     pub range: RangeInclusive<f32>,
+    /// `Some` for a [`ValueBar`](super::value::ValueBar), holding its
+    /// double-click target if it has one; `None` for every other control.
+    pub default: Option<Option<f32>>,
 }
 
 thread_local! {
@@ -16,12 +19,26 @@ thread_local! {
 }
 
 pub(super) fn record(label: &str, values: &[f32], range: &RangeInclusive<f32>) {
+    push(label, values, range, None);
+}
+
+pub(super) fn record_value_bar(
+    label: &str,
+    value: f32,
+    range: &RangeInclusive<f32>,
+    default: Option<f32>,
+) {
+    push(label, &[value], range, Some(default));
+}
+
+fn push(label: &str, values: &[f32], range: &RangeInclusive<f32>, default: Option<Option<f32>>) {
     SCOPES.with_borrow_mut(|scopes| {
         if let Some(visits) = scopes.last_mut() {
             visits.push(Visit {
                 label: label.to_owned(),
                 values: values.to_vec(),
                 range: range.clone(),
+                default,
             });
         }
     });

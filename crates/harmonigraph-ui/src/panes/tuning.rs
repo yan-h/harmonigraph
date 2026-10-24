@@ -16,7 +16,7 @@ use super::{section, subsection};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
-use harmonigraph_core::configuration::{ConfigEdit, PolicyEdit};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit};
 use harmonigraph_core::tuning;
 use std::collections::BTreeMap;
 
@@ -53,7 +53,12 @@ fn interval_bar(
         _ => unreachable!(),
     };
     let linked = comma_deriving(key, &state.appearance.view);
-    let mut bar = ValueBar::new(&mut value, key.range(), key.label()).decimals(2).unit(1.0, "¢");
+    // The host's own reset, which under a temperament releases the derived
+    // axis the way an entered value does.
+    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
+        .decimals(2)
+        .unit(1.0, "¢")
+        .default_value(key.default_value());
     if linked.is_some() {
         bar = bar.badge("↔");
     }
@@ -349,10 +354,19 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     let before = p;
     let mut derive_keyboard = false;
     subsection(ui, "Keyboard", |ui| {
-        for (value, label) in p.keyboard.iter_mut().zip(["Fifth", "Third", "Seventh"]) {
-            *value =
-                adaptive_value(ui, *value as u32, 0..=1_200_000_000, 1_000_000.0, label, "¢", "")
-                    as i32;
+        let fresh = PolicyConfig::default().keyboard;
+        for ((value, fresh), label) in
+            p.keyboard.iter_mut().zip(fresh).zip(["Fifth", "Third", "Seventh"])
+        {
+            *value = adaptive_value(
+                ui,
+                (*value as u32, fresh as u32),
+                0..=1_200_000_000,
+                1_000_000.0,
+                label,
+                "¢",
+                "",
+            ) as i32;
         }
         let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
         if ui
@@ -395,12 +409,13 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         keyboard_controls(ui, state, params);
         let mut p = state.runtime.adaptive_policy;
         let before = p;
+        let fresh = PolicyConfig::default();
         p.pitch_flexibility = adaptive_value(
-            ui, p.pitch_flexibility.into(), 1..=100, 1.0, "Pitch flexibility", "¢",
+            ui, (p.pitch_flexibility.into(), fresh.pitch_flexibility.into()), 1..=100, 1.0, "Pitch flexibility", "¢",
             "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
         ) as u16;
         p.radius =
-            adaptive_value(ui, p.radius.into(), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
+            adaptive_value(ui, (p.radius.into(), fresh.radius.into()), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
         crate::widgets::label(ui, "Search axes").on_hover_text(
             "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
         );
@@ -423,7 +438,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         let context = subsection(ui, "Context", |ui| {
             p.half_life_ms = adaptive_value(
                 ui,
-                p.half_life_ms.into(),
+                (p.half_life_ms.into(), fresh.half_life_ms.into()),
                 0..=20_000,
                 1000.0,
                 "Half-life",
@@ -432,7 +447,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             ) as u16;
             p.register = adaptive_value(
                 ui,
-                p.register.into(),
+                (p.register.into(), fresh.register.into()),
                 10..=1000,
                 1000.0,
                 "Weight per octave",
@@ -441,7 +456,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             ) as u16;
             p.tolerance = adaptive_value(
                 ui,
-                p.tolerance,
+                (p.tolerance, fresh.tolerance),
                 0..=20_000_000,
                 1_000_000.0,
                 "Same-note tolerance",
@@ -450,7 +465,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             );
             p.silence_ms = adaptive_value(
                 ui,
-                p.silence_ms,
+                (p.silence_ms, fresh.silence_ms),
                 0..=120_000,
                 1000.0,
                 "Silence reset",
@@ -825,7 +840,7 @@ fn monitor_pitch(cents: f64) -> String {
 /// Use the dock's width-aware value bars so long labels elide rather than widening the pane.
 fn adaptive_value(
     ui: &mut egui::Ui,
-    raw: u32,
+    (raw, fresh): (u32, u32),
     range: std::ops::RangeInclusive<u32>,
     scale: f32,
     label: &str,
@@ -838,7 +853,8 @@ fn adaptive_value(
         *range.start() as f32 / scale..=*range.end() as f32 / scale,
         label,
     )
-    .unit(1.0, unit);
+    .unit(1.0, unit)
+    .default_value(fresh as f32 / scale);
     bar = if scale == 1.0 { bar.integer() } else { bar.decimals(2) };
     let response = bar.show(ui);
     let response = if hint.is_empty() { response } else { response.on_hover_text(hint) };

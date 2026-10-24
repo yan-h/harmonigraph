@@ -23,6 +23,7 @@ pub(super) fn labels(ui: &mut egui::Ui, state: &mut PictureState) {
     crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
         .on_hover_text("Each node's pitch class in cents, under its name.");
     ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label size")
+        .default_value(super::fresh_view().label_scale)
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(

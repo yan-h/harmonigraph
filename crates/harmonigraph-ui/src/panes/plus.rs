@@ -53,6 +53,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
             MARKER_INK_RANGE,
             "Idle label/cross brightness",
         )
+        .default_value(super::fresh_view().marker_ink)
         .unit(1.0, "%")
         // Whole L* points, matching the gradients' brightness scale.
         .integer()

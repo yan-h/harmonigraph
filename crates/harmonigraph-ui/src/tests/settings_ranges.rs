@@ -620,6 +620,24 @@ fn check(edge: Edge) {
                     violations.push(format!("{edge:?} {scenario:?}: {visit:?}"));
                 }
             }
+            // A double-click puts back what a fresh state opens on, so on the
+            // fresh state every value bar already sits at its own target. A bar
+            // reading anything else resets to some other setting's number.
+            // The two exempt are switches `set_optional_sections` flips, which
+            // moves them off fresh on purpose.
+            let switched =
+                ["Backdrop strength", "Pattern contrast"].contains(&visit.label.as_str());
+            if edge == Edge::Fresh {
+                match visit.default {
+                    Some(None) => violations.push(format!("{scenario:?}: no reset: {visit:?}")),
+                    Some(Some(default))
+                        if !switched && (default - visit.values[0]).abs() > 1e-4 =>
+                    {
+                        violations.push(format!("{scenario:?}: resets elsewhere: {visit:?}"))
+                    }
+                    _ => {}
+                }
+            }
         }
     }
     assert!(violations.is_empty(), "{}", violations.join("\n"));

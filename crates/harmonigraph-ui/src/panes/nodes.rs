@@ -17,12 +17,14 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
     let mut count = view.octave_count as f32;
     ValueBar::new(&mut count, MIN_SPAN as f32..=MAX_SPAN as f32, "Octaves")
         .integer()
+        .default_value(super::fresh_view().octave_count as f32)
         .show(ui)
         .on_hover_text("Equal octave slices shared by the MIDI ring, audio ring and marks. Notes beyond the range use the end slices.");
     view.octave_count = count as u32;
     // Whole semitones, because that is the step the wheel can act on and what
     // the readout can name.
     ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center pitch")
+            .default_value(super::fresh_view().octave_center)
             .integer()
             .unit(1.0, " MIDI")
             .display(|midi| format!("{} / {midi:.0} MIDI", super::pitch_readout(midi)))
@@ -99,7 +101,13 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // section's Fade rather than at the instant the level crosses. Both are in
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
-    crate::widgets::threshold(ui, &mut view.spectral_ring_gate, &mut view.spectral_ring_hysteresis)
+    let fresh = super::fresh_view();
+    crate::widgets::threshold(
+        ui,
+        &mut view.spectral_ring_gate,
+        &mut view.spectral_ring_hysteresis,
+        (fresh.spectral_ring_gate, fresh.spectral_ring_hysteresis),
+    )
         .on_hover_text("MIDI notes always show their rings. For other nodes, the loudest wedge opens the ring at this threshold; hysteresis sets the closing threshold. Ring visibility follows Note fade.");
     crate::widgets::response(
         ui,
@@ -108,6 +116,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
         SPECTRAL_BALLISTICS_MAX,
         ["Ring attack", "Ring release"],
         1000.0,
+        (fresh.spectral_ring_attack, fresh.spectral_ring_release),
     ).on_hover_text("Ring attack and release smooth the ring levels after the Analyzer’s Live attack and release.");
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
@@ -120,6 +129,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
             SPECTRAL_WIDTH_MIN..=SPECTRAL_WIDTH_MAX,
             "Pitch tolerance",
         )
+        .default_value(super::fresh_view().spectral_width)
         .unit(1.0, "¢")
         .decimals(0)
         .show(ui)
@@ -140,6 +150,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 SPECTRAL_RANGE_MIN..=SPECTRAL_RANGE_MAX,
                 "Pitch span",
             )
+            .default_value(super::fresh_view().spectral_ring_range)
             // A decimal below ten cents: the bar's floor is 0.5¢, and "{:.0}"
             // would read it out as the zero the floor exists to forbid.
             .unit(1.0, "¢").decimals(1)
@@ -180,6 +191,7 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Numeric entry uses the displayed percentage too; the widget converts it
     // back to the stored uv.
     ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap")
+        .default_value(super::fresh_view().ring_gap)
         .unit(super::QUAD_UV_PERCENT, "%")
         .decimals(1)
         .show(ui)
@@ -190,6 +202,7 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // L*, shared with the gradient brightness scale. Black is a colour here;
     // layer width, rather than brightness, controls whether a ring exists.
     ValueBar::new(&mut view.lattice_ground, LATTICE_GROUND_RANGE, "Silent slice brightness")
+        .default_value(super::fresh_view().lattice_ground)
         .unit(1.0, "%")
         .integer()
         .show(ui)
@@ -204,7 +217,8 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
     let key = ParamKey::Fade;
     let mut seconds = params.get(key);
     let before = seconds;
-    let response = crate::widgets::fade(ui, &mut seconds, &mut view.fade_shape);
+    let fresh = (key.default_value(), super::fresh_view().fade_shape);
+    let response = crate::widgets::fade(ui, &mut seconds, &mut view.fade_shape, fresh);
     if response.drag_started() {
         params.begin_set(key);
     }
@@ -216,6 +230,7 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
     }
     ui.add_enabled_ui(view.marks_draw(), |ui| {
         ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
+            .default_value(super::fresh_view().mark_delay)
             .unit(1000.0, " ms")
             .decimals(0)
             .show(ui)
@@ -252,10 +267,12 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
     crate::widgets::checkbox(ui, &mut view.note_animation.lit_first, "Lit slices first")
         .on_hover_text("The slices a note lights start with the first slice on arrival and with the last one on release, so they appear first and disappear last. Every other slice keeps the slice order's timing. Needs a stagger spread above zero.");
     ValueBar::new(&mut view.note_animation.stagger_spread, STAGGER_SPREAD_RANGE, "Stagger spread")
+                .default_value(super::fresh_view().note_animation.stagger_spread)
                 .unit(100.0, "%")
                 .show(ui)
                 .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
     ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
+            .default_value(super::fresh_view().note_animation.radial_start)
             .unit(100.0, "%").show(ui)
             .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
 }
