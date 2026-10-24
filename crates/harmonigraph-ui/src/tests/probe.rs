@@ -111,10 +111,24 @@ pub(crate) fn events_into(
     screen: egui::Vec2,
     rect: egui::Rect,
     events: Vec<egui::Event>,
+    add: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    held_into(ctx, screen, rect, egui::Modifiers::NONE, events, add)
+}
+
+/// [`events_into`] with `modifiers` held for the pass. egui reads a held key
+/// off the pass's input rather than off a pointer event, so a Cmd-click
+/// fixture holds it through both the press and the release.
+pub(crate) fn held_into(
+    ctx: &egui::Context,
+    screen: egui::Vec2,
+    rect: egui::Rect,
+    modifiers: egui::Modifiers,
+    events: Vec<egui::Event>,
     mut add: impl FnMut(&mut egui::Ui),
 ) -> egui::FullOutput {
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen);
-    let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+    let raw = egui::RawInput { screen_rect: Some(screen), events, modifiers, ..Default::default() };
     ctx.run_ui(raw, |ui| {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         add(&mut child);

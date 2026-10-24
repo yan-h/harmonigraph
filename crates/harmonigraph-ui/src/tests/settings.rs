@@ -140,7 +140,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     let mut seconds = 0.5;
     let mut shape = harmonigraph_scene::ViewConfig::default().fade_shape;
     let shapes: Vec<egui::Shape> = super::probe::painted_full(egui::vec2(320.0, 500.0), |ui| {
-        crate::widgets::fade(ui, &mut seconds, &mut shape);
+        crate::widgets::fade(ui, &mut seconds, &mut shape, (0.0, 0.0));
     })
     .shapes
     .into_iter()

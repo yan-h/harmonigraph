@@ -61,6 +61,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     ui,
                     &mut atmosphere.pitch_softness,
                     &mut atmosphere.time_softness,
+                    (
+                        crate::panes::fresh_spectrum().atmosphere.pitch_softness,
+                        crate::panes::fresh_spectrum().atmosphere.time_softness,
+                    ),
                 );
             });
             use harmonigraph_scene::CloudStyle;
@@ -91,6 +95,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     ],
                 );
                 ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
+                    .default_value(crate::panes::fresh_spectrum().atmosphere.cloud_depth)
                     .percent().show(ui).on_hover_text(
                         "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
                     );
@@ -98,7 +103,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 // texture's own rows rather than loose between its blocks.
                 if atmosphere.cloud_style == CloudStyle::Stars {
                     ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
-                        super::super::material::stars_resolution(ui, &mut atmosphere.stars);
+                        super::super::material::stars_resolution(
+                            ui,
+                            &mut atmosphere.stars,
+                            &crate::panes::fresh_spectrum().atmosphere.stars,
+                        );
                     });
                 }
             });
@@ -108,15 +117,30 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 let stars = atmosphere.cloud_style == CloudStyle::Stars;
                 if stars {
                     block(ui, "Appearance", |ui| {
-                        super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
+                        super::super::material::stars(
+                            ui,
+                            &mut atmosphere.stars,
+                            &crate::panes::fresh_spectrum().atmosphere.stars,
+                            1.0,
+                        );
                     });
                 }
                 block(ui, "Motion", |ui| {
                     if stars {
-                        super::super::material::stars_motion(ui, &mut atmosphere.stars);
+                        super::super::material::stars_motion(
+                            ui,
+                            &mut atmosphere.stars,
+                            &crate::panes::fresh_spectrum().atmosphere.stars,
+                        );
                     }
                     let speed = (!stars).then_some(&mut atmosphere.cloud_speed);
-                    crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
+                    let fresh = &crate::panes::fresh_spectrum().atmosphere;
+                    crate::widgets::drift(
+                        ui,
+                        &mut atmosphere.cloud_direction,
+                        speed,
+                        (fresh.cloud_direction, fresh.cloud_speed),
+                    );
                 });
                 // Each style has its own controls: nothing a wash carries means
                 // anything to a scallop, and a page listing both would be mostly
@@ -127,10 +151,15 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                             super::super::material::watercolor(
                                 ui,
                                 &mut atmosphere.material_settings,
+                                &crate::panes::fresh_spectrum().atmosphere.material_settings,
                             );
                             super::super::material::edge_pooling(ui, atmosphere);
                         } else {
-                            super::super::material::velvet(ui, &mut atmosphere.material_settings);
+                            super::super::material::velvet(
+                                ui,
+                                &mut atmosphere.material_settings,
+                                &crate::panes::fresh_spectrum().atmosphere.material_settings,
+                            );
                         }
                     });
                 }
@@ -142,6 +171,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX,
                         ["Color pickup", "Color release"],
                         1.0,
+                        (
+                            crate::panes::fresh_spectrum().atmosphere.color_pickup,
+                            crate::panes::fresh_spectrum().atmosphere.color_release,
+                        ),
                     );
                 });
             });
@@ -170,6 +203,7 @@ pub(crate) fn ribbons_section(
                 crate::config::ROLL_THICKNESS_RANGE,
                 "Ribbon width",
             )
+            .default_value(crate::panes::fresh_spectrum().roll_thickness)
             .unit(1.0, " st")
             .show(ui)
             .on_hover_text(
@@ -198,6 +232,7 @@ pub(crate) fn ribbons_section(
                 0.0..=crate::ROLL_LEAD_RELEASE_MAX,
                 "Extension release",
             )
+            .default_value(crate::panes::fresh_spectrum().roll_lead_release)
             .unit(1000.0, " ms")
             .decimals(0)
             .show(ui)
@@ -225,6 +260,7 @@ pub(crate) fn ribbons_section(
                 };
                 crate::widgets::checkbox(ui, &mut cfg.note_names_travel, label).on_hover_text(hover);
                 ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
+                    .default_value(crate::panes::fresh_spectrum().note_name_scale)
                     .unit(1.0, "×")
                     .show(ui)
                     .on_hover_text(
@@ -285,6 +321,7 @@ pub(crate) fn view_section(
         // already say, in the lattice's own spelling, at the pitch they are
         // sounding rather than at the nearest C below it.
         ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Axis label scale")
+            .default_value(crate::panes::fresh_spectrum().marking_scale)
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -296,6 +333,7 @@ pub(crate) fn view_section(
             crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX,
             "History duration",
         )
+        .default_value(crate::panes::fresh_spectrum().roll_seconds)
         .eased(true)
         .decimals(1)
         .unit(1.0, " s")
@@ -303,7 +341,7 @@ pub(crate) fn view_section(
         .show(ui)
         .on_hover_text(
             "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
-             Drag the picture along its time axis to zoom, or double-click this bar to type seconds.",
+             Drag the picture along its time axis to zoom, or Cmd-click this bar (Ctrl-click on Windows and Linux) to type seconds.",
         );
         button_row(ui, |ui| {
             if ui
@@ -318,22 +356,24 @@ pub(crate) fn view_section(
             }
         });
         block(ui, "Spectrum", |ui| {
-            ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").percent().show(ui).on_hover_text(
+            ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").default_value(crate::panes::fresh_spectrum().keyline_lift).percent().show(ui).on_hover_text(
                 "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
                      and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
                      100% is a white line, 0% is exactly the color under it.",
             );
-            ValueBar::new(&mut cfg.backdrop_strength, 0.0..=1.0, "Backdrop strength").percent().show(ui).on_hover_text(
+            ValueBar::new(&mut cfg.backdrop_strength, 0.0..=1.0, "Backdrop strength").default_value(crate::panes::fresh_spectrum().backdrop_strength).percent().show(ui).on_hover_text(
                 "How bright the grey backdrop above the spectrum is at the floor; it fades out upward and stops at the spectrum's edge. \
                      0% is no backdrop. Faint backdrops read as a flat wash; about 70% and up keep dark fills visible.",
             );
             // Below the strength, so hiding them does not move the bar just dragged.
             if cfg.backdrop_strength > 0.0 {
                 ValueBar::new(&mut cfg.backdrop_height, crate::config::BACKDROP_HEIGHT_RANGE, "Backdrop height")
+                    .default_value(crate::panes::fresh_spectrum().backdrop_height)
                     .percent()
                     .show(ui)
                     .on_hover_text("How far up the level axis the backdrop reaches before it has faded out: 100% is the ceiling.");
                 ValueBar::new(&mut cfg.backdrop_gap, crate::config::BACKDROP_GAP_RANGE, "Stripe spacing")
+                    .default_value(crate::panes::fresh_spectrum().backdrop_gap)
                     .integer()
                     .unit(1.0, " pt")
                     .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} pt") })
@@ -414,13 +454,15 @@ pub(crate) fn analysis_section(
         choice_row(ui, "Frequency resolution", &mut cfg.window, &options);
         if cfg.window == SpectrumWindow::Sweep {
             let range = crate::config::sweep_length_range();
-            for (value, label, end) in [
-                (&mut cfg.sweep_bass, "Bass listen", "20 Hz"),
-                (&mut cfg.sweep_treble, "Treble listen", "20 kHz"),
+            let fresh_cfg = crate::panes::fresh_spectrum();
+            for (value, fresh, label, end) in [
+                (&mut cfg.sweep_bass, fresh_cfg.sweep_bass, "Bass listen", "20 Hz"),
+                (&mut cfg.sweep_treble, fresh_cfg.sweep_treble, "Treble listen", "20 kHz"),
             ] {
                 ValueBar::new(value, range.clone(), label)
                     .unit(1.0, " samples")
                     .integer()
+                    .default_value(fresh)
                     .show(ui)
                     .on_hover_text(format!(
                         "How long the analyzer listens at {end}, as the length of an equivalent \
@@ -464,6 +506,7 @@ pub(crate) fn analysis_section(
                 BALLISTICS_MAX,
                 ["Live attack", "Live release"],
                 1000.0,
+                (crate::panes::fresh_spectrum().attack, crate::panes::fresh_spectrum().release),
             );
         });
     });

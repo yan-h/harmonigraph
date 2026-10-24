@@ -64,7 +64,7 @@ Shift makes keyboard adjustments finer.
 A fixed-width picture sits beside compact sliders with labels and value readouts.
 Very narrow panes stack the values below the picture.
 The sliders remain independently editable:
-drag a bar or double-click it to type in the displayed units.
+drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and Linux) to type in the displayed units.
 
 | Control | What the handles change |
 | --- | --- |
@@ -389,8 +389,9 @@ Lattice text shadows use local darkness.
 They attenuate bright slices and finished bloom only inside their footprint,
 with foreground ink covering shadows behind it.
 
-Drag a numeric bar to change its value, or double-click to type.
+Drag a numeric bar to change its value.
+As on the host's own controls, double-click resets it to its default and Cmd-click (Ctrl-click on Windows and Linux) types a value.
 Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.
-Multi-handle bars instead reset on double-click;
+Multi-handle bars have no typed entry and also reset on double-click;
 hover text describes what each handle moves.

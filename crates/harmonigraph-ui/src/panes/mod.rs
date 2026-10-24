@@ -323,6 +323,21 @@ pub(super) fn learn_pulse(now: f64) -> f32 {
     0.78 + 0.22 * (now * 2.0 * std::f64::consts::PI * 0.6).sin() as f32
 }
 
+/// The view a fresh state opens on, built once: where a double-click on one
+/// of its bars puts the value back (see [`ValueBar::default_value`]).
+pub(super) fn fresh_view() -> &'static harmonigraph_scene::ViewConfig {
+    static FRESH: std::sync::LazyLock<harmonigraph_scene::ViewConfig> =
+        std::sync::LazyLock::new(Default::default);
+    &FRESH
+}
+
+/// [`fresh_view`] for the spectrum's settings.
+pub(super) fn fresh_spectrum() -> &'static crate::SpectrumConfig {
+    static FRESH: std::sync::LazyLock<crate::SpectrumConfig> =
+        std::sync::LazyLock::new(Default::default);
+    &FRESH
+}
+
 /// One editable ValueBar for a parameter, with automation-gesture
 /// bracketing so a drag records as a single host gesture.
 pub(super) fn param_bar(
@@ -336,6 +351,7 @@ pub(super) fn param_bar(
         .eased(key.logarithmic())
         .unit(scale, suffix)
         .decimals(decimals)
+        .default_value(key.default_value())
         .show(ui);
     // Bracket drags so the host records one automation gesture per drag;
     // one-shot changes (typed values) go through set() alone.

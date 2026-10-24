@@ -168,7 +168,7 @@ impl Plot {
 /// A familiar scalar slider beside the combined gesture in the picture.
 pub(super) fn value_bar(
     ui: &mut Ui,
-    value: &mut f32,
+    (value, fresh): (&mut f32, f32),
     range: RangeInclusive<f32>,
     labels: [&str; 2],
     scale: f32,
@@ -183,8 +183,13 @@ pub(super) fn value_bar(
         .caption(labels[1])
         .unit(scale, suffix)
         .decimals(decimals)
+        .default_value(fresh)
         .show(ui)
-        .on_hover_text(format!("{} · drag to adjust, double-click to type", labels[0]))
+        .on_hover_text(format!(
+            "{} · drag to adjust, double-click to reset, {} to type",
+            labels[0],
+            super::type_gesture(ui.ctx()),
+        ))
 }
 
 pub(super) fn curve(plot: &Plot, ui: &Ui, sample: impl Fn(f32) -> (f32, f32), color: Color32) {

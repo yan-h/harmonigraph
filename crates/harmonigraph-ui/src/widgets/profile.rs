@@ -222,11 +222,11 @@ struct RangeGrab {
 /// ([`harmonigraph_scene::star_plan::star_profile`]), enlarged to the same
 /// size so the shape reads whatever `Star size` is, with the falloff that
 /// bends their glow beside them.
-pub(crate) fn star_profile(ui: &mut Ui, solid: [f32; 2], falloff: &mut f32) {
+pub(crate) fn star_profile(ui: &mut Ui, solid: [f32; 2], falloff: &mut f32, fresh: f32) {
     use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile};
     let plot = Plot::with_fields(ui, "Star shape · back, front", 1);
     plot.fields(ui, |ui| {
-        value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
+        value_bar(ui, (falloff, fresh), 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
         "One star from the back layer (left) and the front one (right), enlarged to the same size: Star size sets how big they really are, and Solid how much of each is at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
@@ -283,6 +283,7 @@ fn shadow_darkness(depth: f32, coverage: f32, lattice: bool) -> f32 {
 pub(crate) fn shadow(
     ui: &mut Ui,
     style: &mut harmonigraph_scene::ShadowStyle,
+    fresh: &harmonigraph_scene::ShadowStyle,
     max: f32,
     lattice: bool,
     text: bool,
@@ -291,9 +292,30 @@ pub(crate) fn shadow(
     let (unit, suffix) =
         if lattice { (100.0, "%") } else { (harmonigraph_render::SPECTRAL_WIDTH_POINTS, " pt") };
     plot.fields(ui, |ui| {
-        value_bar(ui, &mut style.width, 0.0..=max, ["Shadow width", "Width"], unit, suffix);
-        value_bar(ui, &mut style.depth, 0.0..=1.0, ["Shadow darkness", "Darkness"], 100.0, "%");
-        value_bar(ui, &mut style.spread, 0.0..=1.0, ["Shadow spread", "Spread"], 100.0, "%");
+        value_bar(
+            ui,
+            (&mut style.width, fresh.width),
+            0.0..=max,
+            ["Shadow width", "Width"],
+            unit,
+            suffix,
+        );
+        value_bar(
+            ui,
+            (&mut style.depth, fresh.depth),
+            0.0..=1.0,
+            ["Shadow darkness", "Darkness"],
+            100.0,
+            "%",
+        );
+        value_bar(
+            ui,
+            (&mut style.spread, fresh.spread),
+            0.0..=1.0,
+            ["Shadow spread", "Spread"],
+            100.0,
+            "%",
+        );
     });
     plot.response.clone().on_hover_text(
         "Shadow around a sample shape. Adjust Width, Darkness, and Spread to preview the result. The sample is scaled to fit; the shadow on each shape depends on its size and outline.",

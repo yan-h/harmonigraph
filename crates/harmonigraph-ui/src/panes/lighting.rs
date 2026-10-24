@@ -28,7 +28,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Audio rings, MIDI rings, melody and bass marks",
         true,
         false,
-        &mut shadow.lattice_geometry,
+        (&mut shadow.lattice_geometry, &super::fresh_view().shadow.lattice_geometry),
         Some(&mut view.hide_behind),
     );
     shadow_group(
@@ -37,7 +37,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Note names, tuning marks and idle crosses",
         true,
         true,
-        &mut shadow.lattice_text,
+        (&mut shadow.lattice_text, &super::fresh_view().shadow.lattice_text),
         None,
     );
 }
@@ -47,6 +47,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
 pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Spiral", |ui| {
         ValueBar::new(&mut appearance.view.spiral_bloom, SPIRAL_BLOOM_RANGE, "Spiral bloom")
+            .default_value(super::fresh_view().spiral_bloom)
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -64,7 +65,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             "Analyzer note names and axis labels, and Spiral note names",
             false,
             true,
-            &mut shadow.spectral_text,
+            (&mut shadow.spectral_text, &super::fresh_view().shadow.spectral_text),
             None,
         );
     });
@@ -75,6 +76,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
 fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     super::block(ui, "Note surround", |ui| {
         ValueBar::new(&mut cfg.note_cut, 0.0..=1.0, "Backdrop cut")
+            .default_value(super::fresh_spectrum().note_cut)
             .percent()
             .show(ui)
             .on_hover_text(
@@ -87,6 +89,7 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
             harmonigraph_render::SURROUND_REACH_RANGE,
             "Cut reach",
         )
+        .default_value(super::fresh_spectrum().note_cut_reach)
         .decimals(1)
         .unit(1.0, " pt")
         .show(ui)
@@ -99,6 +102,7 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
             harmonigraph_render::SURROUND_SHAPE_RANGE,
             "Cut shape",
         )
+        .default_value(super::fresh_spectrum().note_cut_shape)
         .percent()
         .magnet(0.0, 0.03)
         .curve(harmonigraph_render::surround_fade)
@@ -109,6 +113,7 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
                  100% holds near the note and drops steeply at the far end.",
         );
         ValueBar::new(&mut cfg.note_fill_lightness, 0.0..=100.0, "Fill lightness")
+            .default_value(super::fresh_spectrum().note_fill_lightness)
             .decimals(0)
             .show(ui)
             .on_hover_text(
@@ -124,6 +129,7 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
 pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
     ValueBar::new(strength, NOTE_BLOOM_RANGE, "Note bloom")
         .unit(1.0, "×")
+        .default_value(super::fresh_view().note_bloom)
         .show(ui)
         .on_hover_text(
             "Soft halos around bright notes. Shared by the Lattice and MIDI ribbons in the Analyzer. \
@@ -142,6 +148,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // half the bar, so a light meant to sit on its own node is still dialled a
     // hundredth at a time, and the far end is reachable in the same drag.
     ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Background glow reach")
+        .default_value(super::fresh_view().glow_reach)
         .eased(true)
         .unit(super::QUAD_UV_PERCENT, "%")
         .decimals(1)
@@ -153,6 +160,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
         );
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Background glow gain")
+            .default_value(super::fresh_view().glow_strength)
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -163,6 +171,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // both above 0, so either at 0 greys it, as it does the breathing.
     ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
             ValueBar::new(&mut view.glow_accumulation, GLOW_ACCUMULATION_RANGE, "Overlap buildup")
+                .default_value(super::fresh_view().glow_accumulation)
                 .percent()
                 .show(ui)
                 .on_hover_text(
@@ -176,6 +185,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
                 "Falloff curve",
             )
+            .default_value(super::fresh_view().glow_curve.shape)
             .decimals(2)
             .magnet(0.0, 0.15)
             .display(|shape| format!("{shape:+.2}"))
@@ -193,6 +203,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             // percentage because it is a SHARE — of a whole turn — and not a
             // distance.
             ValueBar::new(&mut view.glow_blend, GLOW_BLEND_RANGE, "Color smoothing")
+                .default_value(super::fresh_view().glow_blend)
                 .percent()
                 .show(ui)
                 .on_hover_text(
@@ -210,6 +221,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // rest of the lattice always taking the whole field, for the reason the
         // hover text gives.
         ValueBar::new(&mut view.glow_wash, GLOW_WASH_RANGE, "Light on notes")
+            .default_value(super::fresh_view().glow_wash)
             .percent()
             .show(ui)
             .on_hover_text(
@@ -226,13 +238,16 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 GLOW_BALLISTICS_MAX,
                 ["Background glow attack", "Background glow release"],
                 1000.0,
+                (super::fresh_view().glow_attack, super::fresh_view().glow_release),
             );
         });
     });
     ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
         ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
+            .default_value(super::fresh_view().atmosphere.breath_amount)
             .percent().show(ui).on_hover_text("Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.");
         ValueBar::new(&mut view.atmosphere.breath_speed, BREATH_SPEED_MIN..=BREATH_SPEED_MAX, "Breathing speed")
+            .default_value(super::fresh_view().atmosphere.breath_speed)
             .unit(1.0, "×").show(ui).on_hover_text("1× is the original slow breathing. 0 keeps the halo at its normal brightness.");
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Reset breathing").clicked() {
@@ -250,12 +265,12 @@ fn shadow_group(
     casters: &str,
     lattice: bool,
     text: bool,
-    style: &mut ShadowStyle,
+    (style, fresh): (&mut ShadowStyle, &ShadowStyle),
     hide_behind: Option<&mut f32>,
 ) {
     super::block(ui, name, |ui| {
         let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
-        crate::widgets::shadow(ui, style, width_max, lattice, text);
+        crate::widgets::shadow(ui, style, fresh, width_max, lattice, text);
         // Under the diagram rather than in its value column: the preview draws
         // the visible shadow, which this does not move, and the column holds
         // three rows. Greyed at Width 0, which packs no field for it to spend.
@@ -263,6 +278,7 @@ fn shadow_group(
             ui.add_enabled_ui(style.width > 0.0, |ui| {
                 ValueBar::new(hide_behind, HIDE_BEHIND_RANGE, "Hide behind")
                     .percent()
+                    .default_value(super::fresh_view().hide_behind)
                     .show(ui)
                     .on_hover_text(
                         "How much a ring in front hides the rings, marks, names and crosses \
