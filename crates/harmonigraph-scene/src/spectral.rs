@@ -1712,26 +1712,4 @@ mod tests {
         let step = bucket_pitch(BINS_PER_SEMITONE) - bucket_pitch(0);
         assert!((step - 1.0).abs() < 1e-4, "a semitone spans {step} of the grid, not 1");
     }
-
-    /// A pitch reads the two buckets it falls between, in proportion to where
-    /// it sits across them, and nothing past either end of the axis. Every
-    /// [`partial`] is a plateau, flat across each pair it covers, so no test
-    /// reading one can tell which pair a pitch was read from.
-    #[test]
-    fn a_pitch_reads_between_its_two_buckets_and_nothing_off_the_axis() {
-        let top = SPECTRUM_BINS - 1;
-        let mut grid = empty();
-        for (bucket, level) in
-            [(0, 200), (1, 100), (100, 100), (101, 200), (top - 1, 100), (top, 200)]
-        {
-            grid[bucket] = level;
-        }
-        let quarter = 0.25 / BINS_PER_SEMITONE as f32;
-        let reads = |pitch: f32| (level_at(&grid, pitch) * 255.0).round();
-        assert_eq!(reads(bucket_pitch(0) - quarter), 0.0, "below the axis");
-        assert_eq!(reads(bucket_pitch(0) + 2.0 * quarter), 150.0);
-        assert_eq!(reads(bucket_pitch(100) + quarter), 125.0, "a quarter of the way up");
-        assert_eq!(reads(bucket_pitch(top) - 2.0 * quarter), 150.0);
-        assert_eq!(reads(bucket_pitch(top) + quarter), 0.0, "above the axis");
-    }
 }

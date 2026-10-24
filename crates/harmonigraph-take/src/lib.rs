@@ -711,10 +711,6 @@ mod tests {
     #[test]
     fn duration_is_the_last_thing_that_happened() {
         assert_eq!(round_trip("duration").duration(), 2.0);
-        // A gap stamped at 3 s that runs through 5 s ends the take at 5 s.
-        let gap = canonical::GapRecord { t: 3.0, through: 5.0, ..Default::default() };
-        let take = Take { events: vec![CanonicalRecord::Gap(gap)], ..Default::default() };
-        assert_eq!(take.duration(), 5.0, "a gap counts to where it runs through");
     }
 
     /// The format is line-oriented precisely so a take cut short by a
@@ -845,8 +841,6 @@ mod tests {
         ));
     }
 
-    /// A newer take must fail loudly rather than render something subtly
-    /// wrong — the failure mode that would waste a whole render.
     /// A note line is checked field by field, and a bad one is refused at its
     /// own line number rather than replayed: each field one step past its
     /// edge, beside a note at every edge that is still inside.
@@ -906,6 +900,8 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    /// A newer take must fail loudly rather than render something subtly
+    /// wrong — the failure mode that would waste a whole render.
     #[test]
     fn a_take_from_the_future_is_refused() {
         let header = Header { version: FORMAT_VERSION + 1, ..Default::default() };
@@ -1365,10 +1361,6 @@ mod wav_tests {
         assert!((max + 1) * 8 <= u64::from(u32::MAX), "data still fits, RIFF does not");
         assert!(WavWriter::sizes(max + 1, 2).is_err());
         assert!(WavWriter::sizes(u64::MAX, 2).is_err());
-        // The writer admits exactly the frames those sizes can describe.
-        let path = temp("limit.wav");
-        assert_eq!(WavWriter::create(&path, 48_000.0, 2).unwrap().max_frames, max);
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

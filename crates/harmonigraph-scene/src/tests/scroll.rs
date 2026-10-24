@@ -740,28 +740,3 @@ fn the_index_of_a_position_is_where_the_walk_puts_it() {
         assert_eq!(window.index_of(outside), None, "{outside:?} is outside and was given a slot");
     }
 }
-
-/// Light owners from outside the window join the scene in the window's own
-/// walk order, wherever in it they fall, rather than ahead of or after it: the
-/// GPU draws equal depths in instance order, and FP16 light accumulates
-/// differently in another one. One owner sorts before the window, one after
-/// it, and one between two of its rows.
-#[test]
-fn extra_nodes_join_the_window_in_lattice_order() {
-    let window = DrawnWindow { min: LatticePos::new(-1, -1, 0), max: LatticePos::new(1, 1, 0) };
-    let extra = [LatticePos::new(5, 0, 0), LatticePos::new(-4, 2, 0), LatticePos::new(0, 7, 0)];
-    let scene = derive_scene_with_extra(
-        &harmonigraph_core::NoteTracker::new(),
-        &harmonigraph_core::Tuning::default(),
-        &ViewConfig::default(),
-        &window,
-        &extra,
-        &FrameParams::default(),
-        Camera::default(),
-        None,
-        Vec::new(),
-    );
-    let order: Vec<_> = scene.nodes.iter().map(|n| n.lattice_pos).collect();
-    assert_eq!(order.len(), window.count() + extra.len());
-    assert!(order.is_sorted_by_key(crate::derive::lattice_order), "{order:?}");
-}

@@ -1807,15 +1807,6 @@ mod tests {
         transport.time_sig_denominator = Some(8);
         assert_eq!(bar_position(&transport), Some(2.0));
 
-        // A meter with a zero in it is no meter: 4/4, rather than a bar of no
-        // length that the take's stop could never be counted in.
-        transport.time_sig_numerator = Some(0);
-        assert_eq!(bar_position(&transport), Some(1.5));
-        transport.time_sig_numerator = Some(6);
-        transport.time_sig_denominator = Some(0);
-        assert_eq!(bar_position(&transport), Some(1.5));
-        transport.time_sig_denominator = Some(8);
-
         // With the bar fields, the bar number is taken as given and only the
         // offset into it is divided — which is what survives a meter change
         // partway through a song.

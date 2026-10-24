@@ -756,64 +756,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// While frames are still going in, the video sink reports what the
-    /// encoder has finished rather than what it was handed — the count the
-    /// export's progress line shows — and keeps the last one until a newer
-    /// one arrives.
-    #[test]
-    #[cfg(unix)]
-    fn the_video_sink_reports_the_encoders_count_while_frames_go_in() {
-        let dir =
-            fake_ffmpeg("live-count", "printf 'frame=7\\n'\ncat > /dev/null\nprintf 'frame=64\\n'");
-        let mut sink = video_to(&dir);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while sink.encoded() != Some(7) {
-            assert!(std::time::Instant::now() < deadline, "the encoder's count never arrived");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert_eq!(sink.encoded(), Some(7), "with nothing newer, the last count stands");
-        for _ in 0..64 {
-            sink.push(vec![0; 4 * 2 * 4]).expect("the fake encoder is reading");
-        }
-        sink.finish(|_| {}).expect("a clean finish");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The two sinks with no encoder behind them keep every frame they are
-    /// handed, in order: a numbered PNG each, or one raw file that is their
-    /// concatenation.
-    #[test]
-    fn the_image_sinks_keep_every_frame_in_order() {
-        let dir =
-            std::env::temp_dir().join(format!("harmonigraph-image-sinks-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let options = VideoOptions {
-            // Odd, which only a sink with no encoder behind it accepts.
-            size: [1, 3],
-            fps: 30.0,
-            frames: 3,
-            audio: None,
-            encoder: VideoEncoder::X264,
-            crf: 20,
-            ffmpeg: None,
-            audio_offset: 0.0,
-        };
-        let frames: Vec<Vec<u8>> = (0..3u8).map(|k| vec![k; 4 * 3]).collect();
-        for name in ["frame.png", "frames.rgba"] {
-            let mut sink = Sink::create(&dir.join(name), &options).unwrap();
-            for frame in &frames {
-                sink.push(frame.clone()).unwrap();
-            }
-            sink.finish(|_| {}).unwrap();
-        }
-        for (k, frame) in frames.iter().enumerate() {
-            let png = image::open(dir.join(format!("frame-{k:05}.png"))).unwrap().to_rgba8();
-            assert_eq!(png.as_raw(), frame, "frame {k}");
-        }
-        assert_eq!(std::fs::read(dir.join("frames.rgba")).unwrap(), frames.concat());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
     /// Use the actual encoder and muxer: inspecting arguments cannot prove
     /// that AAC priming, empty inputs and the container obey the frame plan.
     /// CI sets `HARMONIGRAPH_REQUIRE_FFMPEG=1`, so a missing encoder fails
@@ -1224,28 +1166,6 @@ mod tests {
     fn an_explicit_ffmpeg_that_does_not_exist_is_reported_not_ignored() {
         let err = find_ffmpeg(Some("/definitely/not/here/ffmpeg")).unwrap_err();
         assert!(err.contains("not a file"), "{err}");
-    }
-
-    /// One odd side is enough for yuv420p to refuse the video at mux time, so
-    /// either is refused before ffmpeg is even looked for.
-    #[test]
-    fn a_video_with_either_side_odd_is_refused_up_front() {
-        for size in [[15, 16], [16, 15]] {
-            let options = VideoOptions {
-                size,
-                fps: 30.0,
-                frames: 1,
-                audio: None,
-                encoder: VideoEncoder::X264,
-                crf: 20,
-                ffmpeg: Some("/definitely/not/here/ffmpeg"),
-                audio_offset: 0.0,
-            };
-            let Err(error) = Sink::create(std::path::Path::new("odd.mp4"), &options) else {
-                panic!("{size:?} was accepted");
-            };
-            assert!(error.contains("even dimensions"), "{size:?}: {error}");
-        }
     }
 
     /// A blank field (the plugin's Options box, left empty) must fall

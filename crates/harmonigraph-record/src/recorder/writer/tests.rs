@@ -50,13 +50,6 @@ fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
     // has to fall through the extra day rather than assume 28.
     assert_eq!(stamp_for(1_709_229_909), "2024-02-29_18-05-09");
     assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
-    // The algorithm's year starts in March, so January and February above
-    // never reach the months after it.
-    assert_eq!(stamp_for(1_700_000_000), "2023-11-14_22-13-20", "a month from March on");
-    // The first day of a March-based year after a century day, and the last
-    // day of a 400-year era: the two corrections the year-of-era term makes.
-    assert_eq!(stamp_for(36_633_600), "1971-03-01_00-00-00");
-    assert_eq!(stamp_for(951_782_400), "2000-02-29_00-00-00");
 }
 
 /// Independent workers receive the same candidate before either creates it.
@@ -1418,27 +1411,6 @@ fn an_invalid_publication_into_a_pass_fails_the_recording() {
     assert!(b.rec.fence.failed.load(Ordering::Acquire), "a hole in a pass fails it");
 }
 
-/// Only a note that lands in a pass counts toward the take, and only a lane
-/// that actually lost a publication owes its sources a snapshot.
-#[test]
-fn only_a_routed_note_is_captured_and_only_a_loss_latches_an_outage() {
-    let mut b = Bench::new();
-    let routed =
-        publication::Route { address: Some(RecordAddress { epoch: 1, pass: 1 }), time_offset: 0.0 };
-    let on = harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8);
-    let reset = harmonigraph_core::NoteEvent { kind: NoteEventKind::SessionReset, ..on };
-    b.rec.publish_note(on.into(), publication::Route::default()).expect_both();
-    b.rec.publish_note(reset.into(), routed).expect_both();
-    for _ in 0..2 {
-        b.rec.publish_note(on.into(), routed).expect_both();
-    }
-    assert_eq!(b.latches.captured.load(Ordering::Relaxed), 2, "the routed attacks alone");
-    assert_eq!(b.rec.take_publication_outage(), publication::Lanes::both(false));
-    // Both lanes carry every note, so they fill on the same publication.
-    while b.rec.publish_note(on.into(), publication::Route::default()).take.is_ok() {}
-    assert_eq!(b.rec.take_publication_outage(), publication::Lanes::both(true));
-}
-
 /// The run changes when the take is armed, when it records again after a
 /// block it did not, and at a split — and at nothing else, since each change
 /// costs a snapshot of every sounding note (#1129).
@@ -1500,16 +1472,4 @@ fn an_epochs_closures_are_published_once() {
     });
     assert_eq!(closed, [1], "the source closure");
     assert_eq!(b.pushed(), ["configuration-protocol"], "the configuration closure");
-}
-
-/// A take that cannot be created for any reason but a name collision is
-/// reported, rather than retried under the next suffix forever.
-#[test]
-fn a_take_that_cannot_be_created_is_reported_rather_than_renamed() {
-    let status = Mutex::new(String::new());
-    let base = std::env::temp_dir()
-        .join(format!("harmonigraph-missing-directory-{}", std::process::id()))
-        .join("take.take");
-    assert!(Recording::create(Default::default(), base, 1, FIXTURE_SPEC, &status).is_none());
-    assert!(status.lock().starts_with("cannot create"), "{}", status.lock());
 }

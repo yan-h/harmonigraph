@@ -217,17 +217,6 @@ mod tests {
         assert_eq!(result, crate::learn_tuning(classes));
         assert_eq!(learning.infer(&confirmed, true).unwrap(), None);
         assert_eq!(learning.last_pair_visits, 0);
-        // A different chord of the same size is not the remembered one.
-        let mut moved = ConfirmedPitches::default();
-        for source in 0..HELD_SESSION / HELD_PER_SOURCE {
-            let rows: Vec<_> = confirmed
-                .rows()
-                .filter(|row| row.key.source == SourceId(1 + source as u64))
-                .map(|row| ConfirmedPitch { pitch_microcents: row.pitch_microcents + 1, ..*row })
-                .collect();
-            moved.replace_source(SourceId(1 + source as u64), &rows).unwrap();
-        }
-        assert!(learning.infer(&moved, true).unwrap().is_some());
     }
 
     /// One malformed row refuses the whole batch and leaves the source

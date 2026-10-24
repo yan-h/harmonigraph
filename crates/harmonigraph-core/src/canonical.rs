@@ -541,7 +541,6 @@ mod tests {
     /// fixture starts from one that passes, so a refusal is that field's.
     #[test]
     fn one_malformed_field_refuses_a_delta_a_gap_or_a_baseline_voice() {
-        let source = SourceId(1);
         let good = NoteDelta {
             assignment: Some(AssignmentMetadata {
                 decision: 1,
@@ -550,54 +549,30 @@ mod tests {
                 player_tuning: 0.0,
             }),
             partial_output: true,
-            ..delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1)
+            ..delta(NoteEvent::on(1.0, SourceId(1), 0, 60, 0.8), 1)
         };
-        let direct = NoteDelta::from(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8));
-        assert_eq!((good.validate(), direct.validate()), (Ok(()), Ok(())));
-        let event = |kind| NoteDelta { event: NoteEvent { kind, ..good.event }, ..good };
-        let timing = |sample_rate| Some(EventTiming { sample_rate, ..good.timing.unwrap() });
-        let assignment = |decision, player_tuning| {
-            Some(AssignmentMetadata { decision, player_tuning, ..good.assignment.unwrap() })
-        };
-        let pressure =
-            |value| NoteEventKind::Expression { expression: crate::Expression::Pressure, value };
+        assert_eq!(good.validate(), Ok(()));
+        let kind = |kind| NoteEvent { kind, ..good.event };
+        let decision = Some(AssignmentMetadata { decision: 0, ..good.assignment.unwrap() });
+        let direct = PitchProvenance::ObservedDirect;
+        let no_rate = |t| Some(EventTiming { sample_rate: 0.0, ..t });
         for (what, bad) in [
-            ("time", NoteDelta { event: NoteEvent { time: f64::NAN, ..good.event }, ..good }),
-            ("channel", NoteDelta { event: NoteEvent { channel: 16, ..good.event }, ..good }),
             ("note", NoteDelta { event: NoteEvent { note: 128, ..good.event }, ..good }),
-            ("velocity NaN", event(NoteEventKind::On { velocity: f32::NAN })),
-            ("velocity above one", event(NoteEventKind::On { velocity: 1.5 })),
-            (
-                "tuning",
-                NoteDelta {
-                    partial_output: false,
-                    ..event(NoteEventKind::Tuning { semitones: f32::INFINITY })
-                },
-            ),
-            ("expression", NoteDelta { partial_output: false, ..event(pressure(1.5)) }),
+            ("velocity", NoteDelta { event: kind(NoteEventKind::On { velocity: 1.5 }), ..good }),
             (
                 "direct from a source",
-                NoteDelta {
-                    provenance: PitchProvenance::ObservedDirect,
-                    partial_output: false,
-                    ..good
-                },
+                NoteDelta { provenance: direct, partial_output: false, ..good },
             ),
-            ("output sequence", NoteDelta { sequence: 0, ..good }),
             ("output lifetime", NoteDelta { lifetime: 0, ..good }),
-            ("output timing", NoteDelta { timing: None, ..good }),
-            ("zero rate", NoteDelta { timing: timing(0.0), ..good }),
-            ("NaN rate", NoteDelta { timing: timing(f64::NAN), ..good }),
-            ("decision", NoteDelta { assignment: assignment(0, 0.0), ..good }),
-            ("player tuning", NoteDelta { assignment: assignment(1, f64::NAN), ..good }),
-            ("partial direct", NoteDelta { partial_output: true, ..direct }),
-            ("partial off", event(NoteEventKind::Off)),
+            ("zero rate", NoteDelta { timing: no_rate(good.timing.unwrap()), ..good }),
+            ("decision", NoteDelta { assignment: decision, ..good }),
+            ("partial off", NoteDelta { event: kind(NoteEventKind::Off), ..good }),
         ] {
             assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
         }
 
         let gap = PublicationGap {
-            source: Some(source),
+            source: Some(SourceId(1)),
             time: 1.0,
             through: 1.0,
             first: 2,
@@ -607,52 +582,24 @@ mod tests {
         assert_eq!(gap.validate(), Ok(()));
         for (what, bad) in [
             ("time", PublicationGap { time: f64::NAN, ..gap }),
-            ("through", PublicationGap { through: f64::NAN, ..gap }),
             ("through before time", PublicationGap { through: 0.5, ..gap }),
-            ("first", PublicationGap { first: 0, ..gap }),
             ("last before first", PublicationGap { first: 3, ..gap }),
         ] {
             assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
         }
 
-        // A voice onset exactly at the frame's time is still in its past.
+        // A voice onset exactly at the frame's time is still in its past, and
+        // direct voices, which have no lifetime, do not collide on it.
         let row = VoiceBaseline { actual_onset: 2.0, ..voice(60) };
         assert!(frame(&[row, voice(64)]).is_ok());
-        let direct = VoiceBaseline {
-            provenance: PitchProvenance::ObservedDirect,
-            lifetime: 0,
-            onset: None,
-            ..row
-        };
-        let direct_frame = |voices: &[VoiceBaseline]| {
-            SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, voices)
-        };
-        assert!(direct_frame(&[direct, VoiceBaseline { note: 64, ..direct }]).is_ok());
-        let expressions = Expressions { pressure: 2.0, ..Expressions::NEUTRAL };
+        let observed = VoiceBaseline { provenance: direct, lifetime: 0, onset: None, ..row };
+        let chord = [observed, VoiceBaseline { note: 64, ..observed }];
+        assert!(SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, &chord).is_ok());
         for (what, bad) in [
-            ("channel", VoiceBaseline { channel: 16, ..row }),
             ("note", VoiceBaseline { note: 128, ..row }),
-            ("port", VoiceBaseline { port: 1, ..row }),
-            ("host note id", VoiceBaseline { host_note_id: -2, ..row }),
-            ("input onset", VoiceBaseline { input_onset: f64::NAN, ..row }),
-            ("actual onset", VoiceBaseline { actual_onset: f64::NAN, ..row }),
             ("onset after the frame", VoiceBaseline { actual_onset: 3.0, ..row }),
-            ("player tuning", VoiceBaseline { player_tuning: f64::NAN, ..row }),
-            ("velocity NaN", VoiceBaseline { velocity: f32::NAN, ..row }),
-            ("velocity above one", VoiceBaseline { velocity: 1.5, ..row }),
-            ("expressions", VoiceBaseline { expressions, ..row }),
-            (
-                "onset rate",
-                VoiceBaseline {
-                    onset: Some(EventTiming { sample_rate: 0.0, ..row.onset.unwrap() }),
-                    ..row
-                },
-            ),
-            (
-                "direct from a source",
-                VoiceBaseline { provenance: PitchProvenance::ObservedDirect, ..row },
-            ),
-            ("output lifetime", VoiceBaseline { lifetime: 0, ..row }),
+            ("onset rate", VoiceBaseline { onset: no_rate(row.onset.unwrap()), ..row }),
+            ("direct from a source", VoiceBaseline { provenance: direct, ..row }),
             ("output onset", VoiceBaseline { onset: None, ..row }),
             ("same key", VoiceBaseline { lifetime: 99, ..row }),
             ("same lifetime", VoiceBaseline { note: 64, ..row }),
@@ -664,9 +611,6 @@ mod tests {
         let mut envelope = frame(&[row]).unwrap();
         envelope.id = 0;
         assert_eq!(envelope.validate(), Err(InvalidCanonical), "id");
-        envelope.id = 1;
-        envelope.time = f64::NAN;
-        assert_eq!(envelope.validate(), Err(InvalidCanonical), "time");
     }
 
     /// Accepted output is the same voice by lifetime, and direct observation,

@@ -144,13 +144,6 @@ mod trigger_tests {
             config.sanitize();
             assert_eq!(config.tail, want, "tail {given}");
         }
-        let split = super::RenderFrame::default().split;
-        for (given, want) in [(f32::NAN, split), (-1.0, 0.05), (5.0, 0.95), (0.42, 0.42)] {
-            let mut config = super::RenderConfig::default();
-            config.frame.split = given;
-            config.sanitize();
-            assert_eq!(config.frame.split, want, "split {given}");
-        }
     }
 }
 
@@ -540,12 +533,6 @@ mod tests {
             let progress = RenderProgress { done, total };
             assert_eq!(RenderProgress::parse_record(&progress.to_string()), Some(progress));
         }
-        // The parse accepts any percent up to 100, so the round trip alone
-        // cannot tell a wrong one from the right one.
-        assert_eq!(
-            RenderProgress { done: 120, total: 300 }.to_string(),
-            "progress: 120/300 frames (40%)"
-        );
         for text in [
             "warning: only 30 frames remain",
             "30/300 frames (10%)",

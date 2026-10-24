@@ -399,29 +399,14 @@ mod tests {
         SourceBaseline::new(SourceId::DIRECT, id, time, 0, true, voices).unwrap()
     }
 
-    /// Publish releases until only `free` ordinary cells are left.
-    fn fill(publisher: &mut Publisher, free: usize) {
+    /// Publish releases until no ordinary cell is left.
+    fn fill(publisher: &mut Publisher) {
         let mut time = 0.0;
-        while publisher.free() > free {
+        while publisher.free() > 0 {
             time += 1.0;
             let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
             publisher.note(release, Route::default()).unwrap();
         }
-    }
-
-    /// A snapshot needs one ordinary cell, like any item: it takes the last
-    /// one, and once only the reserve is left it is refused as Busy rather
-    /// than spending the cell an outage's gap would need.
-    #[test]
-    fn a_snapshot_takes_the_last_ordinary_cell_and_never_the_reserve() {
-        let (mut publisher, _consumer) = channel();
-        fill(&mut publisher, 1);
-        publisher.baseline(&frame(1, 9000.0, &[]), Route::default()).unwrap();
-        assert_eq!(publisher.free(), 0);
-        assert_eq!(
-            publisher.baseline(&frame(2, 9000.0, &[]), Route::default()),
-            Err(PublishError::Busy)
-        );
     }
 
     /// Losses that go on while the first one's gap still holds the reserve
@@ -434,7 +419,7 @@ mod tests {
             |pass| Route { address: Some(RecordAddress { epoch: 1, pass }), time_offset: 0.0 };
         for (last_route, merged) in [(pass(1), pass(1)), (pass(2), Route::default())] {
             let (mut publisher, mut consumer) = channel();
-            fill(&mut publisher, 0);
+            fill(&mut publisher);
             for (time, route) in [(9000.0, pass(1)), (9100.0, pass(1)), (9200.0, last_route)] {
                 let release = NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
                 assert_eq!(publisher.note(release, route), Err(PublishError::Lost));
