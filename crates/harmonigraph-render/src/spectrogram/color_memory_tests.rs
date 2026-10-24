@@ -12,7 +12,7 @@ fn memory(resources: &CallbackResources) -> &Memory {
         .get::<SpectrogramResources>()
         .unwrap()
         .panes
-        .get(0)
+        .get(&0)
         .unwrap()
         .cloud
         .as_ref()
@@ -472,7 +472,7 @@ fn star_passes_shade_the_layouts_rows_and_carry_its_last_one() {
     let last_row = (rows as usize - 1) * STAR_ATLAS_WIDTH as usize;
     assert!(cells > last_row, "the layout's last row holds no cell");
     let atlas = {
-        let cloud = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let cloud = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
         let atlas = cloud.cloud.as_ref().unwrap().stars.as_ref().unwrap().atlas.texture();
         texels(&device, &queue, atlas, allocation)
     };
@@ -588,7 +588,7 @@ fn resolution_changes_carry_stars_color_history() {
             .get::<SpectrogramResources>()
             .unwrap()
             .panes
-            .get(0)
+            .get(&0)
             .unwrap()
             .cloud
             .as_ref()
@@ -678,7 +678,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
             .get::<SpectrogramResources>()
             .unwrap()
             .panes
-            .get(0)
+            .get(&0)
             .unwrap()
             .cloud
             .as_ref()
@@ -700,7 +700,7 @@ fn a_look_turned_off_holds_no_color_history() {
     let mut cb = fixture(CloudStyle::Watercolor);
     cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
     let held = |resources: &CallbackResources| {
-        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
         pane.cloud.as_ref().unwrap().memory.is_some()
     };
     let mut resources = CallbackResources::default();
@@ -805,7 +805,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         cb.atmosphere.as_mut().unwrap().settings = shipped;
         let mut resources = fresh();
         hold(&mut cb, &mut resources);
-        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
         let targets = pane.cloud.as_ref().unwrap();
         let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
         assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");

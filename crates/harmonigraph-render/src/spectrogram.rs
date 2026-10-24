@@ -20,12 +20,12 @@
 
 use crate::uniforms::{uniform_group, Float2};
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const SPECTROGRAM_SRC: &str = concat!(
@@ -170,9 +170,10 @@ impl SpectrogramVertex {
     };
 }
 
-/// Draw `vertices` (a triangle list) into `rect`. See [`crate::PaneIds`]: each
-/// pane id gets its own grid copy, which is the expensive thing here, and the
-/// pipeline is shared.
+/// Draw `vertices` (a triangle list) into `rect`. `pane_id` is unique per
+/// spectrogram drawing in the same frame and the same across frames for one
+/// live copy: each id gets its own grid copy, which is the expensive thing
+/// here, and the pipeline is shared — see [`SpectrogramResources::panes`].
 #[allow(clippy::too_many_arguments)]
 pub fn spectrogram_paint_callback(
     rect: egui::Rect,
@@ -181,7 +182,7 @@ pub fn spectrogram_paint_callback(
     read: SpectrogramRead,
     shades: SpectrogramShades,
     target_format: wgpu::TextureFormat,
-    ids: crate::PaneIds,
+    pane_id: u64,
     atmosphere: Option<SpectrogramAtmosphere>,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
@@ -193,8 +194,7 @@ pub fn spectrogram_paint_callback(
             read,
             shades,
             target_format,
-            pane_id: ids.pane,
-            pass_nr: ids.pass_nr,
+            pane_id,
             atmosphere,
         },
     )
@@ -209,7 +209,6 @@ struct SpectrogramCallback {
     shades: SpectrogramShades,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
-    pass_nr: u64,
     atmosphere: Option<SpectrogramAtmosphere>,
 }
 
@@ -264,11 +263,13 @@ struct SpectrogramResources {
     cloud: Option<atmosphere::Pipelines>,
     layout: wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
-    /// A closed spectrogram would otherwise hold its grid copy, so a closed
-    /// tab keeping one is worth a sweep, and a pane hidden for a frame is worth
-    /// not rebuilding. The age it sweeps at is
-    /// [`crate::pass_aged::TTL_PASSES`].
-    panes: PassAged<SpectrogramPane>,
+    /// Every spectrogram this renderer has drawn, by pane id, and never
+    /// swept, like the lattice's panes. An id is a surface, so the map
+    /// holds as many entries as there are surfaces, and it goes with the
+    /// `CallbackResources` it lives in when the editor window closes or the
+    /// export ends. Until then a hidden tab or a closed preview keeps its grid
+    /// copy and the cloud's targets, so switching back rebuilds nothing.
+    panes: HashMap<u64, SpectrogramPane>,
 }
 
 /// The resource owner remembers only the snapshot it actually uploaded.
@@ -404,22 +405,19 @@ impl SpectrogramResources {
             cloud: None,
             layout,
             target_format,
-            panes: PassAged::new(),
+            panes: HashMap::new(),
         }
     }
 }
 
 impl SpectrogramPane {
-    /// This pane's buffers, made on first sight of its id and stamped with
-    /// `pass_nr` so the sweep can tell a live pane from one whose tab was
-    /// closed.
+    /// This pane's buffers, made on first sight of its id.
     fn get<'a>(
-        panes: &'a mut PassAged<SpectrogramPane>,
+        panes: &'a mut HashMap<u64, SpectrogramPane>,
         device: &wgpu::Device,
         pane_id: u64,
-        pass_nr: u64,
     ) -> &'a mut SpectrogramPane {
-        panes.touched_or_insert_with(pane_id, pass_nr, || SpectrogramPane {
+        panes.entry(pane_id).or_insert_with(|| SpectrogramPane {
             uniform_buffer: crate::gpu_memory::buffer(
                 device,
                 &wgpu::BufferDescriptor {
@@ -526,13 +524,7 @@ impl CallbackTrait for SpectrogramCallback {
         let resources: &mut SpectrogramResources =
             callback_resources.get_mut().expect("inserted above when missing");
         let SpectrogramResources { layout, panes, cloud, .. } = resources;
-        // A spectrogram's id is its surface (the docked pane, the Render
-        // preview), and a closed tab simply stops calling back — so the panes
-        // still being prepared are the only evidence of which ones exist.
-        // Swept from whichever pane IS preparing, so a lone survivor still
-        // clears the others.
-        panes.evict_unseen(self.pass_nr);
-        let pane = SpectrogramPane::get(panes, device, self.pane_id, self.pass_nr);
+        let pane = SpectrogramPane::get(panes, device, self.pane_id);
         pane.cloud_ready = false;
 
         let bins = self.grid.bins as usize;
@@ -842,7 +834,7 @@ impl CallbackTrait for SpectrogramCallback {
         let Some(resources) = callback_resources.get::<SpectrogramResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(self.pane_id) else {
+        let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
         let Some(bind_group) = &pane.bind_group else {
@@ -900,18 +892,12 @@ pub struct SpectrogramHeadless {
     device: wgpu::Device,
     queue: wgpu::Queue,
     resources: CallbackResources,
-    pass_nr: u64,
 }
 
 impl SpectrogramHeadless {
     pub fn new() -> Option<SpectrogramHeadless> {
         let (device, queue) = crate::gpu_harness::headless_device()?;
-        Some(SpectrogramHeadless {
-            device,
-            queue,
-            resources: CallbackResources::default(),
-            pass_nr: 0,
-        })
+        Some(SpectrogramHeadless { device, queue, resources: CallbackResources::default() })
     }
 
     /// Simulate closing the renderer while preserving its callers' CPU snapshots.
@@ -941,7 +927,6 @@ impl SpectrogramHeadless {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
-        self.pass_nr = self.pass_nr.wrapping_add(1);
         let callback = SpectrogramCallback {
             rect,
             atmosphere: None,
@@ -951,7 +936,6 @@ impl SpectrogramHeadless {
             shades,
             target_format: format,
             pane_id,
-            pass_nr: self.pass_nr,
         };
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
         let mut encoder = self.device.create_command_encoder(&Default::default());

@@ -255,7 +255,6 @@ fn cloud_costs_by_style_and_dial() {
                 fill,
                 ..
             } = case;
-            cb.pass_nr = frame as u64;
             cb.atmosphere = turn.map(|turn| {
                 let mut settings = SpectralAtmosphere {
                     cloud_style: CloudStyle::Watercolor,

@@ -56,7 +56,6 @@ fn callback(instances: Vec<RollInstance>, cut: crate::SurroundCut) -> RollCallba
         cut,
         target_format: FORMAT,
         pane_id: 0,
-        pass_nr: 0,
     }
 }
 
@@ -615,7 +614,7 @@ fn switching_the_cut_off_drops_its_targets() {
     let holds = |resources: &CallbackResources| {
         resources
             .get::<RollResources>()
-            .and_then(|r| r.panes.get(0))
+            .and_then(|r| r.panes.get(&0))
             .is_some_and(|pane| pane.holdout.is_some())
     };
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -1527,7 +1526,7 @@ fn the_bloom_adds_light_around_a_note() {
         let (_, resources) =
             draw_bloomed_resourced(&device, &queue, vec![note], TOP, strength, black);
         let roll: &RollResources = resources.get().expect("the callback inserts its resources");
-        roll.panes.get(0).expect("the roll prepared a pane").bloom.is_some()
+        roll.panes.get(&0).expect("the roll prepared a pane").bloom.is_some()
     };
     assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
     assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
@@ -1581,8 +1580,7 @@ fn a_notes_bloom_follows_its_opacity_reading() {
     );
 }
 
-/// One `prepare` of `cb` against `resources`, submitted — the unit both
-/// tests below count in, since a pane's age is measured in these.
+/// One `prepare` of `cb` against `resources`, submitted.
 fn prepare_once(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -1631,7 +1629,7 @@ fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
     let roll: &RollResources = resources.get().expect("prepare inserts its resources");
     let bloom = roll
         .panes
-        .get(0)
+        .get(&0)
         .expect("the roll prepared a pane")
         .bloom
         .as_ref()
@@ -1653,15 +1651,16 @@ fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
     );
 }
 
-/// A pane that stops being drawn gives its buffers and its bloom chain
-/// back, rather than holding three textures the size of the pane it was
-/// last shown at for as long as the plugin is loaded.
+/// Two rolls in one frame keep a chain each, and one that stops drawing keeps
+/// its own: the same instance buffer and the same bloom textures, however long
+/// the other goes on alone.
 ///
-/// There is no teardown to hang this on — a closed tab simply stops
-/// calling back — so the only evidence is the panes that ARE still
-/// preparing, and the sweep runs from whichever one that is.
+/// A hidden tab or a closed preview simply stops calling back, and switching
+/// back must rebuild nothing (#1587). Run for twice the 120 passes the old
+/// sweep evicted at, so an age-based eviction of any length that size could
+/// hide would show here.
 #[test]
-fn a_pane_that_stops_drawing_gives_its_chain_back() {
+fn a_pane_that_stops_drawing_keeps_its_chain() {
     // Held across every prepare: under `hot-reload` a shader published by
     // another test between two of them makes `is_stale` rebuild the
     // resources, pane map included, which reads here as an eviction (#675).
@@ -1671,99 +1670,23 @@ fn a_pane_that_stops_drawing_gives_its_chain_back() {
     };
     let rect =
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-    let (mut docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
+    let (docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
     let mut resources = CallbackResources::default();
     prepare_once(&device, &queue, &mut resources, 1.0, &docked);
     prepare_once(&device, &queue, &mut resources, 1.0, &preview);
-    let live = |resources: &CallbackResources| {
+    let held = |resources: &CallbackResources, id: u64| {
         let roll: &RollResources = resources.get().expect("prepare inserts its resources");
-        let mut ids: Vec<u64> = roll.panes.keys().collect();
-        ids.sort_unstable();
-        ids
+        let pane = roll.panes.get(&id).expect("a pane that has drawn holds its buffers");
+        let bloom = pane.bloom.as_ref().expect("the fixture's strength builds a chain");
+        (pane.instance_buffer.clone(), bloom.notes_view.clone())
     };
-    assert_eq!(live(&resources), vec![0, 1], "both rolls should be holding buffers");
+    let (before, other) = (held(&resources, 1), held(&resources, 0));
+    assert!(before.0 != other.0 && before.1 != other.1, "two rolls share one set of buffers");
 
-    // The preview's tab closes: the docked roll goes on drawing alone.
-    for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
-        docked.pass_nr = pass_nr;
+    for _ in 0..240 {
         prepare_once(&device, &queue, &mut resources, 1.0, &docked);
     }
-    assert_eq!(live(&resources), vec![0], "the closed pane is still holding its chain");
-}
-
-/// Egui prepares every callback in a frame before it paints any of them,
-/// so the cache lifetime must not advance as each live pane prepares.
-#[test]
-fn every_pane_prepared_in_one_frame_survives_until_paint() {
-    // Held across every prepare, for the reason given in the test above.
-    let _guard = crate::reload::test_lock();
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
-    let rect =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-    let mut resources = CallbackResources::default();
-
-    for pane_id in 0..=crate::pass_aged::TTL_PASSES {
-        let pane = bloomed_callback(rect, pane_id);
-        prepare_once(&device, &queue, &mut resources, 1.0, &pane);
-    }
-
-    let roll: &RollResources = resources.get().expect("prepare inserts its resources");
-    assert!(
-        roll.panes.contains_key(0),
-        "the first live pane was evicted before egui reached its paint callback",
-    );
-}
-
-/// A rest longer than the sweep's age keeps everything the roll built, and
-/// paints nothing while it lasts.
-///
-/// The pane calls back on every pass, empty or not, so a quiet stretch is a
-/// run of empty frames rather than an absence: those keep the pane stamped,
-/// and must keep its cut targets and bloom chain as well, or the frame the
-/// next note arrives in rebuilds them. Held but not redrawn, they must not
-/// reach the picture either — the last note's surround and halo are still in
-/// them.
-#[test]
-fn a_rest_keeps_the_rolls_targets_and_draws_nothing() {
-    // Held across every prepare, for the reason given two tests above.
-    let _guard = crate::reload::test_lock();
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
-    let note = RollCallback { bloom: 1.5, ..callback(vec![centered_note()], HARNESS_CUT) };
-    let mut resources = CallbackResources::default();
-    prepare_once(&device, &queue, &mut resources, 1.0, &note);
-    let mut rest = RollCallback { instances: Vec::new(), ..note };
-    for pass_nr in 1..=2 * crate::pass_aged::TTL_PASSES {
-        rest.pass_nr = pass_nr;
-        prepare_once(&device, &queue, &mut resources, 1.0, &rest);
-    }
-
-    let roll: &RollResources = resources.get().expect("prepare inserts its resources");
-    let pane = roll.panes.get(0).expect("a pane calling back through a rest was evicted");
-    assert!(pane.holdout.is_some(), "an empty frame dropped the cut's targets");
-    assert!(pane.bloom.is_some(), "an empty frame dropped the bloom chain");
-
-    let rect = surface_rect();
-    let texture = render_to_texture(&device, &queue, SIZE, FORMAT, bg_color(), |pass| {
-        rest.paint(
-            egui::PaintCallbackInfo {
-                viewport: rect,
-                clip_rect: rect,
-                pixels_per_point: 1.0,
-                screen_size_px: SIZE,
-            },
-            pass,
-            &resources,
-        );
-    });
-    let frame = readback(&device, &queue, &texture, SIZE);
-    assert!(
-        frame.as_chunks::<4>().0.iter().all(|p| p == &BG),
-        "an empty frame painted the last note's surround or halo",
-    );
+    assert!(held(&resources, 1) == before, "the pane that stopped drawing lost its chain");
 }
 
 /// A thin ribbon glows in proportion to the ink it has, not a fraction of

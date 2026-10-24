@@ -2205,11 +2205,10 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // Both the roll and the label batch are paint callbacks (the roll's notes
     // are instanced quads, not shapes), and a callback carries no identity a
     // test can read off the shape — so the roll is pinned by switching it off
-    // instead. It calls back whether or not a note is sounding (the renderer
-    // ages out a pane that stops), so a note no longer tells it apart. The
-    // count of callbacks BEFORE the line is what the roll has to move, and
-    // that holds however many other layers become callbacks and wherever in
-    // the order they land. Two weaker versions of this both pass under either
+    // instead, with the same note sounding in both frames. The count of
+    // callbacks BEFORE the line is what the roll has to move, and that holds
+    // however many other layers become callbacks and wherever in the order
+    // they land. Two weaker versions of this both pass under either
     // draw order: testing the LAST callback finds the label batch, and
     // indexing the FIRST one assumes nothing before the roll emits a callback,
     // which the spectrogram breaks — it draws through one of its own.
