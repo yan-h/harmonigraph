@@ -1120,6 +1120,49 @@ mod tests {
         assert_eq!(origin(&longer).activation, 0.0, "a longer horizon replayed an old note");
         // The activation alone cannot tell: this note's replay also ends dark.
         assert_eq!(motion.replayed_edges, 0, "a longer horizon forgot an old note's cursor");
+
+        // Every note above has ENDED by the frame it arrives at, so its late
+        // off says it is late whatever its onset says. A note still held
+        // carries no off, and one bent since the frame carries no late bend
+        // either: its onset is the only edge that says it is late. A bend on
+        // a held note is the same, the other way round.
+        let bend = |time: f64, semitones: f32| NoteEvent {
+            time,
+            kind: harmonigraph_core::NoteEventKind::Tuning { semitones },
+            ..on(0.0, 60)
+        };
+        let held_late = |deliver_after: bool| {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            if deliver_after {
+                draw(&mut motion, &mut tracker, &view, 0.21, false);
+            }
+            tracker.handle_event(on(0.15, 60));
+            if !deliver_after {
+                draw(&mut motion, &mut tracker, &view, 0.15, false);
+            }
+            tracker.handle_event(bend(0.215, 2.0));
+            origin(&draw(&mut motion, &mut tracker, &view, 0.22, false)).activation
+        };
+        let (late, timely) = (held_late(true), held_late(false));
+        assert!(timely > 0.03, "the onset's fixture must have lit the old node: {timely}");
+        assert!((late - timely).abs() < 1e-5, "a late onset left at {late}, not {timely}");
+        let bent_late = |deliver_after: bool| {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            draw(&mut motion, &mut tracker, &view, if deliver_after { 1.21 } else { 1.0 }, false);
+            tracker.handle_event(bend(1.15, 2.0));
+            if !deliver_after {
+                draw(&mut motion, &mut tracker, &view, 1.15, false);
+            }
+            origin(&draw(&mut motion, &mut tracker, &view, 1.22, false)).activation
+        };
+        let (late, timely) = (bent_late(true), bent_late(false));
+        assert!(timely < 0.95, "the bend's fixture must be fading the old node: {timely}");
+        assert!((late - timely).abs() < 1e-5, "a late bend left at {late}, not {timely}");
     }
     #[test]
     fn reopening_a_hidden_surface_bounds_replay_to_the_settle_horizon() {
@@ -1160,6 +1203,26 @@ mod tests {
         let returned = draw(&mut motion, &mut tracker, &view, 1.3, false);
         assert_eq!(origin(&returned).slice_progress, [1.0; 11]);
         assert_eq!(origin(&returned).activation, 1.0);
+    }
+    /// A node whose note has faded all the way keeps no entry, so a frame's
+    /// motion costs the notes in play rather than every node they ever lit.
+    /// The sparse-against-dense run empties its table too, but through its
+    /// three-second gap's reset and the seventh of the lattice it scrolls out
+    /// of view, either of which empties a table that never lets a node go.
+    #[test]
+    fn a_faded_note_leaves_nothing_in_the_table() {
+        let view = view();
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        draw(&mut motion, &mut tracker, &view, 1.5, false);
+        assert!(motion.nodes.contains_key(&LatticePos::ORIGIN), "the held note kept no entry");
+        tracker.handle_event(off(1.5, 60));
+        for step in 0..=40 {
+            draw(&mut motion, &mut tracker, &view, 1.5 + f64::from(step) * 0.1, false);
+        }
+        assert!(motion.nodes.is_empty(), "{} entries outlived their fade", motion.nodes.len());
     }
     #[test]
     fn short_stabs_reverse_pose_and_opacity_at_event_time_across_frame_cadences() {

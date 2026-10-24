@@ -421,3 +421,47 @@ fn a_curving_zoom_drag_does_not_turn_into_a_pan() {
         "the drag came home to {back} s from {opened_at} s",
     );
 }
+
+/// A drag let go of while the pane is not drawn hands its axis to nobody.
+///
+/// The held axis is forgotten on `drag_stopped`, which only a drawn pane sees,
+/// so a zoom released over a frame the pane skipped (folded or switched away
+/// mid-drag) used to leave its `Leg` behind for the next press: a pan across
+/// pitch then read as a zoom along a depth it never moved on, and did nothing.
+#[test]
+fn a_zoom_let_go_of_unseen_does_not_turn_the_next_pan_into_one() {
+    let mut state = for_drags();
+    state.picture.appearance.spectrum.low_midi = 48.0;
+    state.picture.appearance.spectrum.high_midi = 84.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    // Left runs depth rightward: this leans along time and commits the zoom.
+    let grab = h.spectral_grab(&state);
+    let zoomed = grab + egui::vec2(60.0, 0.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(zoomed)]);
+    assert!(state.picture.appearance.spectrum.roll_seconds < 30.0, "the first drag never zoomed");
+    // Between the harness's own frames, whose clock egui needs to see rise.
+    let raw = egui::RawInput {
+        screen_rect: Some(h.screen),
+        time: Some(h.next_time() - 1.0 / 120.0),
+        events: vec![press(zoomed, false)],
+        ..Default::default()
+    };
+    let _ = h.ctx.run_ui(raw, |_| {});
+    h.settle(&mut state);
+
+    let before = state.picture.appearance.spectrum;
+    let target = grab + egui::vec2(0.0, -60.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+    let after = state.picture.appearance.spectrum;
+    assert!(
+        after.low_midi < before.low_midi - 1.0,
+        "the pan inherited the lost zoom's axis ({} -> {})",
+        before.low_midi,
+        after.low_midi,
+    );
+}

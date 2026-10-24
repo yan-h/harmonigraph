@@ -301,6 +301,25 @@ mod tests {
         assert!(map.valid());
     }
 
+    /// What a hand-edited or travelled map must satisfy: every coordinate
+    /// within the limit, and each node in the class its slot is for.
+    #[test]
+    fn a_map_past_the_limit_or_with_a_node_in_the_wrong_class_is_invalid() {
+        let map = LatticeMap::default();
+        let at_limit = LatticeMap { position: LatticePos::new(COORDINATE_LIMIT, 0, 0), ..map };
+        assert!(at_limit.valid());
+        let past = LatticeMap { position: LatticePos::new(COORDINATE_LIMIT + 1, 0, 0), ..map };
+        assert!(!past.valid(), "position past the limit");
+        let mut far_node = map;
+        // Still a C: 4098 thirds are a whole number of octaves.
+        far_node.nodes[0] = LatticePos::new(0, 4098, 0);
+        assert_eq!(LatticeMap::midi_class(far_node.nodes[0]), 0);
+        assert!(!far_node.valid(), "node past the limit");
+        let mut misfiled = map;
+        misfiled.nodes[1] = LatticePos::ORIGIN;
+        assert!(!misfiled.valid(), "a C filed under C sharp");
+    }
+
     /// The table [`excess`] measures against is the brute-force answer.
     #[test]
     fn simplest_spellings_are_the_least_complex_of_each_class() {

@@ -936,10 +936,17 @@ fn opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner(
 // activation, destruction, and ordinary processing remain exclusively owned.
 unsafe impl Sync for Device {}
 
+/// The restored modes are the saved ones, read back as themselves: two
+/// patterns that differ in every bit and neither of which is the default, so a
+/// preview, a save or an adoption that dropped, swapped or defaulted one
+/// cannot agree with the others by accident.
 #[test]
 fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
     let _scope = crate::test_scope::enter();
-    for gui in [false, true] {
+    for (gui, (meantone, marvel, learning)) in [false, true]
+        .into_iter()
+        .flat_map(|gui| [(gui, (true, false, true)), (gui, (false, true, false))])
+    {
         let mut device = Device::new();
         device.activate();
         let mailbox = device.mailbox();
@@ -947,17 +954,24 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
         state.fields.insert(
             MUSICAL_SETTINGS.into(),
             serde_json::to_string(&MusicalSettings {
-                meantone: false,
-                marvel: false,
-                learning: false,
+                meantone,
+                marvel,
+                learning,
                 ..Default::default()
             })
             .unwrap(),
         );
         device.load(state, gui);
         let preview = view(mailbox.visible().0, true).resolved;
+        let restored_modes = TuningModes {
+            tempered: Tempered { syntonic: meantone, septimal_kleisma: marvel },
+            learning,
+        };
+        assert_eq!(preview.modes, restored_modes);
+        assert_eq!(preview.tuning.three, 700_000_000, "the preview's tuning is the restored one");
         let saved: MusicalSettings =
             serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
+        assert_eq!((saved.meantone, saved.marvel, saved.learning), (meantone, marvel, learning));
         assert_eq!(saved.modes(), preview.modes);
         let saved_gui: MusicalSettings =
             serde_json::from_str(&device.wrapper().get_state_object().fields[MUSICAL_SETTINGS])
@@ -965,7 +979,26 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
         assert_eq!(saved_gui.modes(), preview.modes);
         device.run(0, vec![], false);
         assert_eq!(view(mailbox.visible().0, false).resolved.modes, preview.modes);
+        // And the reducer the audio thread runs Learn and tempering under
+        // holds them too, not only the words that report it.
+        let adopted = device.wrapper().test_inspect_plugin(|plugin| {
+            plugin.configuration.as_ref().unwrap().reducer.resolved().modes
+        });
+        assert_eq!(adopted, restored_modes);
     }
+}
+
+/// A saved state that lacks a tuning axis, as an older or partial preset
+/// does, restores that axis at its default rather than refusing the restore.
+#[test]
+fn a_restore_missing_a_tuning_axis_takes_its_default() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    let mut state = restored(&device, 690.0);
+    state.params.remove(ParamKey::Seven.id());
+    let edit = prepare(&state).expect("a missing axis is not an invalid one");
+    assert_eq!(edit.values[3], Some(ParamKey::Seven.default_value()));
+    assert_eq!(edit.values[1], Some(690.0));
 }
 
 #[test]
@@ -2251,6 +2284,21 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     assert_eq!(PolicyConfig::from(clamped.adaptive).pitch_flexibility, 100);
 }
 
+/// The presentation clock, which dates the live audio ring and the take's
+/// published clock, runs one block's length per process call at the host's
+/// rate.
+#[test]
+fn the_presentation_clock_advances_by_each_blocks_length() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    for block in 0..3 {
+        device.run(block * 64, vec![], false);
+    }
+    let seconds = device.wrapper().test_inspect_plugin(|plugin| plugin.presentation_seconds);
+    assert!((seconds - 3.0 * 64.0 / 48_000.0).abs() < 1e-12, "{seconds} s after three blocks");
+}
+
 /// A fresh Hub leaves player pitch alone until someone picks a retuning
 /// engine: the saved param and the engine the audio thread adopted both say
 /// so.
@@ -2375,9 +2423,11 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(&copied.names[2], &(2, "Distant passage copy".into()));
         // Thirds stand at fine 8, coarse −1: two arrow presses carry into
         // Coarse rather than stopping at the end of Fine, and the second,
-        // pressed before the host has applied the first, still counts.
+        // pressed before the host has applied the first, still counts — with
+        // a frame drawn between them, as the editor draws one.
         let right = harmonigraph_core::LatticePos::new(0, 1, 0);
         edit(MapEdit::Translate(right, MapOffsetLane::Fine));
+        crate::lattice_maps::view(&plugin.params);
         edit(MapEdit::Translate(right, MapOffsetLane::Fine));
     });
     device.run(64, vec![], false);
@@ -2409,6 +2459,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     let mut partial = device.save();
     partial.params.insert("map-fifths".into(), nice_plug::plugin::ParamValue::I32(50));
     partial.params.insert("map-thirds".into(), nice_plug::plugin::ParamValue::I32(-50));
+    partial.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(1));
     for id in ["map-fifths-extension", "map-thirds-extension", "map-sevenths-extension"] {
         partial.params.remove(id);
     }
@@ -2419,8 +2470,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(preview.offsets.extension, harmonigraph_core::LatticePos::ORIGIN);
         assert_eq!(preview.playback.offset, harmonigraph_core::LatticePos::new(9, -9, -9));
         assert_eq!(plugin.params.map_playback.lock().offset, preview.playback.offset);
+        assert_eq!(preview.playback.follow, harmonigraph_core::lattice_map::Follow::Thirds);
     });
     let repaired = device.save();
+    assert!(matches!(repaired.params["map-follow"], nice_plug::plugin::ParamValue::I32(1)));
     assert!(matches!(repaired.params["map-fifths"], nice_plug::plugin::ParamValue::I32(9)));
     assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
 }
@@ -2435,7 +2488,13 @@ fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
     device.load(state, false);
     device.run(0, vec![], false);
     capture.arm();
-    device.run(64, vec![device.param(ParamKey::Three, 690.0, 16)], false);
+    // Two changes in one block, so the second is dated from a segment that
+    // does not start at the block's own start.
+    device.run(
+        64,
+        vec![device.param(ParamKey::Three, 690.0, 16), device.param(ParamKey::Three, 685.0, 40)],
+        false,
+    );
     let configs: Vec<_> = capture
         .drain_entries()
         .into_iter()
@@ -2444,11 +2503,13 @@ fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
             _ => None,
         })
         .collect();
-    assert_eq!(configs.len(), 2);
+    assert_eq!(configs.len(), 3);
     assert_eq!(configs[0].axes[1], 696_000_000);
     assert_eq!(configs[1].axes[1], 690_000_000);
+    assert_eq!(configs[2].axes[1], 685_000_000);
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
     assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
+    assert!((configs[2].t - 104.0 / 48000.0).abs() < 1e-9);
 }
 
 /// Real CLAP automation and project restoration with no editor constructed.

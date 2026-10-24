@@ -574,6 +574,30 @@ fn completed_averages_and_jitter_holds_survive_oldest_column_changes() {
     assert_eq!(agg.rebuilds(), 1);
 }
 
+/// A Clear during playback keeps the columns before it out of the grid, as it
+/// keeps them out of the history. The first column after it lands in the slab
+/// the last one before it was folded into, where the open slab's running sum
+/// would otherwise carry the old power on: the slab is 0.25 s and the columns
+/// either side of the Clear 0.05 s apart.
+#[test]
+fn a_clear_keeps_the_open_slab_from_averaging_in_what_came_before() {
+    let bucket = 0.25;
+    let mut history = crate::SpectrumHistory::default();
+    let mut agg = SpectrogramAgg::new();
+    for t in [0.0, 0.05, 0.1] {
+        history.push(col(t, &[(4, 1.0)]));
+    }
+    agg.window(&history, 0, bucket, 8);
+    history.clear();
+    for (t, energy) in [(0.15, 0.2), (0.2, 0.2), (0.3, 0.5)] {
+        history.push(col(t, &[(4, energy)]));
+    }
+    let (centers, power) = agg.window(&history, 0, bucket, 8);
+    assert_eq!(centers, [0.125, 0.375], "the fixture keeps the slab open across the Clear");
+    assert_eq!(power[0][4], q(0.2), "the open slab averaged in power from before the Clear");
+    assert_eq!((centers, power), SpectrogramAgg::new().window(&history, 0, bucket, 8));
+}
+
 /// Reaching back past a TIER MERGE — which the step-for-step test above
 /// never does, because it pushes 14 columns and tier 0 holds
 /// [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
@@ -1760,6 +1784,41 @@ fn the_lut_key_folds_two_gradients_that_draw_one_picture() {
             );
             assert_eq!(table(&moved), table(&flat), "...and the table really is the same");
         }
+    }
+
+    // The curve's switches, folded the same three ways: a straight curve
+    // applies to nothing, so which channels it is on decides nothing; a pair
+    // closed on a wall is one colour whatever the curve; and without tone the
+    // hue and chroma switches decide only the spacing, through whether either
+    // is on. Each pair is a key AND a table, as above.
+    let bend = |at, hue, lightness, chroma| harmonigraph_scene::Bend {
+        at,
+        share: 0.5,
+        hue,
+        lightness,
+        chroma,
+    };
+    let with = |c: SpectrumConfig, b| SpectrumConfig {
+        spectrogram_gradient: Gradient { bend: b, ..c.spectrogram_gradient },
+        ..c
+    };
+    let unlit = SpectrumConfig {
+        spectrogram_gradient: Gradient { lightness: 0.0, lightness_ramp: 0.0, ..mono },
+        ..cfg
+    };
+    for (base, a, b, why) in [
+        (cfg, bend(0.5, true, false, false), bend(0.5, false, true, true), "a straight curve"),
+        (unlit, bend(0.2, true, true, true), bend(0.8, false, false, true), "a closed pair"),
+        (toneless, bend(0.2, true, false, false), bend(0.2, true, false, true), "no tone, hue"),
+        (toneless, bend(0.2, false, false, true), bend(0.2, true, false, true), "no tone, chroma"),
+    ] {
+        let (a, b) = (with(base, a), with(base, b));
+        assert_eq!(
+            what_decides_a_texel(a.spectrogram_gradient.sanitized()),
+            what_decides_a_texel(b.spectrogram_gradient.sanitized()),
+            "{why}: a switch that decides no texel rebuilds the table",
+        );
+        assert_eq!(table(&a), table(&b), "{why}: ...and the table really is the same");
     }
 
     // The converses, so neither fold can be a blanket "ignore the hues": a

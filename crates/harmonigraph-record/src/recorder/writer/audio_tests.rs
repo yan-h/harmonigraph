@@ -234,6 +234,11 @@ fn wav_limit_is_reported_and_never_renders_an_incomplete_take() {
         worker.assert_prefix();
         let take = harmonigraph_take::Take::read(worker.wav().with_extension("take")).unwrap();
         assert_eq!(take.header.audio_start, Some(0.25), "pending Start retains alignment too");
+        assert_eq!(
+            take.incomplete.map(|marker| marker.reason),
+            Some(harmonigraph_take::canonical::GapReasonRecord::ProducerLost),
+            "the file says the recording failed, not that publication overflowed"
+        );
     }
 }
 

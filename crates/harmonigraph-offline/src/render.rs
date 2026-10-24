@@ -803,7 +803,11 @@ mod tests {
             frames.push(bytes);
             Ok(Vec::new())
         }) {
-            Ok(_) => Some(frames),
+            Ok(stages) => {
+                // What the timing summary divides by is what was drawn.
+                assert_eq!(stages.frames, frames.len() as u64);
+                Some(frames)
+            }
             // Optional local GPU tests may skip. The shared device setup
             // fails before returning this error when CI requires a GPU.
             Err(e) if e.contains("no usable GPU adapter") => {
@@ -1072,5 +1076,42 @@ mod tests {
         let settings = settings();
         let Some(frames) = render_frames(&settings) else { return };
         assert!(frames[0] != frames[frames.len() / 2], "nothing changed as notes arrived");
+    }
+
+    /// A scaled export is the same composition at more pixels: what an export
+    /// at its default scale draws, since only a scale of 1 makes points and
+    /// pixels the same number. Compared as the mean colour of each block of a
+    /// 16x10 grid, which line and glyph rasterization barely move (under 6
+    /// levels at 1.5x) and a frame composed at the wrong height moves by a
+    /// hundred.
+    #[test]
+    fn a_scaled_export_draws_the_one_scale_composition() {
+        let Some(one) = render_frames(&Settings { end: 0.75, ..settings() }) else { return };
+        let one = one.last().unwrap();
+        let blocks = |frame: &[u8], [w, h]: [u32; 2]| {
+            let [w, h] = [w as usize, h as usize];
+            let mut means = vec![[0f64; 3]; 160];
+            for y in 0..h {
+                for x in 0..w {
+                    let block = &mut means[y * 10 / h * 16 + x * 16 / w];
+                    for (c, sum) in block.iter_mut().enumerate() {
+                        *sum += f64::from(frame[(y * w + x) * 4 + c]) * 160.0 / (w * h) as f64;
+                    }
+                }
+            }
+            means
+        };
+        let expected = blocks(one, [320, 200]);
+        for ppp in [1.5f32, 2.0] {
+            let size = [(320.0 * ppp) as u32, (200.0 * ppp) as u32];
+            let settings = Settings { size, pixels_per_point: ppp, end: 0.75, ..settings() };
+            let scaled = render_frames(&settings).expect("the second export has a GPU");
+            let worst = blocks(scaled.last().unwrap(), size)
+                .iter()
+                .zip(&expected)
+                .flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs()))
+                .fold(0.0, f64::max);
+            assert!(worst < 16.0, "a block at {ppp}x is {worst:.1} levels off its 1x colour");
+        }
     }
 }

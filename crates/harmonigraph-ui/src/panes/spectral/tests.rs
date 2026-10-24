@@ -2204,21 +2204,22 @@ fn the_live_strip_fills_the_analysis_gap_only_while_fresh() {
 fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
     // Both the roll and the label batch are paint callbacks (the roll's notes
     // are instanced quads, not shapes), and a callback carries no identity a
-    // test can read off the shape — so the roll is pinned by the note instead.
-    // The count of callbacks BEFORE the line is what the note has to move, and
+    // test can read off the shape — so the roll is pinned by switching it off
+    // instead. It calls back whether or not a note is sounding (the renderer
+    // ages out a pane that stops), so a note no longer tells it apart. The
+    // count of callbacks BEFORE the line is what the roll has to move, and
     // that holds however many other layers become callbacks and wherever in
     // the order they land. Two weaker versions of this both pass under either
     // draw order: testing the LAST callback finds the label batch, and
     // indexing the FIRST one assumes nothing before the roll emits a callback,
     // which the spectrogram breaks — it draws through one of its own.
-    let frame = |sounding: bool| {
+    let frame = |show_roll: bool| {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 60.0;
         state.appearance.spectrum.high_midi = 72.0;
-        if sounding {
-            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
-        }
+        state.appearance.spectrum.show_roll = show_roll;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
         let out = painted_pane(WIDE, &mut state, 0.1);
         let callbacks: Vec<usize> = out
             .shapes
@@ -2238,17 +2239,17 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
         (callbacks.len(), callbacks.iter().filter(|&&c| c < now_line).count())
     };
 
-    let (quiet_total, quiet_early) = frame(false);
-    let (sounding_total, sounding_early) = frame(true);
+    let (hidden_total, hidden_early) = frame(false);
+    let (shown_total, shown_early) = frame(true);
     assert_eq!(
-        sounding_total,
-        quiet_total + 1,
-        "the sounding note did not add the roll's paint callback, so there is no \
-         roll here to have drawn in either order",
+        shown_total,
+        hidden_total + 1,
+        "showing the roll did not add its paint callback, so there is no roll here \
+         to have drawn in either order",
     );
     assert_eq!(
-        sounding_early,
-        quiet_early + 1,
+        shown_early,
+        hidden_early + 1,
         "the roll paints over the line it arrives at, biting half its width out \
          under every sounding note",
     );

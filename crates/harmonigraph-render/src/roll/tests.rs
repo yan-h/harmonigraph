@@ -1716,6 +1716,56 @@ fn every_pane_prepared_in_one_frame_survives_until_paint() {
     );
 }
 
+/// A rest longer than the sweep's age keeps everything the roll built, and
+/// paints nothing while it lasts.
+///
+/// The pane calls back on every pass, empty or not, so a quiet stretch is a
+/// run of empty frames rather than an absence: those keep the pane stamped,
+/// and must keep its cut targets and bloom chain as well, or the frame the
+/// next note arrives in rebuilds them. Held but not redrawn, they must not
+/// reach the picture either — the last note's surround and halo are still in
+/// them.
+#[test]
+fn a_rest_keeps_the_rolls_targets_and_draws_nothing() {
+    // Held across every prepare, for the reason given two tests above.
+    let _guard = crate::reload::test_lock();
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let note = RollCallback { bloom: 1.5, ..callback(vec![centered_note()], HARNESS_CUT) };
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, 1.0, &note);
+    let mut rest = RollCallback { instances: Vec::new(), ..note };
+    for pass_nr in 1..=2 * crate::pass_aged::TTL_PASSES {
+        rest.pass_nr = pass_nr;
+        prepare_once(&device, &queue, &mut resources, 1.0, &rest);
+    }
+
+    let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+    let pane = roll.panes.get(0).expect("a pane calling back through a rest was evicted");
+    assert!(pane.holdout.is_some(), "an empty frame dropped the cut's targets");
+    assert!(pane.bloom.is_some(), "an empty frame dropped the bloom chain");
+
+    let rect = surface_rect();
+    let texture = render_to_texture(&device, &queue, SIZE, FORMAT, bg_color(), |pass| {
+        rest.paint(
+            egui::PaintCallbackInfo {
+                viewport: rect,
+                clip_rect: rect,
+                pixels_per_point: 1.0,
+                screen_size_px: SIZE,
+            },
+            pass,
+            &resources,
+        );
+    });
+    let frame = readback(&device, &queue, &texture, SIZE);
+    assert!(
+        frame.as_chunks::<4>().0.iter().all(|p| p == &BG),
+        "an empty frame painted the last note's surround or halo",
+    );
+}
+
 /// A thin ribbon glows in proportion to the ink it has, not a fraction of
 /// it — which is a claim about WHERE the threshold sits in the chain.
 ///

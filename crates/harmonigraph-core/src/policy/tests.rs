@@ -181,6 +181,20 @@ fn play(h: &mut Harness, keys: &[(&str, i32, i32, i64)]) -> Option<LatticePos> {
 fn meantone() -> [i32; 3] {
     crate::tuning::fifth_generated(crate::tuning::microcents(696.578))
 }
+/// With the seventh axis on, the B♭ key over a held C major triad is the
+/// harmonic seventh 7/4, not the Pythagorean 16/9 its fifths would spell. No
+/// simulator fixture runs three axes, so this is what reaches prime 7.
+#[test]
+fn the_seventh_axis_spells_a_dominant_seventh_harmonically() {
+    let mut h = Harness::new();
+    h.config.policy.axes = 3;
+    play(&mut h, &[("c", 0, 0, 0), ("e", 0, 1, 0), ("g", 1, 0, 0)]);
+    let seventh = LatticePos::new(0, 0, 1);
+    let voice = h.on("bb", 4_800_000_000 + keyboard_class(h.config.policy.keyboard, seventh));
+    assert_eq!(voice.node, Some(seventh));
+    let just = 4_800_000_000 + i64::from(crate::tuning::microcents(crate::tuning::SEVEN_JUST));
+    assert!(voice.pitch.abs_diff(just) < 1000, "{}", voice.pitch);
+}
 #[test]
 fn a_meantone_keyboards_c_key_cannot_become_b_sharp() {
     // E spells the G♯ as a third above it; with E released, the held G♯
@@ -374,19 +388,29 @@ fn octave_copies_of_a_note_add_no_vote() {
 #[test]
 fn hard_boundary_and_configured_axes_ignore_exact_remote_pitch() {
     let mut c = just();
-    c.policy.axes = 1;
     let mut s = PolicyScratch::default();
     let remote = LatticePos::new(10, 0, 0);
-    let d = assign_new_note(
-        c,
-        &[],
-        &Memory::default(),
-        OrderedOnset { pitch: (c.cents(remote) * 1e6) as i64 },
-        &mut s,
-    )
-    .unwrap();
-    assert!(s.candidates.iter().all(|n| n.fives == 0 && n.sevens == 0 && n.threes.abs() <= 3));
-    assert_ne!(d.assignment.node(), Some(remote));
+    // The ball of radius 3 around C, on one, two and three axes: a box would
+    // pass with one axis alone.
+    for (axes, count) in [(1, 7), (2, 25), (3, 63)] {
+        c.policy.axes = axes;
+        let d = assign_new_note(
+            c,
+            &[],
+            &Memory::default(),
+            OrderedOnset { pitch: (c.cents(remote) * 1e6) as i64 },
+            &mut s,
+        )
+        .unwrap();
+        assert_eq!(s.candidates.len(), count, "axes {axes}");
+        assert!(
+            s.candidates.iter().all(|n| n.threes.abs() + n.fives.abs() + n.sevens.abs() <= 3
+                && (axes >= 2 || n.fives == 0)
+                && (axes >= 3 || n.sevens == 0)),
+            "axes {axes}"
+        );
+        assert_ne!(d.assignment.node(), Some(remote));
+    }
 }
 #[test]
 fn resource_exhaustion_is_explicit_and_never_truncates_to_a_winner() {

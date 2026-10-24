@@ -910,6 +910,11 @@ pub(crate) struct SpectrogramAgg {
     /// Time of the newest column already folded; the next update folds only
     /// columns past it.
     last_time: f64,
+    /// The history's [`clears`](crate::SpectrumHistory::clears) when it was
+    /// last rebuilt. Columns after a Clear can carry on from the time the last
+    /// one before it stopped, into the slab still open, so time alone does not
+    /// say the grid was folded from this history.
+    clears: u32,
     /// How many full rebuilds have been taken. The fast path is the whole point
     /// of this type, and every condition guarding it can only ever ADD a reason
     /// to fall back — so without a count, a guard that quietly always fires
@@ -962,6 +967,7 @@ impl SpectrogramAgg {
             grid: SlabGrid::default(),
             bucket_bits: 0,
             last_time: f64::NEG_INFINITY,
+            clears: 0,
             rebuilds: 0,
         }
     }
@@ -986,6 +992,7 @@ impl SpectrogramAgg {
         self.grid = SlabGrid::fold_runs(&columns, bucket, min_key, runs);
         self.bucket_bits = bucket.to_bits();
         self.last_time = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
+        self.clears = history.clears();
     }
 
     /// The window's `(centers, power)`, maintained incrementally. `first` is the
@@ -1006,12 +1013,14 @@ impl SpectrogramAgg {
             .map(|c| ((c.time / bucket).floor() as i64).saturating_sub(keep.max(1) as i64 - 1));
         let layout_same = self.bucket_bits == bucket.to_bits();
         // The fast path is valid only when: the layout is unchanged, we have a
-        // prior grid, time hasn't gone backwards, and the admitted first slab
-        // doesn't reach behind the kept grid. New columns can extend its newest
-        // end, including across a gap. An excluded old target must not
-        // force another rebuild on every resumed frame.
+        // prior grid of this history (not one cleared since), time hasn't gone
+        // backwards, and the admitted first slab doesn't reach behind the kept
+        // grid. New columns can extend its newest end, including across a gap.
+        // An excluded old target must not force another rebuild on every
+        // resumed frame.
         let can_increment = layout_same
             && self.grid.cur_key.is_some()
+            && self.clears == history.clears()
             && newest >= self.last_time
             && target.zip(self.grid.centers.first()).is_some_and(|(t, &front_center)| {
                 let front = (front_center / bucket).floor() as i64;

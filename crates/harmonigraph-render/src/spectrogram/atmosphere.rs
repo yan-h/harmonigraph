@@ -830,6 +830,11 @@ struct MemoryFrame {
 /// the sound under each texel or star, and what it held there is the old
 /// picture's, so carrying it would smear the old picture into the new one.
 /// The same goes for a cleared history.
+///
+/// The level mapping and the softnesses are not in it. A Level, Tilt or
+/// softness drag re-reads the same texels through a new mapping, so the held
+/// colour eases toward the new reading rather than snapping for the length of
+/// the drag (#1578).
 fn memory_key(
     atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
@@ -842,8 +847,8 @@ fn memory_key(
     let s = atmosphere.settings.sanitized();
     let pitch_vertical = atmosphere.pitch_vertical;
     let harmonigraph_scene::SpectralAtmosphere {
-        pitch_softness,
-        time_softness,
+        pitch_softness: _, // re-reads the same texels through a wider blur
+        time_softness: _,  // re-reads the same texels through a wider blur
         blur_time_step: _, // response/coverage changes do not change material identity
         cloud_depth: _,    // response/coverage changes do not change material identity
         color_pickup: _,   // response/coverage changes do not change material identity
@@ -887,18 +892,8 @@ fn memory_key(
                 wash_randomness: _, // display brightness does not change held color
             },
     } = s;
-    let mut values = vec![
-        size[0],
-        size[1],
-        u32::from(pitch_vertical) as f32,
-        read.min_midi,
-        read.span,
-        read.level0,
-        read.level_per_step,
-        read.level_per_midi,
-        pitch_softness,
-        time_softness,
-    ];
+    let mut values =
+        vec![size[0], size[1], u32::from(pitch_vertical) as f32, read.min_midi, read.span];
     match cloud_style {
         CloudStyle::Stars => {
             values.extend([2.0, star_randomness]);
@@ -1190,11 +1185,11 @@ impl Binder<'_> {
 /// The sizes a [`Targets`] is allocated at, and so the whole of what decides a
 /// rebuild: [`Targets::prepare`] compares this and nothing else.
 ///
-/// Sizes only, because a rebuild replaces every target and bind group at once.
+/// Sizes only, because a rebuild replaces every bind group at once.
 /// The tile is here as its texel size alone: the rest of its [`TileKey`]
 /// decides a rebake, and carrying it here would rebuild everything at the rate
-/// a walk dial moves. Each size follows its own sampling grid; a rebuild still
-/// carries the tile's bake and the colour history where their own sizes fit.
+/// a walk dial moves. Each size follows its own sampling grid, and a rebuild
+/// carries every target but the light wherever its own size still fits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Shape {
     /// The light field, which the blur and the material passes share.
@@ -1317,8 +1312,9 @@ pub(super) struct Draw<'a> {
 
 impl Targets {
     /// The pane's targets for `shape`, rebuilt only where the held ones were
-    /// allocated at another. A rebuild carries the tile's bake and the colour
-    /// history across wherever their own sizes still fit.
+    /// allocated at another. A rebuild carries the tile's bake, the colour
+    /// history, the tone and the starfield's targets across wherever their own
+    /// sizes still fit, so only what moved is reallocated.
     pub fn prepare<'a>(
         held: &'a mut Option<Self>,
         device: &wgpu::Device,
@@ -1351,25 +1347,37 @@ impl Targets {
             stars: star_shape,
             memory: memory_size,
         } = shape;
-        // The tile's bake and the colour history are carried wherever their
-        // own sizes still fit.
-        let (carried, carried_memory) = previous.map_or((None, None), |previous| {
-            (
-                previous.tile.filter(|_| previous.shape.tile == tile_texels),
-                previous.memory.filter(|_| previous.shape.memory == memory_size),
-            )
-        });
+        // Every target but the light is carried wherever its own size still
+        // fits: the light's size moves with the span and the scale, and the
+        // star atlas alone is the largest thing a pane allocates. The tone and
+        // the starfield's two are cleared whole each frame before anything
+        // reads them, so a carried one holds nothing a fresh one would not.
+        let (carried, carried_memory, carried_tone, carried_stars) =
+            previous.map_or(Default::default(), |previous| {
+                (
+                    previous.tile.filter(|_| previous.shape.tile == tile_texels),
+                    previous.memory.filter(|_| previous.shape.memory == memory_size),
+                    previous.tone.filter(|_| previous.shape.tone == tone_size),
+                    previous
+                        .stars
+                        .filter(|_| previous.shape.stars == star_shape)
+                        .map(|stars| (stars.atlas, stars.image)),
+                )
+            });
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
         let sized = |label, size: [u32; 2]| formatted(label, size, FORMAT);
         let view = |label| sized(label, size);
         let source_view = view("spectral_cloud_source");
         let views = [view("spectral_cloud_scratch"), view("spectral_cloud_close")];
-        let tone = tone_size.map(|size| sized("spectral_cloud_tone", size));
+        let tone = tone_size
+            .map(|size| carried_tone.unwrap_or_else(|| sized("spectral_cloud_tone", size)));
         let star_views = star_shape.map(|shape| {
-            (
-                formatted("spectral_star_atlas", shape.atlas, STAR_FORMAT),
-                formatted("spectral_star_image", shape.image, STAR_IMAGE_FORMAT),
-            )
+            carried_stars.unwrap_or_else(|| {
+                (
+                    formatted("spectral_star_atlas", shape.atlas, STAR_FORMAT),
+                    formatted("spectral_star_image", shape.image, STAR_IMAGE_FORMAT),
+                )
+            })
         });
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
@@ -2724,6 +2732,54 @@ mod tests {
         for desired in [112, 111, 112, 111, 112, 111] {
             held = retained_size([desired, 100], [128, 128], Some(held));
             assert_eq!(held, [112, 100]);
+        }
+    }
+
+    /// The light field's size moves with the span and the scale, so a rebuild
+    /// it forces must leave every target sized by something else where it is.
+    /// The star atlas is the largest thing a pane allocates; the tone is the
+    /// same rule for the styles without one.
+    #[test]
+    fn a_light_size_change_keeps_the_star_and_tone_targets() {
+        use super::{wgpu, Pipelines, Shape, StarShape, Targets, FORMAT};
+        let Some((device, _queue)) = crate::gpu_harness::headless_device() else { return };
+        let resources = super::super::SpectrogramResources::new(&device, FORMAT);
+        let pipelines = Pipelines::new(&device, FORMAT, &resources.layout);
+        let grid = crate::gpu_memory::buffer(
+            &device,
+            &wgpu::BufferDescriptor {
+                label: Some("grid"),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            },
+        );
+        let lut = crate::stars::image(&device, "lut", [1, 1], FORMAT);
+        let stars = Some(StarShape { atlas: [96, 40], image: [64, 48] });
+        let at = |size, tone, stars| Shape { size, tone, tile: None, stars, memory: None };
+        let kept = |targets: &Targets| {
+            let stars = targets.stars.as_ref();
+            [stars.map(|s| &s.atlas), stars.map(|s| &s.image), targets.tone.as_ref()]
+                .map(|view| view.map(|view| view.texture().clone()))
+        };
+        for (tone, stars) in [(None, stars), (Some([32, 24]), None)] {
+            let mut held = None;
+            let prepare = |held: &mut Option<Targets>, size| {
+                let shape = at(size, tone, stars);
+                kept(Targets::prepare(
+                    held,
+                    &device,
+                    &pipelines,
+                    shape,
+                    &resources.layout,
+                    &grid,
+                    &lut,
+                ))
+            };
+            let before = prepare(&mut held, [64, 48]);
+            let after = prepare(&mut held, [80, 48]);
+            assert_eq!(held.as_ref().unwrap().shape.size, [80, 48], "the light was not rebuilt");
+            assert_eq!(before, after, "tone {tone:?} stars {stars:?}");
         }
     }
 }

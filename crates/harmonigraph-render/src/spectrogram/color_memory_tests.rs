@@ -927,3 +927,64 @@ fn watercolor_brightness_edits_preserve_held_color() {
         assert_eq!(pixels(&device, &queue, memory(&resources)), lit);
     }
 }
+
+/// A Level, Tilt or softness drag re-reads the same texels through a new
+/// mapping rather than moving the sound under them, so the held colour carries
+/// and eases toward the new reading instead of snapping for the whole drag
+/// (#1578). The frame does not advance, so a carried history reads back as it
+/// was held and a reset one as this frame's dark grid.
+#[test]
+fn level_and_softness_edits_carry_held_color() {
+    let Some((device, queue)) = headless_device() else { return };
+    for case in ["level", "step", "tilt", "pitch softness", "time softness"] {
+        let mut cb = fixture(CloudStyle::Watercolor);
+        let mut resources = CallbackResources::default();
+        cb.grid.fill(255);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let lit = pixels(&device, &queue, memory(&resources));
+        assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+        let a = cb.atmosphere.as_mut().unwrap();
+        match case {
+            "level" => cb.read.level0 += 0.1,
+            "step" => cb.read.level_per_step *= 1.1,
+            "tilt" => cb.read.level_per_midi += 0.01,
+            "pitch softness" => a.settings.pitch_softness += 0.1,
+            _ => a.settings.time_softness += 0.1,
+        }
+        cb.grid.fill(0);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        assert!(pixels(&device, &queue, memory(&resources)) == lit, "{case} reset the history");
+    }
+}
+
+/// The tide line's width and softness reach a held colour only while a tide
+/// line is drawn: with one, a width drag moves where the pool sits under each
+/// texel and resets the history, and so does a softness drag; without one,
+/// neither decides anything and the history carries.
+#[test]
+fn a_tide_lines_width_resets_the_history_only_while_one_is_drawn() {
+    let Some((device, queue)) = headless_device() else { return };
+    for (pool, softness) in [(0.0, false), (2.0, false), (0.0, true), (2.0, true)] {
+        let mut cb = fixture(CloudStyle::Watercolor);
+        cb.atmosphere.as_mut().unwrap().settings.wash_pool = pool;
+        let mut resources = CallbackResources::default();
+        cb.grid.fill(255);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let lit = pixels(&device, &queue, memory(&resources));
+        assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        if softness {
+            s.wash_pool_softness *= 0.8;
+        } else {
+            s.wash_pool_width *= 1.2;
+        }
+        cb.grid.fill(0);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let carried = pixels(&device, &queue, memory(&resources)) == lit;
+        assert_eq!(
+            carried,
+            pool == 0.0,
+            "pool {pool}, softness {softness}: the drag carried {carried}"
+        );
+    }
+}

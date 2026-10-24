@@ -444,3 +444,25 @@ pub struct IncompleteRecord {
     pub last_publication: u64,
     pub reason: GapReasonRecord,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A frame read back out of a take is the frame that went in: all 64 voices
+    /// a source can hold, each still at the expressions it was sounding with.
+    #[test]
+    fn a_full_baseline_record_reads_back_as_the_frame_it_came_from() {
+        let voices: Vec<_> = (0..64)
+            .map(|note| VoiceBaseline {
+                note,
+                velocity: 0.8,
+                pitch_microcents: i64::from(note) * 100_000_000,
+                expressions: Expressions { pressure: 0.25, gain: 0.5, timbre: 0.75 },
+                ..Default::default()
+            })
+            .collect();
+        let frame = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &voices).unwrap();
+        assert_eq!(BaselineRecord::from(&frame).baseline(), Ok(frame));
+    }
+}

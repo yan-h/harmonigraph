@@ -30,9 +30,48 @@ impl ParamBackend for Instances {
         match edit {
             InstanceEdit::Retune(value) => row.retune = value,
             InstanceEdit::Show(value) => row.show = value,
+            InstanceEdit::Delay(value) => row.delay = value,
             _ => panic!("unexpected edit"),
         }
     }
+}
+
+/// The all-tuners delay follows the first tuner's own until it is dialled:
+/// a delay changed in Source details is the one "Apply to all tuners" spreads,
+/// not the one the field happened to open on.
+#[test]
+fn apply_to_all_tuners_applies_the_first_tuners_current_delay() {
+    let params = Instances::new();
+    let state = fresh_picture();
+    let ctx = themed();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let size = egui::vec2(300.0, 2400.0);
+    let frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            instance_section(ui, &state, &params)
+        })
+    };
+    let click = |label: &str| {
+        let at = frame(vec![])
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + egui::vec2(4.0, 4.0))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{label} is not drawn"));
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+    };
+    click("Tuning delay");
+    frame(vec![]);
+    params.0.borrow_mut()[1].delay = 4;
+    click("Apply to all tuners");
+    let delays: Vec<_> = params.0.borrow().iter().map(|row| row.delay).collect();
+    assert_eq!(delays, [1, 4, 4], "the hub keeps its one buffer; the tuners take the first's");
 }
 
 #[test]

@@ -970,6 +970,87 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A whole export puts the take's soundtrack where the take says it
+    /// started. The test above holds the sink to the offset it is given; this
+    /// one holds the export to the offset it computes, for a take whose first
+    /// note comes before its audio, so the two clocks differ.
+    #[test]
+    fn an_export_sounds_the_takes_audio_at_the_take_time_it_was_recorded() {
+        use harmonigraph_take::{Header, NoteKind, NoteRecord, Record};
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-export-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The audio starts half a second into the take and clicks half a
+        // second into itself: one second of take time. The render opens on
+        // the first note, a quarter second in, so the click is heard 0.75 s
+        // into the video.
+        write_wav(&dir.join("click.wav"), 48_000, 1.0, Some(0.5));
+        let header = Header {
+            audio_file: Some("click.wav".into()),
+            audio_start: Some(0.5),
+            ..Header::default()
+        };
+        let note = NoteRecord {
+            source: 1,
+            t: 0.25,
+            channel: 0,
+            note: 60,
+            kind: NoteKind::On { velocity: 0.8 },
+        };
+        let take = [Record::Header(header), Record::Note(note)]
+            .iter()
+            .map(|record| ron::to_string(record).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let take_path = dir.join("take.take");
+        std::fs::write(&take_path, take).unwrap();
+        let out = dir.join("take.mp4");
+        let exported = crate::export(crate::Args {
+            take: Some(take_path.display().to_string()),
+            out: Some(out.display().to_string()),
+            size: Some([64, 36]),
+            scale: Some(1.0),
+            fps: 20.0,
+            end: Some(1.25),
+            encoder: Some(VideoEncoder::X264),
+            ffmpeg: Some(ffmpeg.display().to_string()),
+            ..Default::default()
+        });
+        if let Err(error) = &exported {
+            if error.contains("no usable GPU adapter") {
+                return;
+            }
+        }
+        exported.unwrap();
+        let decoded = Command::new(&ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&out)
+            .args(["-map", "0:a:0", "-f", "f32le", "-ac", "1", "-"])
+            .output()
+            .unwrap();
+        assert!(decoded.status.success());
+        let peak = decoded
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes).abs())
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+            .0;
+        // Within a millisecond: AAC is lossy and smears a one-sample click by a
+        // few samples, differently across encoder versions, where an offset
+        // added rather than subtracted moves it a whole second.
+        assert!(
+            peak.abs_diff(36_000) <= 48,
+            "the click is heard {} s into the video, not 0.75 s",
+            peak as f64 / 48_000.0
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// What an x264 export says about its colour is what its pixels hold, read
     /// back from the file rather than the arguments: ffmpeg 7 has dropped
     /// colour options given in the wrong place without a word.

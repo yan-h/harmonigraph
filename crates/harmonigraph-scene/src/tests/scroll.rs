@@ -69,12 +69,17 @@ fn everything_the_pane_shows_is_in_the_window() {
 }
 
 /// The sweep [`everything_the_pane_shows_is_in_the_window`] runs per stack.
+///
+/// Turned as well as fresh, because at the fresh yaw every corner of the pane
+/// but one lands within a node's margin of the rectangle the others make, so
+/// a window built from three corners would pass for one built from four.
 fn sweep_the_pane(view: &ViewConfig) {
     let (low, high) = view.sevens_window();
-    for projection in PROJECTIONS {
+    let turns = [Camera::default().yaw, -0.7];
+    for (projection, yaw) in PROJECTIONS.into_iter().flat_map(|p| turns.map(|yaw| (p, yaw))) {
         for aspect in ASPECTS {
             for distance in [Camera::MIN_DISTANCE, Camera::DEFAULT_DISTANCE, Camera::MAX_DISTANCE] {
-                let camera = Camera { projection, distance, ..Camera::default() };
+                let camera = Camera { projection, distance, yaw, ..Camera::default() };
                 let drawn = view.scrolled(&camera, aspect);
                 if projection != Projection::Cabinet && drawn.count() > MAX_DRAWN_NODES - 512 {
                     continue;

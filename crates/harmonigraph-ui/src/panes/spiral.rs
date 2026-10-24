@@ -1575,15 +1575,16 @@ mod tests {
         );
         // The emptiest frame the pane can draw — no strength, nothing
         // sounding, so nothing to light, nothing to cut and no names. What is
-        // left is two callbacks that both go in unconditionally and both
-        // decline inside their own `prepare`: the dots' surround and the halo.
+        // left is three callbacks that all go in unconditionally and all decline
+        // inside their own `prepare`: the dots' surround, the halo and the
+        // names, which call back with none to keep their pane resident.
         // The halo keeps a clock running that retires state the pane is still
         // using, and the surround drops its targets only on a frame that says
-        // the cut is off, so a gate on either would read 1 here.
+        // the cut is off, so a gate on either would read 2 here.
         assert_eq!(
             callbacks(0.0, false),
-            2,
-            "a silent frame asks for something other than the surround and the halo",
+            3,
+            "a silent frame asks for something other than the surround, the halo and the names",
         );
         assert_eq!(
             callbacks(1.2, false),

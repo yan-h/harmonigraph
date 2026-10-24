@@ -506,6 +506,10 @@ mod tests {
         assert_eq!(tracker.held_count(), 65);
         assert!(tracker.voices().any(|v| v.source == SourceId(2) && v.on_time == 0.0));
         assert!(
+            tracker.roll().notes().any(|n| n.source == SourceId(2) && n.is_live()),
+            "one source's baseline leaves another's ribbons sounding"
+        );
+        assert!(
             tracker.roll().notes().filter(|n| n.source == SourceId(1)).all(|n| {
                 !n.history_complete && n.start == 1.0 && n.segments(3.0).next().unwrap().0 .0 == 2.0
             }),
@@ -529,6 +533,114 @@ mod tests {
                 sample_rate: 48000.0,
             }),
             pitch_microcents: None,
+        }
+    }
+
+    /// Every clause of the publication boundary refuses on its own: a delta,
+    /// a gap or a baseline voice that would be valid but for one field. Each
+    /// fixture starts from one that passes, so a refusal is that field's.
+    #[test]
+    fn one_malformed_field_refuses_a_delta_a_gap_or_a_baseline_voice() {
+        let good = NoteDelta {
+            assignment: Some(AssignmentMetadata {
+                decision: 1,
+                node: None,
+                correction_microcents: 0,
+                player_tuning: 0.0,
+            }),
+            partial_output: true,
+            ..delta(NoteEvent::on(1.0, SourceId(1), 0, 60, 0.8), 1)
+        };
+        assert_eq!(good.validate(), Ok(()));
+        let kind = |kind| NoteEvent { kind, ..good.event };
+        let decision = Some(AssignmentMetadata { decision: 0, ..good.assignment.unwrap() });
+        let direct = PitchProvenance::ObservedDirect;
+        let no_rate = |t| Some(EventTiming { sample_rate: 0.0, ..t });
+        for (what, bad) in [
+            ("note", NoteDelta { event: NoteEvent { note: 128, ..good.event }, ..good }),
+            ("velocity", NoteDelta { event: kind(NoteEventKind::On { velocity: 1.5 }), ..good }),
+            (
+                "direct from a source",
+                NoteDelta { provenance: direct, partial_output: false, ..good },
+            ),
+            ("output lifetime", NoteDelta { lifetime: 0, ..good }),
+            ("zero rate", NoteDelta { timing: no_rate(good.timing.unwrap()), ..good }),
+            ("decision", NoteDelta { assignment: decision, ..good }),
+            ("partial off", NoteDelta { event: kind(NoteEventKind::Off), ..good }),
+        ] {
+            assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
+        }
+
+        let gap = PublicationGap {
+            source: Some(SourceId(1)),
+            time: 1.0,
+            through: 1.0,
+            first: 2,
+            last: 2,
+            reason: GapReason::PublicationFull,
+        };
+        assert_eq!(gap.validate(), Ok(()));
+        for (what, bad) in [
+            ("time", PublicationGap { time: f64::NAN, ..gap }),
+            ("through before time", PublicationGap { through: 0.5, ..gap }),
+            ("last before first", PublicationGap { first: 3, ..gap }),
+        ] {
+            assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
+        }
+
+        // A voice onset exactly at the frame's time is still in its past, and
+        // direct voices, which have no lifetime, do not collide on it.
+        let row = VoiceBaseline { actual_onset: 2.0, ..voice(60) };
+        assert!(frame(&[row, voice(64)]).is_ok());
+        let observed = VoiceBaseline { provenance: direct, lifetime: 0, onset: None, ..row };
+        let chord = [observed, VoiceBaseline { note: 64, ..observed }];
+        assert!(SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, &chord).is_ok());
+        for (what, bad) in [
+            ("note", VoiceBaseline { note: 128, ..row }),
+            ("onset after the frame", VoiceBaseline { actual_onset: 3.0, ..row }),
+            ("onset rate", VoiceBaseline { onset: no_rate(row.onset.unwrap()), ..row }),
+            ("direct from a source", VoiceBaseline { provenance: direct, ..row }),
+            ("output onset", VoiceBaseline { onset: None, ..row }),
+            ("same key", VoiceBaseline { lifetime: 99, ..row }),
+            ("same lifetime", VoiceBaseline { note: 64, ..row }),
+        ] {
+            // Beside a distinct voice, so only the duplicate cases are duplicates.
+            let beside = if what.starts_with("same") { row } else { voice(64) };
+            assert_eq!(frame(&[beside, bad]).err(), Some(InvalidCanonical), "{what}");
+        }
+        let mut envelope = frame(&[row]).unwrap();
+        envelope.id = 0;
+        assert_eq!(envelope.validate(), Err(InvalidCanonical), "id");
+    }
+
+    /// Accepted output is the same voice by lifetime, and direct observation,
+    /// which has none, by its onset. A row naming another voice at a held key
+    /// starts a new note rather than continuing the held one.
+    #[test]
+    fn a_baseline_row_continues_only_the_voice_it_names() {
+        let direct = |actual_onset| VoiceBaseline {
+            provenance: PitchProvenance::ObservedDirect,
+            lifetime: 0,
+            onset: None,
+            actual_onset,
+            ..voice(60)
+        };
+        for (source, row, notes) in [
+            (SourceId(1), voice(60), 1),
+            (SourceId(1), VoiceBaseline { lifetime: 99, ..voice(60) }, 2),
+            (SourceId::DIRECT, direct(1.0), 1),
+            (SourceId::DIRECT, direct(1.5), 2),
+        ] {
+            let mut tracker = NoteTracker::new();
+            let on = NoteEvent::on(1.0, source, 0, 60, 0.8);
+            if source == SourceId::DIRECT {
+                tracker.handle_event(on);
+            } else {
+                tracker.handle_canonical(CanonicalEvent::Note(delta(on, 1))).unwrap();
+            }
+            let baseline = SourceBaseline::new(source, 1, 2.0, 64, true, &[row]).unwrap();
+            tracker.replace_source(&baseline).unwrap();
+            assert_eq!(tracker.roll().notes().count(), notes, "{source:?} {row:?}");
         }
     }
 
@@ -633,6 +745,8 @@ mod tests {
         off.shown = false;
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
+        assert_eq!(tracker.roll().notes().count(), 0, "a hidden source draws nothing");
+        assert_eq!(tracker.roll().latest_activity(2.05), None, "and keeps nothing animating");
         let mut tuning = delta(
             NoteEvent {
                 time: 2.1,

@@ -545,7 +545,9 @@ mod tests {
         assert_eq!(state.runtime.tracker.held_count(), 0, "not yet");
         replay.advance_to(&mut state.runtime, 0.75);
         assert_eq!(state.runtime.tracker.held_count(), 1);
-        replay.advance_to(&mut state.runtime, 2.0);
+        assert!(!replay.is_spent(), "a note is still to come");
+        // A frame exactly on an event's time is the frame that passes it.
+        replay.advance_to(&mut state.runtime, 1.5);
         assert_eq!(state.runtime.tracker.held_count(), 2);
         assert!(replay.is_spent());
     }
@@ -654,7 +656,8 @@ mod tests {
         ));
         replay.advance_to(&mut state.runtime, 0.5);
         assert_eq!(replay.params.get(ParamKey::Fade), 0.25);
-        replay.advance_to(&mut state.runtime, 1.5);
+        assert!(!replay.is_spent(), "a change is still to come");
+        replay.advance_to(&mut state.runtime, 1.0);
         assert_eq!(replay.params.get(ParamKey::Fade), 0.75);
     }
 
