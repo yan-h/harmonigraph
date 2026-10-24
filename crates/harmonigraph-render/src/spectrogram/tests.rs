@@ -1952,6 +1952,39 @@ fn slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads() {
     }
 }
 
+/// Two spectrograms in one frame keep a grid copy each, and one that stops
+/// drawing keeps its own: the same buffer, however long the other goes on
+/// alone.
+///
+/// A hidden tab or a closed preview simply stops calling back, and switching
+/// back must re-upload nothing (#1587). Run for twice the 120 passes the old
+/// sweep evicted at.
+#[test]
+fn a_pane_that_stops_drawing_keeps_its_grid() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let read = read_of(18.0, 24.0, 48);
+    let grid = grid_of(noisy_grid(BINS as usize, 6), BINS, 8, 0);
+    let of_pane = |pane_id| SpectrogramCallback { pane_id, ..callback(full_quad(6), &grid, &read) };
+    let (docked, preview) = (of_pane(0), of_pane(1));
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &docked);
+    prepare_once(&device, &queue, &mut resources, &preview);
+    let held = |resources: &CallbackResources, id: u64| {
+        let spectrogram: &SpectrogramResources = resources.get().expect("resources");
+        let pane = spectrogram.panes.get(&id).expect("a pane that has drawn holds its buffers");
+        pane.grid.as_ref().expect("a drawn pane holds a grid").buffer.clone()
+    };
+    let before = held(&resources, 1);
+    assert!(held(&resources, 0) != before, "two spectrograms share one grid copy");
+
+    for _ in 0..240 {
+        prepare_once(&device, &queue, &mut resources, &docked);
+    }
+    assert!(held(&resources, 1) == before, "the pane that stopped drawing lost its grid");
+}
+
 /// [`SpectrogramHeadless::frame`] is the callback, so a dependent crate's
 /// parity test measures the path that ships rather than a second one.
 #[test]

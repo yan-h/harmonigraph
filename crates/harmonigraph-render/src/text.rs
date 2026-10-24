@@ -2074,6 +2074,45 @@ pub(crate) mod tests {
         }
     }
 
+    /// Two text panes in one frame keep a glyph buffer each, and one that
+    /// stops drawing keeps its own, shadow atlas included, however long the
+    /// other goes on alone (#1587). Run for twice the 120 passes the old sweep
+    /// evicted at.
+    #[test]
+    fn a_pane_that_stops_drawing_keeps_its_glyphs() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let at = |pane_id| TextCallback { pane_id, ..word(GlyphRuns::default(), 1.0) };
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let prepare = |cb: &TextCallback, resources: &mut CallbackResources| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        };
+        let held = |resources: &CallbackResources, id: u64| {
+            let text: &TextResources = resources.get().expect("prepare inserts its resources");
+            let pane = text.panes.get(&id).expect("a pane that has drawn holds its buffers");
+            assert!(
+                pane.shadow.as_ref().is_some_and(|shadow| shadow.target_allocated()),
+                "pane {id} holds no shadow atlas",
+            );
+            pane.instance_buffer.clone()
+        };
+
+        let mut resources = CallbackResources::default();
+        let (docked, preview) = (at(0), at(1));
+        prepare(&docked, &mut resources);
+        prepare(&preview, &mut resources);
+        let before = held(&resources, 1);
+        assert!(held(&resources, 0) != before, "two panes share one glyph buffer");
+
+        for _ in 0..240 {
+            prepare(&docked, &mut resources);
+        }
+        assert!(held(&resources, 1) == before, "the pane that stopped drawing lost its glyphs");
+    }
+
     /// A pane whose text is already prepared keeps it when a LATER pane in the
     /// same frame brings a grown atlas.
     ///

@@ -1651,6 +1651,44 @@ fn the_bloom_covers_the_pixels_the_halo_is_stretched_across() {
     );
 }
 
+/// Two rolls in one frame keep a chain each, and one that stops drawing keeps
+/// its own: the same instance buffer and the same bloom textures, however long
+/// the other goes on alone.
+///
+/// A hidden tab or a closed preview simply stops calling back, and switching
+/// back must rebuild nothing (#1587). Run for twice the 120 passes the old
+/// sweep evicted at, so an age-based eviction of any length that size could
+/// hide would show here.
+#[test]
+fn a_pane_that_stops_drawing_keeps_its_chain() {
+    // Held across every prepare: under `hot-reload` a shader published by
+    // another test between two of them makes `is_stale` rebuild the
+    // resources, pane map included, which reads here as an eviction (#675).
+    let _guard = crate::reload::test_lock();
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let rect =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+    let (docked, preview) = (bloomed_callback(rect, 0), bloomed_callback(rect, 1));
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, 1.0, &docked);
+    prepare_once(&device, &queue, &mut resources, 1.0, &preview);
+    let held = |resources: &CallbackResources, id: u64| {
+        let roll: &RollResources = resources.get().expect("prepare inserts its resources");
+        let pane = roll.panes.get(&id).expect("a pane that has drawn holds its buffers");
+        let bloom = pane.bloom.as_ref().expect("the fixture's strength builds a chain");
+        (pane.instance_buffer.clone(), bloom.notes_view.clone())
+    };
+    let (before, other) = (held(&resources, 1), held(&resources, 0));
+    assert!(before.0 != other.0 && before.1 != other.1, "two rolls share one set of buffers");
+
+    for _ in 0..240 {
+        prepare_once(&device, &queue, &mut resources, 1.0, &docked);
+    }
+    assert!(held(&resources, 1) == before, "the pane that stopped drawing lost its chain");
+}
+
 /// A thin ribbon glows in proportion to the ink it has, not a fraction of
 /// it — which is a claim about WHERE the threshold sits in the chain.
 ///
