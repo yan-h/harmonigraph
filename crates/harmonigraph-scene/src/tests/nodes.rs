@@ -1333,3 +1333,17 @@ fn a_ring_dialled_off_is_gated_by_nothing() {
         "a gate answered on a lattice with no ring to answer about",
     );
 }
+
+/// The glow's attack and release over a clock that ran BACKWARDS — a host
+/// looping its transport — hold the carried light where it is, as a frame
+/// drawn twice at one time does. A negative step is not a short one: run
+/// through the exponential it gives a coefficient below zero, which moves the
+/// light away from its target.
+#[test]
+fn a_glow_clock_that_runs_backwards_holds_the_light() {
+    let timing = GlowTiming { now: 1.0, attack: 0.05, release: 0.5 };
+    assert_eq!(timing.coefficients(Some(2.0)), (0.0, 0.0));
+    assert_eq!(timing.coefficients(Some(1.0)), (0.0, 0.0));
+    let (up, down) = timing.coefficients(Some(0.9));
+    assert!(up > down && down > 0.0 && up < 1.0, "{up} and {down} over a tenth of a second");
+}

@@ -30,6 +30,24 @@ fn zero_shape_makes_a_linear_curve() {
     }
 }
 
+/// Near zero the curve is drawn from a series rather than the exponential,
+/// whose two near-equal terms cancel there. The series has to carry the same
+/// bend: at exactly zero every term of it but the line vanishes, so the line
+/// alone says nothing about the shape it is meant to keep.
+#[test]
+fn a_shape_near_zero_bends_as_the_exact_curve_does() {
+    for shape in [-0.049, -0.03, 0.03, 0.049] {
+        let curve = GlowCurve { shape };
+        let k = f64::from(shape);
+        for i in 0..=100 {
+            let p = i as f32 / 100.0;
+            let exact = (k * (1.0 - f64::from(p))).exp_m1() / k.exp_m1();
+            let level = f64::from(curve.sample(p));
+            assert!((level - exact).abs() < 2e-6, "shape {shape} at {p}: {level} vs {exact}");
+        }
+    }
+}
+
 /// A positive shape produces one convex exponential-like decay, not a curve
 /// that flattens at both ends and turns through an S between them.
 #[test]
