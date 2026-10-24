@@ -238,10 +238,11 @@ impl SpectrumAnalysis {
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
         mut column: impl FnMut(AnalyzedColumn),
     ) -> Result<(), E> {
-        // A changed frame, taper set or rate empties the analyzers' rings, so
-        // nothing comes out until they have refilled; a changed sweep only
-        // replans how the same frame is read. The hop grid keeps its phase
-        // across any gap rather than restarting on it.
+        // A changed rate empties the analyzers' rings, so nothing comes out
+        // until they have refilled; a changed frame carries what the new one
+        // can use, so only a longer one waits, for the rest of it; a changed
+        // sweep only replans how the same frame is read. The hop grid keeps its
+        // phase across any gap rather than restarting on it.
         self.analyzer.configure(config.analyzer(sample_rate), channels);
 
         // FRAMES throughout: `samples` is interleaved, and a hop is an amount of

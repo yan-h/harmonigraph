@@ -165,10 +165,14 @@ impl SpectrumAnalyzer {
     }
 
     /// Adopt the final estimator, rebuilding only what its changed inputs
-    /// decide. A changed frame or rate deliberately requires a fresh audio
-    /// window; a changed sweep, entered or left included, only replans
-    /// how the same frame is read, so it keeps the window. Unchanged settings
-    /// preserve readiness and allocate nothing.
+    /// decide. A changed rate requires a fresh audio window, since samples at
+    /// one rate say nothing at another. A changed frame at the same rate
+    /// carries the newest samples the old window held, as many as the new one
+    /// takes, so a frequency-resolution switch keeps drawing: a shorter frame
+    /// is ready at once, and a longer one fills the rest (#1584). A changed
+    /// sweep, entered or left included, only replans how the same frame is
+    /// read, so it keeps the window. Unchanged settings preserve readiness and
+    /// allocate nothing.
     pub fn configure(&mut self, config: AnalyzerConfig) {
         let AnalyzerConfig { sample_rate, fft_size, sweep } = config;
         assert!(
@@ -196,7 +200,16 @@ impl SpectrumAnalyzer {
             self.sample_rate = sample_rate;
         }
         if size_changed {
-            self.ring = vec![0.0; fft_size];
+            // The new ring holds the carried samples oldest first from slot 0,
+            // exactly where a fresh analyzer fed them would hold them, so it
+            // reads them identically and fills on from there.
+            let carried = if rate_changed { 0 } else { self.filled.min(fft_size) };
+            self.ring.rotate_left(self.write);
+            let mut ring = vec![0.0; fft_size];
+            ring[..carried].copy_from_slice(&self.ring[self.ring.len() - carried..]);
+            self.ring = ring;
+            self.write = carried % fft_size;
+            self.filled = carried;
             // No global cache or retained planner: each channel owns its plan.
             let fft =
                 realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size * kernels::PAD);
@@ -207,10 +220,8 @@ impl SpectrumAnalyzer {
             self.window = hann(fft_size);
             self.window_sum = self.window.iter().sum();
         } else {
-            self.ring.fill(0.0);
+            self.clear_window();
         }
-        self.write = 0;
-        self.filled = 0;
         self.sweep = sweep;
         self.plan_kernels();
     }
@@ -749,14 +760,17 @@ mod tests {
 
     #[test]
     fn sample_rate_change_resets_the_window() {
-        let mut analyzer = SpectrumAnalyzer::new(Default::default());
-        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
-        assert!(analyzer.pitch_spectrum().is_some());
-        analyzer.configure(AnalyzerConfig { sample_rate: 44_100.0, ..Default::default() });
-        assert!(
-            analyzer.pitch_spectrum().is_none(),
-            "stale samples must not be analyzed under a new clock"
-        );
+        // With a shorter frame too, which a frame change alone would carry into.
+        for fft_size in [DEFAULT_FFT_SIZE, 6144] {
+            let mut analyzer = SpectrumAnalyzer::new(Default::default());
+            analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
+            assert!(analyzer.pitch_spectrum().is_some());
+            analyzer.configure(AnalyzerConfig { sample_rate: 44_100.0, fft_size, sweep: None });
+            assert!(
+                analyzer.pitch_spectrum().is_none(),
+                "{fft_size}: stale samples must not be analyzed under a new clock"
+            );
+        }
     }
 
     /// The bucket plan is derived from the sample rate, so an analyzer that
@@ -788,19 +802,47 @@ mod tests {
     }
 
     #[test]
-    fn changing_fft_size_resets_the_window_and_noops_at_the_current_size() {
+    fn a_longer_frame_fills_the_rest_and_noops_at_the_current_size() {
         let mut analyzer = SpectrumAnalyzer::new(Default::default());
         analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(analyzer.pitch_spectrum().is_some());
-        // A genuine size change empties the buffer.
+        // A longer frame carries the shorter one's samples and waits only for
+        // the rest of itself.
         analyzer.configure(AnalyzerConfig { fft_size: DEFAULT_FFT_SIZE * 2, ..Default::default() });
-        assert!(analyzer.pitch_spectrum().is_none(), "resized window starts empty");
-        // Refilling to the new length produces a spectrum again.
-        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE * 2]);
+        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE - 1]);
+        assert!(analyzer.pitch_spectrum().is_none(), "one short of the longer frame");
+        analyzer.push_samples(&[0.2]);
         assert!(analyzer.pitch_spectrum().is_some());
         // Setting the same size again is a no-op: the filled window survives.
         analyzer.configure(AnalyzerConfig { fft_size: DEFAULT_FFT_SIZE * 2, ..Default::default() });
         assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
+    }
+
+    /// A switch to a shorter frame draws on the next column (#1584), from the
+    /// newest samples the longer one held, reading exactly what a fresh
+    /// analyzer fed those samples reads. The longer ring has wrapped, so the
+    /// samples carried cross its seam.
+    #[test]
+    fn a_shorter_frame_draws_at_once_from_the_samples_it_carries() {
+        let rate = 48_000.0;
+        let samples: Vec<f32> = (0..30_000)
+            .map(|i| {
+                let t = i as f32 / rate;
+                0.5 * (std::f32::consts::TAU * 440.0 * t).sin()
+                    + 0.2 * (std::f32::consts::TAU * 9_000.0 * t).sin()
+                    + if i % 97 == 0 { 0.3 } else { 0.0 }
+            })
+            .collect();
+        let mut switched =
+            SpectrumAnalyzer::new(AnalyzerConfig { fft_size: 24_576, ..Default::default() });
+        switched.push_samples(&samples);
+        switched.configure(AnalyzerConfig { fft_size: 6144, ..Default::default() });
+        let mut fresh =
+            SpectrumAnalyzer::new(AnalyzerConfig { fft_size: 6144, ..Default::default() });
+        fresh.push_samples(&samples[samples.len() - 6144..]);
+        let expected = *fresh.pitch_spectrum().unwrap();
+        assert!(expected.iter().filter(|p| **p > 0.0).count() > SPECTRUM_BINS / 2);
+        assert_eq!(switched.pitch_spectrum().expect("a whole frame carried"), &expected);
     }
 
     /// The bottom of the axis sits too near DC for a short frame to place —
