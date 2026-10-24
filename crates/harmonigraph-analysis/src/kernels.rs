@@ -190,7 +190,9 @@ const KERNEL_REACH: f64 = 5.0;
 /// listen is shorter than that frame's longest), which is what this keeps; nearer the edge the
 /// bucket reads as nothing, the truth about a frame too short to place it. At
 /// 48 kHz that is 20 to 22 Hz through the Fast frame, and 20 to 44 Hz through
-/// it at 96 kHz.
+/// it at 96 kHz. A Sweep instead lengthens a listen too short to clear the
+/// edge ([`swept_sigma`]), so only a bucket that the longest listen cannot
+/// place goes unread there.
 ///
 /// The whole listen's width and not the kernel's: what walks the reading off
 /// is the listen's response crossing the edge, and under a fixed listen the
@@ -238,15 +240,39 @@ fn gaussian_for(length: f64, n: f64) -> f64 {
     1.0 / (1.0 / (tau * tau) - 1.0 / (frame * frame)).sqrt()
 }
 
-/// The spread of the Gaussian a bucket centred at `hz` listens through under
-/// `sweep`, on a frame of `fft_size`: the one that brings the frame's own Hann
-/// envelope down to the length the sweep asks for there.
-fn swept_sigma(sweep: Sweep, fft_size: usize, hz: f64) -> f64 {
+/// The spread of the Gaussian a bucket listens through under `sweep`, on a
+/// frame of `fft_size` at `sample_rate`: the length the sweep asks for at the
+/// bucket's centre, gliding log-linearly between its ends, unless that is too
+/// short to place the bucket.
+///
+/// A short listen is a wide kernel, and a kernel that would cross the bottom
+/// of the usable bins is not read ([`KERNEL_CLEARANCE`]). There the bucket
+/// listens instead as long as placing its lowest frequency takes, up to the
+/// longest listen. Left unread, a short bass listen cut the axis off with a
+/// wall under which nothing read: at 48 kHz, 175 Hz at a 256-sample listen,
+/// 75 Hz at 1024. At 48 kHz 20 Hz takes 4740 samples, at 96 kHz 9660, and
+/// at 192 kHz more than the longest, so the bottom few buckets there stay
+/// unread whatever the sweep.
+fn swept_sigma(
+    sweep: Sweep,
+    fft_size: usize,
+    sample_rate: f64,
+    frequencies: &crate::BucketFrequencies,
+) -> f64 {
+    let n = fft_size as f64;
     let longest = f64::from(max_length(fft_size));
     let length = |l: f32| f64::from(l).clamp(f64::from(SWEEP_MIN_LENGTH), longest).ln();
+    let hz = f64::from(frequencies.center_hz);
     let u = ((hz / 20.0).ln() / (20_000.0f64 / 20.0).ln()).clamp(0.0, 1.0);
     let (bass, treble) = (length(sweep.bass), length(sweep.treble));
-    gaussian_for((bass + (treble - bass) * u).exp(), fft_size as f64)
+    let asked = gaussian_for((bass + (treble - bass) * u).exp(), n);
+    // The clearance `plan` asks of the lowest reading, solved for the spread.
+    let bins_n = (PAD * fft_size) as f64;
+    let room =
+        f64::from(frequencies.lower_hz) * bins_n / sample_rate - usable_bins(fft_size).0 as f64;
+    let placed =
+        if room > 0.0 { KERNEL_CLEARANCE * bins_n / (2.0 * PI * room) } else { f64::INFINITY };
+    asked.max(placed).min(gaussian_for(longest, n))
 }
 
 /// The sample of a frame of `fft_size` that every bucket's listen is centred
@@ -421,7 +447,7 @@ impl Kernels {
             // The listen's whole Gaussian, and the share of it the kernel reads.
             let (sigma, kernel_sigma, spread, norm) = match (sweep, fixed) {
                 (Some(sweep), _) => {
-                    let sigma = swept_sigma(sweep, fft_size, f64::from(frequencies.center_hz));
+                    let sigma = swept_sigma(sweep, fft_size, sr, frequencies);
                     let [sum, _, _] = listen_moments(fft_size, centre, sigma, hann);
                     (sigma, sigma, effective_spread(sigma, n), norm_power(sum))
                 }
@@ -704,6 +730,31 @@ mod tests {
         }
     }
 
+    /// A short bass listen still reads the bass: where the listen asked for is
+    /// too short to place a bucket clear of the bottom of the usable bins
+    /// ([`KERNEL_CLEARANCE`]), the bucket listens as long as placing it takes.
+    /// Left unread instead, a 256-sample bass listen read nothing under 175 Hz
+    /// at 48 kHz, and the lowest bucket that did read drew a 60 Hz partial
+    /// there, at -8 dB. At 96 kHz the bins are twice as wide, so it takes a
+    /// listen twice as long, and the lowest buckets need most of the longest.
+    #[test]
+    fn a_short_bass_listen_still_places_every_partial() {
+        let sweep = Some(Sweep { bass: SWEEP_MIN_LENGTH, treble: 2048.0 });
+        for sample_rate in [48_000.0, 96_000.0] {
+            let config = AnalyzerConfig { sample_rate, fft_size: FRAME, sweep };
+            for hz in [21.0f32, 25.0, 40.0, 60.0, 100.0, 150.0] {
+                let level = analyze(config, hz);
+                let (off, db) = (cents_off(peak(&level), hz), 10.0 * level[peak(&level)].log10());
+                assert!(off.abs() < 15.0, "{sample_rate} Hz, {hz} Hz reads {off:+.1} cents off");
+                assert!((-0.35..0.1).contains(&db), "{sample_rate} Hz, {hz} Hz reads {db:+.2} dB");
+            }
+            assert!(
+                analyze(config, 21.0)[0] > 0.0,
+                "{sample_rate} Hz: the bottom bucket is unread"
+            );
+        }
+    }
+
     /// Every frame `configure` accepts reads, however short: padding a kernel
     /// to whole [`TAP_CHUNK`]s at the bottom once overran bin 0 on a 12-sample
     /// frame, whose one kernel spans every usable bin.
@@ -879,7 +930,7 @@ mod tests {
                 let f = &BUCKET_FREQUENCIES[b];
                 let hz = 0.5 * f64::from(f.lower_hz + f.upper_hz);
                 let sigma = sweep.map_or(FIXED_SPREAD * n as f64, |sweep| {
-                    swept_sigma(sweep, n, f64::from(f.center_hz))
+                    swept_sigma(sweep, n, f64::from(RATE), f)
                 });
                 let (mut re, mut im) = (0.0, 0.0);
                 for i in 0..n {
