@@ -179,7 +179,7 @@ pub(crate) const PANE_GUTTER: f32 = 8.0;
 pub(crate) const ROW_GAP: f32 = 4.0;
 
 /// The width of every line, chrome and picture alike: a divider, a widget's
-/// outline, a curve, the spectrum's outline. Otonal's mark width, and like
+/// outline, a curve. Otonal's mark width, and like
 /// otonal's the floor: only a grid is ruled finer ([`GRID_WIDTH`]).
 ///
 /// FIXED at every [UI scale](ui_scale), as a separator is under a larger text
