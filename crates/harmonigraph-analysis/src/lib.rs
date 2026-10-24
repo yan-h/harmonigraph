@@ -111,6 +111,9 @@ pub struct SpectrumAnalyzer {
     /// Samples the ring holds, pushed or carried in by a frame change (see
     /// [`configure`](Self::configure)), saturating at `fft_size`.
     filled: usize,
+    /// The Hann window, precomputed, `fft_size` long. See [`hann`]. The frame is
+    /// multiplied by [`kernels::Kernels::window`], which is built from it.
+    hann: Vec<f32>,
     /// A plan and its reusable buffers, owned by this channel, for a transform
     /// [`kernels::PAD`] frames long. The planner is dropped after
     /// configuration; no cross-channel or global plan cache.
@@ -148,6 +151,7 @@ impl SpectrumAnalyzer {
             ring: Vec::new(),
             write: 0,
             filled: 0,
+            hann: Vec::new(),
             fft: None,
             fft_input: Vec::new(),
             fft_output: Vec::new(),
@@ -218,6 +222,7 @@ impl SpectrumAnalyzer {
             self.fft_output = fft.make_output_vec();
             self.fft_scratch = fft.make_scratch_vec();
             self.fft = Some(fft);
+            self.hann = hann(fft_size);
         }
         self.sweep = sweep;
         self.plan_kernels();
@@ -226,7 +231,7 @@ impl SpectrumAnalyzer {
     /// Plan every bucket's kernels, and the column's lag, for the current
     /// frame, rate and sweep.
     fn plan_kernels(&mut self) {
-        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size);
+        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size, &self.hann);
         let config = AnalyzerConfig {
             sample_rate: self.sample_rate,
             fft_size: self.fft_size,
@@ -451,10 +456,15 @@ impl ChannelBank {
     }
 }
 
-/// Sample `i` of a periodic Hann window of `n` samples, the one definition of
-/// it: the frame's window is built from it ([`kernels::Kernels::window`]), and
-/// the kernels' sums about each listen read it too, so they describe the window
-/// the frame is actually multiplied by, bit for bit.
+/// A periodic Hann window of `n` samples.
+fn hann(n: usize) -> Vec<f32> {
+    (0..n).map(|i| hann_weight(i, n)).collect()
+}
+
+/// Sample `i` of [`hann`], the one definition of the window: the frame's window
+/// is built from it ([`kernels::Kernels::window`]), and the kernels' sums about
+/// each listen read it too, so they describe the window the frame is actually
+/// multiplied by, bit for bit.
 fn hann_weight(i: usize, n: usize) -> f32 {
     let phase = std::f32::consts::TAU * i as f32 / n as f32;
     0.5 * (1.0 - phase.cos())

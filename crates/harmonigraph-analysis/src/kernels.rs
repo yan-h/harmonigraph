@@ -363,8 +363,16 @@ impl Kernels {
     }
 
     /// Settle every bucket's kernels, and the frame's window, listening along
-    /// `sweep` or, without one, through the fixed listen.
-    pub(crate) fn plan(&mut self, sweep: Option<Sweep>, sample_rate: f32, fft_size: usize) {
+    /// `sweep` or, without one, through the fixed listen. `hann` is the frame's
+    /// Hann window, `fft_size` long, looked up rather than recomputed because a
+    /// Sweep's plan reads it once per bucket at every slider tick.
+    pub(crate) fn plan(
+        &mut self,
+        sweep: Option<Sweep>,
+        sample_rate: f32,
+        fft_size: usize,
+        hann: &[f32],
+    ) {
         let n = fft_size as f64;
         // The padded transform's length, in which its bins are counted.
         let bins_n = (PAD * fft_size) as f64;
@@ -372,7 +380,7 @@ impl Kernels {
         let (first, last) = usable_bins(fft_size);
         let centre = listen_centre(fft_size, sweep.is_some());
         self.offset = PAD * fft_size / 2 - centre;
-        let hann = |i: usize| f64::from(crate::hann_weight(i, fft_size));
+        let hann = |i: usize| f64::from(hann[i]);
         // The share of the fixed listen the frame carries: the Gaussian whose
         // product with the kernels' share is the whole listen.
         let carried = sweep.is_none().then(|| {
