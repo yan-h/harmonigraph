@@ -106,7 +106,8 @@ pub struct SpectrumAnalyzer {
     /// The most recent `fft_size` samples, as a circular buffer.
     ring: Vec<f32>,
     write: usize,
-    /// Samples pushed since (re)configuration, saturating at `fft_size`.
+    /// Samples the ring holds, pushed or carried in by a frame change (see
+    /// [`configure`](Self::configure)), saturating at `fft_size`.
     filled: usize,
     /// The Hann window, precomputed, `fft_size` long. See [`hann`].
     window: Vec<f32>,
@@ -195,21 +196,25 @@ impl SpectrumAnalyzer {
             }
             return;
         }
+        // The newest samples the new frame takes, none across a rate change.
+        // The new ring holds them oldest first from slot 0, exactly where a
+        // fresh analyzer fed them would, so it reads them identically and fills
+        // on from there. The old ring in time order is `older` then `newer`.
+        let carried = if rate_changed { 0 } else { self.filled.min(fft_size) };
+        let (newer, older) = self.ring.split_at(self.write);
+        let from_newer = carried.min(newer.len());
+        let from_older = carried - from_newer;
+        let mut ring = vec![0.0; fft_size];
+        ring[..from_older].copy_from_slice(&older[older.len() - from_older..]);
+        ring[from_older..carried].copy_from_slice(&newer[newer.len() - from_newer..]);
+        self.ring = ring;
+        self.write = carried % fft_size;
+        self.filled = carried;
         self.fft_size = fft_size;
         if rate_changed {
             self.sample_rate = sample_rate;
         }
         if size_changed {
-            // The new ring holds the carried samples oldest first from slot 0,
-            // exactly where a fresh analyzer fed them would hold them, so it
-            // reads them identically and fills on from there.
-            let carried = if rate_changed { 0 } else { self.filled.min(fft_size) };
-            self.ring.rotate_left(self.write);
-            let mut ring = vec![0.0; fft_size];
-            ring[..carried].copy_from_slice(&self.ring[self.ring.len() - carried..]);
-            self.ring = ring;
-            self.write = carried % fft_size;
-            self.filled = carried;
             // No global cache or retained planner: each channel owns its plan.
             let fft =
                 realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size * kernels::PAD);
@@ -219,8 +224,6 @@ impl SpectrumAnalyzer {
             self.fft = Some(fft);
             self.window = hann(fft_size);
             self.window_sum = self.window.iter().sum();
-        } else {
-            self.clear_window();
         }
         self.sweep = sweep;
         self.plan_kernels();
@@ -801,20 +804,41 @@ mod tests {
         }
     }
 
+    /// Two tones and a click train at 48 kHz: enough structure that a sample
+    /// carried to the wrong place reads differently.
+    fn mixture(len: usize) -> Vec<f32> {
+        (0..len)
+            .map(|i| {
+                let t = i as f32 / 48_000.0;
+                0.5 * (std::f32::consts::TAU * 440.0 * t).sin()
+                    + 0.2 * (std::f32::consts::TAU * 9_000.0 * t).sin()
+                    + if i % 97 == 0 { 0.3 } else { 0.0 }
+            })
+            .collect()
+    }
+
+    /// A longer frame carries the shorter one's samples and waits only for the
+    /// rest of itself, then reads exactly what a fresh analyzer fed the same
+    /// newest samples reads (#1584). The shorter ring has wrapped, so the
+    /// samples carried cross its seam, and the new ones land after them.
     #[test]
     fn a_longer_frame_fills_the_rest_and_noops_at_the_current_size() {
-        let mut analyzer = SpectrumAnalyzer::new(Default::default());
-        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
+        let samples = mixture(9000 + DEFAULT_FFT_SIZE - 6144);
+        let (before, after) = samples.split_at(9000);
+        let mut analyzer =
+            SpectrumAnalyzer::new(AnalyzerConfig { fft_size: 6144, ..Default::default() });
+        analyzer.push_samples(before);
         assert!(analyzer.pitch_spectrum().is_some());
-        // A longer frame carries the shorter one's samples and waits only for
-        // the rest of itself.
-        analyzer.configure(AnalyzerConfig { fft_size: DEFAULT_FFT_SIZE * 2, ..Default::default() });
-        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE - 1]);
+        analyzer.configure(Default::default());
+        analyzer.push_samples(&after[..after.len() - 1]);
         assert!(analyzer.pitch_spectrum().is_none(), "one short of the longer frame");
-        analyzer.push_samples(&[0.2]);
-        assert!(analyzer.pitch_spectrum().is_some());
+        analyzer.push_samples(&after[after.len() - 1..]);
+        let mut fresh = SpectrumAnalyzer::new(Default::default());
+        fresh.push_samples(&samples[samples.len() - DEFAULT_FFT_SIZE..]);
+        let expected = *fresh.pitch_spectrum().unwrap();
+        assert_eq!(analyzer.pitch_spectrum().expect("the rest arrived"), &expected);
         // Setting the same size again is a no-op: the filled window survives.
-        analyzer.configure(AnalyzerConfig { fft_size: DEFAULT_FFT_SIZE * 2, ..Default::default() });
+        analyzer.configure(Default::default());
         assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
     }
 
@@ -824,15 +848,7 @@ mod tests {
     /// samples carried cross its seam.
     #[test]
     fn a_shorter_frame_draws_at_once_from_the_samples_it_carries() {
-        let rate = 48_000.0;
-        let samples: Vec<f32> = (0..30_000)
-            .map(|i| {
-                let t = i as f32 / rate;
-                0.5 * (std::f32::consts::TAU * 440.0 * t).sin()
-                    + 0.2 * (std::f32::consts::TAU * 9_000.0 * t).sin()
-                    + if i % 97 == 0 { 0.3 } else { 0.0 }
-            })
-            .collect();
+        let samples = mixture(30_000);
         let mut switched =
             SpectrumAnalyzer::new(AnalyzerConfig { fft_size: 24_576, ..Default::default() });
         switched.push_samples(&samples);
@@ -867,8 +883,8 @@ mod tests {
         analyzer.push_samples(&tone);
         let lit = analyzer.pitch_spectrum().expect("window filled")[0];
         assert!(lit > 0.0, "fixture must light the bottom bucket at the long window");
+        // Read from the carried samples alone, which still hold the tone.
         analyzer.configure(AnalyzerConfig { fft_size: 6144, ..Default::default() });
-        analyzer.push_samples(&tone);
         assert_eq!(
             analyzer.pitch_spectrum().expect("window filled")[0],
             0.0,

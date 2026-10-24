@@ -302,9 +302,9 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     assert!(columns > 0);
     let last = spectrum.history().back().unwrap().time;
 
-    // A longer frame carries the shorter one's whole window and waits only for
-    // the rest of itself (#1584).
-    let carried = config.window.samples();
+    // A longer frame carries as much of the shorter one's window as it holds
+    // and waits only for the rest of itself (#1584).
+    let carried = initial.min(config.window.samples());
     let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..config };
     let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
     let first_ready = (initial + config.window.samples() - carried).div_ceil(hop) * hop;
