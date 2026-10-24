@@ -1040,7 +1040,14 @@ mod tests {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .unwrap()
             .0;
-        assert_eq!(peak, 36_000, "the click is heard {} s into the video", peak as f64 / 48_000.0);
+        // Within a millisecond: AAC is lossy and smears a one-sample click by a
+        // few samples, differently across encoder versions, where an offset
+        // added rather than subtracted moves it a whole second.
+        assert!(
+            peak.abs_diff(36_000) <= 48,
+            "the click is heard {} s into the video, not 0.75 s",
+            peak as f64 / 48_000.0
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
