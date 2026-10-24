@@ -70,7 +70,7 @@ printf '#!/bin/sh\ntouch "%s/cargo-ran"\n' "$TMP" > "$TMP/bin/cargo"
 chmod +x "$TMP/bin/cargo"
 for arg in none empty; do
   if [ "$arg" = none ]; then set --; else set -- ""; fi
-  got=$(cd "$TMP/detached-a" && PATH="$TMP/bin:$PATH" ./load-plugin.sh "$@" 2>&1)
+  got=$(cd "$TMP/detached-a" && PATH="$TMP/bin:$PATH" HOME="$TMP/home" ./load-plugin.sh "$@" 2>&1)
   status=$?
   if [ "$status" -ne 0 ] && [[ "$got" == *"detached HEAD"* ]] && [ ! -e "$TMP/cargo-ran" ]; then
     echo "✓ detached build refuses ($arg)"

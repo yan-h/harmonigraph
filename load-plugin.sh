@@ -277,14 +277,17 @@ link_clap_slot() {
   local link="$dir/$NAME.clap"
   if [[ -L "$link" ]]; then
     [[ "$(readlink "$link")" == "$target" ]] && return 0
-    ln -sfn "$target" "$link"  # still pointing at a checkout that moved
-    echo "Relinked $link -> $target"
+    # Still pointing at a checkout that moved, or at another clone's slot.
+    ln -sfn "$target" "$link" && echo "Relinked $link -> $target" \
+      || echo "WARNING: could not relink $link" >&2
   elif [[ -e "$link" ]]; then
     echo "WARNING: $link is a real bundle, not a link to the slot;" >&2
     echo "         Bitwig may list that build beside this one." >&2
   else
-    mkdir -p "$dir" && ln -s "$target" "$link"
-    echo "Linked $link -> $target (restart Bitwig once to discover it)"
+    # A link that cannot be made costs discovery, never the load just done.
+    { mkdir -p "$dir" && ln -s "$target" "$link"; } \
+      && echo "Linked $link -> $target (restart Bitwig once to discover it)" \
+      || echo "WARNING: could not link $link; Bitwig will not find the slot" >&2
   fi
 }
 

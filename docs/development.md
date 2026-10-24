@@ -82,8 +82,9 @@ so the real encoder and export-length tests fail rather than skip without `ffmpe
 
 This repository's Bitwig workflow uses one bundle location:
 the main checkout's `target/bundled/`.
-In a fresh Bitwig setup,
-add that directory under **Settings → Locations → Plug-in Locations**.
+`load-plugin.sh` links it into `~/Library/Audio/Plug-Ins/CLAP/`, which Bitwig scans by default,
+so a fresh Bitwig setup needs only a restart after the first load, and no plug-in location;
+remove a `target/bundled/` location left from an older setup.
 Create the bundle structure once from the main checkout before using either loader script:
 
 ```sh

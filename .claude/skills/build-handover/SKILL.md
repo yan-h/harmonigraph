@@ -14,7 +14,7 @@ With parallel sessions that slot is shared, so every session builds into its own
 a session touching the slot itself would evict whatever he is currently testing.
 
 Bitwig finds the slot through `~/Library/Audio/Plug-Ins/CLAP/Harmonigraph.clap`, a symlink `load-plugin.sh` creates if it is missing,
-so no machine needs `target/bundled` added as a plug-in location; remove one left from older setups so the slot is not scanned under two paths.
+so no machine needs `target/bundled` added as a plug-in location, and the loader's plist touch (#631) is what makes a restart re-read the bundle through it; remove one left from older setups so the slot is not scanned under two paths.
 Bitwig 6.1.5 never scanned a CLAP from any folder on macOS, fixed in 6.1.6:
 on 6.1.5 the plugin drops out of the browser after every swap, and clicking the preset folder icon on a Harmonigraph device brings it back.
 
