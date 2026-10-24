@@ -2,8 +2,8 @@
 //!
 //! Each channel owns a planned RealFFT real-input transform (a half-size
 //! complex FFT plus postprocessing), with reusable input/output/scratch. One
-//! column is one transform of the latest frame through a Hann window, zero-
-//! padded to twice its length, and every pitch bucket then reads that transform
+//! column is one transform of the latest frame through a Hann window (and,
+//! under a fixed listen, part of that listen), zero-padded to twice its length, and every pitch bucket then reads that transform
 //! at its OWN frequency through a small kernel, which also narrows the frame to
 //! that bucket's listen — see [`kernels`]. Live and
 //! offline consumers share all of it verbatim. Exact-zero retained windows
@@ -111,10 +111,6 @@ pub struct SpectrumAnalyzer {
     /// Samples the ring holds, pushed or carried in by a frame change (see
     /// [`configure`](Self::configure)), saturating at `fft_size`.
     filled: usize,
-    /// The Hann window, precomputed, `fft_size` long. See [`hann`].
-    window: Vec<f32>,
-    /// Its sum, which the frame's weighted mean is divided by.
-    window_sum: f32,
     /// A plan and its reusable buffers, owned by this channel, for a transform
     /// [`kernels::PAD`] frames long. The planner is dropped after
     /// configuration; no cross-channel or global plan cache.
@@ -152,8 +148,6 @@ impl SpectrumAnalyzer {
             ring: Vec::new(),
             write: 0,
             filled: 0,
-            window: Vec::new(),
-            window_sum: 0.0,
             fft: None,
             fft_input: Vec::new(),
             fft_output: Vec::new(),
@@ -224,8 +218,6 @@ impl SpectrumAnalyzer {
             self.fft_output = fft.make_output_vec();
             self.fft_scratch = fft.make_scratch_vec();
             self.fft = Some(fft);
-            self.window = hann(fft_size);
-            self.window_sum = self.window.iter().sum();
         }
         self.sweep = sweep;
         self.plan_kernels();
@@ -234,7 +226,7 @@ impl SpectrumAnalyzer {
     /// Plan every bucket's kernels, and the column's lag, for the current
     /// frame, rate and sweep.
     fn plan_kernels(&mut self) {
-        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size, &self.window);
+        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size);
         let config = AnalyzerConfig {
             sample_rate: self.sample_rate,
             fft_size: self.fft_size,
@@ -314,10 +306,10 @@ impl SpectrumAnalyzer {
         // then its head up to `write`: two straight runs rather than an index
         // wrapped per sample, which the compiler cannot vectorize.
         let (newer, older) = self.ring.split_at(self.write);
-        let (window_older, window_newer) = self.window.split_at(older.len());
+        let (window_older, window_newer) = self.kernels.window().split_at(older.len());
         let weighted = older.iter().zip(window_older).map(|(s, w)| s * w).sum::<f32>()
             + newer.iter().zip(window_newer).map(|(s, w)| s * w).sum::<f32>();
-        let mean = weighted / self.window_sum;
+        let mean = weighted / self.kernels.window_sum();
         // The frame sits where its listen's centre is the padded transform's
         // middle, so the kernels stay real (see `Kernels::offset`). The padding
         // is rewritten every column, because realfft uses its input as scratch.
@@ -459,14 +451,10 @@ impl ChannelBank {
     }
 }
 
-/// A periodic Hann window of `n` samples.
-fn hann(n: usize) -> Vec<f32> {
-    (0..n).map(|i| hann_weight(i, n)).collect()
-}
-
-/// Sample `i` of [`hann`], the one definition of the window: the kernels' sums
-/// about the fixed listen read it too, so they describe the window the frame is
-/// actually multiplied by, bit for bit.
+/// Sample `i` of a periodic Hann window of `n` samples, the one definition of
+/// it: the frame's window is built from it ([`kernels::Kernels::window`]), and
+/// the kernels' sums about each listen read it too, so they describe the window
+/// the frame is actually multiplied by, bit for bit.
 fn hann_weight(i: usize, n: usize) -> f32 {
     let phase = std::f32::consts::TAU * i as f32 / n as f32;
     0.5 * (1.0 - phase.cos())
