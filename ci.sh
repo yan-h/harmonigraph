@@ -261,13 +261,21 @@ run cargo test --no-fail-fast -p harmonigraph-render
 # draw its frames. CI sets GOLDEN_BASE to HEAD^1 on a PR, the main its merge
 # commit stands on, and to `none` on a push; locally the base is the merge-base
 # with origin/main. The mechanism, and why it replaced a committed record, is in
-# harmonigraph-golden.
+# harmonigraph-golden. GOLDEN_FRAMES, set by ci.yml, is the directory Actions
+# caches per main commit: a push draws its frames there for later PRs, and a PR
+# whose base's frames were restored there compares against them instead of
+# building the base, unless they report a move (tools/golden-diff.py says why).
 golden_diff() {
   if [ "${GOLDEN_BASE:-}" = none ]; then
-    echo "  skipped — no PR to state a moved frame in"
+    if [ -n "${GOLDEN_FRAMES:-}" ]; then
+      python3 -B tools/golden-diff.py --draw-only "$GOLDEN_FRAMES"
+    else
+      echo "  skipped — no PR to state a moved frame in"
+    fi
     return
   fi
-  python3 -B tools/golden-diff.py ${GOLDEN_BASE:+--base "$GOLDEN_BASE"}
+  python3 -B tools/golden-diff.py ${GOLDEN_BASE:+--base "$GOLDEN_BASE"} \
+    ${GOLDEN_FRAMES:+--base-frames "$GOLDEN_FRAMES"}
 }
 run golden_diff
 

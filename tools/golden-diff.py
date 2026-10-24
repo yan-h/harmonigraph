@@ -4,6 +4,8 @@
     tools/golden-diff.py                 # against `git merge-base origin/main HEAD`
     tools/golden-diff.py --base HEAD^1   # what CI runs: a PR's merge commit against main
     tools/golden-diff.py --strict        # exit 1 if any frame moved: a refactor's proof
+    tools/golden-diff.py --draw-only DIR # draw the working tree alone: what CI caches per main commit
+    tools/golden-diff.py --base HEAD^1 --base-frames DIR  # against those, drawing the base only to confirm a move
 
 Both sides are drawn on this machine in this run, so the comparison is
 byte-exact and needs no record: the base is `git archive`d into
@@ -28,6 +30,14 @@ When anything moved the head is drawn twice, and a frame that differs between
 the two is reported as unstable rather than moved. That second draw exists to
 measure nondeterminism the old committed record never separated from a change;
 drop it once a few dozen PRs have reported none.
+
+CI saves each main commit's frames (`--draw-only`), and a PR compares against
+its base's (`--base-frames`) rather than building the base. Frames that report
+no change are the answer. Frames that report one are only a lead: the base is
+then drawn here and the comparison made again, so every reported move is still
+between two draws on one machine in one run, and a cached set that differs
+from what the base draws now can cost a base build but never hide a move or
+invent one. A missing directory is a cache miss, and draws the base as before.
 
 Run it under `./session-lifecycle.sh run --` like any build.
 """
@@ -77,7 +87,7 @@ def draw(tree, into, target):
                        HARMONIGRAPH_REQUIRE_GPU="1", HARMONIGRAPH_SHADER_ASSETS="source",
                        CARGO_TARGET_DIR=str(target))
     print(f"▶ drawing {tree.relative_to(ROOT) if tree != ROOT else 'the working tree'}"
-          f" into {into.relative_to(ROOT)}", flush=True)
+          f" into {os.path.relpath(into, ROOT)}", flush=True)
     return subprocess.run(TESTS, cwd=tree, env=environment).returncode
 
 
@@ -93,7 +103,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--base", help="the ref to draw against (default: merge-base with origin/main)")
     parser.add_argument("--strict", action="store_true", help="exit 1 if any frame moved")
+    parser.add_argument("--base-frames", type=Path, metavar="DIR",
+                        help="the base's frames, drawn earlier; the base is drawn only if they differ")
+    parser.add_argument("--draw-only", type=Path, metavar="DIR",
+                        help="draw the working tree into DIR, only if every frame draws, and stop")
     args = parser.parse_args()
+    # The tests run in their crates' directories, so what they write to is absolute.
+    args.base_frames = args.base_frames and args.base_frames.resolve()
+    args.draw_only = args.draw_only and args.draw_only.resolve()
+
+    if args.draw_only:
+        # Drawn aside and moved in whole, so a set missing a frame is never
+        # there to be cached and later read as a base that lost it.
+        partial = args.draw_only.with_name(args.draw_only.name + ".partial")
+        shutil.rmtree(partial, ignore_errors=True)
+        shutil.rmtree(args.draw_only, ignore_errors=True)
+        if draw(ROOT, partial, TARGET) != 0:
+            sys.exit("✗ the working tree's golden tests failed; nothing saved")
+        partial.rename(args.draw_only)
+        return 0
 
     base = git("rev-parse", args.base) if args.base else git("merge-base", "origin/main", "HEAD")
     shutil.rmtree(OUT, ignore_errors=True)
@@ -101,6 +129,30 @@ def main():
     if not any(draws(f) for f in changed_files(base)):
         skip(f"Golden frames not drawn: nothing that draws changed since {base[:10]}.\n")
         return 0
+
+    def compare(again):
+        command = ["cargo", "run", "-q", "-p", "harmonigraph-golden", "--bin", "golden-compare",
+                   "--", str(OUT / "base"), str(OUT / "head"), again, str(OUT)]
+        return subprocess.run(command, cwd=ROOT, check=True, text=True,
+                              stdout=subprocess.PIPE).stdout
+
+    head_drawn = False
+    if args.base_frames and args.base_frames.is_dir():
+        # Copied rather than read in place so the artifact carries the base
+        # this run compared against, whichever way it was had.
+        shutil.copytree(args.base_frames, OUT / "base")
+        if draw(ROOT, OUT / "head", TARGET) != 0:
+            sys.exit("✗ the working tree's golden tests failed; the frames they did not draw "
+                     "would read as removed, so there is no comparison to make")
+        head_drawn = True
+        report = compare("-")
+        if not (OUT / "changed").read_text():
+            return finish(base, report, args.strict)
+        print(f"▶ the frames cached for {base[:10]} report a change; drawing the base to "
+              "confirm it", flush=True)
+        shutil.rmtree(OUT / "base")
+    elif args.base_frames:
+        print(f"▶ no frames cached for {base[:10]}; drawing the base", flush=True)
 
     # Reused while the base is unchanged, so its build stays incremental. A new
     # base is extracted with the time of extraction (`-m`) rather than each
@@ -128,28 +180,25 @@ def main():
     if draw(BASE_SRC, OUT / "base", BASE_TARGET) != 0:
         print(f"⚠ the base {base[:10]} failed some golden tests; the frames it did not draw "
               "read as new", flush=True)
-    if draw(ROOT, OUT / "head", TARGET) != 0:
+    if not head_drawn and draw(ROOT, OUT / "head", TARGET) != 0:
         sys.exit("✗ the working tree's golden tests failed; the frames they did not draw "
                  "would read as removed, so there is no comparison to make")
-
-    def compare(again):
-        command = ["cargo", "run", "-q", "-p", "harmonigraph-golden", "--bin", "golden-compare",
-                   "--", str(OUT / "base"), str(OUT / "head"), again, str(OUT)]
-        return subprocess.run(command, cwd=ROOT, check=True, text=True,
-                              stdout=subprocess.PIPE).stdout
 
     report = compare("-")
     if (OUT / "changed").read_text():
         if draw(ROOT, OUT / "again", TARGET) != 0:
             sys.exit("✗ the working tree's golden tests failed on their second draw")
         report = compare(str(OUT / "again"))
-    print(report, end="")
+    return finish(base, report, args.strict)
 
+
+def finish(base, report, strict):
+    print(report, end="")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:
             f.write(f"## Golden frames against {base[:10]}\n\n{report}\n")
-    return 1 if args.strict and (OUT / "changed").read_text() else 0
+    return 1 if strict and (OUT / "changed").read_text() else 0
 
 
 if __name__ == "__main__":
