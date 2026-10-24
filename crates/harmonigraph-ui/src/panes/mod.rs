@@ -795,11 +795,11 @@ pub(super) fn subsection<R>(
 const BLOCK_GAP: f32 = 2.0 * crate::widgets::GROUP_GAP;
 
 /// How far a [`block`]'s rows stand in from its title, at scale 1: a third
-/// short of a fold's 18, which spent width on every row of the block for
+/// short of a fold's 16, which spent width on every row of the block for
 /// nothing. A fold's indent is the column its chevron is centred in, and its
 /// body lines up with the name after it; a block has no chevron, so its indent
 /// only has to read as one.
-pub(crate) const BLOCK_INDENT: f32 = 12.0;
+pub(crate) const BLOCK_INDENT: f32 = 11.0;
 
 /// Where a [`block`]'s guide line stands in from its title's left edge, at
 /// scale 1: under the title's first stroke, which the face's side bearing

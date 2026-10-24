@@ -1319,10 +1319,10 @@ fn a_configuration_fault_asks_for_a_host_reset() {
 const SCROLLING_PANE: egui::Vec2 = egui::vec2(318.0, 200.0);
 
 /// The chrome scales the sweep runs at: the design size, both ends of
-/// [`theme::UI_SCALE_RANGE`], and two in between that leave `8 * scale`
+/// [`theme::UI_SCALE_RANGE`], and two in between that leave `7 * scale`
 /// fractional — which is the case the gutter truncates and the bar must not
 /// (see `theme::dock_pane_margin`).
-const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
+const SCALES: [f32; 5] = [0.75, 0.9, 1.0, 1.1, 1.6];
 
 /// One settings pane soloed in the REAL dock at a size it overflows, as the
 /// shapes it drew.
@@ -1479,11 +1479,13 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             // Where the lane lands: against the pane edge for a pane the dock
             // scrolls, whose area IS the body. The Console scrolls in an area of
             // its own — the Clear row above it must not scroll — so its lane
-            // stands one content margin further in.
+            // stands one content margin further in. Within half a point, which
+            // is what egui's snap of the bar to this 1x fixture's pixels moves
+            // an edge that falls on a half point (the Console's, at 0.75).
             let own_area = matches!(pane, panes::Tab::Console);
             let edge = body.right() - if own_area { margin } else { 0.0 };
             assert!(
-                (right - edge).abs() < 0.5,
+                (right - edge).abs() <= 0.5 + 0.01,
                 "{pane:?} at {scale} puts its scroll bar at {left}..{right}, not against {edge}",
             );
 

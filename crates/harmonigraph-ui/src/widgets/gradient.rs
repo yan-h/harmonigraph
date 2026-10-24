@@ -75,7 +75,7 @@ fn circle_at(circle: &[glam::Vec4; HUE_CIRCLE_N], hue: f32) -> glam::Vec4 {
 /// picture and not a control: nothing on it can be dragged, and a band standing
 /// as tall as the bars under it would read as a fourth bar that has lost its
 /// handle.
-const PREVIEW_H: f32 = 14.0;
+const PREVIEW_H: f32 = 12.5;
 
 /// [`PREVIEW_H`] at this scale.
 ///
@@ -107,8 +107,8 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 ///
 /// It costs the track that much travel, which is the whole trade and a cheap
 /// one: the track stands for a whole turn at any length, so a shorter one is a
-/// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
-/// pixel. A row costs 22pt of a column that already scrolls.
+/// coarser drag and nothing else — 16pt of 400 is a twentieth of a degree per
+/// pixel. A row costs 20pt of a column that already scrolls.
 ///
 /// The far end from where the arc starts, so the button sits past the end of
 /// the reading rather than in front of it: the track is cut at the arc's own
@@ -117,7 +117,7 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// pane's scroll bar runs in the dock's own gutter, outside the content box,
 /// so the button ends where the bar's lane begins rather than under it —
 /// `nothing_is_drawn_under_a_settings_pane_scroll_bar` holds that lane empty.
-const FLIP_W: f32 = 18.0;
+const FLIP_W: f32 = 16.0;
 
 /// [`FLIP_W`] at this scale, for the settings sweep that holds the lane the
 /// button ends against empty — and has to know it drew the button to say so.

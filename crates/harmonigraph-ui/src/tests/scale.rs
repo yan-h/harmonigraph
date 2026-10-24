@@ -54,11 +54,11 @@ fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
 #[test]
 fn the_ui_scale_shrinks_the_panel_chrome() {
     for case in bar_cases() {
-        let (full, small) = (settings_pane_at_scale(case, 1.0), settings_pane_at_scale(case, 0.7));
+        let (full, small) = (settings_pane_at_scale(case, 1.0), settings_pane_at_scale(case, 0.75));
 
         let (tall, short) = (tallest_text(&full), tallest_text(&small));
         assert!(tall > 0.0, "{case:?} drew no text to measure");
-        assert!(short < tall, "{case:?} type stayed at {tall} points with the scale at 0.7");
+        assert!(short < tall, "{case:?} type stayed at {tall} points with the scale at 0.75");
 
         // The column, not just the glyphs in it: a control's height and the
         // gaps between rows come from the style's spacing, so a pane that only
@@ -66,7 +66,7 @@ fn the_ui_scale_shrinks_the_panel_chrome() {
         let (deep, shallow) = (drawn_bottom(&full), drawn_bottom(&small));
         assert!(
             shallow < deep * 0.85,
-            "{case:?} ran to {shallow} points at 0.7 against {deep} at 1.0 — \
+            "{case:?} ran to {shallow} points at 0.75 against {deep} at 1.0 — \
              the spacing is not scaling with the type",
         );
     }
@@ -112,7 +112,7 @@ fn the_ui_scale_leaves_the_picture_alone() {
         out.shapes.iter().map(|cs| format!("{:?}", cs.shape)).collect::<Vec<_>>()
     };
 
-    let (design, small) = (picture(1.0), picture(0.7));
+    let (design, small) = (picture(1.0), picture(0.75));
     assert!(!design.is_empty(), "the analyzer drew nothing to compare");
     assert_eq!(design.len(), small.len(), "the chrome scale changed what the analyzer draws");
     for (i, (a, b)) in design.iter().zip(&small).enumerate() {
@@ -128,7 +128,7 @@ fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
     const ARROW_GLYPH: f32 = 10.0;
 
     let mut previous = 0.0;
-    for scale in [0.7f32, 0.8, 0.9, 1.0, 1.5] {
+    for scale in [0.75f32, 0.8, 0.9, 1.0, 1.6] {
         let height = crate::theme::tab_bar_height(scale);
         assert!(
             height > previous,
@@ -269,8 +269,8 @@ fn control_row(
 #[test]
 fn pointing_at_a_control_leaves_the_row_where_it_is() {
     for kind in CONTROLS {
-        for step in 0..=16u8 {
-            let scale = 0.7 + 0.05 * f32::from(step);
+        for step in 0..=17u8 {
+            let scale = 0.75 + 0.05 * f32::from(step);
             let resting = control_row(kind, scale, None, false);
             // The pointer goes to the middle of the FIRST control, so anything
             // that moves has three neighbours to its right to show it in.
@@ -326,8 +326,8 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 #[test]
 fn every_settings_row_is_one_row_high() {
     for kind in CONTROLS {
-        for step in 0..=16u8 {
-            let scale = 0.7 + 0.05 * f32::from(step);
+        for step in 0..=17u8 {
+            let scale = 0.75 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);
             let (row, controls) = control_row(kind, scale, None, false);
             assert!(
@@ -378,8 +378,8 @@ fn every_settings_row_is_one_row_high() {
 #[test]
 fn every_bar_has_its_declared_height() {
     for case in bar_cases() {
-        for step in 0..=16u8 {
-            let scale = 0.7 + 0.05 * f32::from(step);
+        for step in 0..=17u8 {
+            let scale = 0.75 + 0.05 * f32::from(step);
             let want = crate::theme::row_height(scale);
             let shapes = settings_pane_at_scale(case, scale);
             // Found by WIDTH, never by height: a bar fills the column (the

@@ -304,7 +304,7 @@ fn shadow_sliders_update_the_preview_of(text: bool) {
 #[test]
 fn spectrum_buttons_form_a_compact_rectangle_and_select_each_edge() {
     use crate::SpectralOrientation::{Bottom, Left, Right, Top};
-    for scale in [0.7, 1.0, 1.5] {
+    for scale in [0.75, 1.0, 1.6] {
         let ctx = crate::tests::probe::themed_scaled(scale);
         let mut edge = Left;
         let output = frame(&ctx, vec![], &mut |ui| spectrum_edge(ui, &mut edge));
@@ -436,7 +436,7 @@ fn numeric_entries_use_display_units_and_reject_non_finite_input() {
 
 #[test]
 fn compact_values_fit_beside_the_picture() {
-    for scale in [0.7, 1.0, 1.5] {
+    for scale in [0.75, 1.0, 1.6] {
         for width in [crate::theme::SETTINGS_MIN_CONTENT, 240.0, 320.0] {
             let ctx = crate::tests::probe::themed_scaled(scale);
             let screen = egui::vec2(800.0, 500.0);

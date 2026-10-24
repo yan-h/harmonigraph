@@ -7,21 +7,21 @@ use egui::{CornerRadius, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use crate::theme;
 
 /// Track size of a [`toggle_switch`].
-const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
+const SWITCH_SIZE: Vec2 = Vec2::new(24.0, 14.0);
 
 /// Side of a [`checkbox`]'s box, and of the check mark inside it.
-pub(crate) const CHECKBOX_BOX: f32 = 16.0;
-const CHECKBOX_CHECK: f32 = 9.0;
+pub(crate) const CHECKBOX_BOX: f32 = 15.0;
+const CHECKBOX_CHECK: f32 = 8.0;
 
 /// A settings checkbox: egui's, in a row as tall as its line of text rather
 /// than a whole [`ROW_HEIGHT`](theme::ROW_HEIGHT), with a box that nearly fills
 /// it.
 ///
 /// Every other control fills its row edge to edge, so the row gap is the gap
-/// a reader sees between them. egui's box is 14 points, and in a 22-point row
-/// it stands 4 points in from each edge — two checkboxes in a row read 12
-/// points apart where two bars read 4, the column's loosest joint. Here the
-/// row is the line and the box 16, so the joint is the row gap plus the
+/// a reader sees between them. egui's box is 14 points, and in a 20-point row
+/// it stands 3 points in from each edge — two checkboxes in a row read 9.5
+/// points apart where two bars read 3.5, the column's loosest joint. Here the
+/// row is the line and the box 15, so the joint is the row gap plus the
 /// little the line is taller than the box.
 ///
 /// Its own rows are therefore shorter than a row, the one control whose are:

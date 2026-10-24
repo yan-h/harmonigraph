@@ -1078,7 +1078,7 @@ fn the_handles_reach_is_the_same_at_every_chrome_scale() {
     // Inside GRAB_PX, and outside what the smallest scale would leave of
     // it were the reach scaled.
     let offset = GRAB_PX * (1.0 + *theme::UI_SCALE_RANGE.start()) * 0.5;
-    for scale in [1.0f32, 0.7, 1.5] {
+    for scale in [1.0f32, 0.75, 1.6] {
         let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
         let mut g = before;
         let mut h = Spectrum::settled_scaled(&mut g, 300.0, scale);

@@ -97,11 +97,11 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
 /// egui's own pitch is the font's, about 1.25 times the type, which is
 /// leading for running prose. The text here is a sentence or two of help
 /// under a heading, and at that pitch its lines read as separate rows of a
-/// column rather than as one paragraph. 16 under 15-point type is 1.07 times,
+/// column rather than as one paragraph. 15 under 14-point type is 1.07 times,
 /// tight but clear of a descender meeting the capital under it, as 14 was
 /// under 13.5. A whole number of points, so every line lands on the same
 /// pixel phase at scale 1.
-const LINE_PITCH: f32 = 16.0;
+const LINE_PITCH: f32 = 15.0;
 
 /// `text` laid out the way `ui.label` would — `ui`'s wrap mode across the
 /// width it has, Body as the fallback face — at [`LINE_PITCH`] rather than the
@@ -126,9 +126,10 @@ fn wrapped(ui: &Ui, text: WidgetText) -> std::sync::Arc<egui::Galley> {
 /// would put a line of text as near a bar as two bars sit to each other, which
 /// reads cramped. Bars and buttons keep the row gap between themselves.
 ///
-/// 8 under 15-point text and a 4-point row gap; 6, under 13.5-point text and
+/// 7 under 14-point text and a 3.5-point row gap, which is the 8 that stood
+/// under otonal's 15 and 4 taken down with them; 6, under 13.5-point text and
 /// a 3-point gap, read tight beside otonal's panes.
-pub(crate) const GROUP_GAP: f32 = 8.0;
+pub(crate) const GROUP_GAP: f32 = 7.0;
 
 fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")
