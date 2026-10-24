@@ -153,7 +153,8 @@ pub const fn fixed_frame(listen: usize) -> usize {
 /// the frame: on an unpadded transform the longest listen read a partial up to
 /// 0.06 of a bin off. Padding moves the copies a whole frame further from the
 /// listen's centre. Measured against known tones, twice is enough (under 0.2
-/// cents above 50 Hz at the longest Sweep listen); four times buys nothing more.
+/// cents above 50 Hz at a Sweep listen of 0.89 of the frame, longer than any
+/// it now takes, [`SWEEP_LONGEST`]); four times buys nothing more.
 ///
 /// The frame is placed so that the listen's centre is the transform's middle
 /// ([`Kernels::offset`]), which keeps the copies equally far either side: for
@@ -162,16 +163,6 @@ pub const fn fixed_frame(listen: usize) -> usize {
 /// ([`FIXED_KERNEL_SPREAD`]), brings it to at most `1.5e-7` of the listen's
 /// peak anywhere in the frame.
 pub(crate) const PAD: usize = 2;
-
-/// The narrowest kernel, in bins of the padded transform, and what bounds the
-/// longest listen a Sweep can ask for ([`max_length`]): a narrower kernel is a
-/// wider Gaussian in time, whose repeated copies (see [`PAD`]) reach back into
-/// the frame. At this width the longest listen is 0.89 of the frame and reads
-/// within 0.2 cents; at 0.75 of a bin it is 0.92 of the frame and errs by 0.7.
-/// The fixed listen's kernels are 1.06 bins wide, nearer it, but there the
-/// frame's own window carries the rest of the listen and keeps their copies off
-/// the frame ([`FIXED_KERNEL_SPREAD`]).
-const MIN_KERNEL_STD: f64 = 0.9;
 
 /// How far out each kernel is kept, in its own standard deviations.
 ///
@@ -208,19 +199,27 @@ const KERNEL_REACH: f64 = 5.0;
 /// read 20 Hz tones up to 56 cents off.
 const KERNEL_CLEARANCE: f64 = 2.0;
 
-/// The longest listen, in Hann-equivalent samples, that a Sweep on a frame of
-/// `fft_size` can ask for: the frame's own Hann envelope times the widest
-/// Gaussian whose kernel is still [`MIN_KERNEL_STD`] bins wide. 0.89 of the
-/// frame, so the 16384-sample Sweep frame reaches about 14,600 samples.
-pub fn max_length(fft_size: usize) -> f32 {
-    let n = fft_size as f64;
-    (effective_spread(widest(n), n) / HANN_SPREAD) as f32
-}
+/// The longest listen a Sweep asks for, as a share of its frame, in
+/// Hann-equivalent samples ([`max_length`]).
+///
+/// What bounds it is FALSE PEAKS, as for the fixed listen ([`FIXED_SPREAD`]),
+/// which a Sweep cannot dodge the same way: every bucket's Gaussian has to sit
+/// on the frame's middle to keep the column's lag the same at every pitch
+/// ([`lag_samples`]), so the longest listen reaches both of the frame's ends,
+/// and the Hann window's sidelobes come through between their nulls. Across
+/// full-scale tones every 0.113 semitone at 48 kHz, with both ends at the
+/// one length, the loudest local maximum more than a semitone from the tone
+/// is -42.5 dB at 0.89 of the frame (where the narrowest kernel once bounded
+/// it), -58 at 0.82, -79 at 0.73, -92 at 0.69, and -110.5 here, 5/8 of it:
+/// clean under the lowest floor the levels can be set to, and about where
+/// the fixed frames measure. 0.59 is -121.5 dB, but widens every bass peak.
+const SWEEP_LONGEST: f64 = 5.0 / 8.0;
 
-/// The widest Gaussian, as a spread in samples, whose kernel on the padded
-/// transform of a frame of `n` is still [`MIN_KERNEL_STD`] bins wide.
-fn widest(n: f64) -> f64 {
-    PAD as f64 * n / (2.0 * PI * MIN_KERNEL_STD)
+/// The longest listen, in Hann-equivalent samples, that a Sweep on a frame of
+/// `fft_size` can ask for: [`SWEEP_LONGEST`] of it, so the 16,384-sample Sweep
+/// frame reaches 10,240 samples.
+pub fn max_length(fft_size: usize) -> f32 {
+    (SWEEP_LONGEST * fft_size as f64) as f32
 }
 
 /// The spread of the frame's Hann envelope times a Gaussian of spread `sigma`
@@ -231,25 +230,23 @@ fn effective_spread(sigma: f64, n: f64) -> f64 {
     (1.0 / (1.0 / (sigma * sigma) + 1.0 / (frame * frame))).sqrt()
 }
 
+/// The spread of the Gaussian that brings the frame's Hann envelope down to a
+/// listen of `length` Hann-equivalent samples, on a frame of `n`: the inverse
+/// of [`effective_spread`]. Finite for every length under the frame's own.
+fn gaussian_for(length: f64, n: f64) -> f64 {
+    let (tau, frame) = (length * HANN_SPREAD, HANN_SPREAD * n);
+    1.0 / (1.0 / (tau * tau) - 1.0 / (frame * frame)).sqrt()
+}
+
 /// The spread of the Gaussian a bucket centred at `hz` listens through under
 /// `sweep`, on a frame of `fft_size`: the one that brings the frame's own Hann
-/// envelope down to the length the sweep asks for there, never wider than the
-/// narrowest kernel allows, which [`max_length`] already folds in.
+/// envelope down to the length the sweep asks for there.
 fn swept_sigma(sweep: Sweep, fft_size: usize, hz: f64) -> f64 {
-    let n = fft_size as f64;
     let longest = f64::from(max_length(fft_size));
     let length = |l: f32| f64::from(l).clamp(f64::from(SWEEP_MIN_LENGTH), longest).ln();
     let u = ((hz / 20.0).ln() / (20_000.0f64 / 20.0).ln()).clamp(0.0, 1.0);
     let (bass, treble) = (length(sweep.bass), length(sweep.treble));
-    let tau = (bass + (treble - bass) * u).exp() * HANN_SPREAD;
-    let frame = HANN_SPREAD * n;
-    let inverse = (1.0 / (tau * tau) - 1.0 / (frame * frame)).max(0.0);
-    let widest = widest(n);
-    if inverse > 0.0 {
-        (1.0 / inverse.sqrt()).min(widest)
-    } else {
-        widest
-    }
+    gaussian_for((bass + (treble - bass) * u).exp(), fft_size as f64)
 }
 
 /// The sample of a frame of `fft_size` that every bucket's listen is centred
@@ -584,9 +581,9 @@ mod tests {
 
     const RATE: f32 = 48_000.0;
     const FRAME: usize = 16_384;
-    /// The fresh sweep: the look picked in #1560 at the bottom, a little under
-    /// the 14,600 samples the frame allows there, and half of Fast at the top.
-    const FRESH: Sweep = Sweep { bass: 13_500.0, treble: 2048.0 };
+    /// The fresh sweep: the longest listen the frame allows at the bottom, and
+    /// half of Fast at the top.
+    const FRESH: Sweep = Sweep { bass: 10_240.0, treble: 2048.0 };
 
     fn config(sweep: Sweep) -> AnalyzerConfig {
         AnalyzerConfig { sample_rate: RATE, fft_size: FRAME, sweep: Some(sweep) }
@@ -594,9 +591,11 @@ mod tests {
 
     fn analyze(config: AnalyzerConfig, hz: f32) -> [f32; SPECTRUM_BINS] {
         let mut analyzer = SpectrumAnalyzer::new(config);
-        let samples: Vec<f32> = (0..config.fft_size + 1234)
-            .map(|i| (std::f32::consts::TAU * hz * i as f32 / RATE).sin())
-            .collect();
+        // The phase in f64: in f32 it loses enough precision over a frame to
+        // draw a -74 dB false peak beside an 11 kHz tone.
+        let step = std::f64::consts::TAU * f64::from(hz) / f64::from(config.sample_rate);
+        let samples: Vec<f32> =
+            (0..config.fft_size + 1234).map(|i| (step * i as f64).sin() as f32).collect();
         for chunk in samples.chunks(701) {
             analyzer.push_samples(chunk);
         }
@@ -684,6 +683,27 @@ mod tests {
         }
     }
 
+    /// A Sweep's longest listen draws no false peak beside a loud partial
+    /// either (#1592). Centred on the frame, a listen that nears the frame's
+    /// length reads the frame's own Hann sidelobes between their nulls: at 0.89
+    /// of the frame, which the sliders reached, -42 dB a few semitones either
+    /// side of every tone. Both ends at the longest, so every bucket listens
+    /// that long, and tones from the bottom of the axis up.
+    #[test]
+    fn the_longest_sweep_raises_no_false_peak() {
+        let longest = max_length(FRAME);
+        let config = config(Sweep { bass: longest, treble: longest });
+        for hz in [24.0f32, 31.0, 38.0, 55.0, 93.0, 211.0, 440.0] {
+            let level = analyze(config, hz);
+            let (at, db) = (1..SPECTRUM_BINS - 1)
+                .filter(|&b| level[b] > level[b - 1] && level[b] >= level[b + 1])
+                .filter(|&b| cents_off(b, hz).abs() > 100.0)
+                .map(|b| (BUCKET_FREQUENCIES[b].center_hz, 10.0 * level[b].log10()))
+                .fold((0.0, f32::NEG_INFINITY), |a, b| if b.1 > a.1 { b } else { a });
+            assert!(db < -100.0, "{hz} Hz: a false peak at {at:.1} Hz, {db:+.1} dB");
+        }
+    }
+
     /// Every frame `configure` accepts reads, however short: padding a kernel
     /// to whole [`TAP_CHUNK`]s at the bottom once overran bin 0 on a 12-sample
     /// frame, whose one kernel spans every usable bin.
@@ -752,7 +772,7 @@ mod tests {
     /// the same two for a sweep three times as long.
     #[test]
     fn the_listen_at_each_end_matches_a_hann_window_of_that_length() {
-        let sweep = Sweep { bass: 12_000.0, treble: SWEEP_MIN_LENGTH };
+        let sweep = Sweep { bass: 10_240.0, treble: SWEEP_MIN_LENGTH };
         for hz in [24.0f32, 17_000.0] {
             let u = (hz / 20.0).ln() / 1000.0f32.ln();
             let length = (sweep.bass.ln() + (sweep.treble.ln() - sweep.bass.ln()) * u).exp();
