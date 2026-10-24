@@ -3,9 +3,10 @@
 //! Each channel owns a planned RealFFT real-input transform (a half-size
 //! complex FFT plus postprocessing), with reusable input/output/scratch. One
 //! column is one transform of the latest frame through a Hann window (and,
-//! under a fixed listen, part of that listen), zero-padded to twice its length, and every pitch bucket then reads that transform
-//! at its OWN frequency through a small kernel, which also narrows the frame to
-//! that bucket's listen — see [`kernels`]. Live and
+//! under a fixed listen, part of that listen), zero-padded to twice its
+//! length, and every pitch bucket then reads that transform at its OWN
+//! frequency through a small kernel, which also narrows the frame to that
+//! bucket's listen — see [`kernels`]. Live and
 //! offline consumers share all of it verbatim. Exact-zero retained windows
 //! still emit zero columns without transforming, so history and release
 //! continue advancing.
@@ -290,7 +291,8 @@ impl SpectrumAnalyzer {
     /// bin it was measured at: through the Fast window that drew a 55 Hz A1 a
     /// semitone sharp and lit A♯ on the lattice brighter than A (#1575).
     ///
-    /// The frame's window-weighted MEAN is removed before the transform. A
+    /// The frame's MEAN, weighted by the window it is multiplied by
+    /// ([`kernels::Kernels::window`]), is removed before the transform. A
     /// constant offset otherwise reaches the bottom of the axis through the
     /// skirt of the listen's own response, which the kernels read down to the
     /// first bin above DC (−21 dB for a 0.5 offset through the Fast frame);
@@ -463,8 +465,9 @@ fn hann(n: usize) -> Vec<f32> {
 
 /// Sample `i` of [`hann`], the one definition of the window: the frame's window
 /// is built from it ([`kernels::Kernels::window`]), and the kernels' sums about
-/// each listen read it too, so they describe the window the frame is actually
-/// multiplied by, bit for bit.
+/// each listen read it too, so they describe the same Hann window the frame is
+/// multiplied by (under a fixed listen, times the share of that listen the
+/// frame carries).
 fn hann_weight(i: usize, n: usize) -> f32 {
     let phase = std::f32::consts::TAU * i as f32 / n as f32;
     0.5 * (1.0 - phase.cos())

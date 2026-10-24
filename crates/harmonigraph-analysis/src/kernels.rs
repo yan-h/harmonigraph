@@ -121,8 +121,10 @@ pub(crate) const FIXED_CENTRE: f64 = 0.8;
 /// kernels within 0.01 dB, and pitch and false peaks measure as well as they
 /// did (Fast's loudest false peak beside a full-scale tone fell from -86 dB to
 /// -111, the kernels clipping less at the bottom of the axis). At
-/// 0.35 a partial reads up to 0.03 cents further off, at 0.4 up to half a cent
-/// through Balanced, and at 0.45 three cents.
+/// 0.35 a partial reads up to 0.03 cents further off anywhere above 25 Hz, at
+/// 0.4 up to half a cent through Balanced, and at 0.45 three cents (from 100 to
+/// 500 Hz alone: 0.018, 0.17 and a cent, which
+/// `the_fixed_listens_kernels_leave_every_peak_on_its_pitch` holds).
 pub(crate) const FIXED_KERNEL_SPREAD: f64 = 0.3;
 
 /// The frame a fixed window reads to listen as sharply as a plain Hann window
@@ -179,7 +181,12 @@ const MIN_KERNEL_STD: f64 = 0.9;
 /// and full-scale 55 to 147 Hz tones drew one or two each through every fixed
 /// frame. At 5 the loudest local maximum more than a semitone from any of them
 /// is -124 dB, the transform's own single-precision floor, through all three;
-/// 6 measured the same and costs a fifth more taps.
+/// 6 measured the same and costs a fifth more taps. Those were measured with
+/// the kernels reading the whole fixed listen. Since they read a narrower share
+/// of it ([`FIXED_KERNEL_SPREAD`]), what a cut-off tail drops lies under the
+/// listen's own wider skirt, so it can lower a level but not raise a peak:
+/// across tones every 0.113 semitone the loudest false maximum through Fast is
+/// -111 dB, and -122 through Balanced and Precise.
 const KERNEL_REACH: f64 = 5.0;
 
 /// How far inside the usable bins a reading's centre has to sit, in standard
@@ -303,7 +310,6 @@ const TAP_CHUNK: usize = 4;
 /// and once for its imaginary part, so a reading is one straight run over the
 /// spectrum's interleaved floats. `taps` is padded with zero weights to a whole
 /// number of [`TAP_CHUNK`]s.
-
 #[derive(Clone, Copy, Debug)]
 struct Point {
     k0: u32,
@@ -449,14 +455,13 @@ impl Kernels {
                 }
                 let k0 = ((at - reach).ceil() as usize).max(first);
                 let k1 = ((at + reach).floor() as usize).min(last);
-                // Padded at the top, or at the bottom where the top would run
-                // past the transform's last bin, Nyquist.
+                // Padded at the top up to the transform's last bin, Nyquist,
+                // and the rest at the bottom. The last usable bin is PAD below
+                // Nyquist and the first PAD above DC, so between them the two
+                // ends always have room for the TAP_CHUNK - 1 at most.
                 let padding = (TAP_CHUNK - (k1 + 1 - k0) % TAP_CHUNK) % TAP_CHUNK;
-                let (from, to) = if k1 + padding <= PAD * fft_size / 2 {
-                    (k0, k1 + padding)
-                } else {
-                    (k0 - padding, k1)
-                };
+                let to = (k1 + padding).min(PAD * fft_size / 2);
+                let from = k0 - (padding - (to - k1));
                 let offset = self.weights.len() as u32;
                 // The listen is centred on the transform's middle (see
                 // `offset`), and (-1)^k moves the transform's time origin there.
@@ -482,9 +487,9 @@ impl Kernels {
     /// readings it took, and 0 dB keeps meaning a full-scale sine.
     pub(crate) fn read(&self, spectrum: &[Complex32], out: &mut [f32; SPECTRUM_BINS]) {
         const FLOATS: usize = 2 * TAP_CHUNK;
-        const _: () = assert!(FLOATS == 8, "the lanes are summed by hand below");
-        // SAFETY: `Complex32` is `#[repr(C)]` with two `f32` fields, so a
-        // slice of them is twice as many `f32`s, real parts at even indices.
+        // SAFETY: num-complex documents `Complex<T>` as memory layout
+        // compatible with `[T; 2]`, real part first, so a slice of them is
+        // twice as many `f32`s, real parts at even indices.
         let floats: &[f32] =
             unsafe { std::slice::from_raw_parts(spectrum.as_ptr().cast(), 2 * spectrum.len()) };
         for ((out, &(p0, p1)), norm) in out.iter_mut().zip(self.spans.iter()).zip(self.norm.iter())
@@ -509,8 +514,9 @@ impl Kernels {
                 }
                 // Written out: summing the lanes with `step_by` took the loop
                 // above out of vector registers and doubled the whole read.
-                let re = sums[0] + sums[2] + sums[4] + sums[6];
-                let im = sums[1] + sums[3] + sums[5] + sums[7];
+                // The pattern stops compiling if the lane count changes.
+                let [r0, i0, r1, i1, r2, i2, r3, i3] = sums;
+                let (re, im) = (r0 + r1 + r2 + r3, i0 + i1 + i2 + i3);
                 loudest = loudest.max(re * re + im * im);
             }
             *out = loudest * norm;
@@ -678,6 +684,22 @@ mod tests {
         }
     }
 
+    /// Every frame `configure` accepts reads, however short: padding a kernel
+    /// to whole [`TAP_CHUNK`]s at the bottom once overran bin 0 on a 12-sample
+    /// frame, whose one kernel spans every usable bin.
+    #[test]
+    fn every_even_frame_pads_its_kernels_inside_the_transform() {
+        for n in (4..=64).step_by(2) {
+            let mut analyzer = SpectrumAnalyzer::new(AnalyzerConfig {
+                sample_rate: RATE,
+                fft_size: n,
+                sweep: None,
+            });
+            analyzer.push_samples(&vec![0.5; n]);
+            analyzer.pitch_spectrum().expect("a full frame");
+        }
+    }
+
     /// Through every fixed frame a partial's peak sits within three hundredths
     /// of a cent of its pitch, far finer than a bucket, which only the kernels'
     /// share of the listen threatens ([`FIXED_KERNEL_SPREAD`]).
@@ -819,8 +841,11 @@ mod tests {
             assert_eq!(a.write, 997);
             let frame: Vec<f64> = (0..n).map(|i| f64::from(a.ring[(a.write + i) % n])).collect();
             let window: Vec<f64> = (0..n).map(|i| f64::from(crate::hann_weight(i, n))).collect();
-            let mean = frame.iter().zip(&window).map(|(s, w)| s * w).sum::<f64>()
-                / window.iter().sum::<f64>();
+            // The mean the analyzer removes, weighted by the window the frame
+            // is actually multiplied by: preprocessing, not the claim.
+            let frame_window = a.kernels.window();
+            let mean = frame.iter().zip(frame_window).map(|(s, &w)| s * f64::from(w)).sum::<f64>()
+                / frame_window.iter().map(|&w| f64::from(w)).sum::<f64>();
             let centre = listen_centre(n, sweep.is_some()) as f64;
             let loudest = buckets.iter().copied().fold(0.0f32, f32::max) as f64;
             let mut checked = 0;
