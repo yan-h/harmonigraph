@@ -56,6 +56,10 @@ pub struct Sweep {
 /// The shortest listen either end accepts, in samples.
 pub const SWEEP_MIN_LENGTH: f32 = 256.0;
 
+/// The frame a [`Sweep`] reads every bucket's listen from, whose longest listen
+/// is [`max_length`] of it.
+pub const SWEEP_FRAME: usize = 16_384;
+
 /// The spread of a periodic Hann window of length `n`, as a fraction of `n`:
 /// `sqrt(1/12 - 1/(2 pi^2))`. A Gaussian of this many samples' spread listens
 /// over the same span of time as the Hann window, which is what lets a length
@@ -92,6 +96,23 @@ pub(crate) const FIXED_SPREAD: f64 = 0.1729;
 /// its oldest sample: toward the newest end, which is what keeps the lag of a
 /// frame half as long again as the old one's. See [`FIXED_SPREAD`].
 pub(crate) const FIXED_CENTRE: f64 = 0.8;
+
+/// The frame a fixed window reads to listen as sharply as a plain Hann window
+/// `listen` samples long: half as long again, by the choice of [`FIXED_SPREAD`]
+/// and [`FIXED_CENTRE`]. Each is written out as 3·2^k rather than computed from
+/// the pair, so it stays a size the FFT transforms fast.
+///
+/// # Panics
+///
+/// For any listen but the fixed resolutions' three: 4096, 8192 and 16,384.
+pub const fn fixed_frame(listen: usize) -> usize {
+    match listen {
+        4096 => 6144,
+        8192 => 12_288,
+        16_384 => 24_576,
+        _ => panic!("no fixed frame gives that listen"),
+    }
+}
 
 /// How many frames long the transform is: the frame and a frame of zeros.
 ///
@@ -210,16 +231,6 @@ pub(crate) fn lag_samples(fft_size: usize, sweep: bool) -> f64 {
     let centre = listen_centre(fft_size, sweep) as f64;
     let centroid = if sweep { centre } else { centre + fixed_moments(fft_size).1 };
     (fft_size - 1) as f64 - centroid
-}
-
-/// The fixed listen through a frame of `fft_size`, as the length of the plain
-/// Hann window with its spread in time: two thirds of the frame, to a fifth of a
-/// percent, by the choice of [`FIXED_SPREAD`] and [`FIXED_CENTRE`].
-///
-/// Read off the window rather than restated, so that what the settings call
-/// each fixed resolution follows the pair if it is ever retuned.
-pub fn fixed_listen(fft_size: usize) -> f32 {
-    (fixed_moments(fft_size).2 / HANN_SPREAD) as f32
 }
 
 /// The fixed listen's window — the frame's Hann window under the fixed
@@ -621,16 +632,18 @@ mod tests {
         assert_eq!(left, read(&mut fresh), "leaving the sweep kept the window but not its read");
     }
 
-    /// The fixed listen is as long as two thirds of its frame, the plain Hann
-    /// window each fixed resolution was before #1575 and what the settings name
-    /// it by, so a retuned [`FIXED_SPREAD`] or [`FIXED_CENTRE`] that changed
-    /// the look fails here rather than leaving the settings describing the
-    /// old one.
+    /// Each fixed frame listens as long as the listen it is asked for — the
+    /// plain Hann window each fixed resolution was before #1575, and what the
+    /// settings name it by — read off the window as the length of the Hann
+    /// window with its spread in time. So a retuned [`FIXED_SPREAD`] or
+    /// [`FIXED_CENTRE`] that changed the look fails here rather than leaving
+    /// the settings describing the old one.
     #[test]
-    fn the_fixed_listen_is_two_thirds_of_its_frame() {
-        for n in [6144, 12_288, 24_576] {
-            let ratio = fixed_listen(n) / (n as f32 * 2.0 / 3.0);
-            assert!((ratio - 1.0).abs() < 0.01, "{n}-sample frame: {ratio:.4} of two thirds");
+    fn each_fixed_frame_gives_the_listen_it_is_named_for() {
+        for listen in [4096, 8192, 16_384] {
+            let frame = fixed_frame(listen);
+            let ratio = fixed_moments(frame).2 / HANN_SPREAD / listen as f64;
+            assert!((ratio - 1.0).abs() < 0.01, "{frame}-sample frame: {ratio:.4} of {listen}");
         }
     }
 

@@ -15,7 +15,9 @@ use harmonigraph_core::spectrum::{
 };
 
 mod kernels;
-pub use kernels::{fixed_listen, max_length as sweep_max_length, Sweep, SWEEP_MIN_LENGTH};
+pub use kernels::{
+    fixed_frame, max_length as sweep_max_length, Sweep, SWEEP_FRAME, SWEEP_MIN_LENGTH,
+};
 
 /// The default frame length (~0.26 s at 48 kHz), the UI's Balanced setting;
 /// its fresh one is Fast. The UI changes it through
@@ -25,9 +27,9 @@ pub use kernels::{fixed_listen, max_length as sweep_max_length, Sweep, SWEEP_MIN
 /// inherent to the frame length, not a bug.
 ///
 /// Not a power of two: a fixed window listens through about two thirds of its
-/// frame (see `kernels::FIXED_SPREAD`), so the frame is half as long again as
-/// the 8192-sample Hann window Balanced is as sharp as.
-pub const DEFAULT_FFT_SIZE: usize = 12_288;
+/// frame (see [`fixed_frame`]), so the frame is half as long again as the
+/// 8192-sample Hann window Balanced is as sharp as.
+pub const DEFAULT_FFT_SIZE: usize = fixed_frame(8192);
 
 /// All inputs that determine an analyzer's estimator. Adopt them together so
 /// a caller never builds resources for intermediate settings.
