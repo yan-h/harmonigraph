@@ -41,8 +41,9 @@ jobs:
     name: ${{ matrix.group }}
     # Pinned rather than macos-latest, so that a new image (its Xcode, Metal
     # toolchain and SDK) lands in a PR of its own instead of turning every
-    # branch red the day GitHub moves the alias. The golden frames no longer
-    # care: they are compared against the base drawn in the same job.
+    # branch red the day GitHub moves the alias. The golden frames do not need
+    # it: a move is only reported between two draws in one job, and the frames
+    # cached for a no-move answer are keyed on the image version.
     runs-on: macos-26
     env:
       # Pixel tests must render; a missing adapter must not become a green skip.
@@ -54,7 +55,9 @@ jobs:
       # The base tools/golden-diff.py draws against: on a pull_request the
       # checkout is the PR merged into main, so its first parent is that main.
       # Hence fetch-depth 2 below. A push to main has no PR body to state a
-      # move in, so it does not draw the goldens twice for nobody to read.
+      # move in, so it compares nothing: it draws its own frames once, unless
+      # they are already cached, for the PRs based on it to compare against
+      # (the golden steps below).
       GOLDEN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || 'none' }}
     # A green run takes about 10 minutes; the margin is for a cold cache.
     timeout-minutes: 30
@@ -114,10 +117,59 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: brew install ffmpeg
 
+      # Each main commit's golden frames, cached so a PR need not build its
+      # base to compare against it (#1549). The key is what decides the frames
+      # (`tools/golden-diff.py --frames-key`: the files that draw and the
+      # recipe) and the runner image, which fixes the OS, Xcode and GPU driver.
+      # Whatever it still misses can only make the cached frames differ from
+      # the base, which tools/golden-diff.py treats as a lead and confirms by
+      # drawing the base here. Exact keys only: a restore-keys fallback would
+      # hand a PR another tree's frames. Without an image version to key on,
+      # nothing is cached or restored and the diff runs as it did before.
+      - name: Key the golden frames
+        id: golden
+        if: matrix.group == 'isolated' && github.event_name != 'workflow_dispatch'
+        run: |
+          if [ -z "${ImageVersion:-}" ]; then
+            echo "::warning::no ImageVersion on this runner, so golden frames are neither cached nor restored"
+            exit 0
+          fi
+          ref=$([ "$GITHUB_EVENT_NAME" = pull_request ] && echo HEAD^1 || echo HEAD)
+          frames=$(python3 -B tools/golden-diff.py --frames-key "$ref")
+          echo "key=golden-$frames-${ImageOS:-}-$RUNNER_ARCH-$ImageVersion" >> "$GITHUB_OUTPUT"
+
+      # A PR restores its base's frames. A push only looks: frames already
+      # cached under its key (a merge that touched nothing that draws, or a
+      # re-run) need neither drawing nor saving.
+      - name: Restore the base's golden frames
+        id: frames
+        if: steps.golden.outputs.key
+        uses: actions/cache/restore@v4
+        with:
+          path: target/golden-main
+          key: ${{ steps.golden.outputs.key }}
+          lookup-only: ${{ github.event_name == 'push' }}
+
       # Keep every full gate in ci.sh so local on-demand and remote runs cannot
       # silently diverge: this passes a group, never a gate list.
       - name: Run full CI
+        env:
+          GOLDEN_FRAMES: >-
+            ${{ steps.golden.outputs.key && !(github.event_name == 'push'
+            && steps.frames.outputs.cache-hit == 'true') && 'target/golden-main' || '' }}
         run: ./ci.sh ${{ matrix.group }}
+
+      # Saved whatever else failed, since the directory exists only when every
+      # golden frame drew (`--draw-only`).
+      - name: Save this commit's golden frames
+        if: >-
+          always() && github.event_name == 'push' && steps.golden.outputs.key
+          && steps.frames.outputs.cache-hit != 'true'
+          && hashFiles('target/golden-main/**') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: target/golden-main
+          key: ${{ steps.golden.outputs.key }}
 
       # What tools/golden-diff.py drew and found: both sides' frames, a contact
       # sheet per moved frame, report.md and `changed`, which the summary job

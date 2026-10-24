@@ -1,6 +1,8 @@
 //! Golden frames, compared build against build: what this branch draws held
-//! byte-exactly against what its base draws, on the same machine in the same
-//! run.
+//! byte-exactly against what its base draws. A reported move is always between
+//! two draws on the same machine in the same run; in CI, an answer of no move
+//! may instead come from the base's frames cached by main's own run on the same
+//! runner image (`tools/golden-diff.py --base-frames`).
 //!
 //! Only the MECHANISM lives here. What a frame is OF, and what a diff on it
 //! means, belongs with the scenes — `harmonigraph-render`'s
