@@ -756,6 +756,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// While frames are still going in, the video sink reports what the
+    /// encoder has finished rather than what it was handed — the count the
+    /// export's progress line shows — and keeps the last one until a newer
+    /// one arrives.
+    #[test]
+    #[cfg(unix)]
+    fn the_video_sink_reports_the_encoders_count_while_frames_go_in() {
+        let dir =
+            fake_ffmpeg("live-count", "printf 'frame=7\\n'\ncat > /dev/null\nprintf 'frame=64\\n'");
+        let mut sink = video_to(&dir);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while sink.encoded() != Some(7) {
+            assert!(std::time::Instant::now() < deadline, "the encoder's count never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(sink.encoded(), Some(7), "with nothing newer, the last count stands");
+        for _ in 0..64 {
+            sink.push(vec![0; 4 * 2 * 4]).expect("the fake encoder is reading");
+        }
+        sink.finish(|_| {}).expect("a clean finish");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The two sinks with no encoder behind them keep every frame they are
+    /// handed, in order: a numbered PNG each, or one raw file that is their
+    /// concatenation.
+    #[test]
+    fn the_image_sinks_keep_every_frame_in_order() {
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-image-sinks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = VideoOptions {
+            // Odd, which only a sink with no encoder behind it accepts.
+            size: [1, 3],
+            fps: 30.0,
+            frames: 3,
+            audio: None,
+            encoder: VideoEncoder::X264,
+            crf: 20,
+            ffmpeg: None,
+            audio_offset: 0.0,
+        };
+        let frames: Vec<Vec<u8>> = (0..3u8).map(|k| vec![k; 4 * 3]).collect();
+        for name in ["frame.png", "frames.rgba"] {
+            let mut sink = Sink::create(&dir.join(name), &options).unwrap();
+            for frame in &frames {
+                sink.push(frame.clone()).unwrap();
+            }
+            sink.finish(|_| {}).unwrap();
+        }
+        for (k, frame) in frames.iter().enumerate() {
+            let png = image::open(dir.join(format!("frame-{k:05}.png"))).unwrap().to_rgba8();
+            assert_eq!(png.as_raw(), frame, "frame {k}");
+        }
+        assert_eq!(std::fs::read(dir.join("frames.rgba")).unwrap(), frames.concat());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Use the actual encoder and muxer: inspecting arguments cannot prove
     /// that AAC priming, empty inputs and the container obey the frame plan.
     /// CI sets `HARMONIGRAPH_REQUIRE_FFMPEG=1`, so a missing encoder fails
@@ -970,6 +1028,80 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// A whole export puts the take's soundtrack where the take says it
+    /// started. The test above holds the sink to the offset it is given; this
+    /// one holds the export to the offset it computes, for a take whose first
+    /// note comes before its audio, so the two clocks differ.
+    #[test]
+    fn an_export_sounds_the_takes_audio_at_the_take_time_it_was_recorded() {
+        use harmonigraph_take::{Header, NoteKind, NoteRecord, Record};
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-export-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The audio starts half a second into the take and clicks half a
+        // second into itself: one second of take time. The render opens on
+        // the first note, a quarter second in, so the click is heard 0.75 s
+        // into the video.
+        write_wav(&dir.join("click.wav"), 48_000, 1.0, Some(0.5));
+        let header = Header {
+            audio_file: Some("click.wav".into()),
+            audio_start: Some(0.5),
+            ..Header::default()
+        };
+        let note = NoteRecord {
+            source: 1,
+            t: 0.25,
+            channel: 0,
+            note: 60,
+            kind: NoteKind::On { velocity: 0.8 },
+        };
+        let take = [Record::Header(header), Record::Note(note)]
+            .iter()
+            .map(|record| ron::to_string(record).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let take_path = dir.join("take.take");
+        std::fs::write(&take_path, take).unwrap();
+        let out = dir.join("take.mp4");
+        let exported = crate::export(crate::Args {
+            take: Some(take_path.display().to_string()),
+            out: Some(out.display().to_string()),
+            size: Some([64, 36]),
+            scale: Some(1.0),
+            fps: 20.0,
+            end: Some(1.25),
+            encoder: Some(VideoEncoder::X264),
+            ffmpeg: Some(ffmpeg.display().to_string()),
+            ..Default::default()
+        });
+        if let Err(error) = &exported {
+            if error.contains("no usable GPU adapter") {
+                return;
+            }
+        }
+        exported.unwrap();
+        let decoded = Command::new(&ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&out)
+            .args(["-map", "0:a:0", "-f", "f32le", "-ac", "1", "-"])
+            .output()
+            .unwrap();
+        assert!(decoded.status.success());
+        let peak = decoded
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes).abs())
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap()
+            .0;
+        assert_eq!(peak, 36_000, "the click is heard {} s into the video", peak as f64 / 48_000.0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// What an x264 export says about its colour is what its pixels hold, read
     /// back from the file rather than the arguments: ffmpeg 7 has dropped
     /// colour options given in the wrong place without a word.
@@ -1092,6 +1224,28 @@ mod tests {
     fn an_explicit_ffmpeg_that_does_not_exist_is_reported_not_ignored() {
         let err = find_ffmpeg(Some("/definitely/not/here/ffmpeg")).unwrap_err();
         assert!(err.contains("not a file"), "{err}");
+    }
+
+    /// One odd side is enough for yuv420p to refuse the video at mux time, so
+    /// either is refused before ffmpeg is even looked for.
+    #[test]
+    fn a_video_with_either_side_odd_is_refused_up_front() {
+        for size in [[15, 16], [16, 15]] {
+            let options = VideoOptions {
+                size,
+                fps: 30.0,
+                frames: 1,
+                audio: None,
+                encoder: VideoEncoder::X264,
+                crf: 20,
+                ffmpeg: Some("/definitely/not/here/ffmpeg"),
+                audio_offset: 0.0,
+            };
+            let Err(error) = Sink::create(std::path::Path::new("odd.mp4"), &options) else {
+                panic!("{size:?} was accepted");
+            };
+            assert!(error.contains("even dimensions"), "{size:?}: {error}");
+        }
     }
 
     /// A blank field (the plugin's Options box, left empty) must fall
