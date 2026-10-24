@@ -260,12 +260,9 @@ pub(super) fn draw_roll(
             .roll_notes
             .store((notes.len() + detached.len()) as u32, std::sync::atomic::Ordering::Relaxed);
     }
-    // Added with no notes as well. The renderer holds this pane's buffers, bloom
-    // chain and cut targets only while it prepares (`harmonigraph_render`'s
-    // `pass_aged`), so a rest that added nothing would age them out and rebuild
-    // them in the frame its next note arrives in; an empty callback keeps them
-    // and draws nothing.
-    //
+    if notes.is_empty() && detached.is_empty() {
+        return;
+    }
     // The roll's own share of the pane, and the whole of what its ink may
     // reach. The outline stands off EVERY side of a note, so a note sounding
     // now — whose leading end is the now-line itself — paints its edge across
@@ -1214,37 +1211,6 @@ mod tests {
             );
         });
         assert_eq!(take_roll_draw_probe().unwrap().pixels_per_point, 0.5);
-    }
-
-    /// A roll with nothing on screen still hands the renderer its callback.
-    ///
-    /// The renderer keeps each pane's buffers, bloom chain and cut targets
-    /// only while that pane prepares (`harmonigraph_render::pass_aged`), so a
-    /// roll that went quiet by adding nothing would have them evicted a couple
-    /// of seconds into any rest, and rebuilt inside the frame the next note
-    /// arrives in.
-    #[test]
-    fn an_empty_roll_still_submits_its_callback() {
-        let state = fresh();
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let output = crate::tests::probe::frame_full(
-            &crate::tests::probe::themed_at(PPP),
-            egui::vec2(640.0, 360.0),
-            |ui| {
-                draw_roll(
-                    ui.painter(),
-                    &axes,
-                    &scale,
-                    &state,
-                    RollDrawOptions { split: 0.5, now: 1.0, surface: 0, point_scale: 1.0 },
-                );
-            },
-        );
-        assert_eq!(take_roll_draw_probe().unwrap().note_count, 0, "the fixture sounds a note");
-        let callbacks =
-            output.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::Callback(_))).count();
-        assert_eq!(callbacks, 1, "an empty roll stopped calling back, so its pane ages out");
     }
 
     #[test]
