@@ -277,6 +277,14 @@ if [ "$status" -ne 0 ]; then
 fi
 check_discovery_metadata "no-argument load-plugin.sh"
 
+# 0. A fresh HOME gets the slot linked into the CLAP folder Bitwig scans.
+link="$TMP/home/Library/Audio/Plug-Ins/CLAP/$NAME.clap"
+if [ ! -L "$link" ] \
+  || [ "$(cd "$link" && pwd -P)" != "$(cd "$repo/target/bundled/$NAME.clap" && pwd -P)" ]; then
+  echo "✗ no-argument load-plugin.sh did not link the slot into ~/Library/Audio/Plug-Ins/CLAP" >&2
+  failures=$((failures + 1))
+fi
+
 after_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 
 # 1. The installed path moves to a fresh inode; an old open descriptor keeps
