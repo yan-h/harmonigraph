@@ -38,7 +38,7 @@ pub enum SpectrumWindow {
 
 /// The listens a [`Sweep`](SpectrumWindow::Sweep) end can ask for, in
 /// Hann-equivalent samples: from the analyzer's shortest to the longest its
-/// frame can give, 0.89 of the frame.
+/// frame can give without false peaks, 5/8 of the frame.
 pub fn sweep_length_range() -> std::ops::RangeInclusive<f32> {
     harmonigraph_analysis::SWEEP_MIN_LENGTH
         ..=harmonigraph_analysis::sweep_max_length(SpectrumWindow::Sweep.frame()).floor()
@@ -283,7 +283,8 @@ pub struct SpectrumConfig {
     pub window: SpectrumWindow,
     /// The [`Sweep`](SpectrumWindow::Sweep) setting's listen at 20 Hz and at
     /// 20 kHz, in samples of an equivalent Hann window, so 4096 is Fast's
-    /// listen and 16384 Precise's. Between them it glides log-linearly in
+    /// listen (Precise's, 16384, is past the longest a Sweep reaches). Between
+    /// them it glides log-linearly in
     /// frequency. Inert under the other settings. Bounded by
     /// [`sweep_length_range`].
     pub sweep_bass: f32,
@@ -948,12 +949,12 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Right,
             window: SpectrumWindow::Fast,
-            // A little under the longest listen the frame allows at the bottom
-            // (about 14,600 samples since #1575 padded the transform; 13,500
-            // was the longest when it was picked), and half of Fast's listen at
-            // the top, which is a 4096-sample Hann window's: the bass of
-            // Precise with the treble of Fast, as picked on #1560's sheets.
-            sweep_bass: 13_500.0,
+            // The longest listen the frame allows at the bottom, and half of
+            // Fast's listen at the top, which is a 4096-sample Hann window's:
+            // as near the bass of Precise as the frame reads without false
+            // peaks, with the treble of Fast. #1560's sheets picked 13,500 at
+            // the bottom, which drew the frame's sidelobes (#1592).
+            sweep_bass: 10_240.0,
             sweep_treble: 2048.0,
             // The analyzer's level window as captured from the DAW on
             // 2026-09-10. Its floor and ceiling are independent of the

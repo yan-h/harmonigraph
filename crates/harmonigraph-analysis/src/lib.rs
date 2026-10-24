@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn a_column_is_stamped_where_its_window_listens() {
         let rate = 48_000.0f32;
-        let sweep = Some(Sweep { bass: 13_500.0, treble: 2048.0 });
+        let sweep = Some(Sweep { bass: 10_240.0, treble: 2048.0 });
         for (fft_size, sweep) in [(6144, None), (12_288, None), (24_576, None), (16_384, sweep)] {
             let config = AnalyzerConfig { sample_rate: rate, fft_size, sweep };
             let lag = config.column_lag() * f64::from(rate);
