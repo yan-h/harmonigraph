@@ -14,17 +14,16 @@ pub use harmonigraph_scene::SCALE_BAR_RANGE;
 /// respond more slowly (the tradeoff is physics, not implementation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
-    /// A 6144-sample frame (~128 ms at 48 kHz), every pitch listening through
-    /// the same window toward its newest end: as sharp as a 4096-sample Hann
-    /// window, and drawn as soon after the sound (43 ms), but at each partial's
-    /// own pitch. Longer frames than the Hann windows they match are what that
-    /// costs; see `harmonigraph_analysis::AnalyzerConfig`.
+    /// As sharp as a 4096-sample Hann window, and drawn as soon after the sound
+    /// (43 ms at 48 kHz), but at each partial's own pitch: every pitch listens
+    /// through the same window toward the newest end of a frame half as long
+    /// again. Longer frames than the Hann windows they match are what that
+    /// costs; see `harmonigraph_analysis::fixed_frame`.
     Fast,
-    /// A 12,288-sample frame, as sharp as an 8192-sample Hann window (86 ms
-    /// behind the sound): the balance between the two.
+    /// As sharp as an 8192-sample Hann window (86 ms behind the sound): the
+    /// balance between the two.
     Balanced,
-    /// A 24,576-sample frame, as sharp as a 16,384-sample Hann window (172 ms
-    /// behind the sound).
+    /// As sharp as a 16,384-sample Hann window (172 ms behind the sound).
     Precise,
     /// A 16384-sample frame read through a listen that glides with pitch, from
     /// [`SpectrumConfig::sweep_bass`] at 20 Hz to
@@ -42,18 +41,27 @@ pub enum SpectrumWindow {
 /// frame can give, 0.89 of the frame.
 pub fn sweep_length_range() -> std::ops::RangeInclusive<f32> {
     harmonigraph_analysis::SWEEP_MIN_LENGTH
-        ..=harmonigraph_analysis::sweep_max_length(SpectrumWindow::Sweep.samples()).floor()
+        ..=harmonigraph_analysis::sweep_max_length(SpectrumWindow::Sweep.frame()).floor()
 }
 
 impl SpectrumWindow {
-    /// The analyzer's frame: how many samples one column is read from.
-    pub fn samples(self) -> usize {
+    /// What a fixed resolution is named by: the plain Hann window it is as
+    /// sharp as, in samples, the unit [`SpectrumConfig::sweep_bass`] and
+    /// [`SpectrumConfig::sweep_treble`] are set in. `None` under
+    /// [`Sweep`](SpectrumWindow::Sweep), whose listen glides between those two.
+    pub fn listen(self) -> Option<usize> {
         match self {
-            SpectrumWindow::Fast => 6144,
-            SpectrumWindow::Balanced => 12_288,
-            SpectrumWindow::Precise => 24_576,
-            SpectrumWindow::Sweep => 16_384,
+            SpectrumWindow::Fast => Some(4096),
+            SpectrumWindow::Balanced => Some(8192),
+            SpectrumWindow::Precise => Some(16_384),
+            SpectrumWindow::Sweep => None,
         }
+    }
+
+    /// The analyzer's frame: how many samples one column is read from, which
+    /// the analysis crate sizes for the listen.
+    pub fn frame(self) -> usize {
+        self.listen().map_or(harmonigraph_analysis::SWEEP_FRAME, harmonigraph_analysis::fixed_frame)
     }
 }
 
@@ -606,7 +614,7 @@ impl SpectrumConfig {
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
         harmonigraph_analysis::AnalyzerConfig {
             sample_rate,
-            fft_size: self.window.samples(),
+            fft_size: self.window.frame(),
             sweep: (self.window == SpectrumWindow::Sweep).then_some(harmonigraph_analysis::Sweep {
                 bass: self.sweep_bass,
                 treble: self.sweep_treble,

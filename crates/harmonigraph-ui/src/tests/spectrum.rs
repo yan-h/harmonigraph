@@ -13,7 +13,7 @@ fn display_recovers_after_nonfinite_audio() {
         release: 0.0,
         ..SpectrumConfig::default()
     };
-    let n = config.window.samples();
+    let n = config.window.frame();
     let mut poisoned = vec![0.0; n + 384];
     poisoned[n / 2] = f32::NAN;
     spectrum.push_samples(&poisoned, 1, 48_000.0, 1.0, &config);
@@ -50,7 +50,7 @@ fn the_sweep_setting_reaches_the_analyzer() {
     {
         let mut spectrum = AudioSpectrum::default();
         let config = SpectrumConfig { window, attack: 0.0, ..SpectrumConfig::default() };
-        let sine: Vec<f32> = (0..2 * window.samples())
+        let sine: Vec<f32> = (0..2 * window.frame())
             .map(|i| 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin())
             .collect();
         spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
@@ -74,7 +74,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
         assert!(spectrum.display(0.0).is_none(), "no audio yet");
 
         // A 440 Hz sine, long enough to fill the analysis window.
-        let sine: Vec<f32> = (0..window.samples() + 1000)
+        let sine: Vec<f32> = (0..window.frame() + 1000)
             .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
             .collect();
         spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
@@ -166,7 +166,7 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
     // The window fills before a single column comes out, so each phase is that
     // much audio plus ten hops — enough for a 10 ms time to land and for a 1 s
     // one to have moved a few percent.
-    let window = SpectrumConfig::default().window.samples();
+    let window = SpectrumConfig::default().window.frame();
     let phase = window + 10 * (AudioSpectrum::FFT_INTERVAL * f64::from(sr)) as usize;
     let tone: Vec<f32> =
         (0..phase).map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
@@ -251,7 +251,7 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
     // leaves its newest column up to one hop further back than this — correctly,
     // since that is where the window it measured ends.
     let hop = (AudioSpectrum::FFT_INTERVAL * 48_000.0).round() as usize;
-    let samples = hop * (config.window.samples() / hop + 1); // enough to fill the frame
+    let samples = hop * (config.window.frame() / hop + 1); // enough to fill the frame
     let sine: Vec<f32> = (0..samples)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
@@ -262,7 +262,7 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
     // Where the window's weight is centred: about a third of the Fast frame
     // back, since its listen sits toward the newest end.
     let lag = config.column_lag(48_000.0);
-    let frame = f64::from(config.window.samples() as u32) / 48_000.0;
+    let frame = f64::from(config.window.frame() as u32) / 48_000.0;
     assert!((0.3..0.4).contains(&(lag / frame)), "a {lag} s lag on a {frame} s frame");
     let stamped = spectrum.history().back().expect("a column was kept").time;
     assert!(
@@ -304,7 +304,7 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
 
     let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..config };
     let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
-    let first_ready = (initial + config.window.samples()).div_ceil(hop) * hop;
+    let first_ready = (initial + config.window.frame()).div_ceil(hop) * hop;
     spectrum.push_source_samples(
         &vec![0.2; first_ready - initial - 1],
         1,
@@ -471,7 +471,7 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
         .iter()
         .find(|c| c.db()[a4] >= half_power)
         .expect("the tone must reach half power somewhere");
-    let window = f64::from(cfg.window.samples() as u32) / f64::from(sr);
+    let window = f64::from(cfg.window.frame() as u32) / f64::from(sr);
     assert!(
         (half.time - onset).abs() < window * 0.25,
         "the tone starts at {onset} s but its energy reads as starting at {} s \
@@ -718,7 +718,7 @@ fn runtime_advances_histories_without_a_surface() {
     use harmonigraph_core::{NoteEvent, SourceId};
     let mut runtime = VisualRuntime::default();
     let appearance = AppearanceDocument::default();
-    let samples: Vec<_> = (0..appearance.spectrum.window.samples() * 2)
+    let samples: Vec<_> = (0..appearance.spectrum.window.frame() * 2)
         .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)
         .collect();
     runtime.spectrum.push_samples(&samples, 1, 48_000.0, 1.0, &appearance.spectrum);
@@ -745,7 +745,7 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
     state.picture.appearance.view.spectral_reading = harmonigraph_scene::SpectralReading::Fold;
     state.workspace.layout.select(panes::Tab::Video);
     let cfg = state.picture.appearance.spectrum;
-    let samples: Vec<_> = (0..cfg.window.samples() * 2)
+    let samples: Vec<_> = (0..cfg.window.frame() * 2)
         .map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5)
         .collect();
     state.picture.runtime.spectrum.push_samples(&samples, 1, 48_000.0, 1.0, &cfg);
@@ -784,7 +784,7 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     let cfg = SpectrumConfig::default();
     let mut spectrum = AudioSpectrum::default();
     let tone = |frequency: f32| {
-        (0..cfg.window.samples() * 2)
+        (0..cfg.window.frame() * 2)
             .map(|i| (std::f32::consts::TAU * frequency * i as f32 / 48_000.0).sin() * 0.5)
             .collect::<Vec<_>>()
     };
