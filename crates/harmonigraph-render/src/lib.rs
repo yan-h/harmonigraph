@@ -46,7 +46,6 @@ mod lattice_frame;
 mod lattice_pipelines;
 mod lattice_prepare;
 mod lattice_targets;
-mod pass_aged;
 
 mod device;
 use bloom_chain::*;
@@ -101,9 +100,7 @@ use lattice_node_glow::create_glow_pipelines;
 /// label costs is the rim, and the rim was the text drawn again once per
 /// stamp.
 mod text;
-pub use text::{
-    text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, PaneIds, SheetUploads, SlideAxis,
-};
+pub use text::{text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, SheetUploads, SlideAxis};
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;

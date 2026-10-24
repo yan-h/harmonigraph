@@ -151,7 +151,6 @@ fn a_frame_of_the_roll_costs_this_much() {
             cut,
             target_format: format,
             pane_id: 0,
-            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let mut samples: Vec<f64> = timer

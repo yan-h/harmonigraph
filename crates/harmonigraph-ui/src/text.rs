@@ -777,10 +777,7 @@ impl TextBatch {
             harmonigraph_render::SheetUploads { font: atlas, marks },
             slide,
             state.surfaces.target_format,
-            harmonigraph_render::PaneIds {
-                pane: pane_id,
-                pass_nr: painter.ctx().cumulative_pass_nr(),
-            },
+            pane_id,
             point_scale,
         ));
     }
@@ -1618,7 +1615,7 @@ mod tests {
                     harmonigraph_render::SheetUploads { font: labels.atlas, marks: labels.marks },
                     harmonigraph_render::SlideAxis::Both,
                     state.picture.surfaces.target_format,
-                    harmonigraph_render::PaneIds { pane: 0, pass_nr: ctx.cumulative_pass_nr() },
+                    0,
                     1.0,
                 ));
             });

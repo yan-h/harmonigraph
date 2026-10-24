@@ -52,7 +52,7 @@ fn frame_at_ppp(
 }
 
 fn target(resources: &CallbackResources) -> &atmosphere::Targets {
-    resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap().cloud.as_ref().unwrap()
+    resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap().cloud.as_ref().unwrap()
 }
 
 /// The source this thread's spectrogram pipelines are built from:
@@ -171,7 +171,6 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
             let mut partial = CallbackResources::default();
             let mut wide_reference = CallbackResources::default();
             for step in 0..3 {
-                cb.pass_nr = step;
                 cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
                 cb.grid.fill(80 + step as u8 * 60);
                 cb.atmosphere.as_mut().unwrap().region = cb.rect;
@@ -253,7 +252,6 @@ fn a_drawn_star_follows_the_cpu_profile() {
         stars.star_glow_falloff = falloff;
         let depth = stars.plan().depths[4];
         assert_eq!(depth.gather, StarGather::Core);
-        cb.pass_nr += 1;
         let frame = frame_at_ppp(&device, &queue, &mut resources, &cb, PPP);
         let pixel = |x: usize, y: usize| &frame[(y * width + x) * 4..][..3];
         // Cell (0, 0)'s star, whose corner is the pane's centre: every pixel
@@ -415,7 +413,6 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
         let mut sums = Vec::new();
         // A dozen moments over four lives, so every cell turns over.
         for step in 0..12u64 {
-            cb.pass_nr = step;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64;
             let frame = frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0);
             let side = width as usize + 1;

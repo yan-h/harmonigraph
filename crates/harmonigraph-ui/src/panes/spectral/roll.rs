@@ -308,7 +308,7 @@ pub(super) fn draw_roll(
         bloom,
         state.appearance.spectrum.note_cut(),
         state.surfaces.target_format,
-        harmonigraph_render::PaneIds { pane, pass_nr: painter.ctx().cumulative_pass_nr() },
+        pane,
         options.point_scale,
     ));
 }

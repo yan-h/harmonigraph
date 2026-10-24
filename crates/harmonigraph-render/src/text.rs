@@ -32,9 +32,10 @@
 //! keeps its scene-order compositor; only the field producing their coverage
 //! is shared.
 
+use std::collections::HashMap;
+
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu};
 
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
@@ -141,30 +142,11 @@ pub struct SheetUploads {
     pub marks: Option<FontAtlas>,
 }
 
-/// Which pane a callback's GPU buffers belong to, and which pass it is drawing
-/// in.
-///
-/// One struct rather than two arguments: every paint callback in this crate
-/// that keeps buffers per pane takes both, both are `u64`, and nothing but
-/// their order told them apart.
-/// A call that swapped them would key each pane's buffers on the frame
-/// counter — a fresh chain, grid or instance buffer every frame, held until
-/// the sweep aged it out — while the sweep itself read a pane id as an age and
-/// retired on a clock that never ticks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PaneIds {
-    /// Unique per pane drawing in the same frame, and the same across frames
-    /// for one live copy of a pane: each id keeps buffers of its own.
-    pub pane: u64,
-    /// The painter context's cumulative pass number, which cache lifetime
-    /// follows — frames rather than the number of sibling panes prepared in
-    /// one.
-    pub pass_nr: u64,
-}
-
-/// Draw `glyphs` into `rect`. See [`PaneIds`] for what identifies the pane's
-/// own instance buffer (the pipeline and the atlases are shared) and
-/// [`SheetUploads`] for the sheets a frame may bring.
+/// Draw `glyphs` into `rect`. `pane_id` is unique per batch drawing in the
+/// same frame and the same across frames for one live copy: each id keeps its
+/// own instance buffer and shadow atlas (the pipeline and the sheets are
+/// shared) — see [`TextResources::panes`]. [`SheetUploads`] is the sheets a
+/// frame may bring.
 ///
 /// `slide` is the axis this pane's text scrolls along, which the reconstruction
 /// filter follows — see [`SlideAxis`]. `runs` says which glyphs make one name
@@ -178,22 +160,12 @@ pub fn text_paint_callback(
     sheets: SheetUploads,
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
-    ids: PaneIds,
+    pane_id: u64,
     point_scale: f32,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        TextCallback {
-            point_scale,
-            glyphs,
-            runs,
-            shadow,
-            sheets,
-            slide,
-            target_format,
-            pane_id: ids.pane,
-            pass_nr: ids.pass_nr,
-        },
+        TextCallback { point_scale, glyphs, runs, shadow, sheets, slide, target_format, pane_id },
     )
 }
 
@@ -245,7 +217,6 @@ struct TextCallback {
     slide: SlideAxis,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
-    pass_nr: u64,
 }
 
 /// What a glyph pipeline is told about the surface it is drawing on.
@@ -359,12 +330,14 @@ struct TextResources {
     generation: u64,
     /// The three sheets a glyph is cut from, as this callback binds them.
     sheets: Sheets,
-    /// The text callback does not cast lattice shadows, but shares this bind
-    /// group layout with the lattice and therefore binds a typed stand-in.
-    /// What a closed text pane would otherwise hold is its glyph buffer and its
-    /// shadow atlas; the age they are swept at is
-    /// [`crate::pass_aged::TTL_PASSES`].
-    panes: PassAged<TextPane>,
+    /// Every text batch this renderer has drawn, by pane id, and never swept,
+    /// like the lattice's panes. An id is one of a few flush slots on a
+    /// surface (`harmonigraph_ui::text`), so the map holds a few entries per
+    /// surface, and it goes with the `CallbackResources` it lives in when the
+    /// editor window closes or the export ends. Until then a hidden tab, a
+    /// closed preview or a pane between names keeps its glyph buffer and
+    /// shadow atlas, so the next name rebuilds neither.
+    panes: HashMap<u64, TextPane>,
 }
 
 /// The sheets one renderer binds a glyph pipeline against — the font atlas
@@ -914,7 +887,7 @@ impl TextResources {
             #[cfg(feature = "hot-reload")]
             generation,
             sheets: Sheets::new(device, queue),
-            panes: PassAged::new(),
+            panes: HashMap::new(),
         }
     }
 
@@ -1139,10 +1112,6 @@ impl CallbackTrait for TextCallback {
         }
         let resources: &mut TextResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        // Swept before the early exits below, so a pass that brings no atlas
-        // still retires the panes that stopped drawing.
-        resources.panes.evict_unseen(self.pass_nr);
-
         resources.bind_sheets(device, queue, shared_atlas.as_ref(), &self.sheets);
         // No atlas yet means the first frame arrived without one: nothing can
         // be drawn, and the next frame that sees a change will bring it.
@@ -1174,31 +1143,30 @@ impl CallbackTrait for TextCallback {
         // `bind_sheets` above has already rebound every pane that was bound
         // against a texture since replaced. So they are built where they are
         // used, not beside the rest of the frame's setup.
-        let pane_views = resources.panes.get(self.pane_id).is_none_or(|p| p.bind_group.is_none());
+        let pane_views = resources.panes.get(&self.pane_id).is_none_or(|p| p.bind_group.is_none());
         let pane_views = pane_views.then(|| resources.sheets.views());
         let (layout, sampler) = (&resources.layout, &resources.sampler);
-        let pane =
-            resources.panes.touched_or_insert_with(self.pane_id, self.pass_nr, || TextPane {
-                uniform_buffer: crate::gpu_memory::buffer(
-                    device,
-                    &wgpu::BufferDescriptor {
-                        label: Some("text_uniforms"),
-                        size: std::mem::size_of::<TextUniforms>() as u64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    },
-                ),
-                bind_group: None,
-                instance_buffer: create_vertex_buffer::<GlyphInstance>(
-                    device,
-                    "text_glyphs",
-                    INITIAL_GLYPH_CAPACITY,
-                ),
-                cells: None,
-                shadow: None,
-                capacity: INITIAL_GLYPH_CAPACITY,
-                count: 0,
-            });
+        let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
+            uniform_buffer: crate::gpu_memory::buffer(
+                device,
+                &wgpu::BufferDescriptor {
+                    label: Some("text_uniforms"),
+                    size: std::mem::size_of::<TextUniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+            ),
+            bind_group: None,
+            instance_buffer: create_vertex_buffer::<GlyphInstance>(
+                device,
+                "text_glyphs",
+                INITIAL_GLYPH_CAPACITY,
+            ),
+            cells: None,
+            shadow: None,
+            capacity: INITIAL_GLYPH_CAPACITY,
+            count: 0,
+        });
         if pane.bind_group.is_none() {
             let (view, mark_view) = pane_views.expect("built above when unbound");
             pane.bind_group =
@@ -1285,7 +1253,7 @@ impl CallbackTrait for TextCallback {
         let Some(resources) = callback_resources.get::<TextResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(self.pane_id) else {
+        let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
         let Some(bind_group) = pane.bind_group.as_ref() else {
@@ -1383,7 +1351,7 @@ pub(crate) mod tests {
             return;
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let prepare = |style, pass_nr, resources: &mut CallbackResources| {
+        let prepare = |style, resources: &mut CallbackResources| {
             let cb = TextCallback {
                 point_scale: 1.0,
                 runs: GlyphRuns::default(),
@@ -1393,12 +1361,11 @@ pub(crate) mod tests {
                 slide: SlideAxis::default(),
                 target_format: FORMAT,
                 pane_id: 0,
-                pass_nr,
             };
             let mut encoder = device.create_command_encoder(&Default::default());
             cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             queue.submit([encoder.finish()]);
-            let pane = resources.get::<TextResources>().and_then(|r| r.panes.get(0));
+            let pane = resources.get::<TextResources>().and_then(|r| r.panes.get(&0));
             pane.and_then(|p| p.shadow.as_ref()).is_some_and(|s| s.target_allocated())
         };
         let casting =
@@ -1408,9 +1375,9 @@ pub(crate) mod tests {
             harmonigraph_scene::ShadowStyle { width: 1.0, depth: 0.0, ..Default::default() },
         ] {
             let mut resources = CallbackResources::default();
-            assert!(!prepare(style, 0, &mut resources), "{style:?} allocated a shadow atlas");
-            assert!(prepare(casting, 1, &mut resources), "the casting fixture packed no cell");
-            assert!(!prepare(style, 2, &mut resources), "{style:?} kept last frame's atlas");
+            assert!(!prepare(style, &mut resources), "{style:?} allocated a shadow atlas");
+            assert!(prepare(casting, &mut resources), "the casting fixture packed no cell");
+            assert!(!prepare(style, &mut resources), "{style:?} kept last frame's atlas");
         }
     }
 
@@ -1537,7 +1504,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            pass_nr: 0,
         };
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
@@ -1697,7 +1663,6 @@ pub(crate) mod tests {
             slide,
             target_format: FORMAT,
             pane_id: 0,
-            pass_nr: 0,
         };
         (draw_callback(device, queue, &cb, size, ppp), size)
     }
@@ -1741,7 +1706,7 @@ pub(crate) mod tests {
                     &resources,
                 );
             });
-        let stats = (resources.get::<TextResources>().and_then(|r| r.panes.get(cb.pane_id)))
+        let stats = (resources.get::<TextResources>().and_then(|r| r.panes.get(&cb.pane_id)))
             .and_then(|pane| pane.shadow.as_ref())
             .map_or(Default::default(), |shadow| shadow.stats);
         (readback(device, queue, &texture, size), stats)
@@ -1760,7 +1725,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            pass_nr: 0,
         }
     }
 
@@ -1831,7 +1795,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            pass_nr: 0,
         };
         let together = draw_callback(&device, &queue, &cb, SIZE, 1.0);
         cb.runs = GlyphRuns { names: vec![1, 2], layers: vec![1, 2] };
@@ -1984,7 +1947,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -2074,7 +2036,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id: 0,
-            pass_nr: 0,
         };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -2119,117 +2080,6 @@ pub(crate) mod tests {
                 }
             }
         }
-    }
-
-    /// A text pane that stops drawing gives its glyph buffer back, and one
-    /// still drawing beside it keeps its own.
-    ///
-    /// The ordering is the part worth pinning. The sweep runs at the TOP of
-    /// `prepare`, ahead of the early exit a pass with no atlas takes, so a
-    /// frame that draws no text at all still retires the panes that stopped —
-    /// while a pane is stamped only at the END, once it has an atlas to bind.
-    /// The two are not interchangeable: swept late, a pass that early-exits
-    /// would let a closed pane linger; stamped early, a pane that never reaches
-    /// its bind group would look alive.
-    #[test]
-    fn a_pane_that_stops_drawing_gives_its_glyphs_back() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let at = |pane_id: u64, pass_nr: u64| TextCallback {
-            point_scale: 1.0,
-            runs: GlyphRuns::default(),
-            glyphs: vec![glyph()],
-            shadow: None,
-            sheets: SheetUploads { font: Some(atlas()), marks: None },
-            slide: SlideAxis::default(),
-            target_format: FORMAT,
-            pane_id,
-            pass_nr,
-        };
-        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let prepare = |cb: &TextCallback, resources: &mut CallbackResources| {
-            let mut encoder = device.create_command_encoder(&Default::default());
-            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
-            queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        };
-        let live = |resources: &CallbackResources, id| {
-            let text: &TextResources = resources.get().expect("prepare inserts its resources");
-            text.panes.contains_key(id)
-        };
-
-        let mut resources = CallbackResources::default();
-        prepare(&at(0, 0), &mut resources);
-        prepare(&at(1, 0), &mut resources);
-        assert!(live(&resources, 0) && live(&resources, 1), "two panes, two glyph buffers");
-
-        // Pane 0's tab closes: pane 1 goes on drawing alone, past the age the
-        // other's buffer is held for.
-        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
-            prepare(&at(1, pass_nr), &mut resources);
-        }
-        assert!(!live(&resources, 0), "the closed pane is still holding its glyph buffer");
-        assert!(live(&resources, 1), "the sweep took the pane that never stopped drawing");
-    }
-
-    /// A rest longer than the sweep's age keeps a casting pane's shadow atlas,
-    /// and paints nothing while it lasts.
-    ///
-    /// The pane calls back with no glyphs between names, so a quiet stretch is
-    /// a run of empty batches: those keep it stamped, and must keep the atlas
-    /// its names were packed into, or the first name after the rest rebuilds
-    /// it. Still holding the last name's shadow, it must not reach the picture.
-    #[test]
-    fn a_rest_keeps_the_text_panes_shadow_and_draws_nothing() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let name = word(GlyphRuns::default(), 1.0);
-        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let mut resources = CallbackResources::default();
-        let prepare = |cb: &TextCallback, resources: &mut CallbackResources| {
-            let mut encoder = device.create_command_encoder(&Default::default());
-            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
-            queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        };
-        prepare(&name, &mut resources);
-        let mut rest = TextCallback {
-            glyphs: Vec::new(),
-            sheets: SheetUploads { font: None, marks: None },
-            ..name
-        };
-        for pass_nr in 1..=2 * crate::pass_aged::TTL_PASSES {
-            rest.pass_nr = pass_nr;
-            prepare(&rest, &mut resources);
-        }
-
-        let text: &TextResources = resources.get().expect("prepare inserts its resources");
-        let pane = text.panes.get(0).expect("a pane calling back through a rest was evicted");
-        assert!(
-            pane.shadow.as_ref().is_some_and(|shadow| shadow.target_allocated()),
-            "an empty batch dropped the pane's shadow atlas",
-        );
-
-        let rect =
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
-        let texture =
-            render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
-                rest.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: 1.0,
-                        screen_size_px: SIZE,
-                    },
-                    pass,
-                    &resources,
-                );
-            });
-        let frame = readback(&device, &queue, &texture, SIZE);
-        assert!(
-            frame.as_chunks::<4>().0.iter().all(|p| *p == [0; 4]),
-            "an empty batch painted the last name's ink or shadow",
-        );
     }
 
     /// A pane whose text is already prepared keeps it when a LATER pane in the
@@ -2302,7 +2152,6 @@ pub(crate) mod tests {
             slide: SlideAxis::default(),
             target_format: FORMAT,
             pane_id,
-            pass_nr: 0,
         };
 
         let mut resources = CallbackResources::default();
@@ -2383,7 +2232,6 @@ pub(crate) mod tests {
                     slide: SlideAxis::default(),
                     target_format: FORMAT,
                     pane_id: 0,
-                    pass_nr: 1,
                 },
                 at(40.0, 1, Some(atlas_of(64, 3))),
             ],

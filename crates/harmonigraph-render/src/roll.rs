@@ -34,9 +34,10 @@
 
 use crate::uniforms::{uniform_group, Float2};
 
+use std::collections::HashMap;
+
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
@@ -249,9 +250,10 @@ pub struct RollAxes {
     pub depth_dir: [f32; 2],
 }
 
-/// Draw `instances` into `rect`. See [`crate::PaneIds`] for what identifies
-/// the roll's own instance buffer (the pipeline is shared) and how long the
-/// buffers live.
+/// Draw `instances` into `rect`. `pane_id` is unique per roll drawing in the
+/// same frame and the same across frames for one live copy: each id keeps its
+/// own instance buffer, bloom chain and cut targets (the pipeline is shared),
+/// for as long as the renderer does — see [`RollResources::panes`].
 ///
 /// `rect` is the roll's own region rather than the pane's — it is what the
 /// bloom's offscreen chain and the surround's targets cover, so a rect any
@@ -276,7 +278,7 @@ pub fn roll_paint_callback(
     bloom: f32,
     cut: crate::SurroundCut,
     target_format: wgpu::TextureFormat,
-    ids: crate::PaneIds,
+    pane_id: u64,
     point_scale: f32,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
@@ -291,8 +293,7 @@ pub fn roll_paint_callback(
             bloom,
             cut,
             target_format,
-            pane_id: ids.pane,
-            pass_nr: ids.pass_nr,
+            pane_id,
         },
     )
 }
@@ -315,9 +316,6 @@ struct RollCallback {
     cut: crate::SurroundCut,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
-    /// Egui's cumulative pass number, shared by every callback prepared before
-    /// this frame paints.
-    pass_nr: u64,
 }
 
 uniform_group! {
@@ -431,11 +429,15 @@ struct RollResources {
     target_format: wgpu::TextureFormat,
     #[cfg(feature = "hot-reload")]
     generation: u64,
-    /// What a closed roll would otherwise hold: its buffers and its bloom
-    /// chain, three textures the size of the pane it was shown at. That is the
-    /// reason there is a sweep here at all rather than a map that only ever
-    /// grows; the age it sweeps at is [`crate::pass_aged::TTL_PASSES`].
-    panes: PassAged<RollPane>,
+    /// Every roll this renderer has drawn, by pane id, and never swept, like
+    /// the lattice's panes. An id is a surface — the docked pane, the
+    /// Render preview, one placement of an export — so the map holds as many
+    /// entries as there are surfaces, and it goes with the `CallbackResources`
+    /// it lives in when the editor window closes or the export ends. Until
+    /// then a hidden tab or a closed preview keeps its buffers, bloom chain
+    /// and cut targets, so switching back to it rebuilds nothing, and a rest
+    /// that adds no callback loses nothing either.
+    panes: HashMap<u64, RollPane>,
 }
 
 struct RollPane {
@@ -698,7 +700,7 @@ impl RollResources {
             target_format,
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
-            panes: PassAged::new(),
+            panes: HashMap::new(),
         }
     }
 }
@@ -715,17 +717,14 @@ struct RollBloomShared<'a> {
 }
 
 impl RollPane {
-    /// This pane's buffers, made on first sight of its id and stamped with
-    /// `pass_nr` so the sweep can tell a live pane from one whose tab was
-    /// closed.
+    /// This pane's buffers, made on first sight of its id.
     fn get<'a>(
-        panes: &'a mut PassAged<RollPane>,
+        panes: &'a mut HashMap<u64, RollPane>,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         pane_id: u64,
-        pass_nr: u64,
     ) -> &'a mut RollPane {
-        panes.touched_or_insert_with(pane_id, pass_nr, || {
+        panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = crate::gpu_memory::buffer(
                 device,
                 &wgpu::BufferDescriptor {
@@ -1104,13 +1103,7 @@ impl CallbackTrait for RollCallback {
             ..
         } = resources;
         let shared = RollBloomShared { notes_layout: layout, filter_layout, bloom_layout, sampler };
-        // A roll's id is its surface (the docked pane, the Render preview), and
-        // a closed tab simply stops calling back — so the panes still being
-        // prepared are the only evidence of which ones exist. Swept from
-        // whichever pane IS preparing, so a lone survivor still clears the
-        // others.
-        panes.evict_unseen(self.pass_nr);
-        let pane = RollPane::get(panes, device, layout, self.pane_id, self.pass_nr);
+        let pane = RollPane::get(panes, device, layout, self.pane_id);
         if self.instances.len() > pane.capacity {
             pane.capacity = self.instances.len().next_power_of_two();
             pane.instance_buffer =
@@ -1254,7 +1247,7 @@ impl CallbackTrait for RollCallback {
         let Some(resources) = callback_resources.get::<RollResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(self.pane_id) else {
+        let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
         if pane.count == 0 {
