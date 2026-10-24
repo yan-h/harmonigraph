@@ -613,6 +613,30 @@ impl SpectrumConfig {
     /// The analyzer these settings ask for at `sample_rate`: the window's
     /// frame, and its sweep when the window is [`Sweep`](SpectrumWindow::Sweep).
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
+        // PROTOTYPE (#1600): `HARMONIGRAPH_PROTO_SPECTRUM` = `precise`, or
+        // `sweep:<bass>:<treble>`, or (with `HARMONIGRAPH_SWEEP_GAMMA` set)
+        // `gamma:<bass>:<treble>` on a 32,768-sample frame. Not for merging.
+        if let Ok(spec) = std::env::var("HARMONIGRAPH_PROTO_SPECTRUM") {
+            let parts: Vec<&str> = spec.split(':').collect();
+            let sweep = |frame| harmonigraph_analysis::AnalyzerConfig {
+                sample_rate,
+                fft_size: frame,
+                sweep: Some(harmonigraph_analysis::Sweep {
+                    bass: parts[1].parse().expect("bass"),
+                    treble: parts[2].parse().expect("treble"),
+                }),
+            };
+            return match parts[0] {
+                "precise" => harmonigraph_analysis::AnalyzerConfig {
+                    sample_rate,
+                    fft_size: SpectrumWindow::Precise.frame(),
+                    sweep: None,
+                },
+                "sweep" => sweep(harmonigraph_analysis::SWEEP_FRAME),
+                "gamma" => sweep(32_768),
+                other => panic!("HARMONIGRAPH_PROTO_SPECTRUM: unknown `{other}`"),
+            };
+        }
         harmonigraph_analysis::AnalyzerConfig {
             sample_rate,
             fft_size: self.window.frame(),

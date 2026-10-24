@@ -282,6 +282,26 @@ fn swept_sigma(
     asked.max(placed).min(gaussian_for(longest, n))
 }
 
+/// PROTOTYPE (#1600): a Sweep reads every bucket through its own gamma window
+/// on an untapered frame instead of the frame's Hann window under a centred
+/// Gaussian, when `HARMONIGRAPH_SWEEP_GAMMA` is set. Not for merging.
+pub(crate) fn gamma() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("HARMONIGRAPH_SWEEP_GAMMA").is_some())
+}
+
+/// The gamma Sweep's longest listen on a frame of `fft_size`: half of it, so
+/// the window's tail has died to about 1e-6 by the frame's oldest sample.
+pub fn gamma_max_length(fft_size: usize) -> f64 {
+    fft_size as f64 / 2.0
+}
+
+/// How far behind the newest sample every gamma window's centroid sits: half
+/// the longest listen, as the fixed windows' is.
+fn gamma_delay(fft_size: usize) -> f64 {
+    0.502 * gamma_max_length(fft_size)
+}
+
 /// The sample of a frame of `fft_size` that every bucket's listen is centred
 /// on: the middle under a Sweep, and [`FIXED_CENTRE`] of the way to the newest
 /// sample for a fixed window.
@@ -303,6 +323,9 @@ pub(crate) fn listen_centre(fft_size: usize, sweep: bool) -> usize {
 /// window pulls its centroid back toward the middle a little, which only the
 /// sum says by how much.
 pub(crate) fn lag_samples(fft_size: usize, sweep: bool) -> f64 {
+    if sweep && gamma() {
+        return gamma_delay(fft_size) - 0.5;
+    }
     let centre = listen_centre(fft_size, sweep) as f64;
     let centroid = if sweep { centre } else { centre + fixed_moments(fft_size).1 };
     (fft_size - 1) as f64 - centroid
@@ -345,6 +368,9 @@ struct Point {
     k0: u32,
     taps: u32,
     at: u32,
+    /// PROTOTYPE: complex taps, stored as two runs of `2 * taps` floats: the
+    /// first sums to the reading's real part, the second to its imaginary.
+    complex: bool,
 }
 
 /// Which kernels each bucket reads, for one listen, frame length and sample
@@ -417,6 +443,9 @@ impl Kernels {
         fft_size: usize,
         hann: &[f32],
     ) {
+        if let Some(sweep) = sweep.filter(|_| gamma()) {
+            return self.plan_gamma(sweep, sample_rate, fft_size);
+        }
         let n = fft_size as f64;
         // The padded transform's length, in which its bins are counted.
         let bins_n = (PAD * fft_size) as f64;
@@ -505,10 +534,96 @@ impl Kernels {
                     k0: from as u32,
                     taps: (to + 1 - from) as u32,
                     at: offset,
+                    complex: false,
                 });
             }
             self.spans[b] = (start, self.points.len() as u32);
             self.norm[b] = norm;
+        }
+    }
+
+    /// PROTOTYPE (#1600): every bucket of `sweep` reads the UNTAPERED frame
+    /// through its own whole window, a gamma envelope `tau^(K-1) e^(-tau/mu)`
+    /// with `tau` counted back from the newest sample, so its kernel is that
+    /// window's transform: `(1 - i w mu)^(-K)` times the phase of where the
+    /// frame sits in the transform (Brown and Puckette's spectral kernel). Each
+    /// bucket's spread is its Hann-equivalent listen's, and every window's
+    /// centroid sits [`gamma_delay`] behind the newest sample, so the column
+    /// stays aligned across the axis. The spectrum of a gamma window falls
+    /// away from its peak monotonically at every length: no sidelobes, so no
+    /// cap but the frame's room for the window's tail.
+    fn plan_gamma(&mut self, sweep: Sweep, sample_rate: f32, fft_size: usize) {
+        let m = PAD * fft_size;
+        let bins_n = m as f64;
+        let sr = f64::from(sample_rate);
+        let (first, last) = usable_bins(fft_size);
+        self.offset = PAD * fft_size / 2 - fft_size / 2;
+        self.window.clear();
+        self.window.resize(fft_size, 1.0);
+        self.window_sum = fft_size as f32;
+        self.points.clear();
+        self.weights.clear();
+        let longest = gamma_max_length(fft_size);
+        let delay = gamma_delay(fft_size);
+        // Where tau = 0 falls in the transform: half a sample past the newest.
+        let t0 = (self.offset + fft_size) as f64 - 0.5;
+        let length = |l: f32| f64::from(l).clamp(f64::from(SWEEP_MIN_LENGTH), longest).ln();
+        let (bass, treble) = (length(sweep.bass), length(sweep.treble));
+        for (b, frequencies) in BUCKET_FREQUENCIES.iter().enumerate() {
+            let hz = f64::from(frequencies.center_hz);
+            let u = ((hz / 20.0).ln() / (20_000.0f64 / 20.0).ln()).clamp(0.0, 1.0);
+            let asked = (bass + (treble - bass) * u).exp() * HANN_SPREAD;
+            // The same placement floor as the Hann Sweep's (`swept_sigma`).
+            let room = f64::from(frequencies.lower_hz) * bins_n / sr - first as f64;
+            let placed =
+                if room > 0.0 { clearance_bins(1.0, bins_n) / room } else { f64::INFINITY };
+            let sigma = asked.max(placed).min(longest * HANN_SPREAD);
+            let k = (delay / sigma).powi(2);
+            let mu = sigma * sigma / delay;
+            // Out to -130 dB of the kernel's peak, in bins either side.
+            let reach = ((10f64.powf(13.0 / k) - 1.0).sqrt() / mu) * bins_n / (2.0 * PI);
+            let clearance = clearance_bins(sigma, bins_n);
+            let response_hz = sr / (2.0 * PI * sigma);
+            let (lower, upper) = (f64::from(frequencies.lower_hz), f64::from(frequencies.upper_hz));
+            let readings = (2.0 * (upper - lower) / response_hz).ceil().max(1.0) as usize;
+            let start = self.points.len() as u32;
+            for r in 0..readings {
+                let f = lower + (upper - lower) * (r as f64 + 0.5) / readings as f64;
+                let at = f * bins_n / sr;
+                if at < first as f64 + clearance || at > last as f64 - clearance {
+                    continue;
+                }
+                let k0 = ((at - reach).ceil() as usize).max(first);
+                let k1 = ((at + reach).floor() as usize).min(last);
+                let padding = (TAP_CHUNK - (k1 + 1 - k0) % TAP_CHUNK) % TAP_CHUNK;
+                let to = (k1 + padding).min(PAD * fft_size / 2);
+                let from = k0 - (padding - (to - k1));
+                let theta = 2.0 * PI * f / sr;
+                let taps: Vec<(f64, f64)> = (from..=to)
+                    .map(|kk| {
+                        if !(k0..=k1).contains(&kk) {
+                            return (0.0, 0.0);
+                        }
+                        let w = theta - 2.0 * PI * kk as f64 / bins_n;
+                        // (1 - i w mu)^(-K) = exp(-K ln(1 - i w mu)).
+                        let (lr, li) = (0.5 * (w * mu).mul_add(w * mu, 1.0).ln(), -(w * mu).atan());
+                        let (mag, phase) = ((-k * lr).exp(), -k * li - w * t0);
+                        (mag * phase.cos() / bins_n, mag * phase.sin() / bins_n)
+                    })
+                    .collect();
+                let at_weights = self.weights.len() as u32;
+                // Real part: re*a - im*b; imaginary: re*b + im*a.
+                self.weights.extend(taps.iter().flat_map(|&(a, bb)| [a as f32, -bb as f32]));
+                self.weights.extend(taps.iter().flat_map(|&(a, bb)| [bb as f32, a as f32]));
+                self.points.push(Point {
+                    k0: from as u32,
+                    taps: (to + 1 - from) as u32,
+                    at: at_weights,
+                    complex: true,
+                });
+            }
+            self.spans[b] = (start, self.points.len() as u32);
+            self.norm[b] = norm_power(1.0);
         }
     }
 
@@ -526,6 +641,27 @@ impl Kernels {
         {
             let mut loudest = 0.0f32;
             for point in &self.points[p0 as usize..p1 as usize] {
+                if point.complex {
+                    let len = 2 * point.taps as usize;
+                    let bins = &floats[2 * point.k0 as usize..][..len];
+                    let dot = |weights: &[f32]| {
+                        let mut sums = [0.0f32; FLOATS];
+                        let (bins, _) = bins.as_chunks::<FLOATS>();
+                        let (weights, _) = weights.as_chunks::<FLOATS>();
+                        for (x, w) in bins.iter().zip(weights) {
+                            for lane in 0..FLOATS {
+                                sums[lane] += x[lane] * w[lane];
+                            }
+                        }
+                        let [a, b, c, d, e, f, g, h] = sums;
+                        (a + b) + (c + d) + (e + f) + (g + h)
+                    };
+                    let at = point.at as usize;
+                    let re = dot(&self.weights[at..][..len]);
+                    let im = dot(&self.weights[at + len..][..len]);
+                    loudest = loudest.max(re * re + im * im);
+                    continue;
+                }
                 let len = 2 * point.taps as usize;
                 let weights = &self.weights[point.at as usize..][..len];
                 let bins = &floats[2 * point.k0 as usize..][..len];
@@ -956,6 +1092,172 @@ mod tests {
                 checked += 1;
             }
             assert!(checked > 20, "N={n}, {sweep:?}: only {checked} buckets were compared");
+        }
+    }
+}
+
+#[cfg(test)]
+mod probe_gamma_impl {
+    use super::*;
+    use crate::{AnalyzerConfig, SpectrumAnalyzer};
+    use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+
+    const N: usize = 32_768;
+
+    #[test]
+    #[ignore]
+    fn gamma_reads() {
+        std::env::set_var("HARMONIGRAPH_SWEEP_GAMMA", "1");
+        assert!(gamma());
+        for rate in [48_000.0f32, 96_000.0] {
+            let sweep = Sweep { bass: 16_384.0, treble: 2048.0 };
+            let config = AnalyzerConfig { sample_rate: rate, fft_size: N, sweep: Some(sweep) };
+            println!("rate {rate}: column lag {:.1} ms", config.column_lag() * 1000.0);
+            // 1. Against a direct f64 read through each bucket's gamma window.
+            let mut a = SpectrumAnalyzer::new(config);
+            let input: Vec<f32> = (0..N + 997)
+                .map(|i| {
+                    let t = i as f64 / f64::from(rate);
+                    ((std::f64::consts::TAU * 440.0 * t).sin() * 0.4
+                        + (std::f64::consts::TAU * 7137.0 * t).cos() * 0.2
+                        + (std::f64::consts::TAU * 31.0 * t).sin() * 0.3) as f32
+                })
+                .collect();
+            a.push_samples(&input);
+            let buckets = *a.pitch_spectrum().unwrap();
+            let frame: Vec<f64> = (0..N).map(|i| f64::from(a.ring[(a.write + i) % N])).collect();
+            let mean = frame.iter().sum::<f64>() / N as f64;
+            let longest = gamma_max_length(N);
+            let delay = gamma_delay(N);
+            let mut worst = 0.0f64;
+            for b in (0..SPECTRUM_BINS).step_by(97) {
+                let (p0, p1) = a.kernels.spans[b];
+                if p1 != p0 + 1 {
+                    continue;
+                }
+                let fr = &BUCKET_FREQUENCIES[b];
+                let hz = 0.5 * f64::from(fr.lower_hz + fr.upper_hz);
+                let u = ((f64::from(fr.center_hz) / 20.0).ln() / 1000f64.ln()).clamp(0.0, 1.0);
+                let asked =
+                    (16_384f64.ln() + (2048f64.ln() - 16_384f64.ln()) * u).exp().min(longest)
+                        * HANN_SPREAD;
+                let bins_n = (PAD * N) as f64;
+                let room =
+                    f64::from(fr.lower_hz) * bins_n / f64::from(rate) - usable_bins(N).0 as f64;
+                let sigma =
+                    asked.max(clearance_bins(1.0, bins_n) / room).min(longest * HANN_SPREAD);
+                let (k, mu) = ((delay / sigma).powi(2), sigma * sigma / delay);
+                let w: Vec<f64> = (0..N)
+                    .map(|i| {
+                        let tau = (N - 1 - i) as f64 + 0.5;
+                        ((k - 1.0) * tau.ln() - tau / mu).exp()
+                    })
+                    .collect();
+                let s: f64 = w.iter().sum();
+                let (mut re, mut im) = (0.0, 0.0);
+                for i in 0..N {
+                    let x = (frame[i] - mean) * w[i] / s;
+                    let ang = std::f64::consts::TAU * hz * i as f64 / f64::from(rate);
+                    re += x * ang.cos();
+                    im -= x * ang.sin();
+                }
+                let direct = 4.0 * (re * re + im * im);
+                let got = f64::from(buckets[b]);
+                let db = 10.0 * (got.max(1e-30) / direct.max(1e-30)).log10();
+                if direct > 1e-9 {
+                    worst = worst.max(db.abs());
+                }
+            }
+            println!("  kernel vs direct: worst {worst:.3} dB");
+            // 2. False peaks, pitch, level through the analyzer.
+            let (mut fp, mut cents, mut lmin) = (f64::NEG_INFINITY, 0.0f64, f64::INFINITY);
+            let mut midi = 15.8f32;
+            while midi < 128.0 {
+                let hz = 440.0 * 2f32.powf((midi - 69.0) / 12.0);
+                let step = std::f64::consts::TAU * f64::from(hz) / f64::from(rate);
+                let s: Vec<f32> = (0..N).map(|i| (step * i as f64).sin() as f32).collect();
+                a.push_samples(&s);
+                let l = *a.pitch_spectrum().unwrap();
+                let pk = (0..SPECTRUM_BINS).max_by(|&x, &y| l[x].total_cmp(&l[y])).unwrap();
+                let c = |b: usize| {
+                    100.0
+                        * (SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32
+                            - hz_to_midi(hz))
+                };
+                cents = cents.max(f64::from(c(pk).abs()));
+                lmin = lmin.min(10.0 * f64::from(l[pk]).log10());
+                for b in 1..SPECTRUM_BINS - 1 {
+                    if l[b] > l[b - 1] && l[b] >= l[b + 1] && c(b).abs() > 100.0 {
+                        fp = fp.max(10.0 * f64::from(l[b]).log10());
+                    }
+                }
+                midi += 0.37;
+            }
+            println!(
+                "  tones: false peak {fp:.1} dB | pitch {cents:.1}c | lowest level {lmin:.2} dB"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod probe_gamma_cost {
+    use super::*;
+    use crate::{AnalyzerConfig, SpectrumAnalyzer};
+
+    fn time(config: AnalyzerConfig) -> (f64, usize) {
+        let mut a = SpectrumAnalyzer::new(config);
+        let s: Vec<f32> = (0..config.fft_size)
+            .map(|i| ((i as f32) * 0.0123).sin() * 0.3 + ((i as f32) * 0.7).sin() * 0.1)
+            .collect();
+        a.push_samples(&s);
+        for _ in 0..20 {
+            a.pitch_spectrum();
+        }
+        let t = std::time::Instant::now();
+        let reps = 300;
+        for _ in 0..reps {
+            std::hint::black_box(a.pitch_spectrum());
+        }
+        let taps: usize =
+            a.kernels.points.iter().map(|p| p.taps as usize * if p.complex { 2 } else { 1 }).sum();
+        (t.elapsed().as_secs_f64() * 1e6 / reps as f64, taps)
+    }
+
+    #[test]
+    #[ignore]
+    fn cost() {
+        let gamma_on = gamma();
+        let rate = 48_000.0;
+        if !gamma_on {
+            let (us, taps) = time(AnalyzerConfig {
+                sample_rate: rate,
+                fft_size: 16_384,
+                sweep: Some(Sweep { bass: 10_240.0, treble: 2048.0 }),
+            });
+            println!("today Sweep 10240/2048: {us:.0} us/column, {taps} tap-units");
+            let (us, taps) = time(AnalyzerConfig {
+                sample_rate: rate,
+                fft_size: 16_384,
+                sweep: Some(Sweep { bass: 10_240.0, treble: 256.0 }),
+            });
+            println!("today Sweep 10240/256: {us:.0} us/column, {taps} tap-units");
+            let (us, taps) =
+                time(AnalyzerConfig { sample_rate: rate, fft_size: 24_576, sweep: None });
+            println!("Precise: {us:.0} us/column, {taps} tap-units");
+        } else {
+            let (us, taps) = time(AnalyzerConfig {
+                sample_rate: rate,
+                fft_size: 32_768,
+                sweep: Some(Sweep { bass: 16_384.0, treble: 2048.0 }),
+            });
+            println!("gamma Sweep 16384/2048: {us:.0} us/column, {taps} tap-units");
+            let (us, taps) = time(AnalyzerConfig {
+                sample_rate: rate,
+                fft_size: 32_768,
+                sweep: Some(Sweep { bass: 16_384.0, treble: 256.0 }),
+            });
+            println!("gamma Sweep 16384/256: {us:.0} us/column, {taps} tap-units");
         }
     }
 }
