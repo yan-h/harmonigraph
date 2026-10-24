@@ -551,8 +551,9 @@ pub(crate) fn spiral_pane(
     let lit = sounding(&spiral, state, now);
     let marks = dots(&spiral, state, &lit);
     // The roll's own backdrop cut, round every dot, before the discs land on
-    // it. Unconditionally, as the halo below is: the callback declines a frame
-    // with nothing to cut itself, without building its pipelines.
+    // it. Unconditionally: the callback declines a frame with nothing to cut
+    // itself, without building its pipelines, and it drops its targets only on
+    // a frame that says the cut is off, so it has to see the silent ones.
     painter.add(harmonigraph_render::dot_surround_paint_callback(
         rect,
         surround(&spiral, state, &lit),
@@ -571,19 +572,20 @@ pub(crate) fn spiral_pane(
             ),
         );
     }
-    // The spiral's own bloom, on its dots.
-    //
-    // Unconditionally, including on the frames with no strength and nothing
-    // sounding. The callback declines those itself without allocating, and it
-    // is the one place that can also tell a rect too thin to have a device
-    // pixel.
-    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
-    painter.add(harmonigraph_render::glow_paint_callback(
-        rect,
-        marks,
-        bloom,
-        state.surfaces.target_format,
-    ));
+    // The spiral's own bloom, on its dots, whenever there are dots. Its chain
+    // stands for as long as the renderer does, so a silent frame has nothing
+    // to ask of it. The strength is left to the callback, which declines a
+    // strength of 0 without allocating and is the one place that can also
+    // tell a rect too thin to have a device pixel.
+    if !marks.is_empty() {
+        let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
+        painter.add(harmonigraph_render::glow_paint_callback(
+            rect,
+            marks,
+            bloom,
+            state.surfaces.target_format,
+        ));
+    }
     // The names last, and outside the disc, so nothing in the picture is over
     // them and they are over nothing in it — the halo above included, which is
     // the lattice's rule for a label as well.
@@ -1532,26 +1534,25 @@ mod tests {
         assert!(dots(&spiral, &state, &hidden).is_empty(), "no invisible dot or halo remains");
     }
 
-    /// The halo's callback goes in on every frame this pane draws, the silent
-    /// ones included.
+    /// The halo's callback goes in on every frame with a dot to light, whatever
+    /// the strength, and the dots' surround on every frame, the silent ones
+    /// included.
     ///
-    /// Its renderer retires a chain on the clock of these calls and has no
-    /// other evidence that a copy is still on screen, so a caller that asked
-    /// only on the frames it wanted a halo aged the disc's OWN chain out after
-    /// two silent seconds and rebuilt it, textures and all, inside the frame
-    /// the next note arrived in.
-    ///
-    /// What a declining frame costs is answered where the pipelines are —
-    /// `harmonigraph_render::glow`'s `nothing_to_light_builds_no_chain`, which
-    /// is why this can be unconditional: a frame with nothing to light builds
-    /// nothing, so a reader with the bloom off still pays for none of it.
+    /// The strength is the halo callback's to decline
+    /// (`harmonigraph_render::glow`'s `nothing_to_light_builds_no_chain`), so
+    /// gating on it here would be a second copy of that rule. The surround
+    /// drops its targets only on a frame that says the cut is off, so it has
+    /// to see the silent ones.
     ///
     /// Counted rather than picked out of the frame, because the names and the
     /// shadows are callbacks of their own and all of them are the same shape
     /// from here.
     #[test]
-    fn the_halo_is_asked_for_on_every_frame_the_disc_draws() {
-        let callbacks = |bloom: f32, sounding: bool| {
+    fn the_halo_is_asked_for_on_every_frame_with_a_dot() {
+        // `visible` false sounds the note with its dot faded to nothing, which
+        // keeps its name (the rim name follows the note's envelope, not the
+        // dot's opacity) and removes only what the dot itself asks for.
+        let callbacks = |bloom: f32, sounding: bool, visible: bool| {
             let mut state = fresh();
             state.appearance.view.spiral_bloom = bloom;
             if sounding {
@@ -1563,32 +1564,33 @@ mod tests {
                     1.0,
                 ));
             }
+            if !visible {
+                state.appearance.view.intensity.opacity_rest = 0.0;
+                state.appearance.view.intensity.velocity.opacity = None;
+            }
             painted(&mut state, SpiralView::default(), 0.1)
                 .iter()
                 .filter(|s| matches!(s, egui::Shape::Callback(_)))
                 .count()
         };
         assert_eq!(
-            callbacks(1.2, true),
-            callbacks(0.0, true),
+            callbacks(0.0, true, true),
+            callbacks(0.0, true, false) + 1,
+            "a visible dot did not add its halo's callback, or added more than it",
+        );
+        assert_eq!(
+            callbacks(1.2, true, true),
+            callbacks(0.0, true, true),
             "the bloom strength decided whether the callback went in",
         );
         // The emptiest frame the pane can draw — no strength, nothing
         // sounding, so nothing to light, nothing to cut and no names. What is
-        // left is two callbacks that both go in unconditionally and both
-        // decline inside their own `prepare`: the dots' surround and the halo.
-        // The halo keeps a clock running that retires state the pane is still
-        // using, and the surround drops its targets only on a frame that says
-        // the cut is off, so a gate on either would read 1 here.
+        // left is the dots' surround, which goes in unconditionally and
+        // declines inside its own `prepare`; a gate on it would read 0 here.
         assert_eq!(
-            callbacks(0.0, false),
-            2,
-            "a silent frame asks for something other than the surround and the halo",
-        );
-        assert_eq!(
-            callbacks(1.2, false),
-            callbacks(0.0, false),
-            "the bloom strength decided whether the callback went in with nothing sounding",
+            callbacks(0.0, false, true),
+            1,
+            "a silent frame asks for something other than the surround",
         );
     }
 
