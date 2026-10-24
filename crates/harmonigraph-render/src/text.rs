@@ -1212,12 +1212,18 @@ impl CallbackTrait for TextCallback {
             pane.cells = None;
         }
         pane.count = self.glyphs.len() as u32;
+        let casting = style.filter(|style| style.casts());
+        if casting.is_none() {
+            pane.cells = None;
+            pane.shadow = None;
+        }
         // A batch with nothing in it is a pane between names, which calls back
         // so that it stays stamped (`pass_aged`). It keeps everything it built,
         // its shadow atlas included, which packing no casters would drop and
         // the first name after a rest would rebuild; `paint` declines a count
         // of 0 before it reaches any of it, and the next batch with names
-        // writes the uniforms whole.
+        // writes the uniforms whole. A style that stopped casting has already
+        // let its atlas go above.
         if self.glyphs.is_empty() {
             return Vec::new();
         }
@@ -1226,11 +1232,6 @@ impl CallbackTrait for TextCallback {
         // for a style that casts: unshadowed chrome passes none, and a batch of
         // a few hundred names was allocating and filling the vector every
         // frame for nobody.
-        let casting = style.filter(|style| style.casts());
-        if casting.is_none() {
-            pane.cells = None;
-            pane.shadow = None;
-        }
         if let Some(style) = casting {
             let sigma = crate::shadow::spectral_sigma_points(style, self.point_scale);
             let stops = style.text_spread_stops();
