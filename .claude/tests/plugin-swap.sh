@@ -277,6 +277,14 @@ if [ "$status" -ne 0 ]; then
 fi
 check_discovery_metadata "no-argument load-plugin.sh"
 
+# 0. A fresh HOME gets the slot linked into the CLAP folder Bitwig scans.
+link="$TMP/home/Library/Audio/Plug-Ins/CLAP/$NAME.clap"
+if [ ! -L "$link" ] \
+  || [ "$(cd "$link" && pwd -P)" != "$(cd "$repo/target/bundled/$NAME.clap" && pwd -P)" ]; then
+  echo "✗ no-argument load-plugin.sh did not link the slot into ~/Library/Audio/Plug-Ins/CLAP" >&2
+  failures=$((failures + 1))
+fi
+
 after_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 
 # 1. The installed path moves to a fresh inode; an old open descriptor keeps
@@ -343,6 +351,9 @@ before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
 exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
 cp "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" "$TMP/old-open-bin"
 codex_out="$TMP/codex-load.log"
+# A link left at a moved checkout is repointed at this slot.
+mkdir -p "$TMP/moved"
+ln -sfn "$TMP/moved" "$link"
 prime_discovery_metadata
 metadata_before=$(stat -f %m "$repo/target/bundled/$NAME.clap/Contents/Info.plist")
 mkdir -p "$TMP/collisions"
@@ -365,6 +376,10 @@ elif ! grep -Fq "branch=$codex_branch" "$loaded" \
   failures=$((failures + 1))
 fi
 check_discovery_metadata load-plugin.sh
+if [ "$(cd "$link" && pwd -P)" != "$(cd "$repo/target/bundled/$NAME.clap" && pwd -P)" ]; then
+  echo "✗ load-plugin.sh did not repoint a link left at a moved checkout" >&2
+  failures=$((failures + 1))
+fi
 for ext in clap; do
   if [ ! -f "$TMP/collisions/$NAME.$ext" ]; then
     echo "✗ the $ext timestamp collision fixture was not reached" >&2

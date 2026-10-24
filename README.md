@@ -49,10 +49,11 @@ create the bundle structure once from the main checkout:
 cargo xtask bundle harmonigraph-plugin --release
 ```
 
-Add `<checkout>/target/bundled/` under **Settings → Locations → Plug-in Locations** in Bitwig.
 After that,
 `./load-plugin.sh` with no argument builds this checkout and loads its CLAP plugin plus matching offline renderer in one step —
 the one-shot for building and loading your own checkout directly.
+It also links the bundle into `~/Library/Audio/Plug-Ins/CLAP/`, which Bitwig scans by default,
+so restart Bitwig once after the first load and there is no plug-in location to add.
 After installing,
 deactivate and reactivate Bitwig's audio engine.
 Working across several branch checkouts instead?

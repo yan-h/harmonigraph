@@ -269,6 +269,28 @@ diagnose_hosts() {
     }' "$before" "$after" "$STAGE/images" "$mappings"
 }
 
+# Bitwig scans ~/Library/Audio/Plug-Ins/CLAP by default and follows a symlink
+# there, so linking the slot in leaves no custom plug-in location to add on each
+# machine. A real bundle at that path is someone's install and is left alone.
+link_clap_slot() {
+  local dir="$HOME/Library/Audio/Plug-Ins/CLAP" target="$BUNDLED/$NAME.clap"
+  local link="$dir/$NAME.clap"
+  if [[ -L "$link" ]]; then
+    [[ "$(readlink "$link")" == "$target" ]] && return 0
+    # Still pointing at a checkout that moved, or at another clone's slot.
+    ln -sfn "$target" "$link" && echo "Relinked $link -> $target" \
+      || echo "WARNING: could not relink $link" >&2
+  elif [[ -e "$link" ]]; then
+    echo "WARNING: $link is a real bundle, not a link to the slot;" >&2
+    echo "         Bitwig may list that build beside this one." >&2
+  else
+    # A link that cannot be made costs discovery, never the load just done.
+    { mkdir -p "$dir" && ln -s "$target" "$link"; } \
+      && echo "Linked $link -> $target (restart Bitwig once to discover it)" \
+      || echo "WARNING: could not link $link; Bitwig will not find the slot" >&2
+  fi
+}
+
 load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
   local dylib
@@ -337,6 +359,7 @@ load_build() {  # $1 = worktree index
     updated=$(( updated + 1 ))
   done
   (( updated > 0 )) || { echo "No bundles updated — see warnings above." >&2; exit 1; }
+  link_clap_slot
 
   # Keep the renderer matched to the build being loaded (they share the take
   # format). Only if this worktree built one; otherwise leave the installed one.
