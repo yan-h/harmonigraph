@@ -339,10 +339,11 @@ pub(crate) fn view_section(
         .unit(1.0, " s")
         .display(span_readout)
         .show(ui)
-        .on_hover_text(
+        .on_hover_text(format!(
             "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
-             Drag the picture along its time axis to zoom, or Cmd-click this bar (Ctrl-click on Windows and Linux) to type seconds.",
-        );
+             Drag the picture along its time axis to zoom, or {} this bar to type seconds.",
+            crate::widgets::type_gesture(ui.ctx()),
+        ));
         button_row(ui, |ui| {
             if ui
                 .button("Clear history")

@@ -1,5 +1,5 @@
 //! Custom controls. `ValueBar` is the workhorse: a flat, DAW-style
-//! parameter bar (drag anywhere to set, double-click to type a value)
+//! parameter bar (drag anywhere to set, double-click to reset, Cmd-click to type a value)
 //! that replaces egui's rail-and-knob `Slider` + separate `DragValue`.
 //! `RangeBar` is its two-handle sibling, for a pair of values that bound a
 //! span rather than one value on a scale. `LayerStrip` is the septimal stack's,

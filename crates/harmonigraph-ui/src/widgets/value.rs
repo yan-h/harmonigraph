@@ -442,9 +442,12 @@ impl<'a> ValueBar<'a> {
             ui.data_mut(|d| d.insert_temp(focus_id, true));
             return response;
         }
+        // Submitted like a typed entry, through the same clamp and even when
+        // it lands on the value already there: a caller can read the gesture
+        // as an edit (an interval bar releasing a temperament's link).
         if response.double_clicked() {
-            if let Some(default) = self.default.filter(|&default| default != *self.value) {
-                *self.value = default;
+            if let Some(default) = self.default {
+                *self.value = self.quantized(self.snapped(default.clamp(self.min(), self.max())));
                 response.mark_changed();
             }
         }
@@ -1082,12 +1085,13 @@ mod tests {
         assert_eq!(value, 0.25);
     }
 
-    /// A double-click puts the value back on its default and opens no entry;
-    /// a bar given none keeps its value.
+    /// A double-click puts the value back on its default, held to the range,
+    /// and opens no entry; a bar given none keeps its value. A reset onto the
+    /// value already there still reports a change, as a typed entry does.
     #[test]
     fn a_double_click_resets_to_the_default() {
         use crate::tests::probe::{events_into, press, themed};
-        for (default, want) in [(Some(0.3), 0.3), (None, 0.8)] {
+        for (default, want) in [(Some(0.3), 0.3), (Some(5.0), 1.0), (Some(0.8), 0.8), (None, 0.8)] {
             let ctx = themed();
             let size = egui::vec2(300.0, 100.0);
             let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
