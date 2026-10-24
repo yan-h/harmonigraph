@@ -644,6 +644,48 @@ mod tests {
         }
     }
 
+    /// Through every fixed frame a partial's peak sits within three hundredths
+    /// of a cent of its pitch, far finer than a bucket, which only the kernels'
+    /// share of the listen threatens ([`FIXED_KERNEL_SPREAD`]).
+    ///
+    /// Their repeated copies spread with that share, and a share too wide moves
+    /// every peak by tenths of a cent before anything else notices: here 0.009
+    /// cents at worst with the kernels reading the whole listen and at 0.3,
+    /// 0.018 at 0.35, 0.17 at 0.4 and a cent at 0.45, while the check against a
+    /// direct transform passes throughout. The peak is placed between buckets by
+    /// a parabola through the three around it in dB. The tones stop at 500 Hz,
+    /// above which the Precise frame reads each bucket at several frequencies
+    /// and keeps the loudest, which places a peak only to a sixth of a cent
+    /// whatever the share, and start at 100, below which the Fast frame's length
+    /// rather than the share decides the error.
+    #[test]
+    fn the_fixed_listens_kernels_leave_every_peak_on_its_pitch() {
+        for n in [6144, 12_288, 24_576] {
+            let mut analyzer = SpectrumAnalyzer::new(AnalyzerConfig {
+                sample_rate: RATE,
+                fft_size: n,
+                sweep: None,
+            });
+            let mut midi = hz_to_midi(100.0);
+            while midi < hz_to_midi(500.0) {
+                let hz = 440.0 * 2f64.powf((f64::from(midi) - 69.0) / 12.0);
+                // In f64, since an f32 phase is itself a few hundredths of a
+                // cent of noise on a tone this long.
+                let tone: Vec<f32> = (0..n)
+                    .map(|i| (std::f64::consts::TAU * hz * i as f64 / f64::from(RATE)).sin() as f32)
+                    .collect();
+                analyzer.push_samples(&tone);
+                let level = analyzer.pitch_spectrum().expect("a full frame");
+                let p = peak(level);
+                let [below, at, above] = [p - 1, p, p + 1].map(|b| level[b].log10());
+                let between = 0.5 * (below - above) / (below - 2.0 * at + above);
+                let off = cents_off(p, hz as f32) + between * 100.0 / BINS_PER_SEMITONE as f32;
+                assert!(off.abs() < 0.03, "{n}-sample frame: {hz:.1} Hz peaks {off:+.3} cents off");
+                midi += 0.33;
+            }
+        }
+    }
+
     /// The lengths are Hann-equivalent: a sweep's peak at either end is as wide
     /// as a single Hann window of the length the sweep asks for there, which is
     /// what lets the sliders be read against Fast, Balanced and Precise.
