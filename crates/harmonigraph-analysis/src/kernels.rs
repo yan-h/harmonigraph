@@ -201,6 +201,14 @@ const KERNEL_REACH: f64 = 5.0;
 /// read 20 Hz tones up to 56 cents off.
 const KERNEL_CLEARANCE: f64 = 2.0;
 
+/// How many bins of the padded transform, `bins_n` long, a reading through a
+/// Gaussian of spread `sigma` has to sit inside the usable bins
+/// ([`KERNEL_CLEARANCE`]). Inversely proportional to the spread, which is what
+/// lets [`swept_sigma`] solve it for the spread that places a bucket.
+fn clearance_bins(sigma: f64, bins_n: f64) -> f64 {
+    KERNEL_CLEARANCE * bins_n / (2.0 * PI * sigma)
+}
+
 /// The longest listen a Sweep asks for, as a share of its frame, in
 /// Hann-equivalent samples ([`max_length`]).
 ///
@@ -270,8 +278,7 @@ fn swept_sigma(
     let bins_n = (PAD * fft_size) as f64;
     let room =
         f64::from(frequencies.lower_hz) * bins_n / sample_rate - usable_bins(fft_size).0 as f64;
-    let placed =
-        if room > 0.0 { KERNEL_CLEARANCE * bins_n / (2.0 * PI * room) } else { f64::INFINITY };
+    let placed = if room > 0.0 { clearance_bins(1.0, bins_n) / room } else { f64::INFINITY };
     asked.max(placed).min(gaussian_for(longest, n))
 }
 
@@ -464,7 +471,7 @@ impl Kernels {
             let response_hz = sr / (2.0 * PI * spread);
             let (lower, upper) = (f64::from(frequencies.lower_hz), f64::from(frequencies.upper_hz));
             let readings = (2.0 * (upper - lower) / response_hz).ceil().max(1.0) as usize;
-            let clearance = KERNEL_CLEARANCE * bins_n / (2.0 * PI * sigma);
+            let clearance = clearance_bins(sigma, bins_n);
             let reach = KERNEL_REACH * kernel_std;
             // Unit sum over the WHOLE Gaussian, not the kept taps, so a kernel
             // clipped at the edge of the usable bins is not lifted.

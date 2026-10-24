@@ -283,7 +283,8 @@ pub struct SpectrumConfig {
     pub window: SpectrumWindow,
     /// The [`Sweep`](SpectrumWindow::Sweep) setting's listen at 20 Hz and at
     /// 20 kHz, in samples of an equivalent Hann window, so 4096 is Fast's
-    /// listen and 16384 Precise's. Between them it glides log-linearly in
+    /// listen (Precise's, 16384, is past the longest a Sweep reaches). Between
+    /// them it glides log-linearly in
     /// frequency. Inert under the other settings. Bounded by
     /// [`sweep_length_range`].
     pub sweep_bass: f32,
