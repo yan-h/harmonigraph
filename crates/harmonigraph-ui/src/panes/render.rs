@@ -28,12 +28,12 @@ const PREVIEW_SURFACE: usize = 1;
 /// Points of breathing room between the render frame and the pane edge, so
 /// the frame's boundary chrome always has somewhere to sit outside the
 /// picture. See [`frame_chrome`].
-const FRAME_CHROME_PAD: f32 = 8.0;
+const FRAME_CHROME_PAD: f32 = 7.0;
 
 /// The preview keeps at least this much height, even when the controls above
 /// it have already used the pane up. See [`render_pane`] — the floor is what
 /// lets the pane overflow, and overflow is what the wheel scrolls.
-const PREVIEW_MIN_HEIGHT: f32 = 160.0;
+const PREVIEW_MIN_HEIGHT: f32 = 144.0;
 
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.

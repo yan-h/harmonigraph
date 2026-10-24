@@ -167,16 +167,17 @@ pub(crate) const PANE_INSET: f32 = crate::widgets::GROUP_GAP;
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`pane_gutter`].
-pub(crate) const PANE_GUTTER: f32 = 8.0;
+pub(crate) const PANE_GUTTER: f32 = 7.0;
 
 /// The gap between two rows of a settings pane, egui's `item_spacing.y`.
 ///
 /// A settings pane is a tall column of short rows, so this is spent once per
 /// row. 3 kept two bars from reading as one control and read cramped beside
-/// otonal's panes; 4 is otonal's chrome gap, under its 22-point controls.
+/// otonal's panes; 4 is otonal's chrome gap, under its 22-point controls, and
+/// 3.5 is that gap under the 20-point row here — a whole pixel count at 2x.
 ///
 /// The design size, at [scale](ui_scale) 1.0.
-pub(crate) const ROW_GAP: f32 = 4.0;
+pub(crate) const ROW_GAP: f32 = 3.5;
 
 /// The width of every line, chrome and picture alike: a divider, a widget's
 /// outline, a curve. Otonal's mark width, and like
@@ -255,12 +256,15 @@ pub(crate) fn round_ended(painter: &egui::Painter, mut points: Vec<egui::Pos2>, 
 /// egui's floor does not reach — a text field, the toggle switch, the record
 /// button — ask for it (see [`crate::widgets`]).
 ///
-/// 22 points holds the 15-point text with room over and under it, as otonal's
-/// chrome controls do; 19 held 13.5-point text, and read small and tight.
+/// Otonal's chrome taken down by about a tenth: its 22 points around 15-point
+/// text would be 19.8 around 13.5, and the type is rounded up further than the
+/// row, so 20 holds 14-point text with a little less room over and under it
+/// than otonal leaves. 19 around
+/// 13.5-point text, the size before otonal's, read small and tight.
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`row_height`].
-pub(crate) const ROW_HEIGHT: f32 = 22.0;
+pub(crate) const ROW_HEIGHT: f32 = 20.0;
 
 /// Height of a section's tab bar, which is also the thickness a folded section
 /// is squeezed to (see [`crate::workspace`]) and the depth of the chrome along
@@ -269,7 +273,7 @@ pub(crate) const ROW_HEIGHT: f32 = 22.0;
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`tab_bar_height`].
-pub(crate) const TAB_BAR_HEIGHT: f32 = 29.0;
+pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
 
 // ---- Chrome scale ----------------------------------------------------------
 // One factor over every SIZE in the panel chrome — type, spacing, control
@@ -290,10 +294,10 @@ pub(crate) const TAB_BAR_HEIGHT: f32 = 29.0;
 // here moves a single node. That is the whole request — the panel gets out of
 // the way, the picture is untouched.
 
-/// What the chrome scale may be dialled to. Down to 0.7, where the 15pt body
-/// text lands near 10.5pt; up to 1.5 for a large display seen from across a
+/// What the chrome scale may be dialled to. Down to 0.75, where the 14pt body
+/// text lands near 10.5pt; up to 1.6 for a large display seen from across a
 /// room.
-pub const UI_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.5;
+pub const UI_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.75..=1.6;
 
 /// Where [`set_ui_scale`] leaves the factor for the chrome to find.
 fn ui_scale_id() -> egui::Id {
@@ -410,7 +414,7 @@ pub(crate) fn min_pane(scale: f32) -> f32 {
 /// dropdown, and each row keeps its place. Below it those two blocks would have
 /// to stack, which moves everything under them by hundreds of points, so the
 /// column stops here instead and neither has a stacked layout to fall back to.
-pub(crate) const SETTINGS_MIN_CONTENT: f32 = 220.0;
+pub(crate) const SETTINGS_MIN_CONTENT: f32 = 200.0;
 
 /// The narrowest the settings column is dragged or fitted to, at this scale:
 /// [`SETTINGS_MIN_CONTENT`] plus the pane margins either side of it. Only a
@@ -613,13 +617,13 @@ fn style_at(scale: f32) -> egui::Style {
             // The one Medium role: egui's own titles (a window's), settings
             // section headings in spaced capitals (`panes::section_header`),
             // tab labels and block titles (`panes::block`).
-            (TextStyle::Heading, FontId::new(15.0, heading_family())),
-            (TextStyle::Body, FontId::proportional(15.0)),
-            (TextStyle::Button, FontId::proportional(15.0)),
-            (TextStyle::Small, FontId::proportional(12.0)),
+            (TextStyle::Heading, FontId::new(14.0, heading_family())),
+            (TextStyle::Body, FontId::proportional(14.0)),
+            (TextStyle::Button, FontId::proportional(14.0)),
+            (TextStyle::Small, FontId::proportional(11.0)),
             // egui's name for the role a readout and the console take, in the
             // chrome's family like every other chrome text (see `install_fonts`).
-            (TextStyle::Monospace, FontId::proportional(15.0)),
+            (TextStyle::Monospace, FontId::proportional(14.0)),
         ]
         .into(),
         ..Default::default()
@@ -627,7 +631,7 @@ fn style_at(scale: f32) -> egui::Style {
 
     // The gap ACROSS a row is a different question from [`ROW_GAP`] — that one
     // separates a label from the buttons it names — and stays wider.
-    style.spacing.item_spacing = Vec2::new(8.0, ROW_GAP);
+    style.spacing.item_spacing = Vec2::new(7.0, ROW_GAP);
     // `interact_size` is the FLOOR under every control's height — the size egui
     // gives one with no opinion of its own (a checkbox, a text field), and the
     // minimum it grows a button to. That floor is what puts them all on
@@ -649,10 +653,12 @@ fn style_at(scale: f32) -> egui::Style {
     // moves it by a quarter point at most. This is what a session retuning
     // the type or the row is spending, and `every_settings_row_is_one_row_high`
     // sweeps the range and says so after a change to either.
-    style.spacing.button_padding = Vec2::new(5.0, 0.0);
-    style.spacing.interact_size = Vec2::new(36.0, ROW_HEIGHT);
-    style.spacing.slider_width = 160.0;
-    style.spacing.slider_rail_height = 4.0;
+    style.spacing.button_padding = Vec2::new(4.0, 0.0);
+    style.spacing.interact_size = Vec2::new(32.0, ROW_HEIGHT);
+    style.spacing.slider_width = 144.0;
+    // A fold's indent, egui's 18 taken down with the rest of the chrome.
+    style.spacing.indent = 16.0;
+    style.spacing.slider_rail_height = 3.5;
 
     let visuals = &mut style.visuals;
     visuals.panel_fill = panel();
@@ -671,8 +677,8 @@ fn style_at(scale: f32) -> egui::Style {
     visuals.selection.bg_fill = accent().gamma_multiply(0.5);
     visuals.selection.stroke = Stroke::new(LINE_WIDTH, text());
     visuals.slider_trailing_fill = true;
-    visuals.window_corner_radius = CornerRadius::same(8);
-    visuals.menu_corner_radius = CornerRadius::same(6);
+    visuals.window_corner_radius = CornerRadius::same(7);
+    visuals.menu_corner_radius = CornerRadius::same(5);
 
     // Widget states: flat fills, rounded corners, no outlines. Every state is
     // the same SIZE — hover and press are read off the fill, which costs no
@@ -722,7 +728,7 @@ fn style_at(scale: f32) -> egui::Style {
     // A floating scroll bar is drawn OVER the content rather than beside it, so
     // its width is only free where the pane already leaves air: the
     // [`PANE_GUTTER`] down the right of every settings pane. egui's
-    // default bar is 10pt against that 8pt gutter, and the 2pt of overhang lands
+    // default bar is 10pt against that 7pt gutter, and the 3pt of overhang lands
     // on the right end of every bar in the column, which is where the value
     // readouts are. Sized to the gutter it fills the air that is there and
     // touches nothing, expanded or dormant.

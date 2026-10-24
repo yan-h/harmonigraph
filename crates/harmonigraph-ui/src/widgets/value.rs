@@ -32,7 +32,7 @@ const CURVE_SEGMENTS: usize = 64;
 /// How far a [`ValueBar::curve`] preview is held off the top and bottom of the
 /// track, so the flat ends of the curve read as a line rather than as the
 /// track's own rim.
-const CURVE_INSET: f32 = 3.5;
+const CURVE_INSET: f32 = 3.0;
 
 /// Thickness of the preview line.
 const CURVE_WIDTH: f32 = theme::LINE_WIDTH;
@@ -600,7 +600,7 @@ impl<'a> ValueBar<'a> {
 /// is the same rhythm in a narrow column and a wide one.
 ///
 /// The design size, at [chrome scale](theme::ui_scale) 1.0.
-const STRIPE_PITCH: f32 = 13.0;
+const STRIPE_PITCH: f32 = 12.0;
 
 /// How much of a pitch the stripe covers, the rest being the ground it stands
 /// on.
@@ -1469,32 +1469,45 @@ mod tests {
     /// box; the readout's Iosevka stands them high in it, so centring its box
     /// would leave two points more air under the readout than over it. Measured
     /// on the ink of runs with no descender in them.
+    ///
+    /// Exact on a 2x display, and within a pixel on a 1x one: there the caps'
+    /// ink is a whole 11 pixels in a 20-pixel track, which no snapped position
+    /// can split evenly. The second frame is the one `set_pixels_per_point`
+    /// has landed on.
     #[test]
     fn a_bars_text_stands_its_capitals_mid_track() {
-        let mut value = 500.0;
-        let out = painted(300.0, |ui| {
-            ValueBar::new(&mut value, 0.0..=1000.0, "HIGH").show(ui);
-        });
-        let track = out
-            .iter()
-            .find_map(|cs| match &cs.shape {
-                egui::Shape::Rect(r) if r.fill == crate::theme::well() => Some(r.rect),
-                _ => None,
-            })
-            .expect("the bar painted no track");
-        let mut runs = 0;
-        for cs in &out {
-            let egui::Shape::Text(t) = &cs.shape else { continue };
-            let ink = t.galley.mesh_bounds.translate(t.pos.to_vec2());
-            let (over, under) = (ink.top() - track.top(), track.bottom() - ink.bottom());
-            assert!(
-                (over - under).abs() < 0.5,
-                "{:?} stands {over}pt under the track's top and {under}pt over its bottom",
-                t.galley.text(),
-            );
-            runs += 1;
+        for (ppp, slack) in [(1.0f32, 1.0), (2.0, 0.0)] {
+            let ctx = crate::tests::probe::themed_at(ppp);
+            let mut value = 500.0;
+            let mut out = None;
+            for _ in 0..2 {
+                out = Some(crate::tests::probe::frame_full(&ctx, egui::vec2(300.0, 100.0), |ui| {
+                    ValueBar::new(&mut value, 0.0..=1000.0, "HIGH").show(ui);
+                }));
+            }
+            let out = out.expect("two frames ran").shapes;
+            let track = out
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Rect(r) if r.fill == crate::theme::well() => Some(r.rect),
+                    _ => None,
+                })
+                .expect("the bar painted no track");
+            let mut runs = 0;
+            for cs in &out {
+                let egui::Shape::Text(t) = &cs.shape else { continue };
+                let ink = t.galley.mesh_bounds.translate(t.pos.to_vec2());
+                let (over, under) = (ink.top() - track.top(), track.bottom() - ink.bottom());
+                assert!(
+                    (over - under).abs() <= slack + 0.01,
+                    "{:?} at {ppp}x stands {over}pt under the track's top and {under}pt over \
+                     its bottom",
+                    t.galley.text(),
+                );
+                runs += 1;
+            }
+            assert_eq!(runs, 2, "the bar painted {runs} runs, not its name and readout");
         }
-        assert_eq!(runs, 2, "the bar painted {runs} runs, not its name and readout");
     }
 
     /// A bar's name stands at the same height as the text of an egui button

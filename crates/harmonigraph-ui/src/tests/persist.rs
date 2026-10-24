@@ -1234,7 +1234,8 @@ fn an_impossible_ui_scale_is_clamped() {
     // A nonsense value falls back to the design size rather than to the end of
     // the range it points at: an infinity is not a request for the largest
     // chrome available, it is a blob that has lost the number.
-    for (asked, expected) in [(0.01f32, 0.7f32), (99.0, 1.5), (f32::NAN, 1.0), (f32::INFINITY, 1.0)]
+    for (asked, expected) in
+        [(0.01f32, 0.75f32), (99.0, 1.6), (f32::NAN, 1.0), (f32::INFINITY, 1.0)]
     {
         crate::theme::set_ui_scale(&ctx, asked);
         assert_eq!(

@@ -333,14 +333,14 @@ fn a_window_narrowed_past_the_settings_floor_widens_back_to_its_layout() {
 
 /// A window narrow enough that the settings column is drawn on its floor
 /// rather than at its saved width, and still wide enough that a fold's request
-/// clears the minimum window. At 760 the default layout's column would shrink
-/// to about 213 in proportion.
+/// clears the minimum window. At 720 the default layout's column would shrink
+/// to about 203 in proportion.
 fn narrowed_past_the_floor(position: Position) -> (DockHarness, SharedState) {
     let mut state = fresh();
     state.workspace.layout.position = position;
     let mut h = DockHarness::new();
     h.settle(&mut state);
-    h.screen.max.x = h.screen.min.x + 760.0;
+    h.screen.max.x = h.screen.min.x + 720.0;
     h.settle(&mut state);
     let layout = &state.workspace.layout;
     let saved =

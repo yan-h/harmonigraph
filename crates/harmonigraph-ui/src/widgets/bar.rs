@@ -29,14 +29,14 @@ pub(super) fn bar_radius(scale: f32) -> u8 {
 /// otonal's 4, since the face's side bearings already inset a glyph's ink, so
 /// the ink stands about as far from the bar's end as from its top and bottom.
 /// 7 read as a gap before the name.
-pub(super) const BAR_TEXT_PAD: f32 = 4.0;
+pub(super) const BAR_TEXT_PAD: f32 = 3.5;
 /// The name's inset on a bar that parks a handle at its end at rest, a
 /// [`RangeBar`](super::range::RangeBar) open to the full axis: clear of the
 /// handle by two points, so the resting bar's first letter is not under it.
 pub(super) const GRIP_TEXT_PAD: f32 = HANDLE_INSET + HANDLE_W * 0.5 + 2.0;
 /// Clear space kept between the two, so an elided name stops short of the
 /// number rather than touching it.
-pub(super) const BAR_LABEL_GAP: f32 = 6.0;
+pub(super) const BAR_LABEL_GAP: f32 = 5.0;
 
 /// A bar's NAME, laid out into what its readout leaves it: one row, ellipsised,
 /// against `width` less the inset at each end, the gap held clear of the number,
@@ -116,7 +116,7 @@ pub(super) const HANDLE_W: f32 = 4.0;
 pub(super) const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
 /// Breathing room between a handle and its readout, and between a readout and
 /// the bar's edge.
-pub(super) const TEXT_GAP: f32 = 5.0;
+pub(super) const TEXT_GAP: f32 = 4.5;
 
 /// The accent a bar fills its track with, at the strength its pointer state
 /// asks for: the drag mix while it is being dragged, the hover mix while it is
