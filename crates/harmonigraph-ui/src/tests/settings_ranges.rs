@@ -621,17 +621,27 @@ fn check(edge: Edge) {
                 }
             }
             // A double-click puts back what a fresh state opens on, so on the
-            // fresh state every value bar already sits at its own target. A bar
-            // reading anything else resets to some other setting's number.
-            // The two exempt are switches `set_optional_sections` flips, which
-            // moves them off fresh on purpose.
+            // fresh state every value or range bar already sits at its own
+            // target. A bar reading anything else resets to some other
+            // setting's number. The two exempt are switches
+            // `set_optional_sections` flips, which moves them off fresh on
+            // purpose. Star size has no reset by design: its pair is read off
+            // the layers (`widgets/profile.rs`) and has no fresh value of its
+            // own.
             let switched =
                 ["Backdrop strength", "Pattern contrast"].contains(&visit.label.as_str());
+            let derived = visit.label == "Star size";
             if edge == Edge::Fresh {
-                match visit.default {
-                    Some(None) => violations.push(format!("{scenario:?}: no reset: {visit:?}")),
+                match &visit.default {
+                    Some(None) if !derived => {
+                        violations.push(format!("{scenario:?}: no reset: {visit:?}"))
+                    }
                     Some(Some(default))
-                        if !switched && (default - visit.values[0]).abs() > 1e-4 =>
+                        if !switched
+                            && default
+                                .iter()
+                                .zip(&visit.values)
+                                .any(|(default, value)| (default - value).abs() > 1e-4) =>
                     {
                         violations.push(format!("{scenario:?}: resets elsewhere: {visit:?}"))
                     }

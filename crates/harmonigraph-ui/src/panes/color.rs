@@ -37,7 +37,8 @@ pub(super) fn color_pane(
         .on_hover_text(
             "Pitches assigned the first and last gradient colors. \
                      Pitches outside this range keep the nearest end color. \
-                     Drag an end to resize, or the middle to shift both.",
+                     Drag an end to resize, or the middle to shift both. \
+                     Double-click resets.",
         );
     });
     super::hinted_section(ui, "Audio level colors", LEVEL_COLORS_HINT, |ui| {
@@ -164,12 +165,16 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "Level color range",
     )
     .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+    .default_value({
+        let fresh = super::fresh_spectrum();
+        (fresh.volume_floor_db, fresh.volume_ceiling_db)
+    })
     .display(|db| format!("{db:.0} dB"))
     .show(ui)
     .on_hover_text(
         "Audio levels assigned the first and last colors. \
                  Independent of Spectrum level range on Analyzer, which sets curve height and ring levels. \
-                 Double-click resets to the full dB range.",
+                 Double-click resets.",
     );
     preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
         "Audio colors from the low level on the left to the high level on the right.",

@@ -373,8 +373,9 @@ pub(super) fn param_bar(
 ///
 /// Both params are bracketed for the whole drag and written every changed
 /// frame, so a drag on either handle records as one gesture on each. A
-/// double-click reset arrives as `changed` with no drag, and goes through the
-/// same `set` without a gesture — matching [`param_bar`]'s one-shot path.
+/// double-click reset to the params' defaults arrives as `changed` with no
+/// drag, and goes through the same `set` without a gesture — matching
+/// [`param_bar`]'s one-shot path.
 pub(super) fn param_range_bar(
     ui: &mut egui::Ui,
     params: &dyn ParamBackend,
@@ -387,6 +388,7 @@ pub(super) fn param_range_bar(
     let (mut low, mut high) = (params.get(low_key), params.get(high_key));
     let response = RangeBar::new(&mut low, &mut high, range, label)
         .min_span(min_span)
+        .default_value((low_key.default_value(), high_key.default_value()))
         .display(display)
         .show(ui);
     if response.drag_started() {
@@ -434,13 +436,7 @@ pub(super) fn param_range_bar(
 /// Both numbers are distances from the same place, so the axis floors at 0 and
 /// the caller passes only its far end.
 ///
-/// `fresh` is where a double-click lands. A range bar's own reset opens to the
-/// whole axis, which is the useful place to land for a window onto something
-/// and the worst one here: both ends of this axis together are the widest edge
-/// there is at the softest it goes, so the gesture would trade a dialled edge
-/// for the most extreme one. The fresh pair is the neutral answer, and it is
-/// what a double-click reaches for on a bar whose number is captured out of a
-/// project rather than dragged to.
+/// `fresh` is the `(reach, fade)` pair a double-click lands on.
 pub(super) fn edge_bar(
     ui: &mut egui::Ui,
     (reach, fade): (&mut f32, &mut f32),
@@ -456,11 +452,12 @@ pub(super) fn edge_bar(
     // `ViewConfig::sanitize` and `SpectrumConfig::sanitize` hold the stored
     // pair to the same bound, so this only ever catches a live one.
     let (mut low, mut high) = ((*reach - *fade).max(0.0), *reach);
-    let response =
-        RangeBar::new(&mut low, &mut high, 0.0..=max, label).fade_span().display(display).show(ui);
-    if response.double_clicked() {
-        (*reach, *fade) = fresh;
-    } else if response.changed() {
+    let response = RangeBar::new(&mut low, &mut high, 0.0..=max, label)
+        .fade_span()
+        .default_value(((fresh.0 - fresh.1).max(0.0), fresh.0))
+        .display(display)
+        .show(ui);
+    if response.changed() {
         (*reach, *fade) = (high, high - low);
     }
     response
