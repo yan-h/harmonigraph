@@ -393,5 +393,5 @@ Drag a numeric bar to change its value.
 As on the host's own controls, double-click resets it to its default and Cmd-click (Ctrl-click on Windows and Linux) types a value.
 Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.
-Multi-handle bars have no typed entry and also reset on double-click;
+Multi-handle bars have no typed entry and also reset to their defaults on double-click;
 hover text describes what each handle moves.

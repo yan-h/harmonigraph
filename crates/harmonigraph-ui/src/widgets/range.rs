@@ -52,10 +52,10 @@ impl Grab {
     ///
     /// That last fallback is the whole reason this is a function. A span that
     /// already fills the range has nowhere to slide, so panning it does
-    /// nothing at all — and the range's default IS the full axis, so a bar
-    /// that only panned from the middle would be dead exactly where everyone
-    /// first meets it. When there's no room to pan, a middle drag takes the
-    /// nearer end instead.
+    /// nothing at all — and the full axis is where a window zoomed all the way
+    /// out sits, so a bar that only panned from the middle would be dead
+    /// exactly where the widest view leaves it. When there's no room to pan, a
+    /// middle drag takes the nearer end instead.
     ///
     /// **The mirror of that has no fallback, and the cost is a band that is
     /// inert one way.** An end held against `min_span` cannot move inward, so a
@@ -280,7 +280,8 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 
 /// A two-handle [`ValueBar`]: one control for the pair of values that bound a
 /// range. Drag either end to move it, drag between them to slide the whole
-/// span at a fixed width, double-click to reset to the full range.
+/// span at a fixed width, double-click to put back the pair handed to
+/// [`default_value`](RangeBar::default_value).
 ///
 /// Positions are linear in the value, and that is the whole trick behind the
 /// pitch-range control: its values are MIDI note numbers, and a scale linear
@@ -288,8 +289,9 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// a log-frequency control for free, and `display` formats each end however
 /// suits it — the pitch range drags semitones and reads out Hz.
 ///
-/// Double-click resets rather than opening text entry (ValueBar's use of the
-/// gesture): a bar with two ends has no single value to type into it.
+/// Double-click resets the way a [`ValueBar`]'s does, to the setting's fresh
+/// pair, so the gesture means one thing on every bar. A bar with two ends has
+/// no single value to type into it, so Cmd-click opens nothing here.
 ///
 /// **Named on the bar, exactly where a [`ValueBar`] names itself**, so a range
 /// costs the one row it is worth rather than a row for the control and a row
@@ -371,6 +373,8 @@ pub struct RangeBar<'a> {
     /// Whether the span is painted as a fade off the end of a fill (see
     /// [`RangeBar::fade_span`]) rather than as a filled slice of the track.
     fade_span: bool,
+    /// Where a double-click puts the pair (see [`RangeBar::default_value`]).
+    default: Option<(f32, f32)>,
     display: fn(f32) -> String,
 }
 
@@ -389,8 +393,23 @@ impl<'a> RangeBar<'a> {
             min_span: 0.0,
             integer: false,
             fade_span: false,
+            default: None,
             display: |v| format!("{v:.2}"),
         }
+    }
+
+    /// The pair a double-click puts back: the setting's fresh one, as on a
+    /// [`ValueBar::default_value`]. A bar with none ignores the double-click.
+    ///
+    /// Not the full axis, which this gesture used to reach for: on a soft
+    /// edge that is the widest, softest one there is, and on a window onto an
+    /// axis it is a zoom-out that one rule across every bar was worth more
+    /// than.
+    ///
+    /// [`ValueBar::default_value`]: super::value::ValueBar::default_value
+    pub fn default_value(mut self, (low, high): (f32, f32)) -> Self {
+        self.default = Some((low, high));
+        self
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
@@ -500,9 +519,8 @@ impl<'a> RangeBar<'a> {
 
         // ---- Interaction ----------------------------------------------------
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
-        if response.double_clicked() {
-            *self.low = min;
-            *self.high = max;
+        if let Some((low, high)) = self.default.filter(|_| response.double_clicked()) {
+            (*self.low, *self.high) = (low.clamp(min, max), high.clamp(min, max));
             response.mark_changed();
         }
         // Decided on the first frame of the gesture and remembered for the rest
@@ -1016,6 +1034,37 @@ mod tests {
         let (lo, hi) = drag_range_bar((60.0, 96.0), (1.0, 0.371), true);
         assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
         assert_eq!(hi - lo, OCTAVE, "the span stopped at {} rather than the minimum", hi - lo);
+    }
+
+    /// A double-click puts back the pair handed to `default_value` — not the
+    /// full axis, which is where the gesture went before — and a bar handed
+    /// none leaves its pair alone. Dialled off both first, so neither answer
+    /// can pass by standing still.
+    #[test]
+    fn a_double_click_resets_to_the_default_pair() {
+        let double_click = |default: Option<(f32, f32)>| {
+            let (mut lo, mut hi) = (30.0f32, 60.0f32);
+            after_passes(
+                300.0,
+                |bar| {
+                    let at = bar.center();
+                    let click =
+                        vec![egui::Event::PointerMoved(at), press(at, true), press(at, false)];
+                    vec![click.clone(), click]
+                },
+                |ui| {
+                    let bar =
+                        RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE);
+                    match default {
+                        Some(pair) => bar.default_value(pair).show(ui),
+                        None => bar.show(ui),
+                    }
+                },
+            );
+            (lo, hi)
+        };
+        assert_eq!(double_click(Some((48.0, 84.0))), (48.0, 84.0));
+        assert_eq!(double_click(None), (30.0, 60.0));
     }
 
     /// The second bug this widget shipped with, and the harder one to see: at

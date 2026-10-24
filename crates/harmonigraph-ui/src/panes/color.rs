@@ -127,7 +127,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     // heatmap's, NOT the lattice's: a heatmap resetting onto the pitch
     // gradient's arc would land on a picture the spectrogram has never opened
     // on, and the bars carry no text entry to dial it back with.
-    let home = crate::SpectrumConfig::default().spectrogram_gradient;
+    let home_levels = crate::SpectrumConfig::default();
+    let home = home_levels.spectrogram_gradient;
     let labels: Vec<_> = SpectrogramPreset::ALL.iter().map(|preset| preset.label()).collect();
     crate::widgets::preset_row(ui, "Palette", &labels, |ui, menu| {
         for preset in SpectrogramPreset::ALL {
@@ -164,12 +165,13 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "Level color range",
     )
     .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+    .default_value((home_levels.volume_floor_db, home_levels.volume_ceiling_db))
     .display(|db| format!("{db:.0} dB"))
     .show(ui)
     .on_hover_text(
         "Audio levels assigned the first and last colors. \
                  Independent of Spectrum level range on Analyzer, which sets curve height and ring levels. \
-                 Double-click resets to the full dB range.",
+                 Double-click resets.",
     );
     preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
         "Audio colors from the low level on the left to the high level on the right.",

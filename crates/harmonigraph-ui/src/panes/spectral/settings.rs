@@ -308,12 +308,16 @@ pub(crate) fn view_section(
             "Frequency range",
         )
         .min_span(crate::PITCH_RANGE_MIN_SPAN)
+        .default_value({
+            let fresh = crate::panes::fresh_spectrum();
+            (fresh.low_midi, fresh.high_midi)
+        })
         .display(hz_readout)
         .show(ui)
         .on_hover_text(
             "Visible frequency range, also used by the Spiral. \
                      Each octave has equal width. \
-                     Drag the ends or the middle; double-click shows the full range.",
+                     Drag the ends or the middle; double-click resets.",
         );
         // No choice of what the markings say. They are the analyzer-standard
         // 1-2-5 frequency series, and were switchable to one at every C with
@@ -486,6 +490,10 @@ pub(crate) fn analysis_section(
                 "Spectrum level range",
             )
             .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+            .default_value({
+                let fresh = crate::panes::fresh_spectrum();
+                (fresh.floor_db, fresh.ceiling_db)
+            })
             .display(db_readout)
             .show(ui)
             .on_hover_text(
