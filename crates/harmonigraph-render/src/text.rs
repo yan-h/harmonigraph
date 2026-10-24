@@ -1180,9 +1180,6 @@ impl CallbackTrait for TextCallback {
             pane.cells = None;
         }
         pane.count = self.glyphs.len() as u32;
-        if !self.glyphs.is_empty() {
-            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.glyphs));
-        }
         // A `Caster` per NAME, made the way a lattice name's is, and built only
         // for a style that casts: unshadowed chrome passes none, and a batch of
         // a few hundred names was allocating and filling the vector every
@@ -1192,6 +1189,13 @@ impl CallbackTrait for TextCallback {
             pane.cells = None;
             pane.shadow = None;
         }
+        // An empty batch keeps the shadow atlas it built, which packing no
+        // casters would drop and the next name would rebuild; `paint` declines
+        // a count of 0 before it reaches any of it.
+        if self.glyphs.is_empty() {
+            return Vec::new();
+        }
+        queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.glyphs));
         if let Some(style) = casting {
             let sigma = crate::shadow::spectral_sigma_points(style, self.point_scale);
             let stops = style.text_spread_stops();
@@ -2111,6 +2115,61 @@ pub(crate) mod tests {
             prepare(&docked, &mut resources);
         }
         assert!(held(&resources, 1) == before, "the pane that stopped drawing lost its glyphs");
+    }
+
+    /// An empty batch keeps a casting pane's shadow atlas, and paints nothing.
+    ///
+    /// Packing no casters would drop the atlas, and the first name after the
+    /// rest would rebuild it. Still holding the last name's shadow, the pane
+    /// must not reach the picture.
+    #[test]
+    fn an_empty_batch_keeps_the_text_panes_shadow_and_draws_nothing() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let name = word(GlyphRuns::default(), 1.0);
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut resources = CallbackResources::default();
+        let prepare = |cb: &TextCallback, resources: &mut CallbackResources| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        };
+        prepare(&name, &mut resources);
+        let rest = TextCallback {
+            glyphs: Vec::new(),
+            sheets: SheetUploads { font: None, marks: None },
+            ..name
+        };
+        prepare(&rest, &mut resources);
+
+        let text: &TextResources = resources.get().expect("prepare inserts its resources");
+        let pane = text.panes.get(&0).expect("a pane that has drawn holds its buffers");
+        assert!(
+            pane.shadow.as_ref().is_some_and(|shadow| shadow.target_allocated()),
+            "an empty batch dropped the pane's shadow atlas",
+        );
+
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let texture =
+            render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
+                rest.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            });
+        let frame = readback(&device, &queue, &texture, SIZE);
+        assert!(
+            frame.as_chunks::<4>().0.iter().all(|p| *p == [0; 4]),
+            "an empty batch painted the last name's ink or shadow",
+        );
     }
 
     /// A pane whose text is already prepared keeps it when a LATER pane in the
