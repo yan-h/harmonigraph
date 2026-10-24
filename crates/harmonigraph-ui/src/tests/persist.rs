@@ -391,14 +391,12 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
 }
 
 /// A double-click on a soft edge's bar puts it back to the FRESH pair, not to
-/// the ends of its axis.
+/// the ends of its axis, which are the widest reach there is at the softest it
+/// goes.
 ///
-/// A range bar's own reset means "show the whole axis", which is the useful
-/// thing to land on for a window onto something — the pitch range, the level.
-/// It is the worst thing to land on here: the axis ends are the widest reach
-/// there is at the softest it goes, so the gesture would replace a dialled
-/// edge with the most extreme one instead of a neutral one. `edge_bar` takes
-/// the fresh pair for exactly this.
+/// The pair goes through the bar as two points and comes back as a reach and
+/// a fade, so it can come back off by a float rounding; the tolerance is for
+/// that, and is nowhere near the axis ends.
 ///
 /// It is also the gesture most likely to be aimed here by habit: every one of
 /// these controls takes a six-digit number that gets captured out of a project
@@ -448,9 +446,8 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
         let events = vec![egui::Event::PointerMoved(at), press(true), press(false)];
         click(&mut reach, &mut fade, events);
     }
-    assert_eq!(
-        (reach, fade),
-        (fresh.plus_arm, fresh.plus_taper),
+    assert!(
+        (reach - fresh.plus_arm).abs() < 1e-6 && (fade - fresh.plus_taper).abs() < 1e-6,
         "a double-click landed on ({reach}, {fade}) rather than the fresh pair",
     );
 }

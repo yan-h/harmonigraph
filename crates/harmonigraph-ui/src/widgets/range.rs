@@ -207,7 +207,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
     // outside the span either side, and between the handles. Each is
     // clipped to the region, which is what holds the numbers off the name
     // — a handle parked under the name (the low end at the bottom of its
-    // axis, where the two bars that open at the full range both sit) would
+    // axis, where a bar dragged out to the full range sits) would
     // otherwise open a run that starts inside the name's own letters.
     let clipped = |(start, end): (f32, f32)| (start.max(region_left), end.min(region_right));
     let gaps = [
@@ -337,8 +337,8 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// about a sixth of the axis at the width the settings column opens at, a
 /// tenth on a bar twice that wide.
 ///
-/// Most bars only reach it while the low end is DRAGGED there: a bar that
-/// opens at the full axis stands its low handle a point clear of the name, and
+/// Most bars only reach it while the low end is DRAGGED there: a bar dragged
+/// out to the full axis stands its low handle a point clear of the name, and
 /// the pitch and level color ranges open at a fifth and a third of their axes.
 /// The two [`fade_span`](RangeBar::fade_span) bars, Cross length and Held-note
 /// extension, rest inside it at a fresh install — each one's low end is where
@@ -476,7 +476,12 @@ impl<'a> RangeBar<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         #[cfg(test)]
-        super::range_probe::record(self.label, &[*self.low, *self.high], &self.range);
+        super::range_probe::record_range_bar(
+            self.label,
+            (*self.low, *self.high),
+            &self.range,
+            self.default,
+        );
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
         let (rect, mut response) = ui.allocate_exact_size(
@@ -492,7 +497,7 @@ impl<'a> RangeBar<'a> {
         // clamping where they are PLACED rather than where they mean, which is
         // the same bargain the strip makes.
         //
-        // Every other range bar keeps the inset. They open at the FULL axis,
+        // Every other range bar keeps the inset. Dragged out to the FULL axis,
         // where flush handles at both ends sit under the corner rounding on a
         // bare track and read as the bar's own border — the affordance
         // HANDLE_INSET exists for, and which a bar opening on a fill does not
@@ -519,9 +524,11 @@ impl<'a> RangeBar<'a> {
 
         // ---- Interaction ----------------------------------------------------
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
-        if let Some((low, high)) = self.default.filter(|_| response.double_clicked()) {
-            (*self.low, *self.high) = (low.clamp(min, max), high.clamp(min, max));
-            response.mark_changed();
+        if response.double_clicked() {
+            if let Some((low, high)) = self.default {
+                (*self.low, *self.high) = (low.clamp(min, max), high.clamp(min, max));
+                response.mark_changed();
+            }
         }
         // Decided on the first frame of the gesture and remembered for the rest
         // of it (see `drag`), so dragging one end past the other doesn't hand
@@ -1068,8 +1075,8 @@ mod tests {
     }
 
     /// The second bug this widget shipped with, and the harder one to see: at
-    /// the full range — which is the pitch axis's DEFAULT — both handles sat
-    /// flush against the bar's ends, 3px wide, under the corner rounding. The
+    /// the full range — where zooming the pitch axis all the way out leaves
+    /// it — both handles sat flush against the bar's ends, 3px wide, under the corner rounding. The
     /// control was then pixel-identical to a ValueBar filled to 100%: nothing
     /// on screen said it had ends to grab, so it read as "not there at all".
     #[test]

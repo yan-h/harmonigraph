@@ -37,7 +37,8 @@ pub(super) fn color_pane(
         .on_hover_text(
             "Pitches assigned the first and last gradient colors. \
                      Pitches outside this range keep the nearest end color. \
-                     Drag an end to resize, or the middle to shift both.",
+                     Drag an end to resize, or the middle to shift both. \
+                     Double-click resets.",
         );
     });
     super::hinted_section(ui, "Audio level colors", LEVEL_COLORS_HINT, |ui| {
@@ -127,8 +128,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     // heatmap's, NOT the lattice's: a heatmap resetting onto the pitch
     // gradient's arc would land on a picture the spectrogram has never opened
     // on, and the bars carry no text entry to dial it back with.
-    let home_levels = crate::SpectrumConfig::default();
-    let home = home_levels.spectrogram_gradient;
+    let home = crate::SpectrumConfig::default().spectrogram_gradient;
     let labels: Vec<_> = SpectrogramPreset::ALL.iter().map(|preset| preset.label()).collect();
     crate::widgets::preset_row(ui, "Palette", &labels, |ui, menu| {
         for preset in SpectrogramPreset::ALL {
@@ -165,7 +165,10 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "Level color range",
     )
     .min_span(crate::LEVEL_RANGE_MIN_SPAN)
-    .default_value((home_levels.volume_floor_db, home_levels.volume_ceiling_db))
+    .default_value({
+        let fresh = super::fresh_spectrum();
+        (fresh.volume_floor_db, fresh.volume_ceiling_db)
+    })
     .display(|db| format!("{db:.0} dB"))
     .show(ui)
     .on_hover_text(
