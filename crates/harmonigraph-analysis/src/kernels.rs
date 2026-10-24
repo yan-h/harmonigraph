@@ -294,8 +294,16 @@ fn usable_bins(fft_size: usize) -> (usize, usize) {
     (PAD, PAD * (fft_size / 2 - 1))
 }
 
-/// One frequency a bucket is read at: `taps` sign-folded weights from
-/// `weights[at..]`, applied to bins `k0..k0 + taps`.
+/// How many bins [`Kernels::read`] sums at a time: eight floats, which leaves
+/// no remainder loop for a kernel of a dozen taps to pay for.
+const TAP_CHUNK: usize = 4;
+
+/// One frequency a bucket is read at, over bins `k0..k0 + taps`: from
+/// `weights[at..]`, each bin's sign-folded weight twice, once for its real part
+/// and once for its imaginary part, so a reading is one straight run over the
+/// spectrum's interleaved floats. `taps` is padded with zero weights to a whole
+/// number of [`TAP_CHUNK`]s.
+
 #[derive(Clone, Copy, Debug)]
 struct Point {
     k0: u32,
@@ -441,15 +449,28 @@ impl Kernels {
                 }
                 let k0 = ((at - reach).ceil() as usize).max(first);
                 let k1 = ((at + reach).floor() as usize).min(last);
+                // Padded at the top, or at the bottom where the top would run
+                // past the transform's last bin, Nyquist.
+                let padding = (TAP_CHUNK - (k1 + 1 - k0) % TAP_CHUNK) % TAP_CHUNK;
+                let (from, to) = if k1 + padding <= PAD * fft_size / 2 {
+                    (k0, k1 + padding)
+                } else {
+                    (k0 - padding, k1)
+                };
                 let offset = self.weights.len() as u32;
                 // The listen is centred on the transform's middle (see
                 // `offset`), and (-1)^k moves the transform's time origin there.
-                self.weights.extend((k0..=k1).map(|k| {
+                self.weights.extend((from..=to).flat_map(|k| {
                     let d = (at - k as f64) / kernel_std;
-                    let g = scale * (-0.5 * d * d).exp();
-                    (if k % 2 == 0 { g } else { -g }) as f32
+                    let g = if (k0..=k1).contains(&k) { scale * (-0.5 * d * d).exp() } else { 0.0 };
+                    let w = (if k % 2 == 0 { g } else { -g }) as f32;
+                    [w, w]
                 }));
-                self.points.push(Point { k0: k0 as u32, taps: (k1 + 1 - k0) as u32, at: offset });
+                self.points.push(Point {
+                    k0: from as u32,
+                    taps: (to + 1 - from) as u32,
+                    at: offset,
+                });
             }
             self.spans[b] = (start, self.points.len() as u32);
             self.norm[b] = norm;
@@ -460,31 +481,36 @@ impl Kernels {
     /// frequencies takes the loudest, so its level does not grow with how many
     /// readings it took, and 0 dB keeps meaning a full-scale sine.
     pub(crate) fn read(&self, spectrum: &[Complex32], out: &mut [f32; SPECTRUM_BINS]) {
-        const LANES: usize = 4;
+        const FLOATS: usize = 2 * TAP_CHUNK;
+        const _: () = assert!(FLOATS == 8, "the lanes are summed by hand below");
+        // SAFETY: `Complex32` is `#[repr(C)]` with two `f32` fields, so a
+        // slice of them is twice as many `f32`s, real parts at even indices.
+        let floats: &[f32] =
+            unsafe { std::slice::from_raw_parts(spectrum.as_ptr().cast(), 2 * spectrum.len()) };
         for ((out, &(p0, p1)), norm) in out.iter_mut().zip(self.spans.iter()).zip(self.norm.iter())
         {
             let mut loudest = 0.0f32;
             for point in &self.points[p0 as usize..p1 as usize] {
-                let weights = &self.weights[point.at as usize..(point.at + point.taps) as usize];
-                let bins = &spectrum[point.k0 as usize..point.k0 as usize + weights.len()];
-                // Four running sums a side rather than one, so the taps are
-                // summed four at a time in vector lanes: one sum is a chain
-                // of dependent adds the compiler may not reorder. Reading the
-                // kernels is most of a column's cost.
-                let (mut re, mut im) = ([0.0f32; LANES], [0.0f32; LANES]);
-                let (bins, bins_rest) = bins.as_chunks::<LANES>();
-                let (weights, weights_rest) = weights.as_chunks::<LANES>();
+                let len = 2 * point.taps as usize;
+                let weights = &self.weights[point.at as usize..][..len];
+                let bins = &floats[2 * point.k0 as usize..][..len];
+                // Eight running sums rather than one, so the taps are summed
+                // in vector lanes: one sum is a chain of dependent adds the
+                // compiler may not reorder. Even lanes gather the real part
+                // and odd ones the imaginary. Reading the kernels is about
+                // half a column's cost.
+                let mut sums = [0.0f32; FLOATS];
+                let (bins, _) = bins.as_chunks::<FLOATS>();
+                let (weights, _) = weights.as_chunks::<FLOATS>();
                 for (x, w) in bins.iter().zip(weights) {
-                    for lane in 0..LANES {
-                        re[lane] += x[lane].re * w[lane];
-                        im[lane] += x[lane].im * w[lane];
+                    for lane in 0..FLOATS {
+                        sums[lane] += x[lane] * w[lane];
                     }
                 }
-                for (lane, (x, &w)) in bins_rest.iter().zip(weights_rest).enumerate() {
-                    re[lane] += x.re * w;
-                    im[lane] += x.im * w;
-                }
-                let (re, im) = (re.iter().sum::<f32>(), im.iter().sum::<f32>());
+                // Written out: summing the lanes with `step_by` took the loop
+                // above out of vector registers and doubled the whole read.
+                let re = sums[0] + sums[2] + sums[4] + sums[6];
+                let im = sums[1] + sums[3] + sums[5] + sums[7];
                 loudest = loudest.max(re * re + im * im);
             }
             *out = loudest * norm;
