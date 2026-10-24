@@ -6,11 +6,13 @@
     tools/golden-diff.py --strict        # exit 1 if any frame moved: a refactor's proof
     tools/golden-diff.py --draw-only DIR # draw the working tree alone: what CI caches per main commit
     tools/golden-diff.py --base HEAD^1 --base-frames DIR  # against those, drawing the base only to confirm a move
+    tools/golden-diff.py --frames-key REF  # what CI caches REF's frames under
 
-Both sides are drawn on this machine in this run, so the comparison is
-byte-exact and needs no record: the base is `git archive`d into
-`target/golden-base/src` and built into `target/golden-base/target`, a target
-directory of its own. Sharing this checkout's would save rebuilding the registry
+A reported move is always between two draws on this machine in this run, so the
+comparison is byte-exact and needs no record. (In CI an answer of no move may
+instead come from frames cached on the same runner image; see below.) The base
+is `git archive`d into `target/golden-base/src` and built into
+`target/golden-base/target`, a target directory of its own. Sharing this checkout's would save rebuilding the registry
 dependencies, but cargo names a workspace crate's artifacts the same in both
 trees, so whichever tree built a crate last is what the other links against
 unless something path-dependent in the crate forces a rebuild: #1572's head
@@ -38,11 +40,16 @@ then drawn here and the comparison made again, so every reported move is still
 between two draws on one machine in one run, and a cached set that differs
 from what the base draws now can cost a base build but never hide a move or
 invent one. A missing directory is a cache miss, and draws the base as before.
+The cache key (`--frames-key`) is what decides the frames: the blobs of REF's
+tree that `draws` counts, and this script, the recipe they are drawn by. So a
+merge that touches only what does not draw shares its parent's frames, and a
+PR that changes the recipe misses and draws its base here.
 
 Run it under `./session-lifecycle.sh run --` like any build.
 """
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -81,6 +88,18 @@ def draws(path):
     return not (path.startswith(NOT_DRAWN_DIRS) or path.endswith(NOT_DRAWN_SUFFIXES))
 
 
+def frames_key(ref):
+    """What decides the frames `ref` draws: every blob `draws` counts, and this recipe.
+
+    The script is read from the working tree because it is the recipe this run
+    draws by, whichever commit's frames it is keying."""
+    digest = hashlib.sha256(Path(__file__).read_bytes())
+    for entry in git("ls-tree", "-r", "-z", "--full-tree", ref).split("\0"):
+        if entry and draws(entry.split("\t", 1)[1]):
+            digest.update(entry.encode() + b"\0")
+    return digest.hexdigest()[:40]
+
+
 def draw(tree, into, target):
     """Run the golden tests in `tree`, building into `target`, writing every frame under `into`."""
     environment = dict(os.environ, HARMONIGRAPH_GOLDEN_WRITE=str(into),
@@ -107,7 +126,12 @@ def main():
                         help="the base's frames, drawn earlier; the base is drawn only if they differ")
     parser.add_argument("--draw-only", type=Path, metavar="DIR",
                         help="draw the working tree into DIR, only if every frame draws, and stop")
+    parser.add_argument("--frames-key", metavar="REF",
+                        help="print the cache key for REF's frames, and stop")
     args = parser.parse_args()
+    if args.frames_key:
+        print(frames_key(args.frames_key))
+        return 0
     # The tests run in their crates' directories, so what they write to is absolute.
     args.base_frames = args.base_frames and args.base_frames.resolve()
     args.draw_only = args.draw_only and args.draw_only.resolve()
@@ -120,6 +144,8 @@ def main():
         shutil.rmtree(args.draw_only, ignore_errors=True)
         if draw(ROOT, partial, TARGET) != 0:
             sys.exit("✗ the working tree's golden tests failed; nothing saved")
+        if not partial.is_dir():
+            sys.exit(f"✗ the golden tests passed but wrote no frame into {partial}; nothing saved")
         partial.rename(args.draw_only)
         return 0
 
