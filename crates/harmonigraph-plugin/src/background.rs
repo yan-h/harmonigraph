@@ -791,6 +791,49 @@ mod tests {
         );
     }
 
+    /// A worker whose every step panics stops after [`MAX_PANICS_IN_A_ROW`] of
+    /// them, and the console says each thing once: that a step panicked, and
+    /// that the worker gave up.
+    ///
+    /// Each panicking step publishes the audio the next one takes, so every
+    /// step reaches the hook rather than the first alone; a worker that never
+    /// gives up is stopped well past the budget, so it fails rather than hangs.
+    #[test]
+    fn a_worker_whose_every_step_panics_stops_after_its_budget() {
+        let mut h = harness();
+        h.push_audio(4_800);
+        let mut audio = std::mem::replace(&mut h.audio, crate::audio_ingress::channel(1).0);
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut frame = 4_800u64;
+        let give_up = stop.clone();
+        BETWEEN_HOLDS.set(Some(Box::new(move |_: &Mutex<EditorShared>, _| {
+            let format = crate::audio_ingress::Format {
+                channels: 1,
+                sample_rate: 48_000.0,
+                sidechain: false,
+            };
+            audio.publish(4_800, format, frame as f64 / 48_000.0, std::iter::repeat(0.25));
+            frame += 4_800;
+            if frame > 4 * 4_800 * u64::from(MAX_PANICS_IN_A_ROW) {
+                give_up.store(true, Ordering::Relaxed);
+            }
+            panic!("a step's bug")
+        })));
+        let rounds = AtomicU64::new(0);
+        super::run(&h.shared, &h.editor_state, Restore::of(h.ui_state.clone()), &stop, &rounds);
+        BETWEEN_HOLDS.set(None);
+
+        assert!(!stop.load(Ordering::Relaxed), "the worker never gave up");
+        // The last panic returns before its round is counted.
+        assert_eq!(rounds.load(Ordering::Acquire), u64::from(MAX_PANICS_IN_A_ROW) - 1);
+        let shared = h.shared.lock();
+        let said = |text: &str| {
+            shared.ui.picture.runtime.console.lines().filter(|line| line.contains(text)).count()
+        };
+        assert_eq!(said("panicked in a step"), 1);
+        assert_eq!(said(&format!("stopped after {MAX_PANICS_IN_A_ROW} panicking steps")), 1);
+    }
+
     /// A step analyzes under the settings it took the audio with, even if they
     /// change while it analyzes, and the next step under the new ones.
     #[test]
