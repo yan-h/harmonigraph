@@ -1076,8 +1076,8 @@ mod tests {
 
     /// The second bug this widget shipped with, and the harder one to see: at
     /// the full range — where zooming the pitch axis all the way out leaves
-    /// it — both handles sat flush against the bar's ends, 3px wide, under the corner rounding. The
-    /// control was then pixel-identical to a ValueBar filled to 100%: nothing
+    /// it — both handles sat flush against the bar's ends, 3px wide, under the
+    /// corner rounding. The control was then pixel-identical to a ValueBar filled to 100%: nothing
     /// on screen said it had ends to grab, so it read as "not there at all".
     #[test]
     fn the_handles_read_as_handles_even_at_the_limits() {
