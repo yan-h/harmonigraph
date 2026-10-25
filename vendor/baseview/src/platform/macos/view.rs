@@ -77,9 +77,11 @@ pub(crate) struct BaseviewView {
     ///
     /// A view's link stops dead while the view is hidden, or its window is
     /// minimized or ordered out (measured; it keeps firing while merely
-    /// covered). The frame is also what drains the plugin's MIDI and audio
-    /// rings and repairs a stuck button or a withheld exit, and an editor
-    /// that is open but out of sight must go on doing all three.
+    /// covered). The frame is also what ages the plugin's notes, lets an armed
+    /// take end itself (the plugin's input worker drains its rings, but leaves
+    /// both of these to an open editor's frames) and repairs a stuck button or
+    /// a withheld exit, and an editor that is open but out of sight must go on
+    /// doing all of them.
     link_watchdog: Cell<Option<TimerHandle>>,
     /// `CACurrentMediaTime` at the last link callback, which the watchdog
     /// reads to tell a paused link from a running one.
@@ -537,8 +539,8 @@ impl BaseviewView {
 }
 
 /// How often the watchdog checks on the display link, and so the frame rate
-/// of a view whose link has paused: enough to keep the plugin's rings drained
-/// and a stuck button repaired.
+/// of a view whose link has paused: enough to keep the plugin's notes ageing,
+/// its takes ending on time and a stuck button repaired.
 const LINK_WATCHDOG_INTERVAL: f64 = 0.1;
 
 /// How long the link must have been silent before the watchdog runs a frame

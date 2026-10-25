@@ -82,7 +82,7 @@ use crate::editor::{EditorShared, EguiState};
 /// Under the 8 ms hop, so a column is analyzed within a poll of its audio
 /// arriving, where a frame used to analyze it at the next frame: the worst
 /// case for a block is now a frame plus a poll. Cheap: a step that finds
-/// nothing is two short holds of an uncontended lock.
+/// nothing with the window open is one short hold of an uncontended lock.
 pub(crate) const POLL: Duration = Duration::from_millis(4);
 
 /// How often it looks with the window shut, where nothing is drawing what it
