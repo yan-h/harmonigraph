@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn source_discontinuities_refill_the_window_without_erasing_history() {
-        let window = harmonigraph_ui::SpectrumConfig::default().window.frame();
+        let window = harmonigraph_ui::SpectrumConfig::default().window.frame(48_000.0);
         let (mut tx, mut shared) = audio_harness(window + 384);
         let mono =
             crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
@@ -490,14 +490,16 @@ mod tests {
         tx.reset();
         let stereo =
             crate::audio_ingress::Format { channels: 2, sample_rate: 96_000.0, sidechain: true };
-        tx.publish(window / 4, stereo, 4.0, std::iter::repeat(0.0));
+        // The frame is a length of time, so at 96 kHz it is twice the samples.
+        let refill = harmonigraph_ui::SpectrumConfig::default().window.frame(96_000.0);
+        tx.publish(refill / 4, stereo, 4.0, std::iter::repeat(0.0));
         drain_audio(&mut shared, 4.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
         for i in 1..=4 {
             tx.publish(
-                window / 4,
+                refill / 4,
                 stereo,
-                4.0 + i as f64 * window as f64 / 4.0 / 96_000.0,
+                4.0 + i as f64 * refill as f64 / 4.0 / 96_000.0,
                 std::iter::repeat(0.0),
             );
             drain_audio(&mut shared, 5.0);

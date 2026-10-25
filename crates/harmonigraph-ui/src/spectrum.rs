@@ -785,7 +785,7 @@ mod tests {
         let cfg = SpectrumConfig::default();
         let mut spectrum = AudioSpectrum::default();
         let tone = |frequency: f32| {
-            (0..cfg.window.frame() * 2)
+            (0..cfg.window.frame(48_000.0) * 2)
                 .map(|i| (std::f32::consts::TAU * frequency * i as f32 / 48_000.0).sin() * 0.5)
                 .collect::<Vec<_>>()
         };

@@ -441,12 +441,13 @@ pub(crate) fn analysis_section(
         let hints: Vec<_> = windows
             .iter()
             .map(|(window, _, hint)| {
-                // A frame is longer than the Hann window it is as sharp as, so name
-                // both rather than a frame length that reads as blurrier.
+                // Named in time, which is what a setting holds at every sample rate.
+                let lag = crate::SpectrumConfig { window: *window, ..Default::default() }
+                    .column_lag(48_000.0);
                 format!(
-                    "{}-sample frame, as sharp as a {}-sample window: {hint}",
-                    window.frame(),
-                    window.listen()
+                    "About as sharp as a {:.0} ms window, drawn about {:.0} ms behind the sound: {hint}",
+                    window.listen() as f64 / 48.0,
+                    lag * 1000.0
                 )
             })
             .collect();

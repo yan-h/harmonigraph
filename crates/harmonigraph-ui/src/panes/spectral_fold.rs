@@ -1610,7 +1610,7 @@ mod tests {
             state.runtime.frame_params.fade_time = 1.0;
             let cfg = state.appearance.spectrum;
             // The next scheduled hop must see a FULL configured window.
-            let frames = window.frame().div_ceil(384) * 384;
+            let frames = window.frame(48_000.0).div_ceil(384) * 384;
             let unit: Vec<_> = (0..frames)
                 .map(|i| (std::f64::consts::TAU * 880.0 * i as f64 / f64::from(SR)).sin() as f32)
                 .collect();

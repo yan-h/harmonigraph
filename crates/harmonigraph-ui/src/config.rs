@@ -12,6 +12,9 @@ pub use harmonigraph_scene::SCALE_BAR_RANGE;
 /// The Spectral pane's analysis window length, picked in the Analyzer
 /// settings section: longer windows resolve bass pitch more sharply but
 /// respond more slowly (the tradeoff is physics, not implementation).
+///
+/// Each is a length of TIME, so a setting looks and lags the same at every
+/// sample rate ([`frame`](Self::frame)); the sample counts below are at 48 kHz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
     /// As sharp as a 4096-sample Hann window, and drawn as soon after the sound
@@ -33,7 +36,7 @@ pub enum SpectrumWindow {
 
 impl SpectrumWindow {
     /// What a resolution is named by: the plain Hann window it is as sharp as,
-    /// in samples.
+    /// in samples at 48 kHz.
     pub fn listen(self) -> usize {
         match self {
             SpectrumWindow::Fast => 4096,
@@ -42,10 +45,30 @@ impl SpectrumWindow {
         }
     }
 
-    /// The analyzer's frame: how many samples one column is read from, which
-    /// the analysis crate sizes for the listen.
-    pub fn frame(self) -> usize {
-        harmonigraph_analysis::fixed_frame(self.listen())
+    /// The analyzer's frame at `sample_rate`: how many samples one column is
+    /// read from. The analysis crate sizes it for the listen at 48 kHz, and it
+    /// scales by a power of two, the smallest that keeps it no more than about
+    /// a tenth shorter in TIME than at 48 kHz: 44.1 and 48 kHz read the same
+    /// frame and 88.2 and 96 kHz one twice as long, the same listen to within
+    /// 9%, in a size the transform still takes fast. A rate between, 32 or 64
+    /// kHz, listens longer rather than shorter, so no rate reads the bottom of
+    /// the axis worse than 48 kHz does; rounding to the nearest power instead
+    /// halved the frame at 32 kHz and lost Fast's 22 to 28 Hz. Counted in
+    /// samples, every setting read twice as blurry at 96 kHz, at half the lag,
+    /// and Fast could not place 20 to 44 Hz at all there.
+    ///
+    /// The rate comes from the host or a file's header, so the scale is held
+    /// to 6 kHz through 384 kHz: an absurd rate must not grow the frame without
+    /// bound.
+    pub fn frame(self, sample_rate: f32) -> usize {
+        let base = harmonigraph_analysis::fixed_frame(self.listen());
+        let octaves = ((f64::from(sample_rate) / 48_000.0).log2() - 0.15).ceil();
+        let octaves = if octaves.is_nan() { 0 } else { octaves.clamp(-3.0, 3.0) as i32 };
+        if octaves >= 0 {
+            base << octaves
+        } else {
+            base >> -octaves
+        }
     }
 }
 
@@ -589,7 +612,10 @@ impl SpectrumConfig {
     /// The analyzer these settings ask for at `sample_rate`: the window's
     /// frame.
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
-        harmonigraph_analysis::AnalyzerConfig { sample_rate, fft_size: self.window.frame() }
+        harmonigraph_analysis::AnalyzerConfig {
+            sample_rate,
+            fft_size: self.window.frame(sample_rate),
+        }
     }
 
     /// How far before its newest sample a column analyzed under these settings
