@@ -328,7 +328,7 @@ not evidence of how often a setting is used.
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
 | Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
 | Lattice resolution above 100% | Candidate for removing costly supersampling if visual comparison shows no useful improvement. Existing range is retained. |
-| 144 fps preset and Frame breakdown | Candidates for simplifying the editor controls or moving diagnostics to Console. Neither is a video setting. |
+| Editor frame rate (the display's rate, or a half, third or quarter of it) and Frame breakdown | Candidates for simplifying the editor controls or moving diagnostics to Console. Neither is a video setting. |
 
 The Spiral needs no separate settings page:
 its frequency/level ranges,
@@ -394,5 +394,7 @@ Drag a numeric bar to change its value.
 As on the host's own controls, double-click resets it to its default and Cmd-click (Ctrl-click on Windows and Linux) types a value.
 Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.
-Multi-handle bars have no typed entry and also reset to their defaults on double-click;
+Multi-handle bars have no typed entry and also reset to their defaults on double-click,
+except the star layers' bar (Star size and the other per-layer properties):
+its ends are read off the layers and have no default of their own, so a double-click leaves it alone;
 hover text describes what each handle moves.

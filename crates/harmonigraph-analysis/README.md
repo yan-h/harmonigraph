@@ -1,10 +1,10 @@
 # harmonigraph-analysis
 
 Rolling real-input audio analysis shared by the live UI and offline renderer.
-`SpectrumAnalyzer` takes one transform of a Hann-windowed frame per column, zero-padded to twice its length,
-and reads every bucket of the fixed pitch axis in `harmonigraph-core` at its own frequency through a Gaussian kernel;
+`SpectrumAnalyzer` takes one transform per column of a frame under a Hann window and part of the listen's Gaussian, zero-padded to twice its length,
+and reads every bucket of the fixed pitch axis in `harmonigraph-core` at its own frequency through a Gaussian kernel carrying the rest of the listen;
 `ChannelBank` averages independent channel power without phase cancellation.
-The kernel also narrows the frame to the bucket's listen:
+The frame's window and the kernel together narrow the frame to the bucket's listen:
 every bucket listens through one Gaussian toward the frame's newest end, as sharp as a Hann window two thirds of the frame and lagging as little.
 `AnalyzerConfig::column_lag` says where on a time axis a column belongs, for the analyzer and the export alike.
 

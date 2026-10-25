@@ -15,6 +15,8 @@
   },
   "permissions": {
     "allow": [
+      "Bash(./ci.sh *)",
+      "Bash(./ci.sh)",
       "Bash(.claude/semantic-breaks.py *)",
       "Bash(cargo --version)",
       "Bash(cargo build *)",
@@ -27,6 +29,7 @@
       "Bash(gh pr ready *)",
       "Bash(gh pr view *)",
       "Bash(gh run download *)",
+      "Bash(gh run rerun *)",
       "Bash(gh run view *)",
       "Bash(gh workflow run *)",
       "Bash(git add *)",
@@ -35,7 +38,12 @@
       "Bash(git fetch *)",
       "Bash(ls:*)",
       "Bash(node:*)",
+      "Bash(python3 tools/golden-diff.py *)",
+      "Bash(python3 tools/shader-assets.py fetch*)",
       "Bash(rustc --version)",
+      "Bash(tools/golden-diff.py *)",
+      "Bash(tools/golden-diff.py)",
+      "Bash(tools/shader-assets.py fetch*)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)"
     ]

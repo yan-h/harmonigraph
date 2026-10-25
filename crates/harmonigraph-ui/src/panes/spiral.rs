@@ -551,15 +551,18 @@ pub(crate) fn spiral_pane(
     let lit = sounding(&spiral, state, now);
     let marks = dots(&spiral, state, &lit);
     // The roll's own backdrop cut, round every dot, before the discs land on
-    // it. Unconditionally: the callback declines a frame with nothing to cut
-    // itself, without building its pipelines, and it drops its targets only on
-    // a frame that says the cut is off, so it has to see the silent ones.
-    painter.add(harmonigraph_render::dot_surround_paint_callback(
-        rect,
-        surround(&spiral, state, &lit),
-        state.appearance.spectrum.note_cut(),
-        state.surfaces.target_format,
-    ));
+    // it. Whenever there are dots, as for the halo below: its buffers stand
+    // through a silent stretch, so a silent frame has nothing to ask of it,
+    // and a cut that is off is the callback's to decline.
+    let cut = surround(&spiral, state, &lit);
+    if !cut.is_empty() {
+        painter.add(harmonigraph_render::dot_surround_paint_callback(
+            rect,
+            cut,
+            state.appearance.spectrum.note_cut(),
+            state.surfaces.target_format,
+        ));
+    }
     for mark in &marks {
         painter.circle_filled(
             egui::pos2(mark.center[0], mark.center[1]),
@@ -1534,21 +1537,21 @@ mod tests {
         assert!(dots(&spiral, &state, &hidden).is_empty(), "no invisible dot or halo remains");
     }
 
-    /// The halo's callback goes in on every frame with a dot to light, whatever
-    /// the strength, and the dots' surround on every frame, the silent ones
-    /// included.
+    /// The halo's callback and the dots' surround go in on every frame with a
+    /// dot to light, whatever the strength, and a silent frame asks for
+    /// neither.
     ///
     /// The strength is the halo callback's to decline
     /// (`harmonigraph_render::glow`'s `nothing_to_light_builds_no_chain`), so
-    /// gating on it here would be a second copy of that rule. The surround
-    /// drops its targets only on a frame that says the cut is off, so it has
-    /// to see the silent ones.
+    /// gating on it here would be a second copy of that rule. Neither holds
+    /// anything a silent frame's call would keep alive: both renderers keep
+    /// what they built for as long as they stand.
     ///
     /// Counted rather than picked out of the frame, because the names and the
     /// shadows are callbacks of their own and all of them are the same shape
     /// from here.
     #[test]
-    fn the_halo_is_asked_for_on_every_frame_with_a_dot() {
+    fn the_halo_and_surround_are_asked_for_on_every_frame_with_a_dot() {
         // `visible` false sounds the note with its dot faded to nothing, which
         // keeps its name (the rim name follows the note's envelope, not the
         // dot's opacity) and removes only what the dot itself asks for.
@@ -1575,8 +1578,8 @@ mod tests {
         };
         assert_eq!(
             callbacks(0.0, true, true),
-            callbacks(0.0, true, false) + 1,
-            "a visible dot did not add its halo's callback, or added more than it",
+            callbacks(0.0, true, false) + 2,
+            "a visible dot did not add its halo's and surround's callbacks, or added more",
         );
         assert_eq!(
             callbacks(1.2, true, true),
@@ -1584,14 +1587,8 @@ mod tests {
             "the bloom strength decided whether the callback went in",
         );
         // The emptiest frame the pane can draw — no strength, nothing
-        // sounding, so nothing to light, nothing to cut and no names. What is
-        // left is the dots' surround, which goes in unconditionally and
-        // declines inside its own `prepare`; a gate on it would read 0 here.
-        assert_eq!(
-            callbacks(0.0, false, true),
-            1,
-            "a silent frame asks for something other than the surround",
-        );
+        // sounding, so nothing to light, nothing to cut and no names.
+        assert_eq!(callbacks(0.0, false, true), 0, "a silent frame asked for a callback");
     }
 
     /// The seam is drawn where one turn stops and the next starts — half a

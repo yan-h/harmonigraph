@@ -83,8 +83,10 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 }
 
 /// Every key a retirement has left in saved projects, as `(a live key in the
-/// same struct, the retired pairs as those builds wrote them)`: the retired
-/// pairs are spliced back in ahead of the live key.
+/// same struct, the retired pairs as those builds wrote them, whether that
+/// struct is part of the appearance)`: the retired pairs are spliced back in
+/// ahead of the live key. The last is `false` for editor-only state, which
+/// only the editor door reads.
 ///
 /// The VALUE shapes are the point as much as the names. A number is skipped by
 /// any parser; a bare identifier (`Fibres`, `Pop`) is an enum token with no
@@ -95,41 +97,48 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 /// Retiring another key is a row here, not another test. Only keys a blob at
 /// or above the version floor can hold earn one: anything retired before it
 /// is refused with the blob that carries it.
-const RETIRED_KEYS: &[(&str, &str)] = &[
+const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     // Condensed controls are ignored without disturbing the surviving values.
-    ("pitch_softness", "spread:0.75,"),
-    ("pigment_reach", "material_shadow_width:7.0,material_shadow_softness:0.1,"),
-    ("texture_depth", "texture:None,"),
-    ("texture_depth", "texture:Clouds,"),
+    ("pitch_softness", "spread:0.75,", true),
+    ("pigment_reach", "material_shadow_width:7.0,material_shadow_softness:0.1,", true),
+    ("texture_depth", "texture:None,", true),
+    ("texture_depth", "texture:Clouds,", true),
     // The cloud's sampling grid.
-    ("cloud_depth", "cloud_tile:20.0,cloud_pixel:4.0,"),
+    ("cloud_depth", "cloud_tile:20.0,cloud_pixel:4.0,", true),
     // Node spacing, including a non-finite one.
-    ("label_scale", "spacing:3.0,"),
-    ("label_scale", "spacing:NaN,"),
+    ("label_scale", "spacing:3.0,", true),
+    ("label_scale", "spacing:NaN,", true),
     // The independent angular gap. `ring_gap` is the shared one now, and the
     // dialled 0.02 must not be overwritten by it.
-    ("ring_gap", "octave_gap:0.17,"),
+    ("ring_gap", "octave_gap:0.17,", true),
     // The entire combined lattice material key is retired, including its old variants.
-    ("material_style", "material:Fibres,"),
-    ("material_style", "material:Liquid,"),
+    ("material_style", "material:Fibres,", true),
+    ("material_style", "material:Liquid,", true),
     // The hidden renderer override, a string.
-    ("short_edge", "renderer_path:\"/old/renderer\","),
+    ("short_edge", "renderer_path:\"/old/renderer\",", true),
     // The view's retired switches.
-    ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,"),
+    ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,", true),
     // The note animation's own retired fields, inside its struct.
-    ("stagger_spread", "animation:Pop,start_size:0.2,"),
+    ("stagger_spread", "animation:Pop,start_size:0.2,", true),
     // The overlay switches, moved out of the view to the editor's top level:
     // one inside a view must not reach the top-level key of the same name.
-    ("render_scale", "show_perf:true,show_perf_detail:true,"),
+    ("render_scale", "show_perf:true,show_perf_detail:true,", true),
     // The Spiral's framing, moved out of the appearance to the editor's top
     // level for the same reason, and a struct where those were flags.
-    ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),"),
+    ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),", true),
+    // The analyzer's spectrum averaging (#1573), an enum token.
+    ("window", "tapers:Three,", true),
+    // Sweep's two listens (#1603).
+    ("window", "sweep_bass:10240.0,sweep_treble:2048.0,", true),
+    // The frame cap, which the display link's divisor replaced (#1553).
+    ("frame_rate", "fps_cap:Some(90.0),", false),
 ];
 
 /// A retired key costs nothing: through both doors — the editor's
-/// `load_persist`, and the `AppearanceDocument::parse` that take replay and
-/// explicit export share — the rest of the document loads at the values it
-/// holds, and the key is gone on the next save.
+/// `load_persist`, and, for a key inside the appearance, the
+/// `AppearanceDocument::parse` that take replay and explicit export share —
+/// the rest of the document loads at the values it holds, and the key is gone
+/// on the next save.
 ///
 /// `load_persist` takes the whole `UiPersist` or nothing, so a key that failed
 /// to parse would not degrade: it would discard the dock, the camera and the
@@ -140,7 +149,7 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     let state = dialled();
     let saved = state.save_persist();
     let appearance = state.picture.appearance.serialize();
-    for &(anchor, retired) in RETIRED_KEYS {
+    for &(anchor, retired, in_appearance) in RETIRED_KEYS {
         let splice = |blob: &str| {
             let at = pair_starts(blob, anchor);
             assert_eq!(at.len(), 1, "{anchor:?} must open exactly one pair in {blob}");
@@ -160,9 +169,16 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
         assert!(restored.load_persist(&splice(&saved)), "{retired} sank the editor blob");
         assert_eq!(restored.save_persist(), saved, "{retired} changed what the editor loaded");
 
-        let parsed = AppearanceDocument::parse(&splice(&appearance))
-            .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
-        assert_eq!(parsed.serialize(), appearance, "{retired} changed what the appearance loaded");
+        assert_eq!(!pair_starts(&appearance, anchor).is_empty(), in_appearance, "{anchor}: doors");
+        if in_appearance {
+            let parsed = AppearanceDocument::parse(&splice(&appearance))
+                .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
+            assert_eq!(
+                parsed.serialize(),
+                appearance,
+                "{retired} changed what the appearance loaded"
+            );
+        }
     }
 }
 
@@ -181,6 +197,8 @@ const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     ("settings_tab", "Tuning", "Display", false),
     // The Mappings tab's variant, before it took the tab's title.
     ("settings_tab", "Tuning", "Colors", false),
+    // The gliding frequency resolution (#1603).
+    ("window", "Fast", "Sweep", true),
 ];
 
 /// A dropped variant refuses the WHOLE document, and says so on the Console.

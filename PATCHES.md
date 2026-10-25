@@ -100,10 +100,10 @@ everything is correct from the first click on.
 `src/wrappers/appkit/notification_center.rs`, `src/platform/macos/view.rs`,
 `src/wrappers/appkit/view.rs` + `view/implementation.rs`):
 new `WindowEvent::Occluded(bool)` (mirroring winit's event), emitted from an `NSWindowDidChangeOcclusionStateNotification` observer filtered to the view's own window.
-On re-expose the view is marked `setNeedsDisplay` and, more to the point, a frame is run right there in the notification rather than left to the next timer tick —
+On re-expose the view is marked `setNeedsDisplay` and, more to the point, a frame is run right there in the notification rather than left to the next display-link callback (patch 4) —
 nothing can present while the window is occluded, so what is on screen is the drawable from before it was hidden, and the ghost lasts exactly until one frame gets out.
-Waiting for the tick made that up to a frame interval:
-measured at 11-14 ms against a ~15 ms timer, and it scales with the interval, so a frame-rate cap makes it worse;
+Waiting for the callback made that up to a frame interval:
+measured at 11-14 ms under the ~15 ms frame timer the link replaced, and it scales with the frame divisor, so a frame-rate cap makes it worse;
 painting from the notification measures under 1 ms. `trigger_frame` takes the handler borrow fallibly to stay safe against a notification arriving mid-frame (that direction only —
 `trigger_event` still borrows infallibly and documents its panic), and the handler drops a notification repeating the state the view is already in, which would otherwise buy an off-cadence frame for nothing.
 That state is kept per window attachment (#1070):
@@ -130,7 +130,8 @@ and the callback holds its own reference to the view because a frame can close t
 A divisor rather than a rate because the link's `preferredFrameRateRange` rounds to divisors of the panel's rate: measured on a 144 Hz panel, 120 ran at 144 and 90 and 60 at 72.
 A link stops while its view is hidden or its window minimized or ordered out (measured; it keeps firing while the window is merely covered),
 so the common-mode timer from patch 1 survives as a 10 Hz watchdog that runs a frame whenever the link has been silent for 100 ms:
-the frame is also what drains the plugin's rings and repairs a stuck button or a withheld exit.
+the frame is also what ages the plugin's notes and lets an armed take end itself while the editor is open but out of sight (its rings are drained by the plugin's input worker, #1566),
+and what repairs a stuck button or a withheld exit.
 `Window::frame_timing` hands the frame callback the link's timestamps and the divisor it paced the frame at, for egui-baseview's frame log,
 and the fire on `Instant`'s clock beside the media clock's (`fired_at`);
 `FrameTiming::target_at` puts the target on `Instant`'s clock, refusing one more than 0.1 s from the fire, for the plugin's picture and egui's clock to time the frame by.
@@ -211,13 +212,14 @@ Root-caused from a 26 GB balloon while tabbed away from Bitwig.
 - **Patch 5** (1 site, `src/window.rs` `on_frame`): make delayed repaints
 actually come due.
 The repaint deadline was recomputed as `now + repaint_delay` on *every* tick that painted nothing, and egui rebuilds `repaint_delay` from scratch each pass (reset to `MAX` in `begin_pass_repaint_logic`, then the min of that pass's requests) while the UI closure runs on every tick, painting or not.
-So a steady `request_repaint_after(N)` re-based the deadline on each tick, and for any N longer than the tick interval (~15 ms, the macOS frame timer) `now` never caught up:
+So a steady `request_repaint_after(N)` re-based the deadline on each tick, and for any N longer than the tick interval (then ~15 ms, the macOS frame timer; now one display refresh) `now` never caught up:
 the deadline receded forever and the window painted nothing until an input event or a texture upload forced it.
 Every delayed repaint was silently dead —
 the idle poll included, which went unnoticed because the plugin shell requests a repaint whenever it drains MIDI, and an idle window has nothing to show anyway.
 Fix:
 keep the EARLIEST pending deadline rather than overwriting it, and schedule the next one from the instant a frame actually painted instead of leaving it unset (clearing it to `None` cost a whole tick, so every capped interval ran one tick long).
-Found while adding the System pane's frame-rate cap, which is built on exactly this mechanism and did nothing at all without the fix.
+Found while adding the System pane's frame-rate cap, which was first built on exactly this mechanism and did nothing at all without the fix;
+the cap is now baseview's frame divisor (Patch 6), and this fix still serves every delayed repaint, the idle poll among them.
 - **Patch 6** (`src/window.rs`): pass baseview's frame divisor through, so the
 app can pace its own window.
 `Queue::set_frame_divisor` sets it from inside a frame (applied after the frame returns, where the `Window` is reachable —

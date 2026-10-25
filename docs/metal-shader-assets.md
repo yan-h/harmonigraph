@@ -63,10 +63,12 @@ gh workflow run "Metal shader assets" --ref <branch>
 
 `-f regenerate=true` rebuilds a corpus that passes its check, such as one still holding a deleted shader's libraries.
 
-Either way, `python3 tools/shader-assets.py fetch` imports the corpus the run generated for the checked-out commit,
+Either way, `python3 tools/shader-assets.py fetch` imports the corpus the run generated for the checked-out commit —
+on a PR, for that commit merged with its base, so a base that changed a shader since the branch point fails the local strict gate until it is merged in —
 and `import <dir>` does the same from a downloaded `production-metal-assets` artifact's `generated-metal-assets`.
-Import checks the candidate corpus through the normal production path before replacing the checked-in assets;
-inspect and commit the changed source/options/manifest together with the binary libraries.
+Import checks only that the candidate corpus is whole — manifest hashes, each source paired with its options and library, the recorded compiler flags — before replacing the checked-in assets;
+validating it through the production path is the generating run's job, not import's.
+Inspect and commit the changed source/options/manifest together with the binary libraries.
 The ordinary PR workflow checks the committed corpus before generating anything,
 and fails on a stale one even after generating its replacement,
 so generation cannot conceal stale coverage.

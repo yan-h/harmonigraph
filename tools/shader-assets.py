@@ -188,7 +188,10 @@ def fetch(directory):
     print(f"Imported the corpus from {latest['url']}.\n"
           f"Read why its check failed in {logs} before committing: a missing or rejected Metal "
           "asset is a stale corpus, anything else is not, and "
-          "`git checkout crates/harmonigraph-metal-assets` undoes this import.")
+          "`git checkout crates/harmonigraph-metal-assets` undoes this import.\n"
+          "A PR's run builds the branch merged with its base, so where the base changed a shader "
+          "since the branch point the corpus is the merge's: what lands, but the local strict "
+          "gate fails on the branch alone until the base is merged in.")
 
 
 def generate(directory, logs):

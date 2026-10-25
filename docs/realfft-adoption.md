@@ -3,6 +3,10 @@
 Playhead export and its whole-song fixtures were retired under #973.
 References and measurements for that path below are historical;
 Scrolling and Fit video retain the shared live analyzer.
+The estimator this records has since changed too, so its description below is historical:
+multitaper averaging was removed under #1573, taking the taper matrix and the taper-count invalidation key with it,
+and since #1575 every bucket is read at its own pitch through a kernel over one zero-padded transform, replacing the usable-bin range and MAX-bin resampling.
+The [crate README](../crates/harmonigraph-analysis/README.md) describes the analyzer and what replans it now.
 
 This adopts the backend evaluated in [PR #803's report](archive/fft-backend-evaluation.md).
 Baseline: freshly fetched `origin/main` at `d34d66cfd5e739fbe2528e084ddab001bb4e8b4b`.
@@ -79,7 +83,7 @@ Each renders 192 frames at 640×400/60 fps:
 the existing two-second golden tone/noise generator is made stereo (right channel offset 97 samples and scaled by 0.8), followed by 1.2 seconds of silence.
 Default and largest/five-taper configurations each run Fold and Spectrum with the ring enabled, gate 0.5 and hysteresis 0.1.
 "Default" throughout this report is the default at the time, Balanced (8192 samples) with one taper;
-Fast (4096 samples) has been the fresh window since #1475; these complete-frame measurements do not cover it.
+Fast (then a 4096-sample window) has been the fresh setting since #1475; these complete-frame measurements do not cover it.
 Every RGBA byte is compared, including intermediate frames and fading rings.
 The synthetic waveform's right-channel wrap is part of this fixed fixture;
 this is not a recorded-music corpus.

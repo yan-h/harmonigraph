@@ -498,8 +498,13 @@ impl AudioSpectrum {
     /// resolution 20 ms reaches (via
     /// [`live_slab`](crate::spectrogram::live_slab), whose ladder is
     /// rungs of THIS interval, so the picture's grid tracks it).
-    /// It costs 0.23 ms of FFT per column — 2.9% of a core, against 1.2% at
-    /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
+    /// A column costs about 30 µs per channel through Fast at 48 kHz and 106
+    /// through Precise (#1597's measurement) — up to 2.7% of a core in stereo,
+    /// against 1.1% at 20 ms — and one more [`SpectrumHistory`] tier to hold
+    /// the same reach. The frame is a length of time
+    /// ([`SpectrumWindow::frame`](crate::SpectrumWindow::frame)), so a column
+    /// costs about twice that at 88.2 and 96 kHz and four times at 176.4 and
+    /// 192.
     pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
     pub(crate) const HOLD_SECONDS: f64 = 0.5;
@@ -535,9 +540,12 @@ impl AudioSpectrum {
     /// One call therefore costs as many FFTs as the audio it is handed contains
     /// hops, where the old one cost exactly one. Normally that is a frame's
     /// worth (two or three), and the worst case is a batch as large as the
-    /// shell's audio ring — 1.37 s in the plugin, 170 columns, ~60 ms — reachable
-    /// only by an editor that has been closed or stalled for that long, which
-    /// then gets its heatmap back-filled with audio that really did happen.
+    /// shell's audio ring — 1.37 s of stereo at 48 kHz in the plugin, 170
+    /// columns, some 10 ms through Fast and 36 through Precise — reachable only
+    /// by a drain starved for that long, which then gets its heatmap
+    /// back-filled with audio that really did happen. The ring holds samples,
+    /// not time, so a higher rate's fewer columns cost what its longer frame
+    /// adds back, and a lower rate's are more: 54 ms through Precise at 32 kHz.
     pub fn push_samples(
         &mut self,
         samples: &[f32],

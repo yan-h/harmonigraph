@@ -65,9 +65,9 @@ struct GpuDot {
 /// Draw the backdrop cut round `dots`, which stand inside `rect`. The callback
 /// belongs immediately before the colored egui discs.
 ///
-/// Safe to add on every frame the pane draws, including the frames with no
-/// dots and the frames whose cut draws nothing: the skipping is this
-/// callback's to do, and a declining frame allocates nothing here.
+/// A cut that draws nothing is this callback's to decline, and a declining
+/// frame allocates nothing here. A frame with no dots need not add it at all:
+/// what it built stands through a quiet stretch without being asked.
 pub fn dot_surround_paint_callback(
     rect: egui::Rect,
     dots: Vec<SurroundDot>,

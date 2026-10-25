@@ -24,8 +24,8 @@
 //! Shadow (#490), a name standing on a node's band rather than in its empty
 //! middle (the receiver asymmetry), the same at Render scale 2 (#496), and two
 //! names on ONE sheet whose nodes cover each other (#469). These are here to
-//! be MEASURED when they move, not to stay still: PRs B and C of #498 each
-//! re-baseline them and state what moved.
+//! be MEASURED when they move, not to stay still: a PR that moves them says
+//! which moved against the base's frames, and how.
 //!
 //! **Every scene starts from [`harmonigraph_golden::LOOK`]**, never from the
 //! fresh view: a capture of a new DAW look moves none of these frames, and a
@@ -448,8 +448,8 @@ fn two_strokes_of_one_name() -> Shot {
 ///
 /// The pair is SEARCHED for rather than named, because which nodes light up is
 /// the chord's and the window's answer, and a hand-picked index would silently
-/// stop overlapping the first time either moved — the frame would still render
-/// and would still be blessed.
+/// stop overlapping the first time either moved — the frame would still render,
+/// and from then on would match the base's while testing nothing.
 pub(super) fn names_overlapping_on_one_sheet() -> Shot {
     let view = harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..pinned_view() };
     let camera = Camera {
