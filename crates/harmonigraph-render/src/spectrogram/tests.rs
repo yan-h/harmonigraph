@@ -1026,9 +1026,46 @@ fn styles_fixture() -> SpectrogramCallback {
         }
     }
     cb.grid.set_bytes(&bytes);
+    // The pinned look's atmosphere under the fields this pair is about, so a
+    // captured look moves neither frame: `cloud_fixture` fills the rest from
+    // the type's defaults, which a capture edits.
+    let pinned = pinned_atmosphere();
     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-    (s.pitch_softness, s.time_softness, s.blur_time_step) = (60.0, 200.0, 1.0);
+    *s = harmonigraph_scene::SpectralAtmosphere {
+        pitch_softness: 60.0,
+        time_softness: 200.0,
+        blur_time_step: 1.0,
+        cloud_depth: s.cloud_depth,
+        color_pickup: s.color_pickup,
+        color_release: s.color_release,
+        cloud_style: s.cloud_style,
+        wash_pool: s.wash_pool,
+        material_settings: harmonigraph_scene::MaterialSettings {
+            wash_size: s.material_settings.wash_size,
+            wash_lobe: s.material_settings.wash_lobe,
+            ..pinned.material_settings
+        },
+        ..pinned
+    };
     cb
+}
+
+/// The spectral atmosphere of [`harmonigraph_golden::LOOK`], which the gated
+/// style frames are drawn from.
+fn pinned_atmosphere() -> harmonigraph_scene::SpectralAtmosphere {
+    /// The one group of the document these frames read.
+    #[derive(serde::Deserialize)]
+    struct Look {
+        spectrum: Spectrum,
+    }
+    #[derive(serde::Deserialize)]
+    struct Spectrum {
+        atmosphere: harmonigraph_scene::SpectralAtmosphere,
+    }
+    ron::from_str::<Look>(harmonigraph_golden::LOOK)
+        .expect("the golden look parses")
+        .spectrum
+        .atmosphere
 }
 
 #[test]

@@ -51,7 +51,7 @@ pub(super) fn frame(
     // are analyzed.
     state.params.ui_state.apply_restore(&mut shared.ui);
 
-    shared.note_frame();
+    shared.note_frame(queue.frame_timing().is_some() || !cfg!(target_os = "macos"));
 
     // The input worker ([`crate::background`]) drains the rings and runs the
     // analysis, and a frame reads what it left — unless it never started.

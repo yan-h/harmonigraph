@@ -32,8 +32,10 @@ where `code-review` argues against each finding before anyone acts on it.
 No diff review at any effort covers the class that actually slips through here, a picture change:
 #453 moved the frame by a mean 3.3–3.7/255 with local swings of −90 while the suite stayed 146/0 green.
 Byte-exact golden frames, drawn from the base and the branch, cover it: both the parts a feature PR is not supposed to reach and the ones a given rework is.
-There are two sets:
-the lattice's in `harmonigraph-render`'s `lattice_tests::golden`, and the spectral pane's in `harmonigraph-offline`'s `golden`, which needs a whole UI frame and so cannot live beside the first.
+There are three sets:
+the lattice's in `harmonigraph-render`'s `lattice_tests::golden`,
+the spectrogram styles' (`spectrogram-style-*`) in `harmonigraph-render`'s `spectrogram/tests.rs`,
+and the spectral pane's in `harmonigraph-offline`'s `golden`, which needs a whole UI frame and so cannot live beside the first two.
 
 **A moved golden is a stated picture change**, and the PR body is where it is stated.
 Nothing is committed and nothing is blessed:

@@ -10,7 +10,7 @@
 
 A reported move is always between two draws on this machine in this run, so the
 comparison is byte-exact and needs no record. (In CI an answer of no move may
-instead come from frames cached on the same runner image; see below.) The base
+instead come from frames cached on the same macOS build; see below.) The base
 is `git archive`d into `target/golden-base/src` and built into
 `target/golden-base/target`, a target directory of its own. Sharing this checkout's would save rebuilding the registry
 dependencies, but cargo names a workspace crate's artifacts the same in both
