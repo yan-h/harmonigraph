@@ -554,10 +554,11 @@ pub(crate) fn spiral_pane(
     // it. Whenever there are dots, as for the halo below: its buffers stand
     // through a silent stretch, so a silent frame has nothing to ask of it,
     // and a cut that is off is the callback's to decline.
-    if !marks.is_empty() {
+    let cut = surround(&spiral, state, &lit);
+    if !cut.is_empty() {
         painter.add(harmonigraph_render::dot_surround_paint_callback(
             rect,
-            surround(&spiral, state, &lit),
+            cut,
             state.appearance.spectrum.note_cut(),
             state.surfaces.target_format,
         ));
