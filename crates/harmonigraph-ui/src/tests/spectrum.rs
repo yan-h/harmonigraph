@@ -858,6 +858,13 @@ fn physical_chunks_preserve_the_complete_logical_batch() {
 #[test]
 fn a_setting_listens_as_long_at_every_sample_rate() {
     for window in [SpectrumWindow::Fast, SpectrumWindow::Balanced, SpectrumWindow::Precise] {
+        assert_eq!(window.frame(44_100.0), window.frame(48_000.0));
+        assert_eq!(
+            window.frame(32_000.0),
+            window.frame(48_000.0),
+            "32 kHz must not listen shorter"
+        );
+        assert_eq!(window.frame(96_000.0), 2 * window.frame(48_000.0));
         let cfg = SpectrumConfig { window, ..SpectrumConfig::default() };
         let ratio = cfg.column_lag(96_000.0) / cfg.column_lag(48_000.0);
         assert!((ratio - 1.0).abs() < 0.01, "{window:?} lags {ratio:.3}x as long at 96 kHz");

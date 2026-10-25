@@ -445,7 +445,7 @@ pub(crate) fn analysis_section(
                 let lag = crate::SpectrumConfig { window: *window, ..Default::default() }
                     .column_lag(48_000.0);
                 format!(
-                    "As sharp as a {:.0} ms window, drawn {:.0} ms behind the sound: {hint}",
+                    "About as sharp as a {:.0} ms window, drawn about {:.0} ms behind the sound: {hint}",
                     window.listen() as f64 / 48.0,
                     lag * 1000.0
                 )

@@ -255,7 +255,7 @@ Tab takes priority over focus traversal except while editing text.
 
 Fresh projects use **Fast** frequency resolution, captured from the DAW look in #1475:
 a 6144-sample frame at 48 kHz read as sharply as a 4096-sample Hann window.
-Each resolution is a length of time, so its frame doubles at 88.2 and 96 kHz and it looks and lags the same at every rate.
+Each resolution is a length of time, so its frame doubles at 88.2 and 96 kHz and it looks and lags the same there as at 44.1 and 48 kHz, to within 9%.
 Every resolution draws a partial at its own pitch;
 Fast trades how sharply it resolves neighbouring pitches for response time,
 and its wider peaks can lose low audio-ring fundamental wedges while their harmonics still light the pitch class.
