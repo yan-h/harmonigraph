@@ -12,6 +12,9 @@ pub use harmonigraph_scene::SCALE_BAR_RANGE;
 /// The Spectral pane's analysis window length, picked in the Analyzer
 /// settings section: longer windows resolve bass pitch more sharply but
 /// respond more slowly (the tradeoff is physics, not implementation).
+///
+/// Each is a length of TIME, so a setting looks and lags the same at every
+/// sample rate ([`frame`](Self::frame)); the sample counts below are at 48 kHz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
     /// As sharp as a 4096-sample Hann window, and drawn as soon after the sound
@@ -33,7 +36,7 @@ pub enum SpectrumWindow {
 
 impl SpectrumWindow {
     /// What a resolution is named by: the plain Hann window it is as sharp as,
-    /// in samples.
+    /// in samples at 48 kHz.
     pub fn listen(self) -> usize {
         match self {
             SpectrumWindow::Fast => 4096,
@@ -42,10 +45,22 @@ impl SpectrumWindow {
         }
     }
 
-    /// The analyzer's frame: how many samples one column is read from, which
-    /// the analysis crate sizes for the listen.
-    pub fn frame(self) -> usize {
-        harmonigraph_analysis::fixed_frame(self.listen())
+    /// The analyzer's frame at `sample_rate`: how many samples one column is
+    /// read from. The analysis crate sizes it for the listen at 48 kHz, and it
+    /// scales by the power of two nearest the rate's ratio to 48 kHz, so 44.1
+    /// and 48 kHz read the same frame and 88.2 and 96 kHz one twice as long:
+    /// the same listen in time to within the 9% between 44.1 and 48, and a
+    /// size the transform still takes fast. Counted in samples instead, every
+    /// setting read twice as blurry at 96 kHz, at half the lag, and Fast could
+    /// not place 20 to 44 Hz at all there.
+    pub fn frame(self, sample_rate: f32) -> usize {
+        let base = harmonigraph_analysis::fixed_frame(self.listen());
+        let octaves = (f64::from(sample_rate.max(1.0)) / 48_000.0).log2().round() as i32;
+        if octaves >= 0 {
+            base << octaves
+        } else {
+            (base >> -octaves).max(4)
+        }
     }
 }
 
@@ -589,7 +604,10 @@ impl SpectrumConfig {
     /// The analyzer these settings ask for at `sample_rate`: the window's
     /// frame.
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
-        harmonigraph_analysis::AnalyzerConfig { sample_rate, fft_size: self.window.frame() }
+        harmonigraph_analysis::AnalyzerConfig {
+            sample_rate,
+            fft_size: self.window.frame(sample_rate),
+        }
     }
 
     /// How far before its newest sample a column analyzed under these settings

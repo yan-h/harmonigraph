@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn source_discontinuities_refill_the_window_without_erasing_history() {
-        let window = harmonigraph_ui::SpectrumConfig::default().window.frame();
+        let window = harmonigraph_ui::SpectrumConfig::default().window.frame(48_000.0);
         let (mut tx, mut shared) = audio_harness(window + 384);
         let mono =
             crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };

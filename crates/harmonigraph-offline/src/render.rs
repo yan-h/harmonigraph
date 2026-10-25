@@ -313,7 +313,8 @@ fn prepare_frame(
         // The appearance is installed once per render, so this is the same
         // every frame and consecutive slices meet exactly.
         let lead = config.column_lag(audio.sample_rate);
-        let frame_seconds = config.window.frame() as f64 / f64::from(audio.sample_rate);
+        let frame_seconds =
+            config.window.frame(audio.sample_rate) as f64 / f64::from(audio.sample_rate);
         let from = match frame {
             0 => now - frame_seconds,
             _ => settings.start + (frame - 1) as f64 * step + lead,
@@ -485,7 +486,7 @@ mod tests {
                 let mut replay = Replay::new(transient_take(origin));
                 let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
                 state.runtime.learn_active = false;
-                let window = state.appearance.spectrum.window.frame();
+                let window = state.appearance.spectrum.window.frame(SR as f32);
                 let lag = state.appearance.spectrum.column_lag(SR as f32);
                 let frame_seconds = window as f64 / SR;
                 let audio_end = origin + FRAMES as f64 / SR;

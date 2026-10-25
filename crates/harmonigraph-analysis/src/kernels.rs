@@ -162,7 +162,7 @@ const KERNEL_REACH: f64 = 5.0;
 /// the edge the bucket reads as nothing, the truth about a frame too short to
 /// place it. At
 /// 48 kHz that is 20 to 22 Hz through the Fast frame, and 20 to 44 Hz through
-/// it at 96 kHz.
+/// the same frame at 96 kHz, which is why the UI doubles the frame there.
 ///
 /// The whole listen's width and not the kernel's: what walks the reading off
 /// is the listen's response crossing the edge, and under a fixed listen the

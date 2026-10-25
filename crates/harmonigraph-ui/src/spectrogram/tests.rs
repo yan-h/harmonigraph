@@ -23,7 +23,7 @@ fn aggregate_slabs<'a>(
 fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
     let mut spectrum = crate::AudioSpectrum::default();
     // The hop counts below (17 hops to a whole new window, 6288 samples
-    // to a first column at 32,768 Hz) are the 6144-sample Fast frame's.
+    // to a first column at 65,536 Hz) are the 6144-sample Fast frame's.
     let config = crate::SpectrumConfig {
         attack: 0.0,
         release: 0.0,
@@ -77,11 +77,11 @@ fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
     // Power-of-two rate makes this a bit-exact equality at the old tail:
     // one hop of audio and a correction backwards by exactly one hop.
     let mut equal = crate::AudioSpectrum::default();
-    equal.push_source_samples(&samples[..6288], 1, 32_768.0, 0.25, &config);
+    equal.push_source_samples(&samples[..6288], 1, 65_536.0, 0.25, &config);
     assert_eq!(equal.history().len(), 1);
-    equal.push_source_samples(&samples[..262], 1, 32_768.0, 0.25 - 262.0 / 32_768.0, &config);
+    equal.push_source_samples(&samples[..524], 1, 65_536.0, 0.25 - 524.0 / 65_536.0, &config);
     assert_eq!(equal.history().len(), 1, "equal timestamps must also be suppressed");
-    equal.push_source_samples(&samples[..262], 1, 32_768.0, 0.25 - 262.0 / 32_768.0, &config);
+    equal.push_source_samples(&samples[..524], 1, 65_536.0, 0.25 - 524.0 / 65_536.0, &config);
     assert_eq!(equal.history().len(), 2, "the next later hop resumes history");
 }
 

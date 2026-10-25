@@ -36,3 +36,4 @@ Yan’s decisions recorded for future drift audits.
 
 - Sweep is removed; Fast, Balanced and Precise are the Frequency resolutions. At the lag Precise has, no window a Sweep could glide through drew a bass as sharp as Precise's without false peaks: Hann-tapered Gaussians draw lobes in bands at in-between lengths, and gamma windows stay clean but wider in the skirt. What remained was a faster treble, which did not earn a fourth mode. A saved project set to Sweep opens at defaults.
 - No cheap lower lag for the fixed resolutions: moving the listen nearer the newest end saves at most 14% (Precise 172 → 148 ms) at skirts up to 1.6× as wide, the same trade a shorter listen makes.
+- Frequency resolutions are lengths of time, not sample counts: the frame doubles at 88.2 and 96 kHz, so a setting looks and lags the same at every rate. Counted in samples, 96 kHz read every setting twice as blurry at half the lag, and Fast lost 20 to 44 Hz.
