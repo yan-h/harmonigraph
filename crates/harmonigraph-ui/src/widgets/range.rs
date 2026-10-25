@@ -132,6 +132,8 @@ impl Grab {
         (min, max): (f32, f32),
         min_span: f32,
     ) -> (f32, f32) {
+        // No span wider than the axis, which would cross the clamps below.
+        let min_span = min_span.min(max - min);
         match self {
             Grab::Low => (v.clamp(min, (hi - min_span).max(min)), hi),
             Grab::High => (lo, v.clamp((lo + min_span).min(max), max)),
@@ -1048,8 +1050,8 @@ mod tests {
 
     /// A double-click puts back the pair handed to `default_value` — not the
     /// full axis, which is where the gesture went before — held to the bar's
-    /// walls and `min_span`, and a bar handed none leaves its pair alone. Dialled off both first, so neither answer
-    /// can pass by standing still.
+    /// walls and `min_span`, and a bar handed none leaves its pair alone.
+    /// Dialled off both first, so neither answer can pass by standing still.
     #[test]
     fn a_double_click_resets_to_the_default_pair() {
         let double_click = |default: Option<(f32, f32)>| {
@@ -1076,7 +1078,7 @@ mod tests {
         assert_eq!(double_click(Some((48.0, 84.0))), (48.0, 84.0));
         assert_eq!(double_click(None), (30.0, 60.0));
         // A default narrower than the bar's minimum opens to it, as a drag
-        // would, and one past a wall slides back inside it.
+        // would, and one that would open past a wall opens against it.
         assert_eq!(double_click(Some((48.0, 50.0))), (48.0, 48.0 + OCTAVE));
         assert_eq!(double_click(Some((128.0, 130.0))), (AXIS.1 - OCTAVE, AXIS.1));
     }
@@ -2015,6 +2017,16 @@ mod tests {
     fn the_ends_still_reach_the_limits() {
         assert_eq!(Grab::Low.apply(-200.0, (24.0, 60.0), AXIS, OCTAVE).0, AXIS.0);
         assert_eq!(Grab::High.apply(200.0, (24.0, 60.0), AXIS, OCTAVE).1, AXIS.1);
+    }
+
+    /// A minimum wider than the axis holds the pair to the whole axis rather
+    /// than crossing the clamps, which would panic on the UI thread.
+    #[test]
+    fn a_minimum_wider_than_the_axis_holds_to_the_axis() {
+        let narrow = (60.0, 66.0);
+        for grab in [Grab::Low, Grab::High, Grab::Span { offset: 0.0, width: 1.0 }] {
+            assert_eq!(grab.apply(63.0, narrow, narrow, OCTAVE), narrow, "{grab:?}");
+        }
     }
 
     /// Mid-axis, a slid span just follows the pointer at its grabbed offset,
