@@ -3,6 +3,7 @@
 use super::*;
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::events::*;
+use clap_sys::ext::gui::{clap_host_gui, CLAP_EXT_GUI};
 use clap_sys::ext::params::{clap_host_params, clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_host_state, clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
@@ -26,6 +27,9 @@ struct Host {
     pause_value: AtomicBool,
     value_entered: AtomicBool,
     resume_value: AtomicBool,
+    /// `gui.closed` calls, and whether the last asked for destruction.
+    closed: AtomicUsize,
+    closed_destroyed: AtomicBool,
 }
 unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
     let id = unsafe { CStr::from_ptr(id) };
@@ -33,6 +37,8 @@ unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const
         &PARAMS as *const _ as *const c_void
     } else if id == CLAP_EXT_STATE {
         &STATE as *const _ as *const c_void
+    } else if id == CLAP_EXT_GUI {
+        &GUI as *const _ as *const c_void
     } else {
         ptr::null()
     }
@@ -63,6 +69,25 @@ unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
 static PARAMS: clap_host_params =
     clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
 static STATE: clap_host_state = clap_host_state { mark_dirty: Some(dirty) };
+unsafe extern "C" fn hints(_: *const clap_host) {}
+unsafe extern "C" fn resize(_: *const clap_host, _: u32, _: u32) -> bool {
+    false
+}
+unsafe extern "C" fn show_hide(_: *const clap_host) -> bool {
+    false
+}
+unsafe extern "C" fn closed(host: *const clap_host, was_destroyed: bool) {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    stats.closed.fetch_add(1, Ordering::Relaxed);
+    stats.closed_destroyed.store(was_destroyed, Ordering::Relaxed);
+}
+static GUI: clap_host_gui = clap_host_gui {
+    resize_hints_changed: Some(hints),
+    request_resize: Some(resize),
+    request_show: Some(show_hide),
+    request_hide: Some(show_hide),
+    closed: Some(closed),
+};
 
 #[derive(Clone, Copy)]
 enum Input {
@@ -2642,42 +2667,15 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     drop(context);
 }
 
-/// The editor's own window answers the host's `gui.show` and `gui.hide`
-/// through the handler the editor installs. Without one both refuse, as they
-/// always did for an embedded editor, and the handler runs without the
-/// wrapper's lock, so it can clear itself as the editor's close does.
+/// The own window's close button tells the host through `EditorHost::closed`,
+/// which must ask for the editor's destruction: Bitwig's show/hide control
+/// shows the editor closed after `closed(true)`, and still open after a hide
+/// or `closed(false)` (#1609).
 #[test]
-fn gui_show_and_hide_reach_the_installed_handler_and_refuse_without_one() {
-    use clap_sys::ext::gui::{clap_plugin_gui, CLAP_EXT_GUI};
+fn the_close_button_tells_the_host_to_destroy_the_editor() {
     let device = Device::new();
-    let gui = unsafe {
-        &*(((*device.plugin).get_extension.unwrap())(device.plugin, CLAP_EXT_GUI.as_ptr())
-            .cast::<clap_plugin_gui>())
-    };
-    let show = |visible: bool| unsafe {
-        if visible {
-            (gui.show.unwrap())(device.plugin)
-        } else {
-            (gui.hide.unwrap())(device.plugin)
-        }
-    };
     let host = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().unwrap());
-    assert!(!show(false) && !show(true), "no handler: both refuse");
-
-    let asked = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
-    let handler = {
-        let (asked, host) = (asked.clone(), host.clone());
-        std::sync::Arc::new(move |visible: bool| {
-            asked.lock().push(visible);
-            if !visible {
-                host.on_show_hide(None);
-            }
-            true
-        })
-    };
-    host.on_show_hide(Some(handler));
-    assert!(show(true));
-    assert!(show(false), "the hide that clears its own handler");
-    assert!(!show(true), "cleared: refused again");
-    assert_eq!(*asked.lock(), [true, false]);
+    assert!(host.closed(), "a host with a gui extension is told");
+    assert_eq!(device.stats.closed.load(Ordering::Relaxed), 1);
+    assert!(device.stats.closed_destroyed.load(Ordering::Relaxed));
 }
