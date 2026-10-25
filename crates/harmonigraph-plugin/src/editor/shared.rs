@@ -238,7 +238,7 @@ impl EditorShared {
     ///
     /// Only a gap out of a `paced` frame counts: one the display link asked
     /// for, or any frame off macOS, where a fixed timer drives them all. A
-    /// macOS view whose link has paused (hidden, minimized, occluded) runs on
+    /// macOS view whose link has paused (minimized, or ordered out) runs on
     /// baseview's watchdog, a frame every 0.1 s or slower, and that cadence is
     /// the pause rather than a stall: counted, it logged a line per tick.
     pub(super) fn note_frame(&mut self, paced: bool) {
@@ -429,8 +429,8 @@ mod tests {
         for tick in 1..=50 {
             shared.note_frame_at(at(0.7 + 0.21 * f64::from(tick)), false);
         }
-        shared.note_frame_at(at(11.3), true);
-        shared.note_frame_at(at(11.307), true);
+        shared.note_frame_at(at(11.5), true);
+        shared.note_frame_at(at(11.507), true);
         assert_eq!(stalls(&shared), 2, "neither the watchdog's ticks nor the link's return");
     }
 }
