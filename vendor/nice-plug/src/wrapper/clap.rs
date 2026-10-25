@@ -35,6 +35,9 @@ pub trait EditorHost: Send + Sync {
     /// it does by calling `gui.hide`. False where it refuses, or has no gui
     /// extension.
     fn request_hide(&self) -> bool;
+    /// `clap_host_gui::closed`: tell the host the user closed the editor's
+    /// window, and with `was_destroyed`, that the host is to destroy it.
+    fn closed(&self, was_destroyed: bool);
     /// Answer `gui.show` and `gui.hide` with `handler`, or with nothing (both
     /// then refuse) once it is `None`.
     fn on_show_hide(&self, handler: Option<ShowHide>);

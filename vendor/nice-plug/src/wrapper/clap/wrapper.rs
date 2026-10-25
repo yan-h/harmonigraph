@@ -3712,6 +3712,14 @@ impl<P: ClapPlugin> EditorHost for HostGui<P> {
         })
     }
 
+    fn closed(&self, was_destroyed: bool) {
+        let Some(wrapper) = self.0.upgrade() else { return };
+        let host_gui = wrapper.host_gui.borrow();
+        if let Some(host_gui) = host_gui.as_ref() {
+            unsafe_clap_call! { host_gui=>closed(&*wrapper.host_callback, was_destroyed) }
+        }
+    }
+
     fn on_show_hide(&self, handler: Option<ShowHide>) {
         if let Some(wrapper) = self.0.upgrade() {
             *wrapper.show_hide.lock() = handler;

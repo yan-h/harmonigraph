@@ -243,7 +243,13 @@ impl Editor for LatticeEditor {
             },
         );
 
-        pop_out.open(parent, &window, self.egui_state.docked(), self.host.clone());
+        pop_out.open(
+            parent,
+            &window,
+            self.egui_state.docked(),
+            self.host.clone(),
+            self.shared.clone(),
+        );
         self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
             pop_out,

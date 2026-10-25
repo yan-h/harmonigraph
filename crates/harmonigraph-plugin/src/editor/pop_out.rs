@@ -44,6 +44,9 @@ use std::sync::Arc;
 
 use nice_plug::prelude::ParentWindowHandle;
 use nice_plug::wrapper::clap::EditorHost;
+use parking_lot::Mutex;
+
+use super::EditorShared;
 
 #[cfg(target_os = "macos")]
 pub(super) use macos::PopOut;
@@ -66,6 +69,7 @@ mod macos {
 
     use std::path::{Path, PathBuf};
     use std::sync::Weak;
+    use std::time::Instant;
 
     use baseview::WindowHandle;
     use objc2::rc::Retained;
@@ -80,7 +84,6 @@ mod macos {
         MainThreadMarker, NSArray, NSDictionary, NSNotification, NSNumber, NSObject,
         NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
     };
-    use parking_lot::Mutex;
     use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
     /// The level Bitwig gives its plugin windows, measured (CG layer 3), and
@@ -128,6 +131,27 @@ mod macos {
         settling: Option<(i32, u8)>,
         /// Whom the close button asks, absent where there is no CLAP host.
         editor_host: Option<Arc<dyn EditorHost>>,
+        /// PROBE: where the close button writes what the host did.
+        shared: Option<Arc<Mutex<EditorShared>>>,
+        /// PROBE: the close button was Option-clicked, asking the host to
+        /// destroy the editor rather than hide it.
+        close_destroys: bool,
+        /// PROBE: when the close button last asked the host.
+        asked_close: Option<Instant>,
+    }
+
+    /// PROBE: a line on the editor's console, where the host's answers to
+    /// the close button are read.
+    fn log(shared: &Mutex<EditorShared>, line: String) {
+        if let Some(mut shared) = shared.try_lock() {
+            shared.ui.picture.runtime.console.log(line);
+        }
+    }
+
+    fn since(asked: Option<Instant>) -> String {
+        asked.map_or_else(String::new, |asked| {
+            format!(", {:.0} ms after the close button", asked.elapsed().as_secs_f64() * 1000.0)
+        })
     }
 
     fn main_thread() -> MainThreadMarker {
@@ -267,6 +291,7 @@ mod macos {
             window: &WindowHandle,
             docked: bool,
             editor_host: Option<Arc<dyn EditorHost>>,
+            shared: Arc<Mutex<EditorShared>>,
         ) {
             let mtm = main_thread();
             let ParentWindowHandle::AppKitNsView(host) = parent else { return };
@@ -298,6 +323,7 @@ mod macos {
                 view: Some(view),
                 agent: Some(agent),
                 editor_host: editor_host.clone(),
+                shared: Some(shared),
                 ..State::default()
             };
             if let Some(editor_host) = editor_host {
@@ -522,6 +548,9 @@ mod macos {
         pub(in crate::editor) fn close(&self) {
             let _ = main_thread();
             let state = std::mem::take(&mut *self.0.lock());
+            if let (Some(shared), Some(_)) = (&state.shared, state.asked_close) {
+                log(shared, format!("host destroyed the editor{}", since(state.asked_close)));
+            }
             if let Some(editor_host) = &state.editor_host {
                 editor_host.on_show_hide(None);
             }
@@ -542,17 +571,52 @@ mod macos {
 
         /// The close button, deferred from the window's asking: the host is
         /// asked to hide the editor, which it does through [`Self::show_hide`].
+        ///
+        /// PROBE: Bitwig hides it on `request_hide` yet its show/hide control
+        /// still shows the editor open. A click now follows `request_hide`
+        /// with `closed(false)`; an Option-click sends `closed(true)` alone,
+        /// for the host to destroy the editor. Nothing is held across the
+        /// calls, since the host may destroy the editor within them.
         fn ask_host_close(&self) {
             let _ = main_thread();
-            let (host, window) = {
-                let state = self.0.lock();
-                (state.editor_host.clone(), state.window.clone())
+            let (host, window, shared, destroys) = {
+                let mut state = self.0.lock();
+                state.asked_close = Some(Instant::now());
+                (
+                    state.editor_host.clone(),
+                    state.window.clone(),
+                    state.shared.clone(),
+                    state.close_destroys,
+                )
             };
-            if host.is_some_and(|host| host.request_hide()) {
+            let alive = || self.0.lock().agent.is_some();
+            let Some(host) = host else {
+                if let Some(window) = window {
+                    window.miniaturize(None);
+                }
                 return;
-            }
-            if let Some(window) = window {
-                window.miniaturize(None);
+            };
+            let line = if destroys {
+                host.closed(true);
+                format!("close button (Option): sent closed(true); editor alive: {}", alive())
+            } else {
+                let hid = host.request_hide();
+                let alive_after_hide = alive();
+                if hid && alive_after_hide {
+                    host.closed(false);
+                } else if let Some(window) = window.as_ref().filter(|_| alive_after_hide) {
+                    window.miniaturize(None);
+                }
+                format!(
+                    "close button: request_hide -> {}{}; window visible: {}; editor alive: {}",
+                    if hid { "accepted" } else { "REFUSED, minimized" },
+                    if hid && alive_after_hide { ", then sent closed(false)" } else { "" },
+                    window.is_some_and(|window| window.isVisible()),
+                    alive(),
+                )
+            };
+            if let Some(shared) = shared {
+                log(&shared, line);
             }
         }
 
@@ -564,7 +628,15 @@ mod macos {
         /// anew.
         fn show_hide(&self, visible: bool) -> bool {
             let _ = main_thread();
-            let Some(window) = self.0.lock().window.clone() else { return false };
+            let (window, shared, asked) = {
+                let state = self.0.lock();
+                (state.window.clone(), state.shared.clone(), state.asked_close)
+            };
+            if let Some(shared) = shared {
+                let call = if visible { "gui.show" } else { "gui.hide" };
+                log(&shared, format!("host called {call}{}", since(asked)));
+            }
+            let Some(window) = window else { return false };
             if visible {
                 // Minimized, then hidden and shown by the host: ordering out
                 // took it off the Dock, and ordering in alone leaves it
@@ -672,6 +744,14 @@ mod macos {
             /// run loop's next turn.
             #[unsafe(method(windowShouldClose:))]
             fn window_should_close(&self, _: &NSWindow) -> bool {
+                // PROBE: Option held asks for the editor's destruction.
+                // SAFETY: a class property, read on the main thread.
+                let flags: usize =
+                    unsafe { msg_send![objc2::class!(NSEvent), modifierFlags] };
+                const OPTION: usize = 1 << 19;
+                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
+                    pop_out.0.lock().close_destroys = flags & OPTION != 0;
+                }
                 // SAFETY: `hostClose:` is the agent's own method, taking an
                 // object it ignores; the run loop retains the target until
                 // then, so the host destroying the editor cannot free it
@@ -767,6 +847,7 @@ mod elsewhere {
             _: &baseview::WindowHandle,
             _: bool,
             _: Option<Arc<dyn EditorHost>>,
+            _: Arc<Mutex<EditorShared>>,
         ) {
         }
         pub(in crate::editor) fn offered(&self) -> bool {
