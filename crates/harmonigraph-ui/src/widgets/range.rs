@@ -526,7 +526,10 @@ impl<'a> RangeBar<'a> {
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
         if response.double_clicked() {
             if let Some((low, high)) = self.default {
-                (*self.low, *self.high) = (low.clamp(min, max), high.clamp(min, max));
+                // Placed as a slide of the default's own span to its low end,
+                // so the walls and `min_span` hold it as they hold a drag.
+                let reset = Grab::Span { offset: 0.0, width: high - low };
+                (*self.low, *self.high) = reset.apply(low, (low, high), (min, max), self.min_span);
                 response.mark_changed();
             }
         }
@@ -1044,8 +1047,8 @@ mod tests {
     }
 
     /// A double-click puts back the pair handed to `default_value` — not the
-    /// full axis, which is where the gesture went before — and a bar handed
-    /// none leaves its pair alone. Dialled off both first, so neither answer
+    /// full axis, which is where the gesture went before — held to the bar's
+    /// walls and `min_span`, and a bar handed none leaves its pair alone. Dialled off both first, so neither answer
     /// can pass by standing still.
     #[test]
     fn a_double_click_resets_to_the_default_pair() {
@@ -1072,6 +1075,10 @@ mod tests {
         };
         assert_eq!(double_click(Some((48.0, 84.0))), (48.0, 84.0));
         assert_eq!(double_click(None), (30.0, 60.0));
+        // A default narrower than the bar's minimum opens to it, as a drag
+        // would, and one past a wall slides back inside it.
+        assert_eq!(double_click(Some((48.0, 50.0))), (48.0, 48.0 + OCTAVE));
+        assert_eq!(double_click(Some((128.0, 130.0))), (AXIS.1 - OCTAVE, AXIS.1));
     }
 
     /// The second bug this widget shipped with, and the harder one to see: at
