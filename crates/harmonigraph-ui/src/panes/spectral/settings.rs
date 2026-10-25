@@ -398,6 +398,27 @@ pub(crate) fn view_section(
 const ANALYSIS_HINT: &str = "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings. \
      Nothing here changes the pass-through audio.";
 
+/// The Frequency resolution choices, as `(window, label, what it trades)`.
+const WINDOWS: [(crate::SpectrumWindow, &str, &str); 3] = [
+    (crate::SpectrumWindow::Fast, "Fast", "snappy response, blurry bass where close notes merge; low audio-ring fundamentals can disappear while their harmonics remain"),
+    (crate::SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
+    (crate::SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
+];
+
+/// Each choice's hover, named in time, which is what a setting holds at every
+/// sample rate. Built once: a lag is a sum over its kernels, tens of thousands
+/// of `exp` and `cos` across the three, and nothing it reads can change.
+static WINDOW_HINTS: std::sync::LazyLock<[String; 3]> = std::sync::LazyLock::new(|| {
+    WINDOWS.map(|(window, _, hint)| {
+        let lag = crate::SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0);
+        format!(
+            "About as sharp as a {:.0} ms window, drawn about {:.0} ms behind the sound: {hint}",
+            window.listen() as f64 / 48.0,
+            lag * 1000.0
+        )
+    })
+});
+
 /// Measurement controls shared by every audio view: the input and its
 /// resolution, how levels map to height, and how fast the live picture moves.
 /// Set once and left, in every saved project, so the section is one place to
@@ -407,8 +428,6 @@ pub(crate) fn analysis_section(
     cfg: &mut crate::SpectrumConfig,
     params: &dyn ParamBackend,
 ) {
-    use crate::SpectrumWindow;
-
     hinted_section(ui, "Analysis", ANALYSIS_HINT, |ui| {
         if let Some(mut input) = params.analysis_input() {
             let before = input;
@@ -433,27 +452,9 @@ pub(crate) fn analysis_section(
                 params.set_analysis_input(input);
             }
         }
-        let windows = [
-            (SpectrumWindow::Fast, "Fast", "snappy response, blurry bass where close notes merge; low audio-ring fundamentals can disappear while their harmonics remain"),
-            (SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
-            (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
-        ];
-        let hints: Vec<_> = windows
+        let options: Vec<_> = WINDOWS
             .iter()
-            .map(|(window, _, hint)| {
-                // Named in time, which is what a setting holds at every sample rate.
-                let lag = crate::SpectrumConfig { window: *window, ..Default::default() }
-                    .column_lag(48_000.0);
-                format!(
-                    "About as sharp as a {:.0} ms window, drawn about {:.0} ms behind the sound: {hint}",
-                    window.listen() as f64 / 48.0,
-                    lag * 1000.0
-                )
-            })
-            .collect();
-        let options: Vec<_> = windows
-            .iter()
-            .zip(&hints)
+            .zip(WINDOW_HINTS.iter())
             .map(|(&(window, label, _), hint)| (window, label, hint.as_str()))
             .collect();
         choice_row(ui, "Frequency resolution", &mut cfg.window, &options);
