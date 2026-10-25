@@ -74,14 +74,6 @@ jobs:
       # the last step still fails the job. Stopping here made a branch dispatch
       # `regenerate` and wait out a second run of this job before it had
       # anything to import.
-      # What this run built. A PR's run builds the branch MERGED with its base,
-      # whose first parent `fetch` reads to warn when the corpus it imports is
-      # that merge's rather than the branch's own. The raw object, since the
-      # checkout is shallow and its parents are not.
-      - name: Record the commit built
-        run: |
-          mkdir -p target/shader-asset-logs
-          git cat-file -p HEAD | sed -n 's/^parent //p' > target/shader-asset-logs/built-from.log
       - name: Check the committed production corpus
         id: check
         if: ${{ !inputs.regenerate }}
