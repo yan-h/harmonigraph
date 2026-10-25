@@ -124,11 +124,17 @@ const RETIRED_KEYS: &[(&str, &str)] = &[
     // The Spiral's framing, moved out of the appearance to the editor's top
     // level for the same reason, and a struct where those were flags.
     ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),"),
+    // The analyzer's spectrum averaging (#1573), an enum token.
+    ("window", "tapers:Three,"),
+    // Sweep's two listens (#1603).
+    ("window", "sweep_bass:10240.0,sweep_treble:2048.0,"),
+    // The frame cap, which the display link's divisor replaced (#1553).
+    ("frame_rate", "fps_cap:Some(90.0),"),
 ];
 
 /// A retired key costs nothing: through both doors — the editor's
-/// `load_persist`, and the `AppearanceDocument::parse` that take replay and
-/// explicit export share — the rest of the document loads at the values it
+/// `load_persist`, and, for a key inside the appearance, the
+/// `AppearanceDocument::parse` that take replay and explicit export share — the rest of the document loads at the values it
 /// holds, and the key is gone on the next save.
 ///
 /// `load_persist` takes the whole `UiPersist` or nothing, so a key that failed
@@ -160,9 +166,17 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
         assert!(restored.load_persist(&splice(&saved)), "{retired} sank the editor blob");
         assert_eq!(restored.save_persist(), saved, "{retired} changed what the editor loaded");
 
-        let parsed = AppearanceDocument::parse(&splice(&appearance))
-            .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
-        assert_eq!(parsed.serialize(), appearance, "{retired} changed what the appearance loaded");
+        // The anchor's one pair in the editor blob is in the appearance it
+        // nests, or the key is editor-only (`fps_cap`) and has no second door.
+        if !pair_starts(&appearance, anchor).is_empty() {
+            let parsed = AppearanceDocument::parse(&splice(&appearance))
+                .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
+            assert_eq!(
+                parsed.serialize(),
+                appearance,
+                "{retired} changed what the appearance loaded"
+            );
+        }
     }
 }
 
@@ -181,6 +195,8 @@ const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     ("settings_tab", "Tuning", "Display", false),
     // The Mappings tab's variant, before it took the tab's title.
     ("settings_tab", "Tuning", "Colors", false),
+    // The gliding frequency resolution (#1603).
+    ("window", "Fast", "Sweep", true),
 ];
 
 /// A dropped variant refuses the WHOLE document, and says so on the Console.
