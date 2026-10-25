@@ -3208,14 +3208,18 @@ impl<P: ClapPlugin> Wrapper<P> {
         // This is only relevant for floating windows
     }
 
+    /// Refused, as is [`Self::ext_gui_hide`]. Bitwig calls the two for an
+    /// embedded editor on every switch of the frontmost app: `hide` within
+    /// milliseconds of Bitwig losing focus, `show` as it regains it
+    /// (measured in Bitwig 6.1.6). An editor that answered them by hiding a
+    /// window of its own would vanish whenever another app came forward,
+    /// which is what the editor's own window exists to survive (#1580);
+    /// #1607's answering did exactly that.
     unsafe extern "C" fn ext_gui_show(_plugin: *const clap_plugin) -> bool {
-        // TODO: Does this get used? Is this only for the free-standing window extension? (which we
-        //       don't implement) This wouldn't make any sense for embedded editors.
         false
     }
 
     unsafe extern "C" fn ext_gui_hide(_plugin: *const clap_plugin) -> bool {
-        // TODO: Same as the above
         false
     }
 
