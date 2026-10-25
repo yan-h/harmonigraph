@@ -71,9 +71,13 @@ only the scalar tail is needed across callbacks.
 The read stops at the first NUL or the end of the host's fixed buffer.
 The name is not saved state;
 tuning sources follow it unless the user has set a custom name (#1426).
+- **Editor host** (`src/wrapper/clap.rs`, `src/wrapper/clap/wrapper.rs`): `ClapPlugin::clap_editor_host` hands the plugin an `EditorHost` before the editor is made, whose `closed` calls `clap_host_gui::closed(true)` so the editor's own window can ask the host to destroy the editor (#1607, #1609).
+`gui.show` and `gui.hide` still refuse, as upstream:
+Bitwig calls them on every switch of the frontmost app, so answering them hid the editor's own window whenever another app came forward.
+`crates/harmonigraph-plugin/src/configuration/tests.rs` checks that `closed` reaches a host's gui extension asking for destruction.
 - **VST3 wrapper**: unpatched upstream, and not compiled into Harmonigraph, which ships only as a CLAP and depends on nice-plug without its default `vst3` feature (#1185).
 The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) and their fixture were reverted with the export, so an upgrade has nothing VST3 to reapply.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, track info, root wrapper and state glue, manifest features, and both boundary fixtures.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, track info, the editor host, root wrapper and state glue, manifest features, and both boundary fixtures.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
