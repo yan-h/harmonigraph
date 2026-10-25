@@ -6,6 +6,7 @@ use crossbeam::atomic::AtomicCell;
 use egui::Context;
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SizeSource};
 use nice_plug::prelude::{Editor, GuiContext, ParentWindowHandle, ResizeHint};
+use nice_plug::wrapper::clap::EditorHost;
 use parking_lot::Mutex;
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
@@ -43,11 +44,13 @@ pub(super) fn graphics_config() -> GraphicsConfig {
 pub fn create(
     params: Arc<HarmonigraphParams>,
     shared: Arc<Mutex<EditorShared>>,
+    host: Option<Arc<dyn EditorHost>>,
 ) -> Option<Box<dyn Editor>> {
     Some(Box::new(LatticeEditor {
         egui_state: params.editor_state.clone(),
         params,
         shared,
+        host,
         gpu_context: egui_baseview::SharedGpuContext::default(),
         // On macOS the system reports scaling; elsewhere a host that never
         // calls set_scale_factor gets 1.0 (same policy as nih_plug_egui).
@@ -62,6 +65,7 @@ pub(super) struct LatticeEditor {
     egui_state: Arc<EguiState>,
     params: Arc<HarmonigraphParams>,
     shared: Arc<Mutex<EditorShared>>,
+    host: Option<Arc<dyn EditorHost>>,
     scaling_factor: AtomicCell<Option<f32>>,
     gpu_context: egui_baseview::SharedGpuContext,
 }
@@ -239,7 +243,13 @@ impl Editor for LatticeEditor {
             },
         );
 
-        pop_out.open(parent, &window, self.egui_state.docked());
+        pop_out.open(
+            parent,
+            &window,
+            self.egui_state.docked(),
+            self.host.clone(),
+            self.shared.clone(),
+        );
         self.egui_state.set_open(true);
         Box::new(LatticeEditorHandle {
             pop_out,

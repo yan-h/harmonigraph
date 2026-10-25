@@ -103,7 +103,7 @@ use super::util::ClapPtr;
 use crate::event_loop::{BackgroundThread, EventLoop, MainThreadExecutor, TASK_QUEUE_CAPACITY};
 use crate::midi::MidiResult;
 use crate::util::permit_alloc;
-use crate::wrapper::clap::ClapPlugin;
+use crate::wrapper::clap::{ClapPlugin, EditorHost};
 use crate::wrapper::clap::context::RemoteControlPages;
 use crate::wrapper::clap::util::{read_stream, write_stream};
 use crate::wrapper::state::{self};
@@ -221,6 +221,9 @@ pub struct Wrapper<P: ClapPlugin> {
 
     clap_plugin_gui: clap_plugin_gui,
     host_gui: AtomicRefCell<Option<ClapPtr<clap_host_gui>>>,
+    /// Calls to `gui.hide` and `gui.show`, for [`EditorHost::hides_and_shows`].
+    gui_hides: AtomicU32,
+    gui_shows: AtomicU32,
 
     clap_plugin_latency: clap_plugin_latency,
     host_latency: AtomicRefCell<Option<ClapPtr<clap_host_latency>>>,
@@ -771,6 +774,8 @@ impl<P: ClapPlugin> Wrapper<P> {
                 hide: Some(Self::ext_gui_hide),
             },
             host_gui: AtomicRefCell::new(None),
+            gui_hides: AtomicU32::new(0),
+            gui_shows: AtomicU32::new(0),
 
             clap_plugin_latency: clap_plugin_latency {
                 get: Some(Self::ext_latency_get),
@@ -871,6 +876,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         *wrapper.background_thread.borrow_mut() =
             Some(BackgroundThread::get_or_create(Arc::downgrade(&wrapper)));
 
+        wrapper.plugin.lock().clap_editor_host(Arc::new(HostGui(Arc::downgrade(&wrapper))));
         // The editor also needs to be initialized later so the Async executor can work.
         *wrapper.editor.borrow_mut() = wrapper
             .plugin
@@ -3207,14 +3213,20 @@ impl<P: ClapPlugin> Wrapper<P> {
         // This is only relevant for floating windows
     }
 
-    unsafe extern "C" fn ext_gui_show(_plugin: *const clap_plugin) -> bool {
+    unsafe extern "C" fn ext_gui_show(plugin: *const clap_plugin) -> bool {
         // TODO: Does this get used? Is this only for the free-standing window extension? (which we
         //       don't implement) This wouldn't make any sense for embedded editors.
+        check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
+        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
+        wrapper.gui_shows.fetch_add(1, Ordering::Relaxed);
         false
     }
 
-    unsafe extern "C" fn ext_gui_hide(_plugin: *const clap_plugin) -> bool {
+    unsafe extern "C" fn ext_gui_hide(plugin: *const clap_plugin) -> bool {
         // TODO: Same as the above
+        check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
+        let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
+        wrapper.gui_hides.fetch_add(1, Ordering::Relaxed);
         false
     }
 
@@ -3683,5 +3695,32 @@ unsafe fn query_host_extension<T>(
         unsafe { Some(ClapPtr::new(extension_ptr as *const T)) }
     } else {
         None
+    }
+}
+
+/// One wrapper's [`EditorHost`], held weakly: the plugin keeps it, and the
+/// wrapper keeps the plugin.
+struct HostGui<P: ClapPlugin>(Weak<Wrapper<P>>);
+
+impl<P: ClapPlugin> EditorHost for HostGui<P> {
+    fn request_hide(&self) -> Option<bool> {
+        let wrapper = self.0.upgrade()?;
+        let host_gui = wrapper.host_gui.borrow();
+        let host_gui = host_gui.as_ref()?;
+        Some(unsafe_clap_call! { host_gui=>request_hide(&*wrapper.host_callback) })
+    }
+
+    fn closed(&self, was_destroyed: bool) {
+        let Some(wrapper) = self.0.upgrade() else { return };
+        let host_gui = wrapper.host_gui.borrow();
+        if let Some(host_gui) = host_gui.as_ref() {
+            unsafe_clap_call! { host_gui=>closed(&*wrapper.host_callback, was_destroyed) }
+        }
+    }
+
+    fn hides_and_shows(&self) -> (u32, u32) {
+        self.0.upgrade().map_or((0, 0), |wrapper| {
+            (wrapper.gui_hides.load(Ordering::Relaxed), wrapper.gui_shows.load(Ordering::Relaxed))
+        })
     }
 }

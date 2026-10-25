@@ -23,8 +23,14 @@
 //! What the host's window did for the editor, this one does in its place. It
 //! floats above the host's windows while the host is in front, as Bitwig's
 //! did, and drops to the normal level while another app is, which is where
-//! Bitwig's would have vanished. It has no close button: a CLAP plugin cannot
-//! ask its host to close the editor, so opening and closing stay the host's.
+//! Bitwig's would have vanished.
+//!
+//! Its close button does not close it: the editor is the host's to destroy,
+//! and the host's show/hide control would otherwise still think it open. The
+//! button asks the host instead ([`EditorHost`]), on the run loop's next turn
+//! since the host may destroy the editor during the call. PROBE: which of
+//! `request_hide` and `closed` Bitwig honours is unmeasured, so the button
+//! tries the first, falls back to the second, and logs what happened.
 //!
 //! The view's size is the size source's to set, as for a host resize: the
 //! size source asks [`PopOut::take_size`] first, at the top of the frame it
@@ -35,6 +41,10 @@
 use std::sync::Arc;
 
 use nice_plug::prelude::ParentWindowHandle;
+use nice_plug::wrapper::clap::EditorHost;
+use parking_lot::Mutex;
+
+use super::EditorShared;
 
 #[cfg(target_os = "macos")]
 pub(super) use macos::PopOut;
@@ -57,20 +67,21 @@ mod macos {
 
     use std::path::{Path, PathBuf};
     use std::sync::Weak;
+    use std::time::Instant;
 
     use baseview::WindowHandle;
     use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
     use objc2_app_kit::{
-        NSBackingStoreType, NSView, NSWindow, NSWindowLevel, NSWindowOrderingMode,
-        NSWindowStyleMask, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
+        NSBackingStoreType, NSView, NSWindow, NSWindowDelegate, NSWindowLevel,
+        NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
+        NSWorkspaceDidActivateApplicationNotification,
     };
     use objc2_foundation::{
         MainThreadMarker, NSArray, NSDictionary, NSNotification, NSNumber, NSObject,
         NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
     };
-    use parking_lot::Mutex;
     use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
     /// The level Bitwig gives its plugin windows, measured (CG layer 3), and
@@ -116,6 +127,16 @@ mod macos {
         /// the looks run out with the window still raised over everything,
         /// so the next app to come forward tucks it instead.
         settling: Option<(i32, u8)>,
+        /// Whom the close button asks, absent where there is no CLAP host.
+        editor_host: Option<Arc<dyn EditorHost>>,
+        /// Where the close button's probe writes what the host did.
+        shared: Option<Arc<Mutex<EditorShared>>>,
+        /// When the close button last asked the host.
+        asked_close: Option<Instant>,
+    }
+
+    fn log(shared: &Mutex<EditorShared>, line: String) {
+        shared.lock().ui.picture.runtime.console.log(line);
     }
 
     fn main_thread() -> MainThreadMarker {
@@ -254,6 +275,8 @@ mod macos {
             parent: ParentWindowHandle,
             window: &WindowHandle,
             docked: bool,
+            editor_host: Option<Arc<dyn EditorHost>>,
+            shared: Arc<Mutex<EditorShared>>,
         ) {
             let mtm = main_thread();
             let ParentWindowHandle::AppKitNsView(host) = parent else { return };
@@ -284,6 +307,8 @@ mod macos {
                 host: Some(host),
                 view: Some(view),
                 agent: Some(agent),
+                editor_host,
+                shared: Some(shared),
                 ..State::default()
             };
             if !docked {
@@ -388,20 +413,24 @@ mod macos {
         }
 
         fn pop(&self, mtm: MainThreadMarker) {
-            let (host, view, exe) = {
+            let (host, view, agent, closable) = {
                 let state = self.0.lock();
                 let (None, Some(host), Some(view), Some(agent)) =
                     (&state.window, &state.host, &state.view, &state.agent)
                 else {
                     return;
                 };
-                (host.clone(), view.clone(), agent.ivars().exe.clone())
+                (host.clone(), view.clone(), agent.clone(), state.editor_host.is_some())
             };
+            let exe = agent.ivars().exe.clone();
 
             let content = view.frame().size;
-            let style = NSWindowStyleMask::Titled
+            let mut style = NSWindowStyleMask::Titled
                 | NSWindowStyleMask::Miniaturizable
                 | NSWindowStyleMask::Resizable;
+            if closable {
+                style |= NSWindowStyleMask::Closable;
+            }
             // SAFETY: a plain window, created and owned on the main thread.
             let own = unsafe {
                 NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -418,6 +447,9 @@ mod macos {
             // Already NO for a plain NSWindow; said anyway, since it is the
             // whole difference from the host's window.
             own.setHidesOnDeactivate(false);
+            // The close button asks the agent, which refuses it and asks the
+            // host. The window keeps the delegate weakly; `State` owns both.
+            own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
             own.setTitle(&NSString::from_str("Harmonigraph"));
             let min = super::super::MIN_SIZE;
             own.setContentMinSize(NSSize::new(f64::from(min.0), f64::from(min.1)));
@@ -494,6 +526,15 @@ mod macos {
         pub(in crate::editor) fn close(&self) {
             let _ = main_thread();
             let state = std::mem::take(&mut *self.0.lock());
+            if let (Some(asked), Some(shared)) = (state.asked_close, &state.shared) {
+                log(
+                    shared,
+                    format!(
+                        "close button: host destroyed the editor {:.0} ms after asking",
+                        asked.elapsed().as_secs_f64() * 1000.0
+                    ),
+                );
+            }
             if let Some(agent) = &state.agent {
                 // SAFETY: removing an observer this added, still alive.
                 unsafe {
@@ -504,8 +545,49 @@ mod macos {
                 if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
                     reveal(&host_window);
                 }
+                window.setDelegate(None);
                 window.close();
             }
+        }
+
+        /// The close button, deferred from the window's asking: ask the host
+        /// to close the editor. Nothing is held across the calls, since the
+        /// host may destroy the editor within them, which runs
+        /// [`Self::close`] and takes the shared state's lock.
+        fn ask_host_close(&self) {
+            let _ = main_thread();
+            let (Some(host), Some(shared)) = ({
+                let mut state = self.0.lock();
+                state.asked_close = Some(Instant::now());
+                (state.editor_host.clone(), state.shared.clone())
+            }) else {
+                return;
+            };
+            let before = host.hides_and_shows();
+            let hide = host.request_hide();
+            let fallback = hide != Some(true) && self.0.lock().agent.is_some();
+            if fallback {
+                host.closed(true);
+            }
+            let after = host.hides_and_shows();
+            let alive = self.0.lock().agent.is_some();
+            log(
+                &shared,
+                format!(
+                    "close button: request_hide -> {}{}; gui.hide x{} gui.show x{} during                      ({} / {} in all); editor {}",
+                    match hide {
+                        None => "no host gui",
+                        Some(true) => "accepted",
+                        Some(false) => "REFUSED",
+                    },
+                    if fallback { ", then sent closed(was_destroyed)" } else { "" },
+                    after.0 - before.0,
+                    after.1 - before.1,
+                    after.0,
+                    after.1,
+                    if alive { "still alive" } else { "destroyed during the call" },
+                ),
+            );
         }
 
         /// Another app came to the front, or the host did: float above the
@@ -587,6 +669,27 @@ mod macos {
 
         unsafe impl NSObjectProtocol for Agent {}
 
+        unsafe impl NSWindowDelegate for Agent {
+            /// The close button: refused, and the host asked instead on the
+            /// run loop's next turn.
+            #[unsafe(method(windowShouldClose:))]
+            fn window_should_close(&self, _: &NSWindow) -> bool {
+                // SAFETY: `hostClose:` is the agent's own method, taking an
+                // object it ignores; the run loop retains the target until
+                // then, so the host destroying the editor cannot free it
+                // mid-call.
+                let () = unsafe {
+                    msg_send![
+                        self,
+                        performSelector: sel!(hostClose:),
+                        withObject: None::<&AnyObject>,
+                        afterDelay: 0.0f64
+                    ]
+                };
+                false
+            }
+        }
+
         impl Agent {
             /// Another app came to the front, or the host did.
             #[unsafe(method(activated:))]
@@ -602,6 +705,13 @@ mod macos {
             fn apply(&self, _: Option<&AnyObject>) {
                 if let Some(pop_out) = self.ivars().pop_out.upgrade() {
                     pop_out.apply();
+                }
+            }
+
+            #[unsafe(method(hostClose:))]
+            fn host_close(&self, _: Option<&AnyObject>) {
+                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
+                    pop_out.ask_host_close();
                 }
             }
 
@@ -658,6 +768,8 @@ mod elsewhere {
             _: ParentWindowHandle,
             _: &baseview::WindowHandle,
             _: bool,
+            _: Option<Arc<dyn EditorHost>>,
+            _: Arc<Mutex<EditorShared>>,
         ) {
         }
         pub(in crate::editor) fn offered(&self) -> bool {

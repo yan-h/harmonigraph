@@ -22,6 +22,19 @@ pub use clap_sys::version::CLAP_VERSION;
 use nice_plug_core::context::remote_controls::RemoteControlsContext;
 use nice_plug_core::plugin::Plugin;
 
+/// The host's `clap_host_gui` calls that end an editor, for an editor with a
+/// window of its own (see [`ClapPlugin::clap_editor_host`]). Main thread only.
+pub trait EditorHost: Send + Sync {
+    /// `request_hide`, or `None` where the host has no gui extension.
+    fn request_hide(&self) -> Option<bool>;
+    /// `closed`: the editor's window is gone, and with `was_destroyed` the
+    /// host must destroy the editor.
+    fn closed(&self, was_destroyed: bool);
+    /// How many times the host has called the plugin's `gui.hide` and
+    /// `gui.show`, which do nothing for an embedded editor.
+    fn hides_and_shows(&self) -> (u32, u32);
+}
+
 /// Provides auxiliary metadata needed for a CLAP plugin.
 #[allow(unused_variables)]
 pub trait ClapPlugin: Plugin {
@@ -36,6 +49,11 @@ pub trait ClapPlugin: Plugin {
     const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &[];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[];
+
+    /// Called once, before the editor is created, with the host's side of
+    /// closing it: CLAP gives the host the editor's lifetime, and an editor
+    /// that closes its own window asks the host through this.
+    fn clap_editor_host(&mut self, host: std::sync::Arc<dyn EditorHost>) {}
 
     /// Called once off audio, before editor construction. The handle's methods
     /// are off-thread only; the wrapper retains all shared allocations.
