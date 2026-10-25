@@ -82,8 +82,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         attack, release, keyline_lift, roll_seconds, roll_thickness, roll_lead,
         roll_lead_fade, roll_lead_release, note_cut, note_cut_reach, note_cut_shape,
         note_fill_lightness, note_name_scale,
-        volume_floor_db, volume_ceiling_db, backdrop_strength, backdrop_height, backdrop_gap,
-        sweep_bass, sweep_treble);
+        volume_floor_db, volume_ceiling_db, backdrop_strength, backdrop_height, backdrop_gap);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the
     // nearest offered step rather than clamping — and `roll_fraction` is set
@@ -480,8 +479,6 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
             ]);
             if scenario.enabled {
                 labels.extend([
-                    "Bass listen",
-                    "Treble listen",
                     "Pitch softness",
                     "Time softness",
                     "Texture mix",

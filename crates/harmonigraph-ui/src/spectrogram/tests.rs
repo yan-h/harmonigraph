@@ -938,8 +938,7 @@ fn the_plan_decides_the_layout_without_a_frame() {
 /// Actual upload behavior is checked by the headless renderer tests.
 #[test]
 fn no_cache_layer_falls_back_as_the_window_scrolls() {
-    // Every fixed window the pane offers, by the lag it gives a column (Sweep
-    // lags as Precise does, within a fraction of a percent).
+    // Every window the pane offers, by the lag it gives a column.
     let windows = [
         ("Fast", crate::SpectrumWindow::Fast),
         ("Balanced", crate::SpectrumWindow::Balanced),
