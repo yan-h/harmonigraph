@@ -52,10 +52,10 @@ impl Grab {
     ///
     /// That last fallback is the whole reason this is a function. A span that
     /// already fills the range has nowhere to slide, so panning it does
-    /// nothing at all — and the range's default IS the full axis, so a bar
-    /// that only panned from the middle would be dead exactly where everyone
-    /// first meets it. When there's no room to pan, a middle drag takes the
-    /// nearer end instead.
+    /// nothing at all — and the full axis is where a window zoomed all the way
+    /// out sits, so a bar that only panned from the middle would be dead
+    /// exactly where the widest view leaves it. When there's no room to pan, a
+    /// middle drag takes the nearer end instead.
     ///
     /// **The mirror of that has no fallback, and the cost is a band that is
     /// inert one way.** An end held against `min_span` cannot move inward, so a
@@ -207,7 +207,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
     // outside the span either side, and between the handles. Each is
     // clipped to the region, which is what holds the numbers off the name
     // — a handle parked under the name (the low end at the bottom of its
-    // axis, where the two bars that open at the full range both sit) would
+    // axis, where a bar dragged out to the full range sits) would
     // otherwise open a run that starts inside the name's own letters.
     let clipped = |(start, end): (f32, f32)| (start.max(region_left), end.min(region_right));
     let gaps = [
@@ -280,7 +280,8 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 
 /// A two-handle [`ValueBar`]: one control for the pair of values that bound a
 /// range. Drag either end to move it, drag between them to slide the whole
-/// span at a fixed width, double-click to reset to the full range.
+/// span at a fixed width, double-click to put back the pair handed to
+/// [`default_value`](RangeBar::default_value).
 ///
 /// Positions are linear in the value, and that is the whole trick behind the
 /// pitch-range control: its values are MIDI note numbers, and a scale linear
@@ -288,8 +289,9 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// a log-frequency control for free, and `display` formats each end however
 /// suits it — the pitch range drags semitones and reads out Hz.
 ///
-/// Double-click resets rather than opening text entry (ValueBar's use of the
-/// gesture): a bar with two ends has no single value to type into it.
+/// Double-click resets the way a [`ValueBar`]'s does, to the setting's fresh
+/// pair, so the gesture means one thing on every bar. A bar with two ends has
+/// no single value to type into it, so Cmd-click opens nothing here.
 ///
 /// **Named on the bar, exactly where a [`ValueBar`] names itself**, so a range
 /// costs the one row it is worth rather than a row for the control and a row
@@ -335,8 +337,8 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// about a sixth of the axis at the width the settings column opens at, a
 /// tenth on a bar twice that wide.
 ///
-/// Most bars only reach it while the low end is DRAGGED there: a bar that
-/// opens at the full axis stands its low handle a point clear of the name, and
+/// Most bars only reach it while the low end is DRAGGED there: a bar dragged
+/// out to the full axis stands its low handle a point clear of the name, and
 /// the pitch and level color ranges open at a fifth and a third of their axes.
 /// The two [`fade_span`](RangeBar::fade_span) bars, Cross length and Held-note
 /// extension, rest inside it at a fresh install — each one's low end is where
@@ -371,6 +373,8 @@ pub struct RangeBar<'a> {
     /// Whether the span is painted as a fade off the end of a fill (see
     /// [`RangeBar::fade_span`]) rather than as a filled slice of the track.
     fade_span: bool,
+    /// Where a double-click puts the pair (see [`RangeBar::default_value`]).
+    default: Option<(f32, f32)>,
     display: fn(f32) -> String,
 }
 
@@ -389,8 +393,23 @@ impl<'a> RangeBar<'a> {
             min_span: 0.0,
             integer: false,
             fade_span: false,
+            default: None,
             display: |v| format!("{v:.2}"),
         }
+    }
+
+    /// The pair a double-click puts back: the setting's fresh one, as on a
+    /// [`ValueBar::default_value`]. A bar with none ignores the double-click.
+    ///
+    /// Not the full axis, which this gesture used to reach for: on a soft
+    /// edge that is the widest, softest one there is, and on a window onto an
+    /// axis it is a zoom-out that one rule across every bar was worth more
+    /// than.
+    ///
+    /// [`ValueBar::default_value`]: super::value::ValueBar::default_value
+    pub fn default_value(mut self, (low, high): (f32, f32)) -> Self {
+        self.default = Some((low, high));
+        self
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
@@ -457,7 +476,12 @@ impl<'a> RangeBar<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         #[cfg(test)]
-        super::range_probe::record(self.label, &[*self.low, *self.high], &self.range);
+        super::range_probe::record_range_bar(
+            self.label,
+            (*self.low, *self.high),
+            &self.range,
+            self.default,
+        );
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
         let (rect, mut response) = ui.allocate_exact_size(
@@ -473,7 +497,7 @@ impl<'a> RangeBar<'a> {
         // clamping where they are PLACED rather than where they mean, which is
         // the same bargain the strip makes.
         //
-        // Every other range bar keeps the inset. They open at the FULL axis,
+        // Every other range bar keeps the inset. Dragged out to the FULL axis,
         // where flush handles at both ends sit under the corner rounding on a
         // bare track and read as the bar's own border — the affordance
         // HANDLE_INSET exists for, and which a bar opening on a fill does not
@@ -501,9 +525,10 @@ impl<'a> RangeBar<'a> {
         // ---- Interaction ----------------------------------------------------
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
         if response.double_clicked() {
-            *self.low = min;
-            *self.high = max;
-            response.mark_changed();
+            if let Some((low, high)) = self.default {
+                (*self.low, *self.high) = (low.clamp(min, max), high.clamp(min, max));
+                response.mark_changed();
+            }
         }
         // Decided on the first frame of the gesture and remembered for the rest
         // of it (see `drag`), so dragging one end past the other doesn't hand
@@ -1018,10 +1043,41 @@ mod tests {
         assert_eq!(hi - lo, OCTAVE, "the span stopped at {} rather than the minimum", hi - lo);
     }
 
+    /// A double-click puts back the pair handed to `default_value` — not the
+    /// full axis, which is where the gesture went before — and a bar handed
+    /// none leaves its pair alone. Dialled off both first, so neither answer
+    /// can pass by standing still.
+    #[test]
+    fn a_double_click_resets_to_the_default_pair() {
+        let double_click = |default: Option<(f32, f32)>| {
+            let (mut lo, mut hi) = (30.0f32, 60.0f32);
+            after_passes(
+                300.0,
+                |bar| {
+                    let at = bar.center();
+                    let click =
+                        vec![egui::Event::PointerMoved(at), press(at, true), press(at, false)];
+                    vec![click.clone(), click]
+                },
+                |ui| {
+                    let bar =
+                        RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE);
+                    match default {
+                        Some(pair) => bar.default_value(pair).show(ui),
+                        None => bar.show(ui),
+                    }
+                },
+            );
+            (lo, hi)
+        };
+        assert_eq!(double_click(Some((48.0, 84.0))), (48.0, 84.0));
+        assert_eq!(double_click(None), (30.0, 60.0));
+    }
+
     /// The second bug this widget shipped with, and the harder one to see: at
-    /// the full range — which is the pitch axis's DEFAULT — both handles sat
-    /// flush against the bar's ends, 3px wide, under the corner rounding. The
-    /// control was then pixel-identical to a ValueBar filled to 100%: nothing
+    /// the full range — where zooming the pitch axis all the way out leaves
+    /// it — both handles sat flush against the bar's ends, 3px wide, under the
+    /// corner rounding. The control was then pixel-identical to a ValueBar filled to 100%: nothing
     /// on screen said it had ends to grab, so it read as "not there at all".
     #[test]
     fn the_handles_read_as_handles_even_at_the_limits() {

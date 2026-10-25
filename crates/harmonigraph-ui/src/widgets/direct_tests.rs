@@ -230,8 +230,8 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
 }
 /// The bar keeps its own pair through a drag: an end dragged off level
 /// layers comes back the way it went, rather than clamping against the end
-/// that followed it, and a double click, which resets a range bar to its
-/// whole axis, spreads no layer across it.
+/// that followed it, and a double click, on a bar with no default pair,
+/// leaves the layers alone.
 #[test]
 fn the_star_range_bar_drags_level_layers_both_ways_and_ignores_a_double_click() {
     let values = std::cell::RefCell::new([0.5; 5]);

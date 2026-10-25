@@ -9,9 +9,10 @@ pub(crate) struct Visit {
     pub label: String,
     pub values: Vec<f32>,
     pub range: RangeInclusive<f32>,
-    /// `Some` for a [`ValueBar`](super::value::ValueBar), holding its
-    /// double-click target if it has one; `None` for every other control.
-    pub default: Option<Option<f32>>,
+    /// `Some` for a [`ValueBar`](super::value::ValueBar) or a
+    /// [`RangeBar`](super::range::RangeBar), holding its double-click target,
+    /// one number per value, if it has one; `None` for every other control.
+    pub default: Option<Option<Vec<f32>>>,
 }
 
 thread_local! {
@@ -28,10 +29,24 @@ pub(super) fn record_value_bar(
     range: &RangeInclusive<f32>,
     default: Option<f32>,
 ) {
-    push(label, &[value], range, Some(default));
+    push(label, &[value], range, Some(default.map(|d| vec![d])));
 }
 
-fn push(label: &str, values: &[f32], range: &RangeInclusive<f32>, default: Option<Option<f32>>) {
+pub(super) fn record_range_bar(
+    label: &str,
+    (low, high): (f32, f32),
+    range: &RangeInclusive<f32>,
+    default: Option<(f32, f32)>,
+) {
+    push(label, &[low, high], range, Some(default.map(|(l, h)| vec![l, h])));
+}
+
+fn push(
+    label: &str,
+    values: &[f32],
+    range: &RangeInclusive<f32>,
+    default: Option<Option<Vec<f32>>>,
+) {
     SCOPES.with_borrow_mut(|scopes| {
         if let Some(visits) = scopes.last_mut() {
             visits.push(Visit {

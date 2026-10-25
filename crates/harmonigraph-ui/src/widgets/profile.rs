@@ -174,9 +174,9 @@ pub(crate) fn depth(
             // Written back only on a change: the round trip is not exact, and
             // the values key star placement. Each layer keeps its share of the
             // range; when every layer is level they move with the end dragged.
-            // A double click resets a range bar to the whole axis, which here
-            // would spread every layer across it, so it does nothing.
-            if response.changed() && !response.double_clicked() {
+            // No `default_value`, so a double-click leaves the layers alone:
+            // the pair is read off them and has no fresh value of its own.
+            if response.changed() {
                 for &(k, _) in &drawn {
                     let t = if big > small {
                         (to_bar(from[k]) - small) / (big - small)
