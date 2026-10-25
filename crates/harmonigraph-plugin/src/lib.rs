@@ -139,7 +139,8 @@ pub struct Harmonigraph {
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<Mutex<editor::EditorShared>>,
-    /// The host's side of closing the editor, given before the editor is made.
+    /// The host's showing and hiding of the editor, given before the editor is
+    /// made, which its own window's close button goes through.
     editor_host: Option<Arc<dyn nice_plug::wrapper::clap::EditorHost>>,
     sample_rate: f64,
     samples_processed: u64,

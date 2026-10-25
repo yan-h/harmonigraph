@@ -566,6 +566,12 @@ mod macos {
             let _ = main_thread();
             let Some(window) = self.0.lock().window.clone() else { return false };
             if visible {
+                // Minimized, then hidden and shown by the host: ordering out
+                // took it off the Dock, and ordering in alone leaves it
+                // minimized with nowhere to restore it from.
+                if window.isMiniaturized() {
+                    window.deminiaturize(None);
+                }
                 window.makeKeyAndOrderFront(None);
             } else {
                 window.orderOut(None);
