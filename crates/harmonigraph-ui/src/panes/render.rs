@@ -30,6 +30,17 @@ const PREVIEW_SURFACE: usize = 1;
 /// picture. See [`frame_chrome`].
 const FRAME_CHROME_PAD: f32 = 7.0;
 
+/// The inset the crop ticks need: a line's width clear of the outline, and
+/// half their own past that. In fixed points, as the lines are.
+const TICK_ROOM: f32 = 3.0 * theme::LINE_WIDTH;
+
+/// The inset round the render frame at UI `scale` in a preview `size` across:
+/// the design pad, never too little for the crop ticks, and shrunk on a small
+/// preview rather than eating it.
+fn chrome_pad(scale: f32, size: egui::Vec2) -> f32 {
+    (FRAME_CHROME_PAD * scale).max(TICK_ROOM).min(size.min_elem() * 0.15)
+}
+
 /// The preview keeps at least this much height, even when the controls above
 /// it have already used the pane up. See [`render_pane`] — the floor is what
 /// lets the pane overflow, and overflow is what the wheel scrolls.
@@ -67,8 +78,8 @@ pub(crate) fn render_pane(
         let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
         // Inset before letterboxing: `letterbox` fits the box exactly on one axis,
         // so without this the frame's boundary chrome would have nowhere to go on
-        // two sides. Shrinks on a small preview rather than eating it.
-        let pad = (FRAME_CHROME_PAD * scale).min(size.min_elem() * 0.15);
+        // two sides.
+        let pad = chrome_pad(scale, size);
         let box_rect = letterbox(outer.shrink(pad), aspect);
         // Compose with the SAME Layout the offline renderer resolves.
         let layout = Layout::split(frame.lattice, frame.split);
@@ -469,10 +480,10 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
     // One step further out than the outline, a line's width clear of it so the
     // two read as two marks rather than one thick one, and only when the inset
     // left room for them.
-    let out = 2.5 * theme::LINE_WIDTH;
-    if out + 0.5 * theme::LINE_WIDTH > pad {
+    if pad < TICK_ROOM {
         return;
     }
+    let out = TICK_ROOM - 0.5 * theme::LINE_WIDTH;
     let len = (box_rect.size().min_elem() * 0.05).clamp(4.0, 14.0);
     let stroke = egui::Stroke::new(theme::LINE_WIDTH, theme::text_dim());
     for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
@@ -772,6 +783,17 @@ pub(crate) fn capture_export(
 mod tests {
     use super::*;
     use crate::SpectralOrientation;
+
+    /// The crop ticks are drawn at every UI scale a roomy preview can be
+    /// shown at. The pad scales with the chrome and the lines do not, so
+    /// without a floor the low end of the range left them no room.
+    #[test]
+    fn a_roomy_preview_has_room_for_the_crop_ticks_at_every_scale() {
+        let roomy = egui::vec2(600.0, 400.0);
+        for scale in [*theme::UI_SCALE_RANGE.start(), 1.0, *theme::UI_SCALE_RANGE.end()] {
+            assert!(chrome_pad(scale, roomy) >= TICK_ROOM, "no ticks at {scale}");
+        }
+    }
 
     fn drag_preview(
         frame: &mut crate::RenderFrame,
