@@ -50,10 +50,9 @@ key therefore picks the new value up, so "restyle the fresh view" and "restyle a
 That is the intended trade, not an accident.
 - Camera zoom, `layout` and `folded_sections` are navigation state, deliberately not baked into
 defaults.
-- A capture moves no lattice or spectral-pane golden frame:
-those sets draw from the pinned `crates/harmonigraph-golden/look.ron`, not from these defaults.
-The `spectrogram-style-*` pair does not yet: its `cloud_fixture` reads `SpectralAtmosphere`, `MaterialSettings` and `StarSettings` defaults, so a capture that moves them moves the pair.
-A golden that moves under a capture is a fixture still reading a default, so pin that fixture rather than stating a picture change (the `pr-hygiene` skill).
+- A capture moves no golden frame:
+all three sets draw from the pinned `crates/harmonigraph-golden/look.ron`, not from these defaults.
+A golden that moves anyway is a fixture still reading a default, so pin that fixture rather than stating a picture change (the `pr-hygiene` skill).
 
 ## Using `--appearance`
 

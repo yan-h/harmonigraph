@@ -2,12 +2,13 @@
 //! byte-exactly against what its base draws. A reported move is always between
 //! two draws on the same machine in the same run; in CI, an answer of no move
 //! may instead come from the base's frames cached by main's own run on the same
-//! runner image (`tools/golden-diff.py --base-frames`).
+//! macOS build (`tools/golden-diff.py --base-frames`).
 //!
 //! Only the MECHANISM lives here. What a frame is OF, and what a diff on it
 //! means, belongs with the scenes — `harmonigraph-render`'s
-//! `lattice_tests::golden` and `harmonigraph-offline`'s `golden` each carry
-//! their own set and their own reading of one.
+//! `lattice_tests::golden` and `spectrogram/tests.rs` and
+//! `harmonigraph-offline`'s `golden` each carry their own set and their own
+//! reading of one.
 //!
 //! A golden test draws its frame and hands it to [`Gate::check`], which checks
 //! it is a picture at all and, under [`WRITE`], writes it out. That is all a
@@ -27,7 +28,7 @@
 //! frame saving moved no pixel — which needs a base drawn on the same machine,
 //! not a record.
 //!
-//! There is one mechanism rather than one per crate so that the two sets cannot
+//! There is one mechanism rather than one per crate so that the sets cannot
 //! drift apart in what they compare or where they write.
 
 use std::collections::BTreeSet;
@@ -43,8 +44,9 @@ use std::path::{Path, PathBuf};
 /// from them. Pinned, a capture moves nothing here, and whether the fresh look
 /// is right is judged where it is seen, in the DAW.
 ///
-/// Each crate parses what it draws from: the offline set the whole document,
-/// the lattice set only its `view`. Missing keys take the field's `Default`,
+/// Each set parses what it draws from: the offline set the whole document,
+/// the lattice set only its `view`, the spectrogram styles only the spectrum's
+/// `atmosphere`. Missing keys take the field's `Default`,
 /// as in any saved blob (the `persistence-contract` skill), so how it ages is
 /// worth knowing before a frame moves:
 ///

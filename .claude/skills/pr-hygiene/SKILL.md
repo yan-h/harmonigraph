@@ -54,9 +54,8 @@ a refactor, a frame saving, a cache —
 where `tools/golden-diff.py --strict` (exit 1 if anything moved) is the proof of "behaviour-preserving" this repo has, and can now be had before pushing.
 On a PR that means to move the picture it is a formality, so keep those rare:
 
-- The lattice and spectral-pane frames are drawn from the pinned look in `crates/harmonigraph-golden/look.ron`, never from the fresh defaults, so capturing a DAW look as the new defaults moves none of them.
-  The `spectrogram-style-*` pair is the exception: `cloud_fixture` still fills its atmosphere, materials and stars from `harmonigraph_scene`'s defaults, so a capture that moves those moves the pair.
-  A golden that moves under a capture is a fixture still reading a default: pin it rather than state it as a picture change.
+- Every frame is drawn from the pinned look in `crates/harmonigraph-golden/look.ron`, never from the fresh defaults, so capturing a DAW look as the new defaults moves no golden.
+  A golden that does move under a capture is a fixture still reading a default: pin it rather than state it as a picture change.
   `harmonigraph_golden::LOOK` documents how the pinned look ages under a new, renamed or dropped field.
 - Do not add a golden for a look still being dialled in.
   It moves on every round and proves nothing, as the starfield's did through #1136–#1457;
