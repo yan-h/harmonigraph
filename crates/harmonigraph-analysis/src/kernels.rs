@@ -1,5 +1,5 @@
 //! How every pitch bucket reads the frame's transform: at its own frequency,
-//! through its own listen.
+//! through the one listen every bucket shares.
 //!
 //! **One transform, and a small kernel per bucket.** Shortening a window is
 //! multiplying the frame by a narrower envelope, and multiplying in time is
@@ -83,8 +83,9 @@ pub(crate) const FIXED_CENTRE: f64 = 0.8;
 /// A Gaussian of spread `s` is the product of two about the same centre whose
 /// spreads `a` and `b` satisfy `1/s^2 = 1/a^2 + 1/b^2`, and the fixed listen is
 /// one Gaussian at every pitch, so it can be split anywhere between the frame
-/// and the kernels and every bucket still reads through all of it. The wider the kernels' share in time, the narrower they are in bins and the
-/// fewer taps they take: here 1.06 bins where the whole listen's were 1.84,
+/// and the kernels and every bucket still reads through all of it. The wider
+/// the kernels' share in time, the narrower they are in bins and the fewer taps
+/// they take: here 1.06 bins where the whole listen's were 1.84,
 /// which is 42% fewer taps, a quarter off the reads and 12 to 16% off a column
 /// through each fixed frame.
 ///
@@ -122,20 +123,18 @@ pub const fn fixed_frame(listen: usize) -> usize {
 ///
 /// A kernel sampled at whole bins is the transform of the frame times a
 /// Gaussian REPEATED every transform length, so a frame that filled the whole
-/// transform would be read through the neighbouring copies' tails as well. That
-/// is not a level error but a PITCH one, and it grows as the listen approaches
-/// the frame: on an unpadded transform the longest listen read a partial up to
-/// 0.06 of a bin off. Padding moves the copies a whole frame further from the
-/// listen's centre. Measured against known tones, twice is enough (under 0.2
-/// cents above 50 Hz at a centred listen of 0.89 of the frame, longer than any
-/// a fixed window takes); four times buys nothing more.
+/// transform would be read through the neighbouring copies' tails as well:
+/// not a level error but a PITCH one.
 ///
 /// The frame is placed so that the listen's centre is the transform's middle
-/// ([`Kernels::offset`]), which keeps the copies equally far either side: for
-/// the fixed listen the nearest one is 1.2 frames from the frame's oldest
-/// sample, and the frame's window, which carries the rest of that listen
+/// ([`Kernels::offset`]), which keeps the copies equally far either side. With
+/// a frame of zeros the nearest copy is 1.2 frames from the frame's oldest
+/// sample, and the frame's window, which carries the rest of the listen
 /// ([`FIXED_KERNEL_SPREAD`]), brings it to at most `1.5e-7` of the listen's
-/// peak anywhere in the frame.
+/// peak anywhere in the frame. Unpadded, the copy would sit a frame behind the
+/// listen's centre, nearer than that centre to the oldest 0.3 of the frame,
+/// and bend the window there at about 1% of its peak. Four times buys nothing
+/// more.
 pub(crate) const PAD: usize = 2;
 
 /// How far out each kernel is kept, in its own standard deviations.
@@ -158,11 +157,10 @@ const KERNEL_REACH: f64 = 5.0;
 /// deviations of its whole listen's kernel, to be read at all.
 ///
 /// A kernel clipped by the edge of the usable bins reads a lopsided slice of the
-/// spectrum, and its peak walks away from the partial — at 1.7 of these, a
-/// 20.6 Hz partial through a 4096-sample frame read 48 cents off. From 2 the
-/// error stays within about 13 cents (3.4 through the Fast frame, whose fixed
-/// listen is shorter than that frame's longest), which is what this keeps; nearer the edge the
-/// bucket reads as nothing, the truth about a frame too short to place it. At
+/// spectrum, and its peak walks away from the partial. From 2 the error stays
+/// within 3.4 cents through the Fast frame, which is what this keeps; nearer
+/// the edge the bucket reads as nothing, the truth about a frame too short to
+/// place it. At
 /// 48 kHz that is 20 to 22 Hz through the Fast frame, and 20 to 44 Hz through
 /// it at 96 kHz.
 ///
@@ -191,14 +189,21 @@ pub(crate) fn lag_samples(fft_size: usize) -> f64 {
     (fft_size - 1) as f64 - centroid
 }
 
-/// The fixed listen's window — the frame's Hann window under the fixed
-/// Gaussian — summed once for everything that asks about it: its sum, where its
-/// weight is centred relative to the listen's centre, and its spread about that.
+/// The listen's window — the frame's Hann window under the listen's Gaussian —
+/// summed once for everything that asks about it: its sum, where its weight is
+/// centred relative to the listen's centre, and its spread about that.
 fn fixed_moments(fft_size: usize) -> (f64, f64, f64) {
-    let centre = listen_centre(fft_size);
-    let hann = |i: usize| f64::from(crate::hann_weight(i, fft_size));
-    let [sum, first, second] =
-        listen_moments(fft_size, centre, FIXED_SPREAD * fft_size as f64, hann);
+    let centre = listen_centre(fft_size) as f64;
+    let sigma = FIXED_SPREAD * fft_size as f64;
+    let (mut sum, mut first, mut second) = (0.0f64, 0.0f64, 0.0f64);
+    for i in 0..fft_size {
+        let x = i as f64 - centre;
+        let d = x / sigma;
+        let w = f64::from(crate::hann_weight(i, fft_size)) * (-0.5 * d * d).exp();
+        sum += w;
+        first += w * x;
+        second += w * x * x;
+    }
     let mean = first / sum;
     (sum, mean, (second / sum - mean * mean).sqrt())
 }
@@ -230,8 +235,7 @@ struct Point {
     at: u32,
 }
 
-/// Which kernels each bucket reads, for one listen, frame length and sample
-/// rate. Rebuilt by [`plan`](Self::plan) whenever any of those change, and read
+/// Which kernels each bucket reads, for one frame length and sample rate. Rebuilt by [`plan`](Self::plan) whenever any of those change, and read
 /// unchanged by every column between.
 pub(crate) struct Kernels {
     /// Per bucket, the range of [`points`](Self::points) it reads; empty is a
@@ -265,8 +269,8 @@ impl Kernels {
     }
 
     /// What the frame is multiplied by before its transform, `fft_size` long:
-    /// its Hann window, under a fixed listen times the share of that listen's
-    /// Gaussian the kernels do not read ([`FIXED_KERNEL_SPREAD`]).
+    /// its Hann window times the share of the listen's Gaussian the kernels do
+    /// not read ([`FIXED_KERNEL_SPREAD`]).
     pub(crate) fn window(&self) -> &[f32] {
         &self.window
     }
@@ -422,47 +426,9 @@ fn norm_power(sum: f64) -> f32 {
     (4.0 / (sum * sum)) as f32
 }
 
-/// The window `w` of a frame of `n` under a Gaussian of spread `sigma` about
-/// sample `centre`: its sum, and its first and second moments about `centre`,
-/// which say where the window's weight sits and how widely it spreads.
-///
-/// The sums are taken every `STRIDE` samples. They run at every plan and every
-/// lag asked of a config, which an export does once per frame, and a strided
-/// sum of a smooth integrand that vanishes at both ends is spectrally accurate:
-/// its error is the Gaussian's transform at the stride's own frequency,
-/// `exp(-2 pi^2 sigma^2 / STRIDE^2)`, which for the shortest listen (Fast's, a
-/// spread of 1062 samples) is far under any float's precision. The moments'
-/// integrands are the same one times a polynomial, as smooth.
-fn listen_moments(n: usize, centre: usize, sigma: f64, w: impl Fn(usize) -> f64) -> [f64; 3] {
-    const STRIDE: usize = 16;
-    // The Gaussian at whole multiples of the stride out from the centre, by
-    // recurrence rather than an `exp` per sample: each step's ratio is the last
-    // one's times a constant.
-    let s = STRIDE as f64;
-    let q = (-s * s / (sigma * sigma)).exp();
-    let mut sum = w(centre);
-    let (mut first, mut second) = (0.0f64, 0.0f64);
-    let (mut g, mut ratio) = (1.0f64, (-s * s / (2.0 * sigma * sigma)).exp());
-    let mut d = STRIDE;
-    while d <= centre.max(n - 1 - centre) {
-        g *= ratio;
-        ratio *= q;
-        let below = if d <= centre { w(centre - d) } else { 0.0 };
-        let above = if centre + d < n { w(centre + d) } else { 0.0 };
-        let x = d as f64;
-        sum += g * (below + above);
-        first += g * x * (above - below);
-        second += g * x * x * (below + above);
-        d += STRIDE;
-    }
-    [sum * s, first * s, second * s]
-}
-
 #[cfg(test)]
 mod tests {
-    use harmonigraph_core::spectrum::{
-        hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI,
-    };
+    use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     use super::*;
     use crate::{AnalyzerConfig, SpectrumAnalyzer};
@@ -497,8 +463,8 @@ mod tests {
         100.0 * (midi - hz_to_midi(hz))
     }
 
-    /// The contract every absolute dB rests on, held bucket by bucket: each
-    /// bucket's own window is normalized, and a bucket wider than its response
+    /// The contract every absolute dB rests on, held bucket by bucket: the
+    /// listen's window is normalized, and a bucket wider than its response
     /// is read at several frequencies, half the response's spread apart, so a
     /// partial between two readings is dimmed by a quarter of a dB at most.
     #[test]
@@ -506,9 +472,7 @@ mod tests {
         // A partial on the boundary between two of the widest buckets, the one
         // place a single reading per bucket would be furthest from it.
         let top = &BUCKET_FREQUENCIES[SPECTRUM_BINS - 40];
-        // The listen through the shortest and longest of
-        // the fixed frames: the fixed listen is off the frame's middle, so its
-        // window's sum is a different one.
+        // The shortest and longest frames.
         for frame in [6144, 24_576] {
             let config = AnalyzerConfig { sample_rate: RATE, fft_size: frame };
             for hz in [30.0, 110.0, 440.0, 1999.0, 7531.0, 15_000.0, top.upper_hz] {
@@ -537,12 +501,8 @@ mod tests {
                     .filter(|&b| level[b] > level[b - 1] && level[b] >= level[b + 1])
                     .filter(|&b| cents_off(b, hz).abs() > 100.0)
                     .map(|b| {
-                        (
-                            midi_to_hz(
-                                SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32,
-                            ),
-                            10.0 * level[b].log10(),
-                        )
+                        let f = &BUCKET_FREQUENCIES[b];
+                        ((f.lower_hz * f.upper_hz).sqrt(), 10.0 * level[b].log10())
                     })
                     .fold((0.0, f32::NEG_INFINITY), |a, b| if b.1 > a.1 { b } else { a });
                 assert!(
@@ -622,13 +582,13 @@ mod tests {
 
     /// The shipped analyzer, ring wrap and padding included, against an
     /// independent f64 transform: each bucket read through its kernel is the
-    /// frame, mean removed, through the Hann window times that bucket's own
+    /// frame, mean removed, through the Hann window times the listen's
     /// Gaussian, evaluated directly at the bucket's own frequency.
     ///
     /// That equality is the whole of what the kernels claim, and the two sides
     /// share nothing but the window and the normalization: one convolves the
-    /// padded FFT, the other sums the frame in time. The fixed frames put the
-    /// Gaussian off the frame's middle, which only the frame's placement in the
+    /// padded FFT, the other sums the frame in time. The listen's Gaussian sits
+    /// off the frame's middle, which only the frame's placement in the
     /// transform keeps real.
     #[test]
     fn a_kernel_reads_the_frame_through_its_buckets_own_window() {

@@ -2,11 +2,10 @@
 //!
 //! Each channel owns a planned RealFFT real-input transform (a half-size
 //! complex FFT plus postprocessing), with reusable input/output/scratch. One
-//! column is one transform of the latest frame through a Hann window (and,
-//! under a fixed listen, part of that listen), zero-padded to twice its
-//! length, and every pitch bucket then reads that transform at its OWN
-//! frequency through a small kernel, which also narrows the frame to that
-//! bucket's listen — see [`kernels`]. Live and
+//! column is one transform of the latest frame through a Hann window and part
+//! of the listen, zero-padded to twice its length, and every pitch bucket then
+//! reads that transform at its OWN frequency through a small kernel, which
+//! carries the rest of the listen — see [`kernels`]. Live and
 //! offline consumers share all of it verbatim. Exact-zero retained windows
 //! still emit zero columns without transforming, so history and release
 //! continue advancing.
@@ -35,9 +34,8 @@ pub const DEFAULT_FFT_SIZE: usize = fixed_frame(8192);
 #[derive(Clone, Copy, Debug)]
 pub struct AnalyzerConfig {
     pub sample_rate: f32,
-    /// The FRAME: how much audio one column is taken from, in every mode, and
-    /// so how long a listen it can give. A fixed window listens through about
-    /// two thirds of it.
+    /// The FRAME: how much audio one column is taken from, and so how long a
+    /// listen it can give. The listen is about two thirds of it.
     pub fft_size: usize,
 }
 
@@ -52,9 +50,8 @@ impl AnalyzerConfig {
     /// placed at the moment the LAST of it arrived.
     ///
     /// The window's amplitude centroid, which is about where a tone that starts
-    /// or stops reads half its level: exactly under a symmetric window, and
-    /// within a hundredth of the frame under the fixed one, whose half-weight
-    /// point is a little newer. It is the same at every pitch
+    /// or stops reads half its level: within a hundredth of the frame, the
+    /// window's half-weight point being a little newer. It is the same at every pitch
     /// because every bucket listens about the same instant, so one lag places
     /// the whole column. The listen sits toward the frame's newest end, so the
     /// lag is about a third of the frame, as long as the plain Hann window it

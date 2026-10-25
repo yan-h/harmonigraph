@@ -240,9 +240,8 @@ impl SpectrumAnalysis {
     ) -> Result<(), E> {
         // A changed rate empties the analyzers' rings, so nothing comes out
         // until they have refilled; a changed frame carries what the new one
-        // can use, so only a longer one waits, for the rest of it; a changed
-        // sweep only replans how the same frame is read. The hop grid keeps its
-        // phase across any gap rather than restarting on it.
+        // can use, so only a longer one waits, for the rest of it. The hop grid
+        // keeps its phase across any gap rather than restarting on it.
         self.analyzer.configure(config.analyzer(sample_rate), channels);
 
         // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
