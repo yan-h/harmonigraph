@@ -1391,7 +1391,7 @@ where
         // (spacebar, etc.) pass through unless a widget wants keyboard input.
         match &event {
             baseview::Event::Keyboard(event) => {
-                self.key_capture.status(event, self.egui_ctx.egui_wants_keyboard_input())
+                self.key_capture.status(event, egui_claims_key(&self.egui_ctx, event))
             }
             baseview::Event::Mouse(_) => {
                 if self.egui_ctx.egui_is_using_pointer() || self.egui_ctx.egui_wants_pointer_input()
@@ -1404,6 +1404,18 @@ where
             baseview::Event::Window(_) => EventStatus::Captured,
         }
     }
+}
+
+/// Whether egui has a use for this key, so the host must not act on it too.
+///
+/// A focused widget claims every key. A selection in a label claims only the
+/// copy chord: unclaimed, the same Cmd-C also goes up to the DAW (#1433), and
+/// its own Copy competes with the label's for the pasteboard.
+fn egui_claims_key(ctx: &egui::Context, event: &keyboard_types::KeyboardEvent) -> bool {
+    use egui::text_selection::LabelSelectionState;
+    ctx.egui_wants_keyboard_input()
+        || is_copy_command(crate::translate::translate_modifiers(event.modifiers), event.code)
+            && ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
 }
 
 fn is_cut_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
@@ -1473,5 +1485,49 @@ mod key_capture_tests {
                 assert_eq!(KeyCapture::IgnoreAll.status(&event, true), EventStatus::Ignored);
             }
         }
+    }
+
+    #[test]
+    fn a_label_selection_claims_the_copy_chord_and_nothing_else() {
+        use keyboard_types::{Code, Key, KeyboardEvent, Modifiers as M};
+        let command = if cfg!(target_os = "macos") { M::META } else { M::CONTROL };
+        let chord = |key: &str, code, modifiers| KeyboardEvent {
+            key: Key::Character(key.into()),
+            code,
+            modifiers,
+            ..Default::default()
+        };
+        let copy = chord("c", Code::KeyC, command);
+
+        let ctx = egui::Context::default();
+        // Draws the label, and says where it went.
+        let frame = |events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut label = Rect::NOTHING;
+            let _ = ctx.run_ui(raw, |ui| label = ui.label("frame stall 41 ms").rect);
+            label
+        };
+        let label = frame(vec![]);
+        assert!(!egui_claims_key(&ctx, &copy), "nothing selected: the host keeps Cmd-C");
+
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let (from, to) = (label.left_center() + vec2(1.0, 0.0), label.right_center());
+        frame(vec![egui::Event::PointerMoved(from), press(from, true)]);
+        frame(vec![egui::Event::PointerMoved(to)]);
+        frame(vec![press(to, false)]);
+        frame(vec![]);
+
+        assert!(egui_claims_key(&ctx, &copy), "a selected label claims Cmd-C");
+        assert!(!egui_claims_key(&ctx, &chord("c", Code::KeyC, M::empty())));
+        assert!(!egui_claims_key(&ctx, &chord("v", Code::KeyV, command)));
     }
 }
