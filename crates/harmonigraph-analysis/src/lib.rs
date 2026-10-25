@@ -537,10 +537,11 @@ mod tests {
     /// Where the kernels can read STARTS at a fixed BIN of the frame (1, the
     /// first above DC, and a kernel's clearance above that, 2.8 bins in all)
     /// and therefore at a moving FREQUENCY: about 22 Hz through the Fast frame
-    /// at 48 kHz, but 44 Hz at 96 kHz. So the buckets that read the first
-    /// usable bins are only on the axis AT ALL at the shorter frames and the
-    /// higher rates, and a bound that quietly excludes them is invisible at
-    /// 12288/48 kHz — which is every other test here.
+    /// at 48 kHz, but 44 Hz through the same 6144 samples at 96 kHz, which the
+    /// UI no longer asks for but the analyzer still takes. So the buckets that
+    /// read the first usable bins are only on the axis AT ALL at the shorter
+    /// frames and the higher rates, and a bound that quietly excludes them is
+    /// invisible at 12288/48 kHz — which is every other test here.
     ///
     /// The failure this pins is a band of the axis reading as silence with the
     /// tone in it: two static lines with a hole between them, and the hole does

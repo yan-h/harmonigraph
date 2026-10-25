@@ -310,8 +310,10 @@ thread_local! {
 /// what the ring holds) or a give (appending its columns): microseconds for
 /// the two or three columns a step usually brings, and a few milliseconds at
 /// most for a full ring's 170, reachable only after this thread was starved
-/// for 1.37 s. The FFTs between them, some 40 ms for that ring at the
-/// historical estimate above, hold nothing. The thread runs at the GUI's
+/// for 1.37 s. The FFTs between them, some 10 ms for that ring through Fast
+/// at 48 kHz and 36 through Precise (see
+/// [`AudioSpectrum::push_samples`](harmonigraph_ui::AudioSpectrum::push_samples)),
+/// hold nothing. The thread runs at the GUI's
 /// scheduling class on macOS (see [`InputWorker::spawn`]), so a frame waiting
 /// on one of those holds is not also waiting for this thread to be scheduled.
 fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {

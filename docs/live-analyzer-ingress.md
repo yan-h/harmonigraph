@@ -37,7 +37,9 @@ Offline seeking remains a separate access mechanism.
 
 The first retained frame establishes the source origin of each continuous run.
 Every FFT boundary then follows integer frame counts at the existing hop interval,
-and every column retains the existing half-window center offset and channel power combination.
+and every column is dated `AnalyzerConfig::column_lag` before its newest sample,
+the amplitude centroid of the window it is read through,
+and keeps the existing channel power combination.
 The current note `ClockMapper` offset converts the source origin to GUI seconds once per drain,
 in the same hold that observes the heartbeat it comes from.
 The analyzer does not estimate another offset from arrival time or smooth at callback boundaries.
