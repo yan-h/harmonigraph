@@ -24,44 +24,28 @@ pub enum SpectrumWindow {
     /// balance between the two.
     Balanced,
     /// As sharp as a 16,384-sample Hann window (172 ms behind the sound).
+    ///
+    /// A fourth setting, Sweep, glided the listen with pitch, long in the bass
+    /// and short in the treble. It was removed (#1600), so a blob naming it
+    /// fails to parse and the editor opens at defaults.
     Precise,
-    /// A 16384-sample frame read through a listen that glides with pitch, from
-    /// [`SpectrumConfig::sweep_bass`] at 20 Hz to
-    /// [`SpectrumConfig::sweep_treble`] at 20 kHz (#1560). One window cannot
-    /// suit both ends of a pitch axis; this gives each bucket its own, with no
-    /// bands to leave seams. It listens about the frame's middle, so its
-    /// columns are drawn half the frame behind the sound (171 ms), about as far
-    /// as Precise's, and stay aligned across the whole axis. See
-    /// `harmonigraph_analysis::Sweep`.
-    Sweep,
-}
-
-/// The listens a [`Sweep`](SpectrumWindow::Sweep) end can ask for, in
-/// Hann-equivalent samples: from the analyzer's shortest to the longest its
-/// frame can give without false peaks, 5/8 of the frame.
-pub fn sweep_length_range() -> std::ops::RangeInclusive<f32> {
-    harmonigraph_analysis::SWEEP_MIN_LENGTH
-        ..=harmonigraph_analysis::sweep_max_length(SpectrumWindow::Sweep.frame()).floor()
 }
 
 impl SpectrumWindow {
-    /// What a fixed resolution is named by: the plain Hann window it is as
-    /// sharp as, in samples, the unit [`SpectrumConfig::sweep_bass`] and
-    /// [`SpectrumConfig::sweep_treble`] are set in. `None` under
-    /// [`Sweep`](SpectrumWindow::Sweep), whose listen glides between those two.
-    pub fn listen(self) -> Option<usize> {
+    /// What a resolution is named by: the plain Hann window it is as sharp as,
+    /// in samples.
+    pub fn listen(self) -> usize {
         match self {
-            SpectrumWindow::Fast => Some(4096),
-            SpectrumWindow::Balanced => Some(8192),
-            SpectrumWindow::Precise => Some(16_384),
-            SpectrumWindow::Sweep => None,
+            SpectrumWindow::Fast => 4096,
+            SpectrumWindow::Balanced => 8192,
+            SpectrumWindow::Precise => 16_384,
         }
     }
 
     /// The analyzer's frame: how many samples one column is read from, which
     /// the analysis crate sizes for the listen.
     pub fn frame(self) -> usize {
-        self.listen().map_or(harmonigraph_analysis::SWEEP_FRAME, harmonigraph_analysis::fixed_frame)
+        harmonigraph_analysis::fixed_frame(self.listen())
     }
 }
 
@@ -281,14 +265,6 @@ pub struct SpectrumConfig {
     /// flip.
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
-    /// The [`Sweep`](SpectrumWindow::Sweep) setting's listen at 20 Hz and at
-    /// 20 kHz, in samples of an equivalent Hann window, so 4096 is Fast's
-    /// listen (Precise's, 16384, is past the longest a Sweep reaches). Between
-    /// them it glides log-linearly in
-    /// frequency. Inert under the other settings. Bounded by
-    /// [`sweep_length_range`].
-    pub sweep_bass: f32,
-    pub sweep_treble: f32,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
     pub floor_db: f32,
@@ -611,16 +587,9 @@ impl SpectrumConfig {
     }
 
     /// The analyzer these settings ask for at `sample_rate`: the window's
-    /// frame, and its sweep when the window is [`Sweep`](SpectrumWindow::Sweep).
+    /// frame.
     pub fn analyzer(&self, sample_rate: f32) -> harmonigraph_analysis::AnalyzerConfig {
-        harmonigraph_analysis::AnalyzerConfig {
-            sample_rate,
-            fft_size: self.window.frame(),
-            sweep: (self.window == SpectrumWindow::Sweep).then_some(harmonigraph_analysis::Sweep {
-                bass: self.sweep_bass,
-                treble: self.sweep_treble,
-            }),
-        }
+        harmonigraph_analysis::AnalyzerConfig { sample_rate, fft_size: self.window.frame() }
     }
 
     /// How far before its newest sample a column analyzed under these settings
@@ -689,10 +658,6 @@ impl SpectrumConfig {
         } else {
             fresh.tilt
         };
-        let sweep = sweep_length_range();
-        self.sweep_bass = bounded(self.sweep_bass, fresh.sweep_bass, *sweep.start(), *sweep.end());
-        self.sweep_treble =
-            bounded(self.sweep_treble, fresh.sweep_treble, *sweep.start(), *sweep.end());
         self.keyline_lift = bounded(self.keyline_lift, fresh.keyline_lift, 0.0, 1.0);
         self.backdrop_strength = bounded(self.backdrop_strength, fresh.backdrop_strength, 0.0, 1.0);
         self.backdrop_height = bounded(
@@ -949,13 +914,6 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Right,
             window: SpectrumWindow::Fast,
-            // The longest listen the frame allows at the bottom, and half of
-            // Fast's listen at the top, which is a 4096-sample Hann window's:
-            // as near the bass of Precise as the frame reads without false
-            // peaks, with the treble of Fast. #1560's sheets picked 13,500 at
-            // the bottom, which drew the frame's sidelobes (#1592).
-            sweep_bass: 10_240.0,
-            sweep_treble: 2048.0,
             // The analyzer's level window as captured from the DAW on
             // 2026-09-10. Its floor and ceiling are independent of the
             // heatmap's colour window below.

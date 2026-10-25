@@ -34,34 +34,6 @@ fn display_recovers_after_nonfinite_audio() {
     assert!(shown.iter().any(|p| *p > 0.01), "the curve recovers, not just the history");
 }
 
-/// Every window reads each partial at its own pitch, so what tells Sweep from
-/// a fixed window is how long it listens: the fresh sweep's listen at 1 kHz is
-/// under a third of Precise's, so its peak is that much wider. Ten buckets (31
-/// cents) off a 1 kHz tone, Sweep still reads it 17 dB down, Precise 68. A
-/// Sweep setting that stopped at the config would read its 16,384-sample frame
-/// through the fixed listen instead, 58 dB down there.
-#[test]
-fn the_sweep_setting_reaches_the_analyzer() {
-    let khz = ((harmonigraph_core::spectrum::hz_to_midi(1000.0)
-        - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as usize;
-    for (window, skirt) in
-        [(SpectrumWindow::Sweep, -30.0..0.0), (SpectrumWindow::Precise, -120.0..-40.0)]
-    {
-        let mut spectrum = AudioSpectrum::default();
-        let config = SpectrumConfig { window, attack: 0.0, ..SpectrumConfig::default() };
-        let sine: Vec<f32> = (0..2 * window.frame())
-            .map(|i| 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / 48_000.0).sin())
-            .collect();
-        spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
-        let last = spectrum.history().back().expect("the frame filled");
-        let power: Vec<f32> = last.power_sum().collect();
-        let peak = (khz - 2..=khz + 2).max_by(|&a, &b| power[a].total_cmp(&power[b])).unwrap();
-        let off = 10.0 * (power[peak - 10].max(power[peak + 10]) / power[peak]).log10();
-        assert!(skirt.contains(&off), "{window:?} reads 31 cents off a 1 kHz tone at {off:+.1} dB");
-    }
-}
-
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
     // Each window reads A4 at its own pitch, to within a bucket, the Fast one

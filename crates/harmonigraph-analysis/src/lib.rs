@@ -16,9 +16,7 @@ use harmonigraph_core::spectrum::{
 };
 
 mod kernels;
-pub use kernels::{
-    fixed_frame, max_length as sweep_max_length, Sweep, SWEEP_FRAME, SWEEP_MIN_LENGTH,
-};
+pub use kernels::fixed_frame;
 
 /// The default frame length (~0.26 s at 48 kHz), the UI's Balanced setting;
 /// its fresh one is Fast. The UI changes it through
@@ -41,10 +39,6 @@ pub struct AnalyzerConfig {
     /// so how long a listen it can give. A fixed window listens through about
     /// two thirds of it.
     pub fft_size: usize,
-    /// How long each bucket listens: gliding with pitch under a [`Sweep`],
-    /// about the frame's middle, and the same at every pitch without one,
-    /// toward the frame's newest end — see [`kernels`].
-    pub sweep: Option<Sweep>,
 }
 
 impl AnalyzerConfig {
@@ -62,21 +56,20 @@ impl AnalyzerConfig {
     /// within a hundredth of the frame under the fixed one, whose half-weight
     /// point is a little newer. It is the same at every pitch
     /// because every bucket listens about the same instant, so one lag places
-    /// the whole column. Under a [`Sweep`] it is half the frame; a fixed window
-    /// listens toward its newest end, so its lag is about a third of its frame,
-    /// as long as the plain Hann window it is as sharp as.
+    /// the whole column. The listen sits toward the frame's newest end, so the
+    /// lag is about a third of the frame, as long as the plain Hann window it
+    /// is as sharp as.
     ///
     /// The one source of it: the analyzer stamps its columns with this and an
     /// export reads this far past each frame, so the two agree by construction.
     pub fn column_lag(&self) -> f64 {
-        kernels::lag_samples(self.fft_size, self.sweep.is_some())
-            / f64::from(self.sample_rate.max(1.0))
+        kernels::lag_samples(self.fft_size) / f64::from(self.sample_rate.max(1.0))
     }
 }
 
 impl Default for AnalyzerConfig {
     fn default() -> Self {
-        Self { sample_rate: 48_000.0, fft_size: DEFAULT_FFT_SIZE, sweep: None }
+        Self { sample_rate: 48_000.0, fft_size: DEFAULT_FFT_SIZE }
     }
 }
 
@@ -85,7 +78,6 @@ impl Default for AnalyzerConfig {
 struct BucketFrequencies {
     lower_hz: f32,
     upper_hz: f32,
-    center_hz: f32,
 }
 
 static BUCKET_FREQUENCIES: std::sync::LazyLock<[BucketFrequencies; SPECTRUM_BINS]> =
@@ -96,7 +88,6 @@ static BUCKET_FREQUENCIES: std::sync::LazyLock<[BucketFrequencies; SPECTRUM_BINS
             BucketFrequencies {
                 lower_hz: midi_to_hz(midi - half_bucket),
                 upper_hz: midi_to_hz(midi + half_bucket),
-                center_hz: midi_to_hz(midi),
             }
         })
     });
@@ -112,9 +103,6 @@ pub struct SpectrumAnalyzer {
     /// Samples the ring holds, pushed or carried in by a frame change (see
     /// [`configure`](Self::configure)), saturating at `fft_size`.
     filled: usize,
-    /// The Hann window, precomputed, `fft_size` long. See [`hann`]. The frame is
-    /// multiplied by [`kernels::Kernels::window`], which is built from it.
-    hann: Vec<f32>,
     /// A plan and its reusable buffers, owned by this channel, for a transform
     /// [`kernels::PAD`] frames long. The planner is dropped after
     /// configuration; no cross-channel or global plan cache.
@@ -132,14 +120,11 @@ pub struct SpectrumAnalyzer {
     /// none can be left reading the previous column. Nothing reads it that did
     /// not just write it.
     buckets: Box<[f32; SPECTRUM_BINS]>,
-    /// The sweep each bucket's listen follows, if any; `None` listens through
-    /// the fixed listen toward the frame's newest end (see `kernels`).
-    sweep: Option<Sweep>,
-    /// Which kernels each bucket reads, derived from exactly the frame, the
-    /// rate and the sweep, and replanned by [`configure`](Self::configure)
-    /// whenever any of those changes, so there is no key to check per column.
+    /// Which kernels each bucket reads, derived from exactly the frame and the
+    /// rate, and replanned by [`configure`](Self::configure) whenever either
+    /// changes, so there is no key to check per column.
     kernels: kernels::Kernels,
-    /// [`AnalyzerConfig::column_lag`] for the same three, settled with the
+    /// [`AnalyzerConfig::column_lag`] for the same two, settled with the
     /// kernels.
     lag: f64,
 }
@@ -152,13 +137,11 @@ impl SpectrumAnalyzer {
             ring: Vec::new(),
             write: 0,
             filled: 0,
-            hann: Vec::new(),
             fft: None,
             fft_input: Vec::new(),
             fft_output: Vec::new(),
             fft_scratch: Vec::new(),
             buckets: Box::new([0.0; SPECTRUM_BINS]),
-            sweep: None,
             kernels: kernels::Kernels::new(),
             lag: 0.0,
         };
@@ -171,12 +154,10 @@ impl SpectrumAnalyzer {
     /// one rate say nothing at another. A changed frame at the same rate
     /// carries the newest samples the old window held, as many as the new one
     /// takes, so a frequency-resolution switch keeps drawing: a shorter frame
-    /// is ready at once, and a longer one fills the rest (#1584). A changed
-    /// sweep, entered or left included, only replans how the same frame is
-    /// read, so it keeps the window. Unchanged settings preserve readiness and
-    /// allocate nothing.
+    /// is ready at once, and a longer one fills the rest (#1584). Unchanged
+    /// settings preserve readiness and allocate nothing.
     pub fn configure(&mut self, config: AnalyzerConfig) {
-        let AnalyzerConfig { sample_rate, fft_size, sweep } = config;
+        let AnalyzerConfig { sample_rate, fft_size } = config;
         assert!(
             fft_size >= 4 && fft_size % 2 == 0,
             "an even frame, four up: a real-input transform needs an even length, and realfft \
@@ -185,16 +166,7 @@ impl SpectrumAnalyzer {
         let sample_rate = sample_rate.max(1.0);
         let size_changed = fft_size != self.fft_size;
         let rate_changed = (sample_rate - self.sample_rate).abs() > f32::EPSILON;
-        let sweep_changed = sweep != self.sweep;
         if !size_changed && !rate_changed {
-            // A sweep's lengths alone change neither frame nor rate, so the
-            // window it is reading stays good: only the kernels are replanned.
-            // That keeps a slider drag drawing rather than going dark for a
-            // frame's worth of audio at every step of it.
-            if sweep_changed {
-                self.sweep = sweep;
-                self.plan_kernels();
-            }
             return;
         }
         // The newest samples the new frame takes, none across a rate change.
@@ -223,22 +195,10 @@ impl SpectrumAnalyzer {
             self.fft_output = fft.make_output_vec();
             self.fft_scratch = fft.make_scratch_vec();
             self.fft = Some(fft);
-            self.hann = hann(fft_size);
         }
-        self.sweep = sweep;
-        self.plan_kernels();
-    }
-
-    /// Plan every bucket's kernels, and the column's lag, for the current
-    /// frame, rate and sweep.
-    fn plan_kernels(&mut self) {
-        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size, &self.hann);
-        let config = AnalyzerConfig {
-            sample_rate: self.sample_rate,
-            fft_size: self.fft_size,
-            sweep: self.sweep,
-        };
-        self.lag = config.column_lag();
+        self.kernels.plan(self.sample_rate, self.fft_size);
+        self.lag =
+            AnalyzerConfig { sample_rate: self.sample_rate, fft_size: self.fft_size }.column_lag();
     }
 
     /// How far BEFORE the newest sample the spectrum it produces belongs on a
@@ -458,16 +418,11 @@ impl ChannelBank {
     }
 }
 
-/// A periodic Hann window of `n` samples.
-fn hann(n: usize) -> Vec<f32> {
-    (0..n).map(|i| hann_weight(i, n)).collect()
-}
-
-/// Sample `i` of [`hann`], the one definition of the window: the frame's window
-/// is built from it ([`kernels::Kernels::window`]), and the kernels' sums about
-/// each listen read it too, so they describe the same Hann window the frame is
-/// multiplied by (under a fixed listen, times the share of that listen the
-/// frame carries).
+/// Sample `i` of a periodic Hann window of `n` samples, the one definition of
+/// the window: the frame's window is built from it
+/// ([`kernels::Kernels::window`]), and the listen's sums read it too, so they
+/// describe the same Hann window the frame is multiplied by (times the share of
+/// the listen the frame carries).
 fn hann_weight(i: usize, n: usize) -> f32 {
     let phase = std::f32::consts::TAU * i as f32 / n as f32;
     0.5 * (1.0 - phase.cos())
@@ -491,8 +446,7 @@ mod tests {
         freqs_amps: &[(f32, f32)],
         sample_rate: f32,
     ) -> [f32; SPECTRUM_BINS] {
-        let mut analyzer =
-            SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, fft_size, ..Default::default() });
+        let mut analyzer = SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, fft_size });
         // Push in awkward chunk sizes to exercise the ring seam.
         let samples: Vec<f32> = (0..fft_size + 1234)
             .map(|i| {
@@ -657,7 +611,7 @@ mod tests {
 
     /// A column belongs where its window listens ([`AnalyzerConfig::column_lag`]):
     /// a tone that starts at a known sample reads half its level in the column
-    /// stamped there, through every fixed frame and a sweep, to within a
+    /// stamped there, through every fixed frame, to within a
     /// hundredth of the frame. Not exactly: half the level is where half the
     /// window's weight is over the tone, its median, and the fixed window is
     /// lopsided enough to put that 0.6, 1.3 and 2.8 ms newer than the centroid
@@ -669,9 +623,8 @@ mod tests {
     #[test]
     fn a_column_is_stamped_where_its_window_listens() {
         let rate = 48_000.0f32;
-        let sweep = Some(Sweep { bass: 10_240.0, treble: 2048.0 });
-        for (fft_size, sweep) in [(6144, None), (12_288, None), (24_576, None), (16_384, sweep)] {
-            let config = AnalyzerConfig { sample_rate: rate, fft_size, sweep };
+        for fft_size in [6144, 12_288, 24_576] {
+            let config = AnalyzerConfig { sample_rate: rate, fft_size };
             let lag = config.column_lag() * f64::from(rate);
             let onset = fft_size;
             let tone: Vec<f32> = (0..3 * fft_size)
@@ -695,7 +648,7 @@ mod tests {
                 if level.sqrt() >= 0.5 {
                     break;
                 }
-                assert!(fed < onset + lag as usize + slack, "{fft_size}, {sweep:?}: never crossed");
+                assert!(fed < onset + lag as usize + slack, "{fft_size}: never crossed");
                 analyzer.push_samples(&tone[fed..fed + 8]);
                 fed += 8;
             }
@@ -704,7 +657,7 @@ mod tests {
             let frame_ms = fft_size as f64 / f64::from(rate) * 1e3;
             assert!(
                 early_ms.abs() < frame_ms / 100.0,
-                "{fft_size}, {sweep:?}: the onset reads {early_ms:+.2} ms off"
+                "{fft_size}: the onset reads {early_ms:+.2} ms off"
             );
         }
     }
@@ -771,7 +724,7 @@ mod tests {
             let mut analyzer = SpectrumAnalyzer::new(Default::default());
             analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
             assert!(analyzer.pitch_spectrum().is_some());
-            analyzer.configure(AnalyzerConfig { sample_rate: 44_100.0, fft_size, sweep: None });
+            analyzer.configure(AnalyzerConfig { sample_rate: 44_100.0, fft_size });
             assert!(
                 analyzer.pitch_spectrum().is_none(),
                 "{fft_size}: stale samples must not be analyzed under a new clock"
@@ -1012,7 +965,7 @@ mod tests {
         let mut bank = ChannelBank::new(Default::default(), 1);
         bank.push_frames(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(bank.power_sum().is_some());
-        let config = AnalyzerConfig { sample_rate: 22_050.0, fft_size: 4096, sweep: None };
+        let config = AnalyzerConfig { sample_rate: 22_050.0, fft_size: 4096 };
         // First replace the mono layout; then update both retained channels.
         for config in [config, AnalyzerConfig { sample_rate: 44_100.0, ..config }] {
             bank.configure(config, 2);

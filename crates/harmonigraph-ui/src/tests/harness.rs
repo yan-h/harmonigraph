@@ -304,8 +304,6 @@ pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
     a.spectrum.show_roll = on;
     a.spectrum.show_spectrogram = on;
     a.spectrum.note_names = on;
-    // The Sweep setting is the one window that draws bars of its own.
-    a.spectrum.window = if on { crate::SpectrumWindow::Sweep } else { crate::SpectrumWindow::Fast };
     // Strength 0 is the backdrop's off. On, a strength the load clamped up
     // to the bar's top stays there for the bar to be held to.
     a.spectrum.backdrop_strength = if on { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };

@@ -437,18 +437,17 @@ pub(crate) fn analysis_section(
             (SpectrumWindow::Fast, "Fast", "snappy response, blurry bass where close notes merge; low audio-ring fundamentals can disappear while their harmonics remain"),
             (SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
             (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
-            (SpectrumWindow::Sweep, "Sweep", "a listen that glides with pitch: long in the bass for sharp pitch, short in the treble for fast response, with no seams between. Set its two ends below"),
         ];
         let hints: Vec<_> = windows
             .iter()
-            .map(|(window, _, hint)| match window.listen() {
-                // A fixed window's frame is longer than the Hann window it is as sharp as,
-                // so name both rather than a frame length that reads as blurrier.
-                Some(listen) => format!(
-                    "{}-sample frame, as sharp as a {listen}-sample window: {hint}",
-                    window.frame()
-                ),
-                None => format!("{} samples: {hint}", window.frame()),
+            .map(|(window, _, hint)| {
+                // A frame is longer than the Hann window it is as sharp as, so name
+                // both rather than a frame length that reads as blurrier.
+                format!(
+                    "{}-sample frame, as sharp as a {}-sample window: {hint}",
+                    window.frame(),
+                    window.listen()
+                )
             })
             .collect();
         let options: Vec<_> = windows
@@ -457,29 +456,6 @@ pub(crate) fn analysis_section(
             .map(|(&(window, label, _), hint)| (window, label, hint.as_str()))
             .collect();
         choice_row(ui, "Frequency resolution", &mut cfg.window, &options);
-        if cfg.window == SpectrumWindow::Sweep {
-            let range = crate::config::sweep_length_range();
-            let fresh_cfg = crate::panes::fresh_spectrum();
-            for (value, fresh, label, end) in [
-                (&mut cfg.sweep_bass, fresh_cfg.sweep_bass, "Bass listen", "20 Hz"),
-                (&mut cfg.sweep_treble, fresh_cfg.sweep_treble, "Treble listen", "20 kHz"),
-            ] {
-                ValueBar::new(value, range.clone(), label)
-                    .unit(1.0, " samples")
-                    .integer()
-                    .default_value(fresh)
-                    .show(ui)
-                    .on_hover_text(format!(
-                        "How long the analyzer listens at {end}, as the length of an equivalent \
-                         window: 4096 samples is Fast's listen and 16384 Precise's, past the \
-                         longest the Sweep's frame reads without false peaks. Longer \
-                         separates close pitches; shorter shows changes sooner, though the \
-                         deepest bass listens at least as long as placing its pitch takes. The listen glides \
-                         evenly in pitch between the two ends. Live, the picture waits as long as \
-                         Precise does whatever these are; a video export does not wait."
-                    ));
-            }
-        }
         block(ui, "Level mapping", |ui| {
             // Both ends of the height scale on one control, like the pitch range: the
             // window on the spectrum's dynamics rather than just where it bottoms out.
