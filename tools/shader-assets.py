@@ -185,6 +185,17 @@ def fetch(directory):
         raise SystemExit(f"the run on {head[:12]} ({latest['conclusion']}) generated no corpus: "
                          f"the committed one passed its check. Its logs: {logs}")
     install(generated)
+    # A PR's run built the branch merged with its base. When the base has moved
+    # on, the corpus is that merge's, which is what lands, but the local strict
+    # gate builds the branch alone and fails wherever the base changed a shader.
+    built_from = logs / "built-from.log"
+    parents = built_from.read_text().split() if built_from.is_file() else []
+    if len(parents) == 2 and subprocess.run(
+            ["git", "merge-base", "--is-ancestor", parents[0], "HEAD"], cwd=ROOT,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        print(f"This corpus was generated for {head[:12]} merged with its base at {parents[0][:12]}, "
+              "which the branch does not contain. If the local strict gate fails on it, merge "
+              "the base into the branch rather than regenerating.")
     print(f"Imported the corpus from {latest['url']}.\n"
           f"Read why its check failed in {logs} before committing: a missing or rejected Metal "
           "asset is a stale corpus, anything else is not, and "

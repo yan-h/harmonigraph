@@ -63,7 +63,8 @@ gh workflow run "Metal shader assets" --ref <branch>
 
 `-f regenerate=true` rebuilds a corpus that passes its check, such as one still holding a deleted shader's libraries.
 
-Either way, `python3 tools/shader-assets.py fetch` imports the corpus the run generated for the checked-out commit,
+Either way, `python3 tools/shader-assets.py fetch` imports the corpus the run generated for the checked-out commit —
+on a PR, for that commit merged with its base, and it says so when the base has moved past the branch —
 and `import <dir>` does the same from a downloaded `production-metal-assets` artifact's `generated-metal-assets`.
 Import checks the candidate corpus through the normal production path before replacing the checked-in assets;
 inspect and commit the changed source/options/manifest together with the binary libraries.
