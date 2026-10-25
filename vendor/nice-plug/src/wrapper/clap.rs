@@ -22,25 +22,13 @@ pub use clap_sys::version::CLAP_VERSION;
 use nice_plug_core::context::remote_controls::RemoteControlsContext;
 use nice_plug_core::plugin::Plugin;
 
-/// Answers the host's `gui.show` (true) and `gui.hide` (false), returning
-/// whether it did. See [`EditorHost::on_show_hide`].
-pub type ShowHide = std::sync::Arc<dyn Fn(bool) -> bool + Send + Sync>;
-
-/// The host's showing and hiding of the editor, for an editor with a window
-/// of its own (see [`ClapPlugin::clap_editor_host`]): an embedded editor is
-/// shown and hidden with the host's window, so `gui.show` and `gui.hide` do
-/// nothing for it unless it answers them here. Main thread only.
+/// The host's side of the editor, for an editor with a window of its own
+/// (see [`ClapPlugin::clap_editor_host`]). Main thread only.
 pub trait EditorHost: Send + Sync {
-    /// `clap_host_gui::request_hide`: ask the host to hide the editor, which
-    /// it does by calling `gui.hide`. False where it refuses, or has no gui
-    /// extension.
-    fn request_hide(&self) -> bool;
-    /// `clap_host_gui::closed`: tell the host the user closed the editor's
-    /// window, and with `was_destroyed`, that the host is to destroy it.
-    fn closed(&self, was_destroyed: bool);
-    /// Answer `gui.show` and `gui.hide` with `handler`, or with nothing (both
-    /// then refuse) once it is `None`.
-    fn on_show_hide(&self, handler: Option<ShowHide>);
+    /// `clap_host_gui::closed(was_destroyed: true)`: tell the host the user
+    /// closed the editor's window, for the host to destroy the editor, which
+    /// it may do during the call. False where the host has no gui extension.
+    fn closed(&self) -> bool;
 }
 
 /// Provides auxiliary metadata needed for a CLAP plugin.
