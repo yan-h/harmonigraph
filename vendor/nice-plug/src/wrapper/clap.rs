@@ -22,6 +22,24 @@ pub use clap_sys::version::CLAP_VERSION;
 use nice_plug_core::context::remote_controls::RemoteControlsContext;
 use nice_plug_core::plugin::Plugin;
 
+/// Answers the host's `gui.show` (true) and `gui.hide` (false), returning
+/// whether it did. See [`EditorHost::on_show_hide`].
+pub type ShowHide = std::sync::Arc<dyn Fn(bool) -> bool + Send + Sync>;
+
+/// The host's showing and hiding of the editor, for an editor with a window
+/// of its own (see [`ClapPlugin::clap_editor_host`]): an embedded editor is
+/// shown and hidden with the host's window, so `gui.show` and `gui.hide` do
+/// nothing for it unless it answers them here. Main thread only.
+pub trait EditorHost: Send + Sync {
+    /// `clap_host_gui::request_hide`: ask the host to hide the editor, which
+    /// it does by calling `gui.hide`. False where it refuses, or has no gui
+    /// extension.
+    fn request_hide(&self) -> bool;
+    /// Answer `gui.show` and `gui.hide` with `handler`, or with nothing (both
+    /// then refuse) once it is `None`.
+    fn on_show_hide(&self, handler: Option<ShowHide>);
+}
+
 /// Provides auxiliary metadata needed for a CLAP plugin.
 #[allow(unused_variables)]
 pub trait ClapPlugin: Plugin {
@@ -36,6 +54,11 @@ pub trait ClapPlugin: Plugin {
     const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] = &[];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[];
+
+    /// Called once, before the editor is created, with the host's side of
+    /// showing and hiding it: CLAP gives that to the host, so an editor with
+    /// a close button of its own asks the host through this.
+    fn clap_editor_host(&mut self, host: std::sync::Arc<dyn EditorHost>) {}
 
     /// Called once off audio, before editor construction. The handle's methods
     /// are off-thread only; the wrapper retains all shared allocations.

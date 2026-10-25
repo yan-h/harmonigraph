@@ -23,8 +23,16 @@
 //! What the host's window did for the editor, this one does in its place. It
 //! floats above the host's windows while the host is in front, as Bitwig's
 //! did, and drops to the normal level while another app is, which is where
-//! Bitwig's would have vanished. It has no close button: a CLAP plugin cannot
-//! ask its host to close the editor, so opening and closing stay the host's.
+//! Bitwig's would have vanished.
+//!
+//! Its close button does not close it: showing and hiding the editor is the
+//! host's, and the host's show/hide control would otherwise still think it
+//! open. The button asks the host to hide it ([`EditorHost`]), and the host's
+//! `gui.hide`, which for an embedded editor does nothing, orders this window
+//! out; `gui.show` orders it back in. Bitwig calls `gui.hide` during the
+//! request (#1607). The ask waits for the run loop's next turn, since a host
+//! may destroy the editor during it, and the window must not go while
+//! AppKit is still closing it. A host that refuses gets the window minimized.
 //!
 //! The view's size is the size source's to set, as for a host resize: the
 //! size source asks [`PopOut::take_size`] first, at the top of the frame it
@@ -35,6 +43,7 @@
 use std::sync::Arc;
 
 use nice_plug::prelude::ParentWindowHandle;
+use nice_plug::wrapper::clap::EditorHost;
 
 #[cfg(target_os = "macos")]
 pub(super) use macos::PopOut;
@@ -60,11 +69,12 @@ mod macos {
 
     use baseview::WindowHandle;
     use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
     use objc2_app_kit::{
-        NSBackingStoreType, NSView, NSWindow, NSWindowLevel, NSWindowOrderingMode,
-        NSWindowStyleMask, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
+        NSBackingStoreType, NSView, NSWindow, NSWindowDelegate, NSWindowLevel,
+        NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
+        NSWorkspaceDidActivateApplicationNotification,
     };
     use objc2_foundation::{
         MainThreadMarker, NSArray, NSDictionary, NSNotification, NSNumber, NSObject,
@@ -116,6 +126,8 @@ mod macos {
         /// the looks run out with the window still raised over everything,
         /// so the next app to come forward tucks it instead.
         settling: Option<(i32, u8)>,
+        /// Whom the close button asks, absent where there is no CLAP host.
+        editor_host: Option<Arc<dyn EditorHost>>,
     }
 
     fn main_thread() -> MainThreadMarker {
@@ -254,6 +266,7 @@ mod macos {
             parent: ParentWindowHandle,
             window: &WindowHandle,
             docked: bool,
+            editor_host: Option<Arc<dyn EditorHost>>,
         ) {
             let mtm = main_thread();
             let ParentWindowHandle::AppKitNsView(host) = parent else { return };
@@ -284,8 +297,15 @@ mod macos {
                 host: Some(host),
                 view: Some(view),
                 agent: Some(agent),
+                editor_host: editor_host.clone(),
                 ..State::default()
             };
+            if let Some(editor_host) = editor_host {
+                let pop_out = Arc::downgrade(self);
+                editor_host.on_show_hide(Some(Arc::new(move |visible| {
+                    pop_out.upgrade().is_some_and(|pop_out| pop_out.show_hide(visible))
+                })));
+            }
             if !docked {
                 self.pop(mtm);
             }
@@ -388,20 +408,24 @@ mod macos {
         }
 
         fn pop(&self, mtm: MainThreadMarker) {
-            let (host, view, exe) = {
+            let (host, view, agent, closable) = {
                 let state = self.0.lock();
                 let (None, Some(host), Some(view), Some(agent)) =
                     (&state.window, &state.host, &state.view, &state.agent)
                 else {
                     return;
                 };
-                (host.clone(), view.clone(), agent.ivars().exe.clone())
+                (host.clone(), view.clone(), agent.clone(), state.editor_host.is_some())
             };
+            let exe = agent.ivars().exe.clone();
 
             let content = view.frame().size;
-            let style = NSWindowStyleMask::Titled
+            let mut style = NSWindowStyleMask::Titled
                 | NSWindowStyleMask::Miniaturizable
                 | NSWindowStyleMask::Resizable;
+            if closable {
+                style |= NSWindowStyleMask::Closable;
+            }
             // SAFETY: a plain window, created and owned on the main thread.
             let own = unsafe {
                 NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -418,6 +442,10 @@ mod macos {
             // Already NO for a plain NSWindow; said anyway, since it is the
             // whole difference from the host's window.
             own.setHidesOnDeactivate(false);
+            // The close button asks the agent, which refuses it and asks the
+            // host to hide the editor. The window keeps the delegate weakly;
+            // `State` owns both.
+            own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
             own.setTitle(&NSString::from_str("Harmonigraph"));
             let min = super::super::MIN_SIZE;
             own.setContentMinSize(NSSize::new(f64::from(min.0), f64::from(min.1)));
@@ -494,6 +522,9 @@ mod macos {
         pub(in crate::editor) fn close(&self) {
             let _ = main_thread();
             let state = std::mem::take(&mut *self.0.lock());
+            if let Some(editor_host) = &state.editor_host {
+                editor_host.on_show_hide(None);
+            }
             if let Some(agent) = &state.agent {
                 // SAFETY: removing an observer this added, still alive.
                 unsafe {
@@ -504,8 +535,48 @@ mod macos {
                 if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
                     reveal(&host_window);
                 }
+                window.setDelegate(None);
                 window.close();
             }
+        }
+
+        /// The close button, deferred from the window's asking: the host is
+        /// asked to hide the editor, which it does through [`Self::show_hide`].
+        fn ask_host_close(&self) {
+            let _ = main_thread();
+            let (host, window) = {
+                let state = self.0.lock();
+                (state.editor_host.clone(), state.window.clone())
+            };
+            if host.is_some_and(|host| host.request_hide()) {
+                return;
+            }
+            if let Some(window) = window {
+                window.miniaturize(None);
+            }
+        }
+
+        /// The host showing or hiding the editor, which while docked it does
+        /// with its own window: the editor's own is ordered in or out, and
+        /// out of sight it is occluded, which baseview treats as minimized.
+        /// Docked, this leaves the host to it, as before the editor had a
+        /// window of its own: Bitwig then destroys the editor and makes it
+        /// anew.
+        fn show_hide(&self, visible: bool) -> bool {
+            let _ = main_thread();
+            let Some(window) = self.0.lock().window.clone() else { return false };
+            if visible {
+                // Minimized, then hidden and shown by the host: ordering out
+                // took it off the Dock, and ordering in alone leaves it
+                // minimized with nowhere to restore it from.
+                if window.isMiniaturized() {
+                    window.deminiaturize(None);
+                }
+                window.makeKeyAndOrderFront(None);
+            } else {
+                window.orderOut(None);
+            }
+            true
         }
 
         /// Another app came to the front, or the host did: float above the
@@ -529,6 +600,12 @@ mod macos {
                 window.setLevel(FLOATING);
                 return;
             };
+            // Hidden or minimized: nothing to stack, which ordering it would
+            // undo.
+            if !window.isVisible() {
+                window.setLevel(NORMAL);
+                return;
+            }
             // Still raised from leaving the host, and never tucked: placed
             // behind this app instead, as it would have been behind that one.
             if window.level() != FLOATING && !unplaced {
@@ -559,6 +636,9 @@ mod macos {
                 state.settling = None;
                 (window, state.agent.clone(), pid, tries)
             };
+            if !window.isVisible() {
+                return;
+            }
             if tuck(&window, pid) {
                 return;
             }
@@ -587,6 +667,27 @@ mod macos {
 
         unsafe impl NSObjectProtocol for Agent {}
 
+        unsafe impl NSWindowDelegate for Agent {
+            /// The close button: refused, and the host asked instead on the
+            /// run loop's next turn.
+            #[unsafe(method(windowShouldClose:))]
+            fn window_should_close(&self, _: &NSWindow) -> bool {
+                // SAFETY: `hostClose:` is the agent's own method, taking an
+                // object it ignores; the run loop retains the target until
+                // then, so the host destroying the editor cannot free it
+                // mid-call.
+                let () = unsafe {
+                    msg_send![
+                        self,
+                        performSelector: sel!(hostClose:),
+                        withObject: None::<&AnyObject>,
+                        afterDelay: 0.0f64
+                    ]
+                };
+                false
+            }
+        }
+
         impl Agent {
             /// Another app came to the front, or the host did.
             #[unsafe(method(activated:))]
@@ -602,6 +703,13 @@ mod macos {
             fn apply(&self, _: Option<&AnyObject>) {
                 if let Some(pop_out) = self.ivars().pop_out.upgrade() {
                     pop_out.apply();
+                }
+            }
+
+            #[unsafe(method(hostClose:))]
+            fn host_close(&self, _: Option<&AnyObject>) {
+                if let Some(pop_out) = self.ivars().pop_out.upgrade() {
+                    pop_out.ask_host_close();
                 }
             }
 
@@ -658,6 +766,7 @@ mod elsewhere {
             _: ParentWindowHandle,
             _: &baseview::WindowHandle,
             _: bool,
+            _: Option<Arc<dyn EditorHost>>,
         ) {
         }
         pub(in crate::editor) fn offered(&self) -> bool {

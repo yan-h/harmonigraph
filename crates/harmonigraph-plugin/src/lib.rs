@@ -139,6 +139,9 @@ pub struct Harmonigraph {
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<Mutex<editor::EditorShared>>,
+    /// The host's showing and hiding of the editor, given before the editor is
+    /// made, which its own window's close button goes through.
+    editor_host: Option<Arc<dyn nice_plug::wrapper::clap::EditorHost>>,
     sample_rate: f64,
     samples_processed: u64,
     /// Continuous presentation seconds across raw sample-clock resets/rate changes.
@@ -689,6 +692,7 @@ impl Default for Harmonigraph {
             audio_producer,
             sample_rate_bits,
             editor_shared,
+            editor_host: None,
             sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
             presentation_seconds: 0.0,
@@ -761,7 +765,7 @@ impl Plugin for Harmonigraph {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone(), self.editor_shared.clone())
+        editor::create(self.params.clone(), self.editor_shared.clone(), self.editor_host.clone())
     }
 
     fn initialize(
@@ -924,6 +928,9 @@ impl ClapPlugin for Harmonigraph {
             self.aggregation.as_ref().unwrap().shared.clone(),
             None,
         )))
+    }
+    fn clap_editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
+        self.editor_host = Some(host);
     }
     fn clap_main_init(&mut self) -> bool {
         self.aggregation.as_mut().unwrap().register();
