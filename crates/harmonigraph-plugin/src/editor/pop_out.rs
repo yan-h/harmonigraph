@@ -532,7 +532,7 @@ mod macos {
         }
 
         /// The close button, deferred from the window's asking: the host is
-        /// told, and destroys the editor through [`Self::close`]. Nothing is
+        /// told, and destroys the editor through [`Self::close`]. No lock is
         /// held across the call, which may run it.
         fn ask_host_close(&self) {
             let _ = main_thread();
@@ -637,9 +637,19 @@ mod macos {
 
         unsafe impl NSWindowDelegate for Agent {
             /// The close button: refused, and the host told instead on the
-            /// run loop's next turn.
+            /// run loop's next turn, once however often it is clicked before
+            /// then.
             #[unsafe(method(windowShouldClose:))]
             fn window_should_close(&self, _: &NSWindow) -> bool {
+                // SAFETY: cancelling this object's own pending `hostClose:`.
+                let () = unsafe {
+                    msg_send![
+                        NSObject::class(),
+                        cancelPreviousPerformRequestsWithTarget: self,
+                        selector: sel!(hostClose:),
+                        object: None::<&AnyObject>
+                    ]
+                };
                 // SAFETY: `hostClose:` is the agent's own method, taking an
                 // object it ignores; the run loop retains the target until
                 // then, so the host destroying the editor cannot free it

@@ -47,8 +47,8 @@ pub trait ClapPlugin: Plugin {
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[];
 
     /// Called once, before the editor is created, with the host's side of
-    /// showing and hiding it: CLAP gives that to the host, so an editor with
-    /// a close button of its own asks the host through this.
+    /// it: the editor is the host's to destroy, so an editor with a close
+    /// button of its own tells the host through this.
     fn clap_editor_host(&mut self, host: std::sync::Arc<dyn EditorHost>) {}
 
     /// Called once off audio, before editor construction. The handle's methods
