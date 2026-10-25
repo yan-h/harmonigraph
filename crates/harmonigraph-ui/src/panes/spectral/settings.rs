@@ -467,9 +467,8 @@ pub(crate) fn analysis_section(
                     .show(ui)
                     .on_hover_text(format!(
                         "How long the analyzer listens at {end}, as the length of an equivalent \
-                         window: 4096 samples is Fast's listen and 16384 Precise's, past the \
-                         longest the Sweep's frame reads without false peaks. Longer \
-                         separates close pitches; shorter shows changes sooner, though the \
+                         window: 4096 samples is Fast's listen and 16384, the longest, Precise's. \
+                         Longer separates close pitches; shorter shows changes sooner, though the \
                          deepest bass listens at least as long as placing its pitch takes. The listen glides \
                          evenly in pitch between the two ends. Live, the picture waits as long as \
                          Precise does whatever these are; a video export does not wait."

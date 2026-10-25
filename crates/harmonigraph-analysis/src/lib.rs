@@ -2,11 +2,11 @@
 //!
 //! Each channel owns a planned RealFFT real-input transform (a half-size
 //! complex FFT plus postprocessing), with reusable input/output/scratch. One
-//! column is one transform of the latest frame through a Hann window (and,
-//! under a fixed listen, part of that listen), zero-padded to twice its
-//! length, and every pitch bucket then reads that transform at its OWN
-//! frequency through a small kernel, which also narrows the frame to that
-//! bucket's listen — see [`kernels`]. Live and
+//! column is one transform of the latest frame, zero-padded to twice its
+//! length: under a fixed listen through a Hann window and part of that listen,
+//! and untapered under a [`Sweep`]. Every pitch bucket then reads that
+//! transform at its OWN frequency through a small kernel, which also narrows
+//! the frame to that bucket's listen — see [`kernels`]. Live and
 //! offline consumers share all of it verbatim. Exact-zero retained windows
 //! still emit zero columns without transforming, so history and release
 //! continue advancing.
@@ -41,9 +41,9 @@ pub struct AnalyzerConfig {
     /// so how long a listen it can give. A fixed window listens through about
     /// two thirds of it.
     pub fft_size: usize,
-    /// How long each bucket listens: gliding with pitch under a [`Sweep`],
-    /// about the frame's middle, and the same at every pitch without one,
-    /// toward the frame's newest end — see [`kernels`].
+    /// How long each bucket listens: gliding with pitch under a [`Sweep`], and
+    /// the same at every pitch without one, toward the frame's newest end
+    /// either way — see [`kernels`].
     pub sweep: Option<Sweep>,
 }
 
@@ -59,12 +59,13 @@ impl AnalyzerConfig {
     ///
     /// The window's amplitude centroid, which is about where a tone that starts
     /// or stops reads half its level: exactly under a symmetric window, and
-    /// within a hundredth of the frame under the fixed one, whose half-weight
+    /// within a hundredth of the frame under a lopsided one, whose half-weight
     /// point is a little newer. It is the same at every pitch
     /// because every bucket listens about the same instant, so one lag places
-    /// the whole column. Under a [`Sweep`] it is half the frame; a fixed window
-    /// listens toward its newest end, so its lag is about a third of its frame,
-    /// as long as the plain Hann window it is as sharp as.
+    /// the whole column. A fixed window listens toward its newest end, so its
+    /// lag is about a third of its frame, as long as the plain Hann window it
+    /// is as sharp as; under a [`Sweep`] it is half the longest listen, a
+    /// quarter of the frame, the same 171 ms as Precise at 48 kHz.
     ///
     /// The one source of it: the analyzer stamps its columns with this and an
     /// export reads this far past each frame, so the two agree by construction.
@@ -112,9 +113,6 @@ pub struct SpectrumAnalyzer {
     /// Samples the ring holds, pushed or carried in by a frame change (see
     /// [`configure`](Self::configure)), saturating at `fft_size`.
     filled: usize,
-    /// The Hann window, precomputed, `fft_size` long. See [`hann`]. The frame is
-    /// multiplied by [`kernels::Kernels::window`], which is built from it.
-    hann: Vec<f32>,
     /// A plan and its reusable buffers, owned by this channel, for a transform
     /// [`kernels::PAD`] frames long. The planner is dropped after
     /// configuration; no cross-channel or global plan cache.
@@ -152,7 +150,6 @@ impl SpectrumAnalyzer {
             ring: Vec::new(),
             write: 0,
             filled: 0,
-            hann: Vec::new(),
             fft: None,
             fft_input: Vec::new(),
             fft_output: Vec::new(),
@@ -223,7 +220,6 @@ impl SpectrumAnalyzer {
             self.fft_output = fft.make_output_vec();
             self.fft_scratch = fft.make_scratch_vec();
             self.fft = Some(fft);
-            self.hann = hann(fft_size);
         }
         self.sweep = sweep;
         self.plan_kernels();
@@ -232,7 +228,7 @@ impl SpectrumAnalyzer {
     /// Plan every bucket's kernels, and the column's lag, for the current
     /// frame, rate and sweep.
     fn plan_kernels(&mut self) {
-        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size, &self.hann);
+        self.kernels.plan(self.sweep, self.sample_rate, self.fft_size);
         let config = AnalyzerConfig {
             sample_rate: self.sample_rate,
             fft_size: self.fft_size,
@@ -317,9 +313,9 @@ impl SpectrumAnalyzer {
         let weighted = older.iter().zip(window_older).map(|(s, w)| s * w).sum::<f32>()
             + newer.iter().zip(window_newer).map(|(s, w)| s * w).sum::<f32>();
         let mean = weighted / self.kernels.window_sum();
-        // The frame sits where its listen's centre is the padded transform's
-        // middle, so the kernels stay real (see `Kernels::offset`). The padding
-        // is rewritten every column, because realfft uses its input as scratch.
+        // The frame sits where the kernels expect it (see `Kernels::offset`).
+        // The padding is rewritten every column, because realfft uses its
+        // input as scratch.
         let offset = self.kernels.offset();
         let (before, rest) = self.fft_input.split_at_mut(offset);
         let (frame, after) = rest.split_at_mut(self.fft_size);
@@ -458,16 +454,11 @@ impl ChannelBank {
     }
 }
 
-/// A periodic Hann window of `n` samples.
-fn hann(n: usize) -> Vec<f32> {
-    (0..n).map(|i| hann_weight(i, n)).collect()
-}
-
-/// Sample `i` of [`hann`], the one definition of the window: the frame's window
-/// is built from it ([`kernels::Kernels::window`]), and the kernels' sums about
-/// each listen read it too, so they describe the same Hann window the frame is
-/// multiplied by (under a fixed listen, times the share of that listen the
-/// frame carries).
+/// Sample `i` of a periodic Hann window of `n` samples, the one definition of
+/// the window: a fixed listen's frame window is built from it
+/// ([`kernels::Kernels::window`]), and the sums that normalize and place that
+/// listen read it too, so they describe the same Hann window the frame is
+/// multiplied by.
 fn hann_weight(i: usize, n: usize) -> f32 {
     let phase = std::f32::consts::TAU * i as f32 / n as f32;
     0.5 * (1.0 - phase.cos())
@@ -661,7 +652,8 @@ mod tests {
     /// hundredth of the frame. Not exactly: half the level is where half the
     /// window's weight is over the tone, its median, and the fixed window is
     /// lopsided enough to put that 0.6, 1.3 and 2.8 ms newer than the centroid
-    /// the column is stamped at, so its onsets read that much early.
+    /// the column is stamped at, so its onsets read that much early. So is a
+    /// sweep's gamma window, by 0.7 ms at 1 kHz.
     ///
     /// Half the frame, which is where every column was stamped while every
     /// window was centred on its frame, would put a fixed window's onsets 21 to
@@ -669,8 +661,10 @@ mod tests {
     #[test]
     fn a_column_is_stamped_where_its_window_listens() {
         let rate = 48_000.0f32;
-        let sweep = Some(Sweep { bass: 10_240.0, treble: 2048.0 });
-        for (fft_size, sweep) in [(6144, None), (12_288, None), (24_576, None), (16_384, sweep)] {
+        let sweep = Some(Sweep { bass: 16_384.0, treble: 2048.0 });
+        for (fft_size, sweep) in
+            [(6144, None), (12_288, None), (24_576, None), (SWEEP_FRAME, sweep)]
+        {
             let config = AnalyzerConfig { sample_rate: rate, fft_size, sweep };
             let lag = config.column_lag() * f64::from(rate);
             let onset = fft_size;
