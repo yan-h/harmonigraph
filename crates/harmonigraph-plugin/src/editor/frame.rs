@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use egui_baseview::Queue;
@@ -28,6 +28,10 @@ pub(super) fn frame(
     egui_state: &EguiState,
     context: &dyn GuiContext,
 ) {
+    // The view does not own the native controller; closing its editor handle
+    // must be able to release the view and its callbacks.
+    let Some(pop_out) = state.pop_out.upgrade() else { return };
+
     // Everything the shell does before the UI runs: the lock, a restore,
     // the camera and the take. Timed separately because `ui cpu` starts at
     // the dock build, so this stretch sits outside every other CPU reading.
@@ -114,8 +118,7 @@ pub(super) fn frame(
     let (window_width, window_height) = egui_state.size();
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
-    shared.ui.workspace.interaction.own_window =
-        state.pop_out.offered().then(|| !egui_state.docked());
+    shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
     let ask = harmonigraph_ui::shell::Frame {
         ui,
         state: &mut shared.ui,
@@ -129,7 +132,7 @@ pub(super) fn frame(
     // Also where a host restore that moved the setting reaches an open editor.
     if let Some(own) = shared.ui.workspace.interaction.own_window {
         egui_state.set_docked(!own);
-        state.pop_out.want(own);
+        pop_out.want(own);
     }
 
     // A pane folded sideways (or came back) leaves every other pane its width
@@ -151,14 +154,14 @@ pub(super) fn frame(
 pub(super) struct WindowState {
     pub(super) shared: Arc<Mutex<EditorShared>>,
     pub(super) params: Arc<HarmonigraphParams>,
-    pub(super) pop_out: Arc<PopOut>,
+    pub(super) pop_out: Weak<PopOut>,
 }
 
 impl WindowState {
     pub(super) fn new(
         shared: Arc<Mutex<EditorShared>>,
         params: Arc<HarmonigraphParams>,
-        pop_out: Arc<PopOut>,
+        pop_out: Weak<PopOut>,
     ) -> Self {
         WindowState { shared, params, pop_out }
     }
