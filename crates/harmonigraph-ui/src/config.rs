@@ -13,8 +13,9 @@ pub use harmonigraph_scene::SCALE_BAR_RANGE;
 /// settings section: longer windows resolve bass pitch more sharply but
 /// respond more slowly (the tradeoff is physics, not implementation).
 ///
-/// Each is a length of TIME, so a setting looks and lags the same at every
-/// sample rate ([`frame`](Self::frame)); the sample counts below are at 48 kHz.
+/// Each is a length of TIME, keeping the listen and lag within about 9% across
+/// 44.1, 48, 88.2 and 96 kHz; other rates may listen longer ([`frame`](Self::frame)).
+/// The sample counts below are at 48 kHz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
     /// As sharp as a 4096-sample Hann window, and drawn as soon after the sound
