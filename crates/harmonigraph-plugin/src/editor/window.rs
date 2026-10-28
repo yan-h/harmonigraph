@@ -248,14 +248,23 @@ impl Editor for LatticeEditor {
 
         pop_out.open(parent, &window, self.egui_state.docked(), self.host.clone());
         self.egui_state.set_open(true);
-        Box::new(LatticeEditorHandle {
+        let handle = LatticeEditorHandle {
             pop_out,
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
             params: self.params.clone(),
             context: closing_context,
             window,
-        })
+        };
+        // Bind the entire teardown, including persistence and baseview's
+        // non-Send handle, rather than only its native controller. Normal
+        // destruction is on main; an off-main drop synchronously waits for it.
+        #[cfg(target_os = "macos")]
+        let handle = dispatch2::MainThreadBound::new(
+            handle,
+            objc2::MainThreadMarker::new().expect("the editor is created on the main thread"),
+        );
+        Box::new(handle)
     }
 
     fn size(&self) -> (u32, u32) {
@@ -315,8 +324,9 @@ struct LatticeEditorHandle {
     window: WindowHandle,
 }
 
-// WindowHandle contains raw pointers, but the handle is only used to close
-// the window from the host's GUI thread.
+// Off macOS, nice-plug still closes this raw-pointer handle from the host's
+// GUI thread. On macOS the returned MainThreadBound owns that guarantee.
+#[cfg(not(target_os = "macos"))]
 unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
