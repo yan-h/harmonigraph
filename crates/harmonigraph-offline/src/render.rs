@@ -214,6 +214,12 @@ pub fn render(
     // the worst place to find out.
     state.set_background(settings.layout.background);
 
+    // The analysis window and WAV rate are fixed for this render. Settling the
+    // window's centroid sums a frame's weights, so do it once rather than
+    // once per output frame. This value has no lifetime beyond this loop.
+    let audio_lag =
+        audio.as_ref().map_or(0.0, |audio| state.appearance.spectrum.column_lag(audio.sample_rate));
+
     let frames = settings.frame_count();
     // Timers only: nothing between here and the end of the loop reads a clock
     // to decide anything, so the picture is the same with them as without, and
@@ -227,7 +233,8 @@ pub fn render(
     let mut buffer = Vec::new();
     for frame in 0..frames {
         let drawing = Instant::now();
-        let now = prepare_frame(replay, &mut state, audio.as_deref_mut(), settings, frame)?;
+        let now =
+            prepare_frame(replay, &mut state, audio.as_deref_mut(), settings, frame, audio_lag)?;
 
         // No panels and no dock: the layout owns the frame, and the
         // background is the render pass's clear color rather than a
@@ -303,6 +310,7 @@ fn prepare_frame(
     audio: Option<&mut Audio>,
     settings: &Settings,
     frame: u64,
+    audio_lag: f64,
 ) -> Result<f64, String> {
     // Frame-index time avoids accumulated floating-point drift.
     let step = 1.0 / settings.fps;
@@ -310,17 +318,16 @@ fn prepare_frame(
     replay.advance_to(&mut state.runtime, now);
     if let Some(audio) = audio {
         let config = state.appearance.spectrum;
-        // The appearance is installed once per render, so this is the same
-        // every frame and consecutive slices meet exactly.
-        let lead = config.column_lag(audio.sample_rate);
-        let frame_seconds =
-            config.window.frame(audio.sample_rate) as f64 / f64::from(audio.sample_rate);
         let from = match frame {
-            0 => now - frame_seconds,
-            _ => settings.start + (frame - 1) as f64 * step + lead,
+            0 => {
+                let frame_seconds =
+                    config.window.frame(audio.sample_rate) as f64 / f64::from(audio.sample_rate);
+                now - frame_seconds
+            }
+            _ => settings.start + (frame - 1) as f64 * step + audio_lag,
         };
-        let range =
-            audio.range_seconds(from - settings.audio_start, now + lead - settings.audio_start);
+        let range = audio
+            .range_seconds(from - settings.audio_start, now + audio_lag - settings.audio_start);
         if !range.is_empty() {
             let end = range.end;
             let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
@@ -497,9 +504,15 @@ mod tests {
                 let mut partial_tail = false;
                 for frame in 0..settings.frame_count() {
                     let before = state.runtime.spectrum.history().len();
-                    let now =
-                        prepare_frame(&mut replay, &mut state, Some(&mut audio), &settings, frame)
-                            .unwrap();
+                    let now = prepare_frame(
+                        &mut replay,
+                        &mut state,
+                        Some(&mut audio),
+                        &settings,
+                        frame,
+                        lag,
+                    )
+                    .unwrap();
                     let history = state.runtime.spectrum.history();
                     let (from, to) = match frame {
                         0 => (now - frame_seconds, now + lag),
