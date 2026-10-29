@@ -120,8 +120,11 @@ impl Editor for LatticeEditor {
         let logging = self.shared.clone();
         let asking = context.clone();
         let pop_out = PopOut::new();
-        let popping = pop_out.clone();
+        let popping = Arc::downgrade(&pop_out);
         let size_source = SizeSource::new(move || {
+            // The editor handle owns the controller. A retained view cannot
+            // keep its native owner alive through this callback.
+            let popping = popping.upgrade()?;
             // The editor's own window resized (see `PopOut`): the editor
             // takes its size, and the project saves it as the editor's.
             let as_size =
@@ -206,7 +209,7 @@ impl Editor for LatticeEditor {
                 )
                 .with_graphics_config(graphics)
                 .with_size_source(size_source),
-            WindowState::new(self.shared.clone(), self.params.clone(), pop_out.clone()),
+            WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
             |egui_ctx: &Context, queue, state: &mut WindowState| {
                 queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
                     harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec(),
@@ -245,14 +248,23 @@ impl Editor for LatticeEditor {
 
         pop_out.open(parent, &window, self.egui_state.docked(), self.host.clone());
         self.egui_state.set_open(true);
-        Box::new(LatticeEditorHandle {
+        let handle = LatticeEditorHandle {
             pop_out,
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
             params: self.params.clone(),
             context: closing_context,
             window,
-        })
+        };
+        // Bind the entire teardown, including persistence and baseview's
+        // non-Send handle, rather than only its native controller. Normal
+        // destruction is on main; an off-main drop synchronously waits for it.
+        #[cfg(target_os = "macos")]
+        let handle = dispatch2::MainThreadBound::new(
+            handle,
+            objc2::MainThreadMarker::new().expect("the editor is created on the main thread"),
+        );
+        Box::new(handle)
     }
 
     fn size(&self) -> (u32, u32) {
@@ -302,6 +314,8 @@ impl Editor for LatticeEditor {
 }
 
 struct LatticeEditorHandle {
+    // The sole persistent owner; view callbacks upgrade weak references only
+    // for their invocation, so retaining the view cannot retain this owner.
     pop_out: Arc<PopOut>,
     egui_state: Arc<EguiState>,
     shared: Arc<Mutex<EditorShared>>,
@@ -310,8 +324,9 @@ struct LatticeEditorHandle {
     window: WindowHandle,
 }
 
-// WindowHandle contains raw pointers, but the handle is only used to close
-// the window from the host's GUI thread.
+// Off macOS, nice-plug still closes this raw-pointer handle from the host's
+// GUI thread. On macOS the returned MainThreadBound owns that guarantee.
+#[cfg(not(target_os = "macos"))]
 unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {

@@ -65,10 +65,12 @@ pub(super) enum Sized {
 mod macos {
     use super::*;
 
+    use std::cell::RefCell;
     use std::path::{Path, PathBuf};
     use std::sync::Weak;
 
     use baseview::WindowHandle;
+    use dispatch2::MainThreadBound;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
@@ -81,7 +83,6 @@ mod macos {
         MainThreadMarker, NSArray, NSDictionary, NSNotification, NSNumber, NSObject,
         NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
     };
-    use parking_lot::Mutex;
     use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
     /// The level Bitwig gives its plugin windows, measured (CG layer 3), and
@@ -94,16 +95,17 @@ mod macos {
     /// the process the plugin runs in.
     const AUTOSAVE: &str = "Harmonigraph";
 
-    /// See the module documentation. Shared between the size source, the
-    /// frame and the editor handle, all of which egui-baseview or nice-plug
-    /// require to be `Send`.
-    pub(in crate::editor) struct PopOut(Mutex<State>);
+    /// The editor handle owns this; view callbacks and the agent hold weak
+    /// references. The framework requires a sendable handle, but AppKit state
+    /// is accessible only with a main-thread marker.
+    ///
+    /// Normal teardown stays on main. A final off-main drop would synchronously
+    /// dispatch there, so this is not an arbitrary-thread shutdown protocol.
+    pub(in crate::editor) struct PopOut(MainThreadBound<LocalPopOut>);
 
-    // SAFETY: the AppKit objects inside are only touched from the main thread:
-    // every method takes a `MainThreadMarker` before reaching them, and panics
-    // without one rather than racing.
-    unsafe impl Send for PopOut {}
-    unsafe impl Sync for PopOut {}
+    struct LocalPopOut {
+        state: RefCell<State>,
+    }
 
     #[derive(Default)]
     struct State {
@@ -255,7 +257,14 @@ mod macos {
 
     impl PopOut {
         pub(in crate::editor) fn new() -> Arc<Self> {
-            Arc::new(Self(Mutex::new(State::default())))
+            Arc::new(Self(MainThreadBound::new(
+                LocalPopOut { state: RefCell::new(State::default()) },
+                main_thread(),
+            )))
+        }
+
+        fn state(&self) -> &RefCell<State> {
+            &self.0.get(main_thread()).state
         }
 
         /// Learn the editor's views once it has opened in the host's, and
@@ -294,7 +303,7 @@ mod macos {
                         None,
                     );
             }
-            *self.0.lock() = State {
+            *self.state().borrow_mut() = State {
                 host: Some(host),
                 view: Some(view),
                 agent: Some(agent),
@@ -308,7 +317,7 @@ mod macos {
 
         /// Whether the editor can have a window of its own here.
         pub(in crate::editor) fn offered(&self) -> bool {
-            self.0.lock().agent.is_some()
+            self.state().borrow().agent.is_some()
         }
 
         /// Ask for the editor in its own window or in the host's, performed
@@ -316,9 +325,8 @@ mod macos {
         /// a frame, which is no place to move it (see the module
         /// documentation).
         pub(in crate::editor) fn want(&self, out: bool) {
-            let _ = main_thread();
             let agent = {
-                let mut state = self.0.lock();
+                let mut state = self.state().borrow_mut();
                 if state.window.is_some() == out {
                     // There already, which also calls off a move the other
                     // way that has not happened yet.
@@ -346,7 +354,7 @@ mod macos {
         /// The move [`Self::want`] deferred, off the run loop.
         fn apply(&self) {
             let mtm = main_thread();
-            let wanted = self.0.lock().wanted.take();
+            let wanted = self.state().borrow_mut().wanted.take();
             match wanted {
                 Some(true) => self.pop(mtm),
                 Some(false) => self.dock(),
@@ -357,7 +365,7 @@ mod macos {
         /// The size of the editor's own window, while it is in one, which
         /// then has the say over the editor's size rather than the host.
         pub(in crate::editor) fn size(&self) -> Option<(u32, u32)> {
-            let state = self.0.lock();
+            let state = self.state().borrow();
             state.window.as_ref().map(|_| state.size)
         }
 
@@ -368,9 +376,8 @@ mod macos {
         /// out of it, should the host have put it back, or have shown it only
         /// after the editor opened.
         pub(in crate::editor) fn take_size(&self) -> Option<Sized> {
-            let _ = main_thread();
             let (window, host) = {
-                let mut state = self.0.lock();
+                let mut state = self.state().borrow_mut();
                 if std::mem::take(&mut state.redocked) {
                     return Some(Sized::Docked);
                 }
@@ -380,7 +387,7 @@ mod macos {
                 conceal(&host_window);
             }
             let size = logical(window.contentView()?.frame().size);
-            let mut state = self.0.lock();
+            let mut state = self.state().borrow_mut();
             (size != state.size).then(|| {
                 state.size = size;
                 Sized::Own(size)
@@ -391,9 +398,8 @@ mod macos {
         /// given to its own window instead of to the host. Returns whether it
         /// was.
         pub(in crate::editor) fn resize(&self, size: (u32, u32)) -> bool {
-            let _ = main_thread();
             let window = {
-                let mut state = self.0.lock();
+                let mut state = self.state().borrow_mut();
                 let Some(window) = state.window.clone() else { return false };
                 state.size = size;
                 window
@@ -404,7 +410,7 @@ mod macos {
 
         fn pop(&self, mtm: MainThreadMarker) {
             let (host, view, agent, closable) = {
-                let state = self.0.lock();
+                let state = self.state().borrow();
                 let (None, Some(host), Some(view), Some(agent)) =
                     (&state.window, &state.host, &state.view, &state.agent)
                 else {
@@ -466,9 +472,9 @@ mod macos {
             // just goes unremembered.
             own.setFrameAutosaveName(&name);
 
-            // The move. Made without the lock, as every move here is:
+            // The move. Made without a state borrow, as every move here is:
             // attaching a view can draw a frame on the spot, and its size
-            // source takes the lock.
+            // source borrows the state.
             let Some(own_content) = own.contentView() else { return };
             view.removeFromSuperview();
             own_content.addSubview(&view);
@@ -478,7 +484,7 @@ mod macos {
             }
             own.makeKeyAndOrderFront(None);
 
-            let mut state = self.0.lock();
+            let mut state = self.state().borrow_mut();
             state.window = Some(own);
             state.size = logical(content);
         }
@@ -487,9 +493,8 @@ mod macos {
         /// closed. The view keeps its size; the size source asks the host for
         /// the same ([`Sized::Docked`]).
         fn dock(&self) {
-            let _ = main_thread();
             let (window, host, view) = {
-                let mut state = self.0.lock();
+                let mut state = self.state().borrow_mut();
                 let Some(window) = state.window.take() else { return };
                 // Before the move, which can draw a frame on the spot: that
                 // frame's size source must already find it docked.
@@ -510,34 +515,18 @@ mod macos {
         /// The editor closing, called before baseview closes the view, which
         /// takes it out of whichever window it is in: show the host's window
         /// again, should the host reuse it, close the editor's own, and let go
-        /// of everything. The last is not tidiness: the view owns the size
-        /// source, which owns this, so held views would keep the whole editor
-        /// alive after it closed.
+        /// of everything. Repeated calls are harmless; local destruction uses
+        /// the same cleanup if construction or teardown exits early.
         pub(in crate::editor) fn close(&self) {
-            let _ = main_thread();
-            let state = std::mem::take(&mut *self.0.lock());
-            if let Some(agent) = &state.agent {
-                // SAFETY: removing an observer this added, still alive.
-                unsafe {
-                    NSWorkspace::sharedWorkspace().notificationCenter().removeObserver(agent)
-                };
-            }
-            if let Some(window) = &state.window {
-                if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
-                    reveal(&host_window);
-                }
-                window.setDelegate(None);
-                window.close();
-            }
+            self.0.get(main_thread()).close();
         }
 
         /// The close button, deferred from the window's asking: the host is
-        /// told, and destroys the editor through [`Self::close`]. No lock is
+        /// told, and destroys the editor through [`Self::close`]. No state borrow is
         /// held across the call, which may run it.
         fn ask_host_close(&self) {
-            let _ = main_thread();
             let (host, window) = {
-                let state = self.0.lock();
+                let state = self.state().borrow();
                 (state.editor_host.clone(), state.window.clone())
             };
             if host.is_some_and(|host| host.closed()) {
@@ -555,7 +544,7 @@ mod macos {
         /// any window would, under whatever had already covered it.
         fn front_changed(&self, exe: &Path) {
             let (window, agent, host, unplaced) = {
-                let mut state = self.0.lock();
+                let mut state = self.state().borrow_mut();
                 let unplaced = state.settling.take().is_some();
                 (state.window.clone(), state.agent.clone(), state.host.clone(), unplaced)
             };
@@ -586,7 +575,7 @@ mod macos {
             // Above everything it covered, until that app's windows arrive in
             // front of it.
             window.orderFront(None);
-            self.0.lock().settling = Some((pid, SETTLE_TRIES));
+            self.state().borrow_mut().settling = Some((pid, SETTLE_TRIES));
             if let Some(agent) = agent {
                 agent.settle_later();
             }
@@ -595,7 +584,7 @@ mod macos {
         /// Look again for the windows of the app that came forward.
         fn settle(&self) {
             let (window, agent, pid, tries) = {
-                let mut state = self.0.lock();
+                let mut state = self.state().borrow_mut();
                 let (Some((pid, tries @ 1..)), Some(window)) =
                     (state.settling, state.window.clone())
                 else {
@@ -610,13 +599,40 @@ mod macos {
             if tuck(&window, pid) {
                 return;
             }
-            self.0.lock().settling = Some((pid, tries - 1));
+            self.state().borrow_mut().settling = Some((pid, tries - 1));
             if tries == 1 {
                 return;
             }
             if let Some(agent) = agent {
                 agent.settle_later();
             }
+        }
+    }
+
+    impl LocalPopOut {
+        fn close(&self) {
+            // Release the borrow before native calls, which may reenter a
+            // size source or frame. Those callbacks find the empty state.
+            let state = std::mem::take(&mut *self.state.borrow_mut());
+            if let Some(agent) = &state.agent {
+                // SAFETY: removing an observer this added, still alive.
+                unsafe {
+                    NSWorkspace::sharedWorkspace().notificationCenter().removeObserver(agent)
+                };
+            }
+            if let Some(window) = &state.window {
+                if let Some(host_window) = state.host.as_ref().and_then(|host| host.window()) {
+                    reveal(&host_window);
+                }
+                window.setDelegate(None);
+                window.close();
+            }
+        }
+    }
+
+    impl Drop for LocalPopOut {
+        fn drop(&mut self) {
+            self.close();
         }
     }
 

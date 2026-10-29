@@ -1433,6 +1433,7 @@ dependencies = [
  "baseview",
  "clap-sys",
  "crossbeam",
+ "dispatch2",
  "egui",
  "egui-baseview",
  "egui-wgpu",
