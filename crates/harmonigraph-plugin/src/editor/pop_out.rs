@@ -75,8 +75,8 @@ mod macos {
     use objc2::runtime::{AnyObject, ProtocolObject};
     use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
     use objc2_app_kit::{
-        NSBackingStoreType, NSView, NSWindow, NSWindowDelegate, NSWindowLevel,
-        NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
+        NSBackingStoreType, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowDelegate,
+        NSWindowLevel, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
         NSWorkspaceDidActivateApplicationNotification,
     };
     use objc2_foundation::{
@@ -443,6 +443,11 @@ mod macos {
             // Already NO for a plain NSWindow; said anyway, since it is the
             // whole difference from the host's window.
             own.setHidesOnDeactivate(false);
+            // Left to AppKit's default, a window that floats joins the Spaces
+            // it is carried through (measured in otonal, which ports this
+            // window: in both the desktop's and a fullscreen game's, shown
+            // over the game as it came forward).
+            own.setCollectionBehavior(NSWindowCollectionBehavior::Managed);
             // The close button asks the agent, which refuses it and tells the
             // host. The window keeps the delegate weakly; `State` owns both.
             own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
