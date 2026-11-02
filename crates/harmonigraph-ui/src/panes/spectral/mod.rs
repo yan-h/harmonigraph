@@ -13,11 +13,11 @@
 //! in one file, that shared coordinate system was reachable only as a pane's
 //! insides, and the pane was the most-edited file in the crate.
 
-mod atmosphere;
 pub(crate) mod axes;
 pub(crate) mod collapse;
 mod gestures;
 pub(crate) mod names;
+mod profile;
 pub(crate) mod roll;
 pub(super) mod settings;
 pub(crate) mod spectrogram;
@@ -427,7 +427,7 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split, point_scale);
+            profile::draw_profile(&painter, &axes, &cfg, &visible, budget, split);
         }
     }
 
@@ -510,11 +510,11 @@ pub(crate) fn spectral_pane(
     // In the spectrum outline's color at silence, which is where that outline
     // lies on this line: a silent stretch of the curve runs into the boundary
     // as one line instead of a bright one meeting a grey one, and both answer
-    // the outline's Intensity dial (see `atmosphere::handover_color`).
+    // the outline's Intensity dial (see `profile::handover_color`).
     if split < 1.0 && split > 0.0 {
         painter.line_segment(
             axes.across_pitch(split),
-            egui::Stroke::new(theme::LINE_WIDTH, atmosphere::handover_color(&cfg)),
+            egui::Stroke::new(theme::LINE_WIDTH, profile::handover_color(&cfg)),
         );
     }
 

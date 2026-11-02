@@ -288,14 +288,13 @@ pub(super) const SETTINGS_PANES: &[panes::Tab] = crate::workspace::Section::Sett
 
 /// Switch on (or off) every section a fresh state hides behind a setting:
 /// the lattice's audio ring, read as a spectrum; the roll, the spectrogram
-/// and the note names; the backdrop, whose strength 0 is its off; the perf
-/// overlay's Frame breakdown; and the take controls.
+/// and the note names; the perf overlay's Frame breakdown; and the take
+/// controls.
 /// Off also zeroes the glow pattern's contrast.
 ///
 /// One door for both fixtures that light a page: the range guard's
 /// `enabled` scenarios and the sweeps' [`Variant::Lit`]. It moves no value a
-/// bar shows beyond the switches, and the backdrop's strength only up to
-/// where its bar is lit, so a poisoned load keeps everything else.
+/// bar shows beyond the switches, so a poisoned load keeps everything else.
 pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
     use harmonigraph_scene::SpectralReading;
     let a = &mut state.picture.appearance;
@@ -304,9 +303,6 @@ pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
     a.spectrum.show_roll = on;
     a.spectrum.show_spectrogram = on;
     a.spectrum.note_names = on;
-    // Strength 0 is the backdrop's off. On, a strength the load clamped up
-    // to the bar's top stays there for the bar to be held to.
-    a.spectrum.backdrop_strength = if on { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
     if !on {
         a.view.atmosphere.texture_depth = 0.0;
     }
