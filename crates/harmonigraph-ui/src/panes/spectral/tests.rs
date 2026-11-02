@@ -1903,7 +1903,6 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     };
     let (meshes, outlines) = draw(cfg, &visible);
     assert_eq!(outlines.len(), 1);
-    assert_eq!(outlines[0].vertices.len(), visible.len() * 4);
     let stops = atmosphere::BODY_STOPS;
     let body = &meshes[0];
     assert_eq!(body.vertices.len(), visible.len() * stops);
@@ -1945,9 +1944,10 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     assert!(luminance(fill(4)) > floor, "fixture needs a peak brighter than the floor");
     assert!(luminance(fill(2)) < 0.01, "fixture needs a palette-black level");
     let tinted = solid(&draw(cfg, &visible).1[0]);
-    assert_eq!(tinted[4], fill(4), "a bright level must wear its own color");
+    assert_eq!(tinted.last(), Some(&fill(4)), "a bright level must wear its own color");
     assert!(
-        (luminance(tinted[2]) - floor).abs() < 0.01,
+        tinted.iter().map(|&c| (luminance(c) - floor).abs()).any(|off| off < 0.01)
+            && tinted.iter().all(|&c| luminance(c) > floor - 0.01),
         "a dark level must be lifted to the floor"
     );
     cfg.keyline_lift = 1.0;
@@ -1964,6 +1964,64 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
             .all(|v| v.color == egui::Color32::TRANSPARENT),
         "tilt gave digital silence a visible body"
     );
+}
+
+/// How much ink `mesh` lays at `at`, each triangle's vertex alpha interpolated
+/// the way the GPU does at a pixel center and stacked over the ones before it.
+fn ink_at(mesh: &egui::Mesh, at: egui::Pos2) -> f32 {
+    let mut clear = 1.0;
+    for tri in mesh.indices.as_chunks::<3>().0 {
+        let [a, b, c] = tri.map(|i| mesh.vertices[i as usize]);
+        let area = (b.pos - a.pos).x * (c.pos - a.pos).y - (b.pos - a.pos).y * (c.pos - a.pos).x;
+        if area == 0.0 {
+            continue;
+        }
+        let edge =
+            |p: egui::Pos2, q: egui::Pos2| ((q - p).x * (at - p).y - (q - p).y * (at - p).x) / area;
+        let weights = [edge(b.pos, c.pos), edge(c.pos, a.pos), edge(a.pos, b.pos)];
+        if weights.iter().all(|&w| w >= 0.0) {
+            let alpha = |v: egui::epaint::Vertex| f32::from(v.color.a()) / 255.0;
+            clear *= 1.0 - weights[0] * alpha(a) - weights[1] * alpha(b) - weights[2] * alpha(c);
+        }
+    }
+    1.0 - clear
+}
+
+/// A spectrum that swings between neighbouring pixel columns has an outline
+/// bending sharply at every sample, and the sample columns are all the pixel
+/// centers there are. The line has to reach them on the way from a trough to a
+/// tip, or only its tips land and they float free of each other.
+#[test]
+fn an_outline_swinging_every_column_keeps_its_ink_between_the_tips() {
+    for pixel in [0.5, 1.0] {
+        let (trough, tip) = (5.0, 45.0);
+        let columns: Vec<_> = (0..16)
+            .map(|c| egui::pos2((c as f32 + 0.5) * pixel, if c % 2 == 0 { trough } else { tip }))
+            .collect();
+        let mesh = atmosphere::stroke_mesh(
+            &columns,
+            &vec![egui::Color32::WHITE; columns.len()],
+            1.0,
+            pixel,
+        );
+        for column in &columns[2..14] {
+            let ink = ink_at(&mesh, egui::pos2(column.x, 0.5 * (trough + tip)));
+            assert!(ink > 0.4, "{ink} ink on the flank at {pixel} points per pixel");
+        }
+    }
+}
+
+/// A spike's tip ends in a round cap about the sample, half the line's width
+/// past it in every direction, rather than cut square on the level or drawn out
+/// to a point.
+#[test]
+fn an_outline_spike_ends_round() {
+    let (pixel, width) = (0.5, 1.0);
+    let tip = egui::pos2(0.75, 40.0);
+    let spike = [egui::pos2(0.25, 0.0), tip, egui::pos2(1.25, 0.0)];
+    let mesh = atmosphere::stroke_mesh(&spike, &[egui::Color32::WHITE; 3], width, pixel);
+    assert!(ink_at(&mesh, tip + egui::vec2(0.0, 0.4 * width)) > 0.5, "the tip is cut square");
+    assert_eq!(ink_at(&mesh, tip + egui::vec2(0.0, width + pixel)), 0.0, "the tip shoots off");
 }
 
 /// The backdrop lights only the space above the curve, at its strength on the
