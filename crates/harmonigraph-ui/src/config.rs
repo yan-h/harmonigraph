@@ -359,15 +359,6 @@ pub struct SpectrumConfig {
     /// white outline, 0 is exactly the color under it, and between, bright
     /// levels keep their own color while dark ones are brightened to it.
     pub keyline_lift: f32,
-    /// The backdrop's opacity at the floor, 0..1. At 0 there is no backdrop,
-    /// and no separate switch: see [`Self::backdrop_gap`] for what it is.
-    pub backdrop_strength: f32,
-    /// Where the backdrop has faded to nothing, as a fraction of the level
-    /// axis from the floor (0) to the ceiling (1).
-    pub backdrop_height: f32,
-    /// Logical points between one-point lit stripes; whole numbers
-    /// only. 0 is a smooth wash; see [`BACKDROP_GAP_RANGE`].
-    pub backdrop_gap: f32,
     /// Spectral light and note halos, independent of the lattice's atmosphere.
     pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -685,20 +676,6 @@ impl SpectrumConfig {
             fresh.tilt
         };
         self.keyline_lift = bounded(self.keyline_lift, fresh.keyline_lift, 0.0, 1.0);
-        self.backdrop_strength = bounded(self.backdrop_strength, fresh.backdrop_strength, 0.0, 1.0);
-        self.backdrop_height = bounded(
-            self.backdrop_height,
-            fresh.backdrop_height,
-            *BACKDROP_HEIGHT_RANGE.start(),
-            *BACKDROP_HEIGHT_RANGE.end(),
-        );
-        self.backdrop_gap = bounded(
-            self.backdrop_gap,
-            fresh.backdrop_gap,
-            *BACKDROP_GAP_RANGE.start(),
-            *BACKDROP_GAP_RANGE.end(),
-        )
-        .round();
         self.atmosphere = self.atmosphere.sanitized();
         self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
         self.roll_seconds =
@@ -920,21 +897,6 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 /// MIDI ribbon width in semitones, shared by persistence and its control.
 pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0;
 
-/// The Backdrop height bar's range: a sliver above the floor up to the ceiling.
-pub(crate) const BACKDROP_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
-
-/// The Stripe spacing bar's range, in logical points between stripes.
-///
-/// The backdrop is a neutral light laid in the empty space above the analyzer
-/// curve. It stops exactly at the curve, so the fill reads as a shape cut out
-/// of it and keeps the spectrogram's own color. Strongest at the floor, where
-/// the quiet (short, dark) levels are, and faded out at
-/// [`backdrop_height`](SpectrumConfig::backdrop_height). With a gap, the black
-/// between stripes is what makes a flat fill of ANY color tell apart from it;
-/// at 0 every column is lit, a smooth wash, and a fill whose brightness
-/// matches the wash at some height is lost against it there.
-pub(crate) const BACKDROP_GAP_RANGE: std::ops::RangeInclusive<f32> = 0.0..=7.0;
-
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
@@ -963,11 +925,6 @@ impl Default for SpectrumConfig {
             // little toward a pastel of theirs, so quiet contours stay visible
             // without competing with the loud ones.
             keyline_lift: 0.422_058_7,
-            // No backdrop, as captured from the DAW on 2026-10-07; its height
-            // and stripe ride inert at their captured values.
-            backdrop_strength: 0.0,
-            backdrop_height: 0.655_113_8,
-            backdrop_gap: 1.0,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,

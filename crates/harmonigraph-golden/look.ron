@@ -171,9 +171,6 @@
         tilt: -4.5,
         marking_scale: 1.1844165,
         keyline_lift: 0.4220587,
-        backdrop_strength: 0.0,
-        backdrop_height: 0.6551138,
-        backdrop_gap: 1.0,
         atmosphere: (
             pitch_softness: 0.0,
             time_softness: 0.0,

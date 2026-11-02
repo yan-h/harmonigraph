@@ -81,7 +81,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         attack, release, keyline_lift, roll_seconds, roll_thickness, roll_lead,
         roll_lead_fade, roll_lead_release, note_cut, note_cut_reach, note_cut_shape,
         note_fill_lightness, note_name_scale,
-        volume_floor_db, volume_ceiling_db, backdrop_strength, backdrop_height, backdrop_gap);
+        volume_floor_db, volume_ceiling_db);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the
     // nearest offered step rather than clamping — and `roll_fraction` is set
@@ -276,7 +276,7 @@ fn scenarios() -> Vec<Scenario> {
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
         cases.push(Scenario { pane, ..base });
-        // Draw conditional audio, mapping, spectrogram, ribbon and backdrop bars.
+        // Draw conditional audio, mapping, spectrogram and ribbon bars.
         cases.push(Scenario { pane, enabled: true, ..base });
     }
     // Lattice materials share the spectrogram geometry bars, plus amount, speed
@@ -460,7 +460,6 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                 "Axis label scale",
                 "History duration",
                 "Spectrum outline intensity",
-                "Backdrop strength",
                 "Spectrum level range",
                 "Live attack",
                 "Live release",
@@ -482,8 +481,6 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                     "Held-note extension",
                     "Extension release",
                     "Label scale",
-                    "Backdrop height",
-                    "Stripe spacing",
                     "Drift direction",
                 ]);
                 if scenario.style != CloudStyle::Stars {
@@ -613,13 +610,12 @@ fn check(edge: Edge) {
             // A double-click puts back what a fresh state opens on, so on the
             // fresh state every value or range bar already sits at its own
             // target. A bar reading anything else resets to some other
-            // setting's number. The two exempt are switches
-            // `set_optional_sections` flips, which moves them off fresh on
+            // setting's number. The one exempt is a switch
+            // `set_optional_sections` flips, which moves it off fresh on
             // purpose. Star size has no reset by design: its pair is read off
             // the layers (`widgets/profile.rs`) and has no fresh value of its
             // own.
-            let switched =
-                ["Backdrop strength", "Pattern contrast"].contains(&visit.label.as_str());
+            let switched = visit.label == "Pattern contrast";
             let derived = visit.label == "Star size";
             if edge == Edge::Fresh {
                 match &visit.default {
