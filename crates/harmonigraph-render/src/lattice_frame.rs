@@ -215,7 +215,7 @@ impl LatticeCallback {
         // instance is always one with something to draw.
         //
         // What it ships FOR is the light's own passes alone, which draw every
-        // instance (`fs_ink_strip`, `vs_glow_splat`, `vs_source_shadow`). A node
+        // instance (`fs_ink_strip`, `vs_glow_splat`). A node
         // with no INK left — its Fade run out while its light still releases —
         // paints nothing in the scene pass and fills its cell with nothing, so
         // its shadow, its scene draw and its occlusion of what stands behind it
@@ -223,10 +223,6 @@ impl LatticeCallback {
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
         let lights = scene.view.glow_reach > 0.0 && scene.view.glow_strength > 0.0;
-        let pickup_enabled = lights
-            && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
-            && atmosphere.material_amount > 0.0
-            && atmosphere.pigment_reach > 0.0;
         let inked = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
@@ -605,13 +601,7 @@ impl LatticeCallback {
                         (texture_time * 0.053).cos() as f32 * 0.9,
                     ]),
                     target_size: Float2([1.0; 2]),
-                    glow_size: Float2([1.0; 2]),
-                },
-                pickup: PickupParams {
-                    intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },
-                    width: atmosphere.pigment_width(),
-                    softness: atmosphere.pigment_softness(),
-                    color: if pickup_enabled { atmosphere.material_color_pickup } else { 0.0 },
+                    padding: Float2([0.0; 2]),
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.

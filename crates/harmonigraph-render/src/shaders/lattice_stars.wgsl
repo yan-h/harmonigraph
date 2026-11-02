@@ -51,8 +51,8 @@ fn fs_lattice_stars(in: TileVertex) -> @location(0) vec4<f32> {
     var result = star_color(in.position.xy);
     // Star alpha is coverage, not the light's opacity: a dim star is still a
     // whole star. The stars hide what is behind them as the light they sit in
-    // does, so dark pickup stays dark pigment rather than turning transparent.
-    // Alpha rises past that only to contain a star brighter than its light.
+    // does, and alpha rises past that only to contain a star brighter than its
+    // light.
     let brightest = max(max(result.r, result.g), result.b);
     result.a = max(brightest, min(result.a, 1.0) * raw.a);
     return mix(raw, result, settings.depth);

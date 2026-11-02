@@ -96,9 +96,6 @@
         atmosphere: (
             material_style: Watercolor,
             material_amount: 1.0,
-            material_shadow_pickup: 0.0,
-            material_color_pickup: 0.44764197,
-            pigment_reach: 2.75,
             material_settings: (
                 velvet_size: 1.0,
                 velvet_variety: 0.5,

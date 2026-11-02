@@ -511,9 +511,6 @@ impl LatticeCallback {
         uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {
             uniforms.texture.target_size = Float2(target.size.map(|v| v as f32));
-            if let Some(glow) = &target.glow {
-                uniforms.texture.glow_size = Float2(glow.size.map(|v| v as f32));
-            }
         }
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));
@@ -740,14 +737,7 @@ impl LatticeCallback {
                 pass.draw(0..4, 0..pane.instance_count);
             }
 
-            glow.draw(
-                egui_encoder,
-                compiled,
-                pane,
-                strip,
-                has_lit_nodes,
-                self.uniforms.pickup.intensity.max(self.uniforms.pickup.color),
-            );
+            glow.draw(egui_encoder, compiled, pane, strip, has_lit_nodes);
         }
     }
 

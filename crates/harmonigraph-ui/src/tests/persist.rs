@@ -100,7 +100,13 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     // Condensed controls are ignored without disturbing the surviving values.
     ("pitch_softness", "spread:0.75,", true),
-    ("pigment_reach", "material_shadow_width:7.0,material_shadow_softness:0.1,", true),
+    ("material_amount", "material_shadow_width:7.0,material_shadow_softness:0.1,", true),
+    // The lattice's segment pickup.
+    (
+        "material_amount",
+        "material_shadow_pickup:0.3,material_color_pickup:0.7,pigment_reach:6.0,",
+        true,
+    ),
     ("texture_depth", "texture:None,", true),
     ("texture_depth", "texture:Clouds,", true),
     // The cloud's sampling grid.

@@ -90,20 +90,12 @@ the extra wide blur passes are removed.
 Increase the softness axes for a broader field.
 The balance of a close core and a separate broad haze is no longer independently adjustable.
 
-**Pigment reach** replaces Pickup width and Pickup softness in Lattice → Glow material.
-It grows the source band and its feather together,
-keeping the captured profile's proportions.
-The default is 275% of the node radius,
-and zero disables both dark and colored pickup.
-Dark pickup and Color pickup remain independent.
-
 **Pattern contrast** at zero turns the glow pattern off;
 there is no separate None/Clouds choice.
 **Stagger spread** at zero starts every slice simultaneously;
 Slice order chooses Circular, Bidirectional or Random stagger for positive spread.
 
-Saved Wide blur mix and pickup width/softness keys are ignored;
-old pickup settings start at the new default reach.
+Saved Wide blur mix keys and every lattice pickup key are ignored.
 The retired pattern selector is ignored too,
 so a previously bypassed pattern uses its saved contrast:
 set contrast to zero to turn it off again.

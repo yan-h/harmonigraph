@@ -64,7 +64,6 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         }
     }
     poison!(a.view.atmosphere; texture_depth, texture_scale, texture_speed, material_amount, material_speed, material_direction,
-        material_shadow_pickup, material_color_pickup, pigment_reach,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -280,8 +279,8 @@ fn scenarios() -> Vec<Scenario> {
         // Draw conditional audio, mapping, spectrogram and ribbon bars.
         cases.push(Scenario { pane, enabled: true, ..base });
     }
-    // Lattice materials share the spectrogram geometry bars, plus amount, speed,
-    // direction and three pigment controls.
+    // Lattice materials share the spectrogram geometry bars, plus amount, speed
+    // and direction.
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
@@ -444,13 +443,7 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                 ]);
             }
             if scenario.material != LatticeMaterial::None {
-                labels.extend([
-                    "Material amount",
-                    "Dark pickup",
-                    "Color pickup",
-                    "Pigment reach",
-                    "Drift direction",
-                ]);
+                labels.extend(["Material amount", "Drift direction"]);
                 if scenario.material != LatticeMaterial::Stars {
                     labels.push("Drift speed");
                 }

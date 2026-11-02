@@ -366,8 +366,6 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "fs_glow_splat",
     "vs_glow_resolve",
     "fs_glow_resolve",
-    "vs_source_shadow",
-    "fs_source_shadow",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",

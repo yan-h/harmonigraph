@@ -2,7 +2,7 @@
 
 use harmonigraph_scene::{
     AtmosphereSettings, LatticeMaterial, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN, NEBULA_SPEED_MAX,
-    NEBULA_SPEED_MIN, PIGMENT_REACH_MAX,
+    NEBULA_SPEED_MIN,
 };
 
 pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewConfig) {
@@ -60,15 +60,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             if settings.material_style == LatticeMaterial::Stars {
                 super::material::stars_resolution(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars);
             }
-            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Dark pickup")
-                .default_value(super::fresh_view().atmosphere.material_shadow_pickup)
-                .percent().show(ui).on_hover_text("Dark pigment behind unlit ring segments, picked up by the material. Fades as each segment lights up. Actual ring and label shadows keep their own settings.");
-            ValueBar::new(&mut settings.material_color_pickup, 0.0..=1.0, "Color pickup")
-                .default_value(super::fresh_view().atmosphere.material_color_pickup)
-                .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by the material. Follows each segment’s activation and Bloom brightness. Spreads by distance around the segment, including its ends. 0% disables colored pickup.");
-            ValueBar::new(&mut settings.pigment_reach, 0.0..=PIGMENT_REACH_MAX, "Pigment reach")
-                .default_value(super::fresh_view().atmosphere.pigment_reach)
-                .percent().show(ui).on_hover_text("Distance pigment reaches from each ring segment, as a percentage of the node radius. Grows the source band and its soft feather together. 0% disables dark and colored pickup; actual shadows are unchanged.");
             // Stars put their look first: size and spacing matter more than
             // how they drift.
             let stars = settings.material_style == LatticeMaterial::Stars;
@@ -109,9 +100,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 let fresh = AtmosphereSettings::default();
                 settings.material_style = fresh.material_style;
                 settings.material_amount = fresh.material_amount;
-                settings.material_shadow_pickup = fresh.material_shadow_pickup;
-                settings.material_color_pickup = fresh.material_color_pickup;
-                settings.pigment_reach = fresh.pigment_reach;
                 settings.material_settings = fresh.material_settings;
                 settings.stars = fresh.stars;
                 settings.material_speed = fresh.material_speed;

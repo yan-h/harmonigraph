@@ -540,7 +540,6 @@ pub(super) struct ShaderPipelines {
     pub(super) scenes: [ScenePipelines; 2],
     pub(super) glow_splat_pipeline: wgpu::RenderPipeline,
     pub(super) glow_resolve_pipeline: wgpu::RenderPipeline,
-    pub(super) source_shadow_pipeline: wgpu::RenderPipeline,
     pub(super) ink_strip_pipeline: wgpu::RenderPipeline,
     pub(super) ink_blur_pipeline: wgpu::RenderPipeline,
     pub(super) glyph_cell_pipeline: wgpu::RenderPipeline,
@@ -575,8 +574,6 @@ impl ShaderPipelines {
             layouts.strip,
             layouts.statistics,
         );
-        let source_shadow_pipeline =
-            lattice_node_glow::source_shadow_pipeline(device, lattice, layouts.scene.uniforms);
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
         progress(startup::Stage::Lattice);
@@ -590,7 +587,6 @@ impl ShaderPipelines {
             plus_cell_pipeline,
             glow_splat_pipeline,
             glow_resolve_pipeline,
-            source_shadow_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
             glyph_cell_pipeline,

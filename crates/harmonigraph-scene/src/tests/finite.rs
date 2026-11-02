@@ -108,9 +108,6 @@ fn poisoned_view() -> ViewConfig {
         atmosphere: AtmosphereSettings {
             material_style: base.atmosphere.material_style,
             material_amount: nan,
-            material_shadow_pickup: nan,
-            material_color_pickup: nan,
-            pigment_reach: nan,
             stars: crate::StarSettings::default(),
             material_settings: crate::MaterialSettings {
                 velvet_size: nan,
@@ -384,9 +381,6 @@ fn scene_floats(scene: &Scene) -> Floats {
     let AtmosphereSettings {
         material_style: _,
         material_amount,
-        material_shadow_pickup,
-        material_color_pickup,
-        pigment_reach,
         material_settings,
         stars,
         material_speed,
@@ -409,9 +403,6 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.stars.star_glow_falloff", stars.star_glow_falloff);
     f.one("atmosphere.stars.star_resolution", stars.star_resolution);
     f.one("atmosphere.material_amount", *material_amount);
-    f.one("atmosphere.material_shadow_pickup", *material_shadow_pickup);
-    f.one("atmosphere.material_color_pickup", *material_color_pickup);
-    f.one("atmosphere.pigment_reach", *pigment_reach);
     let crate::MaterialSettings {
         velvet_size,
         velvet_variety,
