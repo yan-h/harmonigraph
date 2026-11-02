@@ -1,7 +1,7 @@
 //! The analyzer's profile: a flat fill up to the original per-pixel FFT
 //! samples and the outline along it.
 
-use egui::{Color32, Mesh, Painter};
+use egui::{emath::Rot2, Color32, Mesh, Painter};
 
 use super::axes::{loudness_db, power_db, spectrogram_level_db, Axes};
 use super::spectrogram::cell_color;
@@ -131,6 +131,13 @@ pub(super) fn handover_color(cfg: &SpectrumConfig) -> Color32 {
     keyline_color(cell_color(cfg.spectrogram_gradient, 0.0), keyline_floor(lift))
 }
 
+/// The chords of a [`stroke_mesh`] join round a reversal. A line this fine is a
+/// few pixels across, so an arc of 60 degree chords is already round.
+const JOIN_CHORDS: usize = 3;
+
+/// The most a bend of [`stroke_mesh`] turns in one row, in radians.
+const JOIN_STEP: f32 = std::f32::consts::PI / JOIN_CHORDS as f32;
+
 /// An open polyline as an antialiased ribbon whose color follows its points,
 /// which `Shape::line` cannot do: it takes one color for the whole path.
 ///
@@ -139,27 +146,54 @@ pub(super) fn handover_color(cfg: &SpectrumConfig) -> Color32 {
 /// than a pixel has no core and fades its peak instead, so it lays down the
 /// same ink as a line of its true width — the same answer egui's own
 /// tessellator gives.
-fn stroke_mesh(points: &[egui::Pos2], colors: &[Color32], width: f32, feather: f32) -> Mesh {
+///
+/// A sharp bend is a round join: a fan of rows on the point, from square to the
+/// segment arriving to square to the one leaving. A miter row there would lie
+/// along the segments it joins, and a spectrum that swings between neighbouring
+/// columns bends that sharply at every sample: its flanks closed to nothing
+/// between pixel centers, and only its tips landed.
+pub(super) fn stroke_mesh(
+    points: &[egui::Pos2],
+    colors: &[Color32],
+    width: f32,
+    feather: f32,
+) -> Mesh {
     let (core, strength) =
         if width > feather { ((width - feather) / 2.0, 1.0) } else { (0.0, width / feather) };
     let across = [(-(core + feather), false), (-core, true), (core, true), (core + feather, false)];
-    let mut mesh = grid_mesh(points.len(), across.len());
+    // Room for a reversal at every point, the most this can take rather than
+    // what a curve usually does: growing from less is the churn #1103 removed.
+    let mut mesh = grid_mesh((JOIN_CHORDS + 1) * points.len(), across.len());
     for (i, (&p, &color)) in points.iter().zip(colors).enumerate() {
         let normal = |a: egui::Pos2, b: egui::Pos2| (b - a).normalized().rot90();
         let into = if i > 0 { normal(points[i - 1], p) } else { egui::Vec2::ZERO };
         let out = if i + 1 < points.len() { normal(p, points[i + 1]) } else { egui::Vec2::ZERO };
-        let one = if into == egui::Vec2::ZERO { out } else { into };
-        let one = if one == egui::Vec2::ZERO { egui::Vec2::Y } else { one };
-        // The miter: the averaged normal, lengthened so the ribbon keeps its
-        // width through a bend, and capped so a spike's tip does not shoot off.
-        let mitre = (into + out).normalized();
-        let offset = if mitre == egui::Vec2::ZERO { one } else { mitre / mitre.dot(one).max(0.5) };
-        for (distance, solid) in across {
-            let color = if solid { color.gamma_multiply(strength) } else { Color32::TRANSPARENT };
-            mesh.colored_vertex(p + offset * distance, color);
+        let mut row = |offset: egui::Vec2| {
+            for (distance, solid) in across {
+                let color =
+                    if solid { color.gamma_multiply(strength) } else { Color32::TRANSPARENT };
+                mesh.colored_vertex(p + offset * distance, color);
+            }
+        };
+        // An end of the line has no bend. It has to be said: `atan2` reads the
+        // signed zeros of a zero normal's products as a reversal.
+        let turn = if into == egui::Vec2::ZERO || out == egui::Vec2::ZERO {
+            0.0
+        } else {
+            (into.x * out.y - into.y * out.x).atan2(into.dot(out))
+        };
+        let steps = (turn.abs() / JOIN_STEP).ceil() as usize;
+        if steps > 1 {
+            for step in 0..=steps {
+                row(Rot2::from_angle(turn * step as f32 / steps as f32) * into);
+            }
+        } else {
+            // The miter: the averaged normal, lengthened so the ribbon keeps
+            // its width through a bend.
+            row((into + out).normalized() / (0.5 * turn).cos());
         }
     }
-    for row in 1..points.len() as u32 {
+    for row in 1..(mesh.vertices.len() / across.len()) as u32 {
         for band in 0..across.len() as u32 - 1 {
             let a = (row - 1) * across.len() as u32 + band;
             let b = a + across.len() as u32;
