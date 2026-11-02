@@ -1390,7 +1390,7 @@ where
         }
 
         // Reserve app shortcuts before returning to the host. Other keys
-        // (spacebar, etc.) pass through unless a widget wants keyboard input.
+        // (spacebar, etc.) pass through unless egui has a use for them.
         match &event {
             baseview::Event::Keyboard(event) => {
                 let claims = egui_claims_key(&self.egui_ctx, self.egui_input.modifiers, event.code);
@@ -1411,10 +1411,14 @@ where
 
 /// Whether egui has a use for this key, so the host must not act on it too.
 ///
-/// A focused widget claims every key. A selection in a label claims only the
-/// copy chord: unclaimed, the same Cmd-C also goes up to the DAW (#1433), and
-/// its own Copy competes with the label's for the pasteboard. A click without
-/// a drag counts, because egui copies the whole label from a bare cursor.
+/// A focused text edit claims every key. Any other focused widget claims only
+/// the arrows, which step a plot handle or a lattice and move focus: a click
+/// leaves the handle focused, and the DAW's Space must still work after it.
+///
+/// A selection in a label claims only the copy chord: unclaimed, the same
+/// Cmd-C also goes up to the DAW (#1433), and its own Copy competes with the
+/// label's for the pasteboard. A click without a drag counts, because egui
+/// copies the whole label from a bare cursor.
 ///
 /// The chord is the one `on_event` turns into `Event::Copy`, so a key is
 /// either egui's copy or the host's, never both.
@@ -1424,7 +1428,13 @@ fn egui_claims_key(
     code: keyboard_types::Code,
 ) -> bool {
     use egui::text_selection::LabelSelectionState;
-    ctx.egui_wants_keyboard_input()
+    use keyboard_types::Code;
+    ctx.text_edit_focused()
+        || ctx.egui_wants_keyboard_input()
+            && matches!(
+                code,
+                Code::ArrowLeft | Code::ArrowRight | Code::ArrowUp | Code::ArrowDown
+            )
         || is_copy_command(modifiers, code)
             && ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
 }
@@ -1496,6 +1506,37 @@ mod key_capture_tests {
                 assert_eq!(KeyCapture::IgnoreAll.status(&event, true), EventStatus::Ignored);
             }
         }
+    }
+
+    #[test]
+    fn only_a_text_edit_takes_space_from_the_host() {
+        use keyboard_types::Code;
+        let claims = |ctx, code| egui_claims_key(ctx, egui::Modifiers::NONE, code);
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        // Draws both, and focuses whichever is asked for.
+        let mut frame = |focus: Option<bool>| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let handle = ui.button("handle");
+                let edit = ui.text_edit_singleline(&mut text);
+                match focus {
+                    Some(true) => edit.request_focus(),
+                    Some(false) => handle.request_focus(),
+                    None => {}
+                }
+            });
+        };
+
+        frame(Some(false));
+        frame(None);
+        assert!(ctx.egui_wants_keyboard_input() && !ctx.text_edit_focused());
+        assert!(!claims(&ctx, Code::Space), "a focused handle leaves Space to the host");
+        assert!(claims(&ctx, Code::ArrowLeft), "and keeps the arrows it steps on");
+
+        frame(Some(true));
+        frame(None);
+        assert!(ctx.text_edit_focused());
+        assert!(claims(&ctx, Code::Space), "a text edit types it");
     }
 
     #[test]
