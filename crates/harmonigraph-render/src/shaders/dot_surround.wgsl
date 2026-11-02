@@ -106,7 +106,7 @@ fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
     return unpack4x8unorm(at.aura).a * fade * end * (1.0 - fill);
 }
 
-/// The cut `in`'s dot lands here, its amount included, when it is the
+/// The cut `in`'s dot lands here, as a share of the amount, when it is the
 /// strongest of its candidates', ties to the lowest index; otherwise the
 /// fragment is discarded.
 fn landed(in: DotOut) -> f32 {
@@ -140,18 +140,24 @@ fn landed(in: DotOut) -> f32 {
     if strongest <= 0.0 || winner != in.dot {
         discard;
     }
-    return dot_locals.surround.cut.x * strongest;
+    return strongest;
+}
+
+/// `in`'s fill where its cut is `strength` of the amount.
+fn dot_fill(in: DotOut, strength: f32) -> vec3<f32> {
+    let color = unpack4x8unorm(dots[in.dot].aura).rgb;
+    return surround_tinted(color, strength, dot_locals.surround.cut.w);
 }
 
 @fragment
 fn fs_dot_surround_gamma(in: DotOut) -> @location(0) vec4<f32> {
-    let cut = landed(in);
-    return surround_lands_gamma(unpack4x8unorm(dots[in.dot].aura).rgb, cut);
+    let strength = landed(in);
+    return surround_lands_gamma(dot_fill(in, strength), dot_locals.surround.cut.x * strength);
 }
 
 /// The same onto a target that encodes sRGB for itself.
 @fragment
 fn fs_dot_surround_linear(in: DotOut) -> @location(0) vec4<f32> {
-    let cut = landed(in);
-    return surround_lands_linear(unpack4x8unorm(dots[in.dot].aura).rgb, cut);
+    let strength = landed(in);
+    return surround_lands_linear(dot_fill(in, strength), dot_locals.surround.cut.x * strength);
 }

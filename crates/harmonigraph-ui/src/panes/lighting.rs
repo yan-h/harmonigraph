@@ -112,14 +112,33 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
                  -100% drops steeply at the note and leaves a long soft tail; \
                  100% holds near the note and drops steeply at the far end.",
         );
-        ValueBar::new(&mut cfg.note_fill_lightness, 0.0..=100.0, "Fill lightness")
-            .default_value(super::fresh_spectrum().note_fill_lightness)
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Lightness (L*) of what fills the cut, drawn in each note's own hue. \
-                 0 is black. Notes stand out most where this is far from their own lightness.",
-            );
+        ValueBar::new(
+            &mut cfg.note_fill_lightness,
+            crate::config::NOTE_FILL_LIGHTNESS_RANGE,
+            "Fill lightness",
+        )
+        .default_value(super::fresh_spectrum().note_fill_lightness)
+        .decimals(0)
+        .show(ui)
+        .on_hover_text(
+            "Lightness (L*) of what fills the cut, drawn in each note's own hue. \
+             0 is black; the top of the bar is about the fullest tint, before it pales. \
+             Notes stand out most where this is far from their own lightness.",
+        );
+        ValueBar::new(
+            &mut cfg.note_tint_fade,
+            harmonigraph_render::SURROUND_TINT_FADE_RANGE,
+            "Tint fade",
+        )
+        .default_value(super::fresh_spectrum().note_tint_fade)
+        .decimals(1)
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "How much sooner the fill's color fades than the cut. \
+             1× fades them together; higher keeps the color close to the note, \
+             and the cut stays dark out to its reach.",
+        );
     })
     .response
     .on_hover_text("MIDI ribbons and Spiral note dots");

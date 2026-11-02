@@ -368,7 +368,8 @@ mod tests {
 
     /// The cut the tests below draw under: whole at the dot's edge, a straight
     /// fade over eight points, strongest-wins.
-    const CUT: crate::SurroundCut = crate::SurroundCut { amount: 1.0, reach: 8.0, shape: 0.0 };
+    const CUT: crate::SurroundCut =
+        crate::SurroundCut { amount: 1.0, reach: 8.0, shape: 0.0, tint_fade: 1.0 };
 
     fn dot() -> SurroundDot {
         SurroundDot { center: [32.0, 32.0], radius: 4.0, aura: [255, 0, 0, 255] }
@@ -526,6 +527,17 @@ mod tests {
             assert_eq!(black(4.0, 4.0), [255; 3], "at {ppp} ppp the cut escaped its reach");
             let filled = draw([255, 0, 0, 255], CUT)(38.5, 32.0);
             assert!(filled[0] >= 250 && filled[1] < 100, "at {ppp} ppp the fill read {filled:?}");
+            // A faster tint fade leaves the cut where it was and takes the red
+            // off what it fills with.
+            let faster = crate::SurroundCut { tint_fade: 3.0, ..CUT };
+            let tinted = draw([255, 0, 0, 255], faster)(38.5, 32.0);
+            let cut = 1.0 - d / CUT.reach;
+            let red = 255.0 * (1.0 - cut + cut.powi(3));
+            assert!(
+                (f32::from(tinted[0]) - red).abs() <= 3.0
+                    && (f32::from(tinted[1]) - left).abs() <= 3.0,
+                "at {ppp} ppp the faster tint read {tinted:?}, not red {red} over {left}",
+            );
         }
     }
 
@@ -639,7 +651,7 @@ mod timing {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let Some(timer) = crate::frame_timer::FrameTimer::new(format) else { return };
         for (size, reach) in [([1600u32, 1600], 15.0), ([2400, 1800], 15.0), ([1600, 1600], 30.0)] {
-            let cut = crate::SurroundCut { amount: 1.0, reach, shape: 0.0 };
+            let cut = crate::SurroundCut { amount: 1.0, reach, ..crate::SurroundCut::OFF };
             let pane = timer.pane(size, 2.0);
             let (rect, c) = (pane.rect, pane.rect.center());
             let time = |dots: Vec<SurroundDot>| {

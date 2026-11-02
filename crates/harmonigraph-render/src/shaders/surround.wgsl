@@ -5,9 +5,9 @@
 //
 // A note's surround is the picture taken away next to it and replaced with the
 // note's own hue: whole at its edge (at the cut's full amount), fading out over
-// the cut's reach. Over black it is that hue laid on; over bright energy it is
-// what keeps the note legible. Where two notes' cuts meet, the stronger lands,
-// with its color.
+// the cut's reach, with the hue fading sooner than the cut does. Over black it
+// is that hue laid on; over bright energy it is what keeps the note legible.
+// Where two notes' cuts meet, the stronger lands, with its color.
 //
 // Functions only, with no bindings, so it can be joined to any module: a
 // producer's own module puts it after common.wgsl and before its own source,
@@ -17,8 +17,8 @@
 /// sits at the head of a uniform block with no padding of its own.
 struct SurroundCut {
     /// The amount the cut takes at a note's edge (0 when off), its reach past
-    /// that edge in points, the fade's bias `k` ([`surround_ramp`]), and
-    /// padding.
+    /// that edge in points, the fade's bias `k` ([`surround_ramp`]), and how
+    /// much sooner the fill's tint fades ([`surround_tinted`]).
     cut: vec4<f32>,
 };
 
@@ -32,6 +32,14 @@ struct SurroundCut {
 fn surround_ramp(k: f32, x: f32) -> f32 {
     let t = clamp(x, 0.0, 1.0);
     return 1.0 - t / (k * (1.0 - t) + 1.0);
+}
+
+/// A note's fill where its cut is `strength` of the amount, above 0: `sooner`
+/// more powers of `strength` off `color`, so the tint draws in toward the note
+/// while the cut keeps its reach. Neighbouring fills then stop merging into a
+/// sheet of their own, and what is left of the cut further out is plain dark.
+fn surround_tinted(color: vec3<f32>, strength: f32, sooner: f32) -> vec3<f32> {
+    return color * pow(strength, sooner);
 }
 
 /// How a note's cut lands on the picture: premultiplied over, so what is under

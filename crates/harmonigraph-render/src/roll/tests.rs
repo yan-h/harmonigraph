@@ -126,7 +126,7 @@ const HARNESS_REACH: f32 = 4.0;
 /// The cut [`draw`] and its kin draw under: whole at the edge, a straight
 /// fade over [`HARNESS_REACH`], cut to black.
 const HARNESS_CUT: crate::SurroundCut =
-    crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0 };
+    crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0, tint_fade: 1.0 };
 
 /// Everything egui does to `cb` before it paints, and submitted: its
 /// `prepare`, which draws the holdout and the surround's targets. Every
@@ -504,6 +504,26 @@ fn the_cut_fills_with_the_strongest_notes_own_color() {
         "between a red note and a weaker blue one the picture reads {both:?}, \
          not the red fill alone {red_alone:?}",
     );
+}
+
+/// A faster tint fade draws the fill in toward the note and leaves the cut's
+/// reach alone: at the third power, 4.5 points into a reach of 8 the fill has
+/// fallen to 0.19 of its color where the cut still takes 0.44 of the picture.
+#[test]
+fn the_tint_fades_sooner_than_the_cut_it_fills() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let faster = crate::SurroundCut { reach: 8.0, tint_fade: 3.0, ..HARNESS_CUT };
+    // The right edge is at x = 140, so the pixel centre at 144.5 is 4.5 off it.
+    let cut: f32 = 1.0 - 4.5 / 8.0;
+    let red = RollInstance { aura: [255, 0, 0, 255], ..centered_note() };
+    let got = pixel(&draw_cut(&device, &queue, vec![red], faster, grey(0.5)).0, 144, 128);
+    let backdrop = 127.5;
+    let want = (255.0 * cut * cut * cut).round() as u8 + kept(backdrop, cut);
+    assert!(got[0].abs_diff(want) <= 3, "the tint read {got:?}, not {want} of red");
+    let dark = kept(backdrop, cut);
+    assert!(got[1].abs_diff(dark) <= 3, "the cut itself moved: {got:?}, not {dark} of green");
 }
 
 /// A hairline ribbon is held by as strong a cut as a wide one at the same

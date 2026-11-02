@@ -599,8 +599,11 @@ mod tests {
                 );
                 if span <= 20.0 {
                     let (gap, body) = range(60);
+                    // A rest shows the surround's fill, so it reads about 0.55
+                    // of the body under the default fill and 0.4 under a
+                    // near-black one; a lost cut reads the whole body.
                     assert!(
-                        f32::from(gap) < f32::from(body) * 0.4,
+                        f32::from(gap) < f32::from(body) * 0.6,
                         "tiny rests lost their visible cuts at {span}s/{ppp}x: {gap}/{body}"
                     );
                 }

@@ -765,11 +765,13 @@ struct SurroundOut {
 @fragment
 fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
     let in = on_screen(fragment);
-    let cut = locals.surround.cut.x * cut_strength(in, rim_of(in));
+    let strength = cut_strength(in, rim_of(in));
+    let cut = locals.surround.cut.x * strength;
     if cut <= 0.0 {
         discard;
     }
-    return SurroundOut(vec4<f32>(in.aura.rgb, cut), 1.0 - cut);
+    let fill = surround_tinted(in.aura.rgb, strength, locals.surround.cut.w);
+    return SurroundOut(vec4<f32>(fill, cut), 1.0 - cut);
 }
 
 @fragment

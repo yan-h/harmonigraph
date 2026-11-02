@@ -409,7 +409,8 @@ pub struct SpectrumConfig {
     /// it is each note's own hue at [`note_fill_lightness`](Self::note_fill_lightness)
     /// laid on. 0 is no surround at all.
     ///
-    /// The cut's reach, shape and fill lightness are the fields below. See
+    /// The cut's reach, shape, fill lightness and tint fade are the fields
+    /// below. See
     /// [`harmonigraph_render::SurroundCut`].
     pub note_cut: f32,
     /// How far past a note's edge the cut fades out, in points
@@ -420,20 +421,26 @@ pub struct SpectrumConfig {
     /// 0 a straight line, -1 a steep drop at the note and a long soft tail, 1
     /// held near the note and a steep drop at the far end.
     pub note_cut_shape: f32,
-    /// How light the cut's fill is, as `L*` (0..100), drawn in each note's own
-    /// hue at the full chroma that lightness holds in gamut. What the cut takes
-    /// away is always filled; 0 fills it with black.
+    /// How light the cut's fill is, as `L*` ([`NOTE_FILL_LIGHTNESS_RANGE`]),
+    /// drawn in each note's own hue at the full chroma that lightness holds in
+    /// gamut. What the cut takes away is always filled; 0 fills it with black.
     ///
     /// One lightness for every note, which is what makes the surround the SAME
     /// thing behind every note: wherever the cut is whole and filled, the
     /// picture there is that lightness whatever the heatmap under it was, so a
     /// note's contrast against its own surround is set here once rather than
-    /// left to the cells. Dark by default, far under every note the pitch
-    /// gradient draws, so a note reads as lit against a deep haze of its own
-    /// color. A gradient whose low end is near this lightness draws those notes
-    /// against a fill they cannot stand out from, which is the cost of one
-    /// lightness for all.
+    /// left to the cells. Dark by default, under every note the pitch gradient
+    /// draws, so a note reads as lit against a deep haze of its own color. A
+    /// gradient whose low end is near this lightness draws those notes against
+    /// a fill they cannot stand out from, which is the cost of one lightness
+    /// for all.
     pub note_fill_lightness: f32,
+    /// How fast the fill's tint fades against the cut
+    /// ([`harmonigraph_render::SURROUND_TINT_FADE_RANGE`]): 1 fades them
+    /// together; higher keeps the hue near the note, where neighbouring fills
+    /// no longer merge into a sheet of it over the heatmap, and leaves the cut
+    /// dark out to its reach.
+    pub note_tint_fade: f32,
     /// How far a SOUNDING note carries past the now-line and into the spectrum,
     /// as a fraction of the spectrum's own share of the depth axis. 0 = not at
     /// all; 0.1 reaches a tenth of the way across the analyzer. The note's
@@ -598,6 +605,7 @@ impl SpectrumConfig {
             amount: self.note_cut,
             reach: self.note_cut_reach,
             shape: self.note_cut_shape,
+            tint_fade: self.note_tint_fade,
         }
     }
 
@@ -687,8 +695,18 @@ impl SpectrumConfig {
             *ROLL_THICKNESS_RANGE.start(),
             *ROLL_THICKNESS_RANGE.end(),
         );
-        self.note_fill_lightness =
-            bounded(self.note_fill_lightness, fresh.note_fill_lightness, 0.0, 100.0);
+        self.note_fill_lightness = bounded(
+            self.note_fill_lightness,
+            fresh.note_fill_lightness,
+            *NOTE_FILL_LIGHTNESS_RANGE.start(),
+            *NOTE_FILL_LIGHTNESS_RANGE.end(),
+        );
+        self.note_tint_fade = bounded(
+            self.note_tint_fade,
+            fresh.note_tint_fade,
+            *harmonigraph_render::SURROUND_TINT_FADE_RANGE.start(),
+            *harmonigraph_render::SURROUND_TINT_FADE_RANGE.end(),
+        );
         self.note_cut = bounded(self.note_cut, fresh.note_cut, 0.0, 1.0);
         self.note_cut_reach = bounded(
             self.note_cut_reach,
@@ -898,6 +916,11 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 /// MIDI ribbon width in semitones, shared by persistence and its control.
 pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0;
 
+/// The surround fill's `L*`, shared by persistence and its control. It stops at
+/// about the full tint: the default pitch gradient's fills hold the most chroma
+/// at 55 on average, and from there up they only pale toward white.
+pub(crate) const NOTE_FILL_LIGHTNESS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=55.0;
+
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
@@ -947,11 +970,14 @@ impl Default for SpectrumConfig {
             // the dials (#1528): the whole backdrop cut at the edge, fading out
             // over 15 points, filled with each note's own hue at W8's deep haze
             // of a lightness, the strongest note's cut standing alone where two
-            // meet.
+            // meet. Then lifted and drawn in off the sheet (Y3, round R9,
+            // 2026-11-02): a fill light enough to read as color, its tint
+            // following the cube of the cut so it stays by the note.
             note_cut: 1.0,
             note_cut_reach: 15.0,
             note_cut_shape: 0.0,
-            note_fill_lightness: 7.0,
+            note_fill_lightness: 25.0,
+            note_tint_fade: 3.0,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which
