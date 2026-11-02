@@ -2009,7 +2009,23 @@ fn an_outline_spike_ends_round() {
     let spike = [egui::pos2(0.25, 0.0), tip, egui::pos2(1.25, 0.0)];
     let mesh = profile::stroke_mesh(&spike, &[egui::Color32::WHITE; 3], width, pixel);
     assert!(ink_at(&mesh, tip + egui::vec2(0.0, 0.4 * width)) > 0.5, "the tip is cut square");
-    assert_eq!(ink_at(&mesh, tip + egui::vec2(0.0, width + pixel)), 0.0, "the tip shoots off");
+    let past = tip + egui::vec2(0.0, 0.5 * width + pixel);
+    assert_eq!(ink_at(&mesh, past), 0.0, "the tip shoots off");
+}
+
+/// The line's two ends have no bend to round, whichever way the line runs: it
+/// has its whole width on the first and the last sample.
+#[test]
+fn an_outline_starts_and_ends_at_its_full_width() {
+    for direction in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        let along = egui::Vec2::from(direction).normalized();
+        let (start, end) = (egui::pos2(50.0, 50.0), egui::pos2(50.0, 50.0) + 10.0 * along);
+        let mesh = profile::stroke_mesh(&[start, end], &[egui::Color32::WHITE; 2], 1.0, 0.5);
+        for inside in [start + 0.1 * along, end - 0.1 * along] {
+            let ink = ink_at(&mesh, inside + 0.2 * along.rot90());
+            assert!(ink > 0.9, "{ink} ink at the end of a line running {direction:?}");
+        }
+    }
 }
 
 /// The whole pane, painted in every orientation with a roll that has

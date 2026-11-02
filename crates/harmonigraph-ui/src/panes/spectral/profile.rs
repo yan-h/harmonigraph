@@ -131,12 +131,12 @@ pub(super) fn handover_color(cfg: &SpectrumConfig) -> Color32 {
     keyline_color(cell_color(cfg.spectrogram_gradient, 0.0), keyline_floor(lift))
 }
 
-/// The most a bend of [`stroke_mesh`] turns in one row, in radians. A line this
-/// fine is a few pixels across, so an arc of 60 degree chords is already round.
-const JOIN_STEP: f32 = std::f32::consts::FRAC_PI_3;
+/// The chords of a [`stroke_mesh`] join round a reversal. A line this fine is a
+/// few pixels across, so an arc of 60 degree chords is already round.
+const JOIN_CHORDS: usize = 3;
 
-/// Rows a [`stroke_mesh`] point can take: a reversal, in steps of [`JOIN_STEP`].
-const JOIN_ROWS: usize = 4;
+/// The most a bend of [`stroke_mesh`] turns in one row, in radians.
+const JOIN_STEP: f32 = std::f32::consts::PI / JOIN_CHORDS as f32;
 
 /// An open polyline as an antialiased ribbon whose color follows its points,
 /// which `Shape::line` cannot do: it takes one color for the whole path.
@@ -161,12 +161,13 @@ pub(super) fn stroke_mesh(
     let (core, strength) =
         if width > feather { ((width - feather) / 2.0, 1.0) } else { (0.0, width / feather) };
     let across = [(-(core + feather), false), (-core, true), (core, true), (core + feather, false)];
-    let mut mesh = grid_mesh(JOIN_ROWS * points.len(), across.len());
+    // Room for a reversal at every point, the most this can take rather than
+    // what a curve usually does: growing from less is the churn #1103 removed.
+    let mut mesh = grid_mesh((JOIN_CHORDS + 1) * points.len(), across.len());
     for (i, (&p, &color)) in points.iter().zip(colors).enumerate() {
         let normal = |a: egui::Pos2, b: egui::Pos2| (b - a).normalized().rot90();
         let into = if i > 0 { normal(points[i - 1], p) } else { egui::Vec2::ZERO };
         let out = if i + 1 < points.len() { normal(p, points[i + 1]) } else { egui::Vec2::ZERO };
-        let one = if into == egui::Vec2::ZERO { out } else { into };
         let mut row = |offset: egui::Vec2| {
             for (distance, solid) in across {
                 let color =
@@ -174,7 +175,13 @@ pub(super) fn stroke_mesh(
                 mesh.colored_vertex(p + offset * distance, color);
             }
         };
-        let turn = (into.x * out.y - into.y * out.x).atan2(into.dot(out));
+        // An end of the line has no bend. It has to be said: `atan2` reads the
+        // signed zeros of a zero normal's products as a reversal.
+        let turn = if into == egui::Vec2::ZERO || out == egui::Vec2::ZERO {
+            0.0
+        } else {
+            (into.x * out.y - into.y * out.x).atan2(into.dot(out))
+        };
         let steps = (turn.abs() / JOIN_STEP).ceil() as usize;
         if steps > 1 {
             for step in 0..=steps {
@@ -183,8 +190,7 @@ pub(super) fn stroke_mesh(
         } else {
             // The miter: the averaged normal, lengthened so the ribbon keeps
             // its width through a bend.
-            let mitre = (into + out).normalized();
-            row(mitre / mitre.dot(one).max(0.5));
+            row((into + out).normalized() / (0.5 * turn).cos());
         }
     }
     for row in 1..(mesh.vertices.len() / across.len()) as u32 {
