@@ -1,5 +1,5 @@
 //! The Tuning pane: interval bars with their temperament links, Learn and note matching, then how incoming notes are retuned (Pass
-//! through, Adaptive or a Lattice Map, each with its own controls) and the
+//! through, a Lattice Map or Adaptive, each with its own controls) and the
 //! tuning instances.
 //!
 //! The bars and the commas share a tab because they are two halves of one
@@ -895,14 +895,14 @@ fn map_controls(
                     "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
                 ),
                 (
-                    TuningEngine::Adaptive,
-                    "Adaptive",
-                    "Choose tuning for new notes from the musical context.",
-                ),
-                (
                     TuningEngine::LatticeMap,
                     "Lattice Map",
                     "Tune new notes using the selected saved lattice map.",
+                ),
+                (
+                    TuningEngine::Adaptive,
+                    "Adaptive",
+                    "Choose tuning for new notes from the musical context.",
                 ),
             ],
         );
