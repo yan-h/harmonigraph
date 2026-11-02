@@ -24,7 +24,7 @@ const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
 /// of the pane's shape list by it, and it is the pane's own constant so that
 /// retuning the fill moves the tests with it rather than leaving them matching
 /// nothing.
-const BODY_ALPHA: u8 = atmosphere::FILL_ALPHA_U8;
+const BODY_ALPHA: u8 = profile::FILL_ALPHA_U8;
 
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
@@ -1838,8 +1838,8 @@ fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
     assert!(body.vertices.len() > 100, "fixture must reach the sampled contour");
     // Each sample is one color and one alpha from the floor to its contour:
     // the flat fill, or nothing where the curve is a sliver.
-    for column in body.vertices.as_chunks::<{ atmosphere::BODY_STOPS }>().0 {
-        let tall = column[1].pos.distance(column[0].pos) > atmosphere::BODY_SLIVER_PT;
+    for column in body.vertices.as_chunks::<{ profile::BODY_STOPS }>().0 {
+        let tall = column[1].pos.distance(column[0].pos) > profile::BODY_SLIVER_PT;
         let alpha = if tall { BODY_ALPHA } else { 0 };
         assert!(column.iter().all(|v| v.color == column[0].color && v.color.a() == alpha));
     }
@@ -1866,7 +1866,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     let draw = |cfg: SpectrumConfig, samples: &[(f32, f32, f32)]| {
         let axes = Axes::new(WIDE, &cfg);
         let out = painted_into(SCREEN, WIDE, |ui| {
-            atmosphere::draw_profile(
+            profile::draw_profile(
                 ui.painter(),
                 &axes,
                 &cfg,
@@ -1896,7 +1896,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     let (meshes, outlines) = draw(cfg, &visible);
     assert_eq!(outlines.len(), 1);
     assert_eq!(outlines[0].vertices.len(), visible.len() * 4);
-    let stops = atmosphere::BODY_STOPS;
+    let stops = profile::BODY_STOPS;
     let body = &meshes[0];
     assert_eq!(body.vertices.len(), visible.len() * stops);
     assert!(
@@ -1910,7 +1910,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     );
     assert!(
         body.vertices[2 * stops + stops - 1].pos.distance(body.vertices[2 * stops].pos)
-            > atmosphere::BODY_SLIVER_PT,
+            > profile::BODY_SLIVER_PT,
         "fixture needs a visible quiet contour"
     );
     cfg.keyline_lift = 1.0;
@@ -1933,7 +1933,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
         let c = egui::Rgba::from(c);
         0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
     };
-    let floor = atmosphere::keyline_floor(cfg.keyline_lift);
+    let floor = profile::keyline_floor(cfg.keyline_lift);
     assert!(luminance(fill(4)) > floor, "fixture needs a peak brighter than the floor");
     assert!(luminance(fill(2)) < 0.01, "fixture needs a palette-black level");
     let tinted = solid(&draw(cfg, &visible).1[0]);
@@ -2093,7 +2093,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
             .collect();
         // The now-line is the one segment in the handover's color clean across
         // the pitch axis.
-        let line = super::atmosphere::handover_color(&state.appearance.spectrum);
+        let line = super::profile::handover_color(&state.appearance.spectrum);
         let now_line = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
                 if stroke.color == line)
@@ -3106,12 +3106,12 @@ fn the_handover_wears_the_silent_outline_and_never_vanishes() {
     let mut cfg = SpectrumConfig::default();
     let silent = |cfg: &SpectrumConfig| {
         let floor = super::spectrogram::cell_color(cfg.spectrogram_gradient, 0.0);
-        atmosphere::keyline_color(floor, atmosphere::keyline_floor(cfg.keyline_lift))
+        profile::keyline_color(floor, profile::keyline_floor(cfg.keyline_lift))
     };
-    assert_eq!(atmosphere::handover_color(&cfg), silent(&cfg));
+    assert_eq!(profile::handover_color(&cfg), silent(&cfg));
     cfg.keyline_lift = 0.0;
     assert_eq!(silent(&cfg), egui::Color32::BLACK, "fixture needs a black silent outline");
-    let line = atmosphere::handover_color(&cfg);
+    let line = profile::handover_color(&cfg);
     assert!(
         line.r().max(line.g()).max(line.b()) >= 32,
         "the handover vanished into the black ground: {line:?}"
