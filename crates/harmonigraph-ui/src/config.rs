@@ -918,7 +918,8 @@ pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0
 
 /// The surround fill's `L*`, shared by persistence and its control. It stops at
 /// about the full tint: the default pitch gradient's fills hold the most chroma
-/// at 55 on average, and from there up they only pale toward white.
+/// at 55 on average, with its hues peaking from 44 to 73, and every hue has
+/// paled most of the way to white by 90.
 pub(crate) const NOTE_FILL_LIGHTNESS_RANGE: std::ops::RangeInclusive<f32> = 0.0..=55.0;
 
 impl Default for SpectrumConfig {

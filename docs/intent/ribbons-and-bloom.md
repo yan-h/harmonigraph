@@ -68,4 +68,4 @@ These settle the open questions from the first trial above.
 - It is not the fill going lighter than the backdrop: at L* 25 only 9% of the surround is lighter than the bare picture.
 - Rejected: lower chroma goes grey-olive and loses the tint; a shorter reach is the worst for legibility; pulling hues toward violet ties the fill to one heatmap, Aurora.
 - Picked (Y3): Tint fade 3 at Fill lightness 25, so the hue stays by the note and the cut carries on dark to its reach. Any lifted fill costs some legibility against the near-black one; the faster fade wins part of it back.
-- Fill lightness now stops at 55, about the full tint: above that the fill only pales toward white, which Yan never wants.
+- Fill lightness now stops at 55, about the full tint: the default gradient's fills hold the most chroma there on average, and higher takes them toward white, which Yan never wants.

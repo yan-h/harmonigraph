@@ -537,6 +537,14 @@ fn the_tint_fades_sooner_than_the_cut_it_fills() {
     let got = pixel(&draw_cut(&device, &queue, vec![capped], faster, black).0, 128, 103)[0];
     let want = (255.0 * cut * cut * cut).round() as u8;
     assert!(got.abs_diff(want) <= 3, "a cap's tint read {got}, not {want}");
+    // Beside a half-opaque lead the wrap hands over to the cap about y = 103,
+    // two points off the flank: the fill has no step where they tie.
+    let led = RollInstance { aura: [255, 0, 0, 255], cap_reach: 8.0, ..led_note(40.0, 0.0, 0.5) };
+    let frame = draw_cut(&device, &queue, vec![led], faster, black).0;
+    for y in 96..107 {
+        let (here, next) = (pixel(&frame, 142, y)[0], pixel(&frame, 142, y + 1)[0]);
+        assert!(here.abs_diff(next) <= 25, "the tint stepped {here} to {next} at y = {y}");
+    }
 }
 
 /// A hairline ribbon is held by as strong a cut as a wide one at the same
