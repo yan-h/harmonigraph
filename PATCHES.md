@@ -349,7 +349,8 @@ a `free`-only delta on a bailing frame used to drop egui's texture-manager ids p
 `wants_render` and `after_render` are pure functions with their own tests in `vendor/egui-baseview`, which `ci.sh` runs.
 - **Patch 18** (`src/window.rs`, `src/translate.rs`): reserve app shortcuts from the host (#1433).
 `KeyCapture::CaptureShortcuts` captures its listed `egui::KeyboardShortcut`s even when no widget has keyboard focus, so the editor's appearance undo and redo (Cmd+Z, Cmd+Shift+Z, and Ctrl+Y off macOS) never reach the DAW while the editor window has the keyboard.
-Every other key still passes to the host unless egui wants keyboard input.
+Every other key still passes to the host unless egui has a use for it, which `egui_claims_key` decides:
+a focused widget takes every key, unless the app says through `Queue::set_focus_takes_only_arrows` that it uses just the arrows, when it keeps those and Escape, so Space still reaches the DAW after a click leaves a plot handle focused.
 Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
 `translate_virtual_key` lowercases a character before matching it,
 so Shift and Caps Lock letters still produce egui key events.

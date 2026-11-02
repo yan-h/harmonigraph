@@ -120,6 +120,7 @@ pub struct Queue<'a> {
     close_requested: &'a mut bool,
     physical_size: &'a mut PhySize,
     key_capture: &'a mut KeyCapture,
+    focus_takes_only_arrows: &'a mut bool,
     frame_divisor: &'a mut Option<u32>,
     frame_timing: Option<baseview::FrameTiming>,
     tess_ms: f32,
@@ -142,6 +143,7 @@ impl<'a> Queue<'a> {
         close_requested: &'a mut bool,
         physical_size: &'a mut PhySize,
         key_capture: &'a mut KeyCapture,
+        focus_takes_only_arrows: &'a mut bool,
         frame_divisor: &'a mut Option<u32>,
         frame_timing: Option<baseview::FrameTiming>,
         tess_ms: f32,
@@ -164,6 +166,7 @@ impl<'a> Queue<'a> {
             close_requested,
             physical_size,
             key_capture,
+            focus_takes_only_arrows,
             frame_divisor,
             frame_timing,
             tess_ms,
@@ -300,6 +303,14 @@ impl<'a> Queue<'a> {
     pub fn set_key_capture(&mut self, key_capture: KeyCapture) {
         *self.key_capture = key_capture;
     }
+
+    /// Say whether the widget with keyboard focus uses only the arrows, which
+    /// leaves every other key to the host. A widget otherwise claims them all,
+    /// and egui cannot tell the two apart. Asked every frame, since it follows
+    /// the focus.
+    pub fn set_focus_takes_only_arrows(&mut self, arrows_only: bool) {
+        *self.focus_takes_only_arrows = arrows_only;
+    }
 }
 
 /// Describes how to handle capturing key events from the host.
@@ -390,6 +401,8 @@ where
     /// shown it will accept. See [`wants_render`].
     retry_after: Option<Instant>,
     key_capture: KeyCapture,
+    /// See [`Queue::set_focus_takes_only_arrows`].
+    focus_takes_only_arrows: bool,
     /// Tessellation time from the PREVIOUS frame — it is measured inside
     /// `render`, which runs after the update closure, so the closure can only
     /// ever be handed the last one. One frame stale, like every other
@@ -478,12 +491,14 @@ where
         let mut close_requested = false;
         let old_physical_size = physical_size;
         let mut key_capture = KeyCapture::default();
+        let mut focus_takes_only_arrows = false;
         let mut frame_divisor = None;
         let mut queue = Queue::new(
             &mut bg_color,
             &mut close_requested,
             &mut physical_size,
             &mut key_capture,
+            &mut focus_takes_only_arrows,
             &mut frame_divisor,
             // The build runs outside any frame the display asked for.
             None,
@@ -555,6 +570,7 @@ where
             refused_presents: 0,
             retry_after: None,
             key_capture,
+            focus_takes_only_arrows,
             tess_ms: 0.0,
             draw_gpu_ms: None,
             acquire_ms: 0.0,
@@ -836,11 +852,13 @@ mod wants_render_tests {
         let mut close = false;
         let mut size = PhySize { width: 1, height: 1 };
         let mut capture = KeyCapture::default();
+        let mut arrows_only = false;
         let mut divisor = None;
         let mut completed = Vec::new();
         for sample in [Some(2.0), None, None, None, None, Some(10.0), None] {
             let mut queue = Queue::new(
-                &mut color, &mut close, &mut size, &mut capture, &mut divisor, None,
+                &mut color, &mut close, &mut size, &mut capture, &mut arrows_only, &mut divisor,
+                None,
                 0.0, sample, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0,
             );
             completed.extend(queue.take_draw_gpu_ms());
@@ -992,6 +1010,7 @@ where
             &mut self.close_requested,
             &mut self.physical_size,
             &mut self.key_capture,
+            &mut self.focus_takes_only_arrows,
             &mut frame_divisor,
             window.frame_timing(),
             self.tess_ms,
@@ -1390,10 +1409,15 @@ where
         }
 
         // Reserve app shortcuts before returning to the host. Other keys
-        // (spacebar, etc.) pass through unless a widget wants keyboard input.
+        // (spacebar, etc.) pass through unless egui has a use for them.
         match &event {
             baseview::Event::Keyboard(event) => {
-                let claims = egui_claims_key(&self.egui_ctx, self.egui_input.modifiers, event.code);
+                let claims = egui_claims_key(
+                    &self.egui_ctx,
+                    self.egui_input.modifiers,
+                    event,
+                    self.focus_takes_only_arrows,
+                );
                 self.key_capture.status(event, claims)
             }
             baseview::Event::Mouse(_) => {
@@ -1411,21 +1435,33 @@ where
 
 /// Whether egui has a use for this key, so the host must not act on it too.
 ///
-/// A focused widget claims every key. A selection in a label claims only the
-/// copy chord: unclaimed, the same Cmd-C also goes up to the DAW (#1433), and
-/// its own Copy competes with the label's for the pasteboard. A click without
-/// a drag counts, because egui copies the whole label from a bare cursor.
+/// A focused widget claims every key: Space and Enter click it, and Escape
+/// drops its focus, so the host acting too would be the same key doing two
+/// things. `arrows_only` is the app's word that this one uses just the arrows
+/// ([`Queue::set_focus_takes_only_arrows`]), and it keeps those and Escape.
+///
+/// A selection in a label claims only the copy chord: unclaimed, the same
+/// Cmd-C also goes up to the DAW (#1433), and its own Copy competes with the
+/// label's for the pasteboard. A click without a drag counts, because egui
+/// copies the whole label from a bare cursor.
 ///
 /// The chord is the one `on_event` turns into `Event::Copy`, so a key is
 /// either egui's copy or the host's, never both.
 fn egui_claims_key(
     ctx: &egui::Context,
     modifiers: egui::Modifiers,
-    code: keyboard_types::Code,
+    event: &keyboard_types::KeyboardEvent,
+    arrows_only: bool,
 ) -> bool {
     use egui::text_selection::LabelSelectionState;
-    ctx.egui_wants_keyboard_input()
-        || is_copy_command(modifiers, code)
+    use keyboard_types::Key;
+    // By the key, as egui reads it: a numpad arrow is not an arrow by its code.
+    let kept = matches!(
+        event.key,
+        Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Escape
+    );
+    ctx.egui_wants_keyboard_input() && (kept || !arrows_only)
+        || is_copy_command(modifiers, event.code)
             && ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
 }
 
@@ -1499,10 +1535,34 @@ mod key_capture_tests {
     }
 
     #[test]
+    fn a_focused_widget_keeps_its_keys_unless_it_takes_only_arrows() {
+        use keyboard_types::{Key, KeyboardEvent};
+        let claims = |ctx, key, arrows_only| {
+            let event = KeyboardEvent { key, ..Default::default() };
+            egui_claims_key(ctx, egui::Modifiers::NONE, &event, arrows_only)
+        };
+        let space = || Key::Character(" ".into());
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| ui.button("button").request_focus());
+        assert!(ctx.egui_wants_keyboard_input());
+
+        assert!(claims(&ctx, space(), false), "Space clicks a focused button");
+        assert!(!claims(&ctx, space(), true), "a plot handle leaves it to the host");
+        assert!(claims(&ctx, Key::ArrowLeft, true), "and keeps the arrows it steps on");
+        assert!(claims(&ctx, Key::Escape, true), "and Escape, which drops its focus");
+
+        let unfocused = egui::Context::default();
+        assert!(!claims(&unfocused, Key::ArrowLeft, true), "without focus, nothing is claimed");
+    }
+
+    #[test]
     fn a_label_selection_takes_cmd_c_from_the_host() {
-        use keyboard_types::Code;
+        use keyboard_types::{Code, KeyboardEvent};
         let copy = (egui::Modifiers::COMMAND, Code::KeyC);
-        let claims = |ctx, (modifiers, code)| egui_claims_key(ctx, modifiers, code);
+        let claims = |ctx, (modifiers, code)| {
+            let event = KeyboardEvent { code, ..Default::default() };
+            egui_claims_key(ctx, modifiers, &event, false)
+        };
 
         let ctx = egui::Context::default();
         // Draws the label, and says where it went.
