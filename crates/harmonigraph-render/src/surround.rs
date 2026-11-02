@@ -33,7 +33,8 @@ pub(crate) fn composite_source() -> String {
 /// The cut as the pane dials it: the notes' surround takes the picture away
 /// next to each note — whole at its edge at a full `amount`, fading out over
 /// `reach` along a curve `shape` bends — and fills what it took with the
-/// note's own hue. Over black it is that hue laid on.
+/// note's own hue, which `tint_fade` draws in toward the note. Over black it
+/// is that hue laid on.
 ///
 /// Where two notes' cuts meet, the stronger is what lands, with its color, so a
 /// crowd of notes is no more cut between them than one note is.
@@ -52,6 +53,11 @@ pub struct SurroundCut {
     /// steep drop at the note and a long soft tail, 1 held near the note and a
     /// steep drop at the far end.
     pub shape: f32,
+    /// How fast the fill's tint fades against the cut
+    /// ([`SURROUND_TINT_FADE_RANGE`]): the power of the cut's fade it follows.
+    /// 1 fades them together; above that the hue stays near the note and the
+    /// cut carries on dark to its reach.
+    pub tint_fade: f32,
 }
 
 /// The cut's reach, in points, that [`SurroundCut::reach`] is held to: the
@@ -61,6 +67,9 @@ pub const SURROUND_REACH_RANGE: std::ops::RangeInclusive<f32> = 3.75..=30.0;
 
 /// [`SurroundCut::shape`]'s range: a bipolar bend about the straight line.
 pub const SURROUND_SHAPE_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
+
+/// [`SurroundCut::tint_fade`]'s range, up from the tint fading with the cut.
+pub const SURROUND_TINT_FADE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=5.0;
 
 /// How far [`SurroundCut::shape`] moves Schlick's bias parameter `a` off its
 /// straight line at 0.5: at either end of the bar it stands at 0.05 or 0.95,
@@ -86,7 +95,7 @@ pub fn surround_fade(shape: f32, x: f32) -> f32 {
 
 impl SurroundCut {
     /// No surround: what a cut at its defaults but for its amount draws.
-    pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0 };
+    pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, tint_fade: 3.0 };
 
     /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.
     pub fn sanitized(self) -> Self {
@@ -98,6 +107,7 @@ impl SurroundCut {
             amount: within(self.amount, off.amount, 0.0..=1.0),
             reach: within(self.reach, off.reach, SURROUND_REACH_RANGE),
             shape: within(self.shape, off.shape, SURROUND_SHAPE_RANGE),
+            tint_fade: within(self.tint_fade, off.tint_fade, SURROUND_TINT_FADE_RANGE),
         }
     }
 
@@ -122,7 +132,8 @@ impl SurroundCut {
         if reach <= 0.0 {
             return SurroundUniform { cut: Float4([0.0; 4]) };
         }
-        SurroundUniform { cut: Float4([cut.amount, reach, shape_bias(cut.shape), 0.0]) }
+        let sooner = cut.tint_fade - 1.0;
+        SurroundUniform { cut: Float4([cut.amount, reach, shape_bias(cut.shape), sooner]) }
     }
 }
 

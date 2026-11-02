@@ -72,7 +72,10 @@ pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 /// The backdrop cut round a note, shared by the roll's ribbons and the
 /// Spiral's dots.
 mod surround;
-pub use surround::{surround_fade, SurroundCut, SURROUND_REACH_RANGE, SURROUND_SHAPE_RANGE};
+pub use surround::{
+    surround_fade, SurroundCut, SURROUND_REACH_RANGE, SURROUND_SHAPE_RANGE,
+    SURROUND_TINT_FADE_RANGE,
+};
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
 /// picture a CPU compose would build texel by texel. Here the aggregator's slab

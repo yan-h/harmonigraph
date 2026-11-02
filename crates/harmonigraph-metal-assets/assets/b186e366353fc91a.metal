@@ -47,6 +47,10 @@ struct Rim {
     float cap_d;
     float cap_keep;
 };
+struct NoteCut {
+    float strength;
+    float fade;
+};
 struct SurroundOut {
     metal::float4 color;
     float depth;
@@ -63,6 +67,22 @@ float surround_ramp(
 ) {
     float t = metal::clamp(x, 0.0, 1.0);
     return 1.0 - (t / ((k * (1.0 - t)) + 1.0));
+}
+
+float surround_fade_at(
+    SurroundCut surround,
+    float d
+) {
+    float _e9 = surround_ramp(surround.cut.z, metal::max(d, 0.0) / surround.cut.y);
+    return _e9;
+}
+
+metal::float3 surround_tinted(
+    metal::float3 color,
+    float fade,
+    float sooner
+) {
+    return color * metal::pow(fade, sooner);
 }
 
 float cut_reach(
@@ -99,23 +119,23 @@ VertexOut on_screen(
 
 float inside(
     VertexOut in_2,
-    float d,
+    float d_1,
     float edge
 ) {
     float f = metal::max(in_2.feather, 0.000001);
-    return metal::clamp(((edge - d) / f) + 0.5, 0.0, 1.0);
+    return metal::clamp(((edge - d_1) / f) + 0.5, 0.0, 1.0);
 }
 
 float cut_coverage(
     VertexOut in_3,
-    float d_1,
+    float d_2,
     float reach,
     constant Locals& locals
 ) {
     bool local = {};
-    float fade = locals.surround.cut.y;
     if (!((reach <= 0.0))) {
-        local = fade <= 0.0;
+        float _e12 = locals.surround.cut.y;
+        local = _e12 <= 0.0;
     } else {
         local = true;
     }
@@ -123,10 +143,10 @@ float cut_coverage(
     if (_e16) {
         return 0.0;
     }
-    float _e22 = locals.surround.cut.z;
-    float _e26 = surround_ramp(_e22, metal::max(d_1, 0.0) / fade);
-    float _e27 = inside(in_3, d_1, reach);
-    return _e26 * _e27;
+    SurroundCut _e20 = locals.surround;
+    float _e21 = surround_fade_at(_e20, d_2);
+    float _e22 = inside(in_3, d_2, reach);
+    return _e21 * _e22;
 }
 
 float lead_coverage(
@@ -205,7 +225,7 @@ float taper_at(
     VertexOut in_6,
     float y
 ) {
-    metal::float4 d_2 = in_6.taper_depth;
+    metal::float4 d_3 = in_6.taper_depth;
     metal::float4 w_1 = in_6.taper;
     if (y < in_6.taper_depth.y) {
         return metal::mix(in_6.taper.x, in_6.taper.y, metal::clamp((y - in_6.taper_depth.x) / metal::max(in_6.taper_depth.y - in_6.taper_depth.x, 0.000001), 0.0, 1.0));
@@ -274,7 +294,7 @@ float tapered_distance(
     float lo_1 = -(in_8.half_extent.y) + trim_1;
     float hi_1 = in_8.half_extent.y;
     metal::float2 p_3 = in_8.local;
-    metal::float4 d_3 = in_8.taper_depth;
+    metal::float4 d_4 = in_8.taper_depth;
     metal::float4 w_2 = in_8.taper;
     float _e14 = taper_at(in_8, lo_1);
     metal::float2 start = metal::float2(lo_1, in_8.half_extent.x * _e14);
@@ -395,20 +415,26 @@ float along(
     return metal::mix(ends.x, ends.y, t_2);
 }
 
-float cut_strength(
+NoteCut cut_strength(
     VertexOut in_14,
     Rim rim_1,
     constant Locals& locals
 ) {
     if (!(rim_1.live)) {
-        return 0.0;
+        return NoteCut {0.0, 0.0};
     }
-    float _e6 = cut_reach(locals);
-    float _e7 = cut_coverage(in_14, rim_1.d, _e6, locals);
-    float wrap = (_e7 * rim_1.keep) * rim_1.lead;
+    float _e8 = cut_reach(locals);
+    float _e9 = cut_coverage(in_14, rim_1.d, _e8, locals);
+    float wrap = (_e9 * rim_1.keep) * rim_1.lead;
     float _e14 = cap_coverage(in_14, rim_1, locals);
-    float _e18 = along(in_14, in_14.fade);
-    return (in_14.aura.w * metal::max(wrap, _e14)) * _e18;
+    SurroundCut _e17 = locals.surround;
+    float _e19 = surround_fade_at(_e17, rim_1.cap_d);
+    float cap_fade = (_e14 > 0.0) ? _e19 : 0.0;
+    SurroundCut _e26 = locals.surround;
+    float _e28 = surround_fade_at(_e26, rim_1.d);
+    float fade_1 = metal::max(_e28 * rim_1.lead, cap_fade);
+    float _e37 = along(in_14, in_14.fade);
+    return NoteCut {(in_14.aura.w * metal::max(wrap, _e14)) * _e37, fade_1};
 }
 
 Rim rim_of(
@@ -469,13 +495,15 @@ fragment fs_note_surroundOutput fs_note_surround(
 ) {
     const VertexOut fragment_ = { position, varyings.local, varyings.half_extent, varyings.shear, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.aura, varyings.center, varyings.feather, {}, varyings.ramp, varyings.fade };
     VertexOut _e1 = on_screen(fragment_, locals);
-    float _e6 = locals.surround.cut.x;
-    Rim _e7 = rim_of(_e1, body_holdout);
-    float _e8 = cut_strength(_e1, _e7, locals);
-    float cut = _e6 * _e8;
+    Rim _e2 = rim_of(_e1, body_holdout);
+    NoteCut _e3 = cut_strength(_e1, _e2, locals);
+    float _e8 = locals.surround.cut.x;
+    float cut = _e8 * _e3.strength;
     if (cut <= 0.0) {
         metal::discard_fragment();
     }
-    const auto _tmp = SurroundOut {metal::float4(_e1.aura.xyz, cut), 1.0 - cut};
+    float _e20 = locals.surround.cut.w;
+    metal::float3 _e21 = surround_tinted(_e1.aura.xyz, _e3.fade, _e20);
+    const auto _tmp = SurroundOut {metal::float4(_e21, cut), 1.0 - cut};
     return fs_note_surroundOutput { _tmp.color, _tmp.depth };
 }

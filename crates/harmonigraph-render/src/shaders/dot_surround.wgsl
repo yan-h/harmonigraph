@@ -102,7 +102,7 @@ fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
     let d = length(p - at.center) - at.radius;
     let fill = clamp(0.5 - d / f, 0.0, 1.0);
     let end = clamp((reach - d) / f + 0.5, 0.0, 1.0);
-    let fade = surround_ramp(dot_locals.surround.cut.z, max(d, 0.0) / reach);
+    let fade = surround_fade_at(dot_locals.surround, d);
     return unpack4x8unorm(at.aura).a * fade * end * (1.0 - fill);
 }
 
@@ -143,15 +143,24 @@ fn landed(in: DotOut) -> f32 {
     return dot_locals.surround.cut.x * strongest;
 }
 
+/// `in`'s fill where it landed: only a dot that cuts here lands, so the fade
+/// is above 0.
+fn dot_fill(in: DotOut) -> vec3<f32> {
+    let at = dots[in.dot];
+    let d = length(in.position.xy * dot_locals.feather - at.center) - at.radius;
+    let fade = surround_fade_at(dot_locals.surround, d);
+    return surround_tinted(unpack4x8unorm(at.aura).rgb, fade, dot_locals.surround.cut.w);
+}
+
 @fragment
 fn fs_dot_surround_gamma(in: DotOut) -> @location(0) vec4<f32> {
     let cut = landed(in);
-    return surround_lands_gamma(unpack4x8unorm(dots[in.dot].aura).rgb, cut);
+    return surround_lands_gamma(dot_fill(in), cut);
 }
 
 /// The same onto a target that encodes sRGB for itself.
 @fragment
 fn fs_dot_surround_linear(in: DotOut) -> @location(0) vec4<f32> {
     let cut = landed(in);
-    return surround_lands_linear(unpack4x8unorm(dots[in.dot].aura).rgb, cut);
+    return surround_lands_linear(dot_fill(in), cut);
 }

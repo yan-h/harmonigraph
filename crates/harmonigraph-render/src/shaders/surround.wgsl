@@ -5,9 +5,9 @@
 //
 // A note's surround is the picture taken away next to it and replaced with the
 // note's own hue: whole at its edge (at the cut's full amount), fading out over
-// the cut's reach. Over black it is that hue laid on; over bright energy it is
-// what keeps the note legible. Where two notes' cuts meet, the stronger lands,
-// with its color.
+// the cut's reach, with the hue fading sooner than the cut does. Over black it
+// is that hue laid on; over bright energy it is what keeps the note legible.
+// Where two notes' cuts meet, the stronger lands, with its color.
 //
 // Functions only, with no bindings, so it can be joined to any module: a
 // producer's own module puts it after common.wgsl and before its own source,
@@ -17,8 +17,8 @@
 /// sits at the head of a uniform block with no padding of its own.
 struct SurroundCut {
     /// The amount the cut takes at a note's edge (0 when off), its reach past
-    /// that edge in points, the fade's bias `k` ([`surround_ramp`]), and
-    /// padding.
+    /// that edge in points, the fade's bias `k` ([`surround_ramp`]), and how
+    /// much sooner the fill's tint fades ([`surround_tinted`]).
     cut: vec4<f32>,
 };
 
@@ -32,6 +32,25 @@ struct SurroundCut {
 fn surround_ramp(k: f32, x: f32) -> f32 {
     let t = clamp(x, 0.0, 1.0);
     return 1.0 - t / (k * (1.0 - t) + 1.0);
+}
+
+/// [`surround_ramp`] of `surround`'s own bias, `d` points past a note's edge. A
+/// note's cut and its tint both read this, so they cannot part ways.
+fn surround_fade_at(surround: SurroundCut, d: f32) -> f32 {
+    return surround_ramp(surround.cut.z, max(d, 0.0) / surround.cut.y);
+}
+
+/// A note's fill where [`surround_fade_at`] reads `fade`, above 0: `sooner` more
+/// powers of it off `color`, so the tint draws in toward the note while the cut
+/// keeps its reach. Neighbouring fills then stop merging into a sheet of their
+/// own, and what is left of the cut further out is plain dark.
+///
+/// Distance alone, and never the cut's whole strength: a note's opacity and the
+/// antialiasing round its body scale the cut once already, and a power of them
+/// would leave a faint note a dark bite with no hue and a rim darker than
+/// either side of it.
+fn surround_tinted(color: vec3<f32>, fade: f32, sooner: f32) -> vec3<f32> {
+    return color * pow(fade, sooner);
 }
 
 /// How a note's cut lands on the picture: premultiplied over, so what is under

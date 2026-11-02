@@ -61,3 +61,11 @@ These settle the open questions from the first trial above.
 ## 2026-11-02 (analyzer backdrop removed)
 
 - The Analyzer backdrop is gone, stripes and gradient alike, with its Backdrop strength, Backdrop height and Stripe spacing bars. The stripe half of the 2026-10-02 line on edge softness no longer applies. The ribbons' Backdrop cut is a different thing and stays.
+
+## 2026-11-02 (tint fade, round R9)
+
+- Turned up from near black, the fill read as discordant: at 15 points of reach neighbouring notes' fills merge into a sheet of their hue over the heatmap, worst as rust over blue and teal round the high notes.
+- It is not the fill going lighter than the backdrop: at L* 25 only 9% of the surround is lighter than the bare picture.
+- Rejected: lower chroma goes grey-olive and loses the tint; a shorter reach is the worst for legibility; pulling hues toward violet ties the fill to one heatmap, Aurora.
+- Picked (Y3): Tint fade 3 at Fill lightness 25, so the hue stays by the note and the cut carries on dark to its reach. Any lifted fill costs some legibility against the near-black one; the faster fade wins part of it back.
+- Fill lightness now stops at 55, about the full tint: the default gradient's fills hold the most chroma there on average, and higher takes them toward white, which Yan never wants.

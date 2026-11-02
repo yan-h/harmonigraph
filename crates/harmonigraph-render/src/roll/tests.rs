@@ -126,7 +126,7 @@ const HARNESS_REACH: f32 = 4.0;
 /// The cut [`draw`] and its kin draw under: whole at the edge, a straight
 /// fade over [`HARNESS_REACH`], cut to black.
 const HARNESS_CUT: crate::SurroundCut =
-    crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0 };
+    crate::SurroundCut { amount: 1.0, reach: HARNESS_REACH, shape: 0.0, tint_fade: 1.0 };
 
 /// Everything egui does to `cb` before it paints, and submitted: its
 /// `prepare`, which draws the holdout and the surround's targets. Every
@@ -504,6 +504,47 @@ fn the_cut_fills_with_the_strongest_notes_own_color() {
         "between a red note and a weaker blue one the picture reads {both:?}, \
          not the red fill alone {red_alone:?}",
     );
+}
+
+/// A faster tint fade draws the fill in toward the note and leaves the cut's
+/// reach alone: at the third power, 4.5 points into a reach of 8 the fill has
+/// fallen to 0.19 of its color where the cut still takes 0.44 of the picture.
+#[test]
+fn the_tint_fades_sooner_than_the_cut_it_fills() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let faster = crate::SurroundCut { reach: 8.0, tint_fade: 3.0, ..HARNESS_CUT };
+    // The right edge is at x = 140, so the pixel centre at 144.5 is 4.5 off it.
+    let cut: f32 = 1.0 - 4.5 / 8.0;
+    let red = RollInstance { aura: [255, 0, 0, 255], ..centered_note() };
+    let got = pixel(&draw_cut(&device, &queue, vec![red], faster, grey(0.5)).0, 144, 128);
+    let backdrop = 127.5;
+    let want = (255.0 * cut * cut * cut).round() as u8 + kept(backdrop, cut);
+    assert!(got[0].abs_diff(want) <= 3, "the tint read {got:?}, not {want} of red");
+    let dark = kept(backdrop, cut);
+    assert!(got[1].abs_diff(dark) <= 3, "the cut itself moved: {got:?}, not {dark} of green");
+    // A half-opaque note halves its cut once and its tint no further.
+    let faint = RollInstance { aura: [255, 0, 0, 128], ..centered_note() };
+    let black = wgpu::Color::BLACK;
+    let got = pixel(&draw_cut(&device, &queue, vec![faint], faster, black).0, 144, 128)[0];
+    let want = (255.0 * 0.5 * cut * cut * cut).round() as u8;
+    assert!(got.abs_diff(want) <= 3, "a faint note's tint read {got}, not {want}");
+    // Behind a spent lead the cap stands inside the box, 4.5 points past the
+    // note's own end at y = 108, and its tint follows that distance.
+    let capped =
+        RollInstance { aura: [255, 0, 0, 255], cap_reach: 8.0, ..led_note(40.0, 0.0, 0.0) };
+    let got = pixel(&draw_cut(&device, &queue, vec![capped], faster, black).0, 128, 103)[0];
+    let want = (255.0 * cut * cut * cut).round() as u8;
+    assert!(got.abs_diff(want) <= 3, "a cap's tint read {got}, not {want}");
+    // Beside a half-opaque lead the wrap hands over to the cap about y = 103,
+    // two points off the flank: the fill has no step where they tie.
+    let led = RollInstance { aura: [255, 0, 0, 255], cap_reach: 8.0, ..led_note(40.0, 0.0, 0.5) };
+    let frame = draw_cut(&device, &queue, vec![led], faster, black).0;
+    for y in 96..107 {
+        let (here, next) = (pixel(&frame, 142, y)[0], pixel(&frame, 142, y + 1)[0]);
+        assert!(here.abs_diff(next) <= 25, "the tint stepped {here} to {next} at y = {y}");
+    }
 }
 
 /// A hairline ribbon is held by as strong a cut as a wide one at the same

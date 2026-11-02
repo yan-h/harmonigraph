@@ -80,7 +80,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline_lift, roll_seconds, roll_thickness, roll_lead,
         roll_lead_fade, roll_lead_release, note_cut, note_cut_reach, note_cut_shape,
-        note_fill_lightness, note_name_scale,
+        note_fill_lightness, note_tint_fade, note_name_scale,
         volume_floor_db, volume_ceiling_db);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the
@@ -468,6 +468,7 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                 "Cut reach",
                 "Cut shape",
                 "Fill lightness",
+                "Tint fade",
             ]);
             if scenario.enabled {
                 labels.extend([
