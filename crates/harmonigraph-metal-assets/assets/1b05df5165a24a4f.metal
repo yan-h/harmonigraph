@@ -43,21 +43,27 @@ float surround_ramp(
     return 1.0 - (t / ((k * (1.0 - t)) + 1.0));
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
+float surround_fade_at(
+    SurroundCut surround,
+    float d
 ) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
+    float _e9 = surround_ramp(surround.cut.z, metal::max(d, 0.0) / surround.cut.y);
+    return _e9;
 }
 
-metal::float4 surround_lands_linear(
+metal::float3 surround_tinted(
     metal::float3 color,
+    float fade,
+    float sooner
+) {
+    return color * metal::pow(fade, sooner);
+}
+
+metal::float4 surround_lands_gamma(
+    metal::float3 color_1,
     float cut
 ) {
-    metal::float3 _e2 = linear_from_gamma_rgb(color);
-    return metal::float4(_e2 * cut, cut);
+    return metal::float4(color_1 * cut, cut);
 }
 
 float cut_reach(
@@ -79,12 +85,12 @@ float dot_cut(
     }
     float _e8 = dot_locals.feather;
     float f = metal::max(_e8, 0.000001);
-    float d = metal::length(p - at.center) - at.radius;
-    float fill = metal::clamp(0.5 - (d / f), 0.0, 1.0);
-    float end = metal::clamp(((_e2 - d) / f) + 0.5, 0.0, 1.0);
-    float _e33 = dot_locals.surround.cut.z;
-    float _e37 = surround_ramp(_e33, metal::max(d, 0.0) / _e2);
-    return ((metal::unpack_unorm4x8_to_float(at.aura).w * _e37) * end) * (1.0 - fill);
+    float d_1 = metal::length(p - at.center) - at.radius;
+    float fill = metal::clamp(0.5 - (d_1 / f), 0.0, 1.0);
+    float end = metal::clamp(((_e2 - d_1) / f) + 0.5, 0.0, 1.0);
+    SurroundCut _e31 = dot_locals.surround;
+    float _e32 = surround_fade_at(_e31, d_1);
+    return ((metal::unpack_unorm4x8_to_float(at.aura).w * _e32) * end) * (1.0 - fill);
 }
 
 float landed(
@@ -164,14 +170,30 @@ float landed(
     return _e83 * _e84;
 }
 
-struct fs_dot_surround_linearInput {
+metal::float3 dot_fill(
+    DotOut in_2,
+    constant DotLocals& dot_locals,
+    device type_5 const& dots,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    Dot at_2 = dots[metal::min(unsigned(in_2.dot), (_buffer_sizes.size1 - 0 - 24) / 24)];
+    float _e9 = dot_locals.feather;
+    float d_2 = metal::length((in_2.position.xy * _e9) - at_2.center) - at_2.radius;
+    SurroundCut _e18 = dot_locals.surround;
+    float _e19 = surround_fade_at(_e18, d_2);
+    float _e27 = dot_locals.surround.cut.w;
+    metal::float3 _e28 = surround_tinted(metal::unpack_unorm4x8_to_float(at_2.aura).xyz, _e19, _e27);
+    return _e28;
+}
+
+struct fs_dot_surround_gammaInput {
     uint dot [[user(loc0), flat]];
 };
-struct fs_dot_surround_linearOutput {
+struct fs_dot_surround_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_dot_surround_linearOutput fs_dot_surround_linear(
-  fs_dot_surround_linearInput varyings [[stage_in]]
+fragment fs_dot_surround_gammaOutput fs_dot_surround_gamma(
+  fs_dot_surround_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant DotLocals& dot_locals [[buffer(0)]]
 , device type_5 const& dots [[buffer(1)]]
@@ -180,7 +202,7 @@ fragment fs_dot_surround_linearOutput fs_dot_surround_linear(
 ) {
     const DotOut in = { position, varyings.dot };
     float _e1 = landed(in, dot_locals, dots, candidates, _buffer_sizes);
-    uint _e6 = dots[metal::min(unsigned(in.dot), (_buffer_sizes.size1 - 0 - 24) / 24)].aura;
-    metal::float4 _e9 = surround_lands_linear(metal::unpack_unorm4x8_to_float(_e6).xyz, _e1);
-    return fs_dot_surround_linearOutput { _e9 };
+    metal::float3 _e2 = dot_fill(in, dot_locals, dots, _buffer_sizes);
+    metal::float4 _e3 = surround_lands_gamma(_e2, _e1);
+    return fs_dot_surround_gammaOutput { _e3 };
 }
