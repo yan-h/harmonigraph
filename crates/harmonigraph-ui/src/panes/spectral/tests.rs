@@ -24,7 +24,7 @@ const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
 /// of the pane's shape list by it, and it is the pane's own constant so that
 /// retuning the fill moves the tests with it rather than leaving them matching
 /// nothing.
-const BODY_ALPHA: u8 = atmosphere::FILL_ALPHA_U8;
+const BODY_ALPHA: u8 = profile::FILL_ALPHA_U8;
 
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
@@ -1818,13 +1818,8 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
 
 #[test]
 fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
-    // No backdrop: its stripes are meshes of their own, drawn behind the fill.
-    let mut cfg = SpectrumConfig {
-        show_spectrogram: false,
-        show_roll: false,
-        backdrop_strength: 0.0,
-        ..Default::default()
-    };
+    let mut cfg =
+        SpectrumConfig { show_spectrogram: false, show_roll: false, ..Default::default() };
     // The fill alone: the outline is always drawn, last, and is checked by
     // `analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark`.
     let meshes = |cfg| {
@@ -1843,8 +1838,8 @@ fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
     assert!(body.vertices.len() > 100, "fixture must reach the sampled contour");
     // Each sample is one color and one alpha from the floor to its contour:
     // the flat fill, or nothing where the curve is a sliver.
-    for column in body.vertices.as_chunks::<{ atmosphere::BODY_STOPS }>().0 {
-        let tall = column[1].pos.distance(column[0].pos) > atmosphere::BODY_SLIVER_PT;
+    for column in body.vertices.as_chunks::<{ profile::BODY_STOPS }>().0 {
+        let tall = column[1].pos.distance(column[0].pos) > profile::BODY_SLIVER_PT;
         let alpha = if tall { BODY_ALPHA } else { 0 };
         assert!(column.iter().all(|v| v.color == column[0].color && v.color.a() == alpha));
     }
@@ -1863,8 +1858,6 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
         volume_floor_db: -40.0,
         volume_ceiling_db: 0.0,
         tilt: 0.0,
-        // No backdrop: its stripes are meshes of their own, drawn first.
-        backdrop_strength: 0.0,
         ..Default::default()
     };
     // Silence, a subpixel sliver, two visible but palette-black levels,
@@ -1873,13 +1866,12 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     let draw = |cfg: SpectrumConfig, samples: &[(f32, f32, f32)]| {
         let axes = Axes::new(WIDE, &cfg);
         let out = painted_into(SCREEN, WIDE, |ui| {
-            atmosphere::draw_profile(
+            profile::draw_profile(
                 ui.painter(),
                 &axes,
                 &cfg,
                 samples,
                 plot_budget(1.0, axes.depth_len()),
-                1.0,
                 1.0,
             );
         });
@@ -1903,7 +1895,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     };
     let (meshes, outlines) = draw(cfg, &visible);
     assert_eq!(outlines.len(), 1);
-    let stops = atmosphere::BODY_STOPS;
+    let stops = profile::BODY_STOPS;
     let body = &meshes[0];
     assert_eq!(body.vertices.len(), visible.len() * stops);
     assert!(
@@ -1917,7 +1909,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     );
     assert!(
         body.vertices[2 * stops + stops - 1].pos.distance(body.vertices[2 * stops].pos)
-            > atmosphere::BODY_SLIVER_PT,
+            > profile::BODY_SLIVER_PT,
         "fixture needs a visible quiet contour"
     );
     cfg.keyline_lift = 1.0;
@@ -1940,7 +1932,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
         let c = egui::Rgba::from(c);
         0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
     };
-    let floor = atmosphere::keyline_floor(cfg.keyline_lift);
+    let floor = profile::keyline_floor(cfg.keyline_lift);
     assert!(luminance(fill(4)) > floor, "fixture needs a peak brighter than the floor");
     assert!(luminance(fill(2)) < 0.01, "fixture needs a palette-black level");
     let tinted = solid(&draw(cfg, &visible).1[0]);
@@ -1998,12 +1990,8 @@ fn an_outline_swinging_every_column_keeps_its_ink_between_the_tips() {
         let columns: Vec<_> = (0..16)
             .map(|c| egui::pos2((c as f32 + 0.5) * pixel, if c % 2 == 0 { trough } else { tip }))
             .collect();
-        let mesh = atmosphere::stroke_mesh(
-            &columns,
-            &vec![egui::Color32::WHITE; columns.len()],
-            1.0,
-            pixel,
-        );
+        let mesh =
+            profile::stroke_mesh(&columns, &vec![egui::Color32::WHITE; columns.len()], 1.0, pixel);
         for column in &columns[2..14] {
             let ink = ink_at(&mesh, egui::pos2(column.x, 0.5 * (trough + tip)));
             assert!(ink > 0.4, "{ink} ink on the flank at {pixel} points per pixel");
@@ -2019,137 +2007,9 @@ fn an_outline_spike_ends_round() {
     let (pixel, width) = (0.5, 1.0);
     let tip = egui::pos2(0.75, 40.0);
     let spike = [egui::pos2(0.25, 0.0), tip, egui::pos2(1.25, 0.0)];
-    let mesh = atmosphere::stroke_mesh(&spike, &[egui::Color32::WHITE; 3], width, pixel);
+    let mesh = profile::stroke_mesh(&spike, &[egui::Color32::WHITE; 3], width, pixel);
     assert!(ink_at(&mesh, tip + egui::vec2(0.0, 0.4 * width)) > 0.5, "the tip is cut square");
     assert_eq!(ink_at(&mesh, tip + egui::vec2(0.0, width + pixel)), 0.0, "the tip shoots off");
-}
-
-/// The backdrop lights only the space above the curve, at its strength on the
-/// floor and fading to nothing at its height, and a segment rising through that
-/// height is cut at the crossing rather than laid over the flank below it.
-/// Stripes light one point in `backdrop_gap + 1`, each a logical point wide;
-/// a gap of 0 lights them all, and a strength of 0 draws no backdrop at all.
-#[test]
-fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
-    let mut cfg = SpectrumConfig {
-        floor_db: -100.0,
-        ceiling_db: 0.0,
-        volume_floor_db: -40.0,
-        volume_ceiling_db: 0.0,
-        tilt: 0.0,
-        backdrop_strength: 0.85,
-        backdrop_height: 0.3,
-        ..Default::default()
-    };
-    let axes = Axes::new(WIDE, &cfg);
-    let n = 60;
-    // Digital silence, a shelf under the backdrop's height, and a spike through it.
-    let level = |i: usize| match i {
-        0..=9 => -120.0,
-        10..=29 => -85.0,
-        40 => 0.0,
-        _ => -95.0,
-    };
-    let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
-    let budget = plot_budget(1.0, axes.depth_len());
-    let top = cfg.backdrop_height * budget;
-    let ink = crate::theme::picture_ruling().gamma_multiply(cfg.backdrop_strength);
-    let stops = atmosphere::BODY_STOPS;
-    let at = |v: &egui::epaint::Vertex| (axes.pitch_at(v.pos), axes.depth_at(v.pos));
-    let meshes = |cfg: &SpectrumConfig, ppp: f32, point_scale: f32| -> Vec<egui::Mesh> {
-        let ctx = crate::tests::probe::themed_at(ppp);
-        let out = crate::tests::probe::frame_into(&ctx, SCREEN, WIDE, |ui| {
-            atmosphere::draw_profile(ui.painter(), &axes, cfg, &visible, budget, 1.0, point_scale);
-        });
-        out.shapes
-            .into_iter()
-            .filter_map(|s| match s.shape {
-                egui::Shape::Mesh(mesh) => Some(egui::Mesh::clone(&mesh)),
-                _ => None,
-            })
-            .collect()
-    };
-    let off = SpectrumConfig { backdrop_strength: 0.0, ..cfg };
-    assert_eq!(
-        meshes(&off, 2.0, 1.0).len(),
-        2,
-        "strength 0 still drew a backdrop under the body and outline"
-    );
-    for (ppp, point_scale) in [(0.5, 1.0), (1.5, 0.5), (2.0, 2.0)] {
-        for (gap, stripe) in [(0.0, None), (2.0, Some(3))] {
-            cfg.backdrop_gap = gap;
-            let meshes = meshes(&cfg, ppp, point_scale);
-            let [sky, body, _outline] = &meshes[..] else {
-                panic!("expected the backdrop, the body and the outline only")
-            };
-            let edge: Vec<_> = (0..n).map(|i| at(&body.vertices[i * stops + stops - 1])).collect();
-            assert!(edge[..10].iter().all(|&(_, d)| d.abs() < 1e-6), "fixture needs silence");
-            assert!(edge[20].1 > 0.0 && edge[20].1 < top, "fixture needs a shelf under the height");
-            assert!(edge[40].1 > 2.0 * top, "fixture needs a spike through the height");
-            let edge_at = |t: f32| {
-                let k = edge.windows(2).position(|w| w[1].0 >= t).unwrap_or(n - 2);
-                let (a, b) = (edge[k], edge[k + 1]);
-                a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
-            };
-            let mut columns = std::collections::BTreeSet::new();
-            for triangle in sky.indices.as_chunks::<3>().0 {
-                let corners =
-                    triangle.iter().map(|&k| at(&sky.vertices[k as usize])).collect::<Vec<_>>();
-                let (lo, hi) = corners
-                    .iter()
-                    .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.0), hi.max(c.0)));
-                if hi - lo < 1e-6 {
-                    continue;
-                }
-                let centroid =
-                    corners.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / 3.0, s.1 + c.1 / 3.0));
-                assert!(
-                    centroid.1 >= edge_at(centroid.0) - 1e-4,
-                    "gap {gap}: over the fill at {centroid:?}"
-                );
-                assert!(centroid.1 <= top + 1e-4, "gap {gap}: above its height at {centroid:?}");
-                if let Some(spacing) = stripe {
-                    let column = (lo * axes.pitch_len() / point_scale + 1e-3).floor() as usize;
-                    assert!(
-                        hi * axes.pitch_len() / point_scale <= column as f32 + 1.0 + 1e-3,
-                        "a stripe wider than a column"
-                    );
-                    assert_eq!(column % spacing, 0, "stripe in column {column}");
-                    columns.insert(column);
-                }
-            }
-            if let Some(spacing) = stripe {
-                // In the silent part every complete stripe must be present.
-                // The measured profile's first half-sample and the spike above
-                // the backdrop height deliberately leave some others empty.
-                let full_silent: Vec<_> = (0..(axes.pitch_len() / point_scale).ceil() as usize)
-                    .step_by(spacing)
-                    .filter(|&column| {
-                        let lo = column as f32 * point_scale / axes.pitch_len();
-                        let hi = (column + 1) as f32 * point_scale / axes.pitch_len();
-                        lo >= edge[0].0 && hi <= edge[9].0
-                    })
-                    .collect();
-                assert!(full_silent.len() >= 2, "fixture needs several silent stripes");
-                assert!(
-                    full_silent.iter().all(|column| columns.contains(column)),
-                    "missing silent stripe"
-                );
-            }
-            for v in &sky.vertices {
-                let (_, d) = at(v);
-                let want = f32::from(ink.a()) * (1.0 - d / top).clamp(0.0, 1.0);
-                assert!(
-                    (f32::from(v.color.a()) - want).abs() <= 2.0,
-                    "gap {gap}: alpha at depth {d}"
-                );
-            }
-            assert!(
-                sky.vertices.iter().any(|v| at(v).1.abs() < 1e-6 && v.color == ink),
-                "silence must be lit at full strength down to the floor"
-            );
-        }
-    }
 }
 
 /// The whole pane, painted in every orientation with a roll that has
@@ -2287,7 +2147,7 @@ fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
             .collect();
         // The now-line is the one segment in the handover's color clean across
         // the pitch axis.
-        let line = super::atmosphere::handover_color(&state.appearance.spectrum);
+        let line = super::profile::handover_color(&state.appearance.spectrum);
         let now_line = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
                 if stroke.color == line)
@@ -3300,12 +3160,12 @@ fn the_handover_wears_the_silent_outline_and_never_vanishes() {
     let mut cfg = SpectrumConfig::default();
     let silent = |cfg: &SpectrumConfig| {
         let floor = super::spectrogram::cell_color(cfg.spectrogram_gradient, 0.0);
-        atmosphere::keyline_color(floor, atmosphere::keyline_floor(cfg.keyline_lift))
+        profile::keyline_color(floor, profile::keyline_floor(cfg.keyline_lift))
     };
-    assert_eq!(atmosphere::handover_color(&cfg), silent(&cfg));
+    assert_eq!(profile::handover_color(&cfg), silent(&cfg));
     cfg.keyline_lift = 0.0;
     assert_eq!(silent(&cfg), egui::Color32::BLACK, "fixture needs a black silent outline");
-    let line = atmosphere::handover_color(&cfg);
+    let line = profile::handover_color(&cfg);
     assert!(
         line.r().max(line.g()).max(line.b()) >= 32,
         "the handover vanished into the black ground: {line:?}"

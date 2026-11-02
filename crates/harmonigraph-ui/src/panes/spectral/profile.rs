@@ -1,11 +1,11 @@
 //! The analyzer's profile: a flat fill up to the original per-pixel FFT
-//! samples, the backdrop above it and the outline along it.
+//! samples and the outline along it.
 
 use egui::{emath::Rot2, Color32, Mesh, Painter};
 
 use super::axes::{loudness_db, power_db, spectrogram_level_db, Axes};
 use super::spectrogram::cell_color;
-use crate::{theme, SpectrumConfig};
+use crate::SpectrumConfig;
 
 /// Points of curve height below which the body is a sliver rather than a
 /// shape. The fill is off entirely below it, so a sub-pixel curve does not
@@ -28,7 +28,6 @@ pub(super) fn draw_profile(
     visible: &[(f32, f32, f32)],
     budget: f32,
     split: f32,
-    point_scale: f32,
 ) {
     if visible.len() < 2 {
         return;
@@ -50,18 +49,6 @@ pub(super) fn draw_profile(
     let vertex = |mesh: &mut Mesh, t, d, color| {
         mesh.colored_vertex(axes.at(t, sd(d)), color);
     };
-    // The backdrop first, under the body it frames. Strength 0 is its off.
-    if cfg.backdrop_strength > 0.0 {
-        let edge: Vec<_> = samples.iter().map(|&(t, d, _)| (t, d)).collect();
-        painter.add(backdrop_mesh(
-            &edge,
-            cfg.backdrop_gap.max(0.0),
-            point_scale.max(1e-6) / axes.pitch_len().max(1e-6),
-            cfg.backdrop_height * budget,
-            theme::picture_ruling().gamma_multiply(cfg.backdrop_strength),
-            |t, d| axes.at(t, sd(d)),
-        ));
-    }
     let connect = |mesh: &mut Mesh, rows: usize, bands: usize| {
         for row in 1..rows {
             for band in 0..bands - 1 {
@@ -109,83 +96,8 @@ fn grid_mesh(rows: usize, bands: usize) -> Mesh {
     mesh
 }
 
-/// The backdrop over the curve's `edge` (`(pitch fraction, depth)` per sample):
-/// the region above the edge and below `top`, lit `ink` at the floor and fading
-/// linearly to nothing at `top`, in one pixel column of every `spacing`. A
-/// `spacing` of 1 lights every column, which is the Gradient.
-///
-/// The fade is AFFINE in depth, so a vertex anywhere carrying its own depth's
-/// alpha is exact across every triangle, and the region can follow the body's
-/// own edge — the same straight segments between the same samples — rather
-/// than a per-column step. The two then tile: no pixel is both, and none is
-/// neither, whatever the column's offset from the pixel grid. Where a segment
-/// rises through `top` it is cut at the crossing rather than clamped, since a
-/// clamped vertex would lay the backdrop over the flank below it.
-///
-/// Stripe width and gaps are logical points. Intersect every measured edge
-/// segment with the lit intervals so fractional DPI cannot move the profile.
-fn backdrop_mesh(
-    edge: &[(f32, f32)],
-    gap: f32,
-    stripe_width: f32,
-    top: f32,
-    ink: Color32,
-    at: impl Fn(f32, f32) -> egui::Pos2,
-) -> Mesh {
-    let mut mesh = Mesh::default();
-    if edge.len() < 2 || top <= 0.0 {
-        return mesh;
-    }
-    let lit = |d: f32| ink.gamma_multiply((1.0 - d / top).clamp(0.0, 1.0));
-    // The part of the segment `p`-`q` below `top`, as a quad up to `top`.
-    let mut piece = |p: (f32, f32), q: (f32, f32)| {
-        if q.0 <= p.0 || (p.1 >= top && q.1 >= top) {
-            return;
-        }
-        let cross =
-            |a: (f32, f32), b: (f32, f32)| (a.0 + (b.0 - a.0) * (top - a.1) / (b.1 - a.1), top);
-        let (p, q) = match (p.1 < top, q.1 < top) {
-            (true, false) => (p, cross(p, q)),
-            (false, true) => (cross(p, q), q),
-            _ => (p, q),
-        };
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(at(p.0, p.1), lit(p.1));
-        mesh.colored_vertex(at(q.0, q.1), lit(q.1));
-        mesh.colored_vertex(at(q.0, top), Color32::TRANSPARENT);
-        mesh.colored_vertex(at(p.0, top), Color32::TRANSPARENT);
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
-    };
-    if gap <= 0.0 {
-        for pair in edge.windows(2) {
-            piece(pair[0], pair[1]);
-        }
-        return mesh;
-    }
-    let period = stripe_width * (gap + 1.0);
-    for pair in edge.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        if b.0 <= a.0 {
-            continue;
-        }
-        let at = |x: f32| (x, a.1 + (b.1 - a.1) * ((x - a.0) / (b.0 - a.0)));
-        let first = (a.0 / period).floor() as i32;
-        let last = (b.0 / period).floor() as i32;
-        for stripe in first..=last {
-            let start = stripe as f32 * period;
-            let low = a.0.max(start);
-            let high = b.0.min(start + stripe_width);
-            if high > low {
-                piece(at(low), at(high));
-            }
-        }
-    }
-    mesh
-}
-
-/// The outline's width, in points: finer than [`theme::LINE_WIDTH`], so the
-/// outline does not outweigh the spectrum it traces.
+/// The outline's width, in points: finer than [`crate::theme::LINE_WIDTH`], so
+/// the outline does not outweigh the spectrum it traces.
 const KEYLINE_WIDTH_PT: f32 = 1.0;
 
 /// The Intensity dial, gamma-encoded so it reads evenly, as the linear luminance
