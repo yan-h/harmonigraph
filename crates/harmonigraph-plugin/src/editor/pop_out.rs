@@ -458,7 +458,7 @@ mod macos {
             // host. The window keeps the delegate weakly; `State` owns both.
             own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
             // SAFETY: a window does not retain its next responder; `State`
-            // owns the host's view for as long as it owns this window.
+            // owns the host's view until `close` clears this.
             unsafe { own.setNextResponder(Some(host.as_ref())) };
             own.setTitle(&NSString::from_str("Harmonigraph"));
             let min = super::super::MIN_SIZE;
@@ -639,6 +639,9 @@ mod macos {
                     reveal(&host_window);
                 }
                 window.setDelegate(None);
+                // SAFETY: clearing the reference `pop` set, while `state`
+                // still owns the view it points at.
+                unsafe { window.setNextResponder(None) };
                 window.close();
             }
         }

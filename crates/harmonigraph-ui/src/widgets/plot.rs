@@ -3,6 +3,18 @@ use crate::theme;
 use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::ops::RangeInclusive;
 
+fn focused_handle_key() -> egui::Id {
+    egui::Id::new("focused-plot-handle")
+}
+
+/// Whether the keyboard focus is on a plot handle, which uses only the arrows.
+/// A click leaves it there, so a shell keeps just those from its host: a DAW's
+/// Space must still work after moving a handle.
+pub fn handle_focused(ctx: &egui::Context) -> bool {
+    let focused = ctx.memory(|m| m.focused());
+    focused.is_some() && focused == ctx.data(|d| d.get_temp(focused_handle_key()))
+}
+
 pub(super) struct Plot {
     pub rect: Rect,
     pub response: Response,
@@ -128,6 +140,15 @@ impl Plot {
             }
         }
         if response.has_focus() {
+            // Claimed, or egui would spend each arrow moving focus to a
+            // neighbouring widget as well.
+            let arrows = egui::EventFilter {
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                ..Default::default()
+            };
+            ui.memory_mut(|m| m.set_focus_lock_filter(response.id, arrows));
+            ui.ctx().data_mut(|d| d.insert_temp(focused_handle_key(), response.id));
             let delta = ui.input(|i| {
                 let step = if i.modifiers.shift { 0.001 } else { 0.01 };
                 egui::vec2(
@@ -208,4 +229,53 @@ pub(super) fn curve(plot: &Plot, ui: &Ui, sample: impl Fn(f32) -> (f32, f32), co
 pub(crate) fn height(scale: f32) -> f32 {
     // Three slider rows and the two row gaps between them.
     (theme::ROW_HEIGHT * 3.0 + theme::ROW_GAP * 2.0) * scale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::probe::{events_into, themed};
+
+    /// A nudge leaves the focus on the handle: moved to the neighbour, it
+    /// would stop being a focus that leaves Space to the host.
+    #[test]
+    fn a_clicked_handle_keeps_the_focus_through_an_arrow() {
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
+        let rect = Rect::from_min_size(Pos2::ZERO, screen);
+        let mut at = Pos2::ZERO;
+        let mut frame = |events| {
+            events_into(&ctx, screen, rect, events, |ui| {
+                let response = ui.allocate_response(egui::vec2(200.0, 100.0), Sense::hover());
+                // Directly above the neighbour, where an arrow would send the focus.
+                at = response.rect.left_top() + egui::vec2(20.0, 90.0);
+                let plot = Plot { rect: response.rect, response, fields: Rect::NOTHING };
+                plot.handle(ui, "handle", 0.1, 0.1);
+                let _ = ui.button("neighbour");
+            });
+            at
+        };
+        let at = frame(vec![]);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(true)]);
+        frame(vec![press(false)]);
+        frame(vec![]);
+        assert!(handle_focused(&ctx), "the click focused the handle");
+
+        frame(vec![egui::Event::Key {
+            key: egui::Key::ArrowDown,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        frame(vec![]);
+        assert!(handle_focused(&ctx), "the arrow left it there");
+    }
 }

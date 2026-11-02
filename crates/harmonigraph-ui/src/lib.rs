@@ -276,9 +276,7 @@ pub fn root_ui(
     // when hidden bars leave no route to System settings or a folded pane.
     // It takes precedence over keyboard focus traversal outside text edits;
     // cancelling the queued focus move keeps the toggle from moving focus too.
-    if !ui.ctx().text_edit_focused()
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
-    {
+    if !ui.ctx().text_edit_focused() && ui.input_mut(|i| i.consume_shortcut(&FRAMELESS_SHORTCUT)) {
         state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
@@ -517,5 +515,10 @@ pub mod lattice_maps;
 mod appearance;
 mod appearance_edit;
 pub use appearance_edit::APPEARANCE_SHORTCUTS;
+pub use widgets::plot_handle_focused;
+
+/// Toggles the hidden chrome, so the native shell keeps it from the host too.
+pub const FRAMELESS_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Tab);
 mod camera_movement;
 pub use appearance::AppearanceDocument;

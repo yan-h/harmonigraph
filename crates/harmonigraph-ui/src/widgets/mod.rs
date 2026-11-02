@@ -81,5 +81,6 @@ pub(crate) use timing::{fade, response};
 #[cfg(test)]
 mod direct_tests;
 
+pub use plot::handle_focused as plot_handle_focused;
 #[cfg(test)]
 pub(crate) use plot::height as direct_plot_height;
