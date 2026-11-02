@@ -276,7 +276,11 @@ pub fn root_ui(
     // when hidden bars leave no route to System settings or a folded pane.
     // It takes precedence over keyboard focus traversal outside text edits;
     // cancelling the queued focus move keeps the toggle from moving focus too.
-    if !ui.ctx().text_edit_focused() && ui.input_mut(|i| i.consume_shortcut(&FRAMELESS_SHORTCUT)) {
+    // Bare Tab alone, as the shell reserves it: a shortcut is otherwise matched
+    // through Shift, which would then act here and in the host.
+    if !ui.ctx().text_edit_focused()
+        && ui.input_mut(|i| i.modifiers.is_none() && i.consume_shortcut(&FRAMELESS_SHORTCUT))
+    {
         state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
