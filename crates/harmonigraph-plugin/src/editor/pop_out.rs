@@ -25,6 +25,12 @@
 //! did, and drops to the normal level while another app is, which is where
 //! Bitwig's would have vanished.
 //!
+//! A key the editor leaves unclaimed, Space among them, walks the responder
+//! chain. Docked, that ends in the host's view and window, and Bitwig's post
+//! it to the main app. This window's chain would end at itself, where AppKit
+//! beeps, so it goes on into the host's view, which works concealed: Bitwig's
+//! forward asks nothing of the window but that it be theirs.
+//!
 //! Its close button does not close it: the editor is the host's to destroy,
 //! and the host's show/hide control would otherwise still think it open. The
 //! button tells the host the user closed it ([`EditorHost::closed`]), for the
@@ -451,6 +457,9 @@ mod macos {
             // The close button asks the agent, which refuses it and tells the
             // host. The window keeps the delegate weakly; `State` owns both.
             own.setDelegate(Some(ProtocolObject::from_ref(&*agent)));
+            // SAFETY: a window does not retain its next responder; `State`
+            // owns the host's view for as long as it owns this window.
+            unsafe { own.setNextResponder(Some(host.as_ref())) };
             own.setTitle(&NSString::from_str("Harmonigraph"));
             let min = super::super::MIN_SIZE;
             own.setContentMinSize(NSSize::new(f64::from(min.0), f64::from(min.1)));
