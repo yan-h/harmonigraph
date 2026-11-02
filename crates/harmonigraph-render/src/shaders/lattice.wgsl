@@ -76,14 +76,7 @@ struct TextureParams {
     scale: f32,
     drift: vec2<f32>,
     target_size: vec2<f32>,
-    glow_size: vec2<f32>,
-};
-
-struct PickupParams {
-    @align(16) intensity: f32,
-    width: f32,
-    softness: f32,
-    color: f32,
+    padding: vec2<f32>,
 };
 
 struct ShadowParams {
@@ -116,7 +109,6 @@ struct Uniforms {
     spectral: SpectralParams,
     glow: GlowParams,
     texture: TextureParams,
-    pickup: PickupParams,
     geometry_shadow: ShadowParams,
     marker_shadow: ShadowParams,
     shadow_target: ShadowTargetParams,
@@ -2808,93 +2800,6 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
     let seen = node_split(paint, paint.seen);
     // The bloom takes the ink without the ordinary shadow's coverage.
     return SceneOut(seen.other, seen.ink, seen.transmission, vec4<f32>(paint.rgb, paint.ink_alpha));
-}
-
-// Independent pigment behind the material, with no shadow-atlas dependency.
-// Its own quad includes the full feather support, even beyond the ink/halo quad.
-struct PickupOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) level: f32,
-    @location(2) @interpolate(flat) octaves: vec3<u32>,
-    @location(3) @interpolate(flat) cents: f32,
-};
-
-@vertex
-fn vs_source_shadow(@builtin(vertex_index) vertex: u32, inst: Instance) -> PickupOut {
-    var out: PickupOut;
-    out.position = vec4<f32>(2.0, 2.0, 0.0, 1.0);
-    out.uv = vec2<f32>(0.0);
-    // Pigment follows the note-light envelope, including its release, but not
-    // decorative breathing. It never feeds back into the carried ink color.
-    out.level = clamp(inst.glow.x, 0.0, 1.0);
-    out.octaves = inst.octaves;
-    out.cents = inst.cents;
-    if out.level <= 0.0 {
-        return out;
-    }
-    let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u)) * 2.0 - 1.0;
-    let radius = u.node.radius * 1.8 * max(inst.scale, 0.05);
-    let center = u.camera.view_proj * vec4<f32>(inst.world_pos, 1.0);
-    let edge = u.camera.view_proj * vec4<f32>(inst.world_pos + u.camera.right.xyz * radius, 1.0);
-    let source_size = max(u.texture.glow_size, vec2<f32>(1.0));
-    let radius_px = length((edge.xy / edge.w - center.xy / center.w) * source_size * 0.5);
-    let aa = 1.0 / max(radius_px, 1e-3);
-    let span = node_rim(false) + (0.5 * u.pickup.width + u.pickup.softness) / 1.8 + aa;
-    out.uv = corner * span;
-    let world = inst.world_pos
-        + (u.camera.right.xyz * out.uv.x + u.camera.up.xyz * out.uv.y) * radius;
-    out.position = u.camera.view_proj * vec4<f32>(world, 1.0);
-    return out;
-}
-
-// Euclidean distance to a finite circular arc, including rounded endpoints.
-// The shared sector fold also handles arcs wider than half a turn. No angle-owned
-// wedge survives outside the arc: a point past an end measures to that end.
-fn pickup_arc_distance(p: vec2<f32>, sector: OctSector, radius: f32) -> f32 {
-    let folded = sector_fold(p, sector.mid, oct_half_turn());
-    if sector_side(folded) <= 0.0 {
-        return abs(length(folded.q) - radius);
-    }
-    return length(folded.q - radius * folded.e);
-}
-
-// Match blit.wgsl's luminance soft knee on the active segment's color.
-// This is bloom-aware pigment, not a read of the downstream scene bloom:
-// that scene already contains this material and would create feedback.
-fn pickup_bloom_color(lit: vec4<f32>) -> vec3<f32> {
-    let lum = dot(lit.rgb * lit.a, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let keep = smoothstep(0.35 - 0.25, 0.35 + 0.25, lum);
-    return min(lit.rgb * (1.0 + keep * u.composite.bloom_strength), vec3<f32>(1.0));
-}
-
-@fragment
-fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
-    let half_width = 0.5 * u.pickup.width / 1.8;
-    let aa = max(fwidth(in.uv.x), 1e-5);
-    let feather = max(u.pickup.softness / 1.8, aa);
-    if abs(length(in.uv) - node_rim(false)) > half_width + feather {
-        discard;
-    }
-    let ring = oct_ring(in.cents);
-    var pigment = vec4<f32>(0.0);
-    var weight = 0.0;
-    var coverage = 0.0;
-    for (var i = 0u; i < oct_span(); i += 1u) {
-        let slot = ring.base + i32(i);
-        let distance = pickup_arc_distance(in.uv, oct_sector(slot, ring), node_rim(false));
-        let arc = 1.0 - smoothstep(half_width - aa, half_width + feather, distance);
-        let lit = oct_slot_lit(in.cents, in.octaves, slot);
-        pigment += vec4<f32>(pickup_bloom_color(lit) * lit.a, lit.a) * arc;
-        weight += arc;
-        coverage = max(coverage, arc);
-    }
-    // Overlapping distance fields mingle pigment without seams or excess alpha.
-    pigment /= max(weight, 1e-5);
-    let amount = coverage * in.level;
-    let opacity = u.pickup.intensity * (1.0 - pigment.a) + u.pickup.color * pigment.a;
-    // DstAlpha color blending confines this pigment to existing light coverage.
-    return vec4<f32>(pigment.rgb * u.pickup.color * amount, opacity * amount);
 }
 
 // ---- Node glow -------------------------------------------------------------

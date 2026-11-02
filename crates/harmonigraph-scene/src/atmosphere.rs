@@ -778,23 +778,12 @@ pub enum LatticeMaterial {
     VelvetScales = 4,
 }
 
-/// Pigment's outer reach from a ring segment, in node radii.
-/// Covers the former maximum half-width plus feather distance.
-pub const PIGMENT_REACH_MAX: f32 = 12.0;
-
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
     /// Replaces the retired combined `material` key, which serde ignores.
     pub material_style: LatticeMaterial,
     pub material_amount: f32,
-    /// Dark pigment from unlit segments, sampled by the material.
-    pub material_shadow_pickup: f32,
-    /// Pitch-colored pigment from lit segments, sampled by the material.
-    pub material_color_pickup: f32,
-    /// Pigment reach from a ring segment, in node radii; zero disables pickup.
-    /// The fixed band/feather ratio preserves the captured 1.5-wide, 2.0-soft profile.
-    pub pigment_reach: f32,
     pub material_settings: MaterialSettings,
     pub stars: StarSettings,
     pub material_speed: f32,
@@ -809,13 +798,10 @@ pub struct AtmosphereSettings {
 impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
-            // A Watercolor glow at full material, picking up a little under half
-            // its colour, as captured from the DAW on 2026-10-07.
+            // A Watercolor glow at full material, as captured from the DAW on
+            // 2026-10-07.
             material_style: LatticeMaterial::Watercolor,
             material_amount: 1.0,
-            material_shadow_pickup: 0.0,
-            material_color_pickup: 0.447_641_97,
-            pigment_reach: 2.75,
             material_settings: MaterialSettings {
                 wash_size: 1.459_047_9,
                 wash_refract: 0.640_725_85,
@@ -842,16 +828,6 @@ impl Default for AtmosphereSettings {
 }
 
 impl AtmosphereSettings {
-    /// Fixed profile at the captured proportions. Divide before multiplying so
-    /// the default reach reproduces width 1.5 and softness 2.0 exactly.
-    pub fn pigment_width(self) -> f32 {
-        (self.pigment_reach / 2.75) * 1.5
-    }
-
-    pub fn pigment_softness(self) -> f32 {
-        (self.pigment_reach / 2.75) * 2.0
-    }
-
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
         let clamp = |value: f32, fallback: f32, low, high| {
@@ -862,11 +838,6 @@ impl AtmosphereSettings {
             }
         };
         self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
-        self.material_color_pickup =
-            clamp(self.material_color_pickup, fresh.material_color_pickup, 0.0, 1.0);
-        self.material_shadow_pickup =
-            clamp(self.material_shadow_pickup, fresh.material_shadow_pickup, 0.0, 1.0);
-        self.pigment_reach = clamp(self.pigment_reach, fresh.pigment_reach, 0.0, PIGMENT_REACH_MAX);
         self.material_settings = self.material_settings.sanitized();
         self.stars = self.stars.sanitized();
         self.material_speed =

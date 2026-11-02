@@ -149,17 +149,7 @@ uniform_group! {
         scale: f32,
         drift: Float2,
         target_size: Float2,
-        /// The glow target's own texels, which `vs_source_shadow` pads its
-        /// quad by; 1x1 where there is no target, which nothing then reads.
-        glow_size: Float2,
-    }
-}
-uniform_group! {
-    struct PickupParams {
-        intensity: f32,
-        width: f32,
-        softness: f32,
-        color: f32,
+        padding: Float2,
     }
 }
 uniform_group! {
@@ -204,7 +194,6 @@ uniform_group! {
         spectral: SpectralParams,
         glow: GlowParams,
         texture: TextureParams,
-        pickup: PickupParams,
         geometry_shadow: ShadowParams,
         marker_shadow: ShadowParams,
         shadow_target: ShadowTargetParams,
