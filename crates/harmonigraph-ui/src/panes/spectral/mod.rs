@@ -427,7 +427,7 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split, point_scale);
+            atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split);
         }
     }
 

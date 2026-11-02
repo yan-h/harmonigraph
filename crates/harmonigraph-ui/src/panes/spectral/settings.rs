@@ -366,29 +366,6 @@ pub(crate) fn view_section(
                      and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
                      100% is a white line, 0% is exactly the color under it.",
             );
-            ValueBar::new(&mut cfg.backdrop_strength, 0.0..=1.0, "Backdrop strength").default_value(crate::panes::fresh_spectrum().backdrop_strength).percent().show(ui).on_hover_text(
-                "How bright the grey backdrop above the spectrum is at the floor; it fades out upward and stops at the spectrum's edge. \
-                     0% is no backdrop. Faint backdrops read as a flat wash; about 70% and up keep dark fills visible.",
-            );
-            // Below the strength, so hiding them does not move the bar just dragged.
-            if cfg.backdrop_strength > 0.0 {
-                ValueBar::new(&mut cfg.backdrop_height, crate::config::BACKDROP_HEIGHT_RANGE, "Backdrop height")
-                    .default_value(crate::panes::fresh_spectrum().backdrop_height)
-                    .percent()
-                    .show(ui)
-                    .on_hover_text("How far up the level axis the backdrop reaches before it has faded out: 100% is the ceiling.");
-                ValueBar::new(&mut cfg.backdrop_gap, crate::config::BACKDROP_GAP_RANGE, "Stripe spacing")
-                    .default_value(crate::panes::fresh_spectrum().backdrop_gap)
-                    .integer()
-                    .unit(1.0, " pt")
-                    .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} pt") })
-                    .show(ui)
-                    .on_hover_text(
-                        "Logical points between the backdrop’s one-point stripes. The dark gaps are what let even a fill as dark as the background \
-                             show as a break in the stripes; wider spacing is calmer but can miss a partial one pixel wide. \
-                             0 is a smooth gradient: softer, but a fill as bright as the glow at its own height blends into it.",
-                    );
-            }
         });
     });
 }
