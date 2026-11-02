@@ -373,8 +373,8 @@ What it takes away is filled with the note's own hue at **Fill lightness** (L*),
 so wherever the cut is whole every note stands against the same surround;
 over black that is the hue laid on, and over bright energy it is what keeps the note legible.
 A Fill lightness of 0 fills it with black, and the bar stops at about the fullest tint, before the fill pales.
-**Tint fade** is how much sooner that color fades than the cut:
-at 1× they fade together, and higher keeps the color close to the note while the cut stays dark out to its reach.
+**Tint fade** is the power of the cut's fade that this color follows:
+at 1 they fade together, and higher keeps the color close to the note while the cut stays dark out to its reach.
 **Cut reach** is how far the cut fades out, in points,
 and **Cut shape** bends that fade:
 a straight line at 0%, a steep drop at the note with a long soft tail toward −100%,

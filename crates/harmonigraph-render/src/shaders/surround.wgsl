@@ -34,12 +34,23 @@ fn surround_ramp(k: f32, x: f32) -> f32 {
     return 1.0 - t / (k * (1.0 - t) + 1.0);
 }
 
-/// A note's fill where its cut is `strength` of the amount, above 0: `sooner`
-/// more powers of `strength` off `color`, so the tint draws in toward the note
-/// while the cut keeps its reach. Neighbouring fills then stop merging into a
-/// sheet of their own, and what is left of the cut further out is plain dark.
-fn surround_tinted(color: vec3<f32>, strength: f32, sooner: f32) -> vec3<f32> {
-    return color * pow(strength, sooner);
+/// [`surround_ramp`] of `surround`'s own bias, `d` points past a note's edge. A
+/// note's cut and its tint both read this, so they cannot part ways.
+fn surround_fade_at(surround: SurroundCut, d: f32) -> f32 {
+    return surround_ramp(surround.cut.z, max(d, 0.0) / surround.cut.y);
+}
+
+/// A note's fill where [`surround_fade_at`] reads `fade`, above 0: `sooner` more
+/// powers of it off `color`, so the tint draws in toward the note while the cut
+/// keeps its reach. Neighbouring fills then stop merging into a sheet of their
+/// own, and what is left of the cut further out is plain dark.
+///
+/// Distance alone, and never the cut's whole strength: a note's opacity and the
+/// antialiasing round its body scale the cut once already, and a power of them
+/// would leave a faint note a dark bite with no hue and a rim darker than
+/// either side of it.
+fn surround_tinted(color: vec3<f32>, fade: f32, sooner: f32) -> vec3<f32> {
+    return color * pow(fade, sooner);
 }
 
 /// How a note's cut lands on the picture: premultiplied over, so what is under

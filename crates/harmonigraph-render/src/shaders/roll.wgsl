@@ -328,11 +328,10 @@ fn cut_reach() -> f32 {
 /// instead of dimming the whole profile — while the fade's own shape is the
 /// cut's whatever bound it is cut at.
 fn cut_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
-    let fade = locals.surround.cut.y;
-    if reach <= 0.0 || fade <= 0.0 {
+    if reach <= 0.0 || locals.surround.cut.y <= 0.0 {
         return 0.0;
     }
-    return surround_ramp(locals.surround.cut.z, max(d, 0.0) / fade) * inside(in, d, reach);
+    return surround_fade_at(locals.surround, d) * inside(in, d, reach);
 }
 
 /// How much of the ribbon survives at this fragment: 1 across the NOTE, and
@@ -658,11 +657,23 @@ fn body_held(in: VertexOut) -> f32 {
 /// keeps the wrap out of, correctly, and where an edge nonetheless is. The
 /// note's opacity reading takes the whole of it out, so a faded note leaves no
 /// solid cut behind.
-fn cut_strength(in: VertexOut, rim: Rim) -> f32 {
-    if !rim.live { return 0.0; }
+fn cut_strength(in: VertexOut, rim: Rim) -> NoteCut {
+    if !rim.live { return NoteCut(0.0, 0.0); }
     let wrap = cut_coverage(in, rim.d, cut_reach()) * rim.keep * rim.lead;
-    return in.aura.a * max(wrap, cap_coverage(in, rim)) * along(in, in.fade);
+    let cap = cap_coverage(in, rim);
+    let d = select(rim.d, rim.cap_d, cap > wrap);
+    let fade = surround_fade_at(locals.surround, d);
+    return NoteCut(in.aura.a * max(wrap, cap) * along(in, in.fade), fade);
 }
+
+/// How much a note cuts at a fragment, as a share of the amount, and the
+/// [`surround_fade_at`] reading of the shape that cut comes from, which is what
+/// its tint follows ([`surround_tinted`]). A strength above 0 has a fade above
+/// 0.
+struct NoteCut {
+    strength: f32,
+    fade: f32,
+};
 
 /// What the cut reads off a note at this fragment, once: where the ribbon
 /// stands, its distance, and how much of a surround there the
@@ -765,12 +776,12 @@ struct SurroundOut {
 @fragment
 fn fs_note_surround(fragment: VertexOut) -> SurroundOut {
     let in = on_screen(fragment);
-    let strength = cut_strength(in, rim_of(in));
-    let cut = locals.surround.cut.x * strength;
+    let note = cut_strength(in, rim_of(in));
+    let cut = locals.surround.cut.x * note.strength;
     if cut <= 0.0 {
         discard;
     }
-    let fill = surround_tinted(in.aura.rgb, strength, locals.surround.cut.w);
+    let fill = surround_tinted(in.aura.rgb, note.fade, locals.surround.cut.w);
     return SurroundOut(vec4<f32>(fill, cut), 1.0 - cut);
 }
 

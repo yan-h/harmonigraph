@@ -528,6 +528,10 @@ mod tests {
                 cfg.high_midi = 79.0;
                 cfg.roll_thickness = 0.45;
                 cfg.note_names = false;
+                // A rest shows the surround's fill, so its depth here is the
+                // ribbon's own against a near-black fill, whatever the look's.
+                cfg.note_fill_lightness = 7.0;
+                cfg.note_tint_fade = 1.0;
                 // Three performances ending at the same time: long notes with
                 // tiny rests, tiny taps, and a much faster repeated-note run.
                 for (note, period, duration) in
@@ -599,11 +603,8 @@ mod tests {
                 );
                 if span <= 20.0 {
                     let (gap, body) = range(60);
-                    // A rest shows the surround's fill, so it reads about 0.55
-                    // of the body under the default fill and 0.4 under a
-                    // near-black one; a lost cut reads the whole body.
                     assert!(
-                        f32::from(gap) < f32::from(body) * 0.6,
+                        f32::from(gap) < f32::from(body) * 0.4,
                         "tiny rests lost their visible cuts at {span}s/{ppp}x: {gap}/{body}"
                     );
                 }

@@ -538,6 +538,14 @@ mod tests {
                     && (f32::from(tinted[1]) - left).abs() <= 3.0,
                 "at {ppp} ppp the faster tint read {tinted:?}, not red {red} over {left}",
             );
+            // A half-opaque dot halves its cut once and its tint no further.
+            let faint = draw([255, 0, 0, 128], faster)(38.5, 32.0);
+            let half_cut = 0.5 * cut;
+            let red = 255.0 * (1.0 - half_cut + half_cut * cut * cut);
+            assert!(
+                (f32::from(faint[0]) - red).abs() <= 3.0,
+                "at {ppp} ppp a faint dot's tint read {faint:?}, not red {red}",
+            );
         }
     }
 

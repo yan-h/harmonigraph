@@ -430,7 +430,7 @@ pub struct SpectrumConfig {
     /// picture there is that lightness whatever the heatmap under it was, so a
     /// note's contrast against its own surround is set here once rather than
     /// left to the cells. Dark by default, under every note the pitch gradient
-    /// draws, so a note reads as lit against a deep haze of its own color. A
+    /// draws, so a note reads as lit against a tint of its own color. A
     /// gradient whose low end is near this lightness draws those notes against
     /// a fill they cannot stand out from, which is the cost of one lightness
     /// for all.

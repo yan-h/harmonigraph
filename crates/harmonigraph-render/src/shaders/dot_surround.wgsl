@@ -102,11 +102,11 @@ fn dot_cut(at: Dot, p: vec2<f32>) -> f32 {
     let d = length(p - at.center) - at.radius;
     let fill = clamp(0.5 - d / f, 0.0, 1.0);
     let end = clamp((reach - d) / f + 0.5, 0.0, 1.0);
-    let fade = surround_ramp(dot_locals.surround.cut.z, max(d, 0.0) / reach);
+    let fade = surround_fade_at(dot_locals.surround, d);
     return unpack4x8unorm(at.aura).a * fade * end * (1.0 - fill);
 }
 
-/// The cut `in`'s dot lands here, as a share of the amount, when it is the
+/// The cut `in`'s dot lands here, its amount included, when it is the
 /// strongest of its candidates', ties to the lowest index; otherwise the
 /// fragment is discarded.
 fn landed(in: DotOut) -> f32 {
@@ -140,24 +140,27 @@ fn landed(in: DotOut) -> f32 {
     if strongest <= 0.0 || winner != in.dot {
         discard;
     }
-    return strongest;
+    return dot_locals.surround.cut.x * strongest;
 }
 
-/// `in`'s fill where its cut is `strength` of the amount.
-fn dot_fill(in: DotOut, strength: f32) -> vec3<f32> {
-    let color = unpack4x8unorm(dots[in.dot].aura).rgb;
-    return surround_tinted(color, strength, dot_locals.surround.cut.w);
+/// `in`'s fill where it landed: only a dot that cuts here lands, so the fade
+/// is above 0.
+fn dot_fill(in: DotOut) -> vec3<f32> {
+    let at = dots[in.dot];
+    let d = length(in.position.xy * dot_locals.feather - at.center) - at.radius;
+    let fade = surround_fade_at(dot_locals.surround, d);
+    return surround_tinted(unpack4x8unorm(at.aura).rgb, fade, dot_locals.surround.cut.w);
 }
 
 @fragment
 fn fs_dot_surround_gamma(in: DotOut) -> @location(0) vec4<f32> {
-    let strength = landed(in);
-    return surround_lands_gamma(dot_fill(in, strength), dot_locals.surround.cut.x * strength);
+    let cut = landed(in);
+    return surround_lands_gamma(dot_fill(in), cut);
 }
 
 /// The same onto a target that encodes sRGB for itself.
 @fragment
 fn fs_dot_surround_linear(in: DotOut) -> @location(0) vec4<f32> {
-    let strength = landed(in);
-    return surround_lands_linear(dot_fill(in, strength), dot_locals.surround.cut.x * strength);
+    let cut = landed(in);
+    return surround_lands_linear(dot_fill(in), cut);
 }

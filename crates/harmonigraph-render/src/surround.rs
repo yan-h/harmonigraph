@@ -95,7 +95,7 @@ pub fn surround_fade(shape: f32, x: f32) -> f32 {
 
 impl SurroundCut {
     /// No surround: what a cut at its defaults but for its amount draws.
-    pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, tint_fade: 1.0 };
+    pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, tint_fade: 3.0 };
 
     /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.
     pub fn sanitized(self) -> Self {

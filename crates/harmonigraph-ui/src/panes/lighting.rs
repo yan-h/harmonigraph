@@ -132,11 +132,10 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
         )
         .default_value(super::fresh_spectrum().note_tint_fade)
         .decimals(1)
-        .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
-            "How much sooner the fill's color fades than the cut. \
-             1× fades them together; higher keeps the color close to the note, \
+            "The power of the cut's fade that the fill's color follows. \
+             1 fades them together; higher keeps the color close to the note, \
              and the cut stays dark out to its reach.",
         );
     })

@@ -524,6 +524,19 @@ fn the_tint_fades_sooner_than_the_cut_it_fills() {
     assert!(got[0].abs_diff(want) <= 3, "the tint read {got:?}, not {want} of red");
     let dark = kept(backdrop, cut);
     assert!(got[1].abs_diff(dark) <= 3, "the cut itself moved: {got:?}, not {dark} of green");
+    // A half-opaque note halves its cut once and its tint no further.
+    let faint = RollInstance { aura: [255, 0, 0, 128], ..centered_note() };
+    let black = wgpu::Color::BLACK;
+    let got = pixel(&draw_cut(&device, &queue, vec![faint], faster, black).0, 144, 128)[0];
+    let want = (255.0 * 0.5 * cut * cut * cut).round() as u8;
+    assert!(got.abs_diff(want) <= 3, "a faint note's tint read {got}, not {want}");
+    // Behind a spent lead the cap stands inside the box, 4.5 points past the
+    // note's own end at y = 108, and its tint follows that distance.
+    let capped =
+        RollInstance { aura: [255, 0, 0, 255], cap_reach: 8.0, ..led_note(40.0, 0.0, 0.0) };
+    let got = pixel(&draw_cut(&device, &queue, vec![capped], faster, black).0, 128, 103)[0];
+    let want = (255.0 * cut * cut * cut).round() as u8;
+    assert!(got.abs_diff(want) <= 3, "a cap's tint read {got}, not {want}");
 }
 
 /// A hairline ribbon is held by as strong a cut as a wide one at the same

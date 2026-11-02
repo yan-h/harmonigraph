@@ -227,7 +227,6 @@
         note_cut_reach: 15.0,
         note_cut_shape: 0.0,
         note_fill_lightness: 7.0,
-        note_tint_fade: 1.0,
         note_names: true,
         note_names_travel: false,
         note_name_scale: 1.4153271,
