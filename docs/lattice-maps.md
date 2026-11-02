@@ -5,9 +5,9 @@ Use the existing Harmonigraph Tune instances before instruments and one Harmonig
 Retune and Show remain per-source controls.
 Note retuning is shared by the Hub:
 Pass through preserves player pitch,
-Adaptive uses the existing policy,
-and Lattice Map assigns each incoming note from explicit geometry,
-choosing its slot by the 12-TET key the note actually sounds.
+Lattice Map assigns each incoming note from explicit geometry,
+choosing its slot by the 12-TET key the note actually sounds,
+and Adaptive uses the existing policy.
 Pass through is the default.
 Mode is saved but is not automatable in this prototype.
 

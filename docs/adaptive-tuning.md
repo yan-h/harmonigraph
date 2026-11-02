@@ -19,7 +19,7 @@ the remaining sections record the implementation boundaries, rejected alternativ
 For explicit passage tuning with saved maps,
 see [Lattice Map tuning](lattice-maps.md).
 The shared Note retuning selector chooses Pass through,
-Adaptive or Lattice Map for subsequent attacks.
+Lattice Map or Adaptive for subsequent attacks.
 
 
 The moving, register-aware policy developed from [Adaptive tuning: a moving harmonic neighbourhood](adaptive-tuning-design.md) shipped in [#782](https://github.com/yan-h/harmonigraph/pull/782).
