@@ -12,9 +12,7 @@ use std::sync::Arc;
 
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::lattice_map::{
-    Follow, LatticeMap, TuningEngine, FOLLOW_GROUP, FOLLOW_RELEASED,
-};
+use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::configuration::OwnedInput;
@@ -991,12 +989,8 @@ impl Hub {
         // released ones, each decayed on the half-life.
         let sequencer = &mut self.sequencer;
         sequencer.fill(self.rate);
-        if sequencer.context.iter().all(Option::is_none) {
-            for pitch in sequencer.working.iter_mut() {
-                pitch.weight *= FOLLOW_RELEASED;
-            }
-        }
-        map.follow(sequencer.follow, sequencer.followed, &sequencer.working, &keys[..struck])
+        let held = sequencer.context.iter().any(Option::is_some);
+        map.follow(sequencer.follow, sequencer.followed, &sequencer.working, held, &keys[..struck])
     }
 
     fn reply(&mut self, record: Record, correction: i64) {

@@ -122,6 +122,9 @@ so a sequenced chord is decided as a chord,
 while a chord played by hand arrives one note at a time and is decided note by note.
 Releases on that sample apply first,
 so a chord change on one sample is weighed against what is actually still held.
+A release the Hub has not received yet,
+from a Tune the host processes after it,
+still counts as held.
 Each candidate is the current place or one step either way along each allowed axis.
 Its score is how much more complex,
 in bits of Tenney height,
@@ -138,6 +141,26 @@ but it cannot make the chord keep a wolf of its own.
 The lowest score wins;
 ties keep the current place,
 then go to the candidate farther from the place the offset parameters set.
+
+A step may not take a held note off the node it sounds at,
+so a held key stays where it is and every other key lands on a map that still covers it.
+A released key has no such hold,
+and returns where it was only if the map has not stepped since.
+The default shape covers four fifths in a row,
+so a held chain of fifths stops the map where the next step would lose its lowest note,
+and the chain wraps there:
+C G D A are pure fifths,
+A taking the one step that keeps the others,
+and the E after them is a 5/4 above C and a wolf against A.
+Released notes pin nothing,
+so a line whose notes end before the next begins still moves the map note by note.
+A hand-rolled chord is decided note by note against notes already frozen,
+so D F A rolled upward keeps the wolf D–A.
+The pin is decided at the attack and never revisited,
+so an old chord that overlaps a new one,
+even by a sample,
+can refuse the step the new chord wanted,
+and the new chord keeps that spelling after the old one ends.
 
 Following prefers drift.
 Held notes keep the tuning they started with,
