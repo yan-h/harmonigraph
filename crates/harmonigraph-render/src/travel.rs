@@ -2,19 +2,19 @@
 //!
 //! The textures here move at a rate their dials set: a material drifts at
 //! `Drift speed` along `Drift direction`, each star layer travels at its own
-//! `Star speed` along the same direction, and the stars' lives turn over once
-//! a `Star lifetime`. Worked out as `now` times the rate,
+//! `Star speed` along the same direction, the stars' lives turn over once a
+//! `Star lifetime`, and on the lattice the glow's texture turns at
+//! `Pattern speed` and its light breathes at `Breathing speed`. Worked out as
+//! `now` times the rate,
 //! every nudge of one of those dials would carry the texture as far as it had
 //! gone since the clock started, which minutes into a session scrambles the
 //! whole field on every frame of a drag. So each pane holds one [`Travel`],
 //! and every frame adds what the frame's own rates carry it in the time since
 //! the last: a dial change alters the pace from where the texture is.
 //!
-//! One clock for all three, held where it outlives what draws them: in the
-//! lattice pane's buffers, and in the spectrogram's targets, whose rebuild
-//! carries it. So a rebuilt target (a resize, a Span zoom, a change of style)
-//! goes on from where its texture was. The lattice's Texture speed and breath
-//! are not on this clock: they are still `now` times their rate.
+//! One clock for all of them, held in each pane's own buffers, which outlive
+//! the targets that draw them. So a rebuilt target (a resize, a Span zoom, a
+//! change of style) goes on from where its texture was.
 
 use crate::stars::STAR_SLICES;
 
@@ -29,6 +29,13 @@ pub(crate) struct Motion {
     pub(crate) stars: [[f64; 2]; STAR_SLICES],
     /// The stars' life clock, in lives.
     pub(crate) life: f64,
+    /// The lattice glow's texture clock, in seconds at a `Pattern speed` of 1.
+    /// [`Motion::rate`] leaves it still; the lattice sets its rate.
+    pub(crate) texture: f64,
+    /// The lattice glow's breathing clock, in seconds at a `Breathing speed`
+    /// of 1, which [`Breathing::at`](harmonigraph_scene::Breathing::at)
+    /// reads. Still at [`Motion::rate`] too.
+    pub(crate) breath: f64,
 }
 
 impl Motion {
@@ -50,6 +57,8 @@ impl Motion {
                 [along * cos, along * sin]
             }),
             life: 1.0 / f64::from(stars.star_lifetime),
+            texture: 0.0,
+            breath: 0.0,
         }
     }
 
@@ -62,6 +71,8 @@ impl Motion {
                 std::array::from_fn(|a| on(self.stars[k][a], rate.stars[k][a]))
             }),
             life: on(self.life, rate.life),
+            texture: on(self.texture, rate.texture),
+            breath: on(self.breath, rate.breath),
         }
     }
 }
@@ -86,6 +97,11 @@ impl Travel {
             _ => Motion::default().after(rate, now),
         };
         self.clock = Some(now);
+        self.at
+    }
+
+    /// Where the textures were left, for a frame with no clock to advance by.
+    pub(crate) fn held(&self) -> Motion {
         self.at
     }
 }

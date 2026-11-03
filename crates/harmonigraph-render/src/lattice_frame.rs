@@ -28,6 +28,7 @@ fn push_plus(draws: &mut Vec<Draw>, at: u32) {
 pub(crate) struct FrameVecs {
     pub(super) instances: Vec<GpuInstance>,
     pub(super) glow_owners: Vec<u64>,
+    pub(super) breathing_at: Vec<harmonigraph_core::LatticePos>,
     pub(super) glyphs: Vec<GlyphInstance>,
     pub(super) casters: Vec<shadow::Caster>,
     pub(super) node_cells: Vec<u32>,
@@ -78,6 +79,7 @@ impl LatticeCallback {
         let FrameVecs {
             instances,
             glow_owners,
+            breathing_at,
             glyphs,
             casters,
             node_cells,
@@ -90,9 +92,6 @@ impl LatticeCallback {
             scene.view.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
         let camera = scene.camera;
         let atmosphere = scene.view.atmosphere.sanitized();
-        // Reduce the decorative clock in f64 before uploading bounded phases.
-        let texture_time =
-            scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -427,8 +426,9 @@ impl LatticeCallback {
             && scene.view.glow_strength > 0.0
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
+        let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
         for &(_, _, i, ships, inked) in &order {
-            let mut instance = to_gpu(&scene.nodes[i]);
+            let instance = to_gpu(&scene.nodes[i]);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
@@ -447,10 +447,11 @@ impl LatticeCallback {
                 // Every instance keeps its box, whether or not one is packed.
                 node_cells.push(casters.len() as u32);
                 casters.push(node_caster(&scene.nodes[i], &instance, inked));
-                // Display modulation is separate from the ink-history level and coefficient.
-                if breathes && instance.glow[0] > 0.0 {
-                    instance.glow[3] = atmosphere
-                        .breath(scene.nodes[i].lattice_pos, scene.glow_timing.unwrap().now);
+                // Display modulation is separate from the ink-history level and
+                // coefficient, and settled in prepare, where the pane's travel
+                // says how far the breathing has run.
+                if breathes {
+                    breathing_at.push(scene.nodes[i].lattice_pos);
                 }
                 instances.push(instance);
                 if scene.glow_timing.is_some() {
@@ -487,6 +488,9 @@ impl LatticeCallback {
                 stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
                 direction: atmosphere.material_direction,
             },
+            texture_speed: atmosphere.texture_speed,
+            breathing: atmosphere.breathing(),
+            breathing_at,
             glow_blend: scene.view.glow_blend,
             glyphs,
             casters,
@@ -572,10 +576,8 @@ impl LatticeCallback {
                 texture: TextureParams {
                     depth: atmosphere.texture_depth,
                     scale: atmosphere.texture_scale,
-                    drift: Float2([
-                        (texture_time * 0.071).sin() as f32 * 0.9,
-                        (texture_time * 0.053).cos() as f32 * 0.9,
-                    ]),
+                    // Settled by prepare from the pane's travel.
+                    drift: Float2([0.0; 2]),
                     target_size: Float2([1.0; 2]),
                     padding: Float2([0.0; 2]),
                 },

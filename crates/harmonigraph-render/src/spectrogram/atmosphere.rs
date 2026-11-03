@@ -1116,8 +1116,6 @@ pub(super) struct Targets {
     tile_group: Option<wgpu::BindGroup>,
     composite_group: wgpu::BindGroup,
     memory: Option<Memory>,
-    /// How far the texture has drifted, its stars travelled at [`star_pace`] and their lives run.
-    travel: Travel,
 }
 
 /// The starfield's targets and the groups of the two passes that fill them.
@@ -1383,7 +1381,7 @@ impl Targets {
         // star atlas alone is the largest thing a pane allocates. The tone and
         // the starfield's two are cleared whole each frame before anything
         // reads them, so a carried one holds nothing a fresh one would not.
-        let (carried, carried_memory, carried_tone, carried_stars, travel) =
+        let (carried, carried_memory, carried_tone, carried_stars) =
             previous.map_or(Default::default(), |previous| {
                 (
                     previous.tile.filter(|_| previous.shape.tile == tile_texels),
@@ -1393,8 +1391,6 @@ impl Targets {
                         .stars
                         .filter(|_| previous.shape.stars == star_shape)
                         .map(|stars| (stars.atlas, stars.image)),
-                    // The drift goes on from where it was whatever moved.
-                    previous.travel,
                 )
             });
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
@@ -1549,7 +1545,6 @@ impl Targets {
             tile_group,
             composite_group,
             memory,
-            travel,
         }
     }
 
@@ -1731,6 +1726,8 @@ impl Targets {
         self.source_group = source_group(device, layout, &self.source_uniform, grid, lut);
     }
 
+    /// `travel` is the pane's: how far the texture has drifted, its stars
+    /// travelled at [`star_pace`] and their lives run.
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
@@ -1741,6 +1738,7 @@ impl Targets {
         atmosphere: SpectrogramAtmosphere,
         plan: &Plan,
         source_end: i64,
+        travel: &mut Travel,
     ) {
         let Plan { tile, stars, memory_extent, .. } = *plan;
         // The source mesh records measured history, and past the divider the
@@ -1798,7 +1796,7 @@ impl Targets {
         let pace = star_pace(atmosphere.points_per_ms, rect.height());
         let rate =
             Motion::rate(settings.cloud_speed, settings.cloud_direction, settings.stars, pace);
-        let motion = self.travel.advance(atmosphere.now, rate);
+        let motion = travel.advance(atmosphere.now, rate);
         let offset = cloud_offset(motion.drift);
         let drift = cloud_drift(settings, offset, tile);
         let image = self.shape.stars.map_or([1, 1], |stars| stars.image);

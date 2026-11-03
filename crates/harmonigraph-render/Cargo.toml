@@ -24,6 +24,8 @@ test-support = []
 
 [dependencies]
 harmonigraph-scene = { workspace = true }
+# The lattice position a breathing instance is lit by (`LatticeCallback::breathing`).
+harmonigraph-core = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 bytemuck = { workspace = true }
@@ -47,9 +49,6 @@ objc2-metal = { version = "0.3.2", default-features = false, features = ["std", 
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.
 naga = { workspace = true, features = ["wgsl-in"] }
-# The offscreen-vs-direct parity test builds a Scene literal, whose
-# NodeInstance carries a LatticePos.
-harmonigraph-core = { path = "../harmonigraph-core" }
 # The byte-exact frame gate the golden set is measured by.
 harmonigraph-golden = { workspace = true }
 # Reads the view out of the golden set's pinned look, which is RON.
