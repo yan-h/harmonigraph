@@ -488,11 +488,21 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// voice lasts one. Unguarded: with neither, the span is the voice's own, so
 /// asking costs nothing, and a setting that lengthens a departure later
 /// needs only to join the span.
+///
+/// The Background glow's release is one: a halo falls on its own clock, which
+/// can outlast the slices by many seconds, and with the roll hidden and no
+/// audio nothing else keeps the frame loop awake for it. It joins only while
+/// the glow draws (`glow_fade::apply`'s own test), so a glow that is off does
+/// not hold the loop for a tail that is not there.
 fn releasing(state: &SharedState, now: f64) -> bool {
-    let animation = state.picture.appearance.view.note_animation;
-    let span = f64::from(animation.fade_out_delay)
-        + f64::from(state.picture.runtime.frame_params.fade_time)
-            * (1.0 + f64::from(animation.stagger_spread));
+    let view = &state.picture.appearance.view;
+    let animation = view.note_animation;
+    let fade = state.picture.runtime.frame_params.fade_time;
+    let mut span = f64::from(animation.fade_out_delay)
+        + f64::from(fade) * (1.0 + f64::from(animation.stagger_spread));
+    if view.glow_reach > 0.0 && view.glow_strength > 0.0 {
+        span = span.max(panes::glow_fade::halo_tail(view.glow_release, fade));
+    }
     state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| now - last <= span)
 }
 

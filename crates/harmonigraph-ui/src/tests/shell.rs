@@ -20,6 +20,34 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     assert!(!crate::roll_scrolling(&state, 2.2));
 }
 
+/// A background glow's release outlasts the note's own departure, and with the
+/// roll hidden and no audio nothing else keeps the frame loop awake through it:
+/// the halo's tail would repaint at the idle poll. Only while the glow draws.
+#[test]
+fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    state.picture.appearance.spectrum.show_roll = false;
+    state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    state.picture.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+    let view = state.picture.appearance.view.clone();
+    assert!(view.glow_reach > 0.0 && view.glow_strength > 0.0, "the fresh glow draws");
+    assert!(!crate::roll_scrolling(&state, 6.0), "the roll must not be what keeps this awake");
+    let span = f64::from(view.note_animation.fade_out_delay)
+        + f64::from(state.picture.runtime.frame_params.fade_time)
+            * (1.0 + f64::from(view.note_animation.stagger_spread));
+    assert!(span < 4.0, "the note's own departure ({span} s) must be over by 5 s after the off");
+
+    // Past the note's departure and well inside the glow's 2.5 s release.
+    assert!(crate::releasing(&state, 6.0), "the halo's tail fell to the idle poll");
+    // Past the whole tail, and the loop may idle.
+    assert!(!crate::releasing(&state, 40.0), "the loop never went idle");
+
+    state.picture.appearance.view.glow_strength = 0.0;
+    assert!(!crate::releasing(&state, 6.0), "a glow that does not draw held the loop awake");
+}
+
 /// Every tab needs an id of its own, and the title is not allowed to be its
 /// source: the workspace keys each tab BODY's `Ui` on `Viewer::id`
 /// (`workspace.rs`), so two tabs whose ids came from a shared title would

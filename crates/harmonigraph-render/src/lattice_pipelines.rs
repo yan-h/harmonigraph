@@ -317,7 +317,7 @@ pub(super) fn create_cell_pipelines(
 ///
 /// **Why two.** A blur cannot read the target it is writing. The first pass
 /// lays the reading down over the instance buffer, one row per node; the second
-/// convolves each row with the Spread bar's lobe.
+/// convolves each row with the Color smoothing bar's lobe.
 ///
 /// **Both are over the INSTANCES**, each drawing the one row its node was
 /// handed rather than a quad over the whole strip. A strip is as tall as the

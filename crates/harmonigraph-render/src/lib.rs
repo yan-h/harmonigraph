@@ -1078,8 +1078,8 @@ struct CompiledLatticeResources {
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
     ///
-    /// Two places there is not, and neither is an error state: the Reach bar at
-    /// 0 drops the target entirely (`Offscreen::ensure_glow`), and the
+    /// Two places there is not, and neither is an error state: Background glow
+    /// reach or gain at 0 drops the target entirely (`Offscreen::ensure_glow`), and the
     /// single-attachment `fs_main`/`fs_plus` path the parity test draws through
     /// has no glow pass at all. Transparent light composites to the plain
     /// ground, so `node_paint` needs no branch for either — which is the whole
@@ -1758,7 +1758,8 @@ const INITIAL_OCCLUDER_CAPACITY: usize = 4096;
 /// (`offscreen_size`, `screen_size`) are a different question and stay separate.
 struct PaneTargets {
     bloom: bool,
-    /// The node light, which the Reach bar switches (`Offscreen::ensure_glow`).
+    /// The node light, which Background glow reach or gain at 0 switches off
+    /// (`Offscreen::ensure_glow`).
     glow: bool,
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).

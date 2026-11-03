@@ -200,7 +200,7 @@ fn halo_hue_spread(px: &[u8], size: [u32; 2], inner: f32, outer: f32) -> f64 {
     worst
 }
 
-/// The Color blend bar's whole claim: a node lighting two directions in two colours
+/// The Color smoothing bar's whole claim: a node lighting two directions in two colours
 /// keeps them apart at the bottom of the bar and averages them into one tint at
 /// the top.
 ///
@@ -214,7 +214,7 @@ fn halo_hue_spread(px: &[u8], size: [u32; 2], inner: f32, outer: f32) -> f64 {
 /// colour eased toward the strip's flat mean over the light's whole SPAN, and
 /// the skirt is an exponential over that same length, so with any real Reach
 /// dialled in the halo was that mean nearly everywhere — and the mean is the one
-/// average the Color blend bar cannot move, being taken at no concentration at all by
+/// average the Color smoothing bar cannot move, being taken at no concentration at all by
 /// definition. Against the node's own rim instead, the bottom of the bar reads
 /// 0.11 here where the span ramp read 0.065, and the bar's travel roughly
 /// doubles.
@@ -274,13 +274,13 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     // a tenth of that is a halo carrying both of them and not one tint.
     assert!(
         spreads[0] > 0.035,
-        "at the bottom of the Color blend bar a node lighting two colours drew one: {:.4}",
+        "at the bottom of the Color smoothing bar a node lighting two colours drew one: {:.4}",
         spreads[0],
     );
     // And monotone: every step up the bar averages further.
     assert!(
         spreads[0] > spreads[1] && spreads[1] > spreads[2],
-        "the Color blend bar must average further at every step: {:.4} / {:.4} / {:.4}",
+        "the Color smoothing bar must average further at every step: {:.4} / {:.4} / {:.4}",
         spreads[0],
         spreads[1],
         spreads[2],

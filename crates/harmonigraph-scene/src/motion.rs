@@ -1539,7 +1539,8 @@ mod tests {
         let (soft, loud) = (held(0.0), held(1.0));
         assert!(soft.melody_level > 0.0, "the fixture lights a mark as well as a slot");
         assert!((soft.activation - 0.81).abs() < 0.01, "{}", soft.activation);
-        assert_eq!(soft.glow.level, soft.activation.max(soft.melody_level));
+        let ink = soft.octaves.iter().copied().fold(0.0, f32::max);
+        assert_eq!(soft.glow.level, ink.max(soft.melody_level));
         assert!(soft.glow.level < 0.82, "a soft note's halo dims: {}", soft.glow.level);
         assert_eq!(loud.glow.level, 1.0, "a loud note's halo is full");
     }

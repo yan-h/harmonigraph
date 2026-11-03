@@ -76,6 +76,14 @@ static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(1);
 /// the note (`ln(1/0.002)`).
 const GONE: f32 = 0.002;
 
+/// How long after a note's release its halo can still be on screen, for a
+/// Background glow release of `release` seconds: the colour takes `fade` to
+/// leave, and the light then falls from at most 1 to [`GONE`] at `release` per
+/// constant. What the frame loop stays awake for (`releasing` in `lib.rs`).
+pub(crate) fn halo_tail(release: f32, fade: f32) -> f64 {
+    f64::from(fade) + f64::from(release) * f64::from(GONE).recip().ln()
+}
+
 /// The fewest rows the strip is ever built for, and the floor the doubling
 /// starts from.
 ///
