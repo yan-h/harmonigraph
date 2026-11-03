@@ -241,7 +241,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let mut cb = fixture(CloudStyle::Stars);
         if held {
             let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-            stars.star_twinkle = [0.0; STAR_SLICES];
+            stars.star_twinkle_dip = 0.0;
         }
         if wrap {
             let a = cb.atmosphere.as_mut().unwrap();
@@ -458,7 +458,7 @@ fn star_passes_shade_the_layouts_rows_and_carry_its_last_one() {
     let a = cb.atmosphere.as_mut().unwrap();
     // Every star keeps its place, and with it its colour across its lives.
     a.settings.stars.star_speed = [0.0; STAR_SLICES];
-    a.settings.stars.star_twinkle = [0.0; STAR_SLICES];
+    a.settings.stars.star_twinkle_dip = 0.0;
     let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
     let mut resources = CallbackResources::default();
     cb.grid.fill(255);

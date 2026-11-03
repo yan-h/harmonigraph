@@ -436,11 +436,10 @@ struct Uniforms {
     /// The image and slice rows that follow all start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
-    /// The starfield's size variation and cover; the rest of its row is
-    /// padding.
+    /// The starfield's size variation, cover and twinkle.
     star_size_variation: f32,
     star_cover: f32,
-    star_pad1: u32,
+    star_twinkle: f32,
     /// The star image's actual dimensions; zw are padding.
     star_image_size: Float4,
     star_slices: [StarSlice; STAR_SLICES],
@@ -885,7 +884,7 @@ fn memory_key(
                 star_size: _,           // reaches the key as the cells
                 star_speed: _,          // carried by absolute cell and per-cell life
                 star_lifetime: _,       // carried by absolute cell and per-cell life
-                star_twinkle: _,        // only whether a depth holds its stars, below
+                star_twinkle_dip,       // only whether the stars are held, below
                 star_resolution: _,     // sampling does not change material identity
                 star_solid: _,          // response/coverage changes do not change material identity
                 star_cover: _,          // composition only
@@ -920,10 +919,10 @@ fn memory_key(
             values.extend(s.stars.plan().depths.map(|depth| {
                 u32::from(depth.gather != harmonigraph_scene::star_plan::StarGather::Off) as f32
             }));
-            // Whether each depth's stars keep their place across lives: that
-            // moves every star and makes a life's colour its last one's. How
-            // far a held star dips or blends is response, not identity.
-            values.extend(s.stars.plan().depths.map(|depth| u32::from(depth.twinkle < 1.0) as f32));
+            // Whether the stars keep their place across lives: that moves
+            // every star and makes a life's colour its last one's. How far a
+            // held star dips or blends is response, not identity.
+            values.push(u32::from(star_twinkle_dip < 1.0) as f32);
         }
         CloudStyle::VelvetScales => values.extend([
             3.0,
@@ -1867,7 +1866,7 @@ impl Targets {
             star_life: life,
             star_size_variation: settings.stars.star_size_variation,
             star_cover: settings.stars.star_cover,
-            star_pad1: 0,
+            star_twinkle: settings.stars.star_twinkle_dip,
             star_image_size: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),

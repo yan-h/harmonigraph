@@ -416,7 +416,7 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
     let mut darkest = Vec::new();
     for twinkle in [0.0, 1.0] {
         let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-        stars.star_twinkle = [twinkle; 5];
+        stars.star_twinkle_dip = twinkle;
         let mut resources = CallbackResources::default();
         let mut sums = Vec::new();
         // A dozen moments over four lives, so every cell turns over.
@@ -467,7 +467,7 @@ fn cover_decides_whether_a_dim_near_star_blacks_out_a_far_one() {
     stars.star_resolution = 1.0;
     stars.star_size = [30.0; 5];
     stars.star_spacing_ratio = [harmonigraph_scene::STAR_SPACING_MIN; 5];
-    stars.star_twinkle = [0.0; 5];
+    stars.star_twinkle_dip = 0.0;
     (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (1.0, 0.0, 1.0);
     (stars.star_solid, stars.star_glow_falloff) = ([0.9; 5], 0.0);
     let luma = |px: &[u8; 4]| {
@@ -518,7 +518,7 @@ fn a_bright_blue_near_star_shows_over_a_dim_green_far_one() {
     stars.star_size = [30.0; 5];
     // A star a cell, on a grid, so no two in a depth overlap and blend.
     stars.star_spacing_ratio = [1.0; 5];
-    stars.star_twinkle = [0.0; 5];
+    stars.star_twinkle_dip = 0.0;
     (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (0.0, 0.0, 1.0);
     (stars.star_solid, stars.star_glow_falloff) = ([0.9; 5], 0.0);
     let mut frame = |solo| {
@@ -573,7 +573,7 @@ fn stars_narrower_than_a_texel_all_show() {
         (stars.star_size[0], stars.star_spacing_ratio[0], stars.star_jitter) =
             (4.0, spacing, jitter);
         (stars.star_size_variation, stars.star_randomness) = (0.0, 0.0);
-        stars.star_twinkle = [0.0; 5];
+        stars.star_twinkle_dip = 0.0;
         // Held still, so the cells the pixels are keyed by below are the
         // undrifted ones the frame draws, whatever the fresh speeds are.
         stars.star_speed = [0.0; 5];

@@ -140,9 +140,6 @@ pub struct StarDepthPlan {
     pub radius: f32,
     /// The star's solid share ([`star_profile`]): its own `Solid`.
     pub solid: f32,
-    /// How far its stars fade as one life gives way to the next: its own
-    /// `Twinkle`. Below 1 a star keeps its place across its lives.
-    pub twinkle: f32,
 }
 
 /// Everything the renderer needs to know about how to draw each depth.
@@ -172,7 +169,6 @@ impl StarSettings {
                 cell,
                 radius,
                 solid: self.star_solid[k],
-                twinkle: self.star_twinkle[k],
             }
         });
         StarPlan { depths }
@@ -269,14 +265,10 @@ mod tests {
 
     /// Fewer layers keep the farthest and the nearest and space the rest
     /// evenly between, each in the depth nearest its place, and each drawn
-    /// one takes that depth's own size, spacing, speed, solid and twinkle.
+    /// one takes that depth's own size, spacing, speed and solid.
     #[test]
     fn star_layers_keep_both_ends_and_spread_the_rest() {
-        let fresh = StarSettings {
-            star_solid: [0.1, 0.2, 0.3, 0.4, 0.5],
-            star_twinkle: [0.9, 0.8, 0.7, 0.6, 0.5],
-            ..Default::default()
-        };
+        let fresh = StarSettings { star_solid: [0.1, 0.2, 0.3, 0.4, 0.5], ..Default::default() };
         for (layers, drawn) in [
             (2, vec![(0, 0.0), (4, 1.0)]),
             (3, vec![(0, 0.0), (2, 0.5), (4, 1.0)]),
@@ -292,10 +284,7 @@ mod tests {
                 let size = fresh.star_size[k];
                 assert_eq!(depth.cell, fresh.star_spacing_ratio[k] * size, "{layers} layers");
                 assert_eq!((depth.radius, depth.speed), (0.5 * size, fresh.star_speed[k]));
-                assert_eq!(
-                    (depth.solid, depth.twinkle),
-                    (fresh.star_solid[k], fresh.star_twinkle[k])
-                );
+                assert_eq!(depth.solid, fresh.star_solid[k]);
             }
         }
     }

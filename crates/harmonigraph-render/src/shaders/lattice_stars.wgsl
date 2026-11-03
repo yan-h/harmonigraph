@@ -2,7 +2,7 @@
 struct Settings {
     stars: StarUniforms,
     depth: f32,
-    _pad0: f32,
+    star_twinkle: f32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -24,6 +24,7 @@ fn star_randomness() -> f32 { return settings.stars.star_randomness; }
 fn star_life() -> f32 { return settings.stars.star_life; }
 fn star_size_variation() -> f32 { return settings.stars.star_size_variation; }
 fn star_cover() -> f32 { return settings.stars.star_cover; }
+fn star_twinkle() -> f32 { return settings.star_twinkle; }
 fn star_image_size() -> vec2<f32> { return settings.stars.star_image_size; }
 fn star_slice(k: u32) -> StarSlice { return settings.stars.star_slices[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }

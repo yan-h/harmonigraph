@@ -506,16 +506,16 @@ pub struct StarSettings {
     pub star_speed: [f32; crate::star_plan::STAR_DEPTHS],
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life, as far as
-    /// [`Self::star_twinkle`] says. Runs over
+    /// [`Self::star_twinkle_dip`] says. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
-    /// How far each depth's stars fade out as one life gives way to the next,
-    /// back (0) to front, over 0..=1. At 1 each star fades to nothing and the
-    /// next is drawn somewhere new in its cell. Below 1 a cell's star keeps
-    /// its place across lives, dips only this far, and blends into the next
-    /// life's brightness and size, so at 0 a layer dense enough to cover the
-    /// sky never opens a hole.
-    pub star_twinkle: [f32; crate::star_plan::STAR_DEPTHS],
+    /// `Twinkle`: how far every star fades out as one life gives way to the
+    /// next, alike at every depth, over 0..=1. At 1 each star fades to nothing
+    /// and the next is drawn somewhere new in its cell. Below 1 a cell's star
+    /// keeps its place across lives, dips only this far, and blends into the
+    /// next life's brightness and size, so at 0 a layer dense enough to cover
+    /// the sky never opens a hole.
+    pub star_twinkle_dip: f32,
     /// How much of each depth's stars is solid, back (0) to front: the share of
     /// the star's radius at full coverage, the rest being glow that falls to
     /// nothing at the star's edge ([`crate::star_plan::star_profile`]), so a
@@ -592,7 +592,7 @@ impl Default for StarSettings {
             star_speed: [0.08931082, 0.0902766, 0.09806162, 0.12107633, 0.16860056],
             star_lifetime: 2.9719827,
             // Every star fades to nothing and is drawn anew, as before the dial.
-            star_twinkle: [1.0; crate::star_plan::STAR_DEPTHS],
+            star_twinkle_dip: 1.0,
             // Fitted to the Gaussian-core-and-glow stars this replaced, at their
             // fresh dials, over the star's area at every depth: 48% far to 0%
             // near, on the size's curve.
@@ -648,7 +648,7 @@ impl StarSettings {
         depths(&mut self.star_speed, fresh.star_speed, (STAR_SPEED_MIN, pane.speed_max()));
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        depths(&mut self.star_twinkle, fresh.star_twinkle, (0.0, 1.0));
+        self.star_twinkle_dip = clamp(self.star_twinkle_dip, fresh.star_twinkle_dip, 0.0, 1.0);
         depths(&mut self.star_solid, fresh.star_solid, (0.0, STAR_SOLID_MAX));
         self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
         self.star_cover = clamp(self.star_cover, fresh.star_cover, 0.0, 1.0);
@@ -720,8 +720,7 @@ impl Default for SpectralAtmosphere {
                 ..MaterialSettings::default()
             },
             // Large far stars thinning to small near ones, the far three
-            // layers packed at the spacing floor and steady, twinkling more
-            // toward the near layer.
+            // layers packed at the spacing floor.
             stars: StarSettings {
                 star_randomness: 0.136_416_58,
                 star_size_variation: 0.101_771_27,
@@ -737,7 +736,10 @@ impl Default for SpectralAtmosphere {
                 // 1.5x the scroll at the back, with the captured parallax.
                 star_speed: [1.5, 1.506_86, 1.562_16, 1.725_64, 2.063_22],
                 star_lifetime: 0.984_566_4,
-                star_twinkle: [0.0, 0.325_125_55, 0.585_016_3, 0.792_508_2, 1.0],
+                // The captured layers ran from steady at the back to a full
+                // twinkle at the front; one dial for them all keeps the back
+                // three, packed at the spacing floor, close to steady.
+                star_twinkle_dip: 0.3,
                 star_glow_falloff: 0.680_821_24,
                 ..StarSettings::default()
             },
