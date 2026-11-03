@@ -13,6 +13,14 @@ pub enum TuningEngine {
     LatticeMap,
 }
 
+impl TuningEngine {
+    /// Whether Learn infers the lattice axes under this engine. Lattice Map
+    /// reads its own map instead, so Learn is suspended there.
+    pub fn learns(self) -> bool {
+        self != Self::LatticeMap
+    }
+}
+
 /// Whether Lattice Map moves the selected map by itself, and along which axes.
 ///
 /// A prototype of adaptive tuning from the map's side: the map keeps its

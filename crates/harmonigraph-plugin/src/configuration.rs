@@ -410,9 +410,7 @@ impl Owner {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.snapshot.status &= !1;
-        if self.snapshot.status & 2 != 0
-            || self.maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-        {
+        if self.snapshot.status & 2 != 0 || !self.maps.playback.engine.learns() {
             return None;
         }
         match self.learning.infer(&self.confirmed, self.reducer.resolved().modes.learning) {

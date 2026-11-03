@@ -286,9 +286,11 @@ pub(super) fn tuning_pane(
             // Lattice Map learns nothing, so an armed ring there would
             // announce an action that does not happen.
             let learning = state.runtime.learn_active
-                && state.runtime.lattice_maps.as_ref().is_none_or(|maps| {
-                    maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-                });
+                && state
+                    .runtime
+                    .lattice_maps
+                    .as_ref()
+                    .is_none_or(|maps| maps.playback.engine.learns());
             if learning {
                 // Pulsing armed ring so the engaged mode can't be missed. It
                 // stands `pad` out from the switch, so its corners are the
@@ -956,7 +958,7 @@ fn map_controls(
         if mode != TuningEngine::LatticeMap {
             return mode;
         }
-        if state.runtime.learn_active {
+        if state.runtime.learn_active && !mode.learns() {
             crate::widgets::label(ui, egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()));
         }
         crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
