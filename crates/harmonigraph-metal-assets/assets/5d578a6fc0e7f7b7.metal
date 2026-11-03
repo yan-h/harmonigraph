@@ -41,7 +41,7 @@ struct Cloud {
     float star_randomness;
     float star_life;
     float star_size_variation;
-    uint star_pad0_;
+    float star_cover;
     uint star_pad1_;
     metal::float4 star_image_size;
     type_8 star_slices;
@@ -238,6 +238,13 @@ metal::float4 star_gather3_(
     return _e46;
 }
 
+float star_cover(
+    constant Cloud& cloud
+) {
+    float _e2 = cloud.star_cover;
+    return _e2;
+}
+
 metal::float4 star_floor(
     metal::texture2d<float, metal::access::sample> lut
 ) {
@@ -251,67 +258,81 @@ metal::float4 star_layers(
     metal::texture2d<float, metal::access::sample> lut,
     metal::texture2d<uint, metal::access::sample> star_atlas
 ) {
-    metal::float4 out = {};
+    metal::float4 stars = metal::float4(0.0);
     uint k_1 = 0u;
     metal::float4 slice = {};
-    metal::float4 _e1 = star_floor(lut);
-    out = _e1;
-    metal::float2 _e3 = star_size(cloud);
-    metal::float2 _e8 = star_size(cloud);
-    metal::float2 sp = (pt - (_e3 * 0.5)) * (STAR_PANE / _e8.y);
+    metal::float2 _e4 = star_size(cloud);
+    metal::float2 _e9 = star_size(cloud);
+    metal::float2 sp = (pt - (_e4 * 0.5)) * (STAR_PANE / _e9.y);
     uint2 loop_bound_1 = uint2(4294967295u);
     bool loop_init_1 = true;
     while(true) {
         if (metal::all(loop_bound_1 == uint2(0u))) { break; }
         loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
         if (!loop_init_1) {
-            uint _e83 = k_1;
-            k_1 = _e83 + 1u;
+            uint _e126 = k_1;
+            k_1 = _e126 + 1u;
         }
         loop_init_1 = false;
-        uint _e14 = k_1;
-        if (_e14 < STAR_SLICES) {
+        uint _e15 = k_1;
+        if (_e15 < STAR_SLICES) {
         } else {
             break;
         }
         {
-            uint _e17 = k_1;
-            StarSlice _e18 = star_slice(_e17, cloud);
-            metal::float2 r_1 = (sp / metal::float2(_e18.cell)) - metal::fract(_e18.offset);
+            uint _e18 = k_1;
+            StarSlice _e19 = star_slice(_e18, cloud);
+            metal::float2 r_1 = (sp / metal::float2(_e19.cell)) - metal::fract(_e19.offset);
             metal::float2 o_1 = metal::floor(r_1);
             metal::float2 f_3 = r_1 - o_1;
-            metal::int2 local_1 = as_type<metal::int2>(as_type<metal::uint2>(as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(o_1)) - as_type<metal::uint2>(naga_f2i32(metal::floor(_e18.offset))))) - as_type<metal::uint2>(_e18.origin));
-            int index_4 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(_e18.base) + as_type<uint>(as_type<int>(as_type<uint>(local_1.y) * as_type<uint>(_e18.grid.x))))) + as_type<uint>(local_1.x));
+            metal::int2 local_1 = as_type<metal::int2>(as_type<metal::uint2>(as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(o_1)) - as_type<metal::uint2>(naga_f2i32(metal::floor(_e19.offset))))) - as_type<metal::uint2>(_e19.origin));
+            int index_4 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(_e19.base) + as_type<uint>(as_type<int>(as_type<uint>(local_1.y) * as_type<uint>(_e19.grid.x))))) + as_type<uint>(local_1.x));
             slice = metal::float4(0.0);
-            if (_e18.gather == 1u) {
-                metal::float4 _e48 = star_texel(_e18, f_3, index_4, star_atlas);
-                slice = _e48;
+            if (_e19.gather == 1u) {
+                metal::float4 _e49 = star_texel(_e19, f_3, index_4, star_atlas);
+                slice = _e49;
             } else {
-                if (_e18.gather == 2u) {
-                    metal::float4 _e52 = star_gather2_(_e18, r_1, star_atlas);
-                    slice = _e52;
+                if (_e19.gather == 2u) {
+                    metal::float4 _e53 = star_gather2_(_e19, r_1, star_atlas);
+                    slice = _e53;
                 } else {
-                    if (_e18.gather == 3u) {
-                        metal::float4 _e56 = star_gather3_(_e18, f_3, index_4, star_atlas);
-                        slice = _e56;
+                    if (_e19.gather == 3u) {
+                        metal::float4 _e57 = star_gather3_(_e19, f_3, index_4, star_atlas);
+                        slice = _e57;
                     }
                 }
             }
-            float _e58 = slice.w;
-            if (_e58 > 0.0) {
-                float _e62 = slice.w;
-                float cover_1 = metal::min(_e62, 1.0);
-                metal::float4 _e65 = out;
-                metal::float4 _e67 = slice;
-                float _e70 = slice.w;
-                float _e75 = out.w;
-                float _e77 = out.w;
-                out = metal::float4(metal::mix(_e65.xyz, _e67.xyz / metal::float3(_e70), cover_1), _e75 + ((1.0 - _e77) * cover_1));
+            float _e59 = slice.w;
+            if (_e59 > 0.0) {
+                float _e63 = slice.w;
+                float cover_1 = metal::min(_e63, 1.0);
+                metal::float4 _e66 = slice;
+                float _e69 = slice.w;
+                metal::float3 colour_1 = _e66.xyz / metal::float3(_e69);
+                metal::float3 luminance = metal::float3(0.2126, 0.7152, 0.0722);
+                metal::float4 _e76 = stars;
+                metal::float4 _e78 = stars;
+                float behind = metal::dot(_e76.xyz * _e78.xyz, luminance);
+                float _e85 = stars.w;
+                float _e88 = stars.w;
+                float own = (metal::dot(colour_1 * colour_1, luminance) * _e85) * _e88;
+                float ratio = (behind > 0.0) ? metal::saturate(own / behind) : 1.0;
+                float _e97 = star_cover(cloud);
+                float hold = cover_1 * metal::mix(ratio * ratio, 1.0, _e97);
+                metal::float4 _e101 = stars;
+                float _e107 = stars.w;
+                float _e112 = stars.w;
+                float _e118 = stars.w;
+                float _e120 = stars.w;
+                stars = metal::float4((_e101.xyz * (1.0 - hold)) + (colour_1 * ((cover_1 * (1.0 - _e107)) + (hold * _e112))), _e118 + ((1.0 - _e120) * cover_1));
             }
         }
     }
-    metal::float4 _e86 = out;
-    return _e86;
+    metal::float4 _e129 = star_floor(lut);
+    float _e132 = stars.w;
+    metal::float4 _e136 = stars;
+    float _e144 = stars.w;
+    return metal::float4((_e129.xyz * (1.0 - _e132)) + _e136.xyz, _e129.w + ((1.0 - _e129.w) * _e144));
 }
 
 metal::float2 star_image_size(

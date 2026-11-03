@@ -133,6 +133,13 @@ pub(super) fn stars(
         .on_hover_text(
             "How much stars vary in brightness, keeping their average. Low values follow the underlying light evenly; high values make a few bright stars among many faint ones.",
         );
+    ValueBar::new(&mut atmosphere.star_cover, 0.0..=1.0, "Cover")
+        .default_value(fresh.star_cover)
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far a star hides the stars behind it. At 0% it hides them only where it is brighter, so a dim star never blacks out a bright one behind it, but overlaps favour the brighter star and the stars read a little brighter than the colour under them, more so with more Brightness variation. At 100% a star hides what is behind it by its own shape, dim or not, which keeps their average colour.",
+        );
     ValueBar::new(&mut atmosphere.star_size_variation, 0.0..=1.0, "Size variation")
         .default_value(fresh.star_size_variation)
         .percent()

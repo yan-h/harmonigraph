@@ -421,9 +421,10 @@ struct Uniforms {
     /// The image and slice rows that follow all start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
-    /// The starfield's size variation; the rest of its row is padding.
+    /// The starfield's size variation and cover; the rest of its row is
+    /// padding.
     star_size_variation: f32,
-    star_pad0: u32,
+    star_cover: f32,
     star_pad1: u32,
     /// The star image's actual dimensions; zw are padding.
     star_image_size: Float4,
@@ -872,6 +873,7 @@ fn memory_key(
                 star_twinkle: _,        // only whether a depth holds its stars, below
                 star_resolution: _,     // sampling does not change material identity
                 star_solid: _,          // response/coverage changes do not change material identity
+                star_cover: _,          // composition only
                 star_glow_falloff: _,   // response/coverage changes do not change material identity
                 star_solo: _,           // composition only; hidden slices keep their history
             },
@@ -1848,7 +1850,7 @@ impl Targets {
             star_randomness: settings.stars.star_randomness,
             star_life: life,
             star_size_variation: settings.stars.star_size_variation,
-            star_pad0: 0,
+            star_cover: settings.stars.star_cover,
             star_pad1: 0,
             star_image_size: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
             star_slices: slices,
