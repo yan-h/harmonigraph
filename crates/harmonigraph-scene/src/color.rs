@@ -600,8 +600,9 @@ thread_local! {
 /// Run `read` over one gradient's table, without copying it.
 ///
 /// The table is memoized on the gradient that built it, in [`LUT_SLOTS`] slots
-/// scanned linearly — a map keyed on six floats would spend more on hashing
-/// than the hit saves. A miss rebuilds [`PITCH_LUT_N`] entries, each a gamut
+/// scanned linearly — a map keyed on the whole gradient, six floats and the
+/// Bend with its corner and channel switches, would spend more on hashing than
+/// the hit saves. A miss rebuilds [`PITCH_LUT_N`] entries, each a gamut
 /// bisection and an Oklab->sRGB conversion, which is why this is worth caching
 /// at all: the per-node draw path asks for a color hundreds of times a frame
 /// and the spectrum curve thousands.
@@ -766,8 +767,9 @@ impl LutSpacing {
 ///
 /// Each side maps a pitch to a `t` FIRST and indexes with that, so the
 /// gradient's endpoints never reach the table and it stays range-independent.
-/// The six knobs are the only thing it varies with — which is why the memo is
-/// keyed on those and NOT on the range. A change that folded
+/// The gradient's own knobs, the six floats and the Bend, are the only thing it
+/// varies with — which is why the memo is keyed on the whole gradient and NOT
+/// on the range. A change that folded
 /// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
 ///

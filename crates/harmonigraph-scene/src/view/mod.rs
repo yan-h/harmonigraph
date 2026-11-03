@@ -603,10 +603,11 @@ pub struct ViewConfig {
     /// Appearance of note arrivals and departures, on the shared Note fade clock.
     pub note_animation: NoteAnimationConfig,
     /// How loud each note is drawn, and how far each display reads that
-    /// (see [`crate::intensity`]). Shared by the lattice and the roll.
+    /// (see [`crate::intensity`]). Shared by the lattice, the roll and the Spiral.
     pub intensity: crate::IntensitySettings,
     /// Shared bloom strength for the lattice and MIDI ribbons, in × of the
-    /// reference halo. Independent of per-note intensity mappings.
+    /// reference halo. Each note's bloom follows its Opacity, so there is no
+    /// mapping of its own.
     pub note_bloom: f32,
     // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands

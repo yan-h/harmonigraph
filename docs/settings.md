@@ -110,7 +110,8 @@ Changing either slider changes both pictures.
 It runs from 0 (off) to 2×,
 with 1× as the reference halo.
 The Spiral keeps its separate **Spiral bloom** control.
-Bloom is independent of the note intensity mappings.
+Bloom has no mapping of its own;
+each note's bloom follows its Opacity.
 
 ## MIDI note intensity
 
@@ -126,7 +127,7 @@ Every target starts at its base and adds the weighted contributions routed to it
 **Thickness base** applies too,
 in multiples of the pane's reference width:
 **Ribbon width** in the Analyzer and the MIDI layer width in the Lattice.
-Its default of 1× starts at that reference width;
+Its default of 0.989× starts at about that reference width;
 0.5× starts at half of it.
 A thickness contribution of 1 adds one such width;
 a zero-width layer remains hidden.
@@ -166,15 +167,9 @@ Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 Old one-target-per-source routes and weights are ignored on load,
 so those mappings must be added again.
 Base values are retained.
-New mappings use these additions:
-velocity no longer subtracts,
-gain no longer uses a signed dB offset,
-and timbre has twice its former range.
-The retired **Gain range** setting is ignored on load.
-Saved opacity bases above 1 are clamped to 1,
-and saved bases now apply even when opacity has no route.
-Saved projects without **Thickness base** load it at 1×,
-preserving their pane widths.
+A saved **Gain range** setting is ignored on load.
+Saved opacity bases above 1 are clamped to 1.
+Saved projects without **Thickness base** load it at its default of 0.989×.
 
 ## Layout and folding
 

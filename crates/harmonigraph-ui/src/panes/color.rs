@@ -149,8 +149,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     );
     SpreadBar::brightness(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
         "Brightness at the low and high audio levels: 0% is black, 100% is white. \
-                 A black low end blends into the spectrogram background; \
-                 lattice rings swap it for gray at Silent slice brightness. \
+                 The low end is also the spectrogram's background; \
+                 lattice rings start from gray at Silent slice brightness instead. \
                  Double-click resets.",
     );
     SpreadBar::chroma(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
