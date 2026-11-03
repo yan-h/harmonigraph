@@ -668,10 +668,6 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_glow_falloff += 0.1;
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources))[5000], held);
-        // Palette interpretation changes are immediate even on a paused frame.
-        cb.shades.lut = std::sync::Arc::new(vec![[64, 128, 192, 255]; 256]);
-        prepare_once(&device, &queue, &mut resources, &cb);
-        close(pixels(&device, &queue, memory(&resources))[5000], floor(&cb));
         // Seed again, then a backwards seek must initialize from the dark input.
         cb.grid.fill(255);
         cb.atmosphere.as_mut().unwrap().now = 140.0;
@@ -956,12 +952,14 @@ fn watercolor_brightness_edits_preserve_held_color() {
 /// A Level, Tilt or softness drag re-reads the same texels through a new
 /// mapping rather than moving the sound under them, so the held colour carries
 /// and eases toward the new reading instead of snapping for the whole drag
-/// (#1578). The frame does not advance, so a carried history reads back as it
-/// was held and a reset one as this frame's dark grid.
+/// (#1578). An Audio level colours edit or a preset's palette re-reads them
+/// through a new colouring, and carries too (#1639). The frame does not
+/// advance, so a carried history reads back as it was held and a reset one as
+/// this frame's dark grid.
 #[test]
-fn level_and_softness_edits_carry_held_color() {
+fn level_softness_and_palette_edits_carry_held_color() {
     let Some((device, queue)) = headless_device() else { return };
-    for case in ["level", "step", "tilt", "pitch softness", "time softness"] {
+    for case in ["level", "step", "tilt", "pitch softness", "time softness", "palette"] {
         let mut cb = fixture(CloudStyle::Watercolor);
         let mut resources = CallbackResources::default();
         cb.grid.fill(255);
@@ -974,7 +972,8 @@ fn level_and_softness_edits_carry_held_color() {
             "step" => cb.read.level_per_step *= 1.1,
             "tilt" => cb.read.level_per_midi += 0.01,
             "pitch softness" => a.settings.pitch_softness += 0.1,
-            _ => a.settings.time_softness += 0.1,
+            "time softness" => a.settings.time_softness += 0.1,
+            _ => cb.shades.lut = std::sync::Arc::new(vec![[64, 128, 192, 255]; 256]),
         }
         cb.grid.fill(0);
         prepare_once(&device, &queue, &mut resources, &cb);

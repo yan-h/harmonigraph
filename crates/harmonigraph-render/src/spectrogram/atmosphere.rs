@@ -839,7 +839,6 @@ struct MemoryFrame {
     now: f64,
     source_end: i64,
     key: Vec<u32>,
-    palette: std::sync::Arc<Vec<[u8; 4]>>,
     origin: [i32; 2],
     slices: [StarSlice; STAR_SLICES],
     life: f32,
@@ -1041,7 +1040,9 @@ impl MemoryFrame {
     ///
     /// The history carries only forward in time, within six of the longest
     /// response time, over source history that has not been seeked back, under
-    /// the same key and the same palette.
+    /// the same key. A palette edit or a preset switch is not a reset: it
+    /// re-reads the same texels through a new colouring, so the held colour
+    /// eases to it over Color release, as a Level drag's does (#1578).
     ///
     /// The step is exact for a target that holds still, and a moving one is
     /// read as if it had already been there for the whole `dt`: the memory
@@ -1062,9 +1063,7 @@ impl MemoryFrame {
         let valid = dt.is_finite()
             && (0.0..=horizon).contains(&dt)
             && self.source_end >= previous.source_end
-            && self.key == previous.key
-            && (std::sync::Arc::ptr_eq(&self.palette, &previous.palette)
-                || self.palette == previous.palette);
+            && self.key == previous.key;
         if !valid {
             return step;
         }
@@ -1741,7 +1740,6 @@ impl Targets {
         ppp: f32,
         atmosphere: SpectrogramAtmosphere,
         plan: &Plan,
-        palette: std::sync::Arc<Vec<[u8; 4]>>,
         source_end: i64,
     ) {
         let Plan { tile, stars, memory_extent, .. } = *plan;
@@ -1823,7 +1821,6 @@ impl Targets {
                     stars,
                     &slices,
                 ),
-                palette,
                 origin,
                 slices,
                 life,

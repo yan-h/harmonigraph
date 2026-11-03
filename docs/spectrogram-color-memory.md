@@ -47,7 +47,8 @@ Stars instead allocate one history texel per atlas cell, at most 128 MiB for bot
 Memory disabled allocates none of these textures.
 
 History survives changes to the scalar blur target's allocation when its own dimensions are unchanged.
-The reset key includes the active material coordinates, the palette and the active style's look controls.
+The reset key includes the active material coordinates and the active style's look controls,
+Edge pooling, its width and its softness among them: they move where the pool sits under each texel (#1579).
 It also includes the pane's geometry (size, points per millisecond and per cent) and a history epoch that Clear history advances,
 so a resize, a time zoom or a cleared history shows the new picture at once instead of fading the old one into it.
 Incoming audio, advancing time, response times, Texture mix, the level mapping (Level, Tilt and softness, #1578) and unrelated styles' controls are excluded.
@@ -56,10 +57,11 @@ it re-maps the same star's level to the palette (#1632).
 So are Drift speed and Drift direction:
 the drift is built up frame by frame, so a drag moves the texture on by one frame's travel,
 which history follows as it follows the drift itself (#1639).
-Palette comparisons retain the existing shared-snapshot fast path.
+The palette is not in it either: an Audio level colours edit or a preset switch re-reads the same texels through a new colouring,
+so held colour eases to it over Color release as it does after a Level drag (#1639).
 A backward clock or source endpoint, disabled texture, invalid mapping, or a gap above 30 seconds resets history.
 Thirty seconds is six times the longest allowed response time, leaving less than 0.25% residual even at that setting.
-Repeated draws at the identical clock preserve history exactly, while interpretation changes still initialize it immediately.
+Repeated draws at the identical clock preserve history exactly, while a change of the key still initializes it immediately.
 
 ## Verification
 
