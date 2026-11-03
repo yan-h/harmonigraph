@@ -18,7 +18,7 @@ read §5 first if you only want the recommendation.
 On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 → **Metal**.
 No OpenGL path is compiled in (`Cargo.toml` builds egui-baseview with `default-features = false, features = ["wgpu"]`).
 
-`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor.rs`) parents onto the host's `NSView`, and `vendor/egui-baseview/src/renderer/wgpu/renderer.rs:59-83` creates a wgpu surface on it —
+`EguiWindow::open_parented` (in `crates/harmonigraph-plugin/src/editor/window.rs`) parents onto the host's `NSView`, and `vendor/egui-baseview/src/renderer/wgpu/renderer.rs:59-83` creates a wgpu surface on it —
 a `CAMetalLayer` swapchain, presented Fifo (vsync).
 
 MSAA is off, so egui renders **straight into the swapchain texture** (`renderer.rs:264-321`).
@@ -40,7 +40,7 @@ Metal *permits* `COPY_SRC` on a surface (`wgpu-hal/src/metal/adapter.rs:428`);
 the cost is that `framebufferOnly` goes false on the layer (`wgpu-hal/src/metal/surface.rs:73`), which is why the flag isn't on by default.
 - **There is no `Device`/`Queue`/`RenderState` reachable from the
 editor.** egui-baseview's `Renderer` keeps them private (`renderer.rs:48-56`) and hands the app only a small `Queue` of window commands (`vendor/egui-baseview/src/window.rs:76-119`).
-`editor.rs:24-31` already documents this gap —
+`editor.rs:20-29` already documents this gap —
 it's the same missing accessor that forces the `ASSUMED_SURFACE_FORMAT` hack.
 
 A paint callback *can* see a `Device` and `Queue` (`prepare()`'s arguments, `harmonigraph-render/src/lib.rs`) and they're cheap clonable handles, so a callback could stash them.
@@ -60,13 +60,13 @@ Frame pacing.
 The plugin repaints **on demand**, not at a fixed rate:
 continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `vendor/baseview/src/platform/macos/view.rs`) and a Fifo swapchain.
 Presents are also skipped outright on Occluded/Outdated/Lost (`renderer.rs:214-262`) —
-the editor already logs these stalls (`note_frame` in `editor.rs`).
+the editor already logs these stalls (`note_frame` in `editor/shared.rs`).
 
 A recorder that counts frames will therefore produce video that drifts against the music.
 Any live-capture route **must** force continuous repaint while recording, stamp each frame with a real timestamp, and let the encoder normalize to constant frame rate.
 Related:
 the window is HiDPI and resizable mid-recording, and H.264 wants even dimensions —
-the size has to be locked (the editor can even ask the host for an exact physical size via `requested_size` + `request_resize()`, both in `editor.rs`).
+the size has to be locked (the editor can even ask the host for an exact physical size via `requested_size` in `editor/persist.rs` + `request_resize()` in `editor/window.rs`).
 
 And audio:
 the mono ring feeding the spectrum analyzer **drops samples under backpressure by design** (`AUDIO_RING_CAPACITY` and the `audio_producer` writes in `crates/harmonigraph-plugin/src/lib.rs`).
@@ -140,7 +140,7 @@ or wires up upstream `egui-wgpu`'s `CaptureState`, and (b) exposes `RenderState`
 Frames go to a worker thread and out to ffmpeg;
 pool 3-4 readback buffers and memcpy padded rows rather than using egui's per-pixel `ColorImage` conversion, whose own comment warns it isn't built for video.
 The redeeming feature:
-exposing `RenderState` is exactly the accessor `editor.rs:24-31` already wants, so this patch retires the `ASSUMED_SURFACE_FORMAT` hack at the same time —
+exposing `RenderState` is exactly the accessor `editor.rs:20-29` already wants, so this patch retires the `ASSUMED_SURFACE_FORMAT` hack at the same time —
 one more entry in `PATCHES.md`, paying for two things.
 
 **Route 4, ScreenCaptureKit/AVFoundation in-process, rejects itself.** The TCC screen-recording prompt would be attributed to the *host* —

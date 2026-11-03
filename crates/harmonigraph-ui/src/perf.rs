@@ -184,6 +184,27 @@ fn tag_line(
     ctx.fonts_mut(|f| f.layout(format!("build  {tag}"), font.clone(), color, width))
 }
 
+/// The headline rate's colour. Only a low rate while something is animating is
+/// flagged: `fps` counts UI passes, which run on every link tick, so an idle
+/// editor reads the link's rate, but only painting is throttled and an idle
+/// number carries no news.
+///
+/// Judged against `target_fps`, the rate the link was asked for (display rate
+/// over the Editor frame rate divisor), so a divided rate running on target
+/// reads healthy: red below half of it and amber below five sixths, the
+/// shares 30 and 50 are of 60. Without a target — the standalone, which no
+/// link paces — the fixed 30 and 50 stand.
+fn frame_health(fps: f32, target_fps: Option<f32>, animating: bool) -> egui::Color32 {
+    let (red, amber) = target_fps.map_or((30.0, 50.0), |target| (target * 0.5, target * 5.0 / 6.0));
+    if animating && fps < red {
+        egui::Color32::from_rgb(0xE5, 0x7A, 0x5A) // warm red
+    } else if animating && fps < amber {
+        egui::Color32::from_rgb(0xE0, 0xB0, 0x4A) // amber
+    } else {
+        egui::Color32::from_rgb(0x7A, 0xC8, 0x8A) // calm green
+    }
+}
+
 /// Draw the overlay over `editor`, at `pos` — dragging it writes the new
 /// position back through that handle, and nothing else in the tree moves it.
 ///
@@ -197,19 +218,12 @@ pub(crate) fn draw_overlay(
     editor: egui::Rect,
     pos: &mut Option<egui::Pos2>,
     perf: &PerfStats,
+    target_fps: Option<f32>,
     detail: bool,
     build_tag: &str,
 ) {
     let fps = perf.fps();
-    // Only flag a low rate while something is actually animating — an idle
-    // editor is meant to drop to the poll rate, so a low idle number is fine.
-    let health = if perf.workload.animating && fps < 30.0 {
-        egui::Color32::from_rgb(0xE5, 0x7A, 0x5A) // warm red
-    } else if perf.workload.animating && fps < 50.0 {
-        egui::Color32::from_rgb(0xE0, 0xB0, 0x4A) // amber
-    } else {
-        egui::Color32::from_rgb(0x7A, 0xC8, 0x8A) // calm green
-    };
+    let health = frame_health(fps, target_fps, perf.workload.animating);
     let state = if perf.workload.animating { "live" } else { "idle" };
 
     let dim = egui::Color32::from_gray(0x9A);
@@ -671,6 +685,25 @@ mod tests {
             );
         }
     }
+    /// The headline rate is judged against the rate chosen. A Quarter rate on
+    /// a 144 Hz display is 36 fps: on target it reads green where the fixed
+    /// thresholds would call it amber, and half the display rate would pass the
+    /// fixed ones while missing a Display rate target by half. The standalone,
+    /// with no target, keeps the fixed 30 and 50.
+    #[test]
+    fn the_headline_rate_is_judged_against_the_rate_chosen() {
+        let (green, amber, red) = (
+            frame_health(144.0, Some(144.0), true),
+            frame_health(100.0, Some(144.0), true),
+            frame_health(60.0, Some(144.0), true),
+        );
+        assert!(green != amber && amber != red && green != red);
+        assert_eq!(frame_health(36.0, Some(36.0), true), green, "36 fps on a Quarter target");
+        assert_eq!(frame_health(36.0, None, true), amber, "36 fps against the fixed 50");
+        assert_eq!(frame_health(20.0, None, true), red, "20 fps against the fixed 30");
+        assert_eq!(frame_health(60.0, Some(144.0), false), green, "an idle editor is not judged");
+    }
+
     /// The build tag wraps rather than widening the HUD, at any branch name.
     ///
     /// A branch name is arbitrarily long and the tag is the one row not sized
@@ -757,7 +790,7 @@ mod tests {
             ctx.run_ui(
                 egui::RawInput { screen_rect: Some(area), ..Default::default() },
                 // Detail on: the widest case.
-                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true, "test @0123456"),
+                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, None, true, "test @0123456"),
             )
         };
         frame();

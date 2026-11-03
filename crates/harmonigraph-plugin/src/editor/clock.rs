@@ -21,7 +21,7 @@ pub(crate) struct ClockMapper {
 /// A heartbeat is seen at the drain that finds it, not when its block was
 /// due, and how long it waited for that drain varies block to block — by up
 /// to a whole drain interval, since blocks and drains run at unrelated rates.
-/// Drains were frames when this was measured; since #1559 they are the input
+/// Drains were frames when this was measured; since #1566 they are the input
 /// worker's steps, every 4 ms with the window open and 20 ms with it shut,
 /// which shrinks the wait this window exists to absorb. Taking
 /// each heartbeat's own lead made that wait the drawn time's: at 144 Hz over
@@ -36,13 +36,16 @@ pub(crate) struct ClockMapper {
 /// Kept as two buckets so the window costs nothing to slide; it spans between
 /// one and three of them.
 ///
-/// A bucket is as long as it takes to see a heartbeat that met its frame
-/// almost at once, which depends on the block and frame lengths together:
+/// A bucket is as long as it takes to see a heartbeat that met its drain
+/// almost at once, which depends on the drain and block lengths together:
 /// the waits spread over the shorter of the two, and one heartbeat arrives
 /// per the longer, so a window of `T` seconds finds a best wait within about
-/// `block * frame / T`. A fixed quarter second held a few dozen 512-sample
-/// blocks but only three of 4096 samples, and each rollover then let go of
-/// the best phase and stepped a 66.7 ms frame by up to 10.7 ms.
+/// `drain * block / T`. At the worker's 4 ms that is a quarter second below
+/// 1,500-sample blocks and 0.68 s at 4096. It was sized from the frame
+/// length while frames drained, when a fixed quarter second held only three
+/// 4096-sample blocks and each rollover stepped a 66.7 ms frame by up to
+/// 10.7 ms; at 4 ms even that fixed quarter second steps one by about 1.3 ms,
+/// and the sizing mostly serves the 20 ms drains of a shut window.
 ///
 /// And never more than its own wait for its frame, plus delivery jitter, past
 /// the latest lead, which is all that wait can explain. A source running
@@ -67,10 +70,12 @@ impl Lead {
     const MIN_BUCKET_SECONDS: f64 = 0.25;
 
     /// The longest a lead the audio dropped is held for, at up to three
-    /// buckets. Large blocks at slow frame rates reach it, as do 512-sample
-    /// ones at 15 fps, whose advance overstates the block. At exact rates
-    /// 4096 samples against 66.7 ms repeat their phases every 2.1 s, within
-    /// it; off them the best phase drifts, and steps stay near 2 ms.
+    /// buckets. With the window open, at 4 ms drains, a drain must find over
+    /// 0.375 s of audio to reach it — a hitch, which also lengthens the gap,
+    /// or a bounce running far faster than realtime, whose advance overstates
+    /// the block. With it shut, at 20 ms, blocks over about 3,500 samples
+    /// reach it as well.
+    /// Without it a bounce's advance would hold a dropped lead for minutes.
     const MAX_BUCKET_SECONDS: f64 = 3.0;
 
     /// How close to the best possible wait the window's best one should be.
@@ -212,11 +217,18 @@ mod tests {
     const FRAME: f64 = 1.0 / 144.0;
     const BLOCK: f64 = 512.0 / 48_000.0;
 
-    /// A window drawing every `frame` seconds for `seconds`, draining blocks
-    /// of `block` seconds, block `k` (whose last sample is due at
-    /// `(k + 1) * block`) arriving at wall time `arrives(k)`. Incommensurate
-    /// rates make every frame find its block waited a different length of
-    /// time, and the run cycles through those phases many times.
+    /// The input worker's cadence with the window open: `background::POLL`
+    /// plus a little for the step itself. Its drains observe the clock; frames
+    /// only read it. Not 4 ms exactly: that divides 512-sample blocks into
+    /// three phases, and a run would never see the rest.
+    const DRAIN: f64 = 0.00413;
+
+    /// A window drawing every `frame` seconds for `seconds`, its worker
+    /// draining every [`DRAIN`] seconds, blocks of `block` seconds, block `k`
+    /// (whose last sample is due at `(k + 1) * block`) arriving at wall time
+    /// `arrives(k)`. Incommensurate rates make every drain find its block
+    /// waited a different length of time, and the run cycles through those
+    /// phases many times.
     ///
     /// Returns, for each frame after the first half second, its drawn time
     /// and how far that was drawn past the newest audio it had.
@@ -229,15 +241,20 @@ mod tests {
         let mut clock = ClockMapper::new();
         let mut newest = 0.0;
         let mut next = 0;
+        let mut drains = 0;
         let mut frames = Vec::new();
         for i in 1..(seconds / frame) as usize {
             let wall = i as f64 * frame;
-            while arrives(next) <= wall {
-                next += 1;
-                newest = next as f64 * block;
-            }
-            if next > 0 {
-                clock.observe(newest, wall);
+            while (drains + 1) as f64 * DRAIN <= wall {
+                drains += 1;
+                let at = drains as f64 * DRAIN;
+                while arrives(next) <= at {
+                    next += 1;
+                    newest = next as f64 * block;
+                }
+                if next > 0 {
+                    clock.observe(newest, at);
+                }
             }
             let now = clock.now(wall);
             if wall >= 0.5 {
@@ -258,15 +275,27 @@ mod tests {
     }
 
     /// What used to move the notes in steps: each drain re-anchored the clock
-    /// at the frame that found the block rather than when the block was due,
-    /// so the drawn time advanced 10.7, 6.9 and 3.7 ms on successive 6.9 ms
+    /// at the one that found the block rather than when the block was due, so
+    /// the drawn time advanced 10.7, 6.9 and 3.7 ms on successive 6.9 ms
     /// frames — the picture running at half and one and a half speed by turns.
-    /// What is left is the window letting go of its best phase now and then,
-    /// a few tenths of a millisecond.
+    /// What is left is the window letting go of its best phase now and then, a
+    /// few tenths of a millisecond for 512-sample blocks and about a
+    /// millisecond for 4096, at every frame rate a display link runs at.
+    /// Twelve seconds roll the longest window over several times. The frames
+    /// of the first second are skipped, while the window first fills.
     #[test]
     fn block_delivery_does_not_step_the_drawn_time() {
-        let worst = worst_step(&frames_at(FRAME, BLOCK, 3.0, on_time(BLOCK)), FRAME);
-        assert!(worst < 1e-3, "a frame advanced {worst:.4} s away from its own interval");
+        for (samples, limit) in [(512.0, 5e-4), (4096.0, 1.5e-3)] {
+            let block = samples / 48_000.0;
+            for frame in [1.0 / 144.0, 1.0 / 60.0, 1.0 / 15.0] {
+                let frames = frames_at(frame, block, 12.0, on_time(block));
+                let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
+                assert!(
+                    worst < limit,
+                    "{samples} samples at {frame:.4} s a frame advanced {worst:.4} s away from it"
+                );
+            }
+        }
     }
 
     /// The audio still owns the clock: a stall that loses it 30 ms leaves the
@@ -290,22 +319,6 @@ mod tests {
         let frames = frames_at(FRAME, BLOCK, 3.0, |k| 2.0 * on_time(k));
         let worst = frames.iter().map(|&(_, ahead)| ahead).fold(0.0, f64::max);
         assert!(worst < 0.1, "drawn {worst:.3} s past the newest audio");
-    }
-
-    /// Large blocks at a slow frame rate: 4096 samples at 48 kHz is 85 ms, so
-    /// a quarter second held three heartbeats, too few for one of them to
-    /// have met its frame at once. Every rollover let go of the best phase and
-    /// stepped a 66.7 ms frame by up to 10.7 ms, and a 16.7 ms one by 8.7 ms.
-    /// Twelve seconds roll the longest window over several times. The frames
-    /// of the first second are skipped, while the window first fills.
-    #[test]
-    fn large_blocks_at_a_slow_frame_rate_do_not_step_the_drawn_time() {
-        let block = 4096.0 / 48_000.0;
-        for frame in [1.0 / 15.0, 1.0 / 60.0] {
-            let frames = frames_at(frame, block, 12.0, on_time(block));
-            let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
-            assert!(worst < 1.5e-3, "a {frame:.4} s frame advanced {worst:.4} s away from it");
-        }
     }
 
     #[test]

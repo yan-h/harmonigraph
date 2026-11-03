@@ -314,10 +314,10 @@ pub fn root_ui(
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
     // Render continuously only while something is animating (sounding or
-    // decaying voices); otherwise poll so newly arriving MIDI still shows
-    // up promptly. egui repaints on input events by itself, so interaction
-    // never waits on this. The plugin shell additionally requests a
-    // repaint the moment it drains new note events.
+    // decaying voices); otherwise poll, which bounds how stale a change that
+    // animates nothing gets: an automated parameter, the console, a take's
+    // status. egui repaints on input events by itself, so interaction never
+    // waits on this, and a note repaints itself, since it makes a voice.
     //
     // The piano roll keeps animating well past the last release fade — it
     // scrolls for as long as its window still reaches a played note — so
@@ -372,6 +372,7 @@ pub fn root_ui(
             ui.max_rect(),
             &mut state.workspace.interaction.perf_pos,
             &state.picture.instruments.perf,
+            state.picture.instruments.timings.target_fps(),
             state.workspace.interaction.show_perf_detail,
             build_tag,
         );

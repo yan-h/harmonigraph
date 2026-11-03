@@ -221,7 +221,7 @@ harmonigraph-plugin      nice-plug shell, lock-free audio-to-UI ingress,
 
 In the plugin,
 the audio thread converts host MIDI to note events and pushes them through a lock-free ring buffer.
-The GUI thread drains the events into the note tracker,
+The input worker thread drains the events into the note tracker,
 derives a scene and paints it.
 Parameters travel through the shared UI's `ParamBackend`,
 implemented by the plugin host in the plugin and by plain values in the standalone harness.

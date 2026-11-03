@@ -59,14 +59,10 @@ pub(super) fn frame(
 
     // The input worker ([`crate::background`]) drains the rings and runs the
     // analysis, and a frame reads what it left — unless it never started.
-    // New MIDI must render this tick, not at the idle poll.
     let now = shared.input.now();
     if shared.frame_drains {
         let runtime = &mut shared.ui.picture.runtime;
-        shared.fresh_notes |= shared.input.drain(runtime, &shared.ui.picture.appearance, now);
-    }
-    if std::mem::take(&mut shared.fresh_notes) {
-        ui.ctx().request_repaint();
+        shared.input.drain(runtime, &shared.ui.picture.appearance, now);
     }
     // Drained on the clock it arrived by, drawn at the refresh it is for.
     let wall = shared.input.frame_wall(queue.frame_timing(), now);
@@ -108,6 +104,8 @@ pub(super) fn frame(
         verts: queue.verts(),
         encode_ms: queue.encode_ms(),
         submit_ms: queue.submit_ms(),
+        link_refresh_s: queue.frame_timing().map_or(0.0, |timing| timing.refresh),
+        link_divisor: queue.frame_timing().map_or(0, |timing| timing.divisor),
         shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0,
     };
     // A fold is priced against `egui_state.size`, which is the size the window

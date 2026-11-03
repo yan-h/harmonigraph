@@ -140,6 +140,21 @@ pub struct ShellTimings {
     pub verts: u32,
     pub encode_ms: f32,
     pub submit_ms: f32,
+    /// Seconds between the display link's refreshes, and the divisor the link
+    /// paced this frame at (one frame per `link_divisor`th refresh). Both zero
+    /// where no link drives the window; see [`Self::target_fps`].
+    pub link_refresh_s: f64,
+    pub link_divisor: u32,
+}
+
+impl ShellTimings {
+    /// The frame rate the link was asked for: the display rate over the
+    /// divisor. `None` where nothing paces the window, and the overlay then
+    /// judges its rate against fixed thresholds instead.
+    pub fn target_fps(&self) -> Option<f32> {
+        let period = self.link_refresh_s * f64::from(self.link_divisor);
+        (period.is_finite() && period > 0.0).then(|| (1.0 / period) as f32)
+    }
 }
 
 /// One frame's measured costs, in milliseconds — every stage of it that
@@ -948,6 +963,18 @@ fn footprint_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_target_rate_is_the_display_rate_over_the_divisor() {
+        let timings = |link_refresh_s, link_divisor| ShellTimings {
+            link_refresh_s,
+            link_divisor,
+            ..Default::default()
+        };
+        assert_eq!(timings(1.0 / 144.0, 4).target_fps().map(f32::round), Some(36.0));
+        assert_eq!(timings(1.0 / 60.0, 1).target_fps().map(f32::round), Some(60.0));
+        assert_eq!(timings(0.0, 0).target_fps(), None, "no link paces the standalone");
+    }
 
     #[test]
     fn host_draw_completions_have_equal_weight_across_pending_gaps() {
