@@ -102,7 +102,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
         star_randomness, star_size_variation, star_jitter, star_glow_falloff,
-        star_resolution, star_lifetime);
+        star_resolution, star_lifetime, star_cover);
         for depths in [
             &mut stars.star_speed,
             &mut stars.star_spacing_ratio,
@@ -537,6 +537,7 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
             "Star size",
             "Glow falloff",
             "Brightness variation",
+            "Cover",
             "Size variation",
             "Position variation",
             "Star lifetime",

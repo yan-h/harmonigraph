@@ -28,7 +28,7 @@ struct StarUniforms {
     float star_randomness;
     float star_life;
     float star_size_variation;
-    float pad;
+    float star_cover;
     type_8 star_slices;
 };
 struct Settings {

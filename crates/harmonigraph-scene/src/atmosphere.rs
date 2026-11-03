@@ -513,6 +513,14 @@ pub struct StarSettings {
     /// glow. Runs over `0..=`[`STAR_SOLID_MAX`], in any order across the
     /// depths.
     pub star_solid: [f32; crate::star_plan::STAR_DEPTHS],
+    /// How far a star hides the stars behind it whatever their brightness,
+    /// alike at every depth, over 0..=1. At 0 a star hides those behind only
+    /// as far as it is as bright as they are, so a dim near star never blacks
+    /// out a bright far one, but where stars overlap the brighter shows and
+    /// the field reads a little brighter than its light. At 1 it hides them by
+    /// its coverage alone, as paint, which keeps the field's average colour.
+    /// Over the floor every star covers by its coverage.
+    pub star_cover: f32,
     /// How the glow falls from the solid edge to the star's edge, over 0..=1:
     /// 0 stays bright almost to the edge, 0.5 falls evenly, 1 drops at once
     /// and leaves a long faint tail ([`crate::star_plan::star_falloff_bend`]).
@@ -579,6 +587,8 @@ impl Default for StarSettings {
             // fresh dials, over the star's area at every depth: 48% far to 0%
             // near, on the size's curve.
             star_solid: [0.48, 0.46020737, 0.3825297, 0.23232502, 0.0],
+            // Every star shows through a dimmer one in front of it.
+            star_cover: 0.0,
             star_glow_falloff: 0.5,
             // Between the old Medium preset's 50% far and 75% near images:
             // sharper than Medium, cheaper than High.
@@ -630,6 +640,7 @@ impl StarSettings {
         depths(&mut self.star_twinkle, fresh.star_twinkle, (0.0, 1.0));
         depths(&mut self.star_solid, fresh.star_solid, (0.0, STAR_SOLID_MAX));
         self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
+        self.star_cover = clamp(self.star_cover, fresh.star_cover, 0.0, 1.0);
         self.star_resolution = (clamp(
             self.star_resolution,
             fresh.star_resolution,

@@ -38,7 +38,9 @@ struct StarUniforms {
     star_randomness: f32,
     star_life: f32,
     star_size_variation: f32,
-    pad: f32,
+    // How far a star hides those behind it whatever their brightness
+    // (`star_layers`).
+    star_cover: f32,
     star_slices: array<StarSlice, 5>,
 };
 fn atlas_texel(index: i32) -> vec2<i32> {
@@ -289,13 +291,24 @@ fn star_gather3(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     return result;
 }
 
-// The consumer's floor, then every slice laid over it back to front: within a slice
-// the stars' coverages add and their colours average by coverage, and the slice
-// covers what is under it by its summed coverage, capped at one. The salts
+// The consumer's floor, then every slice laid over it back to front: within a
+// slice the stars' coverages add and their colours average by coverage, and the
+// slice covers the floor by its summed coverage, capped at one. Over the slices
+// behind it, a slice hides `Cover`'s share of them by its coverage, as paint,
+// and the rest only as far as it is as bright as they are, as light: by the
+// square of its luminance over theirs, so within one hue a star at half their
+// gamma-coded brightness hides a sixteenth of them. Steep, so a dimmer star in
+// front darkens one of a hue behind it by at most 8.2%, where it is four fifths
+// as bright; each depth it passes in front of can take that again. A hard switch
+// at equal brightness would never darken, but would flip a star's hue in and out
+// as the light under the two moved. Light keeps a dim near star from blacking out a bright far one;
+// paint keeps the field's average colour, which light lifts where stars overlap,
+// because the brighter one shows. The slices gather premultiplied, apart from
+// the floor, so the comparison sees the stars behind alone. The salts
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
 // it, a cell's stagger at the second.
 fn star_layers(pt: vec2<f32>) -> vec4<f32> {
-    var out = star_floor();
+    var stars = vec4<f32>(0.0);
     let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
         let s = star_slice(k);
@@ -314,11 +327,29 @@ fn star_layers(pt: vec2<f32>) -> vec4<f32> {
         }
         if slice.w > 0.0 {
             let cover = min(slice.w, 1.0);
-            // Preserve the spectral RGB arithmetic; alpha independently follows over.
-            out = vec4<f32>(mix(out.rgb, slice.rgb / slice.w, cover), out.a + (1.0 - out.a) * cover);
+            let colour = slice.rgb / slice.w;
+            // Luminance, the gamma taken as 2: what reads as a dark hole is a
+            // darker colour, whatever palette position it is, and luma on the
+            // gamma-coded colour rates a 30% green three times a full blue,
+            // the brighter of the two. The stars behind are premultiplied, so
+            // their alpha squared comes back. Zero stars behind are no
+            // brighter than anything.
+            let luminance = vec3<f32>(0.2126, 0.7152, 0.0722);
+            let behind = dot(stars.rgb * stars.rgb, luminance);
+            let own = dot(colour * colour, luminance) * stars.w * stars.w;
+            let ratio = select(1.0, saturate(own / behind), behind > 0.0);
+            let hold = cover * mix(ratio * ratio, 1.0, star_cover());
+            stars = vec4<f32>(
+                stars.rgb * (1.0 - hold) + colour * (cover * (1.0 - stars.w) + hold * stars.w),
+                stars.w + (1.0 - stars.w) * cover,
+            );
         }
     }
-    return out;
+    // The stars over the floor: where every slice is as bright as those behind
+    // it, what laying each over the floor in turn drew. Preserve the spectral RGB
+    // arithmetic; alpha independently follows over.
+    let under = star_floor();
+    return vec4<f32>(under.rgb * (1.0 - stars.w) + stars.rgb, under.a + (1.0 - under.a) * stars.w);
 }
 
 // Every slice into the star image, at `Stars resolution` of the pane. Its

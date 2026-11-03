@@ -68,7 +68,7 @@ struct Cloud {
     float star_randomness;
     float star_life;
     float star_size_variation;
-    uint star_pad0_;
+    float star_cover;
     uint star_pad1_;
     metal::float4 star_image_size;
     type_8 star_slices;

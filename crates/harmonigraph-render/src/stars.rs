@@ -434,7 +434,7 @@ uniform_group! {
         star_randomness: f32,
         star_life: f32,
         star_size_variation: f32,
-        pad: f32,
+        star_cover: f32,
         star_slices: [StarSlice; STAR_SLICES],
     }
 }
@@ -453,7 +453,7 @@ impl StarUniforms {
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,
-            pad: 0.0,
+            star_cover: settings.star_cover,
             star_slices: star_slices(
                 settings,
                 direction,
