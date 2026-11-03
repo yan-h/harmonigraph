@@ -151,9 +151,10 @@ fn held_slab(window: f64, target_cols: usize, held: Option<f64>) -> f64 {
 /// (see `AudioSpectrum::push_samples`), so an ordinary stream cannot skip one at
 /// all. What is left for this to cover is a real gap in the samples — a host
 /// dropout, the pane being switched on, a transport jump re-anchoring the grid.
-/// A stall, by contrast — switching the FFT window empties the ring for a
-/// window's worth of samples, 341 ms at 48 kHz on Precise — is many slabs wide
-/// and genuinely was silence as far as the analyzer is concerned.
+/// A stall, by contrast — a sample-rate change empties the ring, and a longer
+/// frame leaves it unfilled for the extra samples, up to 341 ms at 48 kHz on
+/// Precise — is many slabs wide and genuinely was silence as far as the
+/// analyzer is concerned.
 const JITTER_SLABS: i64 = 1;
 
 /// Where the visible slabs sit in absolute time — everything the mesh's slab

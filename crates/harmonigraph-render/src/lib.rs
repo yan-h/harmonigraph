@@ -107,7 +107,7 @@ pub use text::{text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, SheetUp
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
-pub use shadow::{spectral_shadow_reach, SPECTRAL_WIDTH_POINTS};
+pub use shadow::SPECTRAL_WIDTH_POINTS;
 /// A spectral text pane's own shadow atlas and blur.
 mod spectral_shadow;
 

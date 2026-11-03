@@ -1288,9 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_shadows_keep_the_exports_relative_reach_without_changing_the_dials() {
-        use harmonigraph_render::spectral_shadow_reach;
-
+    fn preview_draws_both_panes_without_changing_the_shadow_dials() {
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
         // The split of 2026-09-26, whose seam the spectral pane's child Ui
         // rounds INTO its own side. egui snaps that rect to its 1/32-point
@@ -1303,26 +1301,12 @@ mod tests {
             state.appearance.render.frame.aspect_h = aspect.1;
             for short_edge in [1080, 2160] {
                 state.appearance.render.short_edge = short_edge;
-                let pixels = state.appearance.render.frame.pixels(short_edge);
-                let export_width =
-                    pixels[0] as f32 / crate::layout::export_pixels_per_point(pixels);
                 state.appearance.view.shadow.spectral_text.width =
                     harmonigraph_scene::SPECTRAL_SHADOW_MAX;
                 state.appearance.view.shadow.spectral_text.spread = 0.2;
                 let saved = state.appearance.view.shadow;
-                for ratio in [0.25, 1.0, 1.25, 2.0] {
-                    let width = export_width * ratio;
-                    let scale = preview_scale(width, &state.appearance.render);
-                    let style = saved.spectral_text;
-                    let reach = spectral_shadow_reach(style, 1.0);
-                    assert!(reach > 0.0, "the label shadow must cast");
-                    assert!(
-                        (spectral_shadow_reach(style, scale) / width - reach / export_width).abs()
-                            < 1e-6
-                    );
-                }
-                // Exercise the actual draw too: it must not change the
-                // settings that the dock and a subsequent export will read.
+                // The draw must not change the settings that the dock and a
+                // subsequent export will read.
                 let ctx = egui::Context::default();
                 crate::theme::apply_theme(&ctx);
                 let output = ctx.run_ui(

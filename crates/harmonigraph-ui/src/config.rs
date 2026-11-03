@@ -92,10 +92,10 @@ pub enum SpectralOrientation {
     /// Time runs left(now)->right(past) along the pane, pitch climbs
     /// bottom->top, and the spectrum sits on the left, joined to the
     /// spectrogram.
-    #[default]
     Left,
     /// Time runs right(now)->left(past); pitch climbs bottom->top, and the
-    /// spectrum sits on the right.
+    /// spectrum sits on the right. The fresh instance's, as captured in #834.
+    #[default]
     Right,
     /// Time runs top(now)->bottom(past) down the pane, pitch runs left->right,
     /// and the spectrum sits on top, joined to the spectrogram.
@@ -165,8 +165,8 @@ impl SpectralOrientation {
 /// **A stop list interpolates in sRGB BYTES, which is not a perceptual space.**
 /// Its grey ramp puts mid-grey at `L*` 54 where an even one puts 50, and its
 /// colored ramps wander off the straight line between their own ends by as much
-/// as a tenth of the black-to-white distance in Oklab — measured against these
-/// four. A heatmap is read for its quiet detail, and an even ramp is what reads
+/// as a tenth of the black-to-white distance in Oklab — measured against the
+/// stop lists these presets replaced. A heatmap is read for its quiet detail, and an even ramp is what reads
 /// that detail honestly, so evenness is the property worth having and a line
 /// straight in `L*` is what has it.
 ///
@@ -573,9 +573,9 @@ pub struct SpectrumConfig {
     ///
     /// One type for both, because a heatmap's palette and a pitch ramp are the
     /// same object asked of different axes, and the six knobs say more about a
-    /// ramp than a list of four names can: how far round the circle it walks,
+    /// ramp than a list of three names can: how far round the circle it walks,
     /// how much brightness it spends on level, how much color, and which end
-    /// carries each. [`SpectrogramPreset`] is where the four names went — a row
+    /// carries each. [`SpectrogramPreset`] is where the three names went — a row
     /// of buttons that WRITE these six, rather than a mode the picture is in.
     ///
     /// The presets all open at `L*` 0. Nothing enforces it — a gradient that

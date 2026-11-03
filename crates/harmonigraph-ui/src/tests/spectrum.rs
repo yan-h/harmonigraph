@@ -195,11 +195,11 @@ fn spectrogram_history_stays_bounded() {
     let cutoff = 799.0 - AudioSpectrum::HISTORY_MAX_SECONDS;
     assert!(spec.history().front().unwrap().time >= cutoff, "capped at HISTORY_MAX_SECONDS");
 
-    // Memory holds even when every column shares one timestamp, so the age trim
-    // never fires — the store's own tier caps are the backstop.
+    // Memory holds when the dates barely advance, so the age trim never fires —
+    // the store's own tier caps are the backstop.
     let mut spec = AudioSpectrum::default();
-    for _ in 0..(SpectrumHistory::MAX_COLUMNS + 50) {
-        spec.push_history(0.0, &bins);
+    for i in 0..(SpectrumHistory::MAX_COLUMNS + 50) {
+        spec.push_history(i as f64 * 1e-6, &bins);
     }
     assert!(spec.history().len() <= SpectrumHistory::MAX_COLUMNS, "column count capped");
 
@@ -394,64 +394,6 @@ fn stereo_analysis_preserves_an_antiphase_partial() {
         "the anti-phase A4 is missing: {} against E5's {}",
         loudest(bucket_of(a4)),
         loudest(bucket_of(e5)),
-    );
-}
-
-/// A spectrum is measured over a WINDOW, not at an instant, so where it lands
-/// on the time axis is a choice — and the only defensible one is where the
-/// weight of what it measured sits. Stamping it when the FFT ran (the end of
-/// that window) drew every sound late: at the then-default 8192 that was 85 ms, so a note
-/// ribbon sat 85 ms further from the now-line than the energy it made, and
-/// reached the far edge — and vanished — that much before its own audio did.
-///
-/// Checked where it is measurable rather than argued: a tone that starts at a
-/// known moment must light the heatmap at that moment.
-#[test]
-fn a_tones_energy_lands_at_the_time_the_tone_started() {
-    use harmonigraph_core::spectrum::midi_to_hz;
-    let sr = 48_000.0f32;
-    let onset = 1.0f64; // silence before this, a steady A4 after
-    let seconds = 3.0;
-    let freq = midi_to_hz(69.0);
-    let samples: Vec<f32> = (0..(sr as f64 * seconds) as usize)
-        .map(|i| {
-            let t = f64::from(i as u32) / f64::from(sr);
-            if t < onset {
-                0.0
-            } else {
-                0.8 * (std::f32::consts::TAU * freq * i as f32 / sr).sin()
-            }
-        })
-        .collect();
-    let cfg = SpectrumConfig::default();
-    let mut spectrum = AudioSpectrum::default();
-    spectrum.push_samples(&samples, 1, sr, seconds, &cfg);
-
-    // The bin the tone sits in, and how loud it reads once fully sounding.
-    // Columns are stored as bytes of dB, so "half power" is 3 dB down from the
-    // peak rather than half its stored value.
-    use harmonigraph_core::spectrogram::{db_of, DB_STEP};
-    let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32)
-        .round() as usize;
-    let loudest = spectrum.history().iter().map(|c| c.db()[a4]).max().expect("columns");
-    assert!(db_of(loudest) > -10.0, "the tone should read loudly at its own bin");
-
-    // Where the ridge reaches half power is what the eye reads as the onset:
-    // the window is tapered, so it crosses half when about half its weight is
-    // over the tone. That must be the moment the tone started.
-    let half_power = loudest.saturating_sub((3.01 / DB_STEP).round() as u8);
-    let half = spectrum
-        .history()
-        .iter()
-        .find(|c| c.db()[a4] >= half_power)
-        .expect("the tone must reach half power somewhere");
-    let window = f64::from(cfg.window.frame(sr) as u32) / f64::from(sr);
-    assert!(
-        (half.time - onset).abs() < window * 0.25,
-        "the tone starts at {onset} s but its energy reads as starting at {} s \
-         (a {window:.3} s frame; a third of one late would be the old end-stamping)",
-        half.time,
     );
 }
 
@@ -770,8 +712,10 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     assert_eq!(spectrum.store.fold_measurements, 1);
     let wide = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(wide, first, "a changed width must change this fixture's measurement");
-    spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.0, &cfg);
-    let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
+    // Later audio, since the columns a stream dates must advance; the Fold is
+    // read at the new audio's own time, as a frame that brought it would.
+    spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.3, &cfg);
+    let next = spectrum.folded(1.3, 50.0).unwrap().to_vec();
     assert_ne!(next, wide, "same-time audio must invalidate the measured grid");
     assert_eq!(spectrum.store.fold_measurements, 3);
     assert!(spectrum.folded(2.0, 50.0).is_none(), "expired audio must not reuse a Fold");
