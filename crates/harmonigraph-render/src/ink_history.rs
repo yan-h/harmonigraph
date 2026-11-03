@@ -56,11 +56,13 @@ impl InkHistory {
                 continue;
             }
             let row = &mut self.rows[instance.glow[1] as usize];
-            // The shipped ink after Opacity, which is exactly the glow target
-            // `NodeMotion::step` hands `GlowFade`; against the carried level
-            // that is the test the CPU makes, so colour and brightness take
-            // the same attack or release.
-            let target = instance.params.into_iter().fold(0.0, f32::max).clamp(0.0, 1.0);
+            // The shipped ink after Opacity -- the colour and the marks, not
+            // the presence in `params.x`, which holds through a release --
+            // which is exactly the glow target `NodeMotion::step` hands
+            // `GlowFade`; against the carried level that is the test the CPU
+            // makes, so colour and brightness take the same attack or release.
+            let [_, melody, bass, ink] = instance.params;
+            let target = ink.max(melody).max(bass).clamp(0.0, 1.0);
             self.mixes.push(if row.owner != owner || row.seen + 1 != self.frame || row.seen == 0 {
                 1.0
             } else if target > row.level {
@@ -77,5 +79,31 @@ impl InkHistory {
     #[cfg(test)]
     pub fn mixes(&self) -> &[f32] {
         &self.mixes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A released note's colour leaves at once while its presence holds for
+    /// the slices still to retract. The strip mixes at the release rate,
+    /// as `GlowFade` takes the brightness down, rather than at the attack
+    /// rate because the presence is still above the carried light.
+    #[test]
+    fn a_release_under_a_held_presence_mixes_at_the_release_rate() {
+        let lit = |presence, ink, carried| GpuInstance {
+            params: [presence, 0.0, 0.0, ink],
+            glow: [carried, 0.0, 1.0, 1.0],
+            ..bytemuck::Zeroable::zeroed()
+        };
+        let timing = |now| GlowTiming { now, attack: 0.1, release: 1.0 };
+        let mut history = InkHistory::new(1);
+        // Already on its way out: the light carried below the held presence.
+        history.encode(timing(0.0), &[lit(1.0, 0.6, 0.95)], &[7]);
+        let (up, down) = timing(0.1).coefficients(Some(0.0));
+        assert_ne!(up, down);
+        let mixes = history.encode(timing(0.1), &[lit(1.0, 0.5, 0.9)], &[7]);
+        assert_eq!(mixes[0], down, "the colour took the attack rate on its way out");
     }
 }

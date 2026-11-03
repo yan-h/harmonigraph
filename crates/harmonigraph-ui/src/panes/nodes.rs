@@ -240,13 +240,11 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
                      0 ms marks immediately.",
             );
     });
-    crate::widgets::checkbox(ui, &mut view.note_animation.lit_first, "Lit slices first")
-        .on_hover_text("The slices a note lights start with the first slice on arrival and with the last one on release, so they appear first and disappear last. Every other slice keeps its place in the sweep from the seam. Needs a stagger spread above zero.");
     ValueBar::new(&mut view.note_animation.stagger_spread, STAGGER_SPREAD_RANGE, "Stagger spread")
                 .default_value(super::fresh_view().note_animation.stagger_spread)
                 .unit(100.0, "%")
                 .show(ui)
-                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
+                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring; the slices a note lights appear first and leave in their turn, and a released note starts losing its colour at once. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note cut short, or pressed again before it has gone, keeps the same sweep, each slice following it in its turn. Zero starts every slice together.");
     ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
             .default_value(super::fresh_view().note_animation.radial_start)
             .unit(100.0, "%").show(ui)

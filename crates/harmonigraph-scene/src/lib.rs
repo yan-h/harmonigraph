@@ -446,11 +446,14 @@ impl GlowTiming {
 pub struct NodeInstance {
     pub lattice_pos: LatticePos,
     pub world_pos: Vec3,
-    /// 0 = idle, 1 = fully lit: the loudest octave slot as drawn, Opacity
-    /// included. A held note sits at its Opacity reading; released notes decay.
+    /// 0 = idle, 1 = fully lit: the node's presence, its loudest octave slot
+    /// Opacity included. A held note sits at its Opacity reading; a released
+    /// one holds while its release travels the slices, then decays. Never
+    /// below any slot's colour in [`octaves`](Self::octaves), which leaves at
+    /// the release.
     pub activation: f32,
     /// [`activation`](Self::activation) before Opacity: the loudest octave
-    /// slot's envelope alone, so a held note is 1 however softly it was played.
+    /// slot's presence alone, so a held note is 1 however softly it was played.
     ///
     /// What reads it is the NAME ([`name_level`](Self::name_level)), and the
     /// cross that is its complement. A name says which position this is, not

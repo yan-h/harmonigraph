@@ -103,6 +103,9 @@ set contrast to zero to turn it off again.
 A saved Slice order is ignored, the removed Simultaneous one included,
 and draws the bidirectional sweep;
 its spread and motion settings are kept.
+There is no Lit slices first switch either:
+the slices a note lights always appear first and leave in their turn,
+and a saved setting is ignored.
 
 ## Note bloom
 

@@ -151,7 +151,12 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            params: [n.activation, n.melody_level, n.bass_level, 0.0],
+            params: [
+                n.activation,
+                n.melody_level,
+                n.bass_level,
+                n.octaves.iter().copied().fold(0.0, f32::max),
+            ],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];

@@ -516,7 +516,7 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     let (melody, bass, leaving, sector) = at(1.0 + ATTACK * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
     assert_eq!(bass, 1.0, "the end that never moved does not re-attack");
-    assert_eq!(leaving, sector, "the outgoing mark keeps its sector's ordered departure");
+    assert_eq!(leaving, sector, "the outgoing mark keeps its sector's departure");
     assert_eq!(at(1.0 + ATTACK * 2.0), (1.0, 1.0, 0.0, 0.0));
 }
 

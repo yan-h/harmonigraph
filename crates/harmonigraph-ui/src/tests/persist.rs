@@ -131,6 +131,8 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     ("stagger_spread", "order:Circular,", true),
     ("stagger_spread", "order:RandomStagger,", true),
     ("stagger_spread", "order:Simultaneous,", true),
+    // Lit slices first, now how every note moves.
+    ("stagger_spread", "lit_first:false,", true),
     // The overlay switches, moved out of the view to the editor's top level:
     // one inside a view must not reach the top-level key of the same name.
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
@@ -2123,11 +2125,8 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 #[test]
 fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
     let mut state = fresh();
-    state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
-        stagger_spread: 0.63,
-        radial_start: -0.5,
-        lit_first: false,
-    };
+    state.picture.appearance.view.note_animation =
+        harmonigraph_scene::NoteAnimationConfig { stagger_spread: 0.63, radial_start: -0.5 };
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
     assert_eq!(
