@@ -45,7 +45,8 @@ pub(crate) struct ClockMapper {
 /// length while frames drained, when a fixed quarter second held only three
 /// 4096-sample blocks and each rollover stepped a 66.7 ms frame by up to
 /// 10.7 ms; at 4 ms even that fixed quarter second steps one by about 1.3 ms,
-/// and the sizing mostly serves the 20 ms drains of a shut window.
+/// and the sizing mostly serves the frame drains left when the worker fails
+/// to spawn (a shut window draws nothing for its 20 ms drains to step).
 ///
 /// And never more than its own wait for its drain, plus delivery jitter, past
 /// the latest lead, which is all that wait can explain. A source running
@@ -75,7 +76,8 @@ impl Lead {
     /// or a bounce running far faster than realtime, whose advance overstates
     /// the block. With it shut, at 20 ms, blocks over about 3,500 samples
     /// reach it as well.
-    /// Without it a bounce's advance would hold a dropped lead for minutes.
+    /// Without it a bounce's advance would hold a dropped lead for minutes
+    /// (`a_bounce_holds_a_dropped_lead_for_seconds_not_minutes`).
     const MAX_BUCKET_SECONDS: f64 = 3.0;
 
     /// How close to the best possible wait the window's best one should be.
@@ -330,6 +332,22 @@ mod tests {
         let stalled = |k| on_time(k) + if on_time(k) < 1.5 { 0.0 } else { 0.03 };
         let &(_, ahead) = frames_at(FRAME, BLOCK, 3.0, DRAIN, stalled).last().unwrap();
         assert!(ahead < 0.015, "drawn {ahead:.3} s past the newest audio");
+    }
+
+    /// A drain that finds a second of audio — a bounce at a few hundred times
+    /// realtime, or a hitch — opens a bucket sized from that advance, and a
+    /// lead the audio then drops is held as long as the bucket runs. The
+    /// ceiling on a bucket keeps that to seconds: sized from the advance alone,
+    /// this one would hold 20 ms past the audio for eight.
+    #[test]
+    fn a_bounce_holds_a_dropped_lead_for_seconds_not_minutes() {
+        let mut lead = super::Lead::new(0.02, 0.0, DRAIN, 1.0);
+        let mut wall = 0.0;
+        while wall < 4.0 {
+            wall += DRAIN;
+            lead.push(0.0, wall, DRAIN, BLOCK);
+        }
+        assert!(lead.get() < 0.001, "drawn {:.3} s past the audio after {wall:.1} s", lead.get());
     }
 
     /// A source running at half speed — an overloaded engine, a slow export —
