@@ -482,14 +482,16 @@ pub fn draw_pane(
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// Whether a lattice note is still departing after its voice was pruned: an
-/// ordered release holds its presence for the stagger, so it runs
-/// `1 + stagger_spread` fades past the off where the voice lasts one.
+/// Whether a lattice note is still departing after its voice was pruned: a
+/// release holds its presence for the fade-out delay and the stagger, so it
+/// runs that delay and `1 + stagger_spread` fades past the off where the
+/// voice lasts one.
 fn releasing(state: &SharedState, now: f64) -> bool {
     let animation = state.picture.appearance.view.note_animation;
-    let span = f64::from(state.picture.runtime.frame_params.fade_time)
-        * (1.0 + f64::from(animation.stagger_spread));
-    animation.staggers()
+    let span = f64::from(animation.fade_out_delay)
+        + f64::from(state.picture.runtime.frame_params.fade_time)
+            * (1.0 + f64::from(animation.stagger_spread));
+    (animation.staggers() || animation.fade_out_delay > 0.0)
         && state
             .picture
             .runtime

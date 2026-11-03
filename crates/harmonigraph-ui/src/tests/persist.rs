@@ -2125,8 +2125,11 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 #[test]
 fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
     let mut state = fresh();
-    state.picture.appearance.view.note_animation =
-        harmonigraph_scene::NoteAnimationConfig { stagger_spread: 0.63, radial_start: -0.5 };
+    state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
+        stagger_spread: 0.63,
+        radial_start: -0.5,
+        fade_out_delay: 0.4,
+    };
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
     assert_eq!(

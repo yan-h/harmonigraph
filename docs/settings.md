@@ -95,6 +95,8 @@ there is no separate None/Clouds choice.
 **Stagger spread** at zero starts every slice simultaneously;
 above zero, both ends start at the seam where the highest and lowest meet and sweep toward each other.
 There is no Slice order choice: the Circular and Random stagger orders are removed.
+**Fade-out delay** holds a node's slices for that long after its last note is released, before the sweep out starts;
+the released pitches still lose their colour at the release, so the node stands uncoloured through the wait.
 
 Saved Wide blur mix keys and every lattice pickup key are ignored.
 The retired pattern selector is ignored too,

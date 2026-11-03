@@ -7,7 +7,9 @@ use harmonigraph_scene::{
     PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
-use harmonigraph_scene::{LATTICE_GROUND_RANGE, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE};
+use harmonigraph_scene::{
+    FADE_OUT_DELAY_RANGE, LATTICE_GROUND_RANGE, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE,
+};
 
 // The Lattice page's independently folded note controls ([`super::pages`]).
 
@@ -245,6 +247,17 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
                 .unit(100.0, "%")
                 .show(ui)
                 .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring; the slices a note lights appear first and leave in their turn, and a released note starts losing its colour at once. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note cut short, or pressed again before it has gone, keeps the same sweep, each slice following it in its turn. Zero starts every slice together.");
+    ValueBar::new(&mut view.note_animation.fade_out_delay, FADE_OUT_DELAY_RANGE, "Fade-out delay")
+        .default_value(super::fresh_view().note_animation.fade_out_delay)
+        .unit(1000.0, " ms")
+        .decimals(0)
+        .show(ui)
+        .on_hover_text(
+            "Time a node keeps its slices after its last note is released, before they start to leave. \
+                 The released pitches lose their colour at once, so the node stands uncoloured for this long. \
+                 Playing the node again inside the wait brings it back from where it stands. \
+                 0 ms starts leaving at the release.",
+        );
     ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
             .default_value(super::fresh_view().note_animation.radial_start)
             .unit(100.0, "%").show(ui)

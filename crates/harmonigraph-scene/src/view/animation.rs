@@ -8,16 +8,27 @@ pub const STAGGER_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.9;
 /// Shared bar and load range for [`NoteAnimationConfig::radial_start`].
 pub const RADIAL_START_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
 
+/// Shared bar and load range for [`NoteAnimationConfig::fade_out_delay`], in
+/// seconds. Two, because past that a released chord stands long enough to be
+/// mistaken for one still held; [`crate::NodeMotion`]'s replay horizon covers
+/// the top of it.
+pub const FADE_OUT_DELAY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct NoteAnimationConfig {
     pub stagger_spread: f32,
     pub radial_start: f32,
+    /// Seconds a node whose last note is released waits before its slices
+    /// start to retract and its presence to fall. Its colour does not wait,
+    /// so the wheel stands uncoloured for this long. A note on the node again
+    /// inside the wait takes it back from where it stands.
+    pub fade_out_delay: f32,
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
-        Self { stagger_spread: 0.602_636_7, radial_start: -0.034_186_72 }
+        Self { stagger_spread: 0.602_636_7, radial_start: -0.034_186_72, fade_out_delay: 0.0 }
     }
 }
 impl NoteAnimationConfig {
@@ -32,6 +43,9 @@ impl NoteAnimationConfig {
             .clamp(*STAGGER_SPREAD_RANGE.start(), *STAGGER_SPREAD_RANGE.end());
         self.radial_start = finite_or(self.radial_start, fresh.radial_start)
             .clamp(*RADIAL_START_RANGE.start(), *RADIAL_START_RANGE.end());
+        // 0 rather than the fresh value: no wait is the inert setting.
+        self.fade_out_delay = finite_or(self.fade_out_delay, 0.0)
+            .clamp(*FADE_OUT_DELAY_RANGE.start(), *FADE_OUT_DELAY_RANGE.end());
         self
     }
     /// Fixed delays of complete displayed sectors; shared by live/export and
