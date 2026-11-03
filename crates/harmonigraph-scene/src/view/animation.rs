@@ -9,9 +9,9 @@ pub const STAGGER_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.9;
 pub const RADIAL_START_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
 
 /// Shared bar and load range for [`NoteAnimationConfig::fade_out_delay`], in
-/// seconds. Two, because past that a released chord stands long enough to be
-/// mistaken for one still held; [`crate::NodeMotion`]'s replay horizon covers
-/// the top of it.
+/// seconds. The two-second ceiling is a first guess, not a measured limit;
+/// [`crate::NodeMotion`]'s replay horizon and the roll cursors it retains
+/// follow it, so raising it needs nothing else.
 pub const FADE_OUT_DELAY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
 
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.

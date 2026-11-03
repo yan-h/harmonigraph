@@ -135,9 +135,9 @@ struct Motion {
     bass: MarkMotion,
     /// Time each slot's presence holds before a departure starts it falling:
     /// the fade-out delay and then the last slice's delay, so the ink outlasts
-    /// every retraction rather than dimming the whole wheel at the off. Only for slots lit at the off
-    /// -- one released earlier keeps fading, rather than freezing mid-fade
-    /// until the rest catch up. 0 otherwise.
+    /// every retraction rather than dimming the whole wheel at the off. Only
+    /// for slots lit at the off -- one released earlier keeps fading, rather
+    /// than freezing mid-fade until the rest catch up. 0 otherwise.
     level_wait: [f32; 11],
     audio_waiting: bool,
 }
@@ -1290,6 +1290,23 @@ mod tests {
             assert_eq!(node.slice_progress[..span], [1.0; 11][..span], "a slice retracted");
         }
     }
+    /// A surface hidden through most of a wait far longer than the fade comes
+    /// back to the wheel still standing: the replay horizon carries the delay,
+    /// or the reset would seed the node at rest mid-wait.
+    #[test]
+    fn a_surface_reopened_inside_the_fade_out_delay_finds_the_wheel_waiting() {
+        let mut view = view();
+        view.note_animation.fade_out_delay = *crate::FADE_OUT_DELAY_RANGE.end();
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        tracker.handle_event(on(0.0, 60));
+        draw_duration(&mut motion, &mut tracker, &view, 0.0, false, 0.1);
+        tracker.handle_event(off(0.5, 60));
+        draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.1);
+        // Hidden for well past twice the fade, which alone resets the surface.
+        let back = draw_duration(&mut motion, &mut tracker, &view, 2.0, false, 0.1);
+        assert_eq!(origin(&back).activation, 1.0, "the wheel left inside its wait");
+        assert_eq!(origin(&back).octaves, [0.0; 11], "the colour waited");
+    }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
@@ -1928,6 +1945,7 @@ mod tests {
             let mut view = ViewConfig::default();
             view.note_animation.stagger_spread = 0.6;
             view.mark_delay = 0.15;
+            view.note_animation.fade_out_delay = 0.2;
             view.intensity.pressure.thickness = Some(0.5);
             let frame = FrameParams { fade_time: 0.35, ..Default::default() };
             let env = view.envelope(&frame);

@@ -95,8 +95,6 @@ there is no separate None/Clouds choice.
 **Stagger spread** at zero starts every slice simultaneously;
 above zero, both ends start at the seam where the highest and lowest meet and sweep toward each other.
 There is no Slice order choice: the Circular and Random stagger orders are removed.
-**Fade-out delay** holds a node's slices for that long after its last note is released, before the sweep out starts;
-the released pitches still lose their colour at the release, so the node stands uncoloured through the wait.
 
 Saved Wide blur mix keys and every lattice pickup key are ignored.
 The retired pattern selector is ignored too,
@@ -246,6 +244,7 @@ Tab takes priority over focus traversal except while editing text.
 | Octave layout | MIDI ring, audio ring and melody/bass marks. The layer stack controls their widths and visibility. |
 | Note fade | MIDI slices, marks and labels, plus audio-ring visibility. Background glow has its own response. |
 | Motion and starting pose | MIDI slices and marks ease smoothly from the selected starting offset and scale. |
+| Fade-out delay | Holds a node's MIDI slices after its last note is released, before they sweep out. The released pitches' colour, the node glow and the marks fade at the release regardless, so the node stands uncoloured through the wait. |
 | Audio level colors | Shared palette; lattice rings substitute gray at Silent slice brightness for its quiet endpoint. |
 | Glow pattern, material and breathing | Require nonzero Background glow reach and gain. Pattern varies the glow; material reshapes the result. Each effect retains its own settings when bypassed. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
