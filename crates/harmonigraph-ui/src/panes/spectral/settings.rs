@@ -121,7 +121,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                             ui,
                             &mut atmosphere.stars,
                             &crate::panes::fresh_spectrum().atmosphere.stars,
-                            1.0,
+                            harmonigraph_scene::StarPane::Spectrogram,
                         );
                     });
                 }

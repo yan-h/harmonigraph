@@ -169,17 +169,59 @@ pub const STAR_SIZE_MAX: f32 = 64.0;
 /// How many times its stored `Star size` the lattice draws and shows it, and
 /// so its spacing, which is a multiple of the size. The glow has no fine detail for stars to pick up, so its
 /// stars run bigger. Applied where the lattice draws and in its bars, never
-/// stored, so both panes share one [`StarSettings::default`] and a key a blob
-/// lacks takes the right fresh value in either.
+/// stored, so a stored size means the same in either pane. A stored speed does
+/// not ([`StarPane`]), so the sanitizer falls back to each pane's own fresh
+/// stars ([`StarPane::fresh`]); a key a blob lacks still takes
+/// [`StarSettings::default`]'s, the lattice's.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
 /// Bounds of every depth's `Star speed` ([`StarSettings::star_speed`]) and
-/// its sanitizer, as a share of the prototype's pace: at the top a depth
-/// crosses the pane's height in about nine seconds. The top was once 5, and
-/// everything past 1 was too fast to use while it crowded the useful range
-/// into a fifth of the track.
+/// its sanitizer on the lattice, as a share of the prototype's pace: at the
+/// top a depth crosses the pane's height in about nine seconds. The top was
+/// once 5, and everything past 1 was too fast to use while it crowded the
+/// useful range into a fifth of the track.
 pub const STAR_SPEED_MIN: f32 = 0.0;
 /// See [`STAR_SPEED_MIN`].
 pub const STAR_SPEED_MAX: f32 = 1.0;
+/// The top of every depth's `Star speed` on the spectrogram, where it is a
+/// multiple of the scroll: 1 moves with the music.
+pub const SPECTRAL_STAR_SPEED_MAX: f32 = 4.0;
+
+/// The pane a starfield is drawn in, which says how its dials read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StarPane {
+    /// Stars drift as a multiple of the scroll, at stored sizes.
+    Spectrogram,
+    /// Stars drift at a share of the prototype's pace, at
+    /// [`LATTICE_STAR_SIZE_SCALE`] times their stored sizes.
+    Lattice,
+}
+
+impl StarPane {
+    /// How many times its stored `Star size` the pane draws and shows a star.
+    pub fn size_scale(self) -> f32 {
+        match self {
+            Self::Spectrogram => 1.0,
+            Self::Lattice => LATTICE_STAR_SIZE_SCALE,
+        }
+    }
+
+    /// The top of every depth's `Star speed` here; the bottom is
+    /// [`STAR_SPEED_MIN`] in either pane.
+    pub fn speed_max(self) -> f32 {
+        match self {
+            Self::Spectrogram => SPECTRAL_STAR_SPEED_MAX,
+            Self::Lattice => STAR_SPEED_MAX,
+        }
+    }
+
+    /// The pane's fresh stars, in its own units.
+    pub fn fresh(self) -> StarSettings {
+        match self {
+            Self::Spectrogram => SpectralAtmosphere::default().stars,
+            Self::Lattice => AtmosphereSettings::default().stars,
+        }
+    }
+}
 /// Longest color-memory time constant in seconds.
 pub const COLOR_MEMORY_MAX: f32 = 5.0;
 
@@ -455,9 +497,12 @@ pub struct StarSettings {
     pub star_size: [f32; crate::star_plan::STAR_DEPTHS],
     /// Each depth's drift speed, back (0) to front, along the shared `Drift
     /// direction`; the stars never read `cloud_speed`, which is the other
-    /// textures' pace. Runs over [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`], in
-    /// any order across the depths, so the front stars can drift slower than
-    /// the back ones.
+    /// textures' pace. Runs from [`STAR_SPEED_MIN`] to
+    /// [`StarPane::speed_max`], in any order across the depths, so the front
+    /// stars can drift slower than the back ones. On the spectrogram it is a
+    /// multiple of the scroll, so a zoom of the Span keeps the stars' pace
+    /// against the music; the lattice has no scroll, and there it is a share
+    /// of the prototype's pace.
     pub star_speed: [f32; crate::star_plan::STAR_DEPTHS],
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life, as far as
@@ -568,8 +613,10 @@ impl StarSettings {
     pub fn scaled(self, scale: f32) -> Self {
         Self { star_size: self.star_size.map(|size| size * scale), ..self }
     }
-    pub fn sanitized(mut self) -> Self {
-        let fresh = Self::default();
+    /// These settings held to the ranges of the `pane` that draws them, a
+    /// value that is no number taking the pane's fresh one.
+    pub fn sanitized(mut self, pane: StarPane) -> Self {
+        let fresh = pane.fresh();
         let clamp = |value: f32, fallback: f32, low, high| {
             if value.is_finite() {
                 value.clamp(low, high)
@@ -598,7 +645,7 @@ impl StarSettings {
             (STAR_SPACING_MIN, STAR_SPACING_MAX),
         );
         depths(&mut self.star_size, fresh.star_size, (STAR_SIZE_MIN, STAR_SIZE_MAX));
-        depths(&mut self.star_speed, fresh.star_speed, (STAR_SPEED_MIN, STAR_SPEED_MAX));
+        depths(&mut self.star_speed, fresh.star_speed, (STAR_SPEED_MIN, pane.speed_max()));
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         depths(&mut self.star_twinkle, fresh.star_twinkle, (0.0, 1.0));
@@ -687,7 +734,8 @@ impl Default for SpectralAtmosphere {
                     2.391_195_3,
                 ],
                 star_size: [7.680_750_4, 6.114_797, 4.190_219, 3.112_796_5, 2.220_784_4],
-                star_speed: [0.162_222_3, 0.162_964_21, 0.168_944_7, 0.186_624_7, 0.223_133_03],
+                // 1.5x the scroll at the back, with the captured parallax.
+                star_speed: [1.5, 1.506_86, 1.562_16, 1.725_64, 2.063_22],
                 star_lifetime: 0.984_566_4,
                 star_twinkle: [0.0, 0.325_125_55, 0.585_016_3, 0.792_508_2, 1.0],
                 star_glow_falloff: 0.680_821_24,
@@ -741,7 +789,7 @@ impl SpectralAtmosphere {
         self.wash_pool_softness =
             clamp(self.wash_pool_softness, fresh.wash_pool_softness, 0.0, 1.0);
         self.material_settings = self.material_settings.sanitized();
-        self.stars = self.stars.sanitized();
+        self.stars = self.stars.sanitized(StarPane::Spectrogram);
         self
     }
 
@@ -850,7 +898,7 @@ impl AtmosphereSettings {
         };
         self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
         self.material_settings = self.material_settings.sanitized();
-        self.stars = self.stars.sanitized();
+        self.stars = self.stars.sanitized(StarPane::Lattice);
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.material_direction = if self.material_direction.is_finite() {

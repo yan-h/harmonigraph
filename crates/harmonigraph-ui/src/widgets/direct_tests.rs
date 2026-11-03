@@ -1,6 +1,7 @@
 //! Exercise the actual handles rather than only their mapping formulas.
 use super::*;
 use egui::{Event, Modifiers, PointerButton, Pos2, Ui, Vec2};
+use harmonigraph_scene::StarPane;
 
 fn frame(
     ctx: &egui::Context,
@@ -161,10 +162,14 @@ fn a_star_layer_dot_moves_its_own_layer_alone_and_idles_exactly() {
         let mut values = initial;
         let ctx = crate::tests::probe::themed_at(1.0);
         for _ in 0..8 {
-            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, kind, 1.0));
+            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, kind, StarPane::Spectrogram));
         }
         assert_eq!(values, initial);
-        drag(|ui| depth(ui, &mut values, 5, kind, 1.0), 1, egui::vec2(0.0, -12.0));
+        drag(
+            |ui| depth(ui, &mut values, 5, kind, StarPane::Spectrogram),
+            1,
+            egui::vec2(0.0, -12.0),
+        );
         assert!(values[1] > initial[1]);
         assert_eq!([values[0], values[2], values[3], values[4]], [0, 2, 3, 4].map(|k| initial[k]));
     }
@@ -177,7 +182,7 @@ fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
     let initial = [0.3, 0.4, 0.5, 0.6, 0.7];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Speed, 1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Speed, StarPane::Lattice);
     let output = frame(&ctx, vec![], &mut draw);
     let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
     let outside = egui::vec2(4.0, 4.0);
@@ -192,7 +197,8 @@ fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
 fn a_line_lost_mid_drag_does_not_anchor_the_next_one() {
     let values = std::cell::RefCell::new([0.5; 5]);
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 3, Depth::Speed, 1.0);
+    let mut draw =
+        |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 3, Depth::Speed, StarPane::Lattice);
     let output = frame(&ctx, vec![], &mut draw);
     let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
     let top_left = inner.left_top() - egui::vec2(4.0, 4.0);
@@ -214,7 +220,7 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
     let initial = [1.0, 2.0, 4.0, 3.0, 8.0];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size, 1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size, StarPane::Spectrogram);
     let output = frame(&ctx, vec![], &mut draw);
     let bar = well(&output, crate::theme::ROW_HEIGHT);
     // The span's middle, 1 to 8 px in octaves on a track of 0.5 to 64.
@@ -236,7 +242,8 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
 fn the_star_range_bar_drags_level_layers_both_ways_and_ignores_a_double_click() {
     let values = std::cell::RefCell::new([0.5; 5]);
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 5, Depth::Speed, 1.0);
+    let mut draw =
+        |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 5, Depth::Speed, StarPane::Lattice);
     let output = frame(&ctx, vec![], &mut draw);
     let bar = well(&output, crate::theme::ROW_HEIGHT);
     // Just left of the level pair, which a closed span gives its low end.

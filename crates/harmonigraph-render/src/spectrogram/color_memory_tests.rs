@@ -248,7 +248,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
             a.settings.cloud_direction = 0.0;
             let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
             a.now = STAR_HASH_PERIOD * f64::from(layout.cells[STAR_SLICES - 1])
-                / star_px_per_second()
+                / star_pace(a.points_per_ms, cb.rect.height())
                 - 0.125;
         }
         let mut resources = CallbackResources::default();
@@ -274,11 +274,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let after = pixels(&device, &queue, m);
         let frame = m.frame.as_ref().unwrap();
         if wrap {
-            assert!(
-                old_slices[STAR_SLICES - 1].offset.0[0] > 65530.0
-                    && frame.slices[STAR_SLICES - 1].offset.0[0] < 5.0,
-                "fixture did not cross the star hash period"
-            );
+            // The drift runs forward along x, so an offset that fell wrapped.
+            let [old, new] = [old_slices, frame.slices].map(|s| s[STAR_SLICES - 1].offset.0[0]);
+            assert!(old > 65500.0 && new < old, "fixture did not cross the star hash period");
         }
         let floor = floor(&cb);
         let decay = (-0.25f32 / 0.6).exp();
@@ -986,5 +984,43 @@ fn a_tide_lines_width_resets_the_history_only_while_one_is_drawn() {
             pool == 0.0,
             "pool {pool}, softness {softness}: the drag carried {carried}"
         );
+    }
+}
+
+/// A Span drag or a resize rebuilds the pane's targets, and the stars go on
+/// from where they were across it: a quarter second on at the new pane's
+/// pace, not restarted at that pace from the clock's start, which would jump
+/// them as far as they had come since.
+#[test]
+fn stars_drift_on_across_a_rebuilt_pane() {
+    let Some((device, queue)) = headless_device() else { return };
+    let targets = |resources: &CallbackResources| {
+        let panes = &resources.get::<SpectrogramResources>().unwrap().panes;
+        panes.get(&0).unwrap().cloud.as_ref().unwrap().shape
+    };
+    let mut cb = fixture(CloudStyle::Stars);
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let (shape, before) = (targets(&resources), memory(&resources).frame.as_ref().unwrap().slices);
+    // Taller, so the pane reallocates and its pace drops.
+    cb.rect.max.y += 40.0;
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.now += 0.25;
+    let pace = star_pace(a.points_per_ms, cb.rect.height());
+    let (now, stars, direction) = (a.now, a.settings.stars, a.settings.cloud_direction);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert_ne!(targets(&resources).size, shape.size, "fixture did not rebuild the targets");
+    let after = memory(&resources).frame.as_ref().unwrap().slices;
+    let cos = f64::from(direction).to_radians().cos();
+    let at = |travel: f64, cell: f32| (cos * travel / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD);
+    for k in 0..STAR_SLICES {
+        let (cell, speed) = (after[k].cell, f64::from(stars.star_speed[k]));
+        assert_eq!(before[k].cell, cell, "fixture moved the cells");
+        let went_on = (f64::from(before[k].offset.0[0]) + at(0.25 * pace * speed, cell))
+            .rem_euclid(STAR_HASH_PERIOD);
+        let restarted = at(now * pace * speed, cell);
+        let got = f64::from(after[k].offset.0[0]);
+        assert!((got - went_on).abs() < 0.01, "depth {k}: {got} against {went_on}");
+        assert!((restarted - went_on).abs() > 1.0, "depth {k}: a restart lands there too");
     }
 }

@@ -206,7 +206,9 @@
                 star_layers: 5,
                 star_spacing_ratio: (0.41666666, 0.41666666, 0.41666666, 0.67354614, 2.3911953),
                 star_size: (7.6807504, 6.114797, 4.190219, 3.1127965, 2.2207844),
-                star_speed: (0.1622223, 0.16296421, 0.1689447, 0.1866247, 0.22313303),
+                // A multiple of the scroll: the old fixed pace carried over at
+                // the starfield goldens' 240 star pixels a second.
+                star_speed: (0.0416449569, 0.0418354161, 0.0433707014, 0.0479094312, 0.0572816767),
                 star_lifetime: 0.9845664,
                 star_twinkle: (0.0, 0.32512555, 0.5850163, 0.7925082, 1.0),
                 star_solid: (0.48, 0.46020737, 0.3825297, 0.23232502, 0.0),
