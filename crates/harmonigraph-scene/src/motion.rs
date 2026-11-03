@@ -53,10 +53,9 @@ pub struct NodeMotion {
     /// identical rest.
     ///
     /// A node at rest can still differ from `REST` in what it last read
-    /// (`readings`, `order_delay`, `level_wait`), and dropping it
-    /// forgets that. Each is written before it is next read: a slot's reading
-    /// before its level can leave 0, the order and its delays on the rise
-    /// that starts the next lifetime, the wait at a departure. The equivalence
+    /// (`readings`, `level_wait`), and dropping it forgets that. Each is
+    /// written before it is next read: a slot's reading before its level can
+    /// leave 0, the wait at a departure. The equivalence
     /// test holds a table that never drops one against this one, frame for
     /// frame.
     nodes: HashMap<LatticePos, Motion>,
@@ -98,8 +97,8 @@ struct Reached {
     lit_after_entering: usize,
 }
 #[derive(Clone)]
-/// Two index spaces share these arrays. `progress`, `delay` and `order_delay`
-/// count the slices a node draws, lowest first (slot `ring.base + i`), as
+/// Two index spaces share these arrays. `progress` and `delay` count the
+/// slices a node draws, lowest first (slot `ring.base + i`), as
 /// `delays` ranks them and the shader reads them: an 11-slice ring can draw a
 /// slice below slot 0, which no slot index holds. `levels`, `targets`,
 /// `readings` and `level_wait` count octave slots, as `NodeInstance::octaves`
@@ -118,7 +117,6 @@ struct Motion {
     gate: bool,
     melody: MarkMotion,
     bass: MarkMotion,
-    order_delay: [f32; 11],
     /// Time each slot's presence holds before an ordered departure starts it
     /// falling: the last slice's delay, so the ink outlasts every retraction
     /// rather than dimming the whole wheel at the off. Only for slots still
@@ -202,7 +200,6 @@ impl Motion {
         gate: false,
         melody: MarkMotion::REST,
         bass: MarkMotion::REST,
-        order_delay: [0.0; 11],
         level_wait: [0.0; 11],
         audio_waiting: false,
     };
@@ -387,6 +384,9 @@ impl NodeMotion {
         first: bool,
     ) {
         let duration = env.fade_time;
+        // The sweep every node's slices follow: one layout and one fade for
+        // the whole step, so the same for each.
+        let order = view.note_animation.delays(&scene.octave_layout, duration);
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         let dense = self.dense();
@@ -485,8 +485,7 @@ impl NodeMotion {
             }
             let arriving = motion.progress.iter().all(|&p| p == 0.0);
             if gate && !motion.gate && arriving {
-                motion.order_delay = view.note_animation.delays(&scene.octave_layout, duration);
-                motion.delay = motion.order_delay;
+                motion.delay = order;
                 motion.level_wait = [0.0; 11];
                 // Ordered departure needs a COMPLETE arrival, and an arrival now
                 // takes `1 + stagger_spread` fades rather than one, so the hold
@@ -496,9 +495,8 @@ impl NodeMotion {
                 // cost of the spread being a start offset; the alternative was
                 // compressing every piece into a tenth of the fade.
             } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
-                motion.order_delay = view.note_animation.delays(&scene.octave_layout, duration);
-                motion.delay = motion.order_delay;
-                let last = motion.order_delay.into_iter().fold(0.0, f32::max);
+                motion.delay = order;
+                let last = order.into_iter().fold(0.0, f32::max);
                 motion.level_wait = motion.levels.map(|l| if l >= 1.0 { last } else { 0.0 });
                 // Lit means what `level_wait` holds: still full at the off, so
                 // the slice that retracts last is the one whose ink outlasts
@@ -1435,7 +1433,7 @@ mod tests {
         );
     }
     #[test]
-    fn orders_apply_to_settled_departure_and_pending_pieces_cancel_on_interrupt() {
+    fn the_sweep_applies_to_settled_departure_and_pending_pieces_cancel_on_interrupt() {
         let mut view = ViewConfig { fade_shape: 0.0, ..view() };
         view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
         let mut tracker = NoteTracker::new();
@@ -1454,12 +1452,10 @@ mod tests {
         tracker.handle_event(off(1.7, 60));
         let scene = draw(&mut motion, &mut tracker, &view, 1.8, false);
         let p = origin(&scene).slice_progress;
-        if view.note_animation.staggers() {
-            assert!(
-                p[..scene.octave_layout.span as usize].iter().any(|&x| (x - p[0]).abs() > 1e-4),
-                "lost departure order"
-            );
-        }
+        assert!(
+            p[..scene.octave_layout.span as usize].iter().any(|&x| (x - p[0]).abs() > 1e-4),
+            "lost departure order"
+        );
     }
     #[test]
     fn audio_presence_stays_settled_and_mark_delay_cancels_on_short_notes() {
@@ -1834,10 +1830,10 @@ mod tests {
         // the arrival is already running, so it is never scheduled afresh.
         tracker.handle_event(on(0.05, 60));
         draw(&mut motion, &mut tracker, &view, 0.05, false);
-        let order = motion.at(LatticePos::ORIGIN).order_delay;
+        let order = view.note_animation.delays(&first.octave_layout, 1.0);
         let late = motion.at(LatticePos::ORIGIN).targets;
         let slot = (0..11).find(|&i| late[i] > early[i]).expect("C4's slot");
-        // The slice that slot is drawn as, which `order_delay` and
+        // The slice that slot is drawn as, which `delays` and
         // `slice_progress` are indexed by.
         let second = slot - base as usize;
         assert!(order[second] > 0.2, "C4's slot would start first anyway: {order:?}");
