@@ -25,8 +25,9 @@ pub fn test_pause_reset(gate: std::sync::Arc<std::sync::Barrier>) {
 /// [`CLOCK`] and [`DROPPED`] are cosmetic and never stop a note: an unassigned
 /// note sounds at its raw pitch, which is the whole of what such a fault costs
 /// here. `CLOCK` refuses the callback's input itself. `DROPPED` costs the input
-/// when the refusal is local, and only its assignment when it is the Hub's,
-/// where the note still sounds uncorrected.
+/// when a local store refuses it, and only its correction when the Hub refuses
+/// its assignment or the output refuses the tuning event after its note: either
+/// way the note still sounds uncorrected.
 pub const NO_HUB: u32 = 1 << 0;
 /// A second Harmonigraph in the process. Both show it; the first one loaded
 /// keeps the session, because there is no pairing choice to offer.
@@ -45,8 +46,9 @@ pub const POLICY: u32 = 1 << 5;
 /// A display or take lane lost a report.
 pub const PUBLICATION: u32 = 1 << 6;
 /// A bounded store was full and an event was dropped outright: the delay line,
-/// the held set, or a value the wrapper refused. Local refusal costs the input;
-/// Hub-only refusal costs its assignment while the Tune still emits raw.
+/// the held set, or a value the wrapper refused. A local store's refusal costs
+/// the input; the Hub's, or the output's after the note, costs only the
+/// correction while the Tune still emits the note raw.
 pub const DROPPED: u32 = 1 << 7;
 
 pub fn status_text(status: u32) -> String {

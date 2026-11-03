@@ -1328,13 +1328,10 @@ mod tests {
         );
     }
 
-    /// A sounding note's dot is inside the pane, at the top of the range and at
-    /// the bottom of it.
-    ///
-    /// The disc reserves no room past its track: its bounds span exactly one
-    /// track for each octave and one more, the track's own half at each end.
-    /// The fit once reserved a quarter more than that, for a mark that has
-    /// since been clamped to the track.
+    /// The disc reserves no room past its track: the track ends at the pane's
+    /// rim less the margin and the names' band, and starts at that rim's
+    /// [`INNER_HOLE`]. The fit once reserved a quarter more than that, for a
+    /// mark that has since been clamped to the track.
     #[test]
     fn the_disc_reserves_no_room_past_its_track() {
         for (name, rect) in FRAMES {
@@ -1356,6 +1353,9 @@ mod tests {
         }
     }
 
+    /// A sounding note's dot is inside the pane, at the top of the range and at
+    /// the bottom of it.
+    ///
     /// The fit reserves half a track at each end and [`Spiral::dot`] is held to
     /// half a track, so this is the two agreeing — and the pane paints through
     /// a clipping painter, so what overruns is cut off rather than merely
