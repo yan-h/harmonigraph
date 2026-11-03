@@ -301,6 +301,29 @@ impl RenderConfig {
         self.tail = self.tail.clamp(TAIL_RANGE.0, TAIL_RANGE.1);
     }
 
+    /// Take from `pane` the fields that say how big the video is, how long it
+    /// runs on and what encodes it: Output size, Tail and Encoder. These are
+    /// the Video pane's whichever look is drawn, where [`frame`](Self::frame),
+    /// Video history, the trigger and the stop bar say how a take was composed
+    /// and recorded, and a recorded look keeps its own.
+    ///
+    /// `pane` is destructured exhaustively, so a new field has to be classified
+    /// here as one or the other before this compiles.
+    pub fn take_output_from(&mut self, pane: &RenderConfig) {
+        let RenderConfig {
+            trigger: _,
+            stop_bar: _,
+            spectrogram: _,
+            frame: _,
+            short_edge,
+            tail,
+            encoder,
+        } = pane;
+        self.short_edge = *short_edge;
+        self.tail = *tail;
+        self.encoder = *encoder;
+    }
+
     /// The bar to end the take at, or `None` when the trigger is not
     /// [`AtBar`](RenderTrigger::AtBar).
     ///

@@ -757,14 +757,24 @@ pub(crate) fn capture_export(
     interaction: &crate::Interaction,
     path: &std::path::Path,
 ) -> Result<crate::ExportAction, String> {
-    let mut captured = if interaction.take.export_recorded {
+    let captured = if interaction.take.export_recorded {
         let header = harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
-        header
-            .appearance
-            .as_deref()
-            .map(crate::AppearanceDocument::parse)
-            .transpose()?
-            .unwrap_or_default()
+        match header.appearance.as_deref().map(crate::AppearanceDocument::parse).transpose()? {
+            // A recorded look keeps its own frame and Video history, so
+            // queueing it does not recompose the take to the pane's aspect and
+            // split; only the pane's Output size, Tail and Encoder apply.
+            Some(mut recorded) => {
+                recorded.render.take_output_from(&appearance.render);
+                recorded
+            }
+            // A take with no recorded look has no frame to keep: it exports at
+            // the default look, drawn by the pane's whole Video configuration.
+            None => {
+                let mut default = crate::AppearanceDocument::default();
+                default.render = appearance.render.clone();
+                default
+            }
+        }
     } else {
         let mut captured = appearance.clone();
         let slots = &interaction.appearance_editor.slots;
@@ -773,19 +783,6 @@ pub(crate) fn capture_export(
         }
         captured
     };
-    // Output size, Tail and Encoder are the pane's whichever look is drawn:
-    // they say how big the video is, how long it runs on and what encodes it,
-    // where the frame and Video history say how the take was composed. A
-    // recorded look keeps its own, so queueing it does not recompose the take
-    // to the pane's aspect and split.
-    if interaction.take.export_recorded {
-        let (short_edge, tail, encoder) =
-            (appearance.render.short_edge, appearance.render.tail, appearance.render.encoder);
-        (captured.render.short_edge, captured.render.tail, captured.render.encoder) =
-            (short_edge, tail, encoder);
-    } else {
-        captured.render = appearance.render.clone();
-    }
     Ok(crate::ExportAction::Queue {
         take: path.to_owned(),
         appearance: captured.serialize(),
@@ -1485,6 +1482,38 @@ mod export_tests {
             assert_eq!(render.short_edge, 1080);
             assert_eq!(render.tail, 2.0);
             assert_eq!(render.encoder, VideoEncoder::Hardware);
+        }
+    }
+
+    /// A take whose header holds no appearance has no frame to keep: queueing
+    /// it under its recorded look draws the pane's whole Video configuration,
+    /// as it did before the recorded frame was kept, not the default one.
+    #[test]
+    fn a_take_with_no_recorded_look_exports_at_the_panes_video_configuration() {
+        use crate::{LatticeSide, SpectrogramRender};
+        let path = std::env::temp_dir()
+            .join(format!("harmonigraph-unrecorded-queue-{}.take", std::process::id()));
+        let header = harmonigraph_take::Header { appearance: None, ..Default::default() };
+        drop(harmonigraph_take::Writer::create(&path, &header).unwrap());
+
+        let mut pane = crate::AppearanceDocument::default();
+        pane.render.frame.aspect_w = 9;
+        pane.render.frame.aspect_h = 16;
+        pane.render.frame.lattice = LatticeSide::Top;
+        pane.render.spectrogram = SpectrogramRender::Scrolling;
+        let mut interaction = crate::Interaction::default();
+        interaction.take.export_recorded = true;
+        let queued = capture_export(&pane, &interaction, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let crate::ExportAction::Queue { appearance, render, .. } = queued else {
+            panic!("queue action")
+        };
+        let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
+        for render in [&captured.render, &render] {
+            assert_eq!((render.frame.aspect_w, render.frame.aspect_h), (9, 16));
+            assert_eq!(render.frame.lattice, LatticeSide::Top);
+            assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
         }
     }
 
