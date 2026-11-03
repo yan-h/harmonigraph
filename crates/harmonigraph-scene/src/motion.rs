@@ -113,7 +113,16 @@ struct Motion {
     /// interruption is a staggered gesture like any other rather than a
     /// moment where every slice turns at once.
     edges: Vec<SliceEdge>,
+    /// Each slot's presence: what keeps the wheel drawn, held at a release
+    /// for as long as the release takes to reach the last slice
+    /// (`level_wait`), so the late slices are still there to retract.
     levels: [f32; 11],
+    /// Each slot's colour: how much of its pitch it wears. The same ramp as
+    /// `levels` but never held, so a released note starts losing its colour
+    /// at once, and a note tapped again and again dims between taps rather
+    /// than staying lit while its presence waits. The shader draws the gap
+    /// between the two as the ghost.
+    colors: [f32; 11],
     targets: [f32; 11],
     /// Each slot's reading from the notes lighting it: the largest a held one
     /// gives each display, and once none is held, the last, so a release fades
@@ -157,14 +166,6 @@ impl MarkMotion {
                 self.waits[slot] = delay;
             }
             self.target = target;
-        }
-    }
-    /// Hold the mark that left `slot` at a gate's fall for as long as the
-    /// slot's presence holds, so the two leave together. A mark already fading
-    /// after a melody/bass handoff left another slot and keeps moving.
-    fn depart(&mut self, slot: Option<usize>, wait: &[f32; 11]) {
-        if let Some(slot) = slot {
-            self.waits[slot] = wait[slot];
         }
     }
     fn advance(&mut self, dt: f64, env: &Envelope) {
@@ -225,6 +226,7 @@ impl Motion {
             seen: [false; 11],
             edges: Vec::new(),
             levels: [0.0; 11],
+            colors: [0.0; 11],
             targets: [0.0; 11],
             readings: [IntensityReading::REST; 11],
             gate: false,
@@ -252,7 +254,7 @@ impl Motion {
             && self.bass.target.is_none()
             && self.edges.is_empty()
             && self.seen == [false; 11]
-            && [self.levels, self.targets]
+            && [self.levels, self.colors, self.targets]
                 .iter()
                 .chain([
                     &self.melody.levels,
@@ -339,6 +341,7 @@ impl Motion {
             let level_dt = (dt - f64::from(self.level_wait[i])).max(0.0);
             self.level_wait[i] = (self.level_wait[i] - dt as f32).max(0.0);
             self.levels[i] = approach(self.levels[i], self.targets[i], level_dt, env);
+            self.colors[i] = approach(self.colors[i], self.targets[i], dt, env);
         }
         for edge in &mut self.edges {
             edge.age += dt;
@@ -529,7 +532,6 @@ impl NodeMotion {
                 self.reached.revived += 1;
             }
             let was_lit = std::mem::replace(&mut motion.targets, targets);
-            let marked = (motion.melody.target, motion.bass.target);
             readings.apply(motion);
             motion.melody.target(melody, view.mark_delay);
             motion.bass.target(bass, view.mark_delay);
@@ -559,40 +561,28 @@ impl NodeMotion {
             // Each slice sees the gate late by its place in the sweep, on the
             // way in and on the way out alike, however the note was cut short:
             // a re-press mid-departure ripples round the ring rather than
-            // turning every slice at once.
-            let lit_first = view.note_animation.lit_first;
+            // turning every slice at once. The slices a note lights take the
+            // rise first, so they appear first; on the way out they keep their
+            // place in the sweep like any other.
             let mut delay = order;
             if gate && !motion.gate {
                 motion.level_wait = [0.0; 11];
-                // The lit slices start with the first, and a lifetime lit over
-                // an audio pose starts at full progress already.
-                if lit_first {
-                    for i in
-                        (0..11).filter_map(|slot| displayed(slot).filter(|_| targets[slot] > 0.0))
-                    {
-                        delay[i] = 0.0;
-                    }
+                for i in (0..11).filter_map(|slot| displayed(slot).filter(|_| targets[slot] > 0.0))
+                {
+                    delay[i] = 0.0;
                 }
+                // A lifetime lit over an audio pose starts at full progress.
                 if posed {
                     motion.settle_slices(true);
                 } else {
                     motion.push_edge(true, delay);
                 }
             } else if !gate && motion.gate {
-                // Lit means lit at the off: the slice that retracts last is the
-                // one whose ink outlasts the others.
+                // The presence of a slot lit at the off outlasts the slice
+                // that retracts last; its colour does not wait (`colors`).
                 motion.level_wait = was_lit.map(|t| if t > 0.0 { last } else { 0.0 });
-                motion.melody.depart(marked.0, &motion.level_wait);
-                motion.bass.depart(marked.1, &motion.level_wait);
-                if lit_first {
-                    for i in
-                        (0..11).filter_map(|slot| displayed(slot).filter(|_| was_lit[slot] > 0.0))
-                    {
-                        delay[i] = last;
-                    }
-                }
                 motion.push_edge(false, delay);
-            } else if gate && lit_first {
+            } else if gate {
                 // A slot a second note lights while the gate is held starts at
                 // once, rather than waiting out the arrival it joined.
                 let mut newly = [f32::INFINITY; 11];
@@ -622,6 +612,7 @@ impl NodeMotion {
                 motion.settle_slices(true);
                 motion.level_wait = [0.0; 11];
                 motion.levels = motion.targets;
+                motion.colors = motion.targets;
                 motion.melody.advance(f64::from(duration + view.mark_delay), env);
                 motion.bass.advance(f64::from(duration + view.mark_delay), env);
             }
@@ -895,14 +886,14 @@ impl NodeMotion {
             let resting = if self.posed.contains(pos) { &Motion::POSED } else { &Motion::REST };
             let motion = self.nodes.get(pos).unwrap_or(resting);
             node.slice_progress = motion.progress;
-            // Opacity fades each slot's ink, and the node's presence with it,
-            // while the envelope under it runs untouched. Thickness reshapes a
+            // Opacity fades each slot's colour, and the node's presence with
+            // it, while the envelope under it runs untouched. Thickness reshapes a
             // LIT slot only: a slot keeps its last reading once released, and
             // an unlit one draws the ghost at full width whatever it read, so
             // it goes as 1 and the shader keeps its full-slice path there —
             // and its mark goes back to standing off the band.
             let fades = motion.readings.map(|reading| reading.opacity);
-            node.octaves = std::array::from_fn(|i| motion.levels[i] * fades[i]);
+            node.octaves = std::array::from_fn(|i| motion.colors[i] * fades[i]);
             node.thickness = std::array::from_fn(|i| {
                 if node.octaves[i] > 0.0 {
                     motion.readings[i].thickness
@@ -910,7 +901,9 @@ impl NodeMotion {
                     1.0
                 }
             });
-            node.activation = node.octaves.iter().copied().fold(0.0, f32::max);
+            // Never below the colour: the two ramp together and only the
+            // presence ever waits.
+            node.activation = (0..11).map(|i| motion.levels[i] * fades[i]).fold(0.0, f32::max);
             node.envelope = motion.levels.iter().copied().fold(0.0, f32::max);
             node.departing = !motion.gate;
             let (melody_slots, melody_level, melody_slot) = motion.melody.strongest();
@@ -929,13 +922,15 @@ impl NodeMotion {
             if scene.spectral.ring_draws() {
                 node.audio_ring = fade.level(&scene.octave_layout, node.cents).max(node.activation);
             }
-            // The node glow is the drawn ink: the most opaque slot or mark,
-            // each after its Opacity, as the bloom reads it. Stateless
+            // The node glow is the drawn colour: the most opaque slot or mark,
+            // each after its Opacity, as the bloom reads it, rather than the
+            // presence that waits on the slices. Stateless
             // snapshots draw it as it stands; the shell's glow pass carries it
             // as its target. The ink strip's history (`ink_history` in
             // harmonigraph-render) compares this same max of what it ships, so
             // the colour picks attack or release by the test the level does.
-            node.glow.level = node.activation.max(node.melody_level).max(node.bass_level);
+            let ink = node.octaves.iter().copied().fold(0.0, f32::max);
+            node.glow.level = ink.max(node.melody_level).max(node.bass_level);
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -1037,19 +1032,25 @@ mod tests {
         scene
     }
     /// The fresh view with every note drawn in full and every slice moving
-    /// at once in its order's own sequence, so a test about timing reads one
-    /// slice's progress and one node's activation without the fresh intensity
-    /// routes, stagger or lit-first reordering in them. The tests about
-    /// orders, lit-first or intensity set their own.
+    /// at once, so a test about timing reads one slice's progress and one
+    /// node's activation without the fresh intensity routes or stagger in
+    /// them. The tests about the stagger or intensity set their own.
     fn view() -> ViewConfig {
         let mut view =
             ViewConfig { intensity: crate::IntensitySettings::unrouted(), ..ViewConfig::default() };
         view.note_animation.stagger_spread = 0.0;
-        view.note_animation.lit_first = false;
         view
     }
     fn origin(scene: &Scene) -> &crate::NodeInstance {
         scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::ORIGIN).unwrap()
+    }
+    /// The octave slot `note` lights on the origin, and the slice that slot is
+    /// drawn as: `octaves` is indexed by the one, `slice_progress` by the other.
+    fn lit_by(scene: &Scene, note: u8) -> (usize, usize) {
+        let cents = origin(scene).cents;
+        let (lo, hi) = scene.octave_layout.slots(cents);
+        let slot = slot_of(lo, hi, cents, f32::from(note));
+        (slot, (slot as i32 - lo) as usize)
     }
     fn on(t: f64, note: u8) -> NoteEvent {
         NoteEvent::on(t, SourceId::DIRECT, 0, note, 0.2)
@@ -1138,10 +1139,6 @@ mod tests {
             })
             .collect()
     }
-    /// A quick re-press keeps the stagger: the release and the press both
-    /// travel the sweep, so every slice dips in its turn, the seam first,
-    /// rather than the few the release had reached turning back at once while
-    /// the rest never move.
     /// Middle C at spread 0.9, drawn every 0.02 from 0 to `end`, each event
     /// delivered on the frame that reaches it: the sweep's delays, its span,
     /// and the frames.
@@ -1163,33 +1160,51 @@ mod tests {
         let layout = &frames[0].1.octave_layout;
         (view.note_animation.delays(layout, 1.0), layout.span as usize, frames)
     }
+    /// A quick re-press keeps the stagger: the release and the press both
+    /// travel the sweep, so every slice dips in its turn, the seam first,
+    /// rather than the few the release had reached turning back at once while
+    /// the rest never move. The lit slice takes the re-press at once, before
+    /// the release has reached it, so it never leaves -- but its colour does
+    /// not wait, so a note tapped again and again dims between the taps.
     #[test]
     fn a_quick_repress_ripples_round_the_ring() {
         let (order, span, frames) = played(&[on(0.0, 60), off(5.0, 60), on(5.16, 60)], 8.0);
-        let after = frames.iter().position(|(now, _)| *now >= 5.0).unwrap();
-        let dips = dips(&frames[after..], span);
-        for (i, &(low, at)) in dips.iter().enumerate() {
+        let (slot, lit) = lit_by(&frames[0].1, 60);
+        let after = &frames[frames.iter().position(|(now, _)| *now >= 5.0).unwrap()..];
+        let dips = dips(after, span);
+        for (i, &(low, at)) in dips.iter().enumerate().filter(|&(i, _)| i != lit) {
             assert!((low - 0.84).abs() < 0.03, "slice {i} dipped to {low}, not by the gap");
             let expected = 5.16 + f64::from(order[i]);
             assert!((at - expected).abs() <= 0.021, "slice {i} dipped at {at}, not {expected}");
         }
+        assert_eq!(dips[lit].0, 1.0, "the lit slice retracted under a re-press");
+        let colour = after.iter().map(|(_, s)| origin(s).octaves[slot]).fold(1.0, f32::min);
+        assert!((colour - 0.84).abs() < 0.03, "the lit slot's colour held at {colour}");
         assert_eq!(origin(&frames.last().unwrap().1).slice_progress, [1.0; 11]);
     }
     /// A note released before its arrival finished plays the same short rise
-    /// and fall on every slice, each in its turn: a pulse travelling round the
-    /// ring, rather than the slices it reached turning back at once and the
-    /// rest never starting.
+    /// and fall on every unlit slice, each in its turn: a pulse travelling
+    /// round the ring, rather than the slices it reached turning back at once
+    /// and the rest never starting. The lit slice, which arrived first and
+    /// takes the release late in the sweep, keeps arriving until then, while
+    /// its colour leaves at the release.
     #[test]
     fn a_short_note_sends_its_pulse_round_the_ring() {
         let (order, span, frames) = played(&[on(0.0, 60), off(0.3, 60)], 2.0);
+        let (slot, lit) = lit_by(&frames[0].1, 60);
         assert!(
-            (0..span).any(|i| order[i] > 0.3),
-            "every slice had started by the release: {order:?}"
+            (0..span).any(|i| i != lit && order[i] > 0.3),
+            "every unlit slice had started by the release: {order:?}"
         );
-        for i in 0..span {
+        for i in (0..span).filter(|&i| i != lit) {
             let peak = frames.iter().map(|(_, s)| origin(s).slice_progress[i]).fold(0.0, f32::max);
             assert!((peak - 0.3).abs() < 0.03, "slice {i} peaked at {peak}, not 0.3");
         }
+        // Two tenths after the release, where the presence still holds.
+        let (_, later) = frames.iter().find(|(now, _)| *now >= 0.5).unwrap();
+        let colour = origin(later).octaves[slot];
+        assert!((colour - 0.1).abs() < 0.03, "the lit slot's colour waited at {colour}");
+        assert!(origin(later).activation >= 0.3 - 1e-6, "the presence left with the colour");
     }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
@@ -1593,9 +1608,11 @@ mod tests {
         let arrival = draw(&mut motion, &mut tracker, &view, 0.15, false);
         tracker.handle_event(off(0.15, 60));
         let departure = draw(&mut motion, &mut tracker, &view, 0.2, false);
-        for (a, b) in origin(&arrival).slice_progress.iter().zip(origin(&departure).slice_progress)
-        {
-            assert!(b <= *a);
+        // The lit slice takes the off last, so it alone is still arriving.
+        let (_, lit) = lit_by(&arrival, 60);
+        let (a, b) = (origin(&arrival).slice_progress, origin(&departure).slice_progress);
+        for i in (0..11).filter(|&i| i != lit) {
+            assert!(b[i] <= a[i], "slice {i}");
         }
         tracker.handle_event(on(0.21, 60));
         draw(&mut motion, &mut tracker, &view, 1.6, false);
@@ -1643,12 +1660,15 @@ mod tests {
             draw(&mut motion, &mut tracker, &view, 0.04, false);
             let before = motion.at(LatticePos::ORIGIN).progress;
             tracker.handle_event(off(0.04, 60));
-            draw(&mut motion, &mut tracker, &view, 0.05, false);
+            let scene = draw(&mut motion, &mut tracker, &view, 0.05, false);
             // The off reaches the seam at once and the rest in their turn: a
-            // slice the arrival had not reached yet has not moved.
+            // slice the arrival had not reached yet has not moved. The lit
+            // slice takes it last, and at no spread with the rest.
+            let (_, lit) = lit_by(&scene, 60);
             let m = motion.at(LatticePos::ORIGIN);
-            for (a, b) in before.into_iter().zip(m.progress) {
-                assert!(if a > 0.0 { b < a } else { b == 0.0 });
+            for i in (0..11).filter(|&i| i != lit || spread == 0.0) {
+                let (a, b) = (before[i], m.progress[i]);
+                assert!(if a > 0.0 { b < a } else { b == 0.0 }, "slice {i}");
             }
             // A re-press is one more edge through the same sweep, so every
             // slice is whole one duration after it reaches the last.
@@ -1751,59 +1771,50 @@ mod tests {
         whole(started, done, "departing");
     }
     #[test]
-    fn lit_first_moves_only_the_lit_slice_to_the_ends_of_the_order() {
+    fn the_lit_slice_arrives_first_and_leaves_in_the_sweep() {
         let step = 0.01f64;
         let spread = 0.9f32;
-        // Every frame of one press and release: the node's presence and each
-        // slice's reveal, and the slot the note lights.
-        let run = |lit_first: bool| {
-            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
-            view.note_animation.stagger_spread = spread;
-            view.note_animation.lit_first = lit_first;
-            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
-            // C3: a slice the sweep starts neither first nor last, 0.6 of
-            // the 0.9 spread. C5 is the seam's, already first.
-            tracker.handle_event(on(0.0, 48));
-            let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
-            let targets = motion.at(LatticePos::ORIGIN).targets;
-            let slot = targets.iter().position(|&t| t > 0.0).expect("lit slot");
-            // The slice that slot is drawn as, which is what `slice_progress`
-            // is indexed by.
-            let lit = slot - first.octave_layout.slots(origin(&first).cents).0 as usize;
-            let span = first.octave_layout.span as usize;
-            let mut frames = Vec::new();
-            let mut now = 0.0;
-            while now < 2.0 * f64::from(spread) + 3.0 {
-                now += step;
-                if (now - 2.5).abs() < step / 2.0 {
-                    tracker.handle_event(off(now, 48));
-                }
-                let scene = draw(&mut motion, &mut tracker, &view, now, false);
-                frames.push((now, origin(&scene).activation, origin(&scene).slice_progress));
-            }
-            (lit, span, frames)
-        };
-        let (lit, span, plain) = run(false);
-        let (_, _, ordered) = run(true);
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = spread;
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        // C3: a slice the sweep starts neither first nor last, 0.6 of the 0.9
+        // spread. C5 is the seam's, already first.
+        tracker.handle_event(on(0.0, 48));
+        let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let slot = motion.at(LatticePos::ORIGIN).targets.iter().position(|&t| t > 0.0);
+        // The slice that slot is drawn as, which is what `slice_progress` is
+        // indexed by.
+        let base = first.octave_layout.slots(origin(&first).cents).0 as usize;
+        let lit = slot.expect("lit slot") - base;
+        let span = first.octave_layout.span as usize;
+        let order = view.note_animation.delays(&first.octave_layout, 1.0);
+        // The fixture reaches the change only if the sweep puts the lit slice
+        // somewhere in the middle; at either end it would be there anyway.
+        assert!(order[lit] > 0.1 && order[lit] < spread - 0.1, "{order:?}");
         let off_at = 2.5;
-        let when = |frames: &[(f64, f32, [f32; 11])], slot: usize, f: fn(f32) -> bool, from| {
-            frames.iter().find(|(t, _, p)| *t >= from && f(p[slot])).map(|(t, ..)| *t).unwrap()
-        };
-        let starts = |frames: &[_], slot| when(frames, slot, |p| p > 0.0, 0.0);
-        let leaves = |frames: &[_], slot| when(frames, slot, |p| p < 1.0, off_at);
-        // The fixture reaches the change only if the order puts the lit slice
-        // somewhere in the middle; at either end the toggle moves nothing.
-        let plain_start = starts(&plain, lit);
-        assert!(plain_start > 0.1 && plain_start < f64::from(spread) - 0.1, "{plain_start}");
-
-        assert!(starts(&ordered, lit) <= step + 1e-9, "the lit slice waited to arrive");
-        let last = (0..span).map(|i| leaves(&plain, i)).fold(0.0, f64::max);
-        assert!((leaves(&ordered, lit) - last).abs() <= step + 1e-9, "the lit slice left early");
-        for ((_, a, p), (t, b, q)) in plain.iter().zip(&ordered) {
-            assert_eq!(a, b, "presence moved at {t}");
-            for i in (0..span).filter(|&i| i != lit) {
-                assert_eq!(p[i], q[i], "unlit slice {i} moved at {t}");
+        let mut frames = Vec::new();
+        let mut now = 0.0;
+        while now < 2.0 * f64::from(spread) + 3.0 {
+            now += step;
+            if (now - off_at).abs() < step / 2.0 {
+                tracker.handle_event(off(now, 48));
             }
+            let scene = draw(&mut motion, &mut tracker, &view, now, false);
+            frames.push((now, origin(&scene).slice_progress));
+        }
+        let when = |slot: usize, f: fn(f32) -> bool, from| {
+            frames.iter().find(|(t, p)| *t >= from && f(p[slot])).map(|(t, _)| *t).unwrap()
+        };
+        let starts = |slot| when(slot, |p| p > 0.0, 0.0);
+        let leaves = |slot| when(slot, |p| p < 1.0, off_at);
+        let near = |at: f64, expected: f64| (at - expected).abs() <= 2.0 * step;
+        assert!(starts(lit) <= step + 1e-9, "the lit slice waited to arrive");
+        for i in (0..span).filter(|&i| i != lit) {
+            assert!(near(starts(i), f64::from(order[i])), "unlit slice {i} left the sweep");
+        }
+        for (i, &delay) in order.iter().enumerate().take(span) {
+            let at = leaves(i);
+            assert!(near(at, off_at + f64::from(delay)), "slice {i} left at {at}, off the sweep");
         }
     }
     /// The table that drops a node at rest draws, frame for frame, what one
@@ -1818,7 +1829,6 @@ mod tests {
         use harmonigraph_core::{Expression, NoteEventKind};
         for run in 0i32..2 {
             let mut view = ViewConfig::default();
-            view.note_animation.lit_first = run % 2 == 0;
             view.note_animation.stagger_spread = 0.6;
             view.mark_delay = 0.15;
             view.intensity.pressure.thickness = Some(0.5);
@@ -1965,10 +1975,9 @@ mod tests {
         }
     }
     #[test]
-    fn lit_first_starts_a_slot_a_second_note_lights_mid_arrival() {
+    fn a_slot_a_second_note_lights_mid_arrival_starts_at_once() {
         let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         view.note_animation.stagger_spread = 0.9;
-        view.note_animation.lit_first = true;
         let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
         tracker.handle_event(on(0.0, 48));
         let first = draw(&mut motion, &mut tracker, &view, 0.0, false);

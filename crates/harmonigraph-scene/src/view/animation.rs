@@ -14,14 +14,10 @@ pub const RADIAL_START_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
 pub struct NoteAnimationConfig {
     pub stagger_spread: f32,
     pub radial_start: f32,
-    /// The slices a note lights start with the earliest on arrival and with
-    /// the latest on departure; every other slice keeps its
-    /// [`delays`](Self::delays) entry.
-    pub lit_first: bool,
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
-        Self { stagger_spread: 0.602_636_7, radial_start: -0.034_186_72, lit_first: true }
+        Self { stagger_spread: 0.602_636_7, radial_start: -0.034_186_72 }
     }
 }
 impl NoteAnimationConfig {

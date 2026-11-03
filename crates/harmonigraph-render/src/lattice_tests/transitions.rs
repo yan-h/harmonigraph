@@ -34,7 +34,6 @@ fn each_arrival_casts_a_measurable_shadow() {
         scene.view.note_animation = NoteAnimationConfig {
             stagger_spread: spread,
             radial_start: if grow { -1.0 } else { 0.0 },
-            ..Default::default()
         };
         scene.view.shadow = one_shadow(0.6, 0.8);
         if name == "audio" {
@@ -294,11 +293,8 @@ fn staggered_slices_draw_complete_rotated_pieces_at_their_shared_delays() {
     // Against an unstaggered arrival, so the delays are seen to reach the
     // picture.
     for spread in [0.0, NoteAnimationConfig::default().stagger_spread] {
-        scene.view.note_animation = NoteAnimationConfig {
-            stagger_spread: spread,
-            radial_start: -1.0,
-            ..Default::default()
-        };
+        scene.view.note_animation =
+            NoteAnimationConfig { stagger_spread: spread, radial_start: -1.0 };
         let delays = scene.view.note_animation.delays(&scene.octave_layout, 1.0);
         let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
         for (step, time) in

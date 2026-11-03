@@ -59,7 +59,6 @@
         note_animation: (
             stagger_spread: 0.6026367,
             radial_start: -0.03418672,
-            lit_first: true,
         ),
         intensity: (
             velocity: (
