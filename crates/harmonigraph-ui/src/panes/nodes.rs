@@ -3,8 +3,8 @@
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, StackBar, ValueBar};
 use harmonigraph_scene::{
-    AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MAX_SPAN, MIN_SPAN,
-    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MAX_SPAN, MIN_SPAN, PITCH_CEIL,
+    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 use harmonigraph_scene::{LATTICE_GROUND_RANGE, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE};
@@ -240,37 +240,13 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
                      0 ms marks immediately.",
             );
     });
-    // Built off `ALL` with an exhaustive match rather than written out, the
-    // way `SpectralOrientation`'s row is and for its reason: another order
-    // cannot reach this pane without a name and a hint of its own.
-    // Every hint here is about WHEN a slice starts and nothing else: the orders
-    // differ in the delay each slice waits, never in what it then does, which
-    // is always the same smooth arrival.
-    let orders = AnimationOrder::ALL.map(|order| {
-            let (label, hint) = match order {
-                AnimationOrder::Circular => (
-                    "Circular",
-                    "Slices start one after another at the seam where the highest and lowest meet, sweeping from low to high pitch.",
-                ),
-                AnimationOrder::Bidirectional => (
-                    "Bidirectional",
-                    "Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring.",
-                ),
-                AnimationOrder::RandomStagger => (
-                    "Random stagger",
-                    "Each slice takes a delay of its own, in an order scrambled per node and per press. The note's release reuses the same order.",
-                ),
-            };
-            (order, label, hint)
-        });
-    choice_row(ui, "Slice order", &mut view.note_animation.order, &orders);
     crate::widgets::checkbox(ui, &mut view.note_animation.lit_first, "Lit slices first")
-        .on_hover_text("The slices a note lights start with the first slice on arrival and with the last one on release, so they appear first and disappear last. Every other slice keeps the slice order's timing. Needs a stagger spread above zero.");
+        .on_hover_text("The slices a note lights start with the first slice on arrival and with the last one on release, so they appear first and disappear last. Every other slice keeps its place in the sweep from the seam. Needs a stagger spread above zero.");
     ValueBar::new(&mut view.note_animation.stagger_spread, STAGGER_SPREAD_RANGE, "Stagger spread")
                 .default_value(super::fresh_view().note_animation.stagger_spread)
                 .unit(100.0, "%")
                 .show(ui)
-                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
+                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
     ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
             .default_value(super::fresh_view().note_animation.radial_start)
             .unit(100.0, "%").show(ui)

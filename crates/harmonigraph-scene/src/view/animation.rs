@@ -1,28 +1,7 @@
-//! [`NoteAnimationConfig`] and its order — how complete lattice slices arrive.
+//! [`NoteAnimationConfig`] — how complete lattice slices arrive.
 
 use super::*;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum AnimationOrder {
-    Circular,
-    #[default]
-    Bidirectional,
-    RandomStagger,
-}
-impl AnimationOrder {
-    /// Every order, for the settings picker and the sweeps that compare them.
-    /// Guarded exhaustively so the settings picker cannot miss a new variant.
-    pub const ALL: [Self; 3] = {
-        const fn covered(order: AnimationOrder) {
-            use AnimationOrder::*;
-            match order {
-                Circular | Bidirectional | RandomStagger => (),
-            }
-        }
-        covered(AnimationOrder::Bidirectional);
-        [Self::Circular, Self::Bidirectional, Self::RandomStagger]
-    };
-}
 /// Shared bar and load range for [`NoteAnimationConfig::stagger_spread`].
 pub const STAGGER_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.9;
 
@@ -33,22 +12,16 @@ pub const RADIAL_START_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct NoteAnimationConfig {
-    pub order: AnimationOrder,
     pub stagger_spread: f32,
     pub radial_start: f32,
     /// The slices a note lights start with the earliest on arrival and with
-    /// the latest on an ordered departure; every other slice keeps `order`'s
-    /// delay.
+    /// the latest on an ordered departure; every other slice keeps its
+    /// [`delays`](Self::delays) entry.
     pub lit_first: bool,
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
-        Self {
-            order: AnimationOrder::Bidirectional,
-            stagger_spread: 0.602_636_7,
-            radial_start: -0.034_186_72,
-            lit_first: true,
-        }
+        Self { stagger_spread: 0.602_636_7, radial_start: -0.034_186_72, lit_first: true }
     }
 }
 impl NoteAnimationConfig {
@@ -68,6 +41,9 @@ impl NoteAnimationConfig {
     /// Fixed delays of complete displayed sectors; shared by live/export and
     /// renderer fixtures, including wheels with unequal outer sectors.
     ///
+    /// Both ends start at the seam where the highest and lowest pitch meet and
+    /// sweep toward each other across the ring.
+    ///
     /// A delay is a START OFFSET and nothing else: every sector still animates
     /// for the whole `duration`, so the spread widens the total to
     /// `duration * (1 + stagger_spread)` rather than dividing one fade time
@@ -75,44 +51,19 @@ impl NoteAnimationConfig {
     /// spread read as two different animations -- the first sector fading over
     /// the full time because the level ramp under it was never staggered, the
     /// last one snapping in over what little time the spread had left it.
-    pub fn delays(
-        self,
-        layout: &crate::OctaveLayout,
-        cents: f32,
-        seed: u32,
-        duration: f32,
-    ) -> [f32; 11] {
+    pub fn delays(self, layout: &crate::OctaveLayout, duration: f32) -> [f32; 11] {
         let span = layout.span as usize;
-        let ring = layout.ring(cents);
-        let random_start = (((layout.center - layout.slot_pitch(ring.base, cents)) / 12.0 + 0.5)
-            .floor() as usize)
-            .min(span - 1);
         let mut ranks = [0.0f32; 11];
         for (i, rank) in ranks.iter_mut().enumerate().take(span) {
-            *rank = match self.order {
-                // Slice zero is the lowest displayed pitch and `i` walks
-                // upward, so this starts at the low/high seam and sweeps low
-                // to high.
-                AnimationOrder::Circular => i as f32 / (span - 1).max(1) as f32,
-                AnimationOrder::Bidirectional => {
-                    // The walk is measured from the seam, not from a fixed
-                    // screen angle. Mirror the index before measuring so each
-                    // opposing pair has exactly one rank; independently
-                    // measuring both sides lets f32 roundoff turn a two-slice
-                    // tie into the whole normalized spread.
-                    let from_seam = i.min(span - 1 - i);
-                    (layout.walk(from_seam as f32) + layout.walk(from_seam as f32 + 1.0)) * 0.5
-                        / std::f32::consts::PI
-                }
-                AnimationOrder::RandomStagger => {
-                    let from_top = (i + span - random_start) % span;
-                    let mut x = seed.wrapping_add((from_top as u32 + 1).wrapping_mul(0x9e3779b9));
-                    x ^= x >> 16;
-                    x = x.wrapping_mul(0x7feb352d);
-                    x ^= x >> 15;
-                    (x & 65535) as f32 / 65535.0
-                }
-            };
+            // Slice zero is the lowest displayed pitch and `i` walks upward.
+            // The walk is measured from the seam, not from a fixed screen
+            // angle. Mirror the index before measuring so each opposing pair
+            // has exactly one rank; independently measuring both sides lets
+            // f32 roundoff turn a two-slice tie into the whole normalized
+            // spread.
+            let from_seam = i.min(span - 1 - i);
+            *rank = (layout.walk(from_seam as f32) + layout.walk(from_seam as f32 + 1.0)) * 0.5
+                / std::f32::consts::PI;
         }
         let min = ranks[..span].iter().copied().fold(f32::INFINITY, f32::min);
         let max = ranks[..span].iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -156,20 +107,12 @@ mod tests {
     }
 
     #[test]
-    fn circular_and_bidirectional_orders_begin_at_the_low_high_seam() {
+    fn slices_start_at_the_low_high_seam_and_meet_across_the_ring() {
         for count in [2, 7, 6, 9] {
             let layout = crate::octave_layout(count, 64.5);
             let span = layout.span as usize;
-            let config = NoteAnimationConfig { stagger_spread: 0.8, ..Default::default() };
-
-            let circular = NoteAnimationConfig { order: AnimationOrder::Circular, ..config }
-                .delays(&layout, 350.0, 42, 2.0);
-            assert_eq!(circular[0], 0.0);
-            assert!((circular[span - 1] - 1.6).abs() < 1e-6);
-            assert!(circular[..span].windows(2).all(|pair| pair[0] < pair[1]));
-
-            let both = NoteAnimationConfig { order: AnimationOrder::Bidirectional, ..config }
-                .delays(&layout, 350.0, 42, 2.0);
+            let both = NoteAnimationConfig { stagger_spread: 0.8, ..Default::default() }
+                .delays(&layout, 2.0);
             assert!(both[0].abs() < 1e-6);
             assert!(both[span - 1].abs() < 1e-6);
             for i in 0..span / 2 {

@@ -26,7 +26,7 @@ fn dialled() -> SharedState {
     appearance.view.label_scale = 0.7;
     appearance.view.ring_gap = 0.02;
     appearance.view.max_sevens = 3;
-    appearance.view.note_animation.order = harmonigraph_scene::AnimationOrder::Circular;
+    appearance.view.note_animation.radial_start = -0.5;
     appearance.view.note_animation.stagger_spread = 0.63;
     appearance.view.atmosphere.texture_depth = 0.0;
     appearance.spectrum.orientation = crate::SpectralOrientation::Left;
@@ -126,6 +126,11 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,", true),
     // The note animation's own retired fields, inside its struct.
     ("stagger_spread", "animation:Pop,start_size:0.2,", true),
+    // The slice order, every variant of it gone with the key: the live ones
+    // and those whose removal once refused the whole document.
+    ("stagger_spread", "order:Circular,", true),
+    ("stagger_spread", "order:RandomStagger,", true),
+    ("stagger_spread", "order:Simultaneous,", true),
     // The overlay switches, moved out of the view to the editor's top level:
     // one inside a view must not reach the top-level key of the same name.
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
@@ -195,8 +200,6 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
 /// Retiring another variant is a row here, not another test.
 const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     ("orientation", "Left", "Diagonal", true),
-    ("order", "Circular", "OddEvenStagger", true),
-    ("order", "Circular", "Simultaneous", true),
     ("spectrogram", "Scrolling", "Playhead", true),
     // The selected settings tab lives in the layout, so removing a tab is a
     // variant break too.
@@ -2119,25 +2122,21 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 
 #[test]
 fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
-    for order in harmonigraph_scene::AnimationOrder::ALL {
-        let mut state = fresh();
-        state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
-            order,
-            stagger_spread: 0.63,
-            radial_start: -0.5,
-            lit_first: true,
-        };
-        let mut restored = fresh();
-        assert!(restored.load_persist(&state.save_persist()));
-        assert_eq!(
-            restored.picture.appearance.view.note_animation,
-            state.picture.appearance.view.note_animation
-        );
-    }
+    let mut state = fresh();
+    state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
+        stagger_spread: 0.63,
+        radial_start: -0.5,
+        lit_first: false,
+    };
+    let mut restored = fresh();
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(
+        restored.picture.appearance.view.note_animation,
+        state.picture.appearance.view.note_animation
+    );
     let mut state = fresh();
     state.picture.appearance.view.label_scale = 0.7;
-    state.picture.appearance.view.note_animation.order =
-        harmonigraph_scene::AnimationOrder::Circular;
+    state.picture.appearance.view.note_animation.radial_start = -0.5;
     state.picture.appearance.view.note_animation.stagger_spread = 0.63;
     let old = state.save_persist();
     let missing_spread = old.replace("stagger_spread:0.63,", "");
@@ -2148,10 +2147,7 @@ fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
         harmonigraph_scene::NoteAnimationConfig::default().stagger_spread
     );
     assert_eq!(state.picture.appearance.view.label_scale, 0.7);
-    assert_eq!(
-        state.picture.appearance.view.note_animation.order,
-        harmonigraph_scene::AnimationOrder::Circular
-    );
+    assert_eq!(state.picture.appearance.view.note_animation.radial_start, -0.5);
     let saved = state.save_persist().replace("note_animation:", "retired_animation_config:");
     assert!(!saved.contains("note_animation:"));
     assert!(state.load_persist(&saved));

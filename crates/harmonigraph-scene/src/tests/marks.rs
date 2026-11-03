@@ -371,17 +371,13 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
 /// would read as a second thing happening.
 #[test]
 fn a_lone_notes_mark_fades_out_with_it() {
-    for (order, spread) in AnimationOrder::ALL
-        .into_iter()
-        .flat_map(|o| [0.0, NoteAnimationConfig::default().stagger_spread].map(|s| (o, s)))
-    {
+    for spread in [0.0, NoteAnimationConfig::default().stagger_spread] {
         let mut motion = NodeMotion::default();
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(1.0, 60));
         let view = ViewConfig {
             note_animation: NoteAnimationConfig {
-                order,
                 stagger_spread: spread,
                 ..NoteAnimationConfig::default()
             },
@@ -393,17 +389,17 @@ fn a_lone_notes_mark_fades_out_with_it() {
             let n = origin_node(&scene);
             (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
         };
-        assert_eq!(at(1.0), (1.0, 1.0, 1.0), "{order:?}: whole at key-up");
+        assert_eq!(at(1.0), (1.0, 1.0, 1.0), "{spread}: whole at key-up");
         for step in 1..=20 {
             let now = 1.0 + ATTACK * f64::from(step) / 10.0;
             let (melody, bass, octave) = at(now);
-            assert_eq!(melody, bass, "{order:?}: both marks at {now}");
-            assert_eq!(melody, octave, "{order:?}: mark and sector at {now}");
+            assert_eq!(melody, bass, "{spread}: both marks at {now}");
+            assert_eq!(melody, octave, "{spread}: mark and sector at {now}");
             if spread == 0.0 && step == 5 {
                 assert!((melody - 0.5).abs() < 1e-5, "half gone: {melody}");
             }
         }
-        assert_eq!(at(1.0 + ATTACK * 2.0), (0.0, 0.0, 0.0), "{order:?}: departed");
+        assert_eq!(at(1.0 + ATTACK * 2.0), (0.0, 0.0, 0.0), "{spread}: departed");
     }
 }
 
