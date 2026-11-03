@@ -1,4 +1,5 @@
 //! Shared star geometry, allocation and frame transport for colored light fields.
+use crate::travel::Motion;
 use crate::uniforms::{uniform_group, Float2, Int2};
 use crate::wgpu;
 use harmonigraph_scene::star_plan::{
@@ -41,51 +42,6 @@ pub(crate) const STAR_LIFE_PERIOD: f64 = 4096.0;
 /// motion video.
 pub(crate) fn star_px_per_second() -> f64 {
     (60.0f64 * 60.0 + 14.0 * 14.0).sqrt()
-}
-
-/// The star pixels each depth has drifted after `seconds` at `pace` star
-/// pixels a second for a `Star speed` of 1, each at its own speed.
-pub(crate) fn star_travel(
-    settings: harmonigraph_scene::StarSettings,
-    seconds: f64,
-    pace: f64,
-) -> [f64; STAR_SLICES] {
-    settings.plan().depths.map(|depth| seconds * pace * f64::from(depth.speed))
-}
-
-/// The star pixels each depth has drifted, built up frame by frame so that a
-/// change of pace or of a depth's `Star speed` moves its stars on from where
-/// they are. Worked out as `now` times the pace instead, every zoom of the
-/// Span and every nudge of the dial would carry the field as far as it had
-/// travelled since the clock started.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct StarTravel {
-    clock: Option<f64>,
-    travel: [f64; STAR_SLICES],
-}
-
-impl StarTravel {
-    /// The travel at `now`, the time since the last frame taken at this
-    /// frame's `pace` and speeds ([`star_travel`]). A first frame, or a clock
-    /// that ran backwards, as a render started over does, takes all of `now`
-    /// from zero, so a render is the same from its first frame however it was
-    /// reached.
-    pub(crate) fn advance(
-        &mut self,
-        settings: harmonigraph_scene::StarSettings,
-        now: f64,
-        pace: f64,
-    ) -> [f64; STAR_SLICES] {
-        self.travel = match self.clock {
-            Some(clock) if now >= clock => {
-                let step = star_travel(settings, now - clock, pace);
-                std::array::from_fn(|k| self.travel[k] + step[k])
-            }
-            _ => star_travel(settings, now, pace),
-        };
-        self.clock = Some(now);
-        self.travel
-    }
 }
 
 uniform_group! {
@@ -154,10 +110,11 @@ pub(crate) const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32U
 /// The star image's texel: every slice composited, gamma-coded, before the
 /// consumer filters it up into the pane.
 pub(crate) const STAR_IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
-/// fresh dials a 16:9 pane takes about 1.2 million and an 8:1 strip about 5.4
-/// million; a pane wider than about 6.3:1, or a finer `Star spacing`, asks
-/// for more (see [`star_layout`]).
+/// The most texels the atlas may take, 64 MB at sixteen bytes each. The
+/// spectrogram's fresh stars take about 0.46 million on a 16:9 pane and 2.0
+/// million on an 8:1 strip, and fit up to about 16:1; the lattice's, drawn
+/// larger, about a tenth of that. A wider pane or a finer `Star spacing` can
+/// ask for more (see [`star_layout`]).
 const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
 /// cell's index splits into a texel with a mask and a shift.
@@ -295,16 +252,17 @@ pub(crate) fn star_atlas_size(needed: [u32; 2], held: Option<[u32; 2]>) -> [u32;
         .unwrap_or([needed[0], rows])
 }
 
-/// The life clock every slice shares: seconds over `Star lifetime`, reduced
-/// modulo [`STAR_LIFE_PERIOD`] in f64. A cell's lives start at this plus its
-/// hashed stagger, so it moves with nothing but the clock and that one dial.
-pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) -> f32 {
-    (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
+/// The life clock every slice shares, [`Motion::life`]: lives built up at
+/// one a `Star lifetime`, reduced modulo [`STAR_LIFE_PERIOD`] in f64. A cell's
+/// lives start at this plus its hashed stagger, so a lifetime drag changes how
+/// fast they turn over from where they are rather than which life each is in.
+pub(crate) fn star_life(life: f64) -> f32 {
+    life.rem_euclid(STAR_LIFE_PERIOD) as f32
 }
 
 /// Every slice's numbers for this frame, for a star image `image` texels
-/// across and down, each depth `travel` star pixels on along `direction`, as
-/// one sheet.
+/// across and down, each depth `travel` star pixels on across and down
+/// ([`Motion::stars`]), as one sheet.
 ///
 /// The star image is drawn by evaluating each star at its texel centres, so
 /// a star narrower than a texel would show only where a centre happened to
@@ -323,15 +281,13 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 /// apart at this resolution.
 pub(crate) fn star_slices(
     settings: harmonigraph_scene::StarSettings,
-    direction: f32,
-    travel: [f64; STAR_SLICES],
+    travel: [[f64; 2]; STAR_SLICES],
     layout: &StarLayout,
     image: [u32; 2],
 ) -> [StarSlice; STAR_SLICES] {
     // The wider of a texel's two sides: each axis rounds up on its own.
     let texel =
         (0..2).map(|axis| layout.pane[axis] / image[axis].max(1) as f32).fold(0.0, f32::max);
-    let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
     let solo = plan
         .depths
@@ -342,9 +298,7 @@ pub(crate) fn star_slices(
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
-        let shift =
-            |axis: f64| (axis * travel[k] / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32;
-        let offset = [shift(cos), shift(sin)];
+        let offset = travel[k].map(|t| (t / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32);
         let grid = layout.grids[k];
         // The cell a pixel at the pane's top left edge is in, as the shader
         // works it out, with the original conservative neighbor and margin.
@@ -439,9 +393,7 @@ uniform_group! {
 impl StarUniforms {
     pub(crate) fn new(
         settings: harmonigraph_scene::StarSettings,
-        direction: f32,
-        now: f64,
-        travel: [f64; STAR_SLICES],
+        motion: Motion,
         pixels: [u32; 2],
         layout: &StarLayout,
         image: [u32; 2],
@@ -450,10 +402,10 @@ impl StarUniforms {
             size: Float2(pixels.map(|n| n as f32)),
             star_image_size: Float2(image.map(|n| n as f32)),
             star_randomness: settings.star_randomness,
-            star_life: star_life(settings, now),
+            star_life: star_life(motion.life),
             star_size_variation: settings.star_size_variation,
             star_cover: settings.star_cover,
-            star_slices: star_slices(settings, direction, travel, layout, image),
+            star_slices: star_slices(settings, motion.stars, layout, image),
         }
     }
 }

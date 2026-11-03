@@ -432,35 +432,59 @@ fn full_resolution_stars_draw_the_frame_on_record() {
 }
 
 /// The light field holds the newest slab across the analyzer divider, so the
-/// stars beside it are as bright as the ones further in. It used to be silence
+/// texture beside it is as bright as it is further in. It used to be silence
 /// past the divider, which the reduced field's filtering and every star
 /// centred there pulled into a dark seam a few pixels wide.
+///
+/// Colour memory, on as the look ships, widened that seam (8 pixels against
+/// 5, #1540), so the claim is held at the fresh pickup and release as well as
+/// with the memory off, under Watercolor as well as Stars, each measured over
+/// its own seam's width.
 #[test]
-fn stars_hold_their_light_up_to_the_analyzer() {
+fn textures_hold_their_light_up_to_the_analyzer() {
+    use harmonigraph_scene::CloudStyle;
     let shot = Shot { size: [480, 240], range: (36.0, 96.0) };
-    let take = shot.dialled(|a| {
-        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-        a.spectrum.roll_fraction = 0.65;
-    });
-    let Some(frame) = last_frame(&shot, take) else {
-        eprintln!("skipping stars_hold_their_light_up_to_the_analyzer: no usable GPU adapter");
-        return;
-    };
-    let [w, h] = shot.size.map(|n| n as usize);
-    let mean = |columns: std::ops::Range<usize>| {
-        let n = columns.len() * h * 3;
-        let sum: u32 = columns
-            .flat_map(|x| (0..h).flat_map(move |y| (0..3).map(move |c| (y * w + x) * 4 + c)))
-            .map(|i| u32::from(frame[i]))
-            .sum();
-        sum as f32 / n as f32
-    };
-    // `dialled` draws full-bleed, so the region is exactly the pane's first
-    // `roll_fraction` of its width and the divider is drawn at its edge. A
-    // margin there would move both windows off the seam.
-    let divider = (0.65 * w as f32).round() as usize;
-    let (edge, inside) = (mean(divider - 6..divider - 1), mean(divider - 60..divider - 20));
-    assert!(edge > 0.95 * inside, "the newest edge {edge} against {inside} further in");
+    let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+    for (style, memory) in [
+        (CloudStyle::Stars, false),
+        (CloudStyle::Stars, true),
+        (CloudStyle::Watercolor, false),
+        (CloudStyle::Watercolor, true),
+    ] {
+        let take = shot.dialled(|a| {
+            let atmosphere = &mut a.spectrum.atmosphere;
+            atmosphere.cloud_style = style;
+            if memory {
+                (atmosphere.color_pickup, atmosphere.color_release) =
+                    (fresh.color_pickup, fresh.color_release);
+            }
+            a.spectrum.roll_fraction = 0.65;
+        });
+        let Some(frame) = last_frame(&shot, take) else {
+            eprintln!("skipping textures_hold_their_light_up_to_the_analyzer: no usable GPU");
+            return;
+        };
+        let [w, h] = shot.size.map(|n| n as usize);
+        let mean = |columns: std::ops::Range<usize>| {
+            let n = columns.len() * h * 3;
+            let sum: u32 = columns
+                .flat_map(|x| (0..h).flat_map(move |y| (0..3).map(move |c| (y * w + x) * 4 + c)))
+                .map(|i| u32::from(frame[i]))
+                .sum();
+            sum as f32 / n as f32
+        };
+        // `dialled` draws full-bleed, so the region is exactly the pane's
+        // first `roll_fraction` of its width and the divider is drawn at its
+        // edge. A margin there would move both windows off the seam.
+        let divider = (0.65 * w as f32).round() as usize;
+        let seam = if memory { 8 } else { 5 };
+        let (edge, inside) =
+            (mean(divider - 1 - seam..divider - 1), mean(divider - 60..divider - 20));
+        assert!(
+            edge > 0.95 * inside,
+            "{style:?}, memory {memory}: the newest edge {edge} against {inside} further in"
+        );
+    }
 }
 
 /// The pinned look's Stars settings draw into a reduced image, filtered up

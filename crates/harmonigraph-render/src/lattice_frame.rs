@@ -93,30 +93,6 @@ impl LatticeCallback {
         // Reduce the decorative clock in f64 before uploading bounded phases.
         let texture_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
-        let velvet = atmosphere.material_style == harmonigraph_scene::LatticeMaterial::VelvetScales;
-        let (material_scale, cells) = lattice_material::size_and_cells(
-            atmosphere.material_style,
-            &atmosphere.material_settings,
-        );
-        // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling
-        // its 40-cell tile. A screen-axis wrap must span five tile periods
-        // so that the rotated jump is still a whole-number tile repeat.
-        let drift_period = 200.0;
-        let offsets = harmonigraph_scene::MaterialSettings::drift(
-            atmosphere.material_speed,
-            atmosphere.material_direction,
-            scene.glow_timing.map_or(0.0, |clock| clock.now),
-        );
-        let material_drift = std::array::from_fn(|axis| {
-            let offset = offsets[axis];
-            if velvet {
-                // Velvet's domain warp is nonperiodic: wrapping would jump.
-                ((offset - if axis == 1 { 0.6 } else { 0.0 }) * f64::from(cells / material_scale))
-                    as f32
-            } else {
-                (offset * f64::from(cells / material_scale)).rem_euclid(drift_period) as f32
-            }
-        });
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -506,7 +482,7 @@ impl LatticeCallback {
             material: lattice_material::Material {
                 style: atmosphere.material_style,
                 amount: atmosphere.material_amount,
-                drift: material_drift,
+                speed: atmosphere.material_speed,
                 settings: atmosphere.material_settings,
                 stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
                 direction: atmosphere.material_direction,

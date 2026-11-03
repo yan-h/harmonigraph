@@ -191,7 +191,7 @@ fn a_drift_wrap_carries_the_colour_history() {
     let settings = atmosphere.settings.sanitized();
     let pane = [cb.rect.width() as u32, cb.rect.height() as u32];
     let tile = tile_key(pane, atmosphere, CloudSampling::default().tile_cells);
-    let reduced = |now| cloud_drift(settings, cloud_offset(settings, now), tile);
+    let reduced = |now| cloud_drift(settings, cloud_offset_at(settings, now), tile);
     let step = 1.0 / 60.0;
     let before = (0..60 * 600)
         .map(|i| atmosphere.now + f64::from(i) * step)
@@ -668,10 +668,6 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_glow_falloff += 0.1;
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources))[5000], held);
-        // Palette interpretation changes are immediate even on a paused frame.
-        cb.shades.lut = std::sync::Arc::new(vec![[64, 128, 192, 255]; 256]);
-        prepare_once(&device, &queue, &mut resources, &cb);
-        close(pixels(&device, &queue, memory(&resources))[5000], floor(&cb));
         // Seed again, then a backwards seek must initialize from the dark input.
         cb.grid.fill(255);
         cb.atmosphere.as_mut().unwrap().now = 140.0;
@@ -861,7 +857,7 @@ thread_local! {
 }
 
 #[test]
-fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
+fn bucketed_and_exact_memory_allocations_draw_the_same() {
     use crate::spectrogram::tests::frame_with;
     let Some((device, queue)) = headless_device() else { return };
     let style = CloudStyle::Watercolor;
@@ -956,12 +952,14 @@ fn watercolor_brightness_edits_preserve_held_color() {
 /// A Level, Tilt or softness drag re-reads the same texels through a new
 /// mapping rather than moving the sound under them, so the held colour carries
 /// and eases toward the new reading instead of snapping for the whole drag
-/// (#1578). The frame does not advance, so a carried history reads back as it
-/// was held and a reset one as this frame's dark grid.
+/// (#1578). An Audio level colours edit or a preset's palette re-reads them
+/// through a new colouring, and carries too (#1639). The frame does not
+/// advance, so a carried history reads back as it was held and a reset one as
+/// this frame's dark grid.
 #[test]
-fn level_and_softness_edits_carry_held_color() {
+fn level_softness_and_palette_edits_carry_held_color() {
     let Some((device, queue)) = headless_device() else { return };
-    for case in ["level", "step", "tilt", "pitch softness", "time softness"] {
+    for case in ["level", "step", "tilt", "pitch softness", "time softness", "palette"] {
         let mut cb = fixture(CloudStyle::Watercolor);
         let mut resources = CallbackResources::default();
         cb.grid.fill(255);
@@ -974,7 +972,8 @@ fn level_and_softness_edits_carry_held_color() {
             "step" => cb.read.level_per_step *= 1.1,
             "tilt" => cb.read.level_per_midi += 0.01,
             "pitch softness" => a.settings.pitch_softness += 0.1,
-            _ => a.settings.time_softness += 0.1,
+            "time softness" => a.settings.time_softness += 0.1,
+            _ => cb.shades.lut = std::sync::Arc::new(vec![[64, 128, 192, 255]; 256]),
         }
         cb.grid.fill(0);
         prepare_once(&device, &queue, &mut resources, &cb);
@@ -1050,4 +1049,142 @@ fn stars_drift_on_across_a_rebuilt_pane() {
         assert!((got - went_on).abs() < 0.01, "depth {k}: {got} against {went_on}");
         assert!((restarted - went_on).abs() > 1.0, "depth {k}: a restart lands there too");
     }
+}
+
+/// A Star lifetime drag minutes in changes how fast the stars' lives turn
+/// over from where they are: at the same clock every cell stays in the life it
+/// was in, where the clock over the new lifetime would move every one of them
+/// on by lives and re-roll the field (#1632).
+#[test]
+fn a_lifetime_nudge_minutes_in_leaves_every_life_in_place() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.now = 600.0;
+    let (now, lifetime) = (a.now, a.settings.stars.star_lifetime);
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let life = memory(&resources).frame.as_ref().unwrap().life;
+    let nudged = lifetime + 0.001;
+    let restarted = now / f64::from(lifetime) - now / f64::from(nudged);
+    assert!(restarted > 1.0, "a restart moves every cell by only {restarted} lives");
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_lifetime = nudged;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert_eq!(memory(&resources).frame.as_ref().unwrap().life, life);
+}
+
+/// A Drift speed or direction drag minutes in moves the texture on by one
+/// frame's travel at the new dials, where the clock times them would jump it
+/// as far as it had come since the clock started (#1639): the material's
+/// history lattice by at most a texel, and each star layer by at most its own
+/// frame's travel.
+#[test]
+fn a_drift_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
+    let Some((device, queue)) = headless_device() else { return };
+    let step = 1.0 / 60.0;
+    for style in [CloudStyle::Watercolor, CloudStyle::VelvetScales, CloudStyle::Stars] {
+        for direction in [false, true] {
+            let case = format!("{style:?}, direction {direction}");
+            let mut cb = fixture(style);
+            cb.atmosphere.as_mut().unwrap().now = 600.0;
+            let mut resources = CallbackResources::default();
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let held = |resources: &CallbackResources| {
+                let frame = memory(resources).frame.as_ref().unwrap();
+                (frame.origin, frame.slices)
+            };
+            let (origin, slices) = held(&resources);
+            let a = cb.atmosphere.as_mut().unwrap();
+            // The stars take their own speeds, and nothing of Drift speed.
+            if direction {
+                a.settings.cloud_direction += 1.0;
+            } else if style == CloudStyle::Stars {
+                a.settings.stars.star_speed = a.settings.stars.star_speed.map(|s| s * 0.99);
+            } else {
+                a.settings.cloud_speed *= 0.99;
+            }
+            a.now += step;
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let (moved_origin, moved_slices) = held(&resources);
+            let mut restart = CallbackResources::default();
+            prepare_once(&device, &queue, &mut restart, &cb);
+            let (restarted_origin, restarted_slices) = held(&restart);
+            // How far one slice's stars moved between two frames, in star
+            // pixels, the hash period's wrap taken out.
+            let apart = |a: StarSlice, b: StarSlice| {
+                let period = STAR_HASH_PERIOD as f32;
+                (0..2)
+                    .map(|i| {
+                        let d = (a.offset.0[i] - b.offset.0[i]).rem_euclid(period);
+                        d.min(period - d) * a.cell
+                    })
+                    .fold(0.0, f32::max)
+            };
+            if style == CloudStyle::Stars {
+                let a = cb.atmosphere.unwrap();
+                let pace = star_pace(a.points_per_ms, cb.rect.height());
+                for k in 0..STAR_SLICES {
+                    let frame = (pace * f64::from(a.settings.stars.star_speed[k]) * step) as f32;
+                    let (moved, restarted) =
+                        (apart(moved_slices[k], slices[k]), apart(restarted_slices[k], slices[k]));
+                    assert!(moved <= frame + 0.01 * slices[k].cell, "{case}, depth {k}: {moved}");
+                    assert!(restarted > 2.0 * frame + 1.0, "{case}, depth {k}: {restarted}");
+                }
+            } else {
+                let texels = |o: [i32; 2]| (0..2).map(|i| (o[i] - origin[i]).abs()).max().unwrap();
+                assert!(texels(moved_origin) <= 1, "{case}: {moved_origin:?} from {origin:?}");
+                assert!(texels(restarted_origin) > 4, "{case}: a restart lands there too");
+            }
+        }
+    }
+}
+
+/// A Drift speed or direction drag moves Watercolor and Scales on by a frame's
+/// travel, which the history follows by its lattice origin as it follows the
+/// drift itself, so the held colour carries across the drag rather than
+/// resetting for its length (#1639). The frame does not advance, so a carried
+/// history reads back as it was held and a reset one as this frame's dark grid.
+#[test]
+fn drift_edits_carry_held_color() {
+    let Some((device, queue)) = headless_device() else { return };
+    for style in [CloudStyle::Watercolor, CloudStyle::VelvetScales] {
+        for direction in [false, true] {
+            let mut cb = fixture(style);
+            let mut resources = CallbackResources::default();
+            cb.grid.fill(255);
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let lit = pixels(&device, &queue, memory(&resources));
+            assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            if direction {
+                s.cloud_direction += 1.0;
+            } else {
+                s.cloud_speed *= 0.99;
+            }
+            cb.grid.fill(0);
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let carried = pixels(&device, &queue, memory(&resources)) == lit;
+            assert!(carried, "{style:?}, direction {direction}: the drag reset the history");
+        }
+    }
+}
+
+/// Brightness variation re-maps each star's level to a palette position
+/// rather than moving any star, so a drag of it eases the held colours as a
+/// Level drag does instead of resetting the stars' history (#1632).
+#[test]
+fn brightness_variation_carries_the_stars_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_randomness = 0.2;
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    cb.grid.fill(0);
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_randomness = 0.6;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let edited = pixels(&device, &queue, memory(&resources));
+    let mut fresh = CallbackResources::default();
+    prepare_once(&device, &queue, &mut fresh, &cb);
+    assert_ne!(edited, pixels(&device, &queue, memory(&fresh)), "the drag reset the history");
 }

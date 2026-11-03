@@ -187,7 +187,7 @@ fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
     let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
     let outside = egui::vec2(4.0, 4.0);
     press_drag(&ctx, &mut draw, inner.left_top() - outside, inner.right_bottom() + outside);
-    for (k, want) in [(0, 1.0), (1, initial[1]), (2, 0.5), (3, initial[3]), (4, 0.0)] {
+    for (k, want) in [(0, 1.0), (1, 0.5), (2, 0.0), (3, initial[3]), (4, initial[4])] {
         assert!((values[k] - want).abs() < 1e-5, "layer {k}: {values:?}");
     }
 }
@@ -211,13 +211,13 @@ fn a_line_lost_mid_drag_does_not_anchor_the_next_one() {
     let (from, to) = (low(inner.left_bottom()) - egui::vec2(4.0, 0.0), low(inner.right_bottom()));
     press_drag(&ctx, &mut draw, from, to + egui::vec2(4.0, 0.0));
     let after = *values.borrow();
-    assert!([0, 2, 4].iter().all(|&k| after[k].abs() < 1e-5), "{after:?}");
+    assert!([0, 1, 2].iter().all(|&k| after[k].abs() < 1e-5), "{after:?}");
 }
 /// The bar under the plot slides every drawn layer together, by the same
 /// octaves for a size, and leaves a layer that is not drawn where it was.
 #[test]
 fn the_star_range_bar_moves_every_drawn_layer_together() {
-    let initial = [1.0, 2.0, 4.0, 3.0, 8.0];
+    let initial = [1.0, 2.0, 8.0, 3.0, 4.0];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
     let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size, StarPane::Spectrogram);
@@ -229,10 +229,10 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
     press_drag(&ctx, &mut draw, from, from + egui::vec2(15.0, 0.0));
     let shift = (values[0] / initial[0]).log2();
     assert!(shift > 0.1, "{values:?}");
-    for k in [2, 4] {
+    for k in [1, 2] {
         assert!(((values[k] / initial[k]).log2() - shift).abs() < 1e-4, "{values:?}");
     }
-    assert_eq!((values[1], values[3]), (initial[1], initial[3]));
+    assert_eq!((values[3], values[4]), (initial[3], initial[4]));
 }
 /// The bar keeps its own pair through a drag: an end dragged off level
 /// layers comes back the way it went, rather than clamping against the end

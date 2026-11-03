@@ -95,6 +95,7 @@ mod lattice_material;
 mod lattice_node_glow;
 mod lattice_stars;
 mod stars;
+mod travel;
 pub use dot_surround::{dot_surround_paint_callback, SurroundDot};
 pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
@@ -1238,6 +1239,10 @@ struct PaneBuffers {
     ink_history: Option<InkStrip>,
     ink_kernel: lattice_node_glow::InkKernel,
     material_tile: Option<lattice_material::Tile>,
+    /// How far the glow material has drifted and the stars travelled, held
+    /// here rather than with the targets that draw them so a resize or a
+    /// change of material goes on from where they were.
+    material_travel: travel::Travel,
     offscreen: Option<Offscreen>,
 }
 
@@ -1662,6 +1667,7 @@ impl LatticeResources {
                 ink_history: None,
                 ink_kernel: Default::default(),
                 material_tile: None,
+                material_travel: Default::default(),
                 offscreen: None,
             }
         });

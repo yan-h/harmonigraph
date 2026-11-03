@@ -520,8 +520,7 @@ fn velvet_samples_body_light_and_preserves_flat_fields() {
 }
 
 /// The starfield draws stars over sound and the scheme's floor over
-/// silence, and reads no tile; at the fresh Medium preset its far three
-/// depths take the reduced tone target as their precomposite.
+/// silence, and reads neither a tile nor the reduced tone target.
 ///
 /// Silence is the claim the look is most likely to break: no star is drawn
 /// over silence, so a quiet pane must settle on the floor EXACTLY — on a
@@ -636,7 +635,7 @@ fn the_starfield_moves_by_the_drift() {
         let layout = atmosphere::star_layout(s.stars, 1.0);
         let image = atmosphere::star_image_size([PANE, PANE], s.stars);
         let gathers =
-            atmosphere::star_slices(s.stars, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image)
+            atmosphere::star_slices(s.stars, [[0.0; 2]; atmosphere::STAR_SLICES], &layout, image)
                 .map(|s| s.gather);
         assert_eq!(gathers.contains(&3), three, "{gathers:?}");
         let mut resources = CallbackResources::default();

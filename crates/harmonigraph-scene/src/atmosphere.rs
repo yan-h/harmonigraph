@@ -6,8 +6,9 @@ use harmonigraph_core::LatticePos;
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
 /// Distinct constructions: [`CloudStyle::Watercolor`] is a field of
-/// overlapping globs that displaces the scalar picture without altering its
-/// levels, then applies the shared palette.
+/// overlapping globs that displaces the scalar picture, darkens or lightens
+/// each glob's edge by its Edge pooling, then applies the shared palette and
+/// varies each glob's brightness by its Random brightness.
 /// [`CloudStyle::VelvetScales`] instead averages each overlapping scallop's
 /// sampled light, with no raw source overlay at full material depth.
 ///
@@ -110,8 +111,9 @@ pub const CLOUD_SPEED_MIN: f32 = 0.0;
 pub const CLOUD_SPEED_MAX: f32 = 20.0;
 
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
-/// the strength #909 shipped as its whole range, where 0.5 is its default. The
-/// bottom is its mirror, where the edge lightens instead.
+/// the strength #909 shipped as its whole range, where 0.5 was its default;
+/// the fresh value is this top. The bottom is its mirror, where the edge
+/// lightens instead.
 pub const WASH_POOL_MAX: f32 = 4.0;
 /// See [`WASH_POOL_MAX`].
 pub const WASH_POOL_MIN: f32 = -WASH_POOL_MAX;
@@ -309,13 +311,18 @@ impl Default for MaterialSettings {
     }
 }
 impl MaterialSettings {
-    /// Sampling offset in cloud units, opposite the visible screen direction.
-    /// Keep f64 until upload; repeating materials reduce their period first.
+    /// Where the sampling offset starts, in cloud units, before any drift.
+    pub const DRIFT_START: [f64; 2] = [0.0, 0.6];
+
+    /// How far the sampling offset moves in a second, in cloud units,
+    /// opposite the visible screen direction. The renderer builds the offset
+    /// up frame by frame from [`DRIFT_START`](Self::DRIFT_START), keeping it in
+    /// f64 until upload; repeating materials reduce their period first, and
     /// Velvet keeps the translation unwrapped because its warp is nonperiodic.
-    pub fn drift(speed: f32, direction: f32, now: f64) -> [f64; 2] {
-        let distance = now * f64::from(speed) * 0.047_169_905_660_283_02;
+    pub fn drift_rate(speed: f32, direction: f32) -> [f64; 2] {
+        let distance = f64::from(speed) * 0.047_169_905_660_283_02;
         let (sin, cos) = f64::from(direction).to_radians().sin_cos();
-        [-distance * cos, 0.6 - distance * sin]
+        [-distance * cos, -distance * sin]
     }
 
     pub fn sanitized(mut self) -> Self {
@@ -474,9 +481,9 @@ pub struct StarSettings {
     /// where the renderer's texel floor widens the depth's stars.
     pub star_jitter: f32,
     /// How many depths the starfield draws, from
-    /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
-    /// back and the front, with the rest spaced evenly between, each in
-    /// the depth nearest its place ([`crate::star_plan::star_layer_depths`]).
+    /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: the stored
+    /// layers 1 to this one in order, so fewer layers drop the front-most
+    /// ([`crate::star_plan::star_layer_depths`]).
     pub star_layers: u32,
     /// Each depth's star spacing, back (0) to front, as a multiple of its own
     /// [`Self::star_size`]. Every cell holds a star, so at one value a depth's
@@ -554,7 +561,9 @@ pub struct StarSettings {
 impl Default for StarSettings {
     fn default() -> Self {
         Self {
-            // Yan's Stars controls captured from the DAW on 2026-09-26.
+            // Yan's Stars controls captured from the DAW on 2026-09-26: the
+            // lattice's, under its own overrides. The spectrogram draws its
+            // 2026-10-07 capture (#1475), retuned since (#1624, #1627).
             star_randomness: 0.080912866,
             // The old shared dial's size spread at its fresh value, anchored
             // at the top: the same smallest-to-largest ratio, now 0.47..1
@@ -796,8 +805,9 @@ impl SpectralAtmosphere {
     }
 
     /// The exponent `Pooling softness` raises the tide line's linear fade to:
-    /// 1/4 at 0, a nearly flat band with a hard outer edge, through 2 at the
-    /// fresh 0.75, which is #909's squared crescent, to 4 at 1.
+    /// 1/4 at 0, a nearly flat band with a hard outer edge, through 2 at
+    /// 0.75, which is #909's squared crescent, to 4 at 1. The fresh 0.536 is
+    /// about 1.1, close to a linear fade.
     pub fn pool_exponent(softness: f32) -> f32 {
         (4.0 * softness - 2.0).exp2()
     }
@@ -870,12 +880,23 @@ impl Default for AtmosphereSettings {
                 wash_randomness: 0.384_269_62,
                 ..MaterialSettings::default()
             },
-            stars: StarSettings {
-                star_randomness: 0.086_385_85,
-                star_jitter: 1.0,
-                star_layers: 4,
-                star_glow_falloff: 0.624_109_57,
-                ..StarSettings::default()
+            // The type's own layers 1, 2, 4 and 5, which the even spread
+            // of four over five drew until four layers drew the first four
+            // (#1635 Stars Q1). The fifth keeps the type's front.
+            stars: {
+                let every = StarSettings::default();
+                let four = |v: [f32; crate::star_plan::STAR_DEPTHS]| [v[0], v[1], v[3], v[4], v[4]];
+                StarSettings {
+                    star_randomness: 0.086_385_85,
+                    star_jitter: 1.0,
+                    star_layers: 4,
+                    star_spacing_ratio: four(every.star_spacing_ratio),
+                    star_size: four(every.star_size),
+                    star_speed: four(every.star_speed),
+                    star_solid: four(every.star_solid),
+                    star_glow_falloff: 0.624_109_57,
+                    ..every
+                }
             },
             material_speed: 3.136_019_5,
             material_direction: 203.0,

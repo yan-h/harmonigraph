@@ -898,7 +898,8 @@ mod tests {
     ///
     /// The spectrogram's cloud layer is the one place in the draw path with a
     /// clock of its own, and all that keeps it reproducible is that the drift
-    /// comes off `atmosphere.now` times a speed dial rather than a wall clock. The
+    /// is built up off `atmosphere.now` at the speed dial, starting over from
+    /// `now` at a render's first frame, rather than off a wall clock. The
     /// shader text reads the same either way, so this is measured.
     ///
     /// Both halves are non-vacuous, and either could be silently absent. The
@@ -920,7 +921,7 @@ mod tests {
     /// vacuous is worth no more than the fixture behind it.
     ///
     /// The starfield runs the same four renders. It has a second clock beside
-    /// the drift — the stars' lives, off `now` as well — and it is the one
+    /// the drift — the stars' lives, built up off `now` as well — and it is the one
     /// texture that does not go through the shared palette lookup, so it is a
     /// second draw path rather than a second setting of this one.
     #[test]

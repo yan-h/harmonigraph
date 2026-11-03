@@ -57,8 +57,10 @@ impl StarGather {
 }
 
 /// The least of its depth's largest star a star is ever drawn at by the cap
-/// at its read's window, wherever `Position variation` strays it: so the cap
-/// stays inside the 0.47 to 1 of it `Size variation` itself draws.
+/// at its read's window, wherever `Position variation` strays it. Set inside
+/// the 0.47 to 1 of it that `Size variation` draws at the type's 31%, which
+/// the lattice keeps; at the spectrogram's fresh 10%, which draws 0.78 to 1,
+/// the cap can draw a strayed star a little smaller than the dial does.
 pub const STAR_CAP_SHARE: f32 = 0.75;
 
 /// The least a read must hold, in star pixels from a cell's centre, for a
@@ -95,17 +97,15 @@ pub fn star_falloff_bend(falloff: f32) -> f32 {
 }
 
 /// Where each depth sits from back (0) to front (1) at `Star layers` `layers`,
-/// or `None` where it is not drawn. Layer `i` of `n` sits at `i / (n - 1)`,
-/// in the depth whose own place at five layers is nearest: two layers are the
-/// back and the front, three add the middle.
+/// or `None` where it is not drawn. `Star layers` `n` draws the stored layers
+/// 1 to `n` in order, layer `i` in depth `i` at `i / (n - 1)`: fewer layers
+/// drop the front-most, and more bring it back with its own values.
+///
+/// A depth's place decides nothing but where the per-layer plot draws it:
+/// size, spacing, speed and solid are each depth's own (#1454).
 pub fn star_layer_depths(layers: u32) -> [Option<f32>; STAR_DEPTHS] {
     let n = (layers as usize).clamp(2, STAR_DEPTHS);
-    let mut depths = [None; STAR_DEPTHS];
-    for i in 0..n {
-        let d = i as f32 / (n - 1) as f32;
-        depths[(d * (STAR_DEPTHS - 1) as f32).round() as usize] = Some(d);
-    }
-    depths
+    std::array::from_fn(|i| (i < n).then(|| i as f32 / (n - 1) as f32))
 }
 
 /// The band a star's centre is drawn from, in cells, at `Position variation`
@@ -263,16 +263,16 @@ mod tests {
         assert!(far.cell > near.cell && far.radius > near.radius && far.speed > near.speed);
     }
 
-    /// Fewer layers keep the farthest and the nearest and space the rest
-    /// evenly between, each in the depth nearest its place, and each drawn
-    /// one takes that depth's own size, spacing, speed and solid.
+    /// `Star layers` `n` draws the stored layers 1 to `n` in order, so fewer
+    /// layers drop the front-most; each is plotted at `i / (n - 1)` and takes
+    /// its own depth's size, spacing, speed and solid.
     #[test]
-    fn star_layers_keep_both_ends_and_spread_the_rest() {
+    fn star_layers_draw_the_first_n_stored_layers() {
         let fresh = StarSettings { star_solid: [0.1, 0.2, 0.3, 0.4, 0.5], ..Default::default() };
         for (layers, drawn) in [
-            (2, vec![(0, 0.0), (4, 1.0)]),
-            (3, vec![(0, 0.0), (2, 0.5), (4, 1.0)]),
-            (4, vec![(0, 0.0), (1, 1.0 / 3.0), (3, 2.0 / 3.0), (4, 1.0)]),
+            (2, vec![(0, 0.0), (1, 1.0)]),
+            (3, vec![(0, 0.0), (1, 0.5), (2, 1.0)]),
+            (4, vec![(0, 0.0), (1, 1.0 / 3.0), (2, 2.0 / 3.0), (3, 1.0)]),
             (5, vec![(0, 0.0), (1, 0.25), (2, 0.5), (3, 0.75), (4, 1.0)]),
         ] {
             let plan = StarSettings { star_layers: layers, ..fresh }.plan();

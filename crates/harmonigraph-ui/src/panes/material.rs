@@ -89,8 +89,10 @@ pub(super) fn edge_pooling(
 ///
 /// Every quality that differed between the prototype's four motion variants is
 /// a bar here rather than a choice made in the shader, because Yan's pick was a
-/// starting point "with sliders exposed". The fresh values are his controls as
-/// captured from the DAW on 2026-09-26.
+/// starting point "with sliders exposed". Each pane has its own fresh values:
+/// the lattice's start from his controls captured from the DAW on 2026-09-26,
+/// the spectrogram's from the 2026-10-07 capture (#1475), retuned since
+/// (#1624, #1627).
 /// The `pane` says how its sizes and speeds read ([`crate::widgets::star_layers`]).
 pub(super) fn stars(
     ui: &mut egui::Ui,
@@ -106,10 +108,10 @@ pub(super) fn stars(
         .default_value(fresh.star_layers as f32)
         .show(ui)
         .on_hover_text(
-            "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and there is always a back and a front layer with the rest spaced evenly between. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed and solid share, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
+            "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and fewer layers drop the front-most. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed and solid share, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
         );
-    // Solo is held per depth, and a new layer count puts other depths under
-    // the numbers, so a solo left on would come back on a different layer.
+    // Solo is held per depth, and a solo left on a layer the count takes away
+    // would come back on, unseen, when the count brings it back.
     if layers as u32 != atmosphere.star_layers {
         atmosphere.star_solo = Default::default();
     }
@@ -194,7 +196,7 @@ pub(super) fn stars_resolution(
     .step(harmonigraph_scene::STAR_RESOLUTION_STEP)
     .show(ui)
     .on_hover_text(
-        "Resolution the stars are drawn at, relative to the pane, in quarters. 100% is the sharpest; 50% draws a quarter of the pixels, softer and faster. Star positions, sizes and reach stay the same.",
+        "Resolution the stars are drawn at, relative to the pane, in quarters. 100% is the sharpest; 50% draws a quarter of the pixels, softer and faster. Star positions stay the same; a star smaller than a pixel of the image is drawn a pixel wide and dimmed to keep its light, so at lower resolutions small stars look bigger and fainter.",
     );
 }
 

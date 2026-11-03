@@ -503,7 +503,7 @@ fn cloud_light(pt: vec2<f32>) -> f32 {
 // version read as cracked mud.
 //
 // Each glob reads the displaced scalar level, and `Edge pooling` is the one
-// tone adjustment: off by default, darkening along an edge above 0 and
+// tone adjustment: 400% fresh, darkening along an edge above 0 and
 // lightening below it, and never moving silence off the palette's floor.
 // `Fine layer mix` mixes the levels before the shared palette transfer.
 //
@@ -521,8 +521,9 @@ const WASH_POOL: f32 = 0.44;
 const WASH_PIG_DEPTH: f32 = 0.35;
 // A negative `Edge pooling` lifts by `level * (1 - level)` times this, which
 // matches the darkening's bite at mid level (`0.35 + 0.65 * 0.5 = 2.7 / 4`)
-// and is zero at both ends, so silence stays black. It can still overshoot 1
-// on a bright band — from level 0.84 up at -100% with hard edges — and clamps
+// and is zero at both ends, so silence stays on the palette's floor. It can
+// still overshoot 1 on a bright band — from level 0.84 up at -100% with hard
+// edges — and clamps
 // there, flattening that stretch of edge to the palette's top.
 const WASH_BLOOM: f32 = 2.7;
 
@@ -537,8 +538,9 @@ fn wash_level(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> f32 {
     }
     // The tide line: full against the front glob's arc, gone `Width` radii
     // out, and the fade between them raised to the `Softness` exponent — a
-    // flat hard-edged band at one end, a long soft tail at the other. The
-    // fresh 0.55 and 2 are #909's crescent exactly.
+    // flat hard-edged band at one end, a long soft tail at the other. A width
+    // of 0.55 and an exponent of 2 are #909's crescent exactly; the fresh
+    // width is 0.55 and the fresh exponent about 1.1.
     let shape = pow(clamp(1.0 - wet.gap / cloud.wash_pigment.y, 0.0, 1.0), cloud.wash_pigment.z);
     // The tide line has to fade as the edge dissolves: a crisp dark crescent
     // on a boundary that is no longer there reads as a line floating in fog.
@@ -885,10 +887,10 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // over as they move, but not look like a flat effect pasted on the spectrogram"*.
 // Prototyped in numpy over a real take (round 4's `drift.py`).
 //
-// **Depth slices, not octaves.** Five jittered star grids from far (fine dust,
-// cells of `Star size`'s far end, many and faint) to near (cells of its near
-// end, few, bright, soft), each sliding at the shared drift times its own
-// parallax factor. The CPU works out every slice's numbers and its drift
+// **Depth slices, not octaves.** Up to five jittered star grids, one per `Star
+// layers` layer from the back, each with its own size, spacing and solid share,
+// and each drifting along `Drift direction` at its own `Star speed`, built up
+// frame by frame. The CPU works out every slice's numbers and its drift
 // (`star_slices`); every slice is drawn into one image at `Stars resolution`.
 //
 // **Each star is worked out once a frame, not once per pixel.** Everything about
@@ -900,8 +902,10 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // the star image reads one, four or nine texels a slice, as few as hold its
 // stars whole (#1142).
 //
-// **Lives.** A star lives `Star lifetime`, then its cell draws a new star,
-// fading the old one out and the new one in over the ends of their lives. Cells
+// **Lives.** A star lives `Star lifetime`. At full `Twinkle` its cell then
+// draws a new star, fading the old one out and the new one in over the ends of
+// their lives; below it the star keeps its place, dips only that far and blends
+// into its next life's brightness and size. Cells
 // turn over at hashed times, so the field never does at once. The life a star
 // is in is hashed into everything about it. Each depth moves as one sheet: a
 // per-star speed spread that let each star stray at its own speed paid for it
@@ -918,7 +922,8 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // POSITION on the palette rather than a multiply, which would turn an orange
 // into brown mud: a dim star is the scheme's own lower colour and sinks into the
 // sky, a bright one sits above what is behind it. Its shape is only coverage — a
-// soft Gaussian point with an optional same-colour fringe — and the slices are
+// solid core over its layer's solid share, then a glow bent by `Glow falloff`
+// (`star_profile`) — and the slices are
 // laid far to near, each a mix with what is under it rather than a sum (how far
 // it hides the stars behind is `Cover`, in `star_layers`), so no core can whiten
 // and no rim can turn another colour. Round 8 of the prototype (`round8.py`,

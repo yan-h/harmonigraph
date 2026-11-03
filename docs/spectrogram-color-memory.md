@@ -1,7 +1,8 @@
 # Spectrogram color memory
 
 Color pickup and Color release are shared by Stars, Watercolor and Scales.
-The defaults reproduce prototype B: pickup 0.08 seconds and release 0.6 seconds.
+Prototype B used pickup 0.08 seconds and release 0.6 seconds;
+the fresh values, captured from the DAW (#1475), are pickup 0.198 seconds and release 0.208 seconds.
 Both bars run from zero to five seconds and specify exponential time constants:
 after one time constant, about 37% of the previous value remains.
 Both zero restores the original immediate rendering path and releases the history textures.
@@ -47,14 +48,21 @@ Stars instead allocate one history texel per atlas cell, at most 128 MiB for bot
 Memory disabled allocates none of these textures.
 
 History survives changes to the scalar blur target's allocation when its own dimensions are unchanged.
-The reset key includes active material coordinates, source interpretation, palette and active style's color controls.
+The reset key includes the active material coordinates and the active style's look controls,
+Edge pooling, its width and its softness among them: they move where the pool sits under each texel (#1579).
 It also includes the pane's geometry (size, points per millisecond and per cent) and a history epoch that Clear history advances,
 so a resize, a time zoom or a cleared history shows the new picture at once instead of fading the old one into it.
-Incoming audio, advancing time, response times, Texture mix and unrelated styles' controls are excluded.
-Palette comparisons retain the existing shared-snapshot fast path.
+Incoming audio, advancing time, response times, Texture mix, the level mapping (Level, Tilt and softness, #1578) and unrelated styles' controls are excluded.
+Stars' Brightness variation is excluded for the same reason as the level mapping:
+it re-maps the same star's level to the palette (#1632).
+So are Drift speed and Drift direction:
+the drift is built up frame by frame, so a drag moves the texture on by one frame's travel,
+which history follows as it follows the drift itself (#1639).
+The palette is not in it either: an Audio level colours edit or a preset switch re-reads the same texels through a new colouring,
+so held colour eases to it over Color release as it does after a Level drag (#1639).
 A backward clock or source endpoint, disabled texture, invalid mapping, or a gap above 30 seconds resets history.
 Thirty seconds is six times the longest allowed response time, leaving less than 0.25% residual even at that setting.
-Repeated draws at the identical clock preserve history exactly, while interpretation changes still initialize it immediately.
+Repeated draws at the identical clock preserve history exactly, while a change of the key still initializes it immediately.
 
 ## Verification
 
@@ -77,7 +85,7 @@ The 1080p run used 40 measured frames per case; the 4K run used 100.
 | Style | 1080p off | 1080p B | 4K off | 4K B |
 | --- | ---: | ---: | ---: | ---: |
 | Stars | 9.16 ms | 8.96 ms | 31.32 ms | 31.45 ms |
-| Mosaic | 1.22 ms | 1.67 ms | 2.55 ms | 4.42 ms |
+| Mosaic (since removed) | 1.22 ms | 1.67 ms | 2.55 ms | 4.42 ms |
 | Watercolor | 1.33 ms | 1.71 ms | 3.20 ms | 4.79 ms |
 
 Stars' difference is within run noise; it is not evidence of a speedup.

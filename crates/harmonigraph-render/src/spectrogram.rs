@@ -796,7 +796,6 @@ impl CallbackTrait for SpectrogramCallback {
                     ppp,
                     settings,
                     &plan,
-                    self.shades.lut.clone(),
                     self.grid.first_key + self.grid.run.len() as i64,
                 );
                 target.encode(

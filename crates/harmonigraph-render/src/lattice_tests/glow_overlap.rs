@@ -201,10 +201,12 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     }
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
-    assert_ne!(smooth, read_glow(&shooter), "held notes still show material motion");
+    let moved = read_glow(&shooter);
+    assert_ne!(smooth, moved, "held notes still show material motion");
     scene.view.atmosphere.material_speed = 0.0;
+    scene.glow_timing.as_mut().unwrap().now = 16.0;
     shooter.shot_again(&scene);
-    assert_eq!(smooth, read_glow(&shooter), "zero speed freezes washes");
+    assert_eq!(moved, read_glow(&shooter), "zero speed freezes washes where they are");
     scene.view.atmosphere.material_amount = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "depth zero restores the production smooth source");
@@ -214,7 +216,7 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     assert_eq!(baseline, read_glow(&shooter), "disabled material is exact");
     scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
-    assert_eq!(smooth, read_glow(&shooter));
+    assert_eq!(moved, read_glow(&shooter), "a disabled material goes on from where it was");
     for node in &mut scene.nodes {
         node.glow.level = 0.0;
     }
@@ -251,8 +253,13 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
         // axis repeat, travelling in both directions along each screen axis.
         for (direction, axis) in [(0.0, 0), (90.0, 1), (180.0, 0), (270.0, 1)] {
             scene.view.atmosphere.material_direction = direction;
-            let drift =
-                |now| harmonigraph_scene::MaterialSettings::drift(1.0, direction, now)[axis];
+            // Each direction's first crossing comes before the last one's, a
+            // clock run backwards, so the drift starts over at `now` times
+            // the rate there.
+            let drift = |now| {
+                harmonigraph_scene::MaterialSettings::DRIFT_START[axis]
+                    + harmonigraph_scene::MaterialSettings::drift_rate(1.0, direction)[axis] * now
+            };
             let cells = f64::from(if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
                 405.0 / 240.0 / scene.view.atmosphere.material_settings.velvet_size
             } else {
@@ -279,6 +286,48 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
                 "direction {direction}, boundary {boundary}: sudden channel step {largest_step}"
             );
             }
+        }
+    }
+}
+
+/// A Drift speed or direction drag minutes in moves the glow material on by
+/// one frame's travel at the new dials, where the clock times them would jump
+/// it as far as it had come since the clock started (#1639). The stars travel
+/// along the same direction at their own speeds.
+#[test]
+fn a_drift_nudge_minutes_in_moves_the_material_one_frame_at_most() {
+    use harmonigraph_scene::LatticeMaterial;
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let largest_step =
+        |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    for style in
+        [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
+    {
+        for direction in [false, true] {
+            let case = format!("{style:?}, direction {direction}");
+            let mut scene = scene(&[1.0, 1.0], 0.75, true);
+            let a = &mut scene.view.atmosphere;
+            a.material_style = style;
+            a.breath_amount = 0.0;
+            a.material_amount = 1.0;
+            a.material_speed = 1.0;
+            scene.glow_timing =
+                Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
+            let held = glow(&mut shooter, &scene);
+            let a = &mut scene.view.atmosphere;
+            if direction {
+                a.material_direction += 1.0;
+            } else if style == LatticeMaterial::Stars {
+                a.stars.star_speed = a.stars.star_speed.map(|s| s * 0.99);
+            } else {
+                a.material_speed *= 0.99;
+            }
+            scene.glow_timing.as_mut().unwrap().now += 0.0001;
+            shooter.shot_again(&scene);
+            let carried = largest_step(&held, &read_glow(&shooter));
+            assert!(carried <= 2, "{case}: sudden channel step {carried}");
+            let restarted = largest_step(&held, &glow(&mut shooter, &scene));
+            assert!(restarted > 10, "{case}: a restart lands there too ({restarted})");
         }
     }
 }
@@ -383,9 +432,12 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
     assert_eq!(still, read_glow(&shooter), "both zero speeds freeze held light");
+    // The material's drift is built up frame by frame, so it moves only as
+    // the clock runs on at its speed.
     for (texture_speed, material_speed) in [(1.0, 0.0), (0.0, 1.0)] {
         scene.view.atmosphere.texture_speed = texture_speed;
         scene.view.atmosphere.material_speed = material_speed;
+        scene.glow_timing.as_mut().unwrap().now += 8.0;
         shooter.shot_again(&scene);
         assert_ne!(still, read_glow(&shooter), "each stage moves independently");
         assert_eq!(
@@ -394,6 +446,9 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
             "motion does not rebake geometry"
         );
     }
+    // Back to the clock's start, as a render started over: the carried pane's
+    // drift starts over there too, and draws what a fresh pane does.
+    scene.glow_timing.as_mut().unwrap().now = 0.0;
     // Texture edits and positive material amount never invalidate active geometry.
     scene.view.atmosphere.texture_depth = 0.4;
     scene.view.atmosphere.texture_scale = 4.0;
@@ -856,7 +911,7 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
     let raw = glow(&mut shooter, &scene);
     let hue = raw.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).unwrap();
     scene.view.atmosphere.material_amount = 1.0;
-    for resolution in [1.0, 0.75, 1.0 / 3.0] {
+    for resolution in [1.0, 0.75, 0.25] {
         scene.view.atmosphere.stars.star_resolution = resolution;
         let painted = glow(&mut shooter, &scene);
         assert!(
@@ -914,7 +969,7 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
     let mut scene = scene(&[1.0, 1.0, 0.6], 0.75, true);
     scene.view.atmosphere.breath_amount = 0.0;
     scene.view.atmosphere.material_amount = 1.0;
-    // The spectrogram's sizes, small and dense enough to sum past coverage:
+    // The type's own sizes, small and dense enough to sum past coverage:
     // the lattice draws what it stores `LATTICE_STAR_SIZE_SCALE` times over.
     scene.view.atmosphere.stars = harmonigraph_scene::StarSettings::default()
         .scaled(1.0 / harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
@@ -943,8 +998,8 @@ fn stars_carried_material_and_resolution_transitions_match_fresh_panes() {
     for (style, amount, resolution, scale) in [
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 1.0, 0.75, 1.0),
-        (LatticeMaterial::Stars, 1.0, 1.0 / 3.0, 1.0),
-        (LatticeMaterial::Watercolor, 1.0, 1.0 / 3.0, 1.0),
+        (LatticeMaterial::Stars, 1.0, 0.25, 1.0),
+        (LatticeMaterial::Watercolor, 1.0, 0.25, 1.0),
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 0.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),

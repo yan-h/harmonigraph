@@ -1,6 +1,6 @@
 # Spectral texture levels
 
-Watercolor at 0% Random brightness displaces the scalar spectrogram picture without adding exposure,
+Watercolor at 0% Random brightness and 0% Edge pooling displaces the scalar spectrogram picture without adding exposure,
 lighting or pigment.
 This is the A2/B2 choice from issue #1027:
 sample the displaced levels,
@@ -14,24 +14,26 @@ Pitch and time softness build the source picture using the density-weighted filt
 Watercolor reads that same softened field and keeps its overlapping globs,
 lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
-Texture mix blends original and displaced levels before the shared palette lookup.
+With color memory off, Texture mix blends original and displaced levels before the shared palette lookup;
+with it on, as it is fresh, Texture mix blends the plain and remembered colors in linear light (see [color memory](spectrogram-color-memory.md)).
 Since #1042 there is no Cloud pixel size:
 cloud sampling is fixed at 0.5 pt,
 which is native on 1x and 2x displays,
 so the displaced scalar field is reduced before that lookup only where a point spans more than two device pixels.
 Tile geometry and the Watercolor tile rotation are unchanged.
 
-At zero Refraction with Color pickup and Color release also zero (and Watercolor Random brightness at 0%) the renderer takes the ordinary texture-off path,
+At zero Refraction with Color pickup and Color release also zero (and Watercolor Random brightness and Edge pooling at 0%) the renderer takes the ordinary texture-off path,
 so the picture is byte-identical and no texture work is needed.
 Zero Refraction alone does not reach that path at the shipped defaults:
 Color pickup and Color release are on by default and keep temporal color memory running regardless of Refraction (see [color memory](spectrogram-color-memory.md)).
 Refraction over a constant source cannot invent a pattern;
 half-float intermediate storage and filtering can round the output by one channel byte.
 
-Scale relief and Edge pooling are removed because they only changed lighting and pigment.
-Their old saved keys are ignored;
+Scale relief was removed because it only changed lighting.
+Edge pooling was removed with it and came back in #1335 as the one tone adjustment:
+it darkens each glob's edge above 0% and lightens it below, before the palette lookup, and is 400% fresh.
+Scale relief's old saved key is ignored;
 other saved appearance settings remain readable.
-Existing projects will look different with a texture enabled because the old tone adjustments are gone.
 The level contours that once quantized the refracted picture were removed in turn;
 their saved keys are ignored the same way.
 
