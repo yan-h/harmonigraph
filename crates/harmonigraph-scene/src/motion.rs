@@ -511,10 +511,23 @@ impl NodeMotion {
                     }
                 }
             } else if gate != motion.gate {
-                // A reversal never schedules new waiting: pending pieces cancel
-                // on off and every piece reverses its current pose immediately.
+                // A reversal never makes a showing piece wait: pending pieces
+                // cancel on off and every piece in view reverses its current
+                // pose immediately, since waiting would freeze it mid-pose.
                 motion.delay = [0.0; 11];
                 motion.level_wait = [0.0; 11];
+                // A press over a departure still under way brings back the
+                // slices already gone in the order's own time, from the press:
+                // reversing them too, with nothing to show yet, made a quick
+                // re-press fade the whole wheel in at once.
+                if gate {
+                    motion.order_delay = view.note_animation.delays(&scene.octave_layout, duration);
+                    for (i, delay) in motion.delay.iter_mut().enumerate() {
+                        if motion.progress[i] == 0.0 {
+                            *delay = motion.order_delay[i];
+                        }
+                    }
+                }
             }
             // A lit slot never waits while the gate is held: not on the
             // arrival's first frame, and not when a second note lights it
@@ -1045,6 +1058,40 @@ mod tests {
         // them rather than one tick's worth.
         assert_eq!(poses[0], poses[1], "the earlier press did not start a fresh entrance");
     }
+    /// A press while the departure is still running brings back the slices
+    /// already gone in the sweep's own order, rather than every slice at once:
+    /// the reversal is only for what is still showing, which cannot wait
+    /// without freezing mid-pose.
+    #[test]
+    fn a_repress_mid_departure_sweeps_back_the_slices_already_gone() {
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = 0.9;
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        draw(&mut motion, &mut tracker, &view, 5.0, false);
+        tracker.handle_event(off(5.0, 60));
+        // Late in the departure: the seam's slices have retracted, the far
+        // ones are still on their way out, and the ink has not run out.
+        let leaving = draw(&mut motion, &mut tracker, &view, 6.45, false);
+        let span = leaving.octave_layout.span as usize;
+        let gone = origin(&leaving).slice_progress;
+        assert!(origin(&leaving).activation > 0.0, "the departure is already over");
+        tracker.handle_event(on(6.45, 60));
+        draw(&mut motion, &mut tracker, &view, 6.45, false);
+        let m = motion.at(LatticePos::ORIGIN);
+        let order = view.note_animation.delays(&leaving.octave_layout, 1.0);
+        for i in 0..span {
+            let owed = if gone[i] == 0.0 { order[i] } else { 0.0 };
+            assert_eq!(m.delay[i], owed, "slice {i} at {}: {:?}", gone[i], m.delay);
+        }
+        assert!(
+            (0..span).any(|i| gone[i] == 0.0 && order[i] > 0.0),
+            "no retracted slice owes a wait: {gone:?}"
+        );
+        assert!((0..span).any(|i| gone[i] > 0.0), "nothing was still showing: {gone:?}");
+    }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
@@ -1480,7 +1527,7 @@ mod tests {
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
     }
     #[test]
-    fn stagger_spread_spans_starts_and_reverses_without_waiting() {
+    fn stagger_spread_spans_starts_and_reverses_what_is_showing_without_waiting() {
         let layout = crate::octave_layout(6, 60.0);
         for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
             let mut view = ViewConfig { fade_shape: 0.0, ..view() };
@@ -1503,15 +1550,22 @@ mod tests {
             for (a, b) in before.into_iter().zip(m.progress) {
                 assert!(if a > 0.0 { b < a } else { b == 0.0 });
             }
+            // The re-press reverses what is still showing at once, and starts
+            // the slices that never arrived on their delays from the press.
+            let left = m.progress;
             tracker.handle_event(on(0.05, 60));
-            draw(&mut motion, &mut tracker, &view, 0.06, false);
-            assert_eq!(motion.at(LatticePos::ORIGIN).delay, [0.0; 11]);
-            draw(&mut motion, &mut tracker, &view, 1.1, false);
+            let scene = draw(&mut motion, &mut tracker, &view, 0.06, false);
+            let order = view.note_animation.delays(&scene.octave_layout, 1.0);
+            for (i, &d) in motion.at(LatticePos::ORIGIN).delay.iter().enumerate() {
+                let owed = if left[i] == 0.0 { (order[i] - 0.01).max(0.0) } else { 0.0 };
+                assert!((d - owed).abs() < 1e-6, "slice {i} waits {d}, not {owed}");
+            }
+            draw(&mut motion, &mut tracker, &view, 2.0, false);
             assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11]);
             // A held control edit governs the next settled departure.
             view.note_animation.stagger_spread = 0.9 - spread;
-            tracker.handle_event(off(1.1, 60));
-            draw(&mut motion, &mut tracker, &view, 1.1, false);
+            tracker.handle_event(off(2.0, 60));
+            draw(&mut motion, &mut tracker, &view, 2.0, false);
             let expected = 0.9 - spread;
             assert!(
                 (motion.at(LatticePos::ORIGIN).delay.into_iter().fold(0.0, f32::max) - expected)
@@ -1521,7 +1575,7 @@ mod tests {
             // The widest delay plus one whole duration: a departure now
             // SPANS `1 + spread`, because the spread offsets starts and no
             // longer buys its waiting out of each slice's own time.
-            let end = 1.1 + 1.0 + f64::from(0.9 - spread) + 1e-5;
+            let end = 2.0 + 1.0 + f64::from(0.9 - spread) + 1e-5;
             draw(&mut motion, &mut tracker, &view, end, false);
             assert_eq!(motion.at(LatticePos::ORIGIN).progress, [0.0; 11]);
         }
