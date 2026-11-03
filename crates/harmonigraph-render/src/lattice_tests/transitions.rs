@@ -1,6 +1,6 @@
 //! Render the selectable gestures, including an audio ring surviving MIDI release.
 use super::fixtures::*;
-use harmonigraph_scene::{AnimationOrder, NoteAnimationConfig};
+use harmonigraph_scene::NoteAnimationConfig;
 
 /// Every layer's arrival casts a measurable shadow, and a mark's shadow rises
 /// over the held body it extends.
@@ -19,20 +19,19 @@ fn each_arrival_casts_a_measurable_shadow() {
         std::fs::create_dir_all(root).unwrap();
     }
     let sweep = root.is_some();
-    for (name, grow, order, spread) in [
-        ("plain", false, AnimationOrder::Circular, 0.0),
-        ("grow", true, AnimationOrder::Circular, 0.0),
-        ("ordered", true, AnimationOrder::Circular, 0.28),
-        ("wide", true, AnimationOrder::Circular, 0.9),
-        ("marks", false, AnimationOrder::Circular, 0.0),
-        ("audio", false, AnimationOrder::Circular, 0.0),
+    for (name, grow, spread) in [
+        ("plain", false, 0.0),
+        ("grow", true, 0.0),
+        ("ordered", true, 0.28),
+        ("wide", true, 0.9),
+        ("marks", false, 0.0),
+        ("audio", false, 0.0),
     ] {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.pluses.clear();
         scene.view.glow_strength = 0.0;
         scene.view.note_bloom = 0.0;
         scene.view.note_animation = NoteAnimationConfig {
-            order,
             stagger_spread: spread,
             radial_start: if grow { -1.0 } else { 0.0 },
             ..Default::default()
@@ -47,8 +46,7 @@ fn each_arrival_casts_a_measurable_shadow() {
             *scene.spectral.color_levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
             scene.spectral.lut = [glam::Vec4::ONE; harmonigraph_scene::PITCH_LUT_N];
         }
-        let delays =
-            scene.view.note_animation.delays(&scene.octave_layout, scene.nodes[0].cents, 42, 1.0);
+        let delays = scene.view.note_animation.delays(&scene.octave_layout, 1.0);
         // `p` sweeps the WHOLE arrival, which a stagger widens past one
         // sector's own duration: every sector animates for 1.0 and the
         // last one only starts at the widest delay.
@@ -128,7 +126,7 @@ fn each_arrival_casts_a_measurable_shadow() {
 }
 
 #[test]
-fn zero_spread_orders_draw_the_same_smooth_arrival() {
+fn zero_spread_draws_the_same_smooth_arrival() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = single_marked_node(MIDDLE_C, 0);
     scene.view.glow_reach = 1.5;
@@ -143,15 +141,8 @@ fn zero_spread_orders_draw_the_same_smooth_arrival() {
         node.melody_level = phase.abs();
         node.glow.level = phase.abs();
         let frame = shooter.shot(&scene);
-        for order in AnimationOrder::ALL {
-            scene.view.note_animation.order = order;
-            scene.view.note_animation.stagger_spread = 0.0;
-            assert_eq!(
-                shooter.shot(&scene),
-                frame,
-                "zero spread changed the smooth arrival for {order:?}"
-            );
-        }
+        scene.view.note_animation.stagger_spread = 0.0;
+        assert_eq!(shooter.shot(&scene), frame, "zero spread changed the smooth arrival");
         scene.view.note_animation = NoteAnimationConfig::default();
     }
 }
@@ -283,7 +274,7 @@ fn smooth_grow_draws_complete_pieces_and_settles() {
 }
 
 #[test]
-fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
+fn staggered_slices_draw_complete_rotated_pieces_at_their_shared_delays() {
     let Some(mut shooter) = Shooter::new([384, 384]) else { return };
     let mut scene = single_marked_node(0, 0);
     scene.node_radius = 1.6;
@@ -300,10 +291,15 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
     scene.background = glam::Vec4::new(0.2, 0.2, 0.2, 1.0);
     shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
     let mut arrivals = Vec::new();
-    for order in AnimationOrder::ALL {
-        scene.view.note_animation =
-            NoteAnimationConfig { order, radial_start: -1.0, ..Default::default() };
-        let delays = scene.view.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
+    // Against an unstaggered arrival, so the delays are seen to reach the
+    // picture.
+    for spread in [0.0, NoteAnimationConfig::default().stagger_spread] {
+        scene.view.note_animation = NoteAnimationConfig {
+            stagger_spread: spread,
+            radial_start: -1.0,
+            ..Default::default()
+        };
+        let delays = scene.view.note_animation.delays(&scene.octave_layout, 1.0);
         let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
         for (step, time) in
             [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()
@@ -327,11 +323,11 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
                 for pixel in shot.as_chunks::<4>().0 {
                     ppm.extend_from_slice(&pixel[..3]);
                 }
-                std::fs::write(root.join(format!("orders-{order:?}-{step}.ppm")), ppm).unwrap();
+                std::fs::write(root.join(format!("stagger-{spread}-{step}.ppm")), ppm).unwrap();
             }
         }
     }
     for pair in arrivals.windows(2) {
-        assert!(differing_pixels(&pair[0], &pair[1]) > 40, "orders drew the same picture");
+        assert!(differing_pixels(&pair[0], &pair[1]) > 40, "the stagger drew the same picture");
     }
 }

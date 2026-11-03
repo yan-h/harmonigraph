@@ -6,7 +6,6 @@ use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
 use std::collections::hash_map::Entry;
-use std::hash::{Hash, Hasher};
 
 // Fixed-seed rather than per-process: nothing here is keyed by input an
 // attacker chooses, and a fixed seed keeps iteration order the same on every
@@ -54,10 +53,9 @@ pub struct NodeMotion {
     /// identical rest.
     ///
     /// A node at rest can still differ from `REST` in what it last read
-    /// (`readings`, `order_seed`, `order_delay`, `level_wait`), and dropping it
-    /// forgets that. Each is written before it is next read: a slot's reading
-    /// before its level can leave 0, the order and its delays on the rise
-    /// that starts the next lifetime, the wait at a departure. The equivalence
+    /// (`readings`, `level_wait`), and dropping it forgets that. Each is
+    /// written before it is next read: a slot's reading before its level can
+    /// leave 0, the wait at a departure. The equivalence
     /// test holds a table that never drops one against this one, frame for
     /// frame.
     nodes: HashMap<LatticePos, Motion>,
@@ -99,8 +97,8 @@ struct Reached {
     lit_after_entering: usize,
 }
 #[derive(Clone)]
-/// Two index spaces share these arrays. `progress`, `delay` and `order_delay`
-/// count the slices a node draws, lowest first (slot `ring.base + i`), as
+/// Two index spaces share these arrays. `progress` and `delay` count the
+/// slices a node draws, lowest first (slot `ring.base + i`), as
 /// `delays` ranks them and the shader reads them: an 11-slice ring can draw a
 /// slice below slot 0, which no slot index holds. `levels`, `targets`,
 /// `readings` and `level_wait` count octave slots, as `NodeInstance::octaves`
@@ -119,8 +117,6 @@ struct Motion {
     gate: bool,
     melody: MarkMotion,
     bass: MarkMotion,
-    order_delay: [f32; 11],
-    order_seed: u32,
     /// Time each slot's presence holds before an ordered departure starts it
     /// falling: the last slice's delay, so the ink outlasts every retraction
     /// rather than dimming the whole wheel at the off. Only for slots still
@@ -204,8 +200,6 @@ impl Motion {
         gate: false,
         melody: MarkMotion::REST,
         bass: MarkMotion::REST,
-        order_delay: [0.0; 11],
-        order_seed: 0,
         level_wait: [0.0; 11],
         audio_waiting: false,
     };
@@ -390,6 +384,9 @@ impl NodeMotion {
         first: bool,
     ) {
         let duration = env.fade_time;
+        // The sweep every node's slices follow: one layout and one fade for
+        // the whole step, so the same for each.
+        let order = view.note_animation.delays(&scene.octave_layout, duration);
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         let dense = self.dense();
@@ -404,9 +401,6 @@ impl NodeMotion {
             let mut melody = None;
             let mut bass = None;
             let mut preexisting = false;
-            // The earliest onset among the notes lighting this node, which
-            // seeds a fresh arrival's order below.
-            let mut first_onset = None::<u64>;
             let mut readings = SlotReadings::default();
             // The one node x held-note match per step: occupancy, marks and
             // readings all come out of it, rather than a second pass over
@@ -416,7 +410,6 @@ impl NodeMotion {
                     continue;
                 }
                 preexisting |= self.at.is_some_and(|at| f64::from_bits(id.1) < at);
-                first_onset = Some(first_onset.map_or(id.1, |first| first.min(id.1)));
                 let slot = slot_of(lo, hi, node.cents, held.pitch);
                 // Activation measures occupancy; intensity rides beside it.
                 targets[slot] = 1.0;
@@ -490,26 +483,9 @@ impl NodeMotion {
             if gate {
                 motion.audio_waiting = false;
             }
-            // A gate rising on a node with no ink begins a lifetime, and the
-            // lifetime owns its order: an arrival's, and also a note's lit over
-            // an audio pose, which starts at full progress and so takes the
-            // reversal below. Seeded only on arrival, that note departed in
-            // whichever order the last note to ARRIVE here left behind.
             let arriving = motion.progress.iter().all(|&p| p == 0.0);
-            if gate && !motion.gate && (arriving || motion.levels.iter().all(|&l| l == 0.0)) {
-                let mut hash = std::collections::hash_map::DefaultHasher::new();
-                node.lattice_pos.hash(&mut hash);
-                first_onset.hash(&mut hash);
-                motion.order_seed = hash.finish() as u32;
-            }
             if gate && !motion.gate && arriving {
-                motion.order_delay = view.note_animation.delays(
-                    &scene.octave_layout,
-                    node.cents,
-                    motion.order_seed,
-                    duration,
-                );
-                motion.delay = motion.order_delay;
+                motion.delay = order;
                 motion.level_wait = [0.0; 11];
                 // Ordered departure needs a COMPLETE arrival, and an arrival now
                 // takes `1 + stagger_spread` fades rather than one, so the hold
@@ -519,14 +495,8 @@ impl NodeMotion {
                 // cost of the spread being a start offset; the alternative was
                 // compressing every piece into a tenth of the fade.
             } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
-                motion.order_delay = view.note_animation.delays(
-                    &scene.octave_layout,
-                    node.cents,
-                    motion.order_seed,
-                    duration,
-                );
-                motion.delay = motion.order_delay;
-                let last = motion.order_delay.into_iter().fold(0.0, f32::max);
+                motion.delay = order;
+                let last = order.into_iter().fold(0.0, f32::max);
                 motion.level_wait = motion.levels.map(|l| if l >= 1.0 { last } else { 0.0 });
                 // Lit means what `level_wait` holds: still full at the off, so
                 // the slice that retracts last is the one whose ink outlasts
@@ -942,7 +912,7 @@ mod tests {
         assert!(NodeMotion::light_classes(&tracker, &view, &env, 2.0).is_empty());
     }
 
-    use crate::{derive_scene, AnimationOrder, Camera, FrameParams, MIDDLE_C_SLOT};
+    use crate::{derive_scene, Camera, FrameParams, MIDDLE_C_SLOT};
     use harmonigraph_core::{NoteEvent, SourceId};
 
     fn draw(
@@ -1043,49 +1013,35 @@ mod tests {
     /// depending on invisible state.
     #[test]
     fn a_faded_departure_leaves_no_pose_for_the_next_press_to_reverse() {
-        for order in AnimationOrder::ALL {
-            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
-            view.note_animation.order = order;
-            view.note_animation.stagger_spread = 0.9;
-            // One press just after the ink runs out, and one well past it.
-            // Both owe the same fresh entrance.
-            let mut poses = Vec::new();
-            for repress in [7.05, 8.5] {
-                let mut tracker = NoteTracker::new();
-                let mut motion = NodeMotion::default();
-                tracker.handle_event(on(0.0, 60));
-                draw(&mut motion, &mut tracker, &view, 0.0, false);
-                draw(&mut motion, &mut tracker, &view, 5.0, false);
-                tracker.handle_event(off(5.0, 60));
-                // The ordered departure spans `1 + stagger_spread` fades, its
-                // presence held for the last slice's delay; past that it is out.
-                let dark = draw(&mut motion, &mut tracker, &view, 7.0, false);
-                assert_eq!(origin(&dark).activation, 0.0, "{order:?}: past the departure's span");
-                assert_eq!(
-                    origin(&dark).slice_progress,
-                    [0.0; 11],
-                    "{order:?}: the ink is gone and the poses are not",
-                );
-                draw(&mut motion, &mut tracker, &view, repress, false);
-                tracker.handle_event(on(repress, 60));
-                let back = draw(&mut motion, &mut tracker, &view, repress + 0.01, false);
-                poses.push(origin(&back).slice_progress);
-            }
-            // Sorted, because `RandomStagger` mints a seed per press and owes
-            // the same SHAPE of entrance rather than the same permutation of
-            // it: as many slices under way, by as much. A press that reversed
-            // leftover poses instead sorts to a spread of them, not to one
-            // tick's worth.
-            let shape = |mut p: [f32; 11]| {
-                p.sort_by(f32::total_cmp);
-                p
-            };
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = 0.9;
+        // One press just after the ink runs out, and one well past it.
+        // Both owe the same fresh entrance.
+        let mut poses = Vec::new();
+        for repress in [7.05, 8.5] {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            draw(&mut motion, &mut tracker, &view, 5.0, false);
+            tracker.handle_event(off(5.0, 60));
+            // The ordered departure spans `1 + stagger_spread` fades, its
+            // presence held for the last slice's delay; past that it is out.
+            let dark = draw(&mut motion, &mut tracker, &view, 7.0, false);
+            assert_eq!(origin(&dark).activation, 0.0, "past the departure's span");
             assert_eq!(
-                shape(poses[0]),
-                shape(poses[1]),
-                "{order:?}: the earlier press did not start a fresh entrance",
+                origin(&dark).slice_progress,
+                [0.0; 11],
+                "the ink is gone and the poses are not",
             );
+            draw(&mut motion, &mut tracker, &view, repress, false);
+            tracker.handle_event(on(repress, 60));
+            let back = draw(&mut motion, &mut tracker, &view, repress + 0.01, false);
+            poses.push(origin(&back).slice_progress);
         }
+        // A press that reversed leftover poses instead holds a spread of
+        // them rather than one tick's worth.
+        assert_eq!(poses[0], poses[1], "the earlier press did not start a fresh entrance");
     }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
@@ -1227,34 +1183,31 @@ mod tests {
     #[test]
     fn short_stabs_reverse_pose_and_opacity_at_event_time_across_frame_cadences() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
-        for order in AnimationOrder::ALL {
-            let mut view = view.clone();
-            view.note_animation.order = order;
-            view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
-            let mut snapshots = Vec::new();
-            for detailed in [false, true] {
-                let mut tracker = NoteTracker::new();
-                let mut motion = NodeMotion::default();
-                tracker.handle_event(on(0.0, 60));
-                draw(&mut motion, &mut tracker, &view, 0.0, false);
-                if detailed {
-                    draw(&mut motion, &mut tracker, &view, 0.1, false);
-                }
-                tracker.handle_event(off(0.2, 60));
-                if detailed {
-                    draw(&mut motion, &mut tracker, &view, 0.2, false);
-                }
-                tracker.handle_event(on(0.25, 60));
-                let scene = draw(&mut motion, &mut tracker, &view, 0.3, false);
-                let node = origin(&scene);
-                assert!((node.activation - 0.2).abs() < 1e-5, "{order:?}: {}", node.activation);
-                snapshots.push((node.activation, node.slice_progress));
-                let repeated = draw(&mut motion, &mut tracker, &view, 0.3, false);
-                assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
+        let mut view = view.clone();
+        view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
+        let mut snapshots = Vec::new();
+        for detailed in [false, true] {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            if detailed {
+                draw(&mut motion, &mut tracker, &view, 0.1, false);
             }
-            for i in 0..11 {
-                assert!((snapshots[0].1[i] - snapshots[1].1[i]).abs() < 1e-5, "{order:?}/{i}");
+            tracker.handle_event(off(0.2, 60));
+            if detailed {
+                draw(&mut motion, &mut tracker, &view, 0.2, false);
             }
+            tracker.handle_event(on(0.25, 60));
+            let scene = draw(&mut motion, &mut tracker, &view, 0.3, false);
+            let node = origin(&scene);
+            assert!((node.activation - 0.2).abs() < 1e-5, "{}", node.activation);
+            snapshots.push((node.activation, node.slice_progress));
+            let repeated = draw(&mut motion, &mut tracker, &view, 0.3, false);
+            assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
+        }
+        for i in 0..11 {
+            assert!((snapshots[0].1[i] - snapshots[1].1[i]).abs() < 1e-5, "{i}");
         }
     }
     /// Pressure routed to opacity over a base of 0 fades a slot's ink, the
@@ -1480,35 +1433,29 @@ mod tests {
         );
     }
     #[test]
-    fn orders_apply_to_settled_departure_and_pending_pieces_cancel_on_interrupt() {
-        for order in AnimationOrder::ALL {
-            let mut view = ViewConfig { fade_shape: 0.0, ..view() };
-            view.note_animation.order = order;
-            view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
-            let mut tracker = NoteTracker::new();
-            let mut motion = NodeMotion::default();
-            tracker.handle_event(on(0.0, 60));
-            draw(&mut motion, &mut tracker, &view, 0.0, false);
-            let arrival = draw(&mut motion, &mut tracker, &view, 0.15, false);
-            tracker.handle_event(off(0.15, 60));
-            let departure = draw(&mut motion, &mut tracker, &view, 0.2, false);
-            for (a, b) in
-                origin(&arrival).slice_progress.iter().zip(origin(&departure).slice_progress)
-            {
-                assert!(b <= *a);
-            }
-            tracker.handle_event(on(0.21, 60));
-            draw(&mut motion, &mut tracker, &view, 1.6, false);
-            tracker.handle_event(off(1.7, 60));
-            let scene = draw(&mut motion, &mut tracker, &view, 1.8, false);
-            let p = origin(&scene).slice_progress;
-            if view.note_animation.staggers() {
-                assert!(
-                    p[..scene.octave_layout.span as usize].iter().any(|&x| (x - p[0]).abs() > 1e-4),
-                    "{order:?} lost departure order"
-                );
-            }
+    fn the_sweep_applies_to_settled_departure_and_pending_pieces_cancel_on_interrupt() {
+        let mut view = ViewConfig { fade_shape: 0.0, ..view() };
+        view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let arrival = draw(&mut motion, &mut tracker, &view, 0.15, false);
+        tracker.handle_event(off(0.15, 60));
+        let departure = draw(&mut motion, &mut tracker, &view, 0.2, false);
+        for (a, b) in origin(&arrival).slice_progress.iter().zip(origin(&departure).slice_progress)
+        {
+            assert!(b <= *a);
         }
+        tracker.handle_event(on(0.21, 60));
+        draw(&mut motion, &mut tracker, &view, 1.6, false);
+        tracker.handle_event(off(1.7, 60));
+        let scene = draw(&mut motion, &mut tracker, &view, 1.8, false);
+        let p = origin(&scene).slice_progress;
+        assert!(
+            p[..scene.octave_layout.span as usize].iter().any(|&x| (x - p[0]).abs() > 1e-4),
+            "lost departure order"
+        );
     }
     #[test]
     fn audio_presence_stays_settled_and_mark_delay_cancels_on_short_notes() {
@@ -1528,91 +1475,51 @@ mod tests {
         tracker.handle_event(off(1.8, 60));
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
     }
-    /// A note that lights a node the audio ring has posed starts its lifetime
-    /// from that pose rather than from an arrival, and departs in its own order
-    /// all the same: not in the order of whichever note last arrived there,
-    /// which is history the picture cannot show.
-    #[test]
-    fn a_note_lit_over_an_audio_pose_departs_in_its_own_order() {
-        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
-        view.note_animation.order = AnimationOrder::RandomStagger;
-        view.note_animation.stagger_spread = 0.9;
-        let departure = |earlier: bool| {
-            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
-            if earlier {
-                tracker.handle_event(on(0.0, 60));
-                draw(&mut motion, &mut tracker, &view, 0.0, false);
-                draw(&mut motion, &mut tracker, &view, 2.0, false);
-                tracker.handle_event(off(2.0, 60));
-            }
-            // Frames inside the replay horizon, so nothing resets the surface:
-            // the earlier note's arrival is still this node's history.
-            for now in [3.0, 4.0, 5.0] {
-                draw(&mut motion, &mut tracker, &view, now, false);
-            }
-            assert_eq!(motion.at(LatticePos::ORIGIN).levels[5], 0.0);
-            draw(&mut motion, &mut tracker, &view, 5.1, true);
-            assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11], "an audio pose");
-            tracker.handle_event(on(5.2, 60));
-            draw(&mut motion, &mut tracker, &view, 5.2, true);
-            draw(&mut motion, &mut tracker, &view, 7.0, true);
-            tracker.handle_event(off(7.0, 60));
-            draw(&mut motion, &mut tracker, &view, 7.0, true);
-            motion.at(LatticePos::ORIGIN).delay
-        };
-        let fresh = departure(false);
-        assert!(fresh.iter().any(|&d| d > 0.0), "an ordered departure: {fresh:?}");
-        assert_eq!(departure(true), fresh);
-    }
     #[test]
     fn stagger_spread_spans_starts_and_reverses_without_waiting() {
         let layout = crate::octave_layout(6, 60.0);
-        for order in AnimationOrder::ALL {
-            for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
-                let mut view = ViewConfig { fade_shape: 0.0, ..view() };
-                view.note_animation.order = order;
-                view.note_animation.stagger_spread = spread;
-                let ds = view.note_animation.delays(&layout, 350.0, 42, 1.0);
-                let active = &ds[..layout.span as usize];
-                assert_eq!(active.iter().copied().fold(f32::INFINITY, f32::min), 0.0);
-                let expected = spread;
-                assert!((active.iter().copied().fold(0.0, f32::max) - expected).abs() < 1e-6);
-                let mut tracker = NoteTracker::new();
-                let mut motion = NodeMotion::default();
-                tracker.handle_event(on(0.0, 60));
-                draw(&mut motion, &mut tracker, &view, 0.0, false);
-                draw(&mut motion, &mut tracker, &view, 0.04, false);
-                let before = motion.at(LatticePos::ORIGIN).progress;
-                tracker.handle_event(off(0.04, 60));
-                draw(&mut motion, &mut tracker, &view, 0.05, false);
-                let m = motion.at(LatticePos::ORIGIN);
-                assert_eq!(m.delay, [0.0; 11]);
-                for (a, b) in before.into_iter().zip(m.progress) {
-                    assert!(if a > 0.0 { b < a } else { b == 0.0 });
-                }
-                tracker.handle_event(on(0.05, 60));
-                draw(&mut motion, &mut tracker, &view, 0.06, false);
-                assert_eq!(motion.at(LatticePos::ORIGIN).delay, [0.0; 11]);
-                draw(&mut motion, &mut tracker, &view, 1.1, false);
-                assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11]);
-                // A held control edit governs the next settled departure.
-                view.note_animation.stagger_spread = 0.9 - spread;
-                tracker.handle_event(off(1.1, 60));
-                draw(&mut motion, &mut tracker, &view, 1.1, false);
-                let expected = 0.9 - spread;
-                assert!(
-                    (motion.at(LatticePos::ORIGIN).delay.into_iter().fold(0.0, f32::max)
-                        - expected)
-                        .abs()
-                        < 1e-6
-                );
-                // The widest delay plus one whole duration: a departure now
-                // SPANS `1 + spread`, because the spread offsets starts and no
-                // longer buys its waiting out of each slice's own time.
-                let end = 1.1 + 1.0 + f64::from(0.9 - spread) + 1e-5;
-                draw(&mut motion, &mut tracker, &view, end, false);
-                assert_eq!(motion.at(LatticePos::ORIGIN).progress, [0.0; 11]);
+        for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
+            let mut view = ViewConfig { fade_shape: 0.0, ..view() };
+            view.note_animation.stagger_spread = spread;
+            let ds = view.note_animation.delays(&layout, 1.0);
+            let active = &ds[..layout.span as usize];
+            assert_eq!(active.iter().copied().fold(f32::INFINITY, f32::min), 0.0);
+            let expected = spread;
+            assert!((active.iter().copied().fold(0.0, f32::max) - expected).abs() < 1e-6);
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            draw(&mut motion, &mut tracker, &view, 0.04, false);
+            let before = motion.at(LatticePos::ORIGIN).progress;
+            tracker.handle_event(off(0.04, 60));
+            draw(&mut motion, &mut tracker, &view, 0.05, false);
+            let m = motion.at(LatticePos::ORIGIN);
+            assert_eq!(m.delay, [0.0; 11]);
+            for (a, b) in before.into_iter().zip(m.progress) {
+                assert!(if a > 0.0 { b < a } else { b == 0.0 });
             }
+            tracker.handle_event(on(0.05, 60));
+            draw(&mut motion, &mut tracker, &view, 0.06, false);
+            assert_eq!(motion.at(LatticePos::ORIGIN).delay, [0.0; 11]);
+            draw(&mut motion, &mut tracker, &view, 1.1, false);
+            assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11]);
+            // A held control edit governs the next settled departure.
+            view.note_animation.stagger_spread = 0.9 - spread;
+            tracker.handle_event(off(1.1, 60));
+            draw(&mut motion, &mut tracker, &view, 1.1, false);
+            let expected = 0.9 - spread;
+            assert!(
+                (motion.at(LatticePos::ORIGIN).delay.into_iter().fold(0.0, f32::max) - expected)
+                    .abs()
+                    < 1e-6
+            );
+            // The widest delay plus one whole duration: a departure now
+            // SPANS `1 + spread`, because the spread offsets starts and no
+            // longer buys its waiting out of each slice's own time.
+            let end = 1.1 + 1.0 + f64::from(0.9 - spread) + 1e-5;
+            draw(&mut motion, &mut tracker, &view, end, false);
+            assert_eq!(motion.at(LatticePos::ORIGIN).progress, [0.0; 11]);
         }
     }
     #[test]
@@ -1627,77 +1534,73 @@ mod tests {
         // against ONE WHOLE DURATION separates the two contracts.
         let step = 0.01f64;
         let spread = 0.9f32;
-        for order in AnimationOrder::ALL {
-            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
-            view.note_animation.order = order;
-            view.note_animation.stagger_spread = spread;
-            let mut tracker = NoteTracker::new();
-            let mut motion = NodeMotion::default();
-            // C5, deliberately NOT middle C, whose slice is the one the orders
-            // start from: the presence check below is about a note landing on a
-            // LATE slice, and middle C would give it a delay of zero to pass at.
-            tracker.handle_event(on(0.0, 72));
-            let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
-            let span = first.octave_layout.span as usize;
-            let mut started = [None; 11];
-            let mut done = [None; 11];
-            let mut now = 0.0;
-            // Past the last slice's finish at `spread + 1`, which is exactly
-            // what a sweep stopping at one duration would never see.
-            while now < f64::from(spread) + 1.5 {
-                now += step;
-                let scene = draw(&mut motion, &mut tracker, &view, now, false);
-                let node = origin(&scene);
-                // The node's presence carries every slot no note lights, so it
-                // must NOT wait for the lit slice. Staggering it too makes the
-                // whole wheel wait on whichever slot the note happens to take,
-                // and C5's is a late one: measured, that collapsed seven starts
-                // spanning 0.9 into all of them landing within 0.08.
-                assert!(node.activation > 0.0, "{order:?}: presence waited for its lit slice");
-                for i in 0..span {
-                    started[i] = started[i].or((node.slice_progress[i] > 0.0).then_some(now));
-                    done[i] = done[i].or((node.slice_progress[i] >= 1.0).then_some(now));
-                }
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = spread;
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        // C5, deliberately NOT middle C, whose slice is the one the orders
+        // start from: the presence check below is about a note landing on a
+        // LATE slice, and middle C would give it a delay of zero to pass at.
+        tracker.handle_event(on(0.0, 72));
+        let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let span = first.octave_layout.span as usize;
+        let mut started = [None; 11];
+        let mut done = [None; 11];
+        let mut now = 0.0;
+        // Past the last slice's finish at `spread + 1`, which is exactly
+        // what a sweep stopping at one duration would never see.
+        while now < f64::from(spread) + 1.5 {
+            now += step;
+            let scene = draw(&mut motion, &mut tracker, &view, now, false);
+            let node = origin(&scene);
+            // The node's presence carries every slot no note lights, so it
+            // must NOT wait for the lit slice. Staggering it too makes the
+            // whole wheel wait on whichever slot the note happens to take,
+            // and C5's is a late one: measured, that collapsed seven starts
+            // spanning 0.9 into all of them landing within 0.08.
+            assert!(node.activation > 0.0, "presence waited for its lit slice");
+            for i in 0..span {
+                started[i] = started[i].or((node.slice_progress[i] > 0.0).then_some(now));
+                done[i] = done[i].or((node.slice_progress[i] >= 1.0).then_some(now));
             }
-            let at = |v: Option<f64>, what: &str| v.unwrap_or_else(|| panic!("{order:?}: {what}"));
-            let expected = f64::from(spread);
-            let whole = |started: [Option<f64>; 11], done: [Option<f64>; 11], way: &str| {
-                for i in 0..span {
-                    let length =
-                        at(done[i], "slice never finished") - at(started[i], "never started");
-                    assert!(
-                        (length - 1.0).abs() <= 2.0 * step,
-                        "{order:?} {way}: slice {i} animated for {length}, not one whole duration"
-                    );
-                }
-                let begins: Vec<f64> = (0..span).map(|i| at(started[i], "never started")).collect();
-                let widest = begins.iter().copied().fold(0.0, f64::max)
-                    - begins.iter().copied().fold(f64::INFINITY, f64::min);
-                assert!(
-                    (widest - expected).abs() <= 2.0 * step,
-                    "{order:?} {way}: starts span {widest}, expected {expected}"
-                );
-            };
-            whole(started, done, "arriving");
-
-            // The same contract on the way out. The presence used to fall from
-            // the off and reach 0 one duration later, which zeroes every slice
-            // still retracting: the late ones never got their whole duration,
-            // and the exit ran one fade where the entrance ran `1 + spread`.
-            tracker.handle_event(off(now, 72));
-            let off_at = now;
-            let (mut started, mut done) = ([None; 11], [None; 11]);
-            while now < off_at + f64::from(spread) + 1.5 {
-                now += step;
-                let scene = draw(&mut motion, &mut tracker, &view, now, false);
-                let node = origin(&scene);
-                for i in 0..span {
-                    started[i] = started[i].or((node.slice_progress[i] < 1.0).then_some(now));
-                    done[i] = done[i].or((node.slice_progress[i] <= 0.0).then_some(now));
-                }
-            }
-            whole(started, done, "departing");
         }
+        let at = |v: Option<f64>, what: &str| v.unwrap_or_else(|| panic!("{what}"));
+        let expected = f64::from(spread);
+        let whole = |started: [Option<f64>; 11], done: [Option<f64>; 11], way: &str| {
+            for i in 0..span {
+                let length = at(done[i], "slice never finished") - at(started[i], "never started");
+                assert!(
+                    (length - 1.0).abs() <= 2.0 * step,
+                    "{way}: slice {i} animated for {length}, not one whole duration"
+                );
+            }
+            let begins: Vec<f64> = (0..span).map(|i| at(started[i], "never started")).collect();
+            let widest = begins.iter().copied().fold(0.0, f64::max)
+                - begins.iter().copied().fold(f64::INFINITY, f64::min);
+            assert!(
+                (widest - expected).abs() <= 2.0 * step,
+                "{way}: starts span {widest}, expected {expected}"
+            );
+        };
+        whole(started, done, "arriving");
+
+        // The same contract on the way out. The presence used to fall from
+        // the off and reach 0 one duration later, which zeroes every slice
+        // still retracting: the late ones never got their whole duration,
+        // and the exit ran one fade where the entrance ran `1 + spread`.
+        tracker.handle_event(off(now, 72));
+        let off_at = now;
+        let (mut started, mut done) = ([None; 11], [None; 11]);
+        while now < off_at + f64::from(spread) + 1.5 {
+            now += step;
+            let scene = draw(&mut motion, &mut tracker, &view, now, false);
+            let node = origin(&scene);
+            for i in 0..span {
+                started[i] = started[i].or((node.slice_progress[i] < 1.0).then_some(now));
+                done[i] = done[i].or((node.slice_progress[i] <= 0.0).then_some(now));
+            }
+        }
+        whole(started, done, "departing");
     }
     #[test]
     fn lit_first_moves_only_the_lit_slice_to_the_ends_of_the_order() {
@@ -1710,7 +1613,7 @@ mod tests {
             view.note_animation.stagger_spread = spread;
             view.note_animation.lit_first = lit_first;
             let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
-            // C3: a slice Bidirectional starts neither first nor last, 0.6 of
+            // C3: a slice the sweep starts neither first nor last, 0.6 of
             // the 0.9 spread. C5 is the seam's, already first.
             tracker.handle_event(on(0.0, 48));
             let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
@@ -1765,9 +1668,8 @@ mod tests {
     #[test]
     fn a_sparse_table_draws_what_a_dense_one_does() {
         use harmonigraph_core::{Expression, NoteEventKind};
-        for (run, order) in (0i32..).zip(AnimationOrder::ALL) {
+        for run in 0i32..2 {
             let mut view = ViewConfig::default();
-            view.note_animation.order = order;
             view.note_animation.lit_first = run % 2 == 0;
             view.note_animation.stagger_spread = 0.6;
             view.mark_delay = 0.15;
@@ -1889,7 +1791,7 @@ mod tests {
                         scene.nodes.iter().map(|n| motion.owns_light(n.lattice_pos)).collect();
                     drawn.push(format!("{:?} {:?} {lights:?}", scene.nodes, scene.pluses));
                 }
-                assert!(drawn[0] == drawn[1], "{order:?}: frame {i} at {now} drew differently");
+                assert!(drawn[0] == drawn[1], "frame {i} at {now} drew differently");
                 assert_eq!(dense.nodes.len(), visible);
                 fewest = fewest.min(sparse.nodes.len());
                 most = most.max(sparse.nodes.len());
@@ -1901,7 +1803,7 @@ mod tests {
             }
             let reached = sparse.reached;
             eprintln!(
-                "{order:?}: {reached:?}, the table between {fewest} and {most} entries, \
+                "{reached:?}, the table between {fewest} and {most} entries, \
                  up to {posed_most} poses"
             );
             assert!(reached.revived > 0 && reached.scrolled_in > 0 && reached.lit_in_view > 0);
@@ -1924,31 +1826,19 @@ mod tests {
         let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
         let base = first.octave_layout.slots(origin(&first).cents).0;
         let early = motion.at(LatticePos::ORIGIN).targets;
-        // C4 a rolled moment later, on the slot Bidirectional delays by 0.3:
+        // C4 a rolled moment later, on the slot the sweep delays by 0.3:
         // the arrival is already running, so it is never scheduled afresh.
         tracker.handle_event(on(0.05, 60));
         draw(&mut motion, &mut tracker, &view, 0.05, false);
-        let order = motion.at(LatticePos::ORIGIN).order_delay;
+        let order = view.note_animation.delays(&first.octave_layout, 1.0);
         let late = motion.at(LatticePos::ORIGIN).targets;
         let slot = (0..11).find(|&i| late[i] > early[i]).expect("C4's slot");
-        // The slice that slot is drawn as, which `order_delay` and
+        // The slice that slot is drawn as, which `delays` and
         // `slice_progress` are indexed by.
         let second = slot - base as usize;
         assert!(order[second] > 0.2, "C4's slot would start first anyway: {order:?}");
         let scene = draw(&mut motion, &mut tracker, &view, 0.1, false);
         assert!(origin(&scene).slice_progress[second] > 0.0, "the later lit slot waited");
-    }
-    #[test]
-    fn random_order_and_a_centre_start_reach_are_stable() {
-        let layout = crate::octave_layout(6, 60.0);
-        let config = NoteAnimationConfig {
-            order: AnimationOrder::RandomStagger,
-            radial_start: -1.0,
-            ..Default::default()
-        };
-        let delays = || config.delays(&layout, 350.0, 42, 1.0);
-        assert_eq!(delays(), delays());
-        assert_eq!(config.reach(1.0), 1.0);
     }
     #[test]
     fn tuned_onsets_and_late_observation_use_the_factual_pitch_and_mark_clock() {

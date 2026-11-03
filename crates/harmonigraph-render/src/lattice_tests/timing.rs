@@ -248,9 +248,7 @@ fn atmosphere_costs_by_polyphony() {
 #[ignore = "a probe: prints animation timing and asserts nothing"]
 fn animation_costs_by_pose_and_density() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
-    use harmonigraph_scene::{
-        AnimationOrder, Camera, FrameParams, NoteAnimationConfig, ViewConfig,
-    };
+    use harmonigraph_scene::{Camera, FrameParams, NoteAnimationConfig, ViewConfig};
     let mut tracker = NoteTracker::new();
     for note in 48..72 {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 0.8));
@@ -260,14 +258,6 @@ fn animation_costs_by_pose_and_density() {
         for (name, config) in [
             ("At rest", NoteAnimationConfig::default()),
             ("Grow", NoteAnimationConfig { radial_start: -1.0, ..Default::default() }),
-            (
-                "Circular",
-                NoteAnimationConfig {
-                    order: AnimationOrder::Circular,
-                    radial_start: -1.0,
-                    ..Default::default()
-                },
-            ),
             ("Maximum", NoteAnimationConfig { radial_start: 1.0, ..Default::default() }),
         ] {
             let mut scene = animated_snapshot(
@@ -304,7 +294,7 @@ fn animation_costs_by_pose_and_density() {
                 scene.node_radius = 0.34;
             }
             for node in &mut scene.nodes {
-                let delays = config.delays(&scene.octave_layout, node.cents, 42, 1.0);
+                let delays = config.delays(&scene.octave_layout, 1.0);
                 node.slice_progress =
                     std::array::from_fn(|i| ((0.4 - delays[i]) / 0.72).clamp(0.0, 1.0));
             }

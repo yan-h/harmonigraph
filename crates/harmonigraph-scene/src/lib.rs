@@ -78,8 +78,8 @@ pub use style::{
     Bend, Gradient, NoteNames, SevensLabel, ShadowSettings, ShadowStyle, TEXT_SPREAD_STOPS,
 };
 pub use view::{
-    AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, RingStack,
-    ViewConfig, GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
+    DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, RingStack, ViewConfig,
+    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
     LATTICE_GROUND_RANGE, LATTICE_RENDER_SCALE_RANGE, MARKER_INK_RANGE, NOTE_BLOOM_RANGE,
     RADIAL_START_RANGE, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT, SEVENS_SIZE_RANGE, SPIRAL_BLOOM_RANGE,
     STAGGER_SPREAD_RANGE,

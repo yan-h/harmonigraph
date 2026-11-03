@@ -93,16 +93,16 @@ The balance of a close core and a separate broad haze is no longer independently
 **Pattern contrast** at zero turns the glow pattern off;
 there is no separate None/Clouds choice.
 **Stagger spread** at zero starts every slice simultaneously;
-Slice order chooses Circular, Bidirectional or Random stagger for positive spread.
+above zero, both ends start at the seam where the highest and lowest meet and sweep toward each other.
+There is no Slice order choice: the Circular and Random stagger orders are removed.
 
 Saved Wide blur mix keys and every lattice pickup key are ignored.
 The retired pattern selector is ignored too,
 so a previously bypassed pattern uses its saved contrast:
 set contrast to zero to turn it off again.
-Saved appearances using the removed Simultaneous order cannot parse;
-the editor reports the refusal and loads defaults,
-and offline export reports the parse error.
-Other orders retain their spread and motion settings.
+A saved Slice order is ignored, the removed Simultaneous one included,
+and draws the bidirectional sweep;
+its spread and motion settings are kept.
 
 ## Note bloom
 
@@ -316,7 +316,7 @@ not evidence of how often a setting is used.
 
 | Candidate | Recommendation and tradeoff |
 | --- | --- |
-| Slice order, stagger, starting offset/scale | Best candidate for motion presets with an expandable custom section. Keep the current freedom until preferred presets are known. |
+| Stagger, starting offset/scale | Best candidate for motion presets with an expandable custom section. Keep the current freedom until preferred presets are known. |
 | Four shadow groups, each with width/darkness/spread | Prefer basic width/darkness and an expandable spread if the page still feels too long. |
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
 | Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
