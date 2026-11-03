@@ -33,8 +33,9 @@ pub(super) fn size_and_cells(
 pub(super) struct Material {
     pub(super) style: harmonigraph_scene::LatticeMaterial,
     pub(super) amount: f32,
-    /// Pattern offset in cells, already reduced to a bounded phase.
-    pub(super) drift: [f32; 2],
+    /// `Drift speed`: [`prepare`] builds the drift up in the pane's
+    /// `material_travel` and reduces it to a bounded phase there.
+    pub(super) speed: f32,
     pub(super) settings: harmonigraph_scene::MaterialSettings,
     pub(super) stars: harmonigraph_scene::StarSettings,
     pub(super) direction: f32,
@@ -410,6 +411,17 @@ pub(super) fn prepare(
     // The glow target's own size: the source is owned by that target and
     // replaced with it whenever the scene size moves.
     let size = glow.size;
+    // Both textures' motion advances whichever is drawn, so a change of
+    // material goes on from where the new one would have been.
+    let motion = pane.material_travel.advance(
+        callback.glow_timing.map_or(0.0, |clock| clock.now),
+        crate::travel::Motion::rate(
+            material.speed,
+            material.direction,
+            material.stars,
+            crate::stars::star_px_per_second(),
+        ),
+    );
     if starfield {
         pane.material_tile = None;
         let source =
@@ -421,12 +433,7 @@ pub(super) fn prepare(
             &pipelines.stars,
             &source.view,
             offscreen.size,
-            lattice_stars::Frame {
-                settings: material.stars,
-                direction: material.direction,
-                now: callback.glow_timing.map_or(0.0, |clock| clock.now),
-                amount: material.amount,
-            },
+            lattice_stars::Frame { settings: material.stars, motion, amount: material.amount },
         );
         return;
     }
@@ -434,6 +441,20 @@ pub(super) fn prepare(
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
     let (scale, cells) = size_and_cells(material.style, &material.settings);
     let cell = size[1] as f32 * scale / (10.0 * cells);
+    // The offset in cells. Watercolor rotates by (cos, sin) = (4/5, 3/5)
+    // before sampling its 40-cell tile, so a screen-axis wrap spans five tile
+    // periods and the rotated jump is still a whole-number tile repeat.
+    // Velvet's domain warp is nonperiodic: wrapping would jump.
+    let drift_period = 200.0;
+    let drift = std::array::from_fn(|axis| {
+        let per_unit = f64::from(cells / scale);
+        if velvet {
+            (motion.drift[axis] * per_unit) as f32
+        } else {
+            let start = harmonigraph_scene::MaterialSettings::DRIFT_START[axis];
+            ((start + motion.drift[axis]) * per_unit).rem_euclid(drift_period) as f32
+        }
+    });
     let dials = &material.settings;
     let geometry = [dials.wash_fuzz.to_bits(), dials.wash_lobe.to_bits()];
     let texels = ((40.0 * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
@@ -453,7 +474,7 @@ pub(super) fn prepare(
         size: Float2(size.map(|n| n as f32)),
         cell,
         depth: material.amount,
-        drift: Float2(material.drift),
+        drift: Float2(drift),
         refract: dials.wash_refract,
         layers: dials.wash_layers,
         randomness: dials.wash_randomness,

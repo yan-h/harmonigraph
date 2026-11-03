@@ -8,6 +8,7 @@ use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
 pub(super) use crate::stars::*;
+use crate::travel::{Motion, Travel};
 use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
@@ -76,11 +77,23 @@ pub struct SpectrogramAtmosphere {
     pub light_hold: Option<[SpectrogramVertex; 6]>,
 }
 
-/// Cloud-space sampling offset for a texture travelling at a constant visible
-/// screen direction, unreduced and still in f64. The shader samples
+/// Cloud-space sampling offset for a texture that has drifted `drift`
+/// ([`Motion::drift`]), unreduced and still in f64. The shader samples
 /// `screen + drift`, so the sampling offset moves opposite the texture itself.
-fn cloud_offset(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f64; 2] {
-    harmonigraph_scene::MaterialSettings::drift(settings.cloud_speed, settings.cloud_direction, now)
+fn cloud_offset(drift: [f64; 2]) -> [f64; 2] {
+    let start = harmonigraph_scene::MaterialSettings::DRIFT_START;
+    std::array::from_fn(|axis| start[axis] + drift[axis])
+}
+
+/// [`cloud_offset`] after `now` seconds at the dials' drift, as a first frame
+/// at `now` takes it.
+#[cfg(test)]
+fn cloud_offset_at(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f64; 2] {
+    let rate = harmonigraph_scene::MaterialSettings::drift_rate(
+        settings.cloud_speed,
+        settings.cloud_direction,
+    );
+    cloud_offset(rate.map(|v| v * now))
 }
 
 /// The star pixels a second a depth at `Star speed` 1 drifts over a
@@ -1103,8 +1116,8 @@ pub(super) struct Targets {
     tile_group: Option<wgpu::BindGroup>,
     composite_group: wgpu::BindGroup,
     memory: Option<Memory>,
-    /// How far the stars have drifted, at [`star_pace`].
-    star_travel: StarTravel,
+    /// How far the texture has drifted, its stars travelled at [`star_pace`] and their lives run.
+    travel: Travel,
 }
 
 /// The starfield's targets and the groups of the two passes that fill them.
@@ -1370,7 +1383,7 @@ impl Targets {
         // star atlas alone is the largest thing a pane allocates. The tone and
         // the starfield's two are cleared whole each frame before anything
         // reads them, so a carried one holds nothing a fresh one would not.
-        let (carried, carried_memory, carried_tone, carried_stars, star_travel) =
+        let (carried, carried_memory, carried_tone, carried_stars, travel) =
             previous.map_or(Default::default(), |previous| {
                 (
                     previous.tile.filter(|_| previous.shape.tile == tile_texels),
@@ -1381,7 +1394,7 @@ impl Targets {
                         .filter(|_| previous.shape.stars == star_shape)
                         .map(|stars| (stars.atlas, stars.image)),
                     // The drift goes on from where it was whatever moved.
-                    previous.star_travel,
+                    previous.travel,
                 )
             });
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
@@ -1536,7 +1549,7 @@ impl Targets {
             tile_group,
             composite_group,
             memory,
-            star_travel,
+            travel,
         }
     }
 
@@ -1783,17 +1796,17 @@ impl Targets {
         // A constant crossing in the direction the setting names, in cloud
         // units — ten across the pane's height, so 1x travels about one pane
         // height every four minutes.
-        let offset = cloud_offset(settings, atmosphere.now);
+        let pace = star_pace(atmosphere.points_per_ms, rect.height());
+        let rate =
+            Motion::rate(settings.cloud_speed, settings.cloud_direction, settings.stars, pace);
+        let motion = self.travel.advance(atmosphere.now, rate);
+        let offset = cloud_offset(motion.drift);
         let drift = cloud_drift(settings, offset, tile);
         let image = self.shape.stars.map_or([1, 1], |stars| stars.image);
-        let pace = star_pace(atmosphere.points_per_ms, rect.height());
-        let travel = self.star_travel.advance(settings.stars, atmosphere.now, pace);
         let slices = stars
-            .map(|layout| {
-                star_slices(settings.stars, settings.cloud_direction, travel, &layout, image)
-            })
+            .map(|layout| star_slices(settings.stars, motion.stars, &layout, image))
             .unwrap_or_default();
-        let life = star_life(settings.stars, atmosphere.now);
+        let life = star_life(motion.life);
         let mut step = MemoryStep::fresh(slices, life);
         if let Some(memory) = self.memory.as_mut() {
             memory.extent = memory_extent.expect("allocated history has a logical extent");
@@ -1984,9 +1997,10 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, cloud_offset, retained_size, source_size, star_layout, star_slices, tile_key,
-        tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
-        STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP, WASH_CELLS,
+        cloud_drift, cloud_offset_at, retained_size, source_size, star_layout, star_slices,
+        tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH,
+        STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
+        WASH_CELLS,
     };
 
     /// Each depth's value off a far-to-near curve, `far · (near / far)^(d^curve)`
@@ -1998,15 +2012,11 @@ mod tests {
         })
     }
 
-    /// Every slice `now` seconds on at the lattice's fixed pace, over a 16:9 pane.
-    fn slices(
-        settings: harmonigraph_scene::SpectralAtmosphere,
-        now: f64,
-    ) -> [super::StarSlice; STAR_SLICES] {
+    /// Every slice at rest, over a 16:9 pane.
+    fn slices(settings: harmonigraph_scene::SpectralAtmosphere) -> [super::StarSlice; STAR_SLICES] {
         star_slices(
             settings.stars,
-            settings.cloud_direction,
-            super::star_travel(settings.stars, now, super::star_px_per_second()),
+            [[0.0; 2]; STAR_SLICES],
             &star_layout(settings.stars, 16.0 / 9.0),
             [1920, 1080],
         )
@@ -2025,7 +2035,7 @@ mod tests {
         };
         for size in [4.0, harmonigraph_scene::STAR_SIZE_MAX] {
             settings.stars.star_size = [size; STAR_SLICES];
-            let slices = slices(settings, 0.0);
+            let slices = slices(settings);
             assert!(slices[0].cell > slices[STAR_SLICES - 1].cell * 1.4, "spacing must vary");
             for slice in &slices {
                 assert_eq!(slice.radius, 0.5 * size);
@@ -2085,7 +2095,7 @@ mod tests {
             }
         }
         assert_eq!(layout.texels, full.texels - left_out);
-        let slices = star_slices(three, 0.0, [0.0; STAR_SLICES], &layout, [1920, 1080]);
+        let slices = star_slices(three, [[0.0; 2]; STAR_SLICES], &layout, [1920, 1080]);
         assert!(off.iter().zip(slices).all(|(&off, slice)| off == (slice.gather == 0)));
     }
 
@@ -2121,21 +2131,21 @@ mod tests {
         let codes = |slices: [super::StarSlice; STAR_SLICES]| slices.map(|slice| slice.gather);
         use StarGather::{Three, Two};
         assert_eq!(plan, [Two, Two, Two, Two, Three]);
-        let fine = star_slices(fresh, 0.0, [0.0; STAR_SLICES], &layout, [2880, 2160]);
+        let fine = star_slices(fresh, [[0.0; 2]; STAR_SLICES], &layout, [2880, 2160]);
         assert_eq!(codes(fine), [2, 2, 2, 2, 3]);
         assert!(fine.iter().all(|slice| slice.inverse_floor == 2160.0 / STAR_PANE));
         // A 75% image of a 720-pixel pane: a texel of one star pixel, which
         // the far two's stars (0.83 and 0.91) are widened to. 2x2 holds that
         // at their cells' centres but not strayed 0.15 of a cell, so they
         // read 3x3.
-        let live = star_slices(fresh, 0.0, [0.0; STAR_SLICES], &layout, [720, 540]);
+        let live = star_slices(fresh, [[0.0; 2]; STAR_SLICES], &layout, [720, 540]);
         assert_eq!(codes(live), [3, 3, 2, 2, 3]);
         assert!(live[..2].iter().all(|slice| slice.radius < 1.0 && slice.inverse_floor == 1.0));
         // A 25% image of a 300-pixel pane: a texel of 7.2 star pixels, past
         // what the far depths' 2x2 holds; the floor stops at what 3x3 holds
         // of a star strayed to the edge of its band.
         let edge = |jitter: f32| Three.half_width() - star_jitter_width(jitter) / 2.0;
-        let coarse = star_slices(fresh, 0.0, [0.0; STAR_SLICES], &layout, [100, 75]);
+        let coarse = star_slices(fresh, [[0.0; 2]; STAR_SLICES], &layout, [100, 75]);
         assert_eq!(codes(coarse), [3; STAR_SLICES]);
         for slice in coarse {
             let holds = edge(fresh.star_jitter) * slice.cell;
@@ -2143,7 +2153,7 @@ mod tests {
         }
         // An image rounded wider across than down: the floor is the wider
         // side, 8 star pixels against 7.2.
-        for slice in star_slices(fresh, 0.0, [0.0; STAR_SLICES], &layout, [90, 75]) {
+        for slice in star_slices(fresh, [[0.0; 2]; STAR_SLICES], &layout, [90, 75]) {
             let holds = edge(fresh.star_jitter) * slice.cell;
             assert_eq!(slice.inverse_floor, 1.0 / (layout.pane[0] / 90.0).min(holds));
         }
@@ -2158,7 +2168,7 @@ mod tests {
             ([720, 540], [3, 3, 2, 2, 3]),
             ([100, 75], [3; STAR_SLICES]),
         ] {
-            let slices = star_slices(full, 0.0, [0.0; STAR_SLICES], &layout, image);
+            let slices = star_slices(full, [[0.0; 2]; STAR_SLICES], &layout, image);
             assert_eq!(codes(slices), want, "{image:?}");
             for slice in slices {
                 let half_width = 0.5 * slice.gather as f32;
@@ -2178,8 +2188,8 @@ mod tests {
             let full = harmonigraph_scene::StarSettings { star_layers: layers, ..fresh };
             let selected = harmonigraph_scene::StarSettings { star_solo: solo, ..full };
             let layout = star_layout(full, 16.0 / 9.0);
-            let slices = star_slices(selected, 37.0, [5.0; STAR_SLICES], &layout, [1920, 1080]);
-            let baseline = star_slices(full, 37.0, [5.0; STAR_SLICES], &layout, [1920, 1080]);
+            let slices = star_slices(selected, [[4.0, 3.0]; STAR_SLICES], &layout, [1920, 1080]);
+            let baseline = star_slices(full, [[4.0, 3.0]; STAR_SLICES], &layout, [1920, 1080]);
             for (k, (got, mut expected)) in slices.into_iter().zip(baseline).enumerate() {
                 if layers == 5 && !solo[k] {
                     expected.gather = 0;
@@ -2306,15 +2316,9 @@ mod tests {
             assert!(layout.fits(), "{layout:?}");
             let size = pixels.map(|side| side as f32 / ppp);
             let image = super::star_image_size(pixels, settings.stars);
-            for (k, slice) in star_slices(
-                settings.stars,
-                settings.cloud_direction,
-                [0.0; STAR_SLICES],
-                &layout,
-                image,
-            )
-            .iter()
-            .enumerate()
+            for (k, slice) in star_slices(settings.stars, [[0.0; 2]; STAR_SLICES], &layout, image)
+                .iter()
+                .enumerate()
             {
                 for axis in 0..2 {
                     let half = f64::from(layout.pane[axis] / 2.0 / slice.cell);
@@ -2391,57 +2395,6 @@ mod tests {
         assert_eq!(layout.cells[STAR_SLICES - 1], wanted[STAR_SLICES - 1]);
     }
 
-    /// Every depth drifts along `Drift direction` at its own `Star speed`, and
-    /// a depth at 1 at the prototype's pace: about a ninth of the pane's
-    /// height a second. Equal speeds are no parallax at all,
-    /// and the other textures' `Drift speed` moves no star.
-    ///
-    /// Read as SCREEN travel, `offset * cell`, which is what the eye sees —
-    /// the offsets themselves are in each slice's own cells.
-    #[test]
-    fn stars_drift_with_parallax_at_the_prototypes_pace() {
-        // Held at the prototype's parallax, which is what the pace below is
-        // stated against, whatever the fresh far speed is.
-        let fresh = harmonigraph_scene::SpectralAtmosphere {
-            stars: harmonigraph_scene::StarSettings {
-                star_speed: [0.15, 0.2, 0.35, 0.6, 1.0],
-                ..Default::default()
-            },
-            cloud_direction: 0.0,
-
-            ..Default::default()
-        };
-        let travelled = |settings, now| {
-            slices(settings, now)
-                .map(|slice| [slice.offset.0[0] * slice.cell, slice.offset.0[1] * slice.cell])
-        };
-        let near = super::star_px_per_second() as f32 * 10.0;
-        assert!((near / 540.0 / 10.0 - 0.114).abs() < 0.001);
-        let moved = travelled(fresh, 10.0);
-        assert!((moved[STAR_SLICES - 1][0] - near).abs() < 0.01, "{moved:?}");
-        assert!((moved[0][0] - 0.15 * near).abs() < 0.01, "{moved:?}");
-        assert!(moved.iter().all(|m| m[1].abs() < 1e-3));
-        assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
-        let together = travelled(
-            harmonigraph_scene::SpectralAtmosphere {
-                stars: harmonigraph_scene::StarSettings {
-                    star_speed: [1.0; STAR_SLICES],
-                    ..fresh.stars
-                },
-                ..fresh
-            },
-            10.0,
-        );
-        assert!(together.iter().all(|m| (m[0] - near).abs() < 0.01), "{together:?}");
-        let clouds = harmonigraph_scene::SpectralAtmosphere { cloud_speed: 20.0, ..fresh };
-        assert_eq!(travelled(clouds, 10.0), moved);
-        // A session left running for days still hands the shader an offset
-        // inside one hash period rather than millions of pixels.
-        for slice in slices(fresh, 3.0e5) {
-            assert!(slice.offset.0.iter().all(|&o| (0.0..=STAR_HASH_PERIOD as f32).contains(&o)));
-        }
-    }
-
     /// A spectrogram star at `Star speed` 1 moves as fast as the music
     /// scrolls, so a zoom of the Span keeps it moving against the music as it
     /// was. A change of pace or of a
@@ -2466,20 +2419,24 @@ mod tests {
             star_speed: [0.2, 0.4, 0.6, 0.8, 1.0],
             ..Default::default()
         };
-        let mut travel = super::StarTravel::default();
+        // Along x: each depth's travel across the pane.
+        let mut travel = super::Travel::default();
+        let mut advance = |stars, now, pace| {
+            travel.advance(now, super::Motion::rate(0.0, 0.0, stars, pace)).stars.map(|t| t[0])
+        };
         let near = |t: [f64; STAR_SLICES]| t[STAR_SLICES - 1];
-        assert_eq!(near(travel.advance(fresh, 100.0, pace)), 100.0 * pace);
-        let before = travel.advance(fresh, 101.0, pace);
-        let after = travel.advance(fresh, 102.0, zoomed);
+        assert_eq!(near(advance(fresh, 100.0, pace)), 100.0 * pace);
+        let before = advance(fresh, 101.0, pace);
+        let after = advance(fresh, 102.0, zoomed);
         assert!((near(after) - near(before) - zoomed).abs() < 1e-6, "{before:?} -> {after:?}");
         // Nudging one depth's speed moves it on at the new speed from where it
         // is, and leaves every other depth where it would have been.
         let faster =
             harmonigraph_scene::StarSettings { star_speed: [0.3, 0.4, 0.6, 0.8, 1.0], ..fresh };
-        let nudged = travel.advance(faster, 103.0, pace);
+        let nudged = advance(faster, 103.0, pace);
         assert!((nudged[0] - after[0] - 0.3 * pace).abs() < 1e-6, "{after:?} -> {nudged:?}");
         assert!((nudged[1] - after[1] - 0.4 * pace).abs() < 1e-6, "{after:?} -> {nudged:?}");
-        assert_eq!(near(travel.advance(fresh, 0.5, pace)), 0.5 * pace);
+        assert_eq!(near(advance(fresh, 0.5, pace)), 0.5 * pace);
     }
 
     #[test]
@@ -2534,7 +2491,7 @@ mod tests {
                 cloud_direction: direction,
                 ..Default::default()
             };
-            cloud_drift(settings, cloud_offset(settings, now), None)
+            cloud_drift(settings, cloud_offset_at(settings, now), None)
         };
         let phase = at(0.0, 1.0, 0.0);
         let travelled = |direction| {
@@ -2589,7 +2546,7 @@ mod tests {
         };
         let tile = tile_key([1920, 1080], atmosphere, period);
         assert!(tile.is_some(), "the wash drew no tile");
-        let short = cloud_offset(settings, 2.0);
+        let short = cloud_offset_at(settings, 2.0);
         assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32));
         // The tile coordinate the shader samples, in periods: a whole number
         // apart is the same texel.
@@ -2603,7 +2560,7 @@ mod tests {
             (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
                 * f64::from(period)
         };
-        let exact = cloud_offset(settings, long);
+        let exact = cloud_offset_at(settings, long);
         let reduced = cloud_drift(settings, exact, tile).map(f64::from);
         let cast = exact.map(|v| f64::from(v as f32));
         assert!(off(reduced, exact) < 1e-4, "{} cells off", off(reduced, exact));

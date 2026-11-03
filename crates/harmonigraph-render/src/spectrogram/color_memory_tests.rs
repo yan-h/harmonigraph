@@ -191,7 +191,7 @@ fn a_drift_wrap_carries_the_colour_history() {
     let settings = atmosphere.settings.sanitized();
     let pane = [cb.rect.width() as u32, cb.rect.height() as u32];
     let tile = tile_key(pane, atmosphere, CloudSampling::default().tile_cells);
-    let reduced = |now| cloud_drift(settings, cloud_offset(settings, now), tile);
+    let reduced = |now| cloud_drift(settings, cloud_offset_at(settings, now), tile);
     let step = 1.0 / 60.0;
     let before = (0..60 * 600)
         .map(|i| atmosphere.now + f64::from(i) * step)
@@ -1049,5 +1049,93 @@ fn stars_drift_on_across_a_rebuilt_pane() {
         let got = f64::from(after[k].offset.0[0]);
         assert!((got - went_on).abs() < 0.01, "depth {k}: {got} against {went_on}");
         assert!((restarted - went_on).abs() > 1.0, "depth {k}: a restart lands there too");
+    }
+}
+
+/// A Star lifetime drag minutes in changes how fast the stars' lives turn
+/// over from where they are: at the same clock every cell stays in the life it
+/// was in, where the clock over the new lifetime would move every one of them
+/// on by lives and re-roll the field (#1632).
+#[test]
+fn a_lifetime_nudge_minutes_in_leaves_every_life_in_place() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.now = 600.0;
+    let (now, lifetime) = (a.now, a.settings.stars.star_lifetime);
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let life = memory(&resources).frame.as_ref().unwrap().life;
+    let nudged = lifetime + 0.001;
+    let restarted = now / f64::from(lifetime) - now / f64::from(nudged);
+    assert!(restarted > 1.0, "a restart moves every cell by only {restarted} lives");
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_lifetime = nudged;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert_eq!(memory(&resources).frame.as_ref().unwrap().life, life);
+}
+
+/// A Drift speed or direction drag minutes in moves the texture on by one
+/// frame's travel at the new dials, where the clock times them would jump it
+/// as far as it had come since the clock started (#1639): the material's
+/// history lattice by at most a texel, and each star layer by at most its own
+/// frame's travel.
+#[test]
+fn a_drift_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
+    let Some((device, queue)) = headless_device() else { return };
+    let step = 1.0 / 60.0;
+    for style in [CloudStyle::Watercolor, CloudStyle::VelvetScales, CloudStyle::Stars] {
+        for direction in [false, true] {
+            let case = format!("{style:?}, direction {direction}");
+            let mut cb = fixture(style);
+            cb.atmosphere.as_mut().unwrap().now = 600.0;
+            let mut resources = CallbackResources::default();
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let held = |resources: &CallbackResources| {
+                let frame = memory(resources).frame.as_ref().unwrap();
+                (frame.origin, frame.slices)
+            };
+            let (origin, slices) = held(&resources);
+            let a = cb.atmosphere.as_mut().unwrap();
+            // The stars take their own speeds, and nothing of Drift speed.
+            if direction {
+                a.settings.cloud_direction += 1.0;
+            } else if style == CloudStyle::Stars {
+                a.settings.stars.star_speed = a.settings.stars.star_speed.map(|s| s * 0.99);
+            } else {
+                a.settings.cloud_speed *= 0.99;
+            }
+            a.now += step;
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let (moved_origin, moved_slices) = held(&resources);
+            let mut restart = CallbackResources::default();
+            prepare_once(&device, &queue, &mut restart, &cb);
+            let (restarted_origin, restarted_slices) = held(&restart);
+            // How far one slice's stars moved between two frames, in star
+            // pixels, the hash period's wrap taken out.
+            let apart = |a: StarSlice, b: StarSlice| {
+                let period = STAR_HASH_PERIOD as f32;
+                (0..2)
+                    .map(|i| {
+                        let d = (a.offset.0[i] - b.offset.0[i]).rem_euclid(period);
+                        d.min(period - d) * a.cell
+                    })
+                    .fold(0.0, f32::max)
+            };
+            if style == CloudStyle::Stars {
+                let a = cb.atmosphere.unwrap();
+                let pace = star_pace(a.points_per_ms, cb.rect.height());
+                for k in 0..STAR_SLICES {
+                    let frame = (pace * f64::from(a.settings.stars.star_speed[k]) * step) as f32;
+                    let (moved, restarted) =
+                        (apart(moved_slices[k], slices[k]), apart(restarted_slices[k], slices[k]));
+                    assert!(moved <= frame + 0.01 * slices[k].cell, "{case}, depth {k}: {moved}");
+                    assert!(restarted > 2.0 * frame + 1.0, "{case}, depth {k}: {restarted}");
+                }
+            } else {
+                let texels = |o: [i32; 2]| (0..2).map(|i| (o[i] - origin[i]).abs()).max().unwrap();
+                assert!(texels(moved_origin) <= 1, "{case}: {moved_origin:?} from {origin:?}");
+                assert!(texels(restarted_origin) > 4, "{case}: a restart lands there too");
+            }
+        }
     }
 }

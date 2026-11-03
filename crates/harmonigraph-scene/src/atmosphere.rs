@@ -309,13 +309,18 @@ impl Default for MaterialSettings {
     }
 }
 impl MaterialSettings {
-    /// Sampling offset in cloud units, opposite the visible screen direction.
-    /// Keep f64 until upload; repeating materials reduce their period first.
+    /// Where the sampling offset starts, in cloud units, before any drift.
+    pub const DRIFT_START: [f64; 2] = [0.0, 0.6];
+
+    /// How far the sampling offset moves in a second, in cloud units,
+    /// opposite the visible screen direction. The renderer builds the offset
+    /// up frame by frame from [`DRIFT_START`](Self::DRIFT_START), keeping it in
+    /// f64 until upload; repeating materials reduce their period first, and
     /// Velvet keeps the translation unwrapped because its warp is nonperiodic.
-    pub fn drift(speed: f32, direction: f32, now: f64) -> [f64; 2] {
-        let distance = now * f64::from(speed) * 0.047_169_905_660_283_02;
+    pub fn drift_rate(speed: f32, direction: f32) -> [f64; 2] {
+        let distance = f64::from(speed) * 0.047_169_905_660_283_02;
         let (sin, cos) = f64::from(direction).to_radians().sin_cos();
-        [-distance * cos, 0.6 - distance * sin]
+        [-distance * cos, -distance * sin]
     }
 
     pub fn sanitized(mut self) -> Self {

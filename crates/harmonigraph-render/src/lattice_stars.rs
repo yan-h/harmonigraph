@@ -121,8 +121,9 @@ impl Pipelines {
 
 pub(super) struct Frame {
     pub settings: harmonigraph_scene::StarSettings,
-    pub direction: f32,
-    pub now: f64,
+    /// How far the stars have travelled and their lives run, at
+    /// [`stars::star_px_per_second`] (`PaneBuffers::material_travel`).
+    pub motion: crate::travel::Motion,
     pub amount: f32,
 }
 
@@ -146,8 +147,6 @@ pub(super) struct Targets {
     bake: wgpu::BindGroup,
     image_group: wgpu::BindGroup,
     material: wgpu::BindGroup,
-    /// How far the stars have drifted, at [`stars::star_px_per_second`].
-    travel: stars::StarTravel,
 }
 impl Targets {
     fn new(
@@ -216,7 +215,6 @@ impl Targets {
             })
         };
         Self {
-            travel: stars::StarTravel::default(),
             bake: group(&atlas_scratch, &scratch),
             image_group: group(&atlas, &scratch),
             material: group(&atlas, &image),
@@ -239,7 +237,7 @@ impl Targets {
         size: [u32; 2],
         frame: Frame,
     ) {
-        let Frame { settings: stars, direction, now, amount } = frame;
+        let Frame { settings: stars, motion, amount } = frame;
         let layout = stars::star_layout(stars, size[0] as f32 / size[1] as f32);
         let allocation = Allocation {
             output: size,
@@ -247,23 +245,12 @@ impl Targets {
             image: stars::star_image_size(size, stars),
         };
         if held.as_ref().is_none_or(|t| t.allocation != allocation) {
-            // The drift goes on from where it was whatever was reallocated.
-            let travel = held.as_ref().map_or_else(Default::default, |t| t.travel);
-            *held = Some(Self { travel, ..Self::new(device, pipelines, source, allocation) });
+            *held = Some(Self::new(device, pipelines, source, allocation));
         }
         let held = held.as_mut().unwrap();
         held.atlas_scissor = layout.scissor();
-        let travel = held.travel.advance(stars, now, stars::star_px_per_second());
         let settings = Settings {
-            stars: StarUniforms::new(
-                stars,
-                direction,
-                now,
-                travel,
-                size,
-                &layout,
-                held.allocation.image,
-            ),
+            stars: StarUniforms::new(stars, motion, size, &layout, held.allocation.image),
             depth: amount,
             star_twinkle: stars.star_twinkle_dip,
             _pad1: 0.0,
@@ -325,5 +312,50 @@ mod tests {
         .validate(&module)
         .unwrap();
         crate::uniforms::layout::check_binding::<Settings>(SOURCE, 0, 0);
+    }
+
+    /// Every lattice depth drifts along `Drift direction` at its own `Star
+    /// speed`, and a depth at 1 at the prototype's pace: about a ninth of the
+    /// pane's height a second. Equal speeds are no parallax at all.
+    ///
+    /// Read as SCREEN travel, `offset * cell`, which is what the eye sees —
+    /// the offsets themselves are in each slice's own cells.
+    #[test]
+    fn stars_drift_with_parallax_at_the_prototypes_pace() {
+        use stars::STAR_SLICES;
+        // Held at the prototype's parallax, which is what the pace below is
+        // stated against, whatever the fresh far speed is.
+        let fresh = harmonigraph_scene::StarSettings {
+            star_speed: [0.15, 0.2, 0.35, 0.6, 1.0],
+            ..Default::default()
+        };
+        let slices = |settings: harmonigraph_scene::StarSettings, now| {
+            let rate = crate::travel::Motion::rate(1.0, 0.0, settings, stars::star_px_per_second());
+            let motion = crate::travel::Travel::default().advance(now, rate);
+            let layout = stars::star_layout(settings, 16.0 / 9.0);
+            stars::star_slices(settings, motion.stars, &layout, [1920, 1080])
+        };
+        let travelled = |settings, now| {
+            slices(settings, now)
+                .map(|slice| [slice.offset.0[0] * slice.cell, slice.offset.0[1] * slice.cell])
+        };
+        let near = stars::star_px_per_second() as f32 * 10.0;
+        assert!((near / 540.0 / 10.0 - 0.114).abs() < 0.001);
+        let moved = travelled(fresh, 10.0);
+        assert!((moved[STAR_SLICES - 1][0] - near).abs() < 0.01, "{moved:?}");
+        assert!((moved[0][0] - 0.15 * near).abs() < 0.01, "{moved:?}");
+        assert!(moved.iter().all(|m| m[1].abs() < 1e-3));
+        assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
+        let together = travelled(
+            harmonigraph_scene::StarSettings { star_speed: [1.0; STAR_SLICES], ..fresh },
+            10.0,
+        );
+        assert!(together.iter().all(|m| (m[0] - near).abs() < 0.01), "{together:?}");
+        // A session left running for days still hands the shader an offset
+        // inside one hash period rather than millions of pixels.
+        for slice in slices(fresh, 3.0e5) {
+            let period = stars::STAR_HASH_PERIOD as f32;
+            assert!(slice.offset.0.iter().all(|&o| (0.0..=period).contains(&o)));
+        }
     }
 }
