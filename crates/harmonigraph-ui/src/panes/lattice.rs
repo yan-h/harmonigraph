@@ -325,10 +325,9 @@ pub(crate) fn draw_lattice(
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of
     // the render, not a place to work.
-    let map_mode = state.runtime.lattice_maps.as_ref().is_some_and(|maps| {
-        maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-    });
-    let badge = (response.is_some() && state.runtime.learn_active && !map_mode)
+    let learns =
+        state.runtime.lattice_maps.as_ref().is_none_or(|maps| maps.playback.engine.learns());
+    let badge = (response.is_some() && state.runtime.learn_active && learns)
         .then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,

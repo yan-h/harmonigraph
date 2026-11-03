@@ -14,8 +14,8 @@ pub enum TuningEngine {
 }
 
 impl TuningEngine {
-    /// Whether Learn infers the lattice axes under this engine. Lattice Map
-    /// reads its own map instead, so Learn is suspended there.
+    /// Whether Learn runs under this engine. Lattice Map reads its own map
+    /// instead, so Learn is suspended there.
     pub fn learns(self) -> bool {
         self != Self::LatticeMap
     }
