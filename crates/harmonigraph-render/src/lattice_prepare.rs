@@ -127,7 +127,7 @@ impl CallbackTrait for LatticeCallback {
             },
         );
 
-        lattice_material::prepare(device, queue, egui_encoder, &material, pane, self);
+        let motion = lattice_material::prepare(device, queue, egui_encoder, &material, pane, self);
 
         self.upload_frame(
             device,
@@ -136,6 +136,7 @@ impl CallbackTrait for LatticeCallback {
             pane,
             &frame,
             FrameSheets { has_atlas, sizes: sheet_sizes },
+            motion,
         );
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -294,6 +295,9 @@ impl LatticeCallback {
         }
     }
 
+    /// `motion` is where the pane's textures are this frame
+    /// ([`lattice_material::prepare`]).
+    #[allow(clippy::too_many_arguments)]
     fn upload_frame(
         &self,
         device: &wgpu::Device,
@@ -302,6 +306,7 @@ impl LatticeCallback {
         pane: &mut PaneBuffers,
         frame: &PreparedFrame,
         sheets: FrameSheets,
+        motion: crate::travel::Motion,
     ) {
         let FrameSheets { has_atlas, sizes: sheet_sizes } = sheets;
         let PreparedFrame { has_light, packed, .. } = frame;
@@ -330,12 +335,19 @@ impl LatticeCallback {
             }
             if let Some(mixes) = mixes {
                 // Each instance with its history coefficient in place of the
-                // seed, written straight into staging rather than into a
-                // patched copy of the frame.
-                let mixed = self.instances.iter().zip(mixes).map(|(&instance, &mix)| {
-                    let [level, row, _, breath] = instance.glow;
-                    GpuInstance { glow: [level, row, mix, breath], ..instance }
-                });
+                // seed, and its light's breathing where it breathes, written
+                // straight into staging rather than into a patched copy of the
+                // frame. Only the ink pass reads the breathing, and a frame
+                // whose light breathes has a clock, so it always comes here.
+                let mixed =
+                    self.instances.iter().zip(mixes).enumerate().map(|(i, (&instance, &mix))| {
+                        let [level, row, _, breath] = instance.glow;
+                        let breath = match self.breathing_at.get(i) {
+                            Some(&at) if level > 0.0 => self.breathing.at(at, motion.breath),
+                            _ => breath,
+                        };
+                        GpuInstance { glow: [level, row, mix, breath], ..instance }
+                    });
                 let count = self.instances.len();
                 write_rows::<_, INSTANCE_BYTES>(queue, &pane.instance_buffer, count, mixed);
             } else {
@@ -512,6 +524,10 @@ impl LatticeCallback {
         if let Some(target) = &pane.offscreen {
             uniforms.texture.target_size = Float2(target.size.map(|v| v as f32));
         }
+        uniforms.texture.drift = Float2([
+            (motion.texture * 0.071).sin() as f32 * 0.9,
+            (motion.texture * 0.053).cos() as f32 * 0.9,
+        ]);
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));
         }

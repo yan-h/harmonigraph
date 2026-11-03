@@ -151,7 +151,7 @@ Star targets belong to their source texture owner,
 so changing or dropping that source also drops its bindings;
 material bypass releases the source and star targets together.
 The motion is not theirs:
-the stars' travel and life clock and the displacement materials' drift are built up per pane (`PaneBuffers::material_travel`),
+the stars' travel and life clock, the displacement materials' drift and the glow's pattern and breathing are built up per pane (`PaneBuffers::material_travel`),
 so a resize, a bypass or a change of material goes on from where they were.
 
 ### Saved-state and reference-image consequences

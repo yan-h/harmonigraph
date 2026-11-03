@@ -333,6 +333,11 @@ struct SpectrogramPane {
     bind_group: Option<wgpu::BindGroup>,
     cloud: Option<atmosphere::Targets>,
     cloud_ready: bool,
+    /// How far the texture has drifted, its stars travelled and their lives
+    /// run, held here rather than with the targets that draw them so a
+    /// rebuilt target (a resize, a Span zoom, a change of style) goes on from
+    /// where its texture was.
+    travel: crate::travel::Travel,
 }
 
 /// Starting size of a pane's vertex buffer; it grows by `next_power_of_two`
@@ -439,6 +444,7 @@ impl SpectrogramPane {
             bind_group: None,
             cloud: None,
             cloud_ready: false,
+            travel: Default::default(),
         })
     }
 }
@@ -797,6 +803,7 @@ impl CallbackTrait for SpectrogramCallback {
                     settings,
                     &plan,
                     self.grid.first_key + self.grid.run.len() as i64,
+                    &mut pane.travel,
                 );
                 target.encode(
                     egui_encoder,

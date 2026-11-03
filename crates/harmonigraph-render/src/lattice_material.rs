@@ -386,6 +386,8 @@ impl Source {
     }
 }
 
+/// Draws the frame's material, and returns where the pane's textures are,
+/// which the glow's texture and breathing read too.
 pub(super) fn prepare(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -393,12 +395,33 @@ pub(super) fn prepare(
     pipelines: &Pipelines,
     pane: &mut PaneBuffers,
     callback: &LatticeCallback,
-) {
+) -> crate::travel::Motion {
     let material = &callback.material;
-    let Some(offscreen) = pane.offscreen.as_mut() else { return };
+    // Every texture's motion advances whatever is drawn, so a change of
+    // material goes on from where the new one would have been, and the glow's
+    // texture and breathing move with no material at all. A frame with no
+    // glow clock draws none of them and holds them where they are, so a glow
+    // turned off and on again goes on from there rather than starting over.
+    let motion = match callback.glow_timing {
+        Some(clock) => pane.material_travel.advance(
+            clock.now,
+            crate::travel::Motion {
+                texture: f64::from(callback.texture_speed),
+                breath: f64::from(callback.breathing.speed),
+                ..crate::travel::Motion::rate(
+                    material.speed,
+                    material.direction,
+                    material.stars,
+                    crate::stars::star_px_per_second(),
+                )
+            },
+        ),
+        None => pane.material_travel.held(),
+    };
+    let Some(offscreen) = pane.offscreen.as_mut() else { return motion };
     let Some(glow) = offscreen.glow.as_mut() else {
         pane.material_tile = None;
-        return;
+        return motion;
     };
     let velvet = material.style == harmonigraph_scene::LatticeMaterial::VelvetScales;
     let displaced = velvet || material.style == harmonigraph_scene::LatticeMaterial::Watercolor;
@@ -406,22 +429,11 @@ pub(super) fn prepare(
     if (!displaced && !starfield) || material.amount <= 0.0 {
         glow.material_source = None;
         pane.material_tile = None;
-        return;
+        return motion;
     }
     // The glow target's own size: the source is owned by that target and
     // replaced with it whenever the scene size moves.
     let size = glow.size;
-    // Both textures' motion advances whichever is drawn, so a change of
-    // material goes on from where the new one would have been.
-    let motion = pane.material_travel.advance(
-        callback.glow_timing.map_or(0.0, |clock| clock.now),
-        crate::travel::Motion::rate(
-            material.speed,
-            material.direction,
-            material.stars,
-            crate::stars::star_px_per_second(),
-        ),
-    );
     if starfield {
         pane.material_tile = None;
         let source =
@@ -435,7 +447,7 @@ pub(super) fn prepare(
             offscreen.size,
             lattice_stars::Frame { settings: material.stars, motion, amount: material.amount },
         );
-        return;
+        return motion;
     }
     // Match the spectrogram's pane-height calibration. Quantized density keeps
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
@@ -488,6 +500,7 @@ pub(super) fn prepare(
         ]),
     };
     queue.write_buffer(&source.buffer, 0, bytemuck::bytes_of(&values));
+    motion
 }
 
 #[cfg(test)]
