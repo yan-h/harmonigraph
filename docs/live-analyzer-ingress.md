@@ -56,7 +56,8 @@ the incremental heatmap aggregation relies on strictly increasing dates, and no 
 Timestamps are neither clamped nor rewritten.
 Arrival-dated analysis still appends every column.
 Its smoothed anchor can step back by up to 50 ms in one batch,
-which the offline renderer's contiguous batches never do;
+which the offline renderer's contiguous batches never do,
+nor the standalone app's synth, which never renders more samples than the time elapsed;
 a build without the assert would meet such a date in the heatmap aggregator,
 which rebuilds its grid on a date that steps back.
 Factual note timestamps and take/export clocks are unchanged.

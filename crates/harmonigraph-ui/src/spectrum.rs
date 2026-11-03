@@ -402,8 +402,10 @@ impl SpectrumStore {
     ///
     /// Dates must be strictly increasing, which the incremental heatmap
     /// aggregation relies on. Today's callers deliver them so: the plugin's
-    /// source-dated path, whose mapper never rewinds its shown time, and the
-    /// offline renderer, whose contiguous batches keep one arrival anchor.
+    /// source-dated path, whose mapper never rewinds its shown time; the
+    /// offline renderer, whose contiguous batches keep one arrival anchor; and
+    /// the standalone app's synth, whose anchor only drifts forward because
+    /// `Synth::render` never renders more samples than the time elapsed.
     /// Arrival-dated input does not promise it in general: the anchor is
     /// smoothed, so one batch can step it back by up to `ANCHOR_SMOOTHING` of
     /// `ANCHOR_SNAP` (50 ms), more than the hop between two columns.
