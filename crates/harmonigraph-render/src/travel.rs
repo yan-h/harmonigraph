@@ -1,18 +1,20 @@
 //! How far a pane's texture has moved, built up frame by frame.
 //!
-//! Every texture that moves on the clock moves at a rate its dials set: a
-//! material drifts at `Drift speed` along `Drift direction`, each star layer
-//! travels at its own `Star speed` along the same direction, and the stars'
-//! lives turn over once a `Star lifetime`. Worked out as `now` times the rate,
+//! The textures here move at a rate their dials set: a material drifts at
+//! `Drift speed` along `Drift direction`, each star layer travels at its own
+//! `Star speed` along the same direction, and the stars' lives turn over once
+//! a `Star lifetime`. Worked out as `now` times the rate,
 //! every nudge of one of those dials would carry the texture as far as it had
 //! gone since the clock started, which minutes into a session scrambles the
 //! whole field on every frame of a drag. So each pane holds one [`Travel`],
 //! and every frame adds what the frame's own rates carry it in the time since
 //! the last: a dial change alters the pace from where the texture is.
 //!
-//! One clock for all three, held by the pane rather than by the targets that
-//! draw them, so a rebuilt target — a resize, a Span zoom, a change of style —
-//! goes on from where its texture was.
+//! One clock for all three, held where it outlives what draws them: in the
+//! lattice pane's buffers, and in the spectrogram's targets, whose rebuild
+//! carries it. So a rebuilt target (a resize, a Span zoom, a change of style)
+//! goes on from where its texture was. The lattice's Texture speed and breath
+//! are not on this clock: they are still `now` times their rate.
 
 use crate::stars::STAR_SLICES;
 
