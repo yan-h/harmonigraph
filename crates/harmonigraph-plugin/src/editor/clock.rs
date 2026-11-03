@@ -223,8 +223,14 @@ mod tests {
     /// three phases, and a run would never see the rest.
     const DRAIN: f64 = 0.00413;
 
+    /// The same with the window shut: `background::SHUT_POLL` plus a little,
+    /// for the same reason. The drain and block lengths are what size the
+    /// lead's buckets, so a clock only tested at [`DRAIN`] never asks the
+    /// sizing for more than its minimum.
+    const SHUT_DRAIN: f64 = 0.0203;
+
     /// A window drawing every `frame` seconds for `seconds`, its worker
-    /// draining every [`DRAIN`] seconds, blocks of `block` seconds, block `k`
+    /// draining every `drain` seconds, blocks of `block` seconds, block `k`
     /// (whose last sample is due at `(k + 1) * block`) arriving at wall time
     /// `arrives(k)`. Incommensurate rates make every drain find its block
     /// waited a different length of time, and the run cycles through those
@@ -236,6 +242,7 @@ mod tests {
         frame: f64,
         block: f64,
         seconds: f64,
+        drain: f64,
         arrives: impl Fn(usize) -> f64,
     ) -> Vec<(f64, f64)> {
         let mut clock = ClockMapper::new();
@@ -245,9 +252,9 @@ mod tests {
         let mut frames = Vec::new();
         for i in 1..(seconds / frame) as usize {
             let wall = i as f64 * frame;
-            while (drains + 1) as f64 * DRAIN <= wall {
+            while (drains + 1) as f64 * drain <= wall {
                 drains += 1;
-                let at = drains as f64 * DRAIN;
+                let at = drains as f64 * drain;
                 while arrives(next) <= at {
                     next += 1;
                     newest = next as f64 * block;
@@ -283,16 +290,27 @@ mod tests {
     /// millisecond for 4096, at every frame rate a display link runs at.
     /// Twelve seconds roll the longest window over several times. The frames
     /// of the first second are skipped, while the window first fills.
+    ///
+    /// Drained at both of the worker's cadences. At [`DRAIN`] a fixed quarter
+    /// second bucket does as well as the sized one; at [`SHUT_DRAIN`] it steps
+    /// 4096-sample blocks by 3.8 ms and 512-sample ones by 0.7 ms, which these
+    /// limits refuse.
     #[test]
     fn block_delivery_does_not_step_the_drawn_time() {
-        for (samples, limit) in [(512.0, 5e-4), (4096.0, 1.5e-3)] {
+        for (drain, samples, limit) in [
+            (DRAIN, 512.0, 5e-4),
+            (DRAIN, 4096.0, 1.5e-3),
+            (SHUT_DRAIN, 512.0, 5e-4),
+            (SHUT_DRAIN, 4096.0, 1.5e-3),
+        ] {
             let block = samples / 48_000.0;
             for frame in [1.0 / 144.0, 1.0 / 60.0, 1.0 / 15.0] {
-                let frames = frames_at(frame, block, 12.0, on_time(block));
+                let frames = frames_at(frame, block, 12.0, drain, on_time(block));
                 let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
                 assert!(
                     worst < limit,
-                    "{samples} samples at {frame:.4} s a frame advanced {worst:.4} s away from it"
+                    "{samples} samples drained every {drain:.4} s at {frame:.4} s a frame \
+                     advanced {worst:.4} s away from it"
                 );
             }
         }
@@ -305,7 +323,7 @@ mod tests {
     fn a_lead_the_audio_lost_ages_out() {
         let on_time = on_time(BLOCK);
         let stalled = |k| on_time(k) + if on_time(k) < 1.5 { 0.0 } else { 0.03 };
-        let &(_, ahead) = frames_at(FRAME, BLOCK, 3.0, stalled).last().unwrap();
+        let &(_, ahead) = frames_at(FRAME, BLOCK, 3.0, DRAIN, stalled).last().unwrap();
         assert!(ahead < 0.015, "drawn {ahead:.3} s past the newest audio");
     }
 
@@ -316,7 +334,7 @@ mod tests {
     #[test]
     fn a_slow_source_is_followed() {
         let on_time = on_time(BLOCK);
-        let frames = frames_at(FRAME, BLOCK, 3.0, |k| 2.0 * on_time(k));
+        let frames = frames_at(FRAME, BLOCK, 3.0, DRAIN, |k| 2.0 * on_time(k));
         let worst = frames.iter().map(|&(_, ahead)| ahead).fold(0.0, f64::max);
         assert!(worst < 0.1, "drawn {worst:.3} s past the newest audio");
     }
