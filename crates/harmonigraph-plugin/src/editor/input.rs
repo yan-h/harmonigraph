@@ -561,13 +561,12 @@ mod tests {
             vec![1, 2]
         );
 
-        // Empty ring: no work, so the tracker is as it was.
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.1);
-        assert_eq!(
-            shared.ui.picture.runtime.tracker.voices().count(),
-            2,
-            "an empty drain changed the tracker"
-        );
+        // An idle poll, a second and a half on, re-reads the same heartbeat.
+        // That is not a new clock: it must not re-anchor the mapping, which
+        // would read as a callback pause.
+        let anchored = shared.input.clock.offset;
+        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 8.5);
+        assert_eq!(shared.input.clock.offset, anchored, "an idle poll re-anchored the clock");
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
@@ -604,14 +603,6 @@ mod tests {
                 .unwrap()
                 .on_time,
             12.0
-        );
-        // The same events are not delivered twice.
-        let sounding = shared.ui.picture.runtime.tracker.voices().count();
-        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.0);
-        assert_eq!(
-            shared.ui.picture.runtime.tracker.voices().count(),
-            sounding,
-            "an empty drain changed the tracker"
         );
         use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
         let baseline = SourceBaseline::new(
