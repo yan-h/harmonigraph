@@ -84,18 +84,12 @@ impl LiveInput {
     /// Drain note events from the audio thread into the tracker, mapping
     /// their sample-clock timestamps onto the GUI clock. A fresh audio
     /// heartbeat anchors the whole stream before historical records are
-    /// mapped; delayed batches never reset that anchor. Returns true when
-    /// events arrived, in which case the
-    /// caller should repaint this tick rather than at the idle poll.
-    fn drain_into_tracker(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        now: f64,
-    ) -> bool {
+    /// mapped; delayed batches never reset that anchor.
+    fn drain_into_tracker(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, now: f64) {
         if let Some(observation) = self.consumer.clock() {
             self.clock.observe(observation, now);
         }
-        let Some(offset) = self.clock.offset else { return false };
+        let Some(offset) = self.clock.offset else { return };
         let tracker = &mut runtime.tracker;
         self.consumer.drain(|delivery, _| {
             if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
@@ -103,7 +97,7 @@ impl LiveInput {
                 debug_assert!(result.is_ok(), "validated canonical publication");
             }
             true
-        }) != 0
+        });
     }
     /// Move the audio ring's blocks out, mapped to the GUI clock with the
     /// offset [`Self::drain_into_tracker`] has just observed, and lend the
@@ -237,8 +231,8 @@ impl LiveInput {
         self.clock.now(wall_now)
     }
     /// The locked half of a step: the notes into the tracker, then the
-    /// audio out of its ring with the analysis lent alongside. Whether notes
-    /// arrived, and the audio for [`Self::analyze`] then [`Self::give`].
+    /// audio out of its ring with the analysis lent alongside, for
+    /// [`Self::analyze`] then [`Self::give`].
     /// Input feeding does not prune against stale parameters: callers advance
     /// time after observing their parameters, or retain the last mirrors while
     /// closed.
@@ -247,25 +241,24 @@ impl LiveInput {
         runtime: &mut harmonigraph_ui::VisualRuntime,
         appearance: &harmonigraph_ui::AppearanceDocument,
         now: f64,
-    ) -> (bool, Option<Taken>) {
-        let notes = self.drain_into_tracker(runtime, now);
-        (notes, self.take_audio(runtime, appearance))
+    ) -> Option<Taken> {
+        self.drain_into_tracker(runtime, now);
+        self.take_audio(runtime, appearance)
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in
-    /// one, for its final drain and for tests. Whether notes arrived.
+    /// one, for its final drain, for the frames of a window whose worker never
+    /// started (`frame_drains`), and for tests.
     pub(crate) fn drain(
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,
         appearance: &harmonigraph_ui::AppearanceDocument,
         now: f64,
-    ) -> bool {
-        let (notes, taken) = self.take(runtime, appearance, now);
-        if let Some(mut taken) = taken {
+    ) {
+        if let Some(mut taken) = self.take(runtime, appearance, now) {
             Self::analyze(&mut taken);
             self.give(runtime, taken);
         }
-        notes
     }
 }
 
@@ -556,10 +549,7 @@ mod tests {
         }
 
         producer.observe_clock(99.995);
-        assert!(
-            shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.0),
-            "events arrived -> repaint"
-        );
+        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.0);
         let mut on_times: Vec<f64> =
             shared.ui.picture.runtime.tracker.voices().map(|v| v.on_time).collect();
         on_times.sort_by(f64::total_cmp);
@@ -571,8 +561,12 @@ mod tests {
             vec![1, 2]
         );
 
-        // Empty ring: no work, no repaint request.
-        assert!(!shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 7.1));
+        // An idle poll, a second and a half on, re-reads the same heartbeat.
+        // That is not a new clock: it must not re-anchor the mapping, which
+        // would read as a callback pause.
+        let anchored = shared.input.clock.offset;
+        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 8.5);
+        assert_eq!(shared.input.clock.offset, anchored, "an idle poll re-anchored the clock");
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
@@ -597,7 +591,7 @@ mod tests {
         producer.note(accepted, Default::default()).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
         producer.note(event.into(), Default::default()).unwrap();
-        assert!(shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0));
+        shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0);
         assert_eq!(
             shared
                 .ui
@@ -610,7 +604,6 @@ mod tests {
                 .on_time,
             12.0
         );
-        assert!(!shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 22.0));
         use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
         let baseline = SourceBaseline::new(
             SourceId::DIRECT,
@@ -722,47 +715,6 @@ mod tests {
         assert!(
             note.segments(22.3).any(|((start, _), _)| (start - 13.5).abs() < 1e-9),
             "the resuming baseline lands at GUI 13.5"
-        );
-    }
-
-    /// `LiveInput::drain`'s ANSWER, which is the only thing that asks for a repaint on
-    /// the tick a note arrives rather than at the idle poll (see `frame`).
-    ///
-    /// Its own test because the drain and the answer fail independently: every
-    /// other test of this path reads the tracker afterwards, so a `LiveInput::drain`
-    /// that drained perfectly and always answered `false` would satisfy all of
-    /// them while costing every note played the latency of the idle poll.
-    #[test]
-    fn catch_up_answers_whether_notes_arrived() {
-        let (mut producer, consumer) = harmonigraph_record::publication::channel();
-        let (_audio_producer, audio_consumer) = crate::audio_ingress::channel(64);
-        let (_recorder, take_control) = harmonigraph_record::channel();
-        let mut shared = EditorShared::new(
-            consumer,
-            audio_consumer,
-            std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
-            take_control,
-        );
-
-        // An empty ring is not a repaint.
-        assert!(
-            !shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 7.0),
-            "nothing arrived, so nothing needs drawing"
-        );
-
-        producer.observe_clock(1.0);
-        producer
-            .note(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0).into(), Default::default())
-            .unwrap();
-        assert!(
-            shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 7.1),
-            "a note arrived and the frame was not told"
-        );
-
-        // And the ring is empty again, so the next tick asks for nothing.
-        assert!(
-            !shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, 7.2),
-            "the same note asked for a second repaint"
         );
     }
 }

@@ -99,7 +99,7 @@ use tuning::plugin::HarmonigraphTune;
 ///
 /// Doubled when the ring stopped carrying a mono mixdown and started carrying
 /// the channels themselves (see `process`), so the seconds it holds — which is
-/// what bounds the GUI's catch-up work after a stall, see
+/// what bounds the input worker's catch-up work after a stall, see
 /// `AudioSpectrum::push_samples` — stayed where it was.
 ///
 /// It is also what paces [`background`], whose longest poll has to stay well
@@ -868,8 +868,8 @@ impl Plugin for Harmonigraph {
         // The selected input for the GUI's spectrum analyzer, INTERLEAVED:
         // it analyzes the channels separately and combines them in the power
         // domain, so a mixdown here would cancel anti-phase content before it
-        // could (see `harmonigraph_analysis::ChannelBank`). A full ring — editor
-        // closed, or its thread stalled — drops frames. The next retained
+        // could (see `harmonigraph_analysis::ChannelBank`). A full ring — the
+        // input worker stalled — drops frames. The next retained
         // source position explicitly resets analysis across that gap.
         // Read the parameter and choose ONCE per block: the same buffer goes to
         // the live ring below and the take recorder after it. The main buffer

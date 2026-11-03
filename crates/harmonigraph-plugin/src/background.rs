@@ -6,8 +6,10 @@
 //! [`AUDIO_RING_CAPACITY`](crate::AUDIO_RING_CAPACITY) samples, 1.37 s of
 //! stereo at 48 kHz, so it saturates within seconds and every sample after
 //! that is dropped. A frame used to drain both with the window open and this
-//! thread with it shut; now this thread drains them always, so the window's
-//! state decides nothing about the input (#1559).
+//! thread with it shut; now this thread drains them always. The window's
+//! state sets how often it polls, and whether it also adopts restores and ages
+//! the picture while nothing draws it; it decides nothing about what is
+//! drained (#1559).
 //!
 //! **The FFTs run with no lock held.** A step takes the editor's lock to move
 //! the notes into the tracker and the audio out of its ring (a copy), lets
@@ -332,10 +334,7 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
             restore.adopt(shared);
         }
         let now = shared.input.now();
-        let (notes, taken) =
-            shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-        shared.fresh_notes |= notes;
-        taken
+        shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now)
     };
     let taken = taken.map(|mut taken| {
         #[cfg(test)]
@@ -665,7 +664,6 @@ mod tests {
         h.step();
         assert!(h.columns() > 0, "the worker left the audio to a frame");
         assert_eq!(h.voices(), 1, "the worker left the notes to a frame");
-        assert!(h.shared.lock().fresh_notes, "the frame was not told to draw the note");
     }
 
     /// A take ends itself with the window SHUT, which is the state a Bitwig

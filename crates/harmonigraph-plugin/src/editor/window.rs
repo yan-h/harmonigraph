@@ -305,7 +305,7 @@ impl Editor for LatticeEditor {
     }
 
     fn param_value_changed(&self, _id: &str, _normalized_value: f32) {
-        // root_ui repaints continuously; nothing to do.
+        // root_ui repaints while animating and polls otherwise; nothing to do.
     }
 
     fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {}

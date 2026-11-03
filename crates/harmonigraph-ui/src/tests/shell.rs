@@ -20,6 +20,42 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     assert!(!crate::roll_scrolling(&state, 2.2));
 }
 
+/// A note arriving in an idle editor paints on the next tick, not at the idle
+/// poll: it makes a voice, and a voice is what `root_ui` paces by. The input
+/// worker's drain no longer reports an arrival, so this is what tells an idle
+/// editor one came.
+///
+/// The roll and the release fade also keep a fresh note animating, so the voice
+/// is isolated by clearing the roll before the frame (Clear display history on
+/// a held note), leaving the voice as the only thing in motion.
+#[test]
+fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let delay = |output: &egui::FullOutput| {
+        output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
+    };
+    let mut state = fresh();
+    let mut harness = DockHarness::new();
+    // Settled: the opening frames lay the dock out and ask to be redrawn.
+    let mut idle = harness.frame(&mut state, vec![]);
+    for _ in 0..4 {
+        idle = harness.frame(&mut state, vec![]);
+    }
+    assert!(
+        delay(&idle) > std::time::Duration::ZERO,
+        "an idle editor waits for the next poll: {:?}",
+        delay(&idle),
+    );
+
+    let at = harness.next_time();
+    state.picture.runtime.tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 60, 1.0));
+    state.picture.runtime.tracker.clear_roll();
+    assert!(state.picture.runtime.tracker.voices().next().is_some(), "the note still sounds");
+    let sounding = harness.frame(&mut state, vec![]);
+    assert_eq!(delay(&sounding), std::time::Duration::ZERO, "a voice repaints at once");
+}
+
 /// Every tab needs an id of its own, and the title is not allowed to be its
 /// source: the workspace keys each tab BODY's `Ui` on `Viewer::id`
 /// (`workspace.rs`), so two tabs whose ids came from a shared title would

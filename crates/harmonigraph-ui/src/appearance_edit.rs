@@ -185,7 +185,7 @@ impl AppearanceEditor {
 
     /// Copies the current look into another slot. Overwriting a stored look is
     /// undoable from that slot; an empty slot had no look to go back to.
-    fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
+    pub(crate) fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
         if slot == self.slots.active {
             return;
         }
