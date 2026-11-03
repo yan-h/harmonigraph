@@ -106,10 +106,10 @@ pub(super) fn stars(
         .default_value(fresh.star_layers as f32)
         .show(ui)
         .on_hover_text(
-            "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and there is always a back and a front layer with the rest spaced evenly between. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed and solid share, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
+            "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and fewer layers drop the front-most. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed and solid share, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
         );
-    // Solo is held per depth, and a new layer count puts other depths under
-    // the numbers, so a solo left on would come back on a different layer.
+    // Solo is held per depth, and a solo left on a layer the count takes away
+    // would come back on, unseen, when the count brings it back.
     if layers as u32 != atmosphere.star_layers {
         atmosphere.star_solo = Default::default();
     }

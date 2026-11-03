@@ -2078,7 +2078,7 @@ mod tests {
     fn a_layer_left_out_is_not_allocated_or_baked() {
         let every = harmonigraph_scene::StarSettings::default();
         let three = harmonigraph_scene::StarSettings { star_layers: 3, ..every };
-        let off = [false, true, false, true, false];
+        let off = [false, false, false, true, true];
         let gathers = three.plan().depths.map(|depth| depth.gather);
         assert_eq!(gathers.map(|g| g == harmonigraph_scene::star_plan::StarGather::Off), off);
 
@@ -2181,7 +2181,7 @@ mod tests {
     #[test]
     fn soloing_draws_only_the_soloed_layers() {
         let fresh = harmonigraph_scene::StarSettings::default();
-        let solo = [false, true, false, true, false];
+        let solo = [false, false, false, true, true];
         for layers in [3, 5] {
             let full = harmonigraph_scene::StarSettings { star_layers: layers, ..fresh };
             let selected = harmonigraph_scene::StarSettings { star_solo: solo, ..full };

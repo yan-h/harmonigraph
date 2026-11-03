@@ -479,9 +479,9 @@ pub struct StarSettings {
     /// where the renderer's texel floor widens the depth's stars.
     pub star_jitter: f32,
     /// How many depths the starfield draws, from
-    /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
-    /// back and the front, with the rest spaced evenly between, each in
-    /// the depth nearest its place ([`crate::star_plan::star_layer_depths`]).
+    /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: the stored
+    /// layers 1 to this one in order, so fewer layers drop the front-most
+    /// ([`crate::star_plan::star_layer_depths`]).
     pub star_layers: u32,
     /// Each depth's star spacing, back (0) to front, as a multiple of its own
     /// [`Self::star_size`]. Every cell holds a star, so at one value a depth's
@@ -875,12 +875,23 @@ impl Default for AtmosphereSettings {
                 wash_randomness: 0.384_269_62,
                 ..MaterialSettings::default()
             },
-            stars: StarSettings {
-                star_randomness: 0.086_385_85,
-                star_jitter: 1.0,
-                star_layers: 4,
-                star_glow_falloff: 0.624_109_57,
-                ..StarSettings::default()
+            // The type's own layers 1, 2, 4 and 5, which the even spread
+            // of four over five drew until four layers drew the first four
+            // (#1635 Stars Q1). The fifth keeps the type's front.
+            stars: {
+                let every = StarSettings::default();
+                let four = |v: [f32; crate::star_plan::STAR_DEPTHS]| [v[0], v[1], v[3], v[4], v[4]];
+                StarSettings {
+                    star_randomness: 0.086_385_85,
+                    star_jitter: 1.0,
+                    star_layers: 4,
+                    star_spacing_ratio: four(every.star_spacing_ratio),
+                    star_size: four(every.star_size),
+                    star_speed: four(every.star_speed),
+                    star_solid: four(every.star_solid),
+                    star_glow_falloff: 0.624_109_57,
+                    ..every
+                }
             },
             material_speed: 3.136_019_5,
             material_direction: 203.0,
