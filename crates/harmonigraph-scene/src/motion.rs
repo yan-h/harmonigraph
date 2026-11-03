@@ -211,6 +211,11 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
             + (1.0 - target) * env.carried((level - target) / (1.0 - target).max(1e-6), dt, false)
     }
 }
+// What an absent entry reads as, by reference. Statics, because a const that
+// owns a `Vec` is not promoted to one: `&Motion::REST` would build a fresh
+// temporary for every visible node on every frame.
+static REST: Motion = Motion::REST;
+static POSED: Motion = Motion::POSED;
 impl Motion {
     /// A node nothing has lit, and what every position [`NodeMotion`] holds no
     /// entry for reads as.
@@ -564,39 +569,35 @@ impl NodeMotion {
             // turning every slice at once. The slices a note lights take the
             // rise first, so they appear first; on the way out they keep their
             // place in the sweep like any other.
-            let mut delay = order;
-            if gate && !motion.gate {
-                motion.level_wait = [0.0; 11];
-                for i in (0..11).filter_map(|slot| displayed(slot).filter(|_| targets[slot] > 0.0))
-                {
-                    delay[i] = 0.0;
+            let settle = seed_settled || (gate && preexisting && newly_visible(&self.visible));
+            if gate {
+                // A slot lit now and not before starts at once: at the rise
+                // that is every lit slot, and with the gate held it is one a
+                // second note lights, rather than waiting out the arrival it
+                // joined. Only the rise sends the rest of the sweep.
+                let mut delay = if motion.gate { [f32::INFINITY; 11] } else { order };
+                for slot in (0..11).filter(|&slot| targets[slot] > 0.0 && was_lit[slot] == 0.0) {
+                    if let Some(i) = displayed(slot) {
+                        delay[i] = 0.0;
+                    }
                 }
-                // A lifetime lit over an audio pose starts at full progress.
-                if posed {
+                if !motion.gate {
+                    motion.level_wait = [0.0; 11];
+                }
+                // A lifetime lit over an audio pose starts at full progress,
+                // and one seeded settled is already there.
+                if posed || settle {
                     motion.settle_slices(true);
                 } else {
                     motion.push_edge(true, delay);
                 }
-            } else if !gate && motion.gate {
+            } else if motion.gate {
                 // The presence of a slot lit at the off outlasts the slice
                 // that retracts last; its colour does not wait (`colors`).
                 motion.level_wait = was_lit.map(|t| if t > 0.0 { last } else { 0.0 });
-                motion.push_edge(false, delay);
-            } else if gate {
-                // A slot a second note lights while the gate is held starts at
-                // once, rather than waiting out the arrival it joined.
-                let mut newly = [f32::INFINITY; 11];
-                for slot in (0..11).filter(|&slot| targets[slot] > 0.0 && was_lit[slot] == 0.0) {
-                    if let Some(i) = displayed(slot) {
-                        newly[i] = 0.0;
-                    }
-                }
-                if newly.iter().any(|d| d.is_finite()) {
-                    motion.push_edge(true, newly);
-                }
+                motion.push_edge(false, order);
             }
             motion.gate = gate;
-            let settle = seed_settled || (gate && preexisting && newly_visible(&self.visible));
             #[cfg(test)]
             if gate && preexisting && vacant && !seed_settled && !dense {
                 if settle {
@@ -883,7 +884,7 @@ impl NodeMotion {
         }
         for node in &mut scene.nodes {
             let pos = &node.lattice_pos;
-            let resting = if self.posed.contains(pos) { &Motion::POSED } else { &Motion::REST };
+            let resting = if self.posed.contains(pos) { &POSED } else { &REST };
             let motion = self.nodes.get(pos).unwrap_or(resting);
             node.slice_progress = motion.progress;
             // Opacity fades each slot's colour, and the node's presence with
@@ -945,9 +946,6 @@ mod tests {
     use super::*;
     use crate::NoteAnimationConfig;
 
-    // Statics, because a const owning a `Vec` is not promoted to a reference.
-    static REST: Motion = Motion::REST;
-    static POSED: Motion = Motion::POSED;
     impl NodeMotion {
         /// A position's motion, absent read as the rest it stands for.
         fn at(&self, pos: LatticePos) -> &Motion {
@@ -1099,16 +1097,20 @@ mod tests {
         // One press just after the ink runs out, and one well past it.
         // Both owe the same fresh entrance.
         let mut poses = Vec::new();
-        for repress in [7.05, 8.5] {
+        for repress in [1.6, 4.0] {
             let mut tracker = NoteTracker::new();
             let mut motion = NodeMotion::default();
+            // A short note: its lit slice arrives at once and takes the
+            // release late in the sweep, so it is still well out when the
+            // presence, held at 0.3 for the last delay, has faded.
             tracker.handle_event(on(0.0, 60));
-            draw(&mut motion, &mut tracker, &view, 0.0, false);
-            draw(&mut motion, &mut tracker, &view, 5.0, false);
-            tracker.handle_event(off(5.0, 60));
-            // The departure spans `1 + stagger_spread` fades, its
-            // presence held for the last slice's delay; past that it is out.
-            let dark = draw(&mut motion, &mut tracker, &view, 7.0, false);
+            let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+            let (_, lit) = lit_by(&first, 60);
+            tracker.handle_event(off(0.3, 60));
+            let fading = draw(&mut motion, &mut tracker, &view, 1.45, false);
+            assert!(origin(&fading).activation > 0.0, "the ink ran out early");
+            assert!(origin(&fading).slice_progress[lit] > 0.5, "the lit slice left in time");
+            let dark = draw(&mut motion, &mut tracker, &view, 1.55, false);
             assert_eq!(origin(&dark).activation, 0.0, "past the departure's span");
             assert_eq!(
                 origin(&dark).slice_progress,
@@ -1178,8 +1180,18 @@ mod tests {
             assert!((at - expected).abs() <= 0.021, "slice {i} dipped at {at}, not {expected}");
         }
         assert_eq!(dips[lit].0, 1.0, "the lit slice retracted under a re-press");
-        let colour = after.iter().map(|(_, s)| origin(s).octaves[slot]).fold(1.0, f32::min);
-        assert!((colour - 0.84).abs() < 0.03, "the lit slot's colour held at {colour}");
+        // The light and the mark go with the colour, and the presence holds.
+        let lowest = |f: &dyn Fn(&crate::NodeInstance) -> f32| {
+            after.iter().map(|(_, s)| f(origin(s))).fold(1.0, f32::min)
+        };
+        for (what, low) in [
+            ("colour", lowest(&|n| n.octaves[slot])),
+            ("light", lowest(&|n| n.glow.level)),
+            ("melody mark", lowest(&|n| n.melody_level)),
+        ] {
+            assert!((low - 0.84).abs() < 0.03, "the lit slot's {what} held at {low}");
+        }
+        assert_eq!(lowest(&|n| n.activation), 1.0, "the presence left with the colour");
         assert_eq!(origin(&frames.last().unwrap().1).slice_progress, [1.0; 11]);
     }
     /// A note released before its arrival finished plays the same short rise
@@ -1598,22 +1610,37 @@ mod tests {
         );
     }
     #[test]
-    fn the_sweep_applies_to_settled_departure_and_pending_pieces_cancel_on_interrupt() {
+    fn an_interrupted_arrival_and_a_settled_departure_each_keep_the_sweep() {
         let mut view = ViewConfig { fade_shape: 0.0, ..view() };
         view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.0, 60));
-        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let order = view.note_animation.delays(&first.octave_layout, 1.0);
         let arrival = draw(&mut motion, &mut tracker, &view, 0.15, false);
         tracker.handle_event(off(0.15, 60));
         let departure = draw(&mut motion, &mut tracker, &view, 0.2, false);
-        // The lit slice takes the off last, so it alone is still arriving.
+        // Each slice where its own edges have brought it: one the rise has
+        // not reached is still out, one the off has reached is on its way
+        // back, and one between the two is still arriving. The lit slice
+        // takes the rise at once and the off in its turn.
         let (_, lit) = lit_by(&arrival, 60);
         let (a, b) = (origin(&arrival).slice_progress, origin(&departure).slice_progress);
-        for i in (0..11).filter(|&i| i != lit) {
-            assert!(b[i] <= a[i], "slice {i}");
+        let mut reached = [false; 3];
+        for i in 0..first.octave_layout.span as usize {
+            let rise = if i == lit { 0.0 } else { order[i] };
+            let (case, holds) = if rise >= 0.2 {
+                (0, b[i] == 0.0)
+            } else if 0.15 + order[i] <= 0.2 {
+                (1, b[i] < a[i])
+            } else {
+                (2, b[i] > a[i])
+            };
+            reached[case] = true;
+            assert!(holds, "slice {i} (case {case}) went from {} to {}", a[i], b[i]);
         }
+        assert_eq!(reached, [true; 3], "the fixture missed a case: {order:?}");
         tracker.handle_event(on(0.21, 60));
         draw(&mut motion, &mut tracker, &view, 1.6, false);
         tracker.handle_event(off(1.7, 60));
@@ -1663,7 +1690,8 @@ mod tests {
             let scene = draw(&mut motion, &mut tracker, &view, 0.05, false);
             // The off reaches the seam at once and the rest in their turn: a
             // slice the arrival had not reached yet has not moved. The lit
-            // slice takes it last, and at no spread with the rest.
+            // slice arrived at once and takes the off in its turn, so it may
+            // still be arriving, unless there is no spread to wait out.
             let (_, lit) = lit_by(&scene, 60);
             let m = motion.at(LatticePos::ORIGIN);
             for i in (0..11).filter(|&i| i != lit || spread == 0.0) {
@@ -1706,9 +1734,6 @@ mod tests {
         view.note_animation.stagger_spread = spread;
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
-        // C5, deliberately NOT middle C, whose slice is the one the orders
-        // start from: the presence check below is about a note landing on a
-        // LATE slice, and middle C would give it a delay of zero to pass at.
         tracker.handle_event(on(0.0, 72));
         let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
         let span = first.octave_layout.span as usize;
@@ -1722,11 +1747,11 @@ mod tests {
             let scene = draw(&mut motion, &mut tracker, &view, now, false);
             let node = origin(&scene);
             // The node's presence carries every slot no note lights, so it
-            // must NOT wait for the lit slice. Staggering it too makes the
-            // whole wheel wait on whichever slot the note happens to take,
-            // and C5's is a late one: measured, that collapsed seven starts
-            // spanning 0.9 into all of them landing within 0.08.
-            assert!(node.activation > 0.0, "presence waited for its lit slice");
+            // must NOT wait on any slice's delay. Staggering it too made the
+            // whole wheel wait on whichever slot the note happened to take:
+            // measured on a late one, that collapsed seven starts spanning
+            // 0.9 into all of them landing within 0.08.
+            assert!(node.activation > 0.0, "presence waited on a slice");
             for i in 0..span {
                 started[i] = started[i].or((node.slice_progress[i] > 0.0).then_some(now));
                 done[i] = done[i].or((node.slice_progress[i] >= 1.0).then_some(now));
