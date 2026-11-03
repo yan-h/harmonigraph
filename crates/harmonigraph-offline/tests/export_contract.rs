@@ -43,7 +43,9 @@ fn render(take: &Path, out: &Path, extra: &[&str]) -> std::process::Output {
         .arg(take)
         .arg("--out")
         .arg(out)
-        .args(["--size", "320x180", "--fps", "20"])
+        // x264 stated, since the fresh Encoder is Hardware: the subject here is
+        // the frame count, and this one runs wherever ffmpeg does.
+        .args(["--size", "320x180", "--fps", "20", "--encoder", "x264"])
         .args(extra)
         .output()
         .unwrap()
@@ -64,13 +66,13 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     let dir =
         std::env::temp_dir().join(format!("harmonigraph-cli-duration-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    // A Re-render's current look, with Tail turned down after recording.
+    // A queued export's current look, with Tail turned down after recording.
     let tail_zero = dir.join("tail-zero.ron");
     let mut replacement = harmonigraph_ui::AppearanceDocument::default();
     replacement.render.tail = 0.0;
     std::fs::write(&tail_zero, replacement.serialize()).unwrap();
     let tail_zero = tail_zero.to_str().unwrap();
-    // A Re-render's current look on a different trigger, with a 4 s Tail.
+    // A queued export's current look on a different trigger, with a 4 s Tail.
     let fresh = dir.join("fresh.ron");
     let mut with_tail = harmonigraph_ui::AppearanceDocument::default();
     with_tail.render.tail = 4.0;
@@ -91,7 +93,7 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         // The recorded Tail of 0 ends the video with the audio at 1 s rather
         // than at the last note plus a longer Tail.
         ("recorded-tail-zero", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
-        // A Re-render takes the Tail from the look it draws with, so the same
+        // A queued export takes the Tail from the look it draws with, so the same
         // take recorded with a 4 s Tail still ends with its audio.
         (
             "replacement-tail",
@@ -101,7 +103,7 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
             vec!["--appearance", tail_zero],
             20,
         ),
-        // But whether it applies is the RECORDING's: a loop-end take re-rendered
+        // But whether it applies is the RECORDING's: a loop-end take exported again
         // with a Manually look and its 4 s Tail still ends with its loop.
         (
             "loop-end-replacement",

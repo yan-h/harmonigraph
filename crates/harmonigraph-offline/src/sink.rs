@@ -465,8 +465,7 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
             // chroma sits between them; untagged, x264 states H.264's default,
             // half a pixel left, and a player that honours it shifts every
             // thin line's colour that way. Decoded as stated rather than as
-            // tagged, a 1440p export gains 0.5-0.75 dB. VideoToolbox drops this
-            // tag however it is given, so the hardware export still says left.
+            // tagged, a 1440p export gains 0.5-0.75 dB.
             args.extend(["-chroma_sample_location", "center"].map(String::from));
         }
         VideoEncoder::Hardware => {
@@ -487,6 +486,13 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
             // Without them every stamp is exact, and the signed-offset reasoning
             // at the muxer flags below has no reorder delay to answer for.
             args.extend(["-bf".to_string(), "0".to_string()]);
+            // The same chroma tag as x264's, by the one route VideoToolbox
+            // leaves open: it drops `-chroma_sample_location` however it is
+            // given, and every route that acts before the encoder, so the
+            // stream says what it holds afterwards, in its VUI (type 1 is
+            // "center"). Left unsaid it states H.264's default, half a pixel
+            // left.
+            args.extend(["-bsf:v", "h264_metadata=chroma_sample_loc_type=1"].map(String::from));
         }
     }
     args.extend(["-g".to_string(), gop.to_string()]);
@@ -781,6 +787,17 @@ mod tests {
         }
     }
 
+    /// The encoders the real-encoder tests run through. x264 anywhere ffmpeg
+    /// has it; VideoToolbox, the fresh Video pane's encoder (#1475), on macOS,
+    /// where an export that cannot open it is a failure and not a skip.
+    fn real_encoders() -> &'static [VideoEncoder] {
+        if cfg!(target_os = "macos") {
+            &[VideoEncoder::X264, VideoEncoder::Hardware]
+        } else {
+            &[VideoEncoder::X264]
+        }
+    }
+
     fn probe(ffmpeg: &std::path::Path, path: &std::path::Path) -> String {
         let output = Command::new(ffmpeg.with_file_name("ffprobe"))
             .args([
@@ -825,49 +842,55 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("harmonigraph-real-duration-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // N/fps = 9.05 rather than a whole second. The priming-band seek is
-        // still inside the WAV before compensation, but beyond EOF after it.
-        for (name, seconds, offset, frames, fps) in [
-            ("none", None, 0.0, 181, 20.0),
-            ("short", Some(0.25), 0.0, 181, 20.0),
-            ("long", Some(12.0), 0.0, 181, 20.0),
-            ("empty", Some(0.0), 0.0, 181, 20.0),
-            ("exhausted", Some(0.25), 3.0, 181, 20.0),
-            ("priming-band", Some(0.25), 0.24, 181, 20.0),
-            ("delay", Some(0.25), -0.5, 181, 20.0),
-            ("seek", Some(1.0), 0.25, 181, 20.0),
-            ("fractional-sample", Some(2.0), 0.0, 61, 59.94),
-        ] {
-            let wav = dir.join(format!("{name}.wav"));
-            if let Some(seconds) = seconds {
-                write_wav(&wav, 44_100, seconds, None);
-            }
-            let out = dir.join(format!("{name}.mp4"));
-            let options = VideoOptions {
-                size: [16, 16],
-                fps,
-                frames,
-                audio: seconds.map(|_| wav.as_path()),
-                encoder: VideoEncoder::X264,
-                crf: 20,
-                ffmpeg: ffmpeg.to_str(),
-                audio_offset: offset,
-            };
-            encode(&options, &out, None);
-            let info = probe(&ffmpeg, &out);
-            assert!(
-                info.contains(&format!("streams.stream.0.nb_frames=\"{frames}\"")),
-                "{name}: {info}"
-            );
-            assert_eq!(info.contains("codec_type=\"audio\""), seconds.is_some(), "{name}: {info}");
-            let planned = frames as f64 / fps;
-            for line in info.lines().filter(|line| line.contains(".duration=")) {
-                let duration: f64 =
-                    line.split('=').nth(1).unwrap().trim_matches('"').parse().unwrap();
+        for &encoder in real_encoders() {
+            // N/fps = 9.05 rather than a whole second. The priming-band seek is
+            // still inside the WAV before compensation, but beyond EOF after it.
+            for (name, seconds, offset, frames, fps) in [
+                ("none", None, 0.0, 181, 20.0),
+                ("short", Some(0.25), 0.0, 181, 20.0),
+                ("long", Some(12.0), 0.0, 181, 20.0),
+                ("empty", Some(0.0), 0.0, 181, 20.0),
+                ("exhausted", Some(0.25), 3.0, 181, 20.0),
+                ("priming-band", Some(0.25), 0.24, 181, 20.0),
+                ("delay", Some(0.25), -0.5, 181, 20.0),
+                ("seek", Some(1.0), 0.25, 181, 20.0),
+                ("fractional-sample", Some(2.0), 0.0, 61, 59.94),
+            ] {
+                let wav = dir.join(format!("{name}.wav"));
+                if let Some(seconds) = seconds {
+                    write_wav(&wav, 44_100, seconds, None);
+                }
+                let out = dir.join(format!("{name}.mp4"));
+                let options = VideoOptions {
+                    size: [16, 16],
+                    fps,
+                    frames,
+                    audio: seconds.map(|_| wav.as_path()),
+                    encoder,
+                    crf: 20,
+                    ffmpeg: ffmpeg.to_str(),
+                    audio_offset: offset,
+                };
+                encode(&options, &out, None);
+                let info = probe(&ffmpeg, &out);
                 assert!(
-                    (planned - 1.0 / 48_000.0 - 1e-6..=planned + 1e-6).contains(&duration),
-                    "{name}: {info}"
+                    info.contains(&format!("streams.stream.0.nb_frames=\"{frames}\"")),
+                    "{encoder:?} {name}: {info}"
                 );
+                assert_eq!(
+                    info.contains("codec_type=\"audio\""),
+                    seconds.is_some(),
+                    "{encoder:?} {name}: {info}"
+                );
+                let planned = frames as f64 / fps;
+                for line in info.lines().filter(|line| line.contains(".duration=")) {
+                    let duration: f64 =
+                        line.split('=').nth(1).unwrap().trim_matches('"').parse().unwrap();
+                    assert!(
+                        (planned - 1.0 / 48_000.0 - 1e-6..=planned + 1e-6).contains(&duration),
+                        "{encoder:?} {name}: {info}"
+                    );
+                }
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -879,28 +902,40 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("harmonigraph-real-tiny-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let wav = dir.join("audio.wav");
-        write_wav(&wav, 48_000, 1.0, None);
-        for fps in [24.0, 30.0, 46.875, 60.0] {
-            let out = dir.join(format!("{fps}.mp4"));
-            let options = VideoOptions {
-                size: [16, 16],
-                fps,
-                frames: 1,
-                audio: Some(&wav),
-                encoder: VideoEncoder::X264,
-                crf: 20,
-                ffmpeg: ffmpeg.to_str(),
-                audio_offset: 0.0,
-            };
-            encode(&options, &out, None);
-            let info = probe(&ffmpeg, &out);
-            assert!(info.contains("streams.stream.0.nb_frames=\"1\""), "{fps}: {info}");
-            assert_eq!(info.contains("codec_type=\"audio\""), fps < 46.875, "{fps}: {info}");
-            for line in info.lines().filter(|line| line.contains(".duration=")) {
-                let duration: f64 =
-                    line.split('=').nth(1).unwrap().trim_matches('"').parse().unwrap();
-                assert!((duration - 1.0 / fps).abs() <= 1.0 / 48_000.0 + 1e-6, "{fps}: {info}");
+        for &encoder in real_encoders() {
+            let wav = dir.join("audio.wav");
+            write_wav(&wav, 48_000, 1.0, None);
+            for fps in [24.0, 30.0, 46.875, 60.0] {
+                let out = dir.join(format!("{fps}.mp4"));
+                let options = VideoOptions {
+                    size: [16, 16],
+                    fps,
+                    frames: 1,
+                    audio: Some(&wav),
+                    encoder,
+                    crf: 20,
+                    ffmpeg: ffmpeg.to_str(),
+                    audio_offset: 0.0,
+                };
+                encode(&options, &out, None);
+                let info = probe(&ffmpeg, &out);
+                assert!(
+                    info.contains("streams.stream.0.nb_frames=\"1\""),
+                    "{encoder:?} {fps}: {info}"
+                );
+                assert_eq!(
+                    info.contains("codec_type=\"audio\""),
+                    fps < 46.875,
+                    "{encoder:?} {fps}: {info}"
+                );
+                for line in info.lines().filter(|line| line.contains(".duration=")) {
+                    let duration: f64 =
+                        line.split('=').nth(1).unwrap().trim_matches('"').parse().unwrap();
+                    assert!(
+                        (duration - 1.0 / fps).abs() <= 1.0 / 48_000.0 + 1e-6,
+                        "{encoder:?} {fps}: {info}"
+                    );
+                }
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -912,58 +947,65 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("harmonigraph-real-sync-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for rate in [44_100, 48_000] {
-            for fps in [24u32, 30, 60] {
-                for offset in [-0.25, 0.0, 0.25] {
-                    let wav = dir.join("click.wav");
-                    write_wav(&wav, rate, 1.25, Some(0.5 + offset));
-                    let out = dir.join("click.mp4");
-                    let options = VideoOptions {
-                        size: [16, 16],
-                        fps: f64::from(fps),
-                        frames: u64::from(fps),
-                        audio: Some(&wav),
-                        encoder: VideoEncoder::X264,
-                        crf: 20,
-                        ffmpeg: ffmpeg.to_str(),
-                        audio_offset: offset,
-                    };
-                    encode(&options, &out, Some(u64::from(fps / 2)));
-                    let decoded = Command::new(&ffmpeg)
-                        .args(["-v", "error", "-i"])
-                        .arg(&out)
-                        .args(["-map", "0:a:0", "-f", "f32le", "-ac", "1", "-"])
-                        .output()
-                        .unwrap();
-                    assert!(decoded.status.success());
-                    let peak = decoded
-                        .stdout
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|bytes| f32::from_le_bytes(*bytes).abs())
-                        .enumerate()
-                        .max_by(|a, b| a.1.total_cmp(&b.1))
-                        .unwrap()
-                        .0;
-                    assert_eq!(peak, 24_000, "{rate} Hz / {fps} fps / offset {offset}");
-                    let decoded = Command::new(&ffmpeg)
-                        .args(["-v", "error", "-i"])
-                        .arg(&out)
-                        .args(["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
-                        .output()
-                        .unwrap();
-                    assert!(decoded.status.success());
-                    let flash = decoded
-                        .stdout
-                        .as_chunks::<{ 16 * 16 }>()
-                        .0
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, frame)| frame.iter().map(|p| u32::from(*p)).sum::<u32>())
-                        .unwrap()
-                        .0;
-                    assert_eq!(flash, fps as usize / 2);
+        for &encoder in real_encoders() {
+            for rate in [44_100, 48_000] {
+                for fps in [24u32, 30, 60] {
+                    for offset in [-0.25, 0.0, 0.25] {
+                        let wav = dir.join("click.wav");
+                        write_wav(&wav, rate, 1.25, Some(0.5 + offset));
+                        let out = dir.join("click.mp4");
+                        let options = VideoOptions {
+                            size: [16, 16],
+                            fps: f64::from(fps),
+                            frames: u64::from(fps),
+                            audio: Some(&wav),
+                            encoder,
+                            crf: 20,
+                            ffmpeg: ffmpeg.to_str(),
+                            audio_offset: offset,
+                        };
+                        encode(&options, &out, Some(u64::from(fps / 2)));
+                        let decoded = Command::new(&ffmpeg)
+                            .args(["-v", "error", "-i"])
+                            .arg(&out)
+                            .args(["-map", "0:a:0", "-f", "f32le", "-ac", "1", "-"])
+                            .output()
+                            .unwrap();
+                        assert!(decoded.status.success());
+                        let peak = decoded
+                            .stdout
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .map(|bytes| f32::from_le_bytes(*bytes).abs())
+                            .enumerate()
+                            .max_by(|a, b| a.1.total_cmp(&b.1))
+                            .unwrap()
+                            .0;
+                        assert_eq!(
+                            peak, 24_000,
+                            "{encoder:?} {rate} Hz / {fps} fps / offset {offset}"
+                        );
+                        let decoded = Command::new(&ffmpeg)
+                            .args(["-v", "error", "-i"])
+                            .arg(&out)
+                            .args(["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+                            .output()
+                            .unwrap();
+                        assert!(decoded.status.success());
+                        let flash = decoded
+                            .stdout
+                            .as_chunks::<{ 16 * 16 }>()
+                            .0
+                            .iter()
+                            .enumerate()
+                            .max_by_key(|(_, frame)| {
+                                frame.iter().map(|p| u32::from(*p)).sum::<u32>()
+                            })
+                            .unwrap()
+                            .0;
+                        assert_eq!(flash, fps as usize / 2);
+                    }
                 }
             }
         }
@@ -1051,41 +1093,44 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// What an x264 export says about its colour is what its pixels hold, read
-    /// back from the file rather than the arguments: ffmpeg 7 has dropped
-    /// colour options given in the wrong place without a word.
+    /// What an export says about its colour is what its pixels hold, read back
+    /// from the file rather than the arguments: ffmpeg 7 has dropped colour
+    /// options given in the wrong place without a word, and VideoToolbox drops
+    /// the chroma tag whichever way it is given.
     #[test]
-    fn real_x264_export_states_the_colour_it_holds() {
+    fn real_export_states_the_colour_it_holds() {
         let Some(ffmpeg) = real_ffmpeg() else { return };
         let dir =
             std::env::temp_dir().join(format!("harmonigraph-real-tags-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let out = dir.join("tags.mp4");
-        let options = VideoOptions {
-            size: [16, 16],
-            fps: 20.0,
-            frames: 4,
-            audio: None,
-            encoder: VideoEncoder::X264,
-            crf: 20,
-            ffmpeg: ffmpeg.to_str(),
-            audio_offset: 0.0,
-        };
-        encode(&options, &out, None);
-        let output = Command::new(ffmpeg.with_file_name("ffprobe"))
-            .args(["-v", "error", "-select_streams", "v", "-of", "flat", "-show_entries"])
-            .arg("stream=color_space,color_primaries,color_transfer,chroma_location")
-            .arg(&out)
-            .output()
-            .unwrap();
-        let info = String::from_utf8(output.stdout).unwrap();
-        for tag in
-            ["color_space=\"bt709\"", "color_primaries=\"bt709\"", "color_transfer=\"bt709\""]
-        {
-            assert!(info.contains(tag), "{tag}: {info}");
+        for &encoder in real_encoders() {
+            let out = dir.join("tags.mp4");
+            let options = VideoOptions {
+                size: [16, 16],
+                fps: 20.0,
+                frames: 4,
+                audio: None,
+                encoder,
+                crf: 20,
+                ffmpeg: ffmpeg.to_str(),
+                audio_offset: 0.0,
+            };
+            encode(&options, &out, None);
+            let output = Command::new(ffmpeg.with_file_name("ffprobe"))
+                .args(["-v", "error", "-select_streams", "v", "-of", "flat", "-show_entries"])
+                .arg("stream=color_space,color_primaries,color_transfer,chroma_location")
+                .arg(&out)
+                .output()
+                .unwrap();
+            let info = String::from_utf8(output.stdout).unwrap();
+            for tag in
+                ["color_space=\"bt709\"", "color_primaries=\"bt709\"", "color_transfer=\"bt709\""]
+            {
+                assert!(info.contains(tag), "{encoder:?} {tag}: {info}");
+            }
+            // swscale's 4:2:0 puts chroma between its two luma columns.
+            assert!(info.contains("chroma_location=\"center\""), "{encoder:?}: {info}");
         }
-        // swscale's 4:2:0 puts chroma between its two luma columns.
-        assert!(info.contains("chroma_location=\"center\""), "{info}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1140,7 +1185,8 @@ mod tests {
         assert_eq!(x264[x_to..], hardware[h_to..], "the GOP, colour, audio or muxer moved");
         assert_eq!(
             hardware[h_from..h_to].join(" "),
-            "-c:v h264_videotoolbox -profile:v high -allow_sw 0 -q:v 88 -bf 0",
+            "-c:v h264_videotoolbox -profile:v high -allow_sw 0 -q:v 88 -bf 0 \
+             -bsf:v h264_metadata=chroma_sample_loc_type=1",
         );
     }
 
