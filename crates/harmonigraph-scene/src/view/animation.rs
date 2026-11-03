@@ -15,7 +15,7 @@ pub struct NoteAnimationConfig {
     pub stagger_spread: f32,
     pub radial_start: f32,
     /// The slices a note lights start with the earliest on arrival and with
-    /// the latest on an ordered departure; every other slice keeps its
+    /// the latest on departure; every other slice keeps its
     /// [`delays`](Self::delays) entry.
     pub lit_first: bool,
 }

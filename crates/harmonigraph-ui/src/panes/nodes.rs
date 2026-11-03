@@ -246,7 +246,7 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
                 .default_value(super::fresh_view().note_animation.stagger_spread)
                 .unit(100.0, "%")
                 .show(ui)
-                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
+                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note cut short, or pressed again before it has gone, keeps the same sweep, each slice following it in its turn. Zero starts every slice together.");
     ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
             .default_value(super::fresh_view().note_animation.radial_start)
             .unit(100.0, "%").show(ui)

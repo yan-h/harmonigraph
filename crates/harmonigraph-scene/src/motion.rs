@@ -97,15 +97,22 @@ struct Reached {
     lit_after_entering: usize,
 }
 #[derive(Clone)]
-/// Two index spaces share these arrays. `progress` and `delay` count the
-/// slices a node draws, lowest first (slot `ring.base + i`), as
-/// `delays` ranks them and the shader reads them: an 11-slice ring can draw a
+/// Two index spaces share these arrays. `progress`, `seen` and each edge's
+/// `delay` count the slices a node draws, lowest first (slot `ring.base + i`),
+/// as `delays` ranks them and the shader reads them: an 11-slice ring can draw a
 /// slice below slot 0, which no slot index holds. `levels`, `targets`,
 /// `readings` and `level_wait` count octave slots, as `NodeInstance::octaves`
 /// and the marks do.
 struct Motion {
     progress: [f32; 11],
-    delay: [f32; 11],
+    /// The gate each slice is moving toward: the node's own, as it was when
+    /// the last edge to reach that slice left the node.
+    seen: [bool; 11],
+    /// The node's gate edges still on their way to some slice, oldest first.
+    /// Every slice follows the gate late by its place in the sweep, so an
+    /// interruption is a staggered gesture like any other rather than a
+    /// moment where every slice turns at once.
+    edges: Vec<SliceEdge>,
     levels: [f32; 11],
     targets: [f32; 11],
     /// Each slot's reading from the notes lighting it: the largest a held one
@@ -117,13 +124,23 @@ struct Motion {
     gate: bool,
     melody: MarkMotion,
     bass: MarkMotion,
-    /// Time each slot's presence holds before an ordered departure starts it
-    /// falling: the last slice's delay, so the ink outlasts every retraction
-    /// rather than dimming the whole wheel at the off. Only for slots still
-    /// full at the off -- one released earlier keeps fading, rather than
-    /// freezing mid-fade until the rest catch up. 0 otherwise.
+    /// Time each slot's presence holds before a departure starts it falling:
+    /// the last slice's delay, so the ink outlasts every retraction rather
+    /// than dimming the whole wheel at the off. Only for slots lit at the off
+    /// -- one released earlier keeps fading, rather than freezing mid-fade
+    /// until the rest catch up. 0 otherwise.
     level_wait: [f32; 11],
     audio_waiting: bool,
+}
+/// One gate edge on its way through a node's slices.
+#[derive(Clone)]
+struct SliceEdge {
+    on: bool,
+    /// Time since the edge left the node.
+    age: f64,
+    /// When it reaches each slice, after leaving the node; infinite once it
+    /// has, or once a newer edge has overtaken it there.
+    delay: [f64; 11],
 }
 #[derive(Clone)]
 struct MarkMotion {
@@ -142,14 +159,19 @@ impl MarkMotion {
             self.target = target;
         }
     }
-    fn advance(&mut self, dt: f64, env: &Envelope, departure_wait: &[f32; 11]) {
-        for (i, &departure_wait) in departure_wait.iter().enumerate() {
+    /// Hold the mark that left `slot` at a gate's fall for as long as the
+    /// slot's presence holds, so the two leave together. A mark already fading
+    /// after a melody/bass handoff left another slot and keeps moving.
+    fn depart(&mut self, slot: Option<usize>, wait: &[f32; 11]) {
+        if let Some(slot) = slot {
+            self.waits[slot] = wait[slot];
+        }
+    }
+    fn advance(&mut self, dt: f64, env: &Envelope) {
+        for i in 0..11 {
             let target = f32::from(self.target == Some(i));
-            // A whole mark leaves with its octave sector. A mark already
-            // fading after a melody/bass handoff must keep moving instead.
-            let wait =
-                if target == 0.0 && self.levels[i] >= 1.0 { departure_wait } else { self.waits[i] };
-            self.levels[i] = approach(self.levels[i], target, (dt - f64::from(wait)).max(0.0), env);
+            let moving = (dt - f64::from(self.waits[i])).max(0.0);
+            self.levels[i] = approach(self.levels[i], target, moving, env);
             self.waits[i] = (self.waits[i] - dt as f32).max(0.0);
         }
     }
@@ -191,21 +213,27 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
 impl Motion {
     /// A node nothing has lit, and what every position [`NodeMotion`] holds no
     /// entry for reads as.
-    const REST: Self = Self {
-        progress: [0.0; 11],
-        delay: [0.0; 11],
-        levels: [0.0; 11],
-        targets: [0.0; 11],
-        readings: [IntensityReading::REST; 11],
-        gate: false,
-        melody: MarkMotion::REST,
-        bass: MarkMotion::REST,
-        level_wait: [0.0; 11],
-        audio_waiting: false,
-    };
+    const REST: Self = Self::still_at(0.0, false);
     /// A node at rest that the audio ring has posed, settled and waiting for a
     /// note. Nothing in `advance` moves it.
-    const POSED: Self = Self { progress: [1.0; 11], audio_waiting: true, ..Self::REST };
+    const POSED: Self = Self::still_at(1.0, true);
+    /// Spelled out rather than `..Self::REST`: `edges` owns an allocation, so
+    /// a const cannot drop the fields such an update leaves behind.
+    const fn still_at(progress: f32, audio_waiting: bool) -> Self {
+        Self {
+            progress: [progress; 11],
+            seen: [false; 11],
+            edges: Vec::new(),
+            levels: [0.0; 11],
+            targets: [0.0; 11],
+            readings: [IntensityReading::REST; 11],
+            gate: false,
+            melody: MarkMotion::REST,
+            bass: MarkMotion::REST,
+            level_wait: [0.0; 11],
+            audio_waiting,
+        }
+    }
     /// Nothing held, nothing moving and nothing left to fade: `advance` would
     /// write back exactly what is here. Most visible nodes are this at once,
     /// and [`NodeMotion`] keeps no entry for one.
@@ -222,7 +250,9 @@ impl Motion {
         !self.gate
             && self.melody.target.is_none()
             && self.bass.target.is_none()
-            && [self.delay, self.levels, self.targets]
+            && self.edges.is_empty()
+            && self.seen == [false; 11]
+            && [self.levels, self.targets]
                 .iter()
                 .chain([
                     &self.melody.levels,
@@ -232,23 +262,62 @@ impl Motion {
                 ])
                 .all(|values| values.iter().all(|&v| v == 0.0))
     }
+    /// Send a gate edge through the slices, reaching slice `i` after
+    /// `delay[i]` (infinite: never). It overtakes any older edge that would
+    /// reach a slice no sooner, so each slice follows the newest edge to have
+    /// reached it, and the edges still travelling reach it in order.
+    fn push_edge(&mut self, on: bool, delay: [f32; 11]) {
+        let mut delay = delay.map(f64::from);
+        for edge in &mut self.edges {
+            for (old, &new) in edge.delay.iter_mut().zip(&delay) {
+                if *old - edge.age >= new {
+                    *old = f64::INFINITY;
+                }
+            }
+        }
+        for (seen, delay) in self.seen.iter_mut().zip(&mut delay) {
+            if *delay <= 0.0 {
+                *seen = on;
+                *delay = f64::INFINITY;
+            }
+        }
+        self.edges.retain(|edge| edge.delay.iter().any(|d| d.is_finite()));
+        if delay.iter().any(|d| d.is_finite()) {
+            self.edges.push(SliceEdge { on, age: 0.0, delay });
+        }
+    }
+    /// Every slice at once, as an arrival seeded settled is.
+    fn settle_slices(&mut self, on: bool) {
+        self.seen = [on; 11];
+        self.edges.clear();
+    }
     fn advance(&mut self, dt: f64, env: &Envelope) {
         if self.at_rest() {
             return;
         }
-        self.melody.advance(dt, env, &self.level_wait);
-        self.bass.advance(dt, env, &self.level_wait);
+        self.melody.advance(dt, env);
+        self.bass.advance(dt, env);
         // The slice reveal runs the envelope's own length rather than a second
         // duration handed in beside it: `ViewConfig::envelope` puts one time on
         // both ends, so the two were always the same number and a parameter
         // for each is a pair that can be made to disagree.
         for i in 0..11 {
-            let moving = (dt as f32 - self.delay[i]).max(0.0);
-            self.delay[i] = (self.delay[i] - dt as f32).max(0.0);
+            // Split at each edge reaching this slice inside the step, so the
+            // pose is the same whatever the frame cadence.
+            let (mut progress, mut moved) = (self.progress[i], 0.0);
+            for edge in &mut self.edges {
+                let reach = edge.delay[i] - edge.age;
+                if reach <= dt {
+                    progress = approach(progress, f32::from(self.seen[i]), reach - moved, env);
+                    moved = reach;
+                    self.seen[i] = edge.on;
+                    edge.delay[i] = f64::INFINITY;
+                }
+            }
             self.progress[i] = if self.audio_waiting {
                 1.0
             } else {
-                approach(self.progress[i], f32::from(self.gate), f64::from(moving), env)
+                approach(progress, f32::from(self.seen[i]), dt - moved, env)
             };
             // Undelayed per slice, and over the WHOLE duration, on purpose.
             // This is the node's presence rather than any one slice's: it
@@ -264,26 +333,27 @@ impl Motion {
             // presence dimmed every slice at once and reached 0 before the late
             // ones had begun to retract, so the stagger barely showed and the
             // exit ran one fade where the entrance ran `1 + stagger_spread`. So
-            // an ordered departure holds it for the LAST slice's delay, one wait
-            // for every slot still full (`level_wait`), and both ends span the same.
+            // a departure holds it for the LAST slice's delay, one wait for
+            // every slot lit at the off (`level_wait`), and both ends span the
+            // same.
             let level_dt = (dt - f64::from(self.level_wait[i])).max(0.0);
             self.level_wait[i] = (self.level_wait[i] - dt as f32).max(0.0);
             self.levels[i] = approach(self.levels[i], self.targets[i], level_dt, env);
         }
+        for edge in &mut self.edges {
+            edge.age += dt;
+        }
+        self.edges.retain(|edge| edge.delay.iter().any(|d| d.is_finite()));
         // A departure that has run out of ink is over, whatever its slices are
         // still holding. The reveal reaches the shader multiplied by this
         // node's presence, so a slice caught mid-retraction behind a zero level
-        // draws nothing -- but it is not nothing to the NEXT press, which reads
-        // `progress` to tell a reversal from a fresh ordered arrival. Under
-        // #885 the two ended together, because a slice's reveal ran
-        // `1 - stagger_spread` of a fade and finished exactly when the level
-        // did. Once the spread became a start offset instead of a compression,
-        // the slices outlived the ink by `stagger_spread` of a fade, and a
-        // re-press inside that window took the reversal branch: no order at
-        // all, from leftover poses ranked opposite to the entrance they owed.
+        // draws nothing -- but it is not nothing to the NEXT press, whose
+        // presence rises at once and would show those leftover poses rather
+        // than the entrance it owes: the same repeated note animating two ways
+        // depending on invisible state.
         if !self.gate && !self.audio_waiting && self.levels.iter().all(|&l| l <= 0.0) {
             self.progress = [0.0; 11];
-            self.delay = [0.0; 11];
+            self.settle_slices(false);
         }
     }
 }
@@ -387,6 +457,7 @@ impl NodeMotion {
         // The sweep every node's slices follow: one layout and one fade for
         // the whole step, so the same for each.
         let order = view.note_animation.delays(&scene.octave_layout, duration);
+        let last = order.into_iter().fold(0.0, f32::max);
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         let dense = self.dense();
@@ -457,7 +528,8 @@ impl NodeMotion {
             if vacant && !dense && in_view(&self.visible) {
                 self.reached.revived += 1;
             }
-            motion.targets = targets;
+            let was_lit = std::mem::replace(&mut motion.targets, targets);
+            let marked = (motion.melody.target, motion.bass.target);
             readings.apply(motion);
             motion.melody.target(melody, view.mark_delay);
             motion.bass.target(bass, view.mark_delay);
@@ -480,50 +552,57 @@ impl NodeMotion {
                 motion.audio_waiting = true;
                 motion.progress = [1.0; 11];
             }
+            let posed = motion.audio_waiting;
             if gate {
                 motion.audio_waiting = false;
             }
-            let arriving = motion.progress.iter().all(|&p| p == 0.0);
-            if gate && !motion.gate && arriving {
-                motion.delay = order;
+            // Each slice sees the gate late by its place in the sweep, on the
+            // way in and on the way out alike, however the note was cut short:
+            // a re-press mid-departure ripples round the ring rather than
+            // turning every slice at once.
+            let lit_first = view.note_animation.lit_first;
+            let mut delay = order;
+            if gate && !motion.gate {
                 motion.level_wait = [0.0; 11];
-                // Ordered departure needs a COMPLETE arrival, and an arrival now
-                // takes `1 + stagger_spread` fades rather than one, so the hold
-                // that earns this has got longer by the same factor. At a high
-                // spread most notes a player actually holds fall short and take
-                // the reversal branch below, departing without order. That is the
-                // cost of the spread being a start offset; the alternative was
-                // compressing every piece into a tenth of the fade.
-            } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
-                motion.delay = order;
-                let last = order.into_iter().fold(0.0, f32::max);
-                motion.level_wait = motion.levels.map(|l| if l >= 1.0 { last } else { 0.0 });
-                // Lit means what `level_wait` holds: still full at the off, so
-                // the slice that retracts last is the one whose ink outlasts
-                // the others. One released earlier keeps its order's delay.
-                if view.note_animation.lit_first {
-                    for (slot, &level) in motion.levels.iter().enumerate() {
-                        if let Some(i) = displayed(slot).filter(|_| level >= 1.0) {
-                            motion.delay[i] = last;
-                        }
+                // The lit slices start with the first, and a lifetime lit over
+                // an audio pose starts at full progress already.
+                if lit_first {
+                    for i in
+                        (0..11).filter_map(|slot| displayed(slot).filter(|_| targets[slot] > 0.0))
+                    {
+                        delay[i] = 0.0;
                     }
                 }
-            } else if gate != motion.gate {
-                // A reversal never schedules new waiting: pending pieces cancel
-                // on off and every piece reverses its current pose immediately.
-                motion.delay = [0.0; 11];
-                motion.level_wait = [0.0; 11];
-            }
-            // A lit slot never waits while the gate is held: not on the
-            // arrival's first frame, and not when a second note lights it
-            // while the order is still running. The order's earliest delay is
-            // always zero (`delays` normalizes its ranks), so this starts it
-            // with the first.
-            if view.note_animation.lit_first && gate {
-                for (slot, &target) in motion.targets.iter().enumerate() {
-                    if let Some(i) = displayed(slot).filter(|_| target > 0.0) {
-                        motion.delay[i] = 0.0;
+                if posed {
+                    motion.settle_slices(true);
+                } else {
+                    motion.push_edge(true, delay);
+                }
+            } else if !gate && motion.gate {
+                // Lit means lit at the off: the slice that retracts last is the
+                // one whose ink outlasts the others.
+                motion.level_wait = was_lit.map(|t| if t > 0.0 { last } else { 0.0 });
+                motion.melody.depart(marked.0, &motion.level_wait);
+                motion.bass.depart(marked.1, &motion.level_wait);
+                if lit_first {
+                    for i in
+                        (0..11).filter_map(|slot| displayed(slot).filter(|_| was_lit[slot] > 0.0))
+                    {
+                        delay[i] = last;
                     }
+                }
+                motion.push_edge(false, delay);
+            } else if gate && lit_first {
+                // A slot a second note lights while the gate is held starts at
+                // once, rather than waiting out the arrival it joined.
+                let mut newly = [f32::INFINITY; 11];
+                for slot in (0..11).filter(|&slot| targets[slot] > 0.0 && was_lit[slot] == 0.0) {
+                    if let Some(i) = displayed(slot) {
+                        newly[i] = 0.0;
+                    }
+                }
+                if newly.iter().any(|d| d.is_finite()) {
+                    motion.push_edge(true, newly);
                 }
             }
             motion.gate = gate;
@@ -540,11 +619,11 @@ impl NodeMotion {
             }
             if settle && gate {
                 motion.progress = [1.0; 11];
-                motion.delay = [0.0; 11];
+                motion.settle_slices(true);
                 motion.level_wait = [0.0; 11];
                 motion.levels = motion.targets;
-                motion.melody.advance(f64::from(duration + view.mark_delay), env, &[0.0; 11]);
-                motion.bass.advance(f64::from(duration + view.mark_delay), env, &[0.0; 11]);
+                motion.melody.advance(f64::from(duration + view.mark_delay), env);
+                motion.bass.advance(f64::from(duration + view.mark_delay), env);
             }
         }
     }
@@ -871,10 +950,13 @@ mod tests {
     use super::*;
     use crate::NoteAnimationConfig;
 
+    // Statics, because a const owning a `Vec` is not promoted to a reference.
+    static REST: Motion = Motion::REST;
+    static POSED: Motion = Motion::POSED;
     impl NodeMotion {
         /// A position's motion, absent read as the rest it stands for.
         fn at(&self, pos: LatticePos) -> &Motion {
-            let resting = if self.posed.contains(&pos) { &Motion::POSED } else { &Motion::REST };
+            let resting = if self.posed.contains(&pos) { &POSED } else { &REST };
             self.nodes.get(&pos).unwrap_or(resting)
         }
     }
@@ -1004,15 +1086,13 @@ mod tests {
 
     /// A slice's reveal used to end exactly when its node's ink did, because
     /// the spread COMPRESSED each piece into `1 - stagger_spread` of a fade.
-    /// Once the spread became a start offset instead -- right for the arrival,
-    /// and applied to the settled departure with it -- the slices outlived the
-    /// ink by `stagger_spread` of a fade. A press inside that window found
-    /// `progress` not all zero and took the reversal branch, which cancels
-    /// every delay and starts from leftover poses ranked OPPOSITE to the
-    /// entrance they owe: the same repeated note animating two different ways
-    /// depending on invisible state.
+    /// Once the spread became a start offset instead the slices outlived the
+    /// ink by `stagger_spread` of a fade, and a press inside that window
+    /// started from leftover poses behind ink that rises at once: the same
+    /// repeated note animating two different ways depending on invisible
+    /// state.
     #[test]
-    fn a_faded_departure_leaves_no_pose_for_the_next_press_to_reverse() {
+    fn a_faded_departure_leaves_no_pose_for_the_next_press_to_carry() {
         let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         view.note_animation.stagger_spread = 0.9;
         // One press just after the ink runs out, and one well past it.
@@ -1025,7 +1105,7 @@ mod tests {
             draw(&mut motion, &mut tracker, &view, 0.0, false);
             draw(&mut motion, &mut tracker, &view, 5.0, false);
             tracker.handle_event(off(5.0, 60));
-            // The ordered departure spans `1 + stagger_spread` fades, its
+            // The departure spans `1 + stagger_spread` fades, its
             // presence held for the last slice's delay; past that it is out.
             let dark = draw(&mut motion, &mut tracker, &view, 7.0, false);
             assert_eq!(origin(&dark).activation, 0.0, "past the departure's span");
@@ -1042,6 +1122,74 @@ mod tests {
         // A press that reversed leftover poses instead holds a spread of
         // them rather than one tick's worth.
         assert_eq!(poses[0], poses[1], "the earlier press did not start a fresh entrance");
+    }
+    /// Each slice's lowest pose over `frames`, and when it reached it.
+    fn dips(frames: &[(f64, Scene)], span: usize) -> Vec<(f32, f64)> {
+        (0..span)
+            .map(|i| {
+                frames.iter().fold((f32::INFINITY, 0.0), |(low, at), (now, scene)| {
+                    let p = origin(scene).slice_progress[i];
+                    if p < low {
+                        (p, *now)
+                    } else {
+                        (low, at)
+                    }
+                })
+            })
+            .collect()
+    }
+    /// A quick re-press keeps the stagger: the release and the press both
+    /// travel the sweep, so every slice dips in its turn, the seam first,
+    /// rather than the few the release had reached turning back at once while
+    /// the rest never move.
+    /// Middle C at spread 0.9, drawn every 0.02 from 0 to `end`, each event
+    /// delivered on the frame that reaches it: the sweep's delays, its span,
+    /// and the frames.
+    fn played(events: &[NoteEvent], end: f64) -> ([f32; 11], usize, Vec<(f64, Scene)>) {
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = 0.9;
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        let mut pending = events.iter().peekable();
+        let frames: Vec<_> = (0..)
+            .map(|k| f64::from(k) * 0.02)
+            .take_while(|&now| now <= end)
+            .map(|now| {
+                while let Some(event) = pending.next_if(|event| event.time <= now) {
+                    tracker.handle_event(*event);
+                }
+                (now, draw(&mut motion, &mut tracker, &view, now, false))
+            })
+            .collect();
+        let layout = &frames[0].1.octave_layout;
+        (view.note_animation.delays(layout, 1.0), layout.span as usize, frames)
+    }
+    #[test]
+    fn a_quick_repress_ripples_round_the_ring() {
+        let (order, span, frames) = played(&[on(0.0, 60), off(5.0, 60), on(5.16, 60)], 8.0);
+        let after = frames.iter().position(|(now, _)| *now >= 5.0).unwrap();
+        let dips = dips(&frames[after..], span);
+        for (i, &(low, at)) in dips.iter().enumerate() {
+            assert!((low - 0.84).abs() < 0.03, "slice {i} dipped to {low}, not by the gap");
+            let expected = 5.16 + f64::from(order[i]);
+            assert!((at - expected).abs() <= 0.021, "slice {i} dipped at {at}, not {expected}");
+        }
+        assert_eq!(origin(&frames.last().unwrap().1).slice_progress, [1.0; 11]);
+    }
+    /// A note released before its arrival finished plays the same short rise
+    /// and fall on every slice, each in its turn: a pulse travelling round the
+    /// ring, rather than the slices it reached turning back at once and the
+    /// rest never starting.
+    #[test]
+    fn a_short_note_sends_its_pulse_round_the_ring() {
+        let (order, span, frames) = played(&[on(0.0, 60), off(0.3, 60)], 2.0);
+        assert!(
+            (0..span).any(|i| order[i] > 0.3),
+            "every slice had started by the release: {order:?}"
+        );
+        for i in 0..span {
+            let peak = frames.iter().map(|(_, s)| origin(s).slice_progress[i]).fold(0.0, f32::max);
+            assert!((peak - 0.3).abs() < 0.03, "slice {i} peaked at {peak}, not 0.3");
+        }
     }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
@@ -1181,7 +1329,7 @@ mod tests {
         assert!(motion.nodes.is_empty(), "{} entries outlived their fade", motion.nodes.len());
     }
     #[test]
-    fn short_stabs_reverse_pose_and_opacity_at_event_time_across_frame_cadences() {
+    fn short_stabs_carry_pose_and_opacity_at_event_time_across_frame_cadences() {
         let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         let mut view = view.clone();
         view.note_animation.stagger_spread = NoteAnimationConfig::default().stagger_spread;
@@ -1201,7 +1349,9 @@ mod tests {
             tracker.handle_event(on(0.25, 60));
             let scene = draw(&mut motion, &mut tracker, &view, 0.3, false);
             let node = origin(&scene);
-            assert!((node.activation - 0.2).abs() < 1e-5, "{}", node.activation);
+            // The presence holds at the off's 0.2 while the off travels the
+            // sweep, then the re-press raises it from there at event time.
+            assert!((node.activation - 0.25).abs() < 1e-5, "{}", node.activation);
             snapshots.push((node.activation, node.slice_progress));
             let repeated = draw(&mut motion, &mut tracker, &view, 0.3, false);
             assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
@@ -1476,7 +1626,7 @@ mod tests {
         assert_eq!(origin(&draw(&mut motion, &mut tracker, &view, 2.1, true)).melody_level, 0.0);
     }
     #[test]
-    fn stagger_spread_spans_starts_and_reverses_without_waiting() {
+    fn stagger_spread_spans_starts_and_carries_through_interruptions() {
         let layout = crate::octave_layout(6, 60.0);
         for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
             let mut view = ViewConfig { fade_shape: 0.0, ..view() };
@@ -1494,31 +1644,29 @@ mod tests {
             let before = motion.at(LatticePos::ORIGIN).progress;
             tracker.handle_event(off(0.04, 60));
             draw(&mut motion, &mut tracker, &view, 0.05, false);
+            // The off reaches the seam at once and the rest in their turn: a
+            // slice the arrival had not reached yet has not moved.
             let m = motion.at(LatticePos::ORIGIN);
-            assert_eq!(m.delay, [0.0; 11]);
             for (a, b) in before.into_iter().zip(m.progress) {
                 assert!(if a > 0.0 { b < a } else { b == 0.0 });
             }
+            // A re-press is one more edge through the same sweep, so every
+            // slice is whole one duration after it reaches the last.
             tracker.handle_event(on(0.05, 60));
             draw(&mut motion, &mut tracker, &view, 0.06, false);
-            assert_eq!(motion.at(LatticePos::ORIGIN).delay, [0.0; 11]);
-            draw(&mut motion, &mut tracker, &view, 1.1, false);
+            draw(&mut motion, &mut tracker, &view, 1.05 + f64::from(spread) + 1e-5, false);
             assert_eq!(motion.at(LatticePos::ORIGIN).progress, [1.0; 11]);
-            // A held control edit governs the next settled departure.
-            view.note_animation.stagger_spread = 0.9 - spread;
-            tracker.handle_event(off(1.1, 60));
-            draw(&mut motion, &mut tracker, &view, 1.1, false);
-            let expected = 0.9 - spread;
-            assert!(
-                (motion.at(LatticePos::ORIGIN).delay.into_iter().fold(0.0, f32::max) - expected)
-                    .abs()
-                    < 1e-6
-            );
-            // The widest delay plus one whole duration: a departure now
-            // SPANS `1 + spread`, because the spread offsets starts and no
-            // longer buys its waiting out of each slice's own time.
-            let end = 1.1 + 1.0 + f64::from(0.9 - spread) + 1e-5;
-            draw(&mut motion, &mut tracker, &view, end, false);
+            // A held control edit governs the next departure: the widest
+            // delay plus one whole duration, because the spread offsets starts
+            // and does not buy its waiting out of each slice's own time.
+            let spread = 0.9 - spread;
+            view.note_animation.stagger_spread = spread;
+            tracker.handle_event(off(2.0, 60));
+            draw(&mut motion, &mut tracker, &view, 2.0, false);
+            let end = 2.0 + 1.0 + f64::from(spread);
+            let late = draw(&mut motion, &mut tracker, &view, end - 0.05, false);
+            assert!(origin(&late).slice_progress.iter().any(|&p| p > 0.0), "{spread}: done early");
+            draw(&mut motion, &mut tracker, &view, end + 1e-5, false);
             assert_eq!(motion.at(LatticePos::ORIGIN).progress, [0.0; 11]);
         }
     }
