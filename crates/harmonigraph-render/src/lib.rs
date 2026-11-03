@@ -881,6 +881,13 @@ struct LatticeCallback {
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
     glow_blend: f32,
     material: lattice_material::Material,
+    /// The scene's sanitized atmosphere: the Pattern and Breathing speeds the
+    /// pane's travel runs at, and the breathing `prepare` lights each
+    /// instance by once the travel says how far it has run.
+    atmosphere: harmonigraph_scene::AtmosphereSettings,
+    /// Each instance's lattice position, parallel to `instances` on a frame
+    /// whose light breathes and empty otherwise.
+    breathing: Vec<harmonigraph_core::LatticePos>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -935,6 +942,7 @@ impl Drop for LatticeCallback {
         frames.give_back(lattice_frame::FrameVecs {
             instances: take(&mut self.instances),
             glow_owners: take(&mut self.glow_owners),
+            breathing: take(&mut self.breathing),
             glyphs: take(&mut self.glyphs),
             casters: take(&mut self.casters),
             node_cells: take(&mut self.node_cells),
@@ -1239,9 +1247,10 @@ struct PaneBuffers {
     ink_history: Option<InkStrip>,
     ink_kernel: lattice_node_glow::InkKernel,
     material_tile: Option<lattice_material::Tile>,
-    /// How far the glow material has drifted and the stars travelled, held
-    /// here rather than with the targets that draw them so a resize or a
-    /// change of material goes on from where they were.
+    /// How far the glow material has drifted, the stars travelled and the
+    /// glow's texture and breathing run, held here rather than with the
+    /// targets that draw them so a resize or a change of material goes on from
+    /// where they were.
     material_travel: travel::Travel,
     offscreen: Option<Offscreen>,
 }

@@ -332,6 +332,47 @@ fn a_drift_nudge_minutes_in_moves_the_material_one_frame_at_most() {
     }
 }
 
+/// Ten minutes in, `nudge` a dial and run a frame on: the largest channel step
+/// of the carried light, and of a pane started over at that frame.
+fn nudged(
+    mut scene: Scene,
+    nudge: fn(&mut harmonigraph_scene::AtmosphereSettings),
+) -> Option<(u8, u8)> {
+    let mut shooter = Shooter::new(SIZE)?;
+    let largest_step =
+        |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    scene.view.atmosphere.material_amount = 0.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
+    let held = glow(&mut shooter, &scene);
+    nudge(&mut scene.view.atmosphere);
+    scene.glow_timing.as_mut().unwrap().now += 0.0001;
+    shooter.shot_again(&scene);
+    let carried = largest_step(&held, &read_glow(&shooter));
+    Some((carried, largest_step(&held, &glow(&mut shooter, &scene))))
+}
+
+#[test]
+fn a_texture_speed_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.texture_depth = 1.0;
+    scene.view.atmosphere.texture_scale = 4.0;
+    let Some((carried, restarted)) = nudged(scene, |a| a.texture_speed *= 0.99) else { return };
+    assert!(carried <= 2, "sudden channel step {carried}");
+    assert!(restarted > 10, "a restart lands there too ({restarted})");
+}
+
+#[test]
+fn a_breathing_speed_nudge_minutes_in_moves_the_light_one_frame_at_most() {
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.view.atmosphere.texture_depth = 0.0;
+    scene.view.atmosphere.breath_amount = 1.0;
+    let Some((carried, restarted)) = nudged(scene, |a| a.breath_speed *= 0.99) else { return };
+    assert!(carried <= 2, "sudden channel step {carried}");
+    assert!(restarted > 10, "a restart lands there too ({restarted})");
+}
+
 #[test]
 fn textures_feed_materials_before_sampling() {
     use harmonigraph_scene::LatticeMaterial;

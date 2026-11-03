@@ -942,16 +942,18 @@ impl AtmosphereSettings {
 
     /// Identity comes from the lattice coordinates, which survive a camera
     /// rebase. The modulation never feeds back into the carried glow history.
-    pub fn breath(self, position: LatticePos, now: f64) -> f32 {
+    ///
+    /// `phase` is how far the breathing has run: `Breathing speed` built up
+    /// over the frames, so a speed drag goes on from where the light is.
+    pub fn breath(self, position: LatticePos, phase: f64) -> f32 {
         if self.breath_amount == 0.0 || self.breath_speed == 0.0 {
             return 1.0;
         }
-        let phase = f64::from(position.fives) * 2.173
+        let place = f64::from(position.fives) * 2.173
             + f64::from(position.threes) * 3.719
             + f64::from(position.sevens) * 5.137;
-        let time = now * f64::from(self.breath_speed);
         let wave =
-            0.5 + (time * 0.73 + phase).sin() / 3.0 + (time * 1.13 + phase * 1.7).sin() / 6.0;
+            0.5 + (phase * 0.73 + place).sin() / 3.0 + (phase * 1.13 + place * 1.7).sin() / 6.0;
         1.0 - self.breath_amount * (1.0 - wave as f32)
     }
 }
