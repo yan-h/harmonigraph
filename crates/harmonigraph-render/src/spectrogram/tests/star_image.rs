@@ -445,8 +445,8 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
 /// one lays a second such sky over it, and their brightnesses spread wide, so
 /// many near stars sit over brighter far ones. As paint, 29% of the pixels
 /// fell below 85% of the far depth alone and 2% below half; as light, none
-/// may fall past the 8% `STAR_HOLD_POWER` allows, and the near stars brighter
-/// than those behind still show.
+/// may fall past the 8.2% one depth in front allows (`star_layers`), and the
+/// near stars brighter than those behind still show.
 #[test]
 fn cover_decides_whether_a_dim_near_star_blacks_out_a_far_one() {
     let Some((device, queue)) = headless_device() else { return };
@@ -489,6 +489,48 @@ fn cover_decides_whether_a_dim_near_star_blacks_out_a_far_one() {
     assert!(brightened > far.len() / 10, "the near stars showed at only {brightened} pixels");
     let (holes, dimmed) = (below(&paint, 0.5), below(&paint, 0.85));
     assert!(holes > 0 && dimmed > far.len() / 5, "as paint: {holes} holes, {dimmed} dimmed");
+}
+
+/// A star's brightness is its luminance, not its gamma-coded luma, which
+/// rates a 30% green three times a full blue though the blue is the brighter.
+/// The palette's lower half is that green and its upper half that blue, so a
+/// blue near star over a green far one is the brighter, and must show; ranked
+/// by luma it showed at 35% of the pixels where it lay over the green.
+#[test]
+fn a_bright_blue_near_star_shows_over_a_dim_green_far_one() {
+    let Some((device, queue)) = headless_device() else { return };
+    let (width, height) = (480, 270);
+    let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
+    cb.grid.fill(220);
+    cb.shades.lut = Arc::new(
+        (0..=255u8).map(|v| if v < 128 { [0, 77, 0, 255] } else { [0, 0, 255, 255] }).collect(),
+    );
+    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+    stars.star_resolution = 1.0;
+    stars.star_size = [30.0; 5];
+    // A star a cell, on a grid, so no two in a depth overlap and blend.
+    stars.star_spacing_ratio = [1.0; 5];
+    stars.star_twinkle = [0.0; 5];
+    (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (0.0, 0.0, 1.0);
+    (stars.star_solid, stars.star_glow_falloff) = ([0.9; 5], 0.0);
+    let mut frame = |solo| {
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = solo;
+        let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
+        let side = width as usize + 1;
+        let pixels = frame.as_chunks::<4>().0;
+        (10..height as usize - 10)
+            .flat_map(|y| (10..width as usize - 10).map(move |x| y * side + x))
+            .map(|i| pixels[i])
+            .collect::<Vec<_>>()
+    };
+    let far = frame([true, false, false, false, false]);
+    let near = frame([false, false, false, false, true]);
+    let both = frame([true, false, false, false, true]);
+    let (blue, green) = (|p: &[u8; 4]| p[2] > 200, |p: &[u8; 4]| p[1] > 60 && p[2] < 20);
+    let over: Vec<_> = (0..far.len()).filter(|&i| green(&far[i]) && blue(&near[i])).collect();
+    let shown = over.iter().filter(|&&i| blue(&both[i])).count();
+    assert!(over.len() > far.len() / 20, "only {} blue-over-green pixels", over.len());
+    assert!(shown * 10 > over.len() * 9, "the blue showed at {shown} of {}", over.len());
 }
 
 /// Every star narrower than a texel of the star image still shows (#1446).

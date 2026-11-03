@@ -291,20 +291,17 @@ fn star_gather3(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     return result;
 }
 
-// How steeply a star's hold over the stars behind it falls as it gets dimmer
-// than them, at `Cover` 0: a star at half their brightness hides a sixteenth of
-// them. Steep, so a dimmer star in front darkens the one behind by at most 8%,
-// where it is four fifths as bright; a hard switch at equal brightness would
-// never darken it, but would flip a star's hue in and out as the light under
-// the two moved.
-const STAR_HOLD_POWER: f32 = 4.0;
-
 // The consumer's floor, then every slice laid over it back to front: within a
 // slice the stars' coverages add and their colours average by coverage, and the
 // slice covers the floor by its summed coverage, capped at one. Over the slices
 // behind it, a slice hides `Cover`'s share of them by its coverage, as paint,
-// and the rest only as far as it is as bright as they are (`STAR_HOLD_POWER`),
-// as light. Light keeps a dim near star from blacking out a bright far one;
+// and the rest only as far as it is as bright as they are, as light: by the
+// square of its luminance over theirs, so within one hue a star at half their
+// gamma-coded brightness hides a sixteenth of them. Steep, so a dimmer star in
+// front darkens one of a hue behind it by at most 8.2%, where it is four fifths
+// as bright; each depth it passes in front of can take that again. A hard switch
+// at equal brightness would never darken, but would flip a star's hue in and out
+// as the light under the two moved. Light keeps a dim near star from blacking out a bright far one;
 // paint keeps the field's average colour, which light lifts where stars overlap,
 // because the brighter one shows. The slices gather premultiplied, apart from
 // the floor, so the comparison sees the stars behind alone. The salts
@@ -331,13 +328,17 @@ fn star_layers(pt: vec2<f32>) -> vec4<f32> {
         if slice.w > 0.0 {
             let cover = min(slice.w, 1.0);
             let colour = slice.rgb / slice.w;
-            // Gamma-coded luma: what reads as a dark hole is a darker colour,
-            // whatever palette position it is. Zero stars behind are no
+            // Luminance, the gamma taken as 2: what reads as a dark hole is a
+            // darker colour, whatever palette position it is, and luma on the
+            // gamma-coded colour rates a 30% green three times a full blue,
+            // the brighter of the two. The stars behind are premultiplied, so
+            // their alpha squared comes back. Zero stars behind are no
             // brighter than anything.
-            let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
-            let behind = dot(stars.rgb, luma);
-            let ratio = select(1.0, saturate(dot(colour, luma) * stars.w / behind), behind > 0.0);
-            let hold = cover * mix(pow(ratio, STAR_HOLD_POWER), 1.0, star_cover());
+            let luminance = vec3<f32>(0.2126, 0.7152, 0.0722);
+            let behind = dot(stars.rgb * stars.rgb, luminance);
+            let own = dot(colour * colour, luminance) * stars.w * stars.w;
+            let ratio = select(1.0, saturate(own / behind), behind > 0.0);
+            let hold = cover * mix(ratio * ratio, 1.0, star_cover());
             stars = vec4<f32>(
                 stars.rgb * (1.0 - hold) + colour * (cover * (1.0 - stars.w) + hold * stars.w),
                 stars.w + (1.0 - stars.w) * cover,

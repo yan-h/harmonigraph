@@ -919,8 +919,10 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // into brown mud: a dim star is the scheme's own lower colour and sinks into the
 // sky, a bright one sits above what is behind it. Its shape is only coverage — a
 // soft Gaussian point with an optional same-colour fringe — and the slices are
-// laid far to near, each OVER what is under it, so no core can whiten and no rim
-// can turn another colour. Round 8 of the prototype (`round8.py`, Yan's YB3).
+// laid far to near, each a mix with what is under it rather than a sum (how far
+// it hides the stars behind is `Cover`, in `star_layers`), so no core can whiten
+// and no rim can turn another colour. Round 8 of the prototype (`round8.py`,
+// Yan's YB3).
 //
 // The ground under them is the scheme's floor.
 // Silence is exactly the floor: a star over silence is not drawn.
@@ -938,7 +940,9 @@ fn star_level_at(pt: vec2<f32>) -> f32 {
 // spread and the lift are linear in it with a mean of one and of
 // `STAR_LIFT / 2`, so the field's average palette position is the light behind
 // it plus that lift at every `Brightness variation` — the dial redistributes
-// brightness, it does not darken (it did before, by about a quarter at 0.6). Only the palette's top clips.
+// brightness, it does not darken (it did before, by about a quarter at 0.6). Only the palette's top clips,
+// and at `Cover` below 1 the brighter of two overlapping stars shows, which lifts
+// the average where stars overlap.
 // At 0 every star is the colour behind it lifted by its draw, as before. The
 // lift fades in with the level, so a star over near-silence cannot climb the
 // palette on its rank alone. The mean rank, 1, paints the mean star.
