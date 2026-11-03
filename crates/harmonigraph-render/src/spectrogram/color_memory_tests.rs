@@ -564,6 +564,33 @@ fn jitter_edits_reset_only_the_stars_color_history() {
     }
 }
 
+/// Whether the stars keep their place is their identity, so a Twinkle edit
+/// across 100% resets their colour history; one below it only changes how far
+/// a held star dips, and carries it.
+#[test]
+fn twinkle_resets_the_stars_color_history_only_across_full() {
+    let Some((device, queue)) = headless_device() else { return };
+    for (from, to, resets) in [(0.5, 0.3, false), (0.9, 1.0, true)] {
+        let mut cb = fixture(CloudStyle::Stars);
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_twinkle_dip = from;
+        let mut resources = CallbackResources::default();
+        cb.grid.fill(255);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        cb.grid.fill(0);
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_twinkle_dip = to;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let edited = pixels(&device, &queue, memory(&resources));
+        let mut fresh = CallbackResources::default();
+        prepare_once(&device, &queue, &mut fresh, &cb);
+        let reset = pixels(&device, &queue, memory(&fresh));
+        if resets {
+            assert_eq!(edited, reset, "{from} -> {to} carried the stars' history");
+        } else {
+            assert_ne!(edited, reset, "{from} -> {to} reset the stars' history");
+        }
+    }
+}
+
 /// Resolution changes rebuild the star image but must carry material history,
 /// including paused redraws whose dark current input would expose a reset.
 #[test]
