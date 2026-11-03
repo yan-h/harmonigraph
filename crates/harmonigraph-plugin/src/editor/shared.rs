@@ -43,10 +43,6 @@ pub struct EditorShared {
     /// it has stayed stopped since. Debounces the OnTransportStop trigger: a
     /// host reporting one still block mid-playback must not end a take.
     take_still_since: Option<f64>,
-    /// Notes reached the tracker since the window's last frame, which then
-    /// draws now rather than at the idle repaint. Set by whoever drains them —
-    /// the input worker ([`crate::background`]) — and taken by the frame.
-    pub(crate) fresh_notes: bool,
     /// The input worker could not be started, so the window's frames drain
     /// the rings themselves, as they did before it existed.
     pub(crate) frame_drains: bool,
@@ -77,7 +73,6 @@ impl EditorShared {
             take_rolling: false,
             take_last_count: 0,
             take_still_since: None,
-            fresh_notes: false,
             frame_drains: false,
         }
     }
