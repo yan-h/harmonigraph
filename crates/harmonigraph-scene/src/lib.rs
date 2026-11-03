@@ -689,8 +689,8 @@ impl NodeInstance {
     /// marker only says that there is one.
     ///
     /// So the label layer is the one that decides, and this is the whole of
-    /// its rule: the node is sounding, hovered, or one the Show row keeps at
-    /// rest.
+    /// its rule: the node is sounding, hovered, or one Label visibility keeps
+    /// at rest.
     ///
     /// A LEVEL rather than a yes or no, and that is the whole of what keeps
     /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
@@ -736,9 +736,9 @@ impl NodeInstance {
         };
         // A name on its way to being KEPT settles on the level its record takes
         // over at rather than easing out and being popped back: `trail` is not
-        // written until the frame the release finishes, so through the release
-        // there is nothing to settle onto and the level has to be reserved
-        // ahead of the record. Reserved on the way OUT alone, where a record
+        // written until the voice's Note fade ends, so until then there is
+        // nothing to settle onto and the level has to be reserved ahead of the
+        // record. Reserved on the way OUT alone, where a record
         // can actually land, and under the one mode that keeps one.
         //
         // Here rather than in the label pass alone, because the marker under

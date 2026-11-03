@@ -168,8 +168,9 @@ impl Layout {
     /// by the Video panel's preview, after the panes themselves, so both
     /// compose the identical picture.
     ///
-    /// The live dock deliberately does NOT get these: its editor-only Frameless
-    /// mode can show adjacent panes as one continuous live picture.
+    /// The live dock deliberately does NOT get these: `workspace` paints its own
+    /// draggable divider between the panes, a 2-point hairline that Hide tab
+    /// bars leaves in place.
     pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
         let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_divider());
         for line in self.dividers(placements) {

@@ -80,7 +80,7 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
             .percent()
             .show(ui)
             .on_hover_text(
-                "How much of the spectrogram is taken away next to a note, so the note \
+                "How much of the picture is taken away next to a note, so the note \
                  holds over bright energy as well as over dark. 0% turns the surround off. \
                  Over black it changes nothing but the fill.",
             );

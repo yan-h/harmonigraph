@@ -250,7 +250,7 @@ pub fn root_ui(
     }
     if state.picture.runtime.tracker.history_missing() {
         ui.colored_label(
-            egui::Color32::from_rgb(240, 180, 70),
+            theme::armed(),
             "Some note history is missing. Current notes may be incomplete until their source recovers.",
         );
     }

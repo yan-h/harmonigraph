@@ -603,10 +603,11 @@ pub struct ViewConfig {
     /// Appearance of note arrivals and departures, on the shared Note fade clock.
     pub note_animation: NoteAnimationConfig,
     /// How loud each note is drawn, and how far each display reads that
-    /// (see [`crate::intensity`]). Shared by the lattice and the roll.
+    /// (see [`crate::intensity`]). Shared by the lattice, the roll and the Spiral.
     pub intensity: crate::IntensitySettings,
     /// Shared bloom strength for the lattice and MIDI ribbons, in × of the
-    /// reference halo. Independent of per-note intensity mappings.
+    /// reference halo. Each note's bloom follows its Opacity, so there is no
+    /// mapping of its own.
     pub note_bloom: f32,
     // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands
@@ -953,7 +954,7 @@ impl ViewConfig {
     /// invisible past this line and no caller can pair a duration with the
     /// wrong shape. The shape has already passed through `sanitize`.
     ///
-    /// The Note section's Fade curve bar builds one of its own, and it is the single
+    /// The Note animation section's Note fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
     /// of the curve, over a unit duration that is nothing a note ever fades
     /// on, so it has no note's seconds to pair with and could not reach for

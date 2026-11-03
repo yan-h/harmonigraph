@@ -563,8 +563,7 @@ impl<'a> ValueBar<'a> {
         // nothing, since the unbadged name is the shorter of the two and draws
         // in full at the same width. Here rather than in the caller's label so
         // every badged bar gets it, and so the name is the same string badged
-        // or not. Full brightness while the name beside it is dim: the badge
-        // is state, not more label.
+        // or not. The badge is state, not more label.
         let body = TextStyle::Body.resolve(ui.style());
         let mut job = egui::text::LayoutJob::default();
         if let Some(word) = self.badge {
@@ -1475,7 +1474,7 @@ mod tests {
     /// - the name's budget subtracts the room the readout needs, or the name
     ///   runs over the number (measured: 6pt of overlap at 160, 16pt at 120);
     /// - the name is held to ONE row, or it wraps to two and spills above and
-    ///   below into the bars either side (a 29pt galley in a 19pt track);
+    ///   below into the bars either side (a 29pt galley in a 20pt track);
     /// - both runs are centred in the track, or they sit a half-line low with
     ///   7pt of a 17pt line below the track. How evenly is the next test's.
     ///

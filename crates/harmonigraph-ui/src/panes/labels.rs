@@ -6,7 +6,7 @@
 //! rides a hovered node, a sounding one and a remembered one alike: the
 //! subject here is the text. The trail is that last case and belongs here for
 //! the same reason — it IS labels persisting, which is why it is one option of
-//! the Show row rather than a heading of its own.
+//! Label visibility rather than a heading of its own.
 //!
 //! Active labels are fixed at white. Resting names use the marker field's ink,
 //! over in [`super::plus`], so a resting name and the crosses standing around

@@ -114,7 +114,7 @@ impl Editor for NativeEditor {
         };
         let retune = button("Retune", 16.0, sel!(retune:));
         let show = button("Show in Harmonigraph", 206.0, sel!(show:));
-        label("Retune off passes notes through without influencing tuning.", 119.0, 32.0);
+        label("Retune off passes notes through without influencing adaptive tuning.", 119.0, 32.0);
         let status = label("Waiting for audio state", 54.0, 60.0);
         label("Manage instances and timing in Harmonigraph → Tuning.", 16.0, 32.0);
         actions

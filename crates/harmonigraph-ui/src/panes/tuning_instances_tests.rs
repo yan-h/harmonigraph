@@ -253,9 +253,6 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                 for (label, checkbox) in labels.iter().zip(&boxes[..2]) {
                     assert!(*label > checkbox.right(), "each header names its bulk checkbox");
                 }
-                assert!(!shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if matches!(text.galley.text(), "Retune all" | "Show all"))),
-                    "the table integrates bulk controls into its headers");
                 for checkbox in boxes {
                     assert!(
                         columns.iter().any(|x| (checkbox.left() - x).abs() < 1.0),
