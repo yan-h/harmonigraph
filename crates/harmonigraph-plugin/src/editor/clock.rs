@@ -47,7 +47,7 @@ pub(crate) struct ClockMapper {
 /// 10.7 ms; at 4 ms even that fixed quarter second steps one by about 1.3 ms,
 /// and the sizing mostly serves the 20 ms drains of a shut window.
 ///
-/// And never more than its own wait for its frame, plus delivery jitter, past
+/// And never more than its own wait for its drain, plus delivery jitter, past
 /// the latest lead, which is all that wait can explain. A source running
 /// slower than realtime — an overloaded engine, a slow export — supports a
 /// lower lead with every block, and holding the best one ran the picture at
@@ -66,7 +66,7 @@ struct Lead {
 
 impl Lead {
     /// Below a quarter second the window would gain nothing: the best of a
-    /// few dozen 512-sample blocks already met its frame almost at once.
+    /// few dozen 512-sample blocks already met its drain almost at once.
     const MIN_BUCKET_SECONDS: f64 = 0.25;
 
     /// The longest a lead the audio dropped is held for, at up to three
@@ -89,7 +89,7 @@ impl Lead {
     const MAX_WAIT_SECONDS: f64 = 0.1;
 
     /// How much later one block may be delivered than another, past the wait
-    /// for its frame, before the ceiling holds the drawn time back. A 4096-
+    /// for its drain, before the ceiling holds the drawn time back. A 4096-
     /// sample block's processing can vary by tens of milliseconds, and 20 ms
     /// stepped a 144 Hz picture by 25 ms when one in ten came 20–50 ms late.
     const JITTER_SECONDS: f64 = 0.045;
