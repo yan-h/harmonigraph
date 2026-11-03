@@ -473,6 +473,34 @@ fn lattice_map_follow_scores_a_retriggered_note_without_its_predecessor() {
 }
 
 #[test]
+fn lattice_map_follow_does_not_strand_a_note_replayed_over_what_is_held() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    install(&hub);
+    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
+    // A chain of fifths from C, all held, then everything but the C let go.
+    // A half-life apart, because the older notes must have faded for the
+    // newest to pull the map along; struck together they hold it back.
+    let half_life = 24_000;
+    let chain = [48, 55, 62, 69, 76, 83, 90, 97];
+    for (index, &key) in chain.iter().enumerate() {
+        let id = index as i32 + 1;
+        hub.run(i64::from(id) * half_life, vec![note(id, 0, key, 0, true)], None);
+    }
+    let g = node(&hub, 55);
+    let release = chain.iter().enumerate().skip(1);
+    let release = release.map(|(index, &key)| note(index as i32 + 1, 0, key, 0, false)).collect();
+    hub.run(9 * half_life, release, None);
+    // The map never left the C, so the replayed G is the G it left, a fifth
+    // above that C, and not one a long way off at the far side of the map.
+    hub.run(10 * half_life, vec![note(9, 0, 55, 0, true)], None);
+    assert_eq!(node(&hub, 55), g);
+    assert_eq!(g, Some(LatticePos::new(1, 0, 0)));
+}
+
+#[test]
 fn map_follow_changes_leave_adaptive_context_alone() {
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);

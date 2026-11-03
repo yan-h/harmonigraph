@@ -177,11 +177,19 @@ impl LatticeMap {
     /// at its strongest weight, as in Adaptive, so an octave doubling adds
     /// nothing. Ties keep the current place, and otherwise go to the candidate
     /// farther from the automated place.
+    ///
+    /// When `held`, the context is sounding notes, and no step may take one
+    /// off the node it sounds at. A step is all the map can move per attack,
+    /// so a map walked away from a held note could not come back for a key
+    /// replayed over it; each new fifth of a held chain would walk it further.
+    /// A note the current place no longer covers has nothing to keep and holds
+    /// nothing back.
     pub fn follow(
         &self,
         follow: Follow,
         current: LatticePos,
         context: &[ContextPitch],
+        held: bool,
         keys: &[i64],
     ) -> LatticePos {
         let fifths: &[i32] = match follow {
@@ -206,12 +214,16 @@ impl LatticeMap {
                 anchored += 1;
             }
         }
+        let on =
+            |map: &LatticeMap, node: LatticePos| map.node(Self::midi_class(node) as i64) == node;
+        let here = LatticeMap { position: self.position + current, ..*self };
+        let pinned = if held { &anchors[..anchored] } else { &[] };
         let mut best = (f64::INFINITY, f64::NEG_INFINITY, current);
         for &df in fifths {
             for dt in [0, -1, 1] {
                 let offset = current + LatticePos::new(df, dt, 0);
                 let map = LatticeMap { position: self.position + offset, ..*self };
-                if !map.valid() {
+                if !map.valid() || pinned.iter().any(|a| on(&here, a.0) && !on(&map, a.0)) {
                     continue;
                 }
                 let mut nodes = [LatticePos::ORIGIN; 12];
@@ -348,19 +360,19 @@ mod tests {
         let (d_minor, c_major, a_flat) = ([62, 65, 69], [60, 64, 67], [68, 72, 75]);
         assert!(!pure(&chord(LatticePos::ORIGIN, &d_minor)), "the fixture must hold the wolf");
         // D F A from rest: one fifths step makes D 10/9 and the triad pure.
-        let moved = map.follow(both, LatticePos::ORIGIN, &[], &d_minor);
+        let moved = map.follow(both, LatticePos::ORIGIN, &[], false, &d_minor);
         assert_eq!(moved, LatticePos::new(-1, 0, 0));
         assert!(pure(&chord(moved, &d_minor)));
         assert_eq!(
-            map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &d_minor),
+            map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], false, &d_minor),
             LatticePos::ORIGIN
         );
-        assert_eq!(map.follow(Follow::Off, moved, &[], &c_major), LatticePos::ORIGIN);
+        assert_eq!(map.follow(Follow::Off, moved, &[], false, &c_major), LatticePos::ORIGIN);
         // A chord already pure, and a lone note, never move the map.
-        assert_eq!(map.follow(both, LatticePos::ORIGIN, &[], &c_major), LatticePos::ORIGIN);
-        assert_eq!(map.follow(both, moved, &[], &[61]), moved);
+        assert_eq!(map.follow(both, LatticePos::ORIGIN, &[], false, &c_major), LatticePos::ORIGIN);
+        assert_eq!(map.follow(both, moved, &[], false, &[61]), moved);
         // Ab major takes a thirds step rather than a diminished fourth.
-        let flat = map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &a_flat);
+        let flat = map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], false, &a_flat);
         assert_eq!(flat, LatticePos::new(0, -1, 0));
         assert!(pure(&chord(flat, &a_flat)));
         // G B D after the moved D minor follows its 10/9 D down a comma rather
@@ -374,16 +386,54 @@ mod tests {
         };
         let drifted = LatticePos::new(-2, 0, 0);
         let held = chord(moved, &[62]);
-        assert_eq!(map.follow(both, moved, &context(held.clone()), &[67, 71]), drifted);
+        assert_eq!(map.follow(both, moved, &context(held.clone()), true, &[67, 71]), drifted);
         assert!(pure(&[chord(drifted, &[67, 71]), held].concat()));
         let released = context(chord(moved, &d_minor));
-        assert_eq!(map.follow(both, moved, &released, &[67, 71, 74]), drifted);
-        assert_eq!(map.follow(both, moved, &[], &[67, 71, 74]), drifted);
+        assert_eq!(map.follow(both, moved, &released, false, &[67, 71, 74]), drifted);
+        assert_eq!(map.follow(both, moved, &[], false, &[67, 71, 74]), drifted);
         // A released G# an octave doubled weighs as one G#: once, it is not
         // worth a thirds step for C major; counted twice, it would be.
         let g_sharp = ContextPitch { pitch: 0, node: Some(map.node(68)), weight: 0.6 };
         let doubled = [g_sharp, ContextPitch { pitch: 1_200_000_000, ..g_sharp }];
-        assert_eq!(map.follow(both, LatticePos::ORIGIN, &doubled, &c_major), LatticePos::ORIGIN);
+        assert_eq!(
+            map.follow(both, LatticePos::ORIGIN, &doubled, false, &c_major),
+            LatticePos::ORIGIN
+        );
+    }
+
+    /// Holding a chain of fifths must not carry the map away from it: each step
+    /// keeps every held note on its node, so the map stops where the next step
+    /// would lose one, and a key still held or replayed stays where it was.
+    #[test]
+    fn follow_keeps_every_held_note_on_its_node() {
+        let map = LatticeMap::default();
+        let both = Follow::ThirdsAndFifths;
+        let placed = |offset: LatticePos| LatticeMap { position: map.position + offset, ..map };
+        let mut offset = LatticePos::ORIGIN;
+        let mut held = Vec::new();
+        for key in [48, 55, 62, 69, 76, 83, 90, 97] {
+            offset = map.follow(both, offset, &held, true, &[key]);
+            let node = placed(offset).node(key);
+            held.push(ContextPitch { pitch: 0, node: Some(node), weight: 1.0 });
+        }
+        // A takes the one step that keeps C, G and D; E would lose C, so it wraps.
+        assert_eq!(offset, LatticePos::new(1, 0, 0));
+        assert_eq!(held[3].node, Some(LatticePos::new(3, 0, 0)), "A a pure fifth above D");
+        assert_eq!(held[4].node, Some(LatticePos::new(0, 1, 0)), "E a 5/4 above C");
+        for node in held.iter().filter_map(|pitch| pitch.node) {
+            assert_eq!(placed(offset).node(LatticeMap::midi_class(node) as i64), node);
+        }
+        // A note the map had already left, by automation or a shape change, is
+        // not on the current place to keep, so it holds nothing back.
+        let stray = ContextPitch { pitch: 0, node: Some(LatticePos::new(-8, 0, 0)), weight: 1.0 };
+        assert_ne!(
+            map.node(LatticeMap::midi_class(stray.node.unwrap()) as i64),
+            stray.node.unwrap()
+        );
+        assert_eq!(
+            map.follow(both, LatticePos::ORIGIN, &[stray], true, &[62, 65, 69]),
+            LatticePos::new(-1, 0, 0)
+        );
     }
 
     #[test]

@@ -991,12 +991,13 @@ impl Hub {
         // released ones, each decayed on the half-life.
         let sequencer = &mut self.sequencer;
         sequencer.fill(self.rate);
-        if sequencer.context.iter().all(Option::is_none) {
+        let held = sequencer.context.iter().any(Option::is_some);
+        if !held {
             for pitch in sequencer.working.iter_mut() {
                 pitch.weight *= FOLLOW_RELEASED;
             }
         }
-        map.follow(sequencer.follow, sequencer.followed, &sequencer.working, &keys[..struck])
+        map.follow(sequencer.follow, sequencer.followed, &sequencer.working, held, &keys[..struck])
     }
 
     fn reply(&mut self, record: Record, correction: i64) {

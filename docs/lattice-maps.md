@@ -139,6 +139,19 @@ The lowest score wins;
 ties keep the current place,
 then go to the candidate farther from the place the offset parameters set.
 
+A step may not take a held note off the node it sounds at,
+so a key held or replayed over held notes stays where it was.
+The default shape covers four fifths in a row,
+so a held chain of fifths stops the map where the next step would lose its lowest note,
+and the chain wraps there:
+C G D A are pure fifths,
+A taking the one step that keeps the others,
+and the E after them is a 5/4 above C and a wolf against A.
+Released notes pin nothing,
+so a line whose notes end before the next begins still moves the map note by note.
+A hand-rolled chord is decided note by note against notes already frozen,
+so D F A rolled upward keeps the wolf D–A.
+
 Following prefers drift.
 Held notes keep the tuning they started with,
 and a note just heard keeps its pitch where the chord allows,
