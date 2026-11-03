@@ -109,16 +109,6 @@ mod trigger_tests {
         assert!(!RenderTrigger::AtBar.ends_at_rewind());
     }
 
-    /// The enums' own defaults are the fresh `RenderConfig`'s choices, so a
-    /// fallback through `unwrap_or_default()` names what a fresh install does.
-    #[test]
-    fn the_enum_defaults_are_the_fresh_configs_choices() {
-        let fresh = super::RenderConfig::default();
-        assert_eq!(RenderTrigger::default(), fresh.trigger);
-        assert_eq!(super::SpectrogramRender::default(), fresh.spectrogram);
-        assert_eq!(super::VideoEncoder::default(), fresh.encoder);
-    }
-
     /// The bar only reaches the audio thread under the one trigger that means
     /// it. Any other choice must publish `None`, or a stop bar left over in a
     /// saved project would end takes recorded under `OnDisarm`.
@@ -161,7 +151,7 @@ mod trigger_tests {
 /// Which spectrogram a render bakes: the Video pane's Video history row.
 ///
 /// Both modes scroll the same history; the choice decides its visible span.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrogramRender {
     /// The live scrolling window, spanning the Analyzer's History duration —
     /// exactly what the preview shows.
@@ -170,7 +160,6 @@ pub enum SpectrogramRender {
     /// frame reaches back to the first. Only a render knows its own length, so
     /// the preview keeps the dialled span; the offline renderer applies this,
     /// held to the History duration bar's ends.
-    #[default]
     WholeVideo,
 }
 
@@ -180,14 +169,13 @@ pub enum SpectrogramRender {
 /// waits on the encoder and what the file costs. At 2560x1440@60 an 82.6 s take
 /// took 90.2 s end to end through x264 and 31.5 s through VideoToolbox on an
 /// M5 Pro, for a file about 1.1x the size.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VideoEncoder {
     /// libx264 at the `--crf` quality, tuned for the spectrogram's grain.
     X264,
     /// The machine's hardware H.264 encoder (`h264_videotoolbox`) at a constant
     /// quality. About three times as fast as x264 at 1440p, for a slightly
     /// larger file and no grain tuning.
-    #[default]
     Hardware,
 }
 
@@ -256,8 +244,10 @@ impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
             // Transport stop, the trigger that also ends a take during an
-            // arrangement export (see docs/intent/video-export.md).
-            trigger: RenderTrigger::OnTransportStop,
+            // arrangement export (see docs/intent/video-export.md). The
+            // offline renderer reads the same default for a take that cannot
+            // say how it ended.
+            trigger: RenderTrigger::default(),
             // Off-trigger by default, so this only ever matters once `AtBar`
             // is chosen. 65 rather than 1: a stop bar equal to the song start
             // can never be crossed from below, so the take would simply never
