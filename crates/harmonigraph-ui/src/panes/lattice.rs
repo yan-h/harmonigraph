@@ -677,7 +677,7 @@ pub(crate) fn draw_node_labels(
         // white over a node going dark reads as a note still sounding. The
         // name's strength above reads the unfaded envelope, so a soft note is
         // named whole in a greyer ink.
-        let ink = label_ink(view, node.octaves.iter().copied().fold(0.0, f32::max));
+        let ink = label_ink(view, node.drawn_level());
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
         // behind the camera, so a node off to the side still lands at a

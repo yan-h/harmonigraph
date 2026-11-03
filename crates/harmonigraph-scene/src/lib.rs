@@ -767,6 +767,19 @@ impl NodeInstance {
     pub fn is_named(&self, view: &ViewConfig) -> bool {
         self.name_level(view) > 0.0
     }
+
+    /// How lit the node is DRAWN: its most opaque octave slot's colour, Opacity
+    /// included, which leaves at the release rather than waiting out a Fade-out
+    /// delay as [`activation`](Self::activation) does.
+    ///
+    /// The one spelling of "the drawn colour" for everything that follows it:
+    /// the glow's target (which adds the marks), the ink strip's attack or
+    /// release test (`ink_history` in `harmonigraph-render`) and the name's
+    /// ink, so a name, a halo and the colour they follow cannot disagree about
+    /// whether the node is going dark.
+    pub fn drawn_level(&self) -> f32 {
+        self.octaves.iter().copied().fold(0.0, f32::max)
+    }
 }
 
 /// One marker standing at a lattice position: a small cross, drawn under the
