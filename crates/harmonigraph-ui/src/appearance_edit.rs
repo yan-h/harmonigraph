@@ -719,14 +719,14 @@ mod tests {
         appearance.spectrum.attack = 0.8;
         appearance.camera.distance = 5.0;
         appearance.render.short_edge = 720;
-        let crate::ExportAction::Queue { appearance: blob, render, .. } = queued else {
+        let crate::ExportAction::Queue { appearance: blob, size, .. } = queued else {
             panic!("queue request")
         };
         let captured = AppearanceDocument::parse(&blob).unwrap();
         assert_eq!(captured.spectrum.attack, 0.2);
         assert_eq!(captured.camera.distance, 7.0);
         assert_eq!(captured.render.short_edge, 1080);
-        assert_eq!(render.short_edge, 1080);
+        assert_eq!(size, captured.render.frame.pixels(1080));
         assert_eq!(appearance.spectrum.attack, 0.8);
     }
 }

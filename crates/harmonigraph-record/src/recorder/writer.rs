@@ -18,12 +18,7 @@ mod tests;
 /// leaves only "could not run" on the status line.
 #[cfg(test)]
 fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
-    RenderRequest {
-        program: directory.join("no-such-renderer"),
-        appearance: None,
-        size: Some([16, 16]),
-        notice: None,
-    }
+    RenderRequest { program: directory.join("no-such-renderer"), appearance: None, notice: None }
 }
 
 /// The WAV every fixture's take opens: [`TAKE_CHANNELS`], as `Control::start`
@@ -139,7 +134,7 @@ pub fn channel() -> (Recorder, Control) {
                 #[cfg(all(test, feature = "test-support"))]
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
-                spawn_render(*render, path, thread_status.clone(),
+                spawn_render(*render, path, None, thread_status.clone(),
                     thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]

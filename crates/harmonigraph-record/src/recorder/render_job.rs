@@ -28,9 +28,6 @@ pub struct RenderRequest {
     /// look — set for an Exports queue job so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
     pub appearance: Option<String>,
-    /// Explicit output override for a queued export. Automatic exports read the
-    /// captured Aspect and Output size from their recorded appearance.
-    pub size: Option<[u32; 2]>,
     /// A session-local completion notice, owned by this request so a new
     /// recording cannot erase the reason an earlier render was cut short.
     pub notice: Option<&'static str>,
@@ -41,31 +38,16 @@ impl RenderRequest {
     /// spectrogram, laid out as the take's own spectrogram choice says, in the
     /// take's own recorded look.
     pub fn recorded() -> RenderRequest {
-        RenderRequest {
-            program: default_renderer_path(),
-            appearance: None,
-            size: None,
-            notice: None,
-        }
+        RenderRequest { program: default_renderer_path(), appearance: None, notice: None }
     }
 
     /// Build an explicit queued export with the appearance selected at queue
-    /// time (current, saved or recorded) and the captured output settings.
-    pub fn render_now(
-        config: &harmonigraph_take::RenderConfig,
-        appearance: String,
-    ) -> RenderRequest {
-        Self::build(config, Some(appearance))
-    }
-
-    fn build(
-        config: &harmonigraph_take::RenderConfig,
-        appearance: Option<String>,
-    ) -> RenderRequest {
+    /// time (current, saved or recorded). The renderer takes the output size
+    /// from that appearance alone.
+    pub fn render_now(appearance: String) -> RenderRequest {
         RenderRequest {
             program: default_renderer_path(),
-            appearance,
-            size: Some(config.frame.pixels(config.short_edge)),
+            appearance: Some(appearance),
             notice: None,
         }
     }
@@ -226,6 +208,7 @@ impl RenderControl {
 pub(super) fn spawn_render(
     mut request: RenderRequest,
     take: PathBuf,
+    size: Option<[u32; 2]>,
     status: Arc<Mutex<String>>,
     progress: Arc<Progress>,
     control: Arc<RenderControl>,
@@ -257,7 +240,7 @@ pub(super) fn spawn_render(
             id,
             take,
             output,
-            size: request.size,
+            size,
             state: if error.is_some() { ExportStatus::Failed } else { ExportStatus::Pending },
             progress: RenderProgress::default(),
             detail: error.unwrap_or_default(),
@@ -403,9 +386,6 @@ fn run_job(
     command.arg(&job.take).arg("--out").arg(&partial);
     if request.appearance.is_some() {
         command.arg("--appearance").arg(&appearance);
-    }
-    if let Some([w, h]) = request.size {
-        command.arg("--size").arg(format!("{w}x{h}"));
     }
     command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     let mut child = command.spawn().map_err(|e| format!("could not run paired renderer: {e}"))?;

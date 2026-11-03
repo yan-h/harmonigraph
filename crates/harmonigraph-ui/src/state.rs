@@ -84,7 +84,10 @@ pub enum ExportAction {
     Queue {
         take: std::path::PathBuf,
         appearance: String,
-        render: crate::RenderConfig,
+        /// The pixels the Exports list shows for the job: what the renderer
+        /// derives from `appearance`, computed from the same document and
+        /// not an input to the render.
+        size: [u32; 2],
     },
     Cancel(u64),
     Retry(u64),

@@ -161,12 +161,8 @@ impl FileWriter {
     ///
     /// [`drain`]: Self::drain
     pub fn stop(&mut self) {
-        let unlaunched = RenderRequest {
-            program: std::path::PathBuf::new(),
-            appearance: None,
-            size: Some([0, 0]),
-            notice: None,
-        };
+        let unlaunched =
+            RenderRequest { program: std::path::PathBuf::new(), appearance: None, notice: None };
         self.pump.pending_stop = Some((self.fence.epoch(), Box::new(unlaunched)));
     }
     pub fn drain(&mut self, capture: &mut Capture) {

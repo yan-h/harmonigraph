@@ -1,21 +1,13 @@
 use super::*;
-use harmonigraph_take::RenderConfig;
 
-/// Only manual requests override the recorded appearance and output size.
+/// Only manual requests override the recorded appearance.
 #[test]
-fn only_manual_requests_override_captured_settings() {
-    let config = RenderConfig {
-        frame: harmonigraph_take::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
-        short_edge: 2160,
-        ..Default::default()
-    };
+fn only_manual_requests_override_the_recorded_appearance() {
     let automatic = RenderRequest::recorded();
-    let manual = RenderRequest::render_now(&config, "current appearance".into());
+    let manual = RenderRequest::render_now("current appearance".into());
     for request in [&automatic, &manual] {
         assert_eq!(request.program, default_renderer_path());
     }
-    assert_eq!(automatic.size, None);
-    assert_eq!(manual.size, Some([2160, 3840]));
     assert_eq!(automatic.appearance, None);
     assert_eq!(manual.appearance.as_deref(), Some("current appearance"));
 }
@@ -257,7 +249,7 @@ case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
 esac
-printf '%s %s' "$look" "$7" > "$3"
+printf '%s %s' "$look" "${6:-unsized}" > "$3"
 echo 'progress: 10/10 frames (100%)' >&2
 "#).unwrap();
         std::fs::set_permissions(dir.join("renderer"), std::fs::Permissions::from_mode(0o755))
@@ -269,18 +261,21 @@ echo 'progress: 10/10 frames (100%)' >&2
             status: Arc::new(Mutex::new(String::new())),
         }
     }
-    fn request(&self, look: &str, size: [u32; 2]) -> RenderRequest {
+    fn request(&self, look: &str) -> RenderRequest {
         RenderRequest {
             program: self.dir.join("renderer"),
             appearance: Some(look.into()),
-            size: Some(size),
             notice: None,
         }
     }
     fn enqueue(&self, request: RenderRequest) {
+        self.enqueue_sized(request, None);
+    }
+    fn enqueue_sized(&self, request: RenderRequest, size: Option<[u32; 2]>) {
         spawn_render(
             request,
             self.dir.join("music.take"),
+            size,
             self.status.clone(),
             self.progress.clone(),
             self.control.clone(),
@@ -315,9 +310,13 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
     let f = Fixture::new("fifo");
     std::fs::write(f.dir.join("music.mp4"), "existing video").unwrap();
     let gate = f.control.running.lock();
-    f.enqueue(f.request("first", [16, 18]));
-    f.enqueue(f.request("retry", [20, 22]));
-    f.enqueue(f.request("third", [24, 26]));
+    f.enqueue_sized(f.request("first"), Some([16, 18]));
+    f.enqueue_sized(f.request("retry"), Some([20, 22]));
+    f.enqueue_sized(f.request("third"), Some([24, 26]));
+    assert_eq!(
+        f.jobs().iter().map(|j| j.size).collect::<Vec<_>>(),
+        [Some([16, 18]), Some([20, 22]), Some([24, 26])]
+    );
     assert!(f.jobs().iter().all(|j| j.state == ExportStatus::Pending));
     assert_eq!(
         f.jobs()
@@ -337,14 +336,15 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
         [ExportStatus::Completed, ExportStatus::Failed, ExportStatus::Completed]
     );
     assert!(jobs[1].detail.contains("transient encoder failure"));
-    assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first 16x18");
-    assert_eq!(std::fs::read_to_string(&jobs[2].output).unwrap(), "third 24x26");
+    assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first unsized");
+    assert_eq!(std::fs::read_to_string(&jobs[2].output).unwrap(), "third unsized");
     assert_eq!(jobs[2].progress, RenderProgress { done: 10, total: 10 });
     f.control.retry(2, f.status.clone(), f.progress.clone());
     f.finished();
     let retried = f.jobs().into_iter().find(|j| j.id == 2).unwrap();
     assert_eq!(retried.state, ExportStatus::Completed);
-    assert_eq!(std::fs::read_to_string(retried.output).unwrap(), "retry 20x22");
+    assert_eq!(retried.size, Some([20, 22]));
+    assert_eq!(std::fs::read_to_string(retried.output).unwrap(), "retry unsized");
     assert_eq!(std::fs::read_to_string(f.dir.join("music.mp4")).unwrap(), "existing video");
     assert_eq!(std::fs::read_link(f.dir.join("music-1.mp4")).unwrap(), f.dir.join("missing-video"));
 }
@@ -356,10 +356,10 @@ fn cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jo
     let orphan = f.dir.join(format!("music.export-{}-1-0", std::process::id()));
     std::fs::create_dir(&orphan).unwrap();
     std::fs::write(orphan.join("keep"), "owned elsewhere").unwrap();
-    f.enqueue(f.request("slow", [16, 16]));
+    f.enqueue(f.request("slow"));
     wait_until("descendant and partial output", || f.progress.read().is_some_and(|p| p.done == 1));
-    f.enqueue(f.request("cancel pending", [18, 18]));
-    f.enqueue(f.request("survivor", [20, 20]));
+    f.enqueue(f.request("cancel pending"));
+    f.enqueue(f.request("survivor"));
     f.control.cancel_job(2);
     f.control.cancel_job(1);
     f.finished();
@@ -379,7 +379,7 @@ fn cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jo
     );
     let completed = f.jobs()[2].output.clone();
     f.control.cancel_job(3);
-    assert_eq!(std::fs::read_to_string(completed).unwrap(), "survivor 20x20");
+    assert_eq!(std::fs::read_to_string(completed).unwrap(), "survivor unsized");
 }
 
 #[cfg(unix)]
@@ -387,7 +387,7 @@ fn cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jo
 fn cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs() {
     let f = Fixture::new("publish");
     let gate = f.control.before_publish.lock();
-    f.enqueue(f.request("finished bytes", [16, 16]));
+    f.enqueue(f.request("finished bytes"));
     wait_until("renderer to finish", || {
         f.progress.read().is_some_and(|p| p.done == 10) && f.control.child.lock().is_none()
     });
@@ -396,13 +396,13 @@ fn cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs
     f.finished();
     assert_eq!(f.jobs()[0].state, ExportStatus::Cancelled);
     assert!(!f.jobs()[0].output.exists());
-    f.enqueue(f.request("slow", [16, 16]));
+    f.enqueue(f.request("slow"));
     wait_until("renderer to start", || f.progress.read().is_some_and(|p| p.done == 1));
-    f.enqueue(f.request("pending", [16, 16]));
+    f.enqueue(f.request("pending"));
     f.control.shutdown();
     assert!(f.jobs().iter().all(|j| j.state == ExportStatus::Cancelled));
     assert!(f.control.child.lock().is_none());
-    f.enqueue(f.request("late recorder completion", [16, 16]));
+    f.enqueue(f.request("late recorder completion"));
     assert_eq!(f.jobs().len(), 3);
 }
 
@@ -415,9 +415,8 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
         harmonigraph_take::Header { appearance: Some("recorded".into()), ..Default::default() };
     harmonigraph_take::Writer::create(&take, &header).unwrap().flush().unwrap();
     let gate = f.control.running.lock();
-    let mut request = f.request("", [16, 16]);
+    let mut request = f.request("");
     request.appearance = None;
-    request.size = None;
     f.enqueue(request);
     harmonigraph_take::Writer::create(
         &take,
@@ -429,8 +428,9 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     let other = Arc::new(RenderControl::default());
     let other_progress = Arc::new(Progress::default());
     spawn_render(
-        f.request("other instance", [18, 18]),
+        f.request("other instance"),
         take,
+        None,
         f.status.clone(),
         other_progress.clone(),
         other.clone(),
@@ -441,7 +441,7 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     let first = f.jobs().remove(0);
     let second = other.snapshots(&other_progress).remove(0);
     assert_ne!(first.output, second.output);
-    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded ");
-    assert_eq!(std::fs::read_to_string(second.output).unwrap(), "other instance 18x18");
+    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded unsized");
+    assert_eq!(std::fs::read_to_string(second.output).unwrap(), "other instance unsized");
     other.shutdown();
 }

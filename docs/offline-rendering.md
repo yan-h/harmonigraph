@@ -201,7 +201,7 @@ There is nothing to enable, and no field for the renderer's path —
 it uses the copy `load-plugin.sh` installs, and the audio it muxes and analyzes is the take's own recording.
 What you do choose is **when** a take counts as finished, in the **Finish recording** row below.
 
-The video's size comes from **Aspect ratio** and **Output size (px)** in the Frame section, which the plugin passes as `--size`.
+The video's size comes from **Aspect ratio** and **Output size (px)** in the Frame section, which the renderer reads from the appearance the plugin hands it (the plugin passes no `--size`).
 There is no field for raw renderer flags:
 there was one, defaulting to `--size 1920x1080`, and since the renderer reads `--size` *after* resolving the take's frame it outranked every Aspect but 16:9 —
 a 9:16 frame previewed tall and rendered wide.
