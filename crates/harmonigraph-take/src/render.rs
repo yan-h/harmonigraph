@@ -221,7 +221,8 @@ pub struct RenderConfig {
     /// Kept beside `RenderFrame` rather than in it: the frame is the
     /// composition, and this only scales it, so one framing renders the same
     /// picture at any size. It rides in a take like the frame does, so a plain
-    /// re-render keeps it, and the offline renderer's `--size` overrides it.
+    /// re-render keeps it, and an export renders at it: only a hand-run
+    /// `harmonigraph-offline --size` overrides it.
     pub short_edge: u32,
     /// Seconds the video runs past the take's last event, so releases finish
     /// fading and the roll clears. The Video pane's Tail.
@@ -437,9 +438,10 @@ impl RenderFrame {
     /// tall as a landscape one is wide instead of a fifth the pixels.
     /// Both dimensions come out even, which ffmpeg's yuv420p requires.
     ///
-    /// The single definition of aspect-to-pixels: the Video pane displays it,
-    /// the plugin passes it as `--size`, and `harmonigraph-offline` falls back
-    /// to it when no `--size` is given. Three callers agreeing by construction
+    /// The single definition of aspect-to-pixels: the Video pane and the
+    /// Exports list display it, and `harmonigraph-offline` renders at it from
+    /// the appearance it is given unless a hand-run `--size` overrides it.
+    /// Every caller agreeing by construction
     /// is the point — a second copy is how the preview and the render come to
     /// disagree about the shape of the picture.
     pub fn pixels(&self, short_edge: u32) -> [u32; 2] {
@@ -612,8 +614,8 @@ pub struct ExportJob {
     pub output: std::path::PathBuf,
     /// What the Exports list shows for the job, and nothing the render reads:
     /// the renderer derives the real size from the appearance it is given.
-    /// `None` for a recorded take's automatic export, whose appearance is not
-    /// read until the job is queued.
+    /// `None` for a recorded take's automatic export: its appearance rides in
+    /// the take's header, and this crate never parses an appearance.
     pub size: Option<[u32; 2]>,
     pub state: ExportStatus,
     pub progress: RenderProgress,

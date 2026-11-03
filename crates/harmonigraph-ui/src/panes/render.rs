@@ -321,8 +321,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
         (f.aspect_w, f.aspect_h) = aspect;
         // The SHORT edge, not a named format: "1080p" means nothing to a 9:16
         // frame, where 1080 is the width. Aspect decides the shape and this
-        // decides only how big, so each option shows the pixels it lands on and
-        // the pair is what the plugin passes as `--size`.
+        // decides only how big, so each option shows the pixels it lands on, the
+        // pair the renderer derives from the exported look.
         //
         // 1440 is the fresh size.
         let frame = state.appearance.render.frame;
@@ -815,11 +815,12 @@ pub(crate) fn capture_export(
             captured
         }
     };
-    Ok(crate::ExportAction::Queue {
-        take: path.to_owned(),
-        appearance: captured.serialize(),
-        size: captured.render.frame.pixels(captured.render.short_edge),
-    })
+    // The size the Exports list shows is read back out of the blob, as the
+    // renderer reads it, so whatever parsing repairs, the two agree.
+    let appearance = captured.serialize();
+    let render = crate::AppearanceDocument::parse(&appearance)?.render;
+    let size = render.frame.pixels(render.short_edge);
+    Ok(crate::ExportAction::Queue { take: path.to_owned(), appearance, size })
 }
 
 #[cfg(test)]
