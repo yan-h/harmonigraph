@@ -601,7 +601,7 @@ fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
 fn the_starfield_moves_by_the_drift() {
     const PANE: u32 = 540;
     const SHIFT: usize = 8;
-    const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
+    const SPEED: f32 = harmonigraph_scene::SPECTRAL_STAR_SPEED_MAX;
     let Some((device, queue)) = headless_device() else { return };
     let fresh = harmonigraph_scene::StarSettings::default();
     // Every depth at the far spacing, which 2x2 reads, then the fresh
@@ -635,12 +635,15 @@ fn the_starfield_moves_by_the_drift() {
         s.stars.star_spacing_ratio = spacing;
         let layout = atmosphere::star_layout(s.stars, 1.0);
         let image = atmosphere::star_image_size([PANE, PANE], s.stars);
-        let gathers = atmosphere::star_slices(s.stars, 0.0, 0.0, &layout, image).map(|s| s.gather);
+        let gathers =
+            atmosphere::star_slices(s.stars, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image)
+                .map(|s| s.gather);
         assert_eq!(gathers.contains(&3), three, "{gathers:?}");
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
-        cb.atmosphere.as_mut().unwrap().now +=
-            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_px_per_second());
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.now +=
+            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_pace(a.points_per_ms, PANE as f32));
         let after = frame_with(&device, &queue, &mut resources, &cb);
 
         // Clear of the edges, where the light the stars read need not be flat.

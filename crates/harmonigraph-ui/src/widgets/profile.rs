@@ -4,6 +4,7 @@ use super::RangeBar;
 use crate::theme;
 use egui::Ui;
 use harmonigraph_scene::star_plan::STAR_DEPTHS;
+use harmonigraph_scene::StarPane;
 
 /// Which star property a [`depth`] control sets, one value per drawn layer.
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -23,7 +24,7 @@ pub(crate) enum Depth {
 pub(crate) fn star_layers(
     ui: &mut Ui,
     stars: &mut harmonigraph_scene::StarSettings,
-    size_scale: f32,
+    pane: StarPane,
 ) {
     let id = ui.make_persistent_id("star layer property");
     let mut kind = ui.data(|d| d.get_temp::<Depth>(id)).unwrap_or_default();
@@ -51,7 +52,7 @@ pub(crate) fn star_layers(
         Depth::Solid => &mut stars.star_solid,
         Depth::Twinkle => &mut stars.star_twinkle,
     };
-    depth(ui, values, stars.star_layers, kind, size_scale);
+    depth(ui, values, stars.star_layers, kind, pane);
 }
 
 /// Each drawn layer's own value, back to front, in any order: a dot per layer
@@ -59,19 +60,20 @@ pub(crate) fn star_layers(
 /// sets every layer it spans onto it; and a bar beside the plot over the
 /// drawn layers' whole range, which stretches and slides them together. A
 /// depth `Star layers` leaves out is not shown and keeps its value.
-/// `size_scale` is how many times its stored size the pane draws and shows a
-/// star: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1. A spacing is a
-/// multiple of the size, so it shows as stored.
+/// The `pane` says how a value reads there: a size shows as the pane draws it
+/// ([`StarPane::size_scale`]), and a spacing, a multiple of the size, as
+/// stored; a speed is a multiple of the scroll on the spectrogram and a share
+/// of the prototype's pace on the lattice.
 pub(crate) fn depth(
     ui: &mut Ui,
     values: &mut [f32; STAR_DEPTHS],
     layers: u32,
     kind: Depth,
-    size_scale: f32,
+    pane: StarPane,
 ) {
     use harmonigraph_scene::{
         STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SOLID_MAX, STAR_SPACING_MAX, STAR_SPACING_MIN,
-        STAR_SPEED_MAX, STAR_SPEED_MIN,
+        STAR_SPEED_MIN,
     };
     const PLOT: &str = "Set each layer on the plot: drag its dot, or press on empty space and draw a line across the layers to set them all onto it.";
     let percent: fn(f32) -> String = |share| format!("{:.0}%", share * 100.0);
@@ -90,9 +92,15 @@ pub(crate) fn depth(
         ),
         Depth::Speed => (
             "Star speed",
-            STAR_SPEED_MIN..=STAR_SPEED_MAX,
-            percent,
-            "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
+            STAR_SPEED_MIN..=pane.speed_max(),
+            match pane {
+                StarPane::Spectrogram => |times| format!("{times:.2}× scroll"),
+                StarPane::Lattice => percent,
+            },
+            match pane {
+                StarPane::Spectrogram => "How fast the stars drift, as a multiple of how fast the spectrogram scrolls, from the slowest layer to the fastest: at 1× a star moves as fast as the music, and zooming the Span keeps it so. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
+                StarPane::Lattice => "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
+            },
         ),
         Depth::Solid => (
             "Solid share",
@@ -111,7 +119,7 @@ pub(crate) fn depth(
     // the bar alike; the bar's octaves are of the value as shown, so its
     // display stays a plain function of them.
     let (octaves, shown) = match kind {
-        Depth::Size => (true, size_scale),
+        Depth::Size => (true, pane.size_scale()),
         Depth::Spacing => (true, 1.0),
         Depth::Speed | Depth::Solid | Depth::Twinkle => (false, 1.0),
     };
