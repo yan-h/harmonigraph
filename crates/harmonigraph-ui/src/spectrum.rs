@@ -776,8 +776,9 @@ mod tests {
     /// no new column reuses the measurement instead of taking it again.
     ///
     /// Beside its siblings in `tests::spectrum`, which cover the key's other
-    /// two inputs (a width edit and same-frame audio) and its hold-window
-    /// early return.
+    /// two inputs (a width edit, and audio pushed at the same shell time,
+    /// which the revision sees and a clock in the key would not)
+    /// and its hold-window early return.
     #[test]
     fn a_fold_outlives_a_frame_that_brought_no_new_column() {
         let cfg = SpectrumConfig::default();

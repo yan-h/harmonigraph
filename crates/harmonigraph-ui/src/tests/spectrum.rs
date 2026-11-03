@@ -712,10 +712,16 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     assert_eq!(spectrum.store.fold_measurements, 1);
     let wide = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(wide, first, "a changed width must change this fixture's measurement");
-    // Later audio, since the columns a stream dates must advance; the Fold is
-    // read at the new audio's own time, as a frame that brought it would.
-    spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.3, &cfg);
-    let next = spectrum.folded(1.3, 50.0).unwrap().to_vec();
+    // More audio at the SAME shell time, so only the display revision can tell
+    // the memo it is stale. It must still date forward, which a batch of a few
+    // hops does: the arrival anchor moves by `ANCHOR_SMOOTHING` of the batch's
+    // length (0.05 of 1152 frames, 58) where the columns advance by whole hops
+    // (384), and a long enough batch would date backward.
+    let batch = AudioSpectrum::FFT_INTERVAL * 48_000.0 * 3.0;
+    let short: Vec<f32> = tone(660.0)[..batch as usize].to_vec();
+    assert!(AudioSpectrum::ANCHOR_SMOOTHING * batch < AudioSpectrum::FFT_INTERVAL * 48_000.0);
+    spectrum.push_samples(&short, 1, 48_000.0, 1.0, &cfg);
+    let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(next, wide, "same-time audio must invalidate the measured grid");
     assert_eq!(spectrum.store.fold_measurements, 3);
     assert!(spectrum.folded(2.0, 50.0).is_none(), "expired audio must not reuse a Fold");
