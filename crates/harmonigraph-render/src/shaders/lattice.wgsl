@@ -451,11 +451,12 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
 
 struct Instance {
     @location(0) world_pos: vec3<f32>,
-    // x: activation 0..1. y/z: the melody and bass marks' own levels, which
-    // follow the marked voice rather than this node's activation — each
-    // ring eases in over the scene layer's attack when its note takes that
-    // end, and drops to 0 the frame the key comes up. w is reserved for
-    // shadow-cell kinds in cell draws, and a stable lattice seed in node draws.
+    // x: activation 0..1, the node's presence. y/z: the melody and bass marks'
+    // own levels, which follow the marked voice rather than this node's
+    // activation — each ring eases in over the scene layer's attack when its
+    // note takes that end, and falls from the frame the key comes up. w is
+    // the CPU's (the glow target's colour half, for the ink history) and is
+    // dropped on the way in.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
@@ -1066,10 +1067,10 @@ fn glyph_band(d: f32, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer 
 // `level > 0` switch instead parts them — the opacity floors at the ghost while
 // the colour is still the lit pitch, so the fade visibly stops, and then the
 // colour steps to the ground in one frame at no change in opacity at all. That
-// is visible only where a node's presence OUTLIVES this slot's level, which is
-// another instance of the pitch class still held: a lone note drives both off
-// one envelope, so the ghost never catches the fade and the switch lands at
-// nothing.
+// is visible wherever a node's presence OUTLIVES this slot's level: another
+// instance of the pitch class still held, and every release, whose colour
+// leaves at the key-up while the presence holds for the slices still to
+// retract.
 //
 // The ghost takes what is left of the node's PRESENCE after this slot's own
 // level, rather than a share of the whole of it. Both releases are then

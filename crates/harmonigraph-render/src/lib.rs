@@ -572,10 +572,12 @@ const _: () = assert!(SPECTRUM_WORDS == 240);
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuInstance {
     world_pos: [f32; 3],
-    /// x: activation, y: melody mark level, z: bass mark level (see
-    /// lattice.wgsl). The first three are levels the same node
-    /// draws at, read together by the layers that draw it.
-    /// The fourth component is reserved for shadow-cell kinds in cell draws.
+    /// x: activation, the node's presence, y: melody mark level, z: bass
+    /// mark level (see lattice.wgsl). The first three are levels the same
+    /// node draws at, read together by the layers that draw it. w is the
+    /// most colour any slot wears, which the shader never reads: with the
+    /// marks it is the glow's target, which the presence outlasts after a
+    /// release, for [`ink_history`].
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
