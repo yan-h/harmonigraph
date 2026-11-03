@@ -17,7 +17,7 @@ struct StarSlice {
     float width;
     float inverse_floor;
     uint gather;
-    float twinkle;
+    uint _pad;
 };
 struct type_10 {
     StarSlice inner[5];
@@ -42,7 +42,7 @@ struct Cloud {
     float star_life;
     float star_size_variation;
     float star_cover;
-    uint star_pad1_;
+    float star_twinkle;
     metal::float4 star_image_size;
     type_10 star_slices;
     uint memory_enabled;
@@ -153,6 +153,13 @@ float star_life(
     return _e2;
 }
 
+float star_twinkle(
+    constant Cloud& cloud
+) {
+    float _e2 = cloud.star_twinkle;
+    return _e2;
+}
+
 uint naga_f2u32(float value) {
     return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
 }
@@ -175,7 +182,8 @@ StarDraw star_draw(
     d.life = life;
     uint key = salt_1 + ((life + 1u) << 16u);
     float through = metal::fract(age);
-    bool held = s.twinkle < 1.0;
+    float _e24 = star_twinkle(cloud);
+    bool held = _e24 < 1.0;
     d.held = held;
     metal::float4 _e29 = star_hash(hashed, held ? salt_1 : key);
     d.centre = metal::float2(0.5) + (s.width * (_e29.xy - metal::float2(0.5)));
@@ -185,7 +193,7 @@ StarDraw star_draw(
     d.other = _e47;
     d.blend = 0.0;
     float dip = metal::smoothstep(0.0, STAR_FADE, through) * metal::smoothstep(0.0, STAR_FADE, 1.0 - through);
-    d.fade = 1.0 - (s.twinkle * (1.0 - dip));
+    d.fade = 1.0 - (_e24 * (1.0 - dip));
     bool early = through < STAR_FADE;
     if (held) {
         if (!(early)) {
@@ -193,21 +201,21 @@ StarDraw star_draw(
         } else {
             local_2 = true;
         }
-        bool _e76 = local_2;
-        local_1 = _e76;
+        bool _e75 = local_2;
+        local_1 = _e75;
     } else {
         local_1 = false;
     }
-    bool _e78 = local_1;
-    if (_e78) {
+    bool _e77 = local_1;
+    if (_e77) {
         uint other = (early ? (life - 1u) : (life + 1u)) & 4095u;
-        metal::float4 _e94 = star_hash(hashed, (salt_1 + ((other + 1u) << 16u)) + 1u);
-        d.other = _e94.xy;
+        metal::float4 _e93 = star_hash(hashed, (salt_1 + ((other + 1u) << 16u)) + 1u);
+        d.other = _e93.xy;
         float later = metal::smoothstep(-0.2, STAR_FADE, early ? through : (through - 1.0));
         d.blend = early ? (1.0 - later) : later;
     }
-    StarDraw _e106 = d;
-    return _e106;
+    StarDraw _e105 = d;
+    return _e105;
 }
 
 float star_half_width(

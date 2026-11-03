@@ -118,7 +118,7 @@
                 star_size: (1.66, 1.8216218, 2.6231027, 5.309201, 15.799999),
                 star_speed: (0.08931082, 0.0902766, 0.09806162, 0.12107633, 0.16860056),
                 star_lifetime: 2.9719827,
-                star_twinkle: (1.0, 1.0, 1.0, 1.0, 1.0),
+                star_twinkle_dip: 1.0,
                 star_solid: (0.48, 0.46020737, 0.3825297, 0.23232502, 0.0),
                 star_glow_falloff: 0.62410957,
                 star_resolution: 0.75,
@@ -208,7 +208,7 @@
                 // the starfield goldens' 240 star pixels a second.
                 star_speed: (0.0416449569, 0.0418354161, 0.0433707014, 0.0479094312, 0.0572816767),
                 star_lifetime: 0.9845664,
-                star_twinkle: (0.0, 0.32512555, 0.5850163, 0.7925082, 1.0),
+                star_twinkle_dip: 0.3,
                 star_solid: (0.48, 0.46020737, 0.3825297, 0.23232502, 0.0),
                 star_glow_falloff: 0.68082124,
                 star_resolution: 0.75,

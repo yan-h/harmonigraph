@@ -17,7 +17,7 @@ struct StarSlice {
     float width;
     float inverse_floor;
     uint gather;
-    float twinkle;
+    uint _pad;
 };
 struct type_8 {
     StarSlice inner[5];
@@ -34,7 +34,7 @@ struct StarUniforms {
 struct Settings {
     StarUniforms stars;
     float depth;
-    float _pad0_;
+    float star_twinkle;
     float _pad1_;
     float _pad2_;
 };
