@@ -6,11 +6,8 @@ Yan’s decisions recorded for future drift audits.
 
 - Retain Tab / Hide tab bars for the live editor, saved as an editor preference rather than appearance. Tab takes priority over focus traversal outside text edits and restores hidden fold controls. #1314 Editor Q1
 
-## 2026-10-22 (frame pacing, #1551)
+The display link and frame pacing decisions (#1551) are in `host-window-and-pacing.md`.
 
-- Drive the macOS editor's frames from the view's display link. Prefer smoothness over latency: keep the default 3 drawables rather than 2. #1551 Q1
-- The editor frame limit stays an fps number, applied as the display link's preferred frame rate; if a 72 fps cap does not hold on the 144 Hz LG, fall back to fractions of the display rate (Display rate / Half / Third / Quarter, every Nth refresh). #1551 Q2
-- Outcome, measured 2026-10-22: the preferred frame rate rounds to divisors of the 144 Hz LG's rate (120 ran at 144, 90 and 60 at 72), so the fallback shipped as Display rate / Half / Third / Quarter in #1553. #1551 Q2
-- The display link keeps running while the editor is idle; pausing it is a later option. #1551 Q3
-- Require macOS 14 and delete the macOS frame-timer path, with no fallback. #1551 Q4
-- Leave the remaining drawable wait: Bitwig's UI is unaffected with the editor open, so neither CAMetalDisplayLink nor skipping a render to leave the deep regime is built; reopen if the host feels heavier or hitches show at Display rate. #1551 step 5
+## 2026-11-02 (drift audit, #1635)
+
+- One wheel or trackpad zoom of the Analyzer is one undoable look edit, as a drag is: the gesture closes as one entry when it stops. Navigation stays in the look, so slots keep carrying the Analyzer's pitch range. #1635 Editor Q1, #1633

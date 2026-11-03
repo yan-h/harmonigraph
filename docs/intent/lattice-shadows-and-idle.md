@@ -13,3 +13,7 @@ Yan’s decisions recorded for future drift audits.
 - Remove Contour (Distance) shadows entirely: Yan preferred Blur almost always. Every shadow group is a blur of its caster, with Width, Darkness and Spread. #1499
 
 - Drop the fixed glyph SDF sheet. Text Spread lifts the blurred shadow by stops before its clamp instead of growing letters by a distance, so lattice and spectral names fill their shadow cells from the same egui coverage through one pipeline. The idle crosses, in the same group as lattice names, take the same stops rather than growing. A cheaper spread that looks similar was preferred over keeping the sheet. #1501
+
+## 2026-11-02 (drift audit, #1635)
+
+- A released note's name dims from white with its colour at the release, as the background glow and marks do; whether a name is drawn at all still follows the node's presence through the stagger and Fade-out delay. #1635 Slices Q1, #1629

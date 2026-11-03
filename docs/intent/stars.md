@@ -16,3 +16,7 @@ One line per decision; the audit reads this before asking anything.
 
 - #1442 replaced the High, Medium, Low and Uniform profiles with one Stars resolution slider (default 75%), superseding the 09-29 "Medium quality" and #1314 Stars Q4.
 Every resolution draws stars in their own pass into one image, so Uniform's large-pane split has no separate switch to retain.
+
+## 2026-11-02 (drift audit, #1635)
+
+- Star layers n draws stored layers 1..n in order, so fewer layers drop the front-most and more bring it back. The even spacing over five stored layers lost both its reasons (per-depth images and halo tiers, #1442; depth curves, #1454). #1635 Stars Q1, #1632
