@@ -17,3 +17,7 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-02 (drift audit, #1635)
 
 - A released note's name dims from white with its colour at the release, as the background glow and marks do; whether a name is drawn at all still follows the node's presence through the stagger and Fade-out delay. #1635 Slices Q1, #1629
+
+## 2026-11-03 (drift audit, #1635)
+
+- The fresh text-shadow Spread (lattice 0.129, spectral 0.136, about ×1.6) and the 5-stop ceiling on the lift (`TEXT_SPREAD_STOPS`, #1513) are the intended look, though both values were captured while Spread was a dilation. #1635 Glow Q1
