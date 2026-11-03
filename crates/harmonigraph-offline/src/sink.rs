@@ -788,10 +788,11 @@ mod tests {
     }
 
     /// The encoders the real-encoder tests run through. x264 anywhere ffmpeg
-    /// has it; VideoToolbox, the fresh Video pane's encoder (#1475), on macOS,
-    /// where an export that cannot open it is a failure and not a skip.
+    /// has it; VideoToolbox, the fresh Video pane's encoder (#1475), on Apple
+    /// Silicon, where an export that cannot open it is a failure and not a
+    /// skip. The Video pane's hover says Hardware needs Apple Silicon.
     fn real_encoders() -> &'static [VideoEncoder] {
-        if cfg!(target_os = "macos") {
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             &[VideoEncoder::X264, VideoEncoder::Hardware]
         } else {
             &[VideoEncoder::X264]
