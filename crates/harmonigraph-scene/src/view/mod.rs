@@ -786,14 +786,15 @@ pub struct ViewConfig {
     /// reach ends.
     pub glow_curve: GlowCurve,
     /// The Shadow, dialled per GROUP of casters ([`ShadowSettings`]): the
-    /// lattice's geometry and text, and the spectral pictures' geometry and
-    /// text. The spiral inherits the matching spectral pair rather than
-    /// carrying settings of its own.
+    /// lattice's geometry, the lattice's text, and the spectral pictures' text
+    /// (the spectrum's note names and axis labels, and the spiral's names). The
+    /// spiral inherits the spectral text rather than carrying settings of its
+    /// own, and the piano roll casts no shadow at all.
     ///
     /// Each group says which renderer draws it, how wide its shadow is and how
     /// dark it lands ([`crate::ShadowStyle`]). A lattice group's width is a
-    /// share of node radius; a spectral group's uses the renderer's fixed
-    /// four-point edge unit so roll, axis and spiral shadows stay constant on
+    /// share of node radius; the spectral group's uses the renderer's fixed
+    /// four-point edge unit so axis and spiral text shadows stay constant on
     /// screen. Half the resolved width is σ (`shadow::sigma_points` in
     /// harmonigraph-render).
     ///

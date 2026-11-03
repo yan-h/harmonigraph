@@ -67,7 +67,7 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{roll_paint_callback, RollAxes, RollInstance};
+pub use roll::{roll_paint_callback, RollAxes, RollInstance, DEFAULT_RIBBON_SEMITONES};
 
 /// The backdrop cut round a note, shared by the roll's ribbons and the
 /// Spiral's dots.

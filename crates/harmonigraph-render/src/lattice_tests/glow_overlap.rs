@@ -987,7 +987,7 @@ fn the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel() {
     // Pattern size times the glow's height in texels, and that height halved
     // with #1461.
     const PATTERN: f32 = 0.22;
-    const GLOW_TEXELS: u32 = SIZE[1] / 4;
+    const GLOW_TEXELS: u32 = SIZE[1].div_ceil(crate::lattice_targets::GLOW_DIVISOR);
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0; 32], 0.75, false);
     scene.camera = harmonigraph_scene::Camera {

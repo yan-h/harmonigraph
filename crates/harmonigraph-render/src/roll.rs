@@ -40,6 +40,12 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
+/// The pane's default Ribbon width in semitones, which this crate cannot read
+/// from `SpectrumConfig`. Only the roll timing probe draws with it;
+/// `harmonigraph-ui` pins it to `roll_thickness`'s default
+/// (`a_fresh_ribbon_is_the_renders_probe_width`).
+pub const DEFAULT_RIBBON_SEMITONES: f32 = 0.551_037_2;
+
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
 /// Entry points the roll shader must provide: the two vertex stages (the

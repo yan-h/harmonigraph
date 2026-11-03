@@ -19,7 +19,7 @@
 use egui::Color32;
 use harmonigraph_core::Expressions;
 use harmonigraph_core::RollNote;
-use harmonigraph_render::{RollAxes, RollInstance, SurroundCut};
+use harmonigraph_render::{RollAxes, RollInstance};
 use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
@@ -97,13 +97,8 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// Off comes back zero reach: the reach is what the far-edge cull keeps a
 /// leaving note alive for, so a surround that will not paint must not be paid
 /// for.
-fn outline(cut: SurroundCut, point_scale: f32) -> f32 {
-    cut.reach_points(point_scale)
-}
-
-/// [`outline`] for the roll `state` draws.
 fn surround(state: &PictureState, point_scale: f32) -> f32 {
-    outline(state.appearance.spectrum.note_cut(), point_scale)
+    state.appearance.spectrum.note_cut().reach_points(point_scale)
 }
 
 /// How far a SOUNDING note's ribbon carries past the now-line, and how much of
@@ -136,7 +131,7 @@ fn surround(state: &PictureState, point_scale: f32) -> f32 {
 /// cannot reach into a spectrum region of no length.
 ///
 /// Off comes back zero-reach AND zero-fade, never one or the other, for
-/// [`outline`]'s reason: the reach is what the geometry grows by, so a lead
+/// [`surround`]'s reason: the reach is what the geometry grows by, so a lead
 /// that will not be drawn must not be paid for in a fade either.
 pub(super) fn lead(cfg: &crate::SpectrumConfig, axes: &Axes, split: f32) -> (f32, f32) {
     if split <= 0.0 {
@@ -1125,25 +1120,21 @@ mod tests {
         notes
     }
 
-    /// One held note under a surround of `amount` reaching `reach` points, and
+    /// One held note under a full surround reaching `reach` points, and
     /// the instances the roll would draw for it. `range` is the pitch span in
     /// semitones — the pane is 100 points across the pitch axis, so a wide
     /// range makes a thin ribbon, which is where the surround geometry is
     /// under the most pressure.
-    fn ribbon_with_cut(amount: f32, reach: f32, range: f32) -> Vec<RollInstance> {
+    fn ribbon_with_range(reach: f32, range: f32) -> Vec<RollInstance> {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 60.0 - range * 0.5;
         state.appearance.spectrum.high_midi = 60.0 + range * 0.5;
         state.appearance.spectrum.roll_thickness = 2.0;
-        state.appearance.spectrum.note_cut = amount;
+        state.appearance.spectrum.note_cut = 1.0;
         state.appearance.spectrum.note_cut_reach = reach;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         instances(&state, 0.05)
-    }
-
-    fn ribbon_with_range(reach: f32, range: f32) -> Vec<RollInstance> {
-        ribbon_with_cut(1.0, reach, range)
     }
 
     /// A note must stay on screen until the last of its INK is past the far
@@ -1626,12 +1617,13 @@ mod tests {
     /// for.
     #[test]
     fn a_cut_of_nothing_makes_no_room_for_a_surround() {
-        let off = harmonigraph_render::SurroundCut {
-            amount: 0.0,
-            ..fresh().appearance.spectrum.note_cut()
-        };
-        assert!(off.reach > 0.0, "the fixture's reach is 0, which proves nothing below");
-        assert_eq!(outline(off, 1.0), 0.0, "a cut of nothing still made room for one");
+        let mut state = fresh();
+        assert!(
+            surround(&state, 1.0) > 0.0,
+            "the fixture's reach is 0, which proves nothing below"
+        );
+        state.appearance.spectrum.note_cut = 0.0;
+        assert_eq!(surround(&state, 1.0), 0.0, "a cut of nothing still made room for one");
     }
 
     /// The renderer keeps its own copy of the cut's defaults
@@ -1645,6 +1637,17 @@ mod tests {
                 amount: 1.0,
                 ..harmonigraph_render::SurroundCut::OFF
             },
+        );
+    }
+
+    /// The renderer's timing probe draws ribbons at the pane's default width,
+    /// which it cannot read from `SpectrumConfig`; this keeps the two together
+    /// ([`DEFAULT_RIBBON_SEMITONES`](harmonigraph_render::DEFAULT_RIBBON_SEMITONES)).
+    #[test]
+    fn a_fresh_ribbon_is_the_renders_probe_width() {
+        assert_eq!(
+            fresh().appearance.spectrum.roll_thickness,
+            harmonigraph_render::DEFAULT_RIBBON_SEMITONES,
         );
     }
 

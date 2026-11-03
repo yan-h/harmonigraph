@@ -22,7 +22,7 @@
 //! shape and tint a fresh `SpectrumConfig` has, which `harmonigraph-ui` pins).
 //!
 //! The notes are synthetic, since the pane that builds them lives in
-//! `harmonigraph-ui`: ribbons at the pane's default width (0.551 semitone over
+//! `harmonigraph-ui`: ribbons at the pane's default width ([`DEFAULT_RIBBON_SEMITONES`] over
 //! 72, floored at 1.5 pt) and length floor (1 pt), mostly plain held boxes with
 //! leads, glides, tapers, two-piece fades and tremolo mixed in.
 //! Both workloads are far denser than a real one: the live pane (about
@@ -36,10 +36,6 @@ use crate::SurroundCut;
 
 const AXES: RollAxes = RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [1.0, 0.0] };
 const SPAN_SEMITONES: f32 = 72.0;
-/// The pane's default Ribbon width (`SpectrumConfig::default`'s `roll_thickness`,
-/// #1475), which this crate cannot read.
-const RIBBON_SEMITONES: f32 = 0.551;
-
 fn env<T: std::str::FromStr>(name: &str, default: T) -> T {
     std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
@@ -71,7 +67,7 @@ fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance>
     let mut rng = Lcg(0x005e_ed0f_a011);
     let per_second = points[0] / work.span_seconds;
     let semitone = points[1] / SPAN_SEMITONES;
-    let half_pitch = (0.5 * RIBBON_SEMITONES * semitone).max(0.75);
+    let half_pitch = (0.5 * DEFAULT_RIBBON_SEMITONES * semitone).max(0.75);
     let mut out = Vec::with_capacity(work.notes + work.notes / 5);
     for i in 0..work.notes {
         let start = rng.next() * work.span_seconds;
