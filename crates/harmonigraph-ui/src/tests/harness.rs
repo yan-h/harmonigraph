@@ -400,12 +400,12 @@ impl SettingsCase {
     /// has to open: the Sources table's Source details and Tuning delay on
     /// every Tuning page, then Keyboard and Context under Adaptive tuning, or
     /// Map offsets, Manage selected saved map and Assignments under Lattice
-    /// Map; the Video page's Exports.
+    /// Map, plus the Context Follow harmony shows; the Video page's Exports.
     pub(super) fn folds(self) -> usize {
         use harmonigraph_core::lattice_map::TuningEngine;
         match (self.pane, self.variant) {
             (panes::Tab::Tuning, Variant::Engine(TuningEngine::Adaptive)) => 2 + 2,
-            (panes::Tab::Tuning, Variant::Engine(TuningEngine::LatticeMap)) => 2 + 3,
+            (panes::Tab::Tuning, Variant::Engine(TuningEngine::LatticeMap)) => 2 + 4,
             (panes::Tab::Tuning, _) => 2,
             (panes::Tab::Video, _) => 1,
             _ => 0,

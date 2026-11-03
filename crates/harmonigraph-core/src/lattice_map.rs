@@ -95,7 +95,7 @@ pub struct LatticeMap {
 impl Default for LatticeMap {
     fn default() -> Self {
         let mut nodes = [LatticePos::ORIGIN; 12];
-        // Four fifth rows, three third columns: F C G D / A E B F# /
+        // Four fifth columns, three third rows: F C G D / A E B F# /
         // C# G# D# A#. C is the zero-correction origin under just axes.
         for fifth in -1..=2 {
             for third in 0..=2 {

@@ -294,6 +294,8 @@ There is no separate Auto setting.
 Saved links and recorded configurations are restored as saved,
 without running recognition again.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
+In Lattice Map mode with Follow harmony on,
+**Follow harmony context** shows the same **Context** settings except Weight per octave.
 In Lattice Map mode,
 **Saved map**,
 **Edit shape on lattice**,
