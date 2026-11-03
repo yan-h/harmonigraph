@@ -845,8 +845,9 @@ struct MemoryFrame {
     life: f32,
 }
 
-/// Only coordinate and color interpretation, and which history the colour came
-/// from ([`SpectrogramAtmosphere::history_epoch`]), belong to the history key.
+/// What the history key holds: the pane's coordinates, the active style's
+/// look dials that decide what sits under each texel or star, and which
+/// history the colour came from ([`SpectrogramAtmosphere::history_epoch`]).
 /// Sound, time, response times and Texture mix change the response, not its
 /// identity.
 /// Other styles' dials must not erase the active style's carried color.
@@ -862,7 +863,11 @@ struct MemoryFrame {
 /// The level mapping and the softnesses are not in it. A Level, Tilt or
 /// softness drag re-reads the same texels through a new mapping, so the held
 /// colour eases toward the new reading rather than snapping for the length of
-/// the drag (#1578).
+/// the drag (#1578). Brightness variation re-maps each star's level to the
+/// palette the same way. Nor is the motion: a Drift speed or direction drag
+/// moves the texture on by a frame's travel ([`Travel`]), which the
+/// history follows as it follows the drift itself, by the lattice origin
+/// ([`memory_origin`]) or by absolute star cell.
 fn memory_key(
     atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
@@ -875,21 +880,21 @@ fn memory_key(
     let s = atmosphere.settings.sanitized();
     let pitch_vertical = atmosphere.pitch_vertical;
     let harmonigraph_scene::SpectralAtmosphere {
-        pitch_softness: _, // re-reads the same texels through a wider blur
-        time_softness: _,  // re-reads the same texels through a wider blur
-        blur_time_step: _, // response/coverage changes do not change material identity
-        cloud_depth: _,    // response/coverage changes do not change material identity
-        color_pickup: _,   // response/coverage changes do not change material identity
-        color_release: _,  // response/coverage changes do not change material identity
-        cloud_speed,
-        cloud_direction,
+        pitch_softness: _,  // re-reads the same texels through a wider blur
+        time_softness: _,   // re-reads the same texels through a wider blur
+        blur_time_step: _,  // response/coverage changes do not change material identity
+        cloud_depth: _,     // response/coverage changes do not change material identity
+        color_pickup: _,    // response/coverage changes do not change material identity
+        color_release: _,   // response/coverage changes do not change material identity
+        cloud_speed: _,     // built up frame by frame, carried by the lattice origin
+        cloud_direction: _, // built up frame by frame, carried by the lattice origin
         wash_pool,
         wash_pool_width,
         wash_pool_softness,
         cloud_style,
         stars:
             harmonigraph_scene::StarSettings {
-                star_randomness,
+                star_randomness: _,     // re-maps the same star's level to the palette
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
                 star_layers: _,         // read through the plan's drawn slices below
@@ -925,7 +930,7 @@ fn memory_key(
         vec![size[0], size[1], u32::from(pitch_vertical) as f32, read.min_midi, read.span];
     match cloud_style {
         CloudStyle::Stars => {
-            values.extend([2.0, star_randomness]);
+            values.push(2.0);
             // Each layer count draws its own set. Solo only hides composition
             // and leaves these slices running. Where the layers sit reaches
             // the key as the cells.
@@ -939,8 +944,6 @@ fn memory_key(
         }
         CloudStyle::VelvetScales => values.extend([
             3.0,
-            cloud_direction,
-            cloud_speed,
             velvet_size,
             velvet_variety,
             velvet_edge,
@@ -951,8 +954,6 @@ fn memory_key(
         ]),
         CloudStyle::Watercolor => values.extend([
             1.0,
-            cloud_direction,
-            cloud_speed,
             wash_size,
             wash_fuzz,
             wash_lobe,

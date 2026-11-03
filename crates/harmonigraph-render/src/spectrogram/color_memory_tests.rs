@@ -1139,3 +1139,53 @@ fn a_drift_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
         }
     }
 }
+
+/// A Drift speed or direction drag moves Watercolor and Scales on by a frame's
+/// travel, which the history follows by its lattice origin as it follows the
+/// drift itself, so the held colour carries across the drag rather than
+/// resetting for its length (#1639). The frame does not advance, so a carried
+/// history reads back as it was held and a reset one as this frame's dark grid.
+#[test]
+fn drift_edits_carry_held_color() {
+    let Some((device, queue)) = headless_device() else { return };
+    for style in [CloudStyle::Watercolor, CloudStyle::VelvetScales] {
+        for direction in [false, true] {
+            let mut cb = fixture(style);
+            let mut resources = CallbackResources::default();
+            cb.grid.fill(255);
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let lit = pixels(&device, &queue, memory(&resources));
+            assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            if direction {
+                s.cloud_direction += 1.0;
+            } else {
+                s.cloud_speed *= 0.99;
+            }
+            cb.grid.fill(0);
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let carried = pixels(&device, &queue, memory(&resources)) == lit;
+            assert!(carried, "{style:?}, direction {direction}: the drag reset the history");
+        }
+    }
+}
+
+/// Brightness variation re-maps each star's level to a palette position
+/// rather than moving any star, so a drag of it eases the held colours as a
+/// Level drag does instead of resetting the stars' history (#1632).
+#[test]
+fn brightness_variation_carries_the_stars_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_randomness = 0.2;
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    cb.grid.fill(0);
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_randomness = 0.6;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let edited = pixels(&device, &queue, memory(&resources));
+    let mut fresh = CallbackResources::default();
+    prepare_once(&device, &queue, &mut fresh, &cb);
+    assert_ne!(edited, pixels(&device, &queue, memory(&fresh)), "the drag reset the history");
+}
