@@ -92,7 +92,7 @@ pub(crate) fn depth(
             "Star speed",
             STAR_SPEED_MIN..=STAR_SPEED_MAX,
             percent,
-            "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
+            "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together. On the spectrogram the speed follows the scroll, so zooming the Span keeps the stars' pace against the music.",
         ),
         Depth::Solid => (
             "Solid share",

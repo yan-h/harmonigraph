@@ -43,6 +43,38 @@ pub(crate) fn star_px_per_second() -> f64 {
     (60.0f64 * 60.0 + 14.0 * 14.0).sqrt()
 }
 
+/// The spectrogram's scroll, in star pixels a second, at which its stars drift
+/// at [`star_px_per_second`]: a 16:9 pane at a 163.33 s Span, the fresh Span
+/// when the stars began following the scroll. They drift in proportion to the
+/// scroll past it, so a zoom of the Span or a reshaped pane keeps their pace
+/// against the music. The lattice has no scroll and always drifts at it.
+pub(crate) const STAR_SCROLL_REFERENCE: f64 = STAR_PANE as f64 * 16.0 / 9.0 / 163.330_38;
+
+/// The star pixels a depth at `Star speed` 1 has drifted, built up frame by
+/// frame so that a change of pace moves the stars on from where they are.
+/// Worked out as `now` times the pace instead, every zoom of the Span would
+/// carry the field as far as it had travelled since the clock started.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct StarTravel {
+    clock: Option<f64>,
+    travel: f64,
+}
+
+impl StarTravel {
+    /// The travel at `now`, the time since the last frame taken at `pace`
+    /// star pixels a second. A first frame, or a clock that ran backwards, as
+    /// a render started over does, takes `now` at `pace` from zero, so a
+    /// render is the same from its first frame however it was reached.
+    pub(crate) fn advance(&mut self, now: f64, pace: f64) -> f64 {
+        self.travel = match self.clock {
+            Some(clock) if now >= clock => self.travel + (now - clock) * pace,
+            _ => now * pace,
+        };
+        self.clock = Some(now);
+        self.travel
+    }
+}
+
 uniform_group! {
 /// One depth slice of the starfield, in the shader's `StarSlice` order: read by
 /// OFFSET, so a reordering here swaps values silently.
@@ -260,7 +292,8 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 }
 
 /// Every slice's numbers for this frame, for a star image `image` texels
-/// across and down. Each depth moves as one sheet at its own speed.
+/// across and down, `travel` star pixels on at a speed of one. Each depth
+/// moves as one sheet at its own speed.
 ///
 /// The star image is drawn by evaluating each star at its texel centres, so
 /// a star narrower than a texel would show only where a centre happened to
@@ -280,15 +313,13 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 pub(crate) fn star_slices(
     settings: harmonigraph_scene::StarSettings,
     direction: f32,
-    now: f64,
+    travel: f64,
     layout: &StarLayout,
     image: [u32; 2],
 ) -> [StarSlice; STAR_SLICES] {
     // The wider of a texel's two sides: each axis rounds up on its own.
     let texel =
         (0..2).map(|axis| layout.pane[axis] / image[axis].max(1) as f32).fold(0.0, f32::max);
-    // Star pixels travelled at a speed of one.
-    let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
     let solo = plan
@@ -412,7 +443,13 @@ impl StarUniforms {
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,
             pad: 0.0,
-            star_slices: star_slices(settings, direction, now, layout, image),
+            star_slices: star_slices(
+                settings,
+                direction,
+                now * star_px_per_second(),
+                layout,
+                image,
+            ),
         }
     }
 }

@@ -639,8 +639,9 @@ fn the_starfield_moves_by_the_drift() {
         assert_eq!(gathers.contains(&3), three, "{gathers:?}");
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
-        cb.atmosphere.as_mut().unwrap().now +=
-            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_px_per_second());
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.now +=
+            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_pace(a.points_per_ms, PANE as f32));
         let after = frame_with(&device, &queue, &mut resources, &cb);
 
         // Clear of the edges, where the light the stars read need not be flat.

@@ -248,7 +248,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
             a.settings.cloud_direction = 0.0;
             let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
             a.now = STAR_HASH_PERIOD * f64::from(layout.cells[STAR_SLICES - 1])
-                / star_px_per_second()
+                / star_pace(a.points_per_ms, cb.rect.height())
                 - 0.125;
         }
         let mut resources = CallbackResources::default();
@@ -274,11 +274,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let after = pixels(&device, &queue, m);
         let frame = m.frame.as_ref().unwrap();
         if wrap {
-            assert!(
-                old_slices[STAR_SLICES - 1].offset.0[0] > 65530.0
-                    && frame.slices[STAR_SLICES - 1].offset.0[0] < 5.0,
-                "fixture did not cross the star hash period"
-            );
+            // The drift runs forward along x, so an offset that fell wrapped.
+            let [old, new] = [old_slices, frame.slices].map(|s| s[STAR_SLICES - 1].offset.0[0]);
+            assert!(old > 65500.0 && new < old, "fixture did not cross the star hash period");
         }
         let floor = floor(&cb);
         let decay = (-0.25f32 / 0.6).exp();

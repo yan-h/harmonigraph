@@ -83,6 +83,23 @@ fn cloud_offset(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [
     harmonigraph_scene::MaterialSettings::drift(settings.cloud_speed, settings.cloud_direction, now)
 }
 
+/// The star pixels a second a depth at `Star speed` 1 drifts over a
+/// spectrogram scrolling `points_per_ms` along its time axis, on a pane
+/// `height` points tall: [`star_px_per_second`] at
+/// [`STAR_SCROLL_REFERENCE`], and in proportion to the scroll either side, so
+/// the stars keep their pace against the music through a zoom. Still on a
+/// pane with no height, which would otherwise carry an infinite drift into
+/// every frame after it.
+pub(super) fn star_pace(points_per_ms: f32, height: f32) -> f64 {
+    let scroll = f64::from(points_per_ms) * 1000.0 * f64::from(STAR_PANE) / f64::from(height);
+    let pace = star_px_per_second() * scroll / STAR_SCROLL_REFERENCE;
+    if pace.is_finite() {
+        pace
+    } else {
+        0.0
+    }
+}
+
 /// [`cloud_offset`] as the shader takes it. Watercolor repeats its `tile`, so
 /// the offset is reduced by whole repeats before it narrows to f32,
 /// as Stars and the lattice reduce theirs: unreduced, a long clock leaves the
@@ -1087,6 +1104,8 @@ pub(super) struct Targets {
     tile_group: Option<wgpu::BindGroup>,
     composite_group: wgpu::BindGroup,
     memory: Option<Memory>,
+    /// How far the stars have drifted, at [`star_pace`].
+    star_travel: StarTravel,
 }
 
 /// The starfield's targets and the groups of the two passes that fill them.
@@ -1352,7 +1371,7 @@ impl Targets {
         // star atlas alone is the largest thing a pane allocates. The tone and
         // the starfield's two are cleared whole each frame before anything
         // reads them, so a carried one holds nothing a fresh one would not.
-        let (carried, carried_memory, carried_tone, carried_stars) =
+        let (carried, carried_memory, carried_tone, carried_stars, star_travel) =
             previous.map_or(Default::default(), |previous| {
                 (
                     previous.tile.filter(|_| previous.shape.tile == tile_texels),
@@ -1362,6 +1381,8 @@ impl Targets {
                         .stars
                         .filter(|_| previous.shape.stars == star_shape)
                         .map(|stars| (stars.atlas, stars.image)),
+                    // The drift goes on from where it was whatever moved.
+                    previous.star_travel,
                 )
             });
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
@@ -1516,6 +1537,7 @@ impl Targets {
             tile_group,
             composite_group,
             memory,
+            star_travel,
         }
     }
 
@@ -1765,15 +1787,11 @@ impl Targets {
         let offset = cloud_offset(settings, atmosphere.now);
         let drift = cloud_drift(settings, offset, tile);
         let image = self.shape.stars.map_or([1, 1], |stars| stars.image);
+        let pace = star_pace(atmosphere.points_per_ms, rect.height());
+        let travel = self.star_travel.advance(atmosphere.now, pace);
         let slices = stars
             .map(|layout| {
-                star_slices(
-                    settings.stars,
-                    settings.cloud_direction,
-                    atmosphere.now,
-                    &layout,
-                    image,
-                )
+                star_slices(settings.stars, settings.cloud_direction, travel, &layout, image)
             })
             .unwrap_or_default();
         let life = star_life(settings.stars, atmosphere.now);
@@ -1981,7 +1999,7 @@ mod tests {
         })
     }
 
-    /// Every slice at `now` over a 16:9 pane.
+    /// Every slice `now` seconds on at the reference scroll, over a 16:9 pane.
     fn slices(
         settings: harmonigraph_scene::SpectralAtmosphere,
         now: f64,
@@ -1989,7 +2007,7 @@ mod tests {
         star_slices(
             settings.stars,
             settings.cloud_direction,
-            now,
+            now * super::star_px_per_second(),
             &star_layout(settings.stars, 16.0 / 9.0),
             [1920, 1080],
         )
@@ -2418,6 +2436,32 @@ mod tests {
         for slice in slices(fresh, 3.0e5) {
             assert!(slice.offset.0.iter().all(|&o| (0.0..=STAR_HASH_PERIOD as f32).contains(&o)));
         }
+    }
+
+    /// The spectrogram's stars drift in proportion to its scroll, at the
+    /// prototype's pace at the reference scroll, so a zoom of the Span keeps
+    /// them moving against the music as they were. A change of pace goes on
+    /// from where the field is, rather than carrying it as far as the clock has
+    /// run, and a render started over begins again from its own clock.
+    #[test]
+    fn stars_keep_pace_with_the_scroll_and_go_on_from_where_they_are() {
+        // A 16:9 pane at the reference's 163.33 s Span.
+        let height = 900.0;
+        let reference = 1600.0 / (163.330_38 * 1000.0);
+        let pace = super::star_pace(reference, height);
+        assert!((pace / super::star_px_per_second() - 1.0).abs() < 1e-6, "{pace}");
+        // Zoomed in to a tenth of the Span, the music and the stars scroll ten
+        // times as fast.
+        let zoomed = super::star_pace(reference * 10.0, height);
+        assert!((zoomed / pace - 10.0).abs() < 1e-5, "{zoomed} against {pace}");
+        assert_eq!(super::star_pace(reference, 0.0), 0.0);
+
+        let mut travel = super::StarTravel::default();
+        assert_eq!(travel.advance(100.0, pace), 100.0 * pace);
+        let before = travel.advance(101.0, pace);
+        let after = travel.advance(102.0, zoomed);
+        assert!((after - before - zoomed).abs() < 1e-6, "{before} -> {after}");
+        assert_eq!(travel.advance(0.5, pace), 0.5 * pace);
     }
 
     #[test]

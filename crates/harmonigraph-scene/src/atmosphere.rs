@@ -174,7 +174,8 @@ pub const STAR_SIZE_MAX: f32 = 64.0;
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
 /// Bounds of every depth's `Star speed` ([`StarSettings::star_speed`]) and
 /// its sanitizer, as a share of the prototype's pace: at the top a depth
-/// crosses the pane's height in about nine seconds. The top was once 5, and
+/// crosses the pane's height in about nine seconds, on the spectrogram at the
+/// renderer's reference scroll. The top was once 5, and
 /// everything past 1 was too fast to use while it crowded the useful range
 /// into a fifth of the track.
 pub const STAR_SPEED_MIN: f32 = 0.0;
@@ -457,7 +458,9 @@ pub struct StarSettings {
     /// direction`; the stars never read `cloud_speed`, which is the other
     /// textures' pace. Runs over [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`], in
     /// any order across the depths, so the front stars can drift slower than
-    /// the back ones.
+    /// the back ones. The spectrogram scales it with its scroll, so a zoom of
+    /// the Span keeps its stars' pace against the music; the lattice has no
+    /// scroll and draws it as set.
     pub star_speed: [f32; crate::star_plan::STAR_DEPTHS],
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life, as far as
