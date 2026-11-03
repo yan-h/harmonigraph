@@ -948,8 +948,11 @@ fn refold_columns(
 }
 
 /// Most threads a full refold splits across. The add is memory-bound: on an
-/// M1 Pro one thread streams a full-cap history (7,168 columns, 110 MB) in
-/// about 7 ms, four in about 3, and more buy little.
+/// M1 Pro one thread streamed a full-cap history (7,168 columns, 110 MB in
+/// f32) in about 7 ms, four in about 3, and more bought little. Measured
+/// before #1505 stored the columns as bfloat16, which halves the bytes (about
+/// 55 MB) and widens each value as it is added; the times and the thread
+/// count rest on the old format until remeasured.
 const REFOLD_THREADS: usize = 4;
 
 /// Fewest columns worth a refold thread of their own: a thread costs tens of

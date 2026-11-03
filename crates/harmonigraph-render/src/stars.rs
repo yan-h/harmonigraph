@@ -110,10 +110,11 @@ pub(crate) const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32U
 /// The star image's texel: every slice composited, gamma-coded, before the
 /// consumer filters it up into the pane.
 pub(crate) const STAR_IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
-/// fresh dials a 16:9 pane takes about 1.2 million and an 8:1 strip about 5.4
-/// million; a pane wider than about 6.3:1, or a finer `Star spacing`, asks
-/// for more (see [`star_layout`]).
+/// The most texels the atlas may take, 64 MB at sixteen bytes each. The
+/// spectrogram's fresh stars take about 0.46 million on a 16:9 pane and 2.0
+/// million on an 8:1 strip, and fit up to about 16:1; the lattice's, drawn
+/// larger, about a tenth of that. A wider pane or a finer `Star spacing` can
+/// ask for more (see [`star_layout`]).
 const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
 /// cell's index splits into a texel with a mask and a shift.

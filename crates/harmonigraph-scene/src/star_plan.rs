@@ -57,8 +57,10 @@ impl StarGather {
 }
 
 /// The least of its depth's largest star a star is ever drawn at by the cap
-/// at its read's window, wherever `Position variation` strays it: so the cap
-/// stays inside the 0.47 to 1 of it `Size variation` itself draws.
+/// at its read's window, wherever `Position variation` strays it. Set inside
+/// the 0.47 to 1 of it that `Size variation` draws at the type's 31%, which
+/// the lattice keeps; at the spectrogram's fresh 10%, which draws 0.78 to 1,
+/// the cap can draw a strayed star a little smaller than the dial does.
 pub const STAR_CAP_SHARE: f32 = 0.75;
 
 /// The least a read must hold, in star pixels from a cell's centre, for a

@@ -117,8 +117,8 @@ pub(super) fn star_pace(points_per_ms: f32, height: f32) -> f64 {
 /// f32 fewer and fewer bits of the cell it lands in. A screen-axis repeat of
 /// the Watercolor tile is five periods, because its basis is the 3-4-5
 /// rotation. Reduced about zero rather than onto `[0, repeat)`, so an offset
-/// already inside half a repeat — every one in a render's first minutes at the
-/// fresh speed — passes bit for bit.
+/// already inside half a repeat passes bit for bit: at the fresh speed and
+/// size that holds for a render's first 24 seconds or so, where it wraps first.
 ///
 /// Scales' warp is nonperiodic, and Stars drift by their own slices, so
 /// neither has a tile or a repeat, and their offset passes unreduced.

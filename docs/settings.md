@@ -42,7 +42,8 @@ Lattice note geometry, animation, labels and light effects fold independently.
 **Label size** also controls cross thickness.
 
 Analyzer textures read in decision order:
-choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
+choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**,
+with Stars' **Appearance** before their **Motion**, since their size and spacing matter more than how they drift.
 For Stars, **Stars resolution** comes first among its controls in both pictures,
 after Texture mix in the spectrogram and Material amount in the lattice,
 at 75% by default and in quarters from 25%:

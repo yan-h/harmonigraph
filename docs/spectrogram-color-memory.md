@@ -1,7 +1,8 @@
 # Spectrogram color memory
 
 Color pickup and Color release are shared by Stars, Watercolor and Scales.
-The defaults reproduce prototype B: pickup 0.08 seconds and release 0.6 seconds.
+Prototype B used pickup 0.08 seconds and release 0.6 seconds;
+the fresh values, captured from the DAW (#1475), are pickup 0.198 seconds and release 0.208 seconds.
 Both bars run from zero to five seconds and specify exponential time constants:
 after one time constant, about 37% of the previous value remains.
 Both zero restores the original immediate rendering path and releases the history textures.
@@ -84,7 +85,7 @@ The 1080p run used 40 measured frames per case; the 4K run used 100.
 | Style | 1080p off | 1080p B | 4K off | 4K B |
 | --- | ---: | ---: | ---: | ---: |
 | Stars | 9.16 ms | 8.96 ms | 31.32 ms | 31.45 ms |
-| Mosaic | 1.22 ms | 1.67 ms | 2.55 ms | 4.42 ms |
+| Mosaic (since removed) | 1.22 ms | 1.67 ms | 2.55 ms | 4.42 ms |
 | Watercolor | 1.33 ms | 1.71 ms | 3.20 ms | 4.79 ms |
 
 Stars' difference is within run noise; it is not evidence of a speedup.

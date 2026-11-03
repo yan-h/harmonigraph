@@ -6,8 +6,9 @@ use harmonigraph_core::LatticePos;
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
 /// Distinct constructions: [`CloudStyle::Watercolor`] is a field of
-/// overlapping globs that displaces the scalar picture without altering its
-/// levels, then applies the shared palette.
+/// overlapping globs that displaces the scalar picture, darkens or lightens
+/// each glob's edge by its Edge pooling, then applies the shared palette and
+/// varies each glob's brightness by its Random brightness.
 /// [`CloudStyle::VelvetScales`] instead averages each overlapping scallop's
 /// sampled light, with no raw source overlay at full material depth.
 ///
@@ -110,8 +111,9 @@ pub const CLOUD_SPEED_MIN: f32 = 0.0;
 pub const CLOUD_SPEED_MAX: f32 = 20.0;
 
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
-/// the strength #909 shipped as its whole range, where 0.5 is its default. The
-/// bottom is its mirror, where the edge lightens instead.
+/// the strength #909 shipped as its whole range, where 0.5 was its default;
+/// the fresh value is this top. The bottom is its mirror, where the edge
+/// lightens instead.
 pub const WASH_POOL_MAX: f32 = 4.0;
 /// See [`WASH_POOL_MAX`].
 pub const WASH_POOL_MIN: f32 = -WASH_POOL_MAX;
@@ -559,7 +561,9 @@ pub struct StarSettings {
 impl Default for StarSettings {
     fn default() -> Self {
         Self {
-            // Yan's Stars controls captured from the DAW on 2026-09-26.
+            // Yan's Stars controls captured from the DAW on 2026-09-26: the
+            // lattice's, under its own overrides. The spectrogram draws its
+            // 2026-10-07 capture (#1475), retuned since (#1624, #1627).
             star_randomness: 0.080912866,
             // The old shared dial's size spread at its fresh value, anchored
             // at the top: the same smallest-to-largest ratio, now 0.47..1
@@ -801,8 +805,9 @@ impl SpectralAtmosphere {
     }
 
     /// The exponent `Pooling softness` raises the tide line's linear fade to:
-    /// 1/4 at 0, a nearly flat band with a hard outer edge, through 2 at the
-    /// fresh 0.75, which is #909's squared crescent, to 4 at 1.
+    /// 1/4 at 0, a nearly flat band with a hard outer edge, through 2 at
+    /// 0.75, which is #909's squared crescent, to 4 at 1. The fresh 0.536 is
+    /// about 1.1, close to a linear fade.
     pub fn pool_exponent(softness: f32) -> f32 {
         (4.0 * softness - 2.0).exp2()
     }

@@ -117,12 +117,10 @@ No extra abstractions or configurable ordering were recommended.
 Stars reads the same resolved note illumination as the displacement materials.
 Its source adapter samples one premultiplied color at each star center,
 keeps that hue,
-and spends brightness variation as coverage.
-The shared renderer composites five depths over transparent black;
-the final lattice material scales its bounded coverage to the existing glow strength/accumulation ceiling,
-then blends with the original source by Material amount.
-Scaling all premultiplied channels retains star contrast;
-a hard cap flattened the bright center of a recorded note cluster.
+and puts the star's level in its color, as a palette position does:
+a star is whole however dim, and Brightness variation spreads the levels (#1287).
+The shared renderer composites the drawn layers, up to five by Star layers, over transparent black;
+the final lattice material blends that with the original source by Material amount.
 Silence clears the output without running the star passes or discarding their allocations.
 
 `StarSettings` owns defaults and normalization for both panes,
@@ -152,6 +150,9 @@ jitter and other appearance changes reuse images while their required shapes sta
 Star targets belong to their source texture owner,
 so changing or dropping that source also drops its bindings;
 material bypass releases the source and star targets together.
+The motion is not theirs:
+the stars' travel and life clock and the displacement materials' drift are built up per pane (`PaneBuffers::material_travel`),
+so a resize, a bypass or a change of material goes on from where they were.
 
 ### Saved-state and reference-image consequences
 
@@ -161,7 +162,7 @@ other spectral controls,
 material selection,
 camera and lattice settings survive.
 There is no migration or alias.
-Lattice material defaults remain None.
+Lattice material defaults were None then; they are Watercolor since #1475.
 
 The shared shader extraction changes one color channel by 1/255 at one pixel in each of two export references:
 `spectrogram-short-pane` green 235 to 234 at (12,108),
@@ -182,5 +183,6 @@ Watercolor and Mosaic measured 3.66 ms and 2.79 ms in the same probe;
 these are total scene timings,
 not isolated material-pass costs.
 Stars is therefore a more expensive material,
-with Medium providing the existing shared quality/performance tradeoff.
+with Medium providing the shared quality/performance tradeoff at the time;
+#1442 replaced the profiles with Stars resolution.
 The callback CPU medians remained 0.05 ms across the materials.

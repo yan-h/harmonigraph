@@ -78,8 +78,8 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                             CloudStyle::Stars,
                             "Stars",
                             "Pinpoint stars at several depths, each taking the color and brightness \
-                                 of the sound under it as it drifts. Nearer stars are fewer, bigger, \
-                                 brighter and faster",
+                                 of the sound under it as it drifts. Each layer has its own size, \
+                                 spacing and speed",
                         ),
                         (
                             CloudStyle::Watercolor,
