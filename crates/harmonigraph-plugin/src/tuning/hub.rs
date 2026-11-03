@@ -12,9 +12,7 @@ use std::sync::Arc;
 
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::lattice_map::{
-    Follow, LatticeMap, TuningEngine, FOLLOW_GROUP, FOLLOW_RELEASED,
-};
+use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine, FOLLOW_GROUP};
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
 use nice_plug::wrapper::clap::configuration::OwnedInput;
@@ -992,11 +990,6 @@ impl Hub {
         let sequencer = &mut self.sequencer;
         sequencer.fill(self.rate);
         let held = sequencer.context.iter().any(Option::is_some);
-        if !held {
-            for pitch in sequencer.working.iter_mut() {
-                pitch.weight *= FOLLOW_RELEASED;
-            }
-        }
         map.follow(sequencer.follow, sequencer.followed, &sequencer.working, held, &keys[..struck])
     }
 

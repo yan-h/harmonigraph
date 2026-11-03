@@ -44,7 +44,7 @@ const THIRD_STEP: f64 = 0.25;
 /// the map drift rather than snap back; but it must not outvote the chord's own
 /// intervals, or C E G followed by D F A would keep D's wolf to stay level with
 /// the G before it.
-pub const FOLLOW_RELEASED: f64 = 0.5;
+const FOLLOW_RELEASED: f64 = 0.5;
 
 /// The simplest 5-limit spelling of each 12-TET class, as (fifths, thirds).
 const SIMPLEST: [(i32, i32); 12] = [
@@ -178,8 +178,9 @@ impl LatticeMap {
     /// nothing. Ties keep the current place, and otherwise go to the candidate
     /// farther from the automated place.
     ///
-    /// When `held`, the context is sounding notes, and no step may take one
-    /// off the node it sounds at. A step is all the map can move per attack,
+    /// `held` says the context is sounding notes rather than released ones.
+    /// A released note weighs [`FOLLOW_RELEASED`] of its weight, and no step
+    /// may take a sounding one off the node it sounds at. A step is all the map can move per attack,
     /// so a map walked away from a held note could not come back for a key
     /// replayed over it; each new fifth of a held chain would walk it further.
     /// A note the current place no longer covers has nothing to keep and holds
@@ -206,7 +207,9 @@ impl LatticeMap {
         let mut anchors =
             [(LatticePos::ORIGIN, 0.0); crate::policy::MAX_CONTEXT + crate::policy::MAX_MEMORY];
         let mut anchored = 0;
-        for (node, weight) in context.iter().filter_map(|c| c.node.map(|node| (node, c.weight))) {
+        let scale = if held { 1.0 } else { FOLLOW_RELEASED };
+        let weighted = context.iter().filter_map(|c| c.node.map(|node| (node, c.weight * scale)));
+        for (node, weight) in weighted {
             if let Some(anchor) = anchors[..anchored].iter_mut().find(|a| a.0 == node) {
                 anchor.1 = f64::max(anchor.1, weight);
             } else if anchored < anchors.len() {
@@ -393,7 +396,7 @@ mod tests {
         assert_eq!(map.follow(both, moved, &[], false, &[67, 71, 74]), drifted);
         // A released G# an octave doubled weighs as one G#: once, it is not
         // worth a thirds step for C major; counted twice, it would be.
-        let g_sharp = ContextPitch { pitch: 0, node: Some(map.node(68)), weight: 0.6 };
+        let g_sharp = ContextPitch { pitch: 0, node: Some(map.node(68)), weight: 1.2 };
         let doubled = [g_sharp, ContextPitch { pitch: 1_200_000_000, ..g_sharp }];
         assert_eq!(
             map.follow(both, LatticePos::ORIGIN, &doubled, false, &c_major),
@@ -403,7 +406,7 @@ mod tests {
 
     /// Holding a chain of fifths must not carry the map away from it: each step
     /// keeps every held note on its node, so the map stops where the next step
-    /// would lose one, and a key still held or replayed stays where it was.
+    /// would lose one, and a note played next lands beside what is held.
     #[test]
     fn follow_keeps_every_held_note_on_its_node() {
         let map = LatticeMap::default();
