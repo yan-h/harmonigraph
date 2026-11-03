@@ -11,7 +11,7 @@ use crate::theme;
 
 // The bars' own geometry, written at the design size — scale 1.0. Each is
 // multiplied by `theme::ui_scale` where it is drawn, so a bar shrinks with the
-// type inside it rather than keeping a 22-point row around 10-point text.
+// type inside it rather than keeping a 20-point row around 14-point text.
 
 // A bar's own HEIGHT is not among them: it is `theme::row_height`, which every
 // control in a settings row is drawn at. A number here instead would be free to
@@ -159,8 +159,7 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
 /// handle and still stands on the fill as often as on the well: 2.0:1 against
 /// the hover fill and 1.4:1 against the drag fill, where the well side of the
 /// thumb is what carries it. Between lit and unlit it is 1.7:1 — a white thumb
-/// beside grey ones, the same step a bar's name takes between resting and
-/// hovered.
+/// beside grey ones.
 pub(super) fn grip_color(lit: bool) -> Color32 {
     if lit {
         theme::text()
@@ -210,8 +209,8 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// vanishing into it.
 ///
 /// The grip is filled in `fill`, which is [`grip_color`]'s answer. On a thumb
-/// that is not in hand the knockout is panel on `text_dim()` at 8.2:1, level
-/// with a resting name on the well; the parity argued below is the lit case.
+/// that is not in hand the knockout is panel on `text_dim()` at 8.2:1; the
+/// parity argued below is the lit case.
 ///
 /// A thumb and this tree's text are both near-white, so a crossing swallows
 /// whichever of the two paints first, and "-60 dB" reading "-60 B" is the
@@ -226,12 +225,10 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 ///
 /// The knocked-out letters read about as strongly as the run they belong to,
 /// which is the bar this has to clear: panel on the near-white thumb is 14.1:1,
-/// against 8.9:1 for a dimmed name on the `well()` track and 15.2:1 for a run
-/// at full `text()` on it. So it is a shade stronger than a resting name and a
-/// shade weaker than a run being hovered or dragged — the [`SpreadBar`] readout
-/// is always the latter — and both ends of that are far enough above any
-/// legibility floor that the crossing costs nothing either way. The claim is
-/// parity, not improvement.
+/// against 15.2:1 for a run at full `text()` on the `well()` track. So it is a
+/// shade weaker than the run it belongs to, and both are far enough above any
+/// legibility floor that the crossing costs nothing. The claim is parity, not
+/// improvement.
 ///
 /// **Overlapping thumbs knock out right whatever order they are painted in**,
 /// and the reason is worth stating because the ordering here looks load-bearing
@@ -254,7 +251,7 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// caller's `radius`:
 ///
 /// - At a grip's own 2pt the notch is a sliver at the extreme corners of a grip
-///   drawn 3pt shy of a 19pt row, well outside a Body galley's ink.
+///   drawn 3pt shy of a 20pt row, well outside a Body galley's ink.
 /// - A [`RangeBar::fade_span`] bar hands in the BAR's radius instead, so its
 ///   thumb is a 4pt-wide pill (epaint holds a corner to half the width, so 4
 ///   becomes 2) and the notch is the whole of the top and bottom 2pt. A

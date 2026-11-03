@@ -49,7 +49,8 @@ pub struct Skin {
     pub accent: [u8; 3],
     /// Primary text.
     pub text: [u8; 3],
-    /// Secondary text.
+    /// Marks that are not text: unlit thumbs, chevrons, preview lines and a
+    /// switched-off section's heading. Every text is `text`.
     pub text_dim: [u8; 3],
     /// ValueBar fill at rest / hovered / dragging (opaque accent mixes).
     pub accent_fill: [u8; 3],
@@ -59,13 +60,9 @@ pub struct Skin {
     pub accent_active: [u8; 3],
     /// Hover accent: a lit divider, a hovered switch track.
     pub accent_edge: [u8; 3],
-    /// Armed-mode indicator (learn mode): amber, distinct from both the
-    /// accent and the warning red.
+    /// Armed-mode indicator (learn mode) and the notice colour for a status
+    /// to inspect: amber, distinct from the accent.
     pub armed: [u8; 3],
-    /// Warning text (e.g. notes not represented on the lattice).
-    pub warning_text: [u8; 3],
-    /// Background band behind warning rows.
-    pub warning_bg: [u8; 3],
 }
 
 /// What a skin is made of. Persisted in the editor's workspace, never in the
@@ -123,9 +120,8 @@ const TEXT_DIM_LIGHTNESS: f32 = 0.72;
 /// Where the base16 schemes' accents sat, 0.68 to 0.74.
 pub const ACCENT_LIGHTNESS: f32 = 0.70;
 
-/// Status colours, the same under every skin.
+/// The status colour, the same under every skin.
 const ARMED: [u8; 3] = [238, 178, 92];
-const WARNING: [u8; 3] = [236, 142, 132];
 
 impl Default for SkinDials {
     /// Tinta's page and accent as measured, the default before the dials: a
@@ -182,8 +178,8 @@ fn lifted_dim(panel: [u8; 3], hue: f32, tint: f32) -> [u8; 3] {
     text_dim
 }
 
-/// The dim text `dials` make — every label in the panel — without the rest
-/// of the skin, for a track previewing it once per point along a bar.
+/// The dim grey `dials` make, for the marks that are not text, without the
+/// rest of the skin, for a track previewing it once per point along a bar.
 pub fn text_dim_color(dials: SkinDials) -> [u8; 3] {
     let panel = tinted(dials.lightness, dials.tint_hue, dials.tint);
     lifted_dim(panel, dials.tint_hue, dials.tint)
@@ -237,8 +233,6 @@ impl Skin {
             accent_active: mix(widget, accent, 0.55),
             accent_edge: mix(accent, [255, 255, 255], 0.06),
             armed: ARMED,
-            warning_text: WARNING,
-            warning_bg: mix(panel, WARNING, 0.2),
         }
     }
 }

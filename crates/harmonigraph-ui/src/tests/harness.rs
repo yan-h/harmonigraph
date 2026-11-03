@@ -602,11 +602,9 @@ pub(super) fn fold_indent(ctx: &egui::Context) -> f32 {
 
 /// The centre of the first closed fold's arrow in `shapes`: a three-point
 /// path pointing right — two points one above the other and the third out to
-/// their right, level with their middle — in the exact proportions of one of
-/// the two painters that draw a fold's arrow. `widgets::paint_chevron`
-/// strokes an open chevron twice as tall as it reaches, for our sections and
-/// subsections; egui's `paint_default_icon` fills a triangle as tall as it
-/// reaches, for its own `CollapsingHeader`. Exact, because other right-pointing
+/// their right, level with their middle — in the exact proportions of the
+/// chevron `widgets::paint_chevron` strokes for our sections and subsections,
+/// twice as tall as it reaches. Exact, because other right-pointing
 /// triangles share the page (a gradient's flip button); a restyled arrow
 /// then fails [`open_settings_pane`]'s count rather than going unopened.
 fn closed_fold(shapes: &[egui::epaint::ClippedShape]) -> Option<egui::Pos2> {
@@ -616,10 +614,11 @@ fn closed_fold(shapes: &[egui::epaint::ClippedShape]) -> Option<egui::Pos2> {
             points.sort_by(|a, b| a.x.total_cmp(&b.x));
             let [a, b, tip] = points;
             let (reach, span) = (tip.x - a.x, (a.y - b.y).abs());
-            let shape = if path.closed { reach } else { 2.0 * reach };
+            let shape = 2.0 * reach;
             let pointing_right = reach > 0.5
                 && (a.x - b.x).abs() < 0.01
                 && (tip.y - (a.y + b.y) / 2.0).abs() < 0.01
+                && !path.closed
                 && (span - shape).abs() < 0.01;
             pointing_right.then(|| egui::pos2((a.x + tip.x) / 2.0, tip.y))
         }

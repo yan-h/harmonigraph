@@ -51,8 +51,6 @@ a ratio just below 100% saves almost nothing yet softens the stars nearly as muc
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
 
-Renamed sections start unfolded when opening older projects;
-visual values and their saved keys are unchanged.
 Detail folds such as **Map offsets** reopen closed with the editor.
 
 ## Combined controls
@@ -79,8 +77,6 @@ drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
 
-These controls edit the existing saved values.
-Saved keys are unchanged.
 
 ## Condensed appearance controls
 
@@ -226,10 +222,21 @@ Restoring both regions brings back their previous split at the original spectrum
 Changing the spectrum position while folded does not lose the width owed to the editor window.
 Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
-Frameless mode hides their controls;
+Hide tab bars hides their controls;
 press Tab to show them again.
 Hide tab bars is saved with the editor workspace and never in an appearance or take.
 Tab takes priority over focus traversal except while editing text.
+
+## Slots and undo
+
+The numbered slots above the panes compare appearances:
+each holds a look, edits land in the active slot,
+and an unused slot starts as a copy of the current look.
+**Save to** copies the current look into another slot.
+Camera movement, tuning and output stay as they are when a slot is chosen.
+Each slot keeps its own undo history:
+Cmd-Z undoes the last edit and Cmd-Shift-Z redoes it (Ctrl on other systems).
+A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
 
 ## Shared settings and dependencies
 

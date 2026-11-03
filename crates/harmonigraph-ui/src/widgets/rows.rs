@@ -358,28 +358,39 @@ pub(crate) fn choice_buttons<T: Copy + PartialEq>(
     if width <= ui.available_width() {
         ui.horizontal(|ui| {
             tighten(ui);
-            // A button's fill under each option, laid down first and sized once
-            // they are: an unselected option draws no fill of its own, and
-            // without one the options read as more words after the row's name
-            // rather than as the control beside it. One fill per option rather
-            // than one spanning them all, so the page shows through the gap
-            // between two options and a label of several words reads as one
-            // choice rather than as several. A button's fill rather than a
-            // value bar's well, which says "a range to drag" and is the one
-            // thing a bar is found by.
-            let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
             for &(choice, label, hint) in options {
-                let fill = ui.painter().add(egui::Shape::Noop);
-                let response = ui.selectable_value(value, choice, label);
-                ui.painter()
-                    .set(fill, egui::Shape::rect_filled(response.rect, radius, theme::widget()));
-                if !hint.is_empty() {
-                    response.on_hover_text(hint).on_disabled_hover_text(hint);
-                }
+                option_button(ui, value, choice, label, hint);
             }
         });
     } else {
         choice_menu(ui, id, value, options);
+    }
+}
+
+/// One option of a choice group: a selectable button standing on its own fill.
+///
+/// The fill is laid down first and sized once the button is: an unselected
+/// option draws no fill of its own, and without one the options read as more
+/// words after the row's name rather than as the control beside it. One fill
+/// per option rather than one spanning them all, so the page shows through the
+/// gap between two options and a label of several words reads as one choice
+/// rather than as several. A button's fill rather than a value bar's well,
+/// which says "a range to drag" and is the one thing a bar is found by.
+pub(crate) fn option_button<T: PartialEq>(
+    ui: &mut Ui,
+    value: &mut T,
+    choice: T,
+    label: &str,
+    hint: &str,
+) -> egui::Response {
+    let radius = theme::control_radius(theme::ui_scale(ui.ctx()));
+    let fill = ui.painter().add(egui::Shape::Noop);
+    let response = ui.selectable_value(value, choice, label);
+    ui.painter().set(fill, egui::Shape::rect_filled(response.rect, radius, theme::widget()));
+    if hint.is_empty() {
+        response
+    } else {
+        response.on_hover_text(hint).on_disabled_hover_text(hint)
     }
 }
 

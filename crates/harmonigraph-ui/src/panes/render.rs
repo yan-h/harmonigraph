@@ -15,7 +15,7 @@
 
 use egui::Sense;
 
-use super::section;
+use super::{section, subsection};
 use crate::widgets::{button_row, choice_row, record_button};
 use crate::{theme, LatticeSide, Layout, Pane, PictureState, RenderFrame};
 
@@ -664,39 +664,73 @@ fn export_queue(
     {
         interaction.take.export_actions.push(ExportAction::OpenTakeFolder);
     }
-    egui::CollapsingHeader::new("Exports").show(ui, |ui| {
+    subsection(ui, "Exports", |ui| {
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"))
             .on_hover_text("One take path per line. Each video is saved beside its take; an existing video gets a numbered variant.");
         ui.checkbox(&mut interaction.take.export_recorded, "Use each take's recorded appearance");
         if !interaction.take.export_recorded {
-            let selected = interaction.take.export_look.map_or("Current appearance".into(), slot_name);
-            egui::ComboBox::from_id_salt("export-look").selected_text(selected).width(ui.available_width()).truncate().show_ui(ui, |ui| {
-                ui.selectable_value(&mut interaction.take.export_look, None, "Current appearance");
-                for slot in 0..SLOT_COUNT {
-                    ui.selectable_value(&mut interaction.take.export_look, Some(slot), slot_name(slot));
-                }
-            });
+            let selected =
+                interaction.take.export_look.map_or("Current appearance".into(), slot_name);
+            egui::ComboBox::from_id_salt("export-look")
+                .selected_text(selected)
+                .width(ui.available_width())
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut interaction.take.export_look,
+                        None,
+                        "Current appearance",
+                    );
+                    for slot in 0..SLOT_COUNT {
+                        ui.selectable_value(
+                            &mut interaction.take.export_look,
+                            Some(slot),
+                            slot_name(slot),
+                        );
+                    }
+                });
         }
         let mut paths = Vec::new();
         button_row(ui, |ui| {
-            if ui.add_enabled(interaction.take.last_take.is_some(), egui::Button::new("Queue last take")).on_hover_text(QUEUE_HINT).clicked() {
+            if ui
+                .add_enabled(
+                    interaction.take.last_take.is_some(),
+                    egui::Button::new("Queue last take"),
+                )
+                .on_hover_text(QUEUE_HINT)
+                .clicked()
+            {
                 paths.extend(interaction.take.last_take.clone());
             }
             if ui.button("Queue paths").on_hover_text(QUEUE_HINT).clicked() {
-                paths.extend(interaction.take.export_paths.lines().map(str::trim).filter(|line| !line.is_empty()).map(std::path::PathBuf::from));
+                paths.extend(
+                    interaction
+                        .take
+                        .export_paths
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(std::path::PathBuf::from),
+                );
             }
         });
-        if !paths.is_empty() { interaction.take.export_error.clear(); }
+        if !paths.is_empty() {
+            interaction.take.export_error.clear();
+        }
         for path in paths {
             match capture_export(appearance, interaction, &path) {
                 Ok(action) => interaction.take.export_actions.push(action),
                 Err(error) => {
-                    if !interaction.take.export_error.is_empty() { interaction.take.export_error.push('\n'); }
+                    if !interaction.take.export_error.is_empty() {
+                        interaction.take.export_error.push('\n');
+                    }
                     interaction.take.export_error.push_str(&format!("{}: {error}", path.display()));
                 }
             }
         }
-        if !interaction.take.export_error.is_empty() { crate::widgets::label(ui, &interaction.take.export_error); }
+        if !interaction.take.export_error.is_empty() {
+            crate::widgets::label(ui, &interaction.take.export_error);
+        }
     });
     for job in &interaction.take.exports {
         ui.push_id(job.id, |ui| {
