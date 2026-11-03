@@ -520,8 +520,7 @@ fn velvet_samples_body_light_and_preserves_flat_fields() {
 }
 
 /// The starfield draws stars over sound and the scheme's floor over
-/// silence, and reads no tile; at the fresh Medium preset its far three
-/// depths take the reduced tone target as their precomposite.
+/// silence, and reads neither a tile nor the reduced tone target.
 ///
 /// Silence is the claim the look is most likely to break: no star is drawn
 /// over silence, so a quiet pane must settle on the floor EXACTLY — on a

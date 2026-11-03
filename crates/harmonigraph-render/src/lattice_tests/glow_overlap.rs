@@ -911,7 +911,7 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
     let raw = glow(&mut shooter, &scene);
     let hue = raw.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).unwrap();
     scene.view.atmosphere.material_amount = 1.0;
-    for resolution in [1.0, 0.75, 1.0 / 3.0] {
+    for resolution in [1.0, 0.75, 0.25] {
         scene.view.atmosphere.stars.star_resolution = resolution;
         let painted = glow(&mut shooter, &scene);
         assert!(
@@ -969,7 +969,7 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
     let mut scene = scene(&[1.0, 1.0, 0.6], 0.75, true);
     scene.view.atmosphere.breath_amount = 0.0;
     scene.view.atmosphere.material_amount = 1.0;
-    // The spectrogram's sizes, small and dense enough to sum past coverage:
+    // The type's own sizes, small and dense enough to sum past coverage:
     // the lattice draws what it stores `LATTICE_STAR_SIZE_SCALE` times over.
     scene.view.atmosphere.stars = harmonigraph_scene::StarSettings::default()
         .scaled(1.0 / harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
@@ -998,8 +998,8 @@ fn stars_carried_material_and_resolution_transitions_match_fresh_panes() {
     for (style, amount, resolution, scale) in [
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 1.0, 0.75, 1.0),
-        (LatticeMaterial::Stars, 1.0, 1.0 / 3.0, 1.0),
-        (LatticeMaterial::Watercolor, 1.0, 1.0 / 3.0, 1.0),
+        (LatticeMaterial::Stars, 1.0, 0.25, 1.0),
+        (LatticeMaterial::Watercolor, 1.0, 0.25, 1.0),
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 0.0, 1.0, 1.0),
         (LatticeMaterial::Stars, 1.0, 1.0, 1.0),

@@ -857,7 +857,7 @@ thread_local! {
 }
 
 #[test]
-fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
+fn bucketed_and_exact_memory_allocations_draw_the_same() {
     use crate::spectrogram::tests::frame_with;
     let Some((device, queue)) = headless_device() else { return };
     let style = CloudStyle::Watercolor;
