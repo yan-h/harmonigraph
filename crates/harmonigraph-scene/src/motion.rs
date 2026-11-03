@@ -1036,9 +1036,9 @@ mod tests {
         motion.step(&mut scene, tracker, &Tuning::default(), view, &env, &fade, now);
         scene
     }
-    /// The fresh view with every note drawn in full and every slice moving
-    /// at once, so a test about timing reads one slice's progress and one
-    /// node's activation without the fresh intensity routes or stagger in
+    /// The view with intensity pinned unrouted, so every note is drawn in full,
+    /// and every slice moving at once, so a test about timing reads one
+    /// slice's progress and one node's activation without routes or stagger in
     /// them. The tests about the stagger or intensity set their own.
     fn view() -> ViewConfig {
         let mut view =
@@ -1516,7 +1516,7 @@ mod tests {
         assert!((glow - 0.25).abs() < 1e-5, "the glow departs with the ink: {glow}");
     }
     /// With velocity and gain routed to Opacity over a rest of about a third
-    /// (the fresh routes captured on 2026-09-26), the glow takes the drawn ink
+    /// (the routes fresh until #1475), the glow takes the drawn ink
     /// there too, the melody mark included: a soft note's halo is as faint as
     /// its most opaque slice, a loud one's is full.
     #[test]

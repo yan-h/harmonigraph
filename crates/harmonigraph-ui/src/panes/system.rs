@@ -156,7 +156,7 @@ pub(super) fn system_pane(
             |hue, amount| rgb(skin::accent_color(hue, amount)),
         );
         crate::widgets::checkbox(ui, &mut interaction.frameless, "Hide tab bars (Tab)").on_hover_text(
-            "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
+            "Hide the dock's tab bars, pane headers, fold buttons and rails for a continuous picture; a folded section then takes no room. Press Tab to toggle while not editing text.",
         );
         if let Some(own) = &mut interaction.own_window {
             crate::widgets::checkbox(ui, own, "Own window").on_hover_text(

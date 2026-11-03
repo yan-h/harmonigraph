@@ -231,18 +231,14 @@ impl VisualRuntime {
                 self.adaptive_policy,
             );
             let learned = harmonigraph_core::learn_tuning(&classes);
-            // The audio owner's rule (`Owner::group_end`): with a source
-            // retuning, the lattice is the target and only the C offset moves.
-            let retuning = params.tuning_instances().iter().any(|row| row.retune);
+            // No audio owner and so no Tune source: the lattice axes are the
+            // only target, and every value is learned.
             for (value, key) in [
                 (learned.c_offset, params::ParamKey::COffset),
                 (learned.three, params::ParamKey::Three),
                 (learned.five, params::ParamKey::Five),
                 (learned.seven, params::ParamKey::Seven),
-            ]
-            .into_iter()
-            .take(if retuning { 1 } else { 4 })
-            {
+            ] {
                 if let Some(value) = value {
                     params.set(key, value);
                 }
@@ -250,7 +246,7 @@ impl VisualRuntime {
             self.config_reducer.apply(
                 harmonigraph_core::configuration::ConfigMutation::LearnResolved {
                     learned,
-                    retuning,
+                    retuning: false,
                     raw: params::tuning_from_params(params),
                 },
             );

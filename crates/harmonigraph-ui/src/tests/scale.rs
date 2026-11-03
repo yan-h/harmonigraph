@@ -301,7 +301,7 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 /// The ROW is what is pinned to the number, and the controls only to not
 /// exceeding it, because those are two different questions and only the first
 /// is what a reader sees. A control shorter than its row is inset in it — the
-/// switch's track is 15 points in a 19-point row deliberately, and a text field
+/// switch's track is 14 points in a 20-point row deliberately, and a text field
 /// lands up to two points under at most scales because egui stores its margin as
 /// whole points, floored on each side. A control TALLER than its row takes the row with it, which is the
 /// misalignment this is here about.
@@ -311,7 +311,7 @@ const ROUNDING: f32 = egui::emath::GUI_ROUNDING;
 /// is as tall as its text plus `button_padding`, or the floor, whichever is
 /// more, and only the floor is a round height: a frame's margin is whole points
 /// too, so a button sized by its padding alone lands on its text plus an even
-/// number and can miss a 19-point row either way.
+/// number and can miss a 20-point row either way.
 ///
 /// Which makes the padding what breaks this, quietly and from a distance: raise
 /// the type or the padding until their sum clears the floor and the floor stops

@@ -1589,7 +1589,7 @@ fn one_text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> f32 {
 /// rect that row is drawn on.
 ///
 /// The track and not the name, though the name is what a reader looks at: a bar
-/// lays its label out in an explicit `theme::text_dim()`, and `Ui::disable`
+/// lays its label out in an explicit `theme::text()`, and `Ui::disable`
 /// greys by tinting the colours a SHAPE carries, which for a galley with a
 /// colour of its own is the fallback nothing reads. The track is a plain rect,
 /// so the tint lands on it — which is also why a greyed bar reads as greyed on

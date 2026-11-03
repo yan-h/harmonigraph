@@ -8,10 +8,9 @@
 //! in multiples of each pane's reference note width. Opacity has a base of
 //! its own. Bases apply even with no routes enabled.
 //!
-//! Fresh settings route velocity and gain to opacity. A host sends unity gain
-//! for a note with no gain lane, which adds gain's whole weight, so at fresh
-//! settings velocity only shows on very soft notes; that is intended. The
-//! trail never reads any of this; it records pitch classes only.
+//! Fresh settings route nothing: every note is drawn at full opacity and about
+//! one reference width. The trail never reads any of this; it records pitch
+//! classes only.
 
 use crate::view::finite_or;
 use harmonigraph_core::Expressions;
@@ -25,7 +24,8 @@ pub const THICKNESS_MAX_RANGE: std::ops::RangeInclusive<f32> = 1.0..=4.0;
 /// Which display a source drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntensityTarget {
-    /// The lattice's octave slices and the roll's ribbons.
+    /// The lattice's octave slices and marks, the roll's ribbons, the Spiral's
+    /// dots, every note's bloom and the background glow.
     Opacity,
     /// Width in multiples of each pane's reference note width.
     Thickness,
@@ -87,8 +87,8 @@ pub struct IntensitySettings {
 impl Default for IntensitySettings {
     fn default() -> Self {
         Self {
-            // No source routed: every note drawn at full opacity and one
-            // width, as captured from the DAW on 2026-10-07.
+            // No source routed: every note drawn at full opacity and 0.989 of
+            // a reference width, as captured from the DAW on 2026-10-07.
             velocity: IntensitySource::default(),
             gain: IntensitySource::default(),
             pressure: IntensitySource::default(),

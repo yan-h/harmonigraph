@@ -51,8 +51,6 @@ a ratio just below 100% saves almost nothing yet softens the stars nearly as muc
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
 
-Renamed sections start unfolded when opening older projects;
-visual values and their saved keys are unchanged.
 Detail folds such as **Map offsets** reopen closed with the editor.
 
 ## Combined controls
@@ -79,8 +77,6 @@ drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
 
-These controls edit the existing saved values.
-Saved keys are unchanged.
 
 ## Condensed appearance controls
 
@@ -114,7 +110,8 @@ Changing either slider changes both pictures.
 It runs from 0 (off) to 2×,
 with 1× as the reference halo.
 The Spiral keeps its separate **Spiral bloom** control.
-Bloom is independent of the note intensity mappings.
+Bloom has no mapping of its own;
+each note's bloom follows its Opacity.
 
 ## MIDI note intensity
 
@@ -130,7 +127,7 @@ Every target starts at its base and adds the weighted contributions routed to it
 **Thickness base** applies too,
 in multiples of the pane's reference width:
 **Ribbon width** in the Analyzer and the MIDI layer width in the Lattice.
-Its default of 1× starts at that reference width;
+Its default of 0.989× starts at about that reference width;
 0.5× starts at half of it.
 A thickness contribution of 1 adds one such width;
 a zero-width layer remains hidden.
@@ -170,15 +167,9 @@ Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 Old one-target-per-source routes and weights are ignored on load,
 so those mappings must be added again.
 Base values are retained.
-New mappings use these additions:
-velocity no longer subtracts,
-gain no longer uses a signed dB offset,
-and timbre has twice its former range.
-The retired **Gain range** setting is ignored on load.
-Saved opacity bases above 1 are clamped to 1,
-and saved bases now apply even when opacity has no route.
-Saved projects without **Thickness base** load it at 1×,
-preserving their pane widths.
+A saved **Gain range** setting is ignored on load.
+Saved opacity bases above 1 are clamped to 1.
+Saved projects without **Thickness base** load it at its default of 0.989×.
 
 ## Layout and folding
 
@@ -226,10 +217,21 @@ Restoring both regions brings back their previous split at the original spectrum
 Changing the spectrum position while folded does not lose the width owed to the editor window.
 Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
-Frameless mode hides their controls;
+Hide tab bars hides their controls;
 press Tab to show them again.
 Hide tab bars is saved with the editor workspace and never in an appearance or take.
 Tab takes priority over focus traversal except while editing text.
+
+## Slots and undo
+
+The numbered slots above the panes compare appearances:
+each holds a look, edits land in the active slot,
+and an unused slot starts as a copy of the current look.
+**Save to** copies the current look into another slot.
+Camera movement, tuning and output stay as they are when a slot is chosen.
+Each slot keeps its own undo history:
+Cmd-Z undoes the last edit and Cmd-Shift-Z redoes it (Ctrl on other systems).
+A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
 
 ## Shared settings and dependencies
 
@@ -294,6 +296,8 @@ There is no separate Auto setting.
 Saved links and recorded configurations are restored as saved,
 without running recognition again.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
+In Lattice Map mode with Follow harmony on,
+**Follow harmony context** shows the same settings as **Context**, except Weight per octave, directly under its heading.
 In Lattice Map mode,
 **Saved map**,
 **Edit shape on lattice**,

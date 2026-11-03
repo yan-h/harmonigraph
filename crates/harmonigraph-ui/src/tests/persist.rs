@@ -1007,9 +1007,10 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
 /// A section added without the attribute fails here rather than the day a
 /// blob is short of it.
 ///
-/// `dock` is the exception and is not swept: it has no `impl Default`, so a
-/// blob with no dock has no layout to restore and refusing the document is
-/// the honest answer.
+/// This drops whole sections from a fresh state, whose lists are empty, so the
+/// structs inside a list never appear;
+/// [`a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest`] is the
+/// layer in.
 #[test]
 fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
     let mut state = fresh();
@@ -1044,6 +1045,84 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
         // Every top-level value in `saved` is the fresh one, so a dropped key
         // must come back exactly as it was.
         assert_eq!(restored.save_persist(), saved, "{key:?} came back at a non-fresh value");
+    }
+}
+
+/// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`]:
+/// the structs that live inside a list, `CameraPreset` and a stored slot's
+/// `Look`, which a fresh state never holds and so never sweeps.
+///
+/// One preset and one stored look, each off its defaults, are written, and each
+/// key in turn is dropped from them. A struct added to a list without its own
+/// container-level `#[serde(default)]` sinks the whole document here, layout
+/// and camera with it, rather than the day a project holding one is reopened
+/// after a field is added.
+#[test]
+fn a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest() {
+    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
+
+    let mut state = fresh();
+    // A witness outside the lists, so "the blob survived" is distinguishable
+    // from "it sank and every section reverted together".
+    state.picture.appearance.camera.yaw = 1.23;
+    let preset = CameraPreset { name: "reading".into(), yaw: 0.7, pitch: 0.2 };
+    state.workspace.interaction.camera_presets.push(preset.clone());
+    let mut stored = AppearanceDocument::default();
+    stored.spectrum.attack = 0.2;
+    stored.view.max_sevens = 3;
+    let look_text = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
+    let slots: Slots =
+        ron::from_str(&format!("(stored:(None,Some({look_text}),None,None),active:0)"))
+            .expect("a slot holding a look parses");
+    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
+    let saved = state.save_persist();
+
+    let preset_text = ron::to_string(&preset).expect("a preset serializes");
+    for text in [&preset_text, &look_text] {
+        assert!(saved.contains(text.as_str()), "the blob must carry {text}");
+    }
+    let defaults = ron::to_string(&Look::default()).expect("a look serializes");
+    let default_pairs = top_level_pairs(&defaults);
+    let preset_pairs = top_level_pairs(&preset_text);
+    let look_pairs = top_level_pairs(&look_text);
+    assert_eq!((preset_pairs.len(), look_pairs.len()), (3, 3), "the probe must see every key");
+
+    for (whole, pairs) in [(&preset_text, &preset_pairs), (&look_text, &look_pairs)] {
+        for (key, _) in pairs {
+            let kept: Vec<&str> =
+                pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+            let without = saved.replacen(whole.as_str(), &format!("({})", kept.join(",")), 1);
+            assert_ne!(without, saved, "{key:?} must be in the blob to drop");
+
+            let mut restored = fresh();
+            assert!(
+                restored.load_persist(&without),
+                "dropping {key:?} sank the whole document instead of costing itself",
+            );
+            assert_eq!(
+                restored.picture.appearance.camera.yaw, 1.23,
+                "dropping {key:?} cost the camera too"
+            );
+            if whole == &preset_text {
+                let got = &restored.workspace.interaction.camera_presets[0];
+                let fresh_preset = CameraPreset::default();
+                let want = match key.as_str() {
+                    "name" => (fresh_preset.name, preset.yaw, preset.pitch),
+                    "yaw" => (preset.name.clone(), fresh_preset.yaw, preset.pitch),
+                    "pitch" => (preset.name.clone(), preset.yaw, fresh_preset.pitch),
+                    other => panic!("the preset grew a {other:?} field this sweep does not name"),
+                };
+                assert_eq!((got.name.clone(), got.yaw, got.pitch), want, "dropping {key:?}");
+            } else {
+                let got = restored.workspace.interaction.appearance_editor.slots.stored(1);
+                let got = ron::to_string(got.expect("the stored look is kept")).unwrap();
+                for (k, pair) in top_level_pairs(&got) {
+                    let source = if &k == key { &default_pairs } else { &look_pairs };
+                    let expected = source.iter().find(|(name, _)| *name == k).unwrap();
+                    assert_eq!(pair, expected.1, "dropping {key:?} changed {k}");
+                }
+            }
+        }
     }
 }
 

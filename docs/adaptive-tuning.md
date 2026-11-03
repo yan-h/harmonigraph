@@ -316,8 +316,10 @@ A successful claim and a return both bump the session epoch.
 Retune off passes arriving notes and player expression through without adaptive correction and excludes them from all adaptive context and memory.
 Learn still hears them:
 an uncorrected note is exactly the player's pitch Learn reads, so a tuner in front of Harmonigraph with Retune off everywhere is what Learn learns from.
-What Learn writes depends on Retune too:
-with it on anywhere, the lattice is the target, and Learn moves only the C offset and the [keyboard tuning](adaptive-tuning-plugin.md#keyboard-tuning).
+What Learn writes depends on Retune and the engine:
+with Retune on anywhere under Adaptive, the lattice is the target, and Learn moves only the C offset and the [keyboard tuning](adaptive-tuning-plugin.md#keyboard-tuning).
+Under Pass through, Learn updates the lattice axes too;
+Lattice Map suspends Learn.
 Switching it off removes that source's held context, released memory and owned moving reference on the Hub's next callback.
 Already sounding notes keep their correction through release, including subsequent player expression;
 turning Retune back on admits new attacks only.
@@ -352,7 +354,6 @@ Its **Source details** include an editable name, input/output counts, last attac
 Custom names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
 Retune defaults on for a Tune and off for Harmonigraph's own input.
 The **Retune** and **Show** column-header checkboxes independently control all currently loaded instances, including the Hub input.
-In narrow columns, the stacked layout labels these controls **Retune all** and **Show all**.
 A mixed checkbox enables everyone on its next click;
 an enabled checkbox disables everyone, and individual rows remain adjustable afterward.
 New instances start from their own saved settings or defaults.

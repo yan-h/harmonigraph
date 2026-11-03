@@ -274,7 +274,7 @@ pub(super) fn tuning_pane(
             let mut learn_active = state.runtime.learn_active;
             let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
                 .on_hover_text(
-                    "While active, set the tuning from the held notes whenever they change. While a source has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to.",
+                    "While active, set the tuning from the held notes whenever they change. With Adaptive retuning a source that has Retune on, only the C offset and the keyboard are learned: the lattice axes are what it is retuned to. Lattice Map suspends Learn.",
                 );
             if learn.changed() {
                 state.runtime.edit_tuning(
@@ -283,7 +283,15 @@ pub(super) fn tuning_pane(
                     ConfigEdit { learning: Some(learn_active), ..Default::default() },
                 );
             }
-            if state.runtime.learn_active {
+            // Lattice Map learns nothing, so an armed ring there would
+            // announce an action that does not happen.
+            let learning = state.runtime.learn_active
+                && state
+                    .runtime
+                    .lattice_maps
+                    .as_ref()
+                    .is_none_or(|maps| maps.playback.engine.learns());
+            if learning {
                 // Pulsing armed ring so the engaged mode can't be missed. It
                 // stands `pad` out from the switch, so its corners are the
                 // switch's radius plus `pad` and the two round about one centre.
@@ -330,8 +338,17 @@ pub(super) fn tuning_pane(
     });
 
     let mode = map_controls(ui, state, params);
-    if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
+    use harmonigraph_core::lattice_map::{Follow, TuningEngine};
+    if mode == TuningEngine::Adaptive {
         adaptive_controls(ui, state, params);
+    } else if mode == TuningEngine::LatticeMap
+        && state
+            .runtime
+            .lattice_maps
+            .as_ref()
+            .is_some_and(|maps| maps.playback.follow != Follow::Off)
+    {
+        follow_context_controls(ui, state, params);
     }
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
@@ -415,7 +432,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             "Cents of displacement beyond accumulated drift that cost one point. The exponential penalty rises increasingly quickly; a note stays unsnapped when its harmonic benefit cannot cover that cost.",
         ) as u16;
         p.radius =
-            adaptive_value(ui, (p.radius.into(), fresh.radius.into()), 1..=5, 1.0, "Search radius", " steps", "Candidate distance along each enabled lattice axis. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
+            adaptive_value(ui, (p.radius.into(), fresh.radius.into()), 1..=5, 1.0, "Search radius", " steps", "Candidates may lie at most this many lattice steps away in total: |fifths| + |thirds| + |sevenths|, over the enabled axes. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
         crate::widgets::label(ui, "Search axes").on_hover_text(
             "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
         );
@@ -435,48 +452,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        let context = subsection(ui, "Context", |ui| {
-            p.half_life_ms = adaptive_value(
-                ui,
-                (p.half_life_ms.into(), fresh.half_life_ms.into()),
-                0..=20_000,
-                1000.0,
-                "Half-life",
-                "s",
-                "A note struck this long before the newest counts half. 0: no decay.",
-            ) as u16;
-            p.register = adaptive_value(
-                ui,
-                (p.register.into(), fresh.register.into()),
-                10..=1000,
-                1000.0,
-                "Weight per octave",
-                "",
-                "Each octave between two notes multiplies the vote by this. 1: ignore register.",
-            ) as u16;
-            p.tolerance = adaptive_value(
-                ui,
-                (p.tolerance, fresh.tolerance),
-                0..=20_000_000,
-                1_000_000.0,
-                "Same-note tolerance",
-                "¢",
-                "Onsets this close in pitch count as one note.",
-            );
-            p.silence_ms = adaptive_value(
-                ui,
-                (p.silence_ms, fresh.silence_ms),
-                0..=120_000,
-                1000.0,
-                "Silence reset",
-                "s",
-                "Forget the context after this long with nothing held. 0: never.",
-            );
-            crate::widgets::checkbox(ui, &mut p.reset_stop, "Reset context on stop")
-                .on_hover_text("Forget the context when the transport stops.");
-            crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
-                .on_hover_text("Forget the context when playback jumps.");
-        });
+        let context = subsection(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true));
         context.on_hover_text(
             "New notes follow the moving context; sounding notes keep their correction.",
         );
@@ -488,6 +464,73 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             );
         }
     });
+}
+
+/// Follow harmony's context, under Lattice Map: the same policy values Adaptive
+/// edits, which Follow reads. Drawn only while Follow is on.
+fn follow_context_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+    section(ui, "Follow harmony context", |ui| {
+        let mut p = state.runtime.adaptive_policy;
+        let before = p;
+        context_controls(ui, &mut p, &PolicyConfig::default(), false);
+        if p != before {
+            state.runtime.edit_tuning(
+                &mut state.appearance,
+                params,
+                ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
+            );
+        }
+    });
+}
+
+/// The context the adaptive policy votes with: edited in Adaptive's Context
+/// fold, and under Lattice Map directly under Follow harmony's heading, where
+/// it reads it. Follow reads the decayed
+/// context alone, so only Adaptive's own scoring takes `register`, the weight
+/// per octave.
+fn context_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig, register: bool) {
+    p.half_life_ms = adaptive_value(
+        ui,
+        (p.half_life_ms.into(), fresh.half_life_ms.into()),
+        0..=20_000,
+        1000.0,
+        "Half-life",
+        "s",
+        "A note struck this long before the newest counts half. 0: no decay.",
+    ) as u16;
+    if register {
+        p.register = adaptive_value(
+            ui,
+            (p.register.into(), fresh.register.into()),
+            10..=1000,
+            1000.0,
+            "Weight per octave",
+            "",
+            "Each octave between two notes multiplies the vote by this. 1: ignore register.",
+        ) as u16;
+    }
+    p.tolerance = adaptive_value(
+        ui,
+        (p.tolerance, fresh.tolerance),
+        0..=20_000_000,
+        1_000_000.0,
+        "Same-note tolerance",
+        "¢",
+        "Onsets this close in pitch count as one note.",
+    );
+    p.silence_ms = adaptive_value(
+        ui,
+        (p.silence_ms, fresh.silence_ms),
+        0..=120_000,
+        1000.0,
+        "Silence reset",
+        "s",
+        "Forget the context after this long with nothing held. 0: never.",
+    );
+    crate::widgets::checkbox(ui, &mut p.reset_stop, "Reset context on stop")
+        .on_hover_text("Forget the context when the transport stops.");
+    crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
+        .on_hover_text("Forget the context when playback jumps.");
 }
 
 fn instance_section(ui: &mut egui::Ui, state: &PictureState, params: &dyn ParamBackend) {
@@ -587,9 +630,8 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 
 /// What a source's Retune and Show boxes answer a hover with, the bulk
 /// boxes included: off, Retune passes notes through without influencing
-/// tuning, and Show only ever affects the picture.
-const RETUNE_HINT: &str =
-    "Tune new notes with the selected engine. Off, notes pass through without influencing tuning.";
+/// adaptive tuning, and Show only ever affects the picture.
+const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through without influencing adaptive tuning.";
 const SHOW_HINT: &str = "Show this instance's output notes. Only affects the picture.";
 
 fn instance_controls(
@@ -915,7 +957,7 @@ fn map_controls(
         if mode != TuningEngine::LatticeMap {
             return mode;
         }
-        if state.runtime.learn_active {
+        if state.runtime.learn_active && !mode.learns() {
             crate::widgets::label(ui, egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()));
         }
         crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
@@ -1084,7 +1126,16 @@ fn map_controls(
             ui.data_mut(|data| data.insert_temp(key, renamed));
             crate::widgets::button_row(ui, |ui| {
                 if ui.button("Move earlier in list").clicked() { params.edit_lattice_map(MapEdit::MoveEarlier(selected)); }
-                if ui.button("Delete saved map").on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.").clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
+                // Nothing in the pane makes a map once none is left, so the last live
+                // one stays.
+                let others = view.names.iter().any(|(id, _)| *id != selected);
+                let delete = ui.add_enabled(others, egui::Button::new("Delete saved map"));
+                let delete = if others {
+                    delete.on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.")
+                } else {
+                    delete.on_disabled_hover_text("This is the last saved map, and a project needs one to duplicate from.")
+                };
+                if delete.clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
             });
         });
         subsection(ui, "Assignments and sounding intervals", |ui| {

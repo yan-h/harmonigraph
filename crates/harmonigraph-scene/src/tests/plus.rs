@@ -767,8 +767,8 @@ fn a_markers_shadow_fades_in_with_its_cross() {
 /// crossing.
 #[test]
 fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
-    // Velocity and gain on Opacity over a rest of about a third (the fresh
-    // routes captured on 2026-09-26), which holds this soft note near four
+    // Velocity and gain on Opacity over a rest of about a third (the routes
+    // fresh until #1475), which holds this soft note near four
     // fifths opaque.
     let intensity = IntensitySettings {
         velocity: IntensitySource { opacity: Some(0.606_835_6), thickness: None },
