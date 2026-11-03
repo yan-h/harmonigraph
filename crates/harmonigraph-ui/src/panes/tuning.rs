@@ -1134,7 +1134,7 @@ fn map_controls(
                 let delete = if others {
                     delete.on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.")
                 } else {
-                    delete.on_disabled_hover_text("This is the last saved map, and nothing here makes another. Duplicate it first.")
+                    delete.on_disabled_hover_text("This is the last saved map, and a project needs one to duplicate from.")
                 };
                 if delete.clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
             });

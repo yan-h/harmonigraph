@@ -22,9 +22,11 @@ pub fn test_pause_reset(gate: std::sync::Arc<std::sync::Barrier>) {
 }
 
 /// Status bits. Each one shows in the editor and in `HG-TUNING`. All but
-/// [`DROPPED`] are cosmetic and never stop a note: an unassigned note sounds at
-/// its raw pitch, which is the whole of what such a fault costs here.
-/// `DROPPED` drops the input itself, so that note does not sound.
+/// [`CLOCK`] and [`DROPPED`] are cosmetic and never stop a note: an unassigned
+/// note sounds at its raw pitch, which is the whole of what such a fault costs
+/// here. `CLOCK` refuses the callback's input itself. `DROPPED` costs the input
+/// when the refusal is local, and only its assignment when it is the Hub's,
+/// where the note still sounds uncorrected.
 pub const NO_HUB: u32 = 1 << 0;
 /// A second Harmonigraph in the process. Both show it; the first one loaded
 /// keeps the session, because there is no pairing choice to offer.

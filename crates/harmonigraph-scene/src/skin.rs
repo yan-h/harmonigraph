@@ -49,8 +49,9 @@ pub struct Skin {
     pub accent: [u8; 3],
     /// Primary text.
     pub text: [u8; 3],
-    /// Marks that are not text: unlit thumbs, chevrons, preview lines and a
-    /// switched-off section's heading. Every text is `text`.
+    /// Marks that are not text: unlit thumbs, chevrons and preview lines. The
+    /// one text in it is a switched-off section's heading; every other text is
+    /// `text`.
     pub text_dim: [u8; 3],
     /// ValueBar fill at rest / hovered / dragging (opaque accent mixes).
     pub accent_fill: [u8; 3],
