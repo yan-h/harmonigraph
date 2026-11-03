@@ -420,8 +420,7 @@ fn the_default_opens_at_the_colorfulness_it_used_to() {
     );
 }
 
-/// A ribbon's glow is the ribbon's own hue at the glow's lightness, and the
-/// grey of that lightness with its color dialled out.
+/// A ribbon's glow is the ribbon's own hue at the glow's lightness.
 ///
 /// At a middling `L*`, where every hue holds enough chroma for its angle to be
 /// read back off the drawn color; at the roll's default the glow is near black
@@ -433,7 +432,7 @@ fn a_ribbons_glow_is_its_hue_at_the_glows_lightness() {
     for t in deciles() {
         let pitch = darkest + t as f32 * (brightest - darkest);
         let ribbon = crate::pitch_lut_color(pitch, darkest, brightest, gradient);
-        let glow = crate::pitch_glow_color(pitch, darkest, brightest, gradient, 40.0, 1.0);
+        let glow = crate::pitch_glow_color(pitch, darkest, brightest, gradient, 40.0);
         let l_star = crate::color::lightness_of_encoded(
             f64::from(glow.x),
             f64::from(glow.y),
@@ -445,8 +444,5 @@ fn a_ribbons_glow_is_its_hue_at_the_glows_lightness() {
             turn.abs() < 2.0,
             "at t = {t} the glow's hue is {turn:.2} degrees off its ribbon's"
         );
-
-        let grey = crate::pitch_glow_color(pitch, darkest, brightest, gradient, 40.0, 0.0);
-        assert!(oklch(grey).1 < 1e-3, "at t = {t} the glow at no color kept chroma: {grey:?}");
     }
 }

@@ -82,8 +82,10 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// against the same surround; what it takes is filled with the note's own hue
 /// ([`note_fill`]).
 ///
-/// The strength handed over is a full 1, and how strongly it cuts is the cut's
-/// amount: strongest against the note, falling off to nothing at its reach.
+/// How strongly it cuts is the cut's amount: strongest against the note,
+/// falling off to nothing at its reach. The instance's aura alpha is a constant
+/// full 1 beside it (the shader multiplies the cut by it, and a reach of 0
+/// already zeroes the cut), where the Spiral's carries a real strength.
 /// Where two notes' cuts meet, the stronger lands, with its color, rather than
 /// the two stacking, so a crowd of notes is no more cut between them than one
 /// note is.
@@ -92,16 +94,15 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// ribbon width. The shader reads it from the cut itself; the one returned
 /// here is for the culls, which keep a note whose surround is still on screen.
 ///
-/// Off comes back zero-reach AND zero strength, never one or the other: the
-/// reach is what the far-edge cull keeps a leaving note alive for, so a
-/// surround that will not paint must not be paid for either.
-fn outline(cut: SurroundCut, point_scale: f32) -> (f32, f32) {
-    let reach = cut.reach_points(point_scale);
-    (reach, if reach > 0.0 { 1.0 } else { 0.0 })
+/// Off comes back zero reach: the reach is what the far-edge cull keeps a
+/// leaving note alive for, so a surround that will not paint must not be paid
+/// for.
+fn outline(cut: SurroundCut, point_scale: f32) -> f32 {
+    cut.reach_points(point_scale)
 }
 
 /// [`outline`] for the roll `state` draws.
-fn surround(state: &PictureState, point_scale: f32) -> (f32, f32) {
+fn surround(state: &PictureState, point_scale: f32) -> f32 {
     outline(state.appearance.spectrum.note_cut(), point_scale)
 }
 
@@ -374,7 +375,7 @@ fn roll_instances_with_floor(
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
-    let (outline_px, outline_strength) = surround(state, point_scale);
+    let outline_px = surround(state, point_scale);
     // ...and how far a SOUNDING note carries past the now-line, which is
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
@@ -439,7 +440,7 @@ fn roll_instances_with_floor(
     //
     // A segment's ink along pitch is its own drawn pitch span, widened by the
     // ribbon's half width and the outline's reach (see the cull in
-    // [`note_instances`]'s loop, and `vs_note`), and a note's segments each
+    // [`note_instances`]'s loop, and `vs_note_cut`), and a note's segments each
     // span less than the note does. Testing them one by one draws only the
     // segments of a long, bent note that are actually in range.
     //
@@ -497,7 +498,7 @@ fn roll_instances_with_floor(
                         lead_alpha: standing,
                         cap_reach: 0.0,
                         core: note_color(state, pitch, 1.0).to_array(),
-                        aura: note_fill(state, pitch, outline_strength),
+                        aura: note_fill(state, pitch, 1.0),
                         span: RollInstance::WHOLE,
                         ramp: [0.0, 0.0],
                         fade,
@@ -558,8 +559,8 @@ fn roll_instances_with_floor(
             // `cap_px`'s to meter and can be given only the room it has.
             //
             // How far the note's own end sits inside the roll, in points, and
-            // how far the outline stands off it: the same reach `vs_note` grows
-            // the quad by, since it is the same ink.
+            // how far the surround stands off it: the same reach `vs_note_cut`
+            // grows the quad by, since it is the same ink.
             let behind_px = (d1 - split) * axes.depth_len();
             let outline_reach_px = outline_px + 0.5 * feather_px;
             let leads = lead_px > 0.0 && last && (standing > 0.0 || behind_px < outline_reach_px);
@@ -591,32 +592,32 @@ fn roll_instances_with_floor(
             // number that decides nothing is still worth not carrying.
             let cap_px = outline_px.min((behind_px - 0.5 * feather_px).max(0.0));
 
-            // Reading outward: the note, the dark outline standing against
-            // every one of its edges and fading out, then whatever the
-            // spectrogram is doing.
+            // Reading outward: the note, the surround (the cut, filled with
+            // the note's own hue) standing against every one of its edges and
+            // fading out, then whatever the spectrogram is doing.
             //
-            // The outline stands entirely OUTSIDE the note, never as a stroke
+            // The surround stands entirely OUTSIDE the note, never as a stroke
             // of its path — a centered stroke grows inward exactly as much as
             // outward, and a note is only a few pixels thick at the pitch
             // ranges this pane is actually used at, so the two long edges meet
             // in the middle and paint over it. Here that is structural: the
-            // shader reads the outline off the DISTANCE to the note's edge, and
+            // shader reads the surround off the DISTANCE to the note's edge, and
             // coverage taken at a positive distance cannot reach back inside it
             // whatever the ribbon's thickness.
             //
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
-            // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them, and holds every outline out wherever
-            // any body covers, so no shadow shows through a body however its
-            // Opacity reading fades it.
+            // surround: `harmonigraph_render::roll` lays every surround down
+            // and then every body over them, and holds every surround out
+            // wherever any body covers, so no cut shows through a body however
+            // its Opacity reading fades it.
             //
             // It has to be that way round rather than something gentler at the
-            // seam. The outline is at its darkest where it meets its own note,
-            // as dark as the Shadow darkness makes it (`outline_coverage`).
-            // Composited with its own note, that darkness landed on the
-            // neighbour it reached into — repeats of one key butt together
-            // along time, and the later one blanked the tail of the earlier.
+            // seam. The surround is at its strongest where it meets its own
+            // note, at the cut's amount. Composited with its own note, that
+            // strength landed on the neighbour it reached into — repeats of
+            // one key butt together along time, and the later one blanked the
+            // tail of the earlier.
             //
             // Readable repeats have a real cut between their drawn bodies.
             // Dense repeats share a continuous body, textured below.
@@ -631,7 +632,7 @@ fn roll_instances_with_floor(
             // segment actually reaches rather than the note's endpoints — the
             // cull the filter above deliberately leaves undone.
             //
-            // Term for term what `vs_note` grows the quad by along pitch: the
+            // Term for term what `vs_note_cut` grows the quad by along pitch: the
             // drawn ribbon's own half width, the center line's drift over the
             // box's half length, and the outline's reach — the shader's
             // distance being Euclidean, the same reach every way. Measured
@@ -704,7 +705,7 @@ fn roll_instances_with_floor(
                 lead_alpha: attached_alpha,
                 cap_reach: cap_px,
                 core: core.to_array(),
-                aura: note_fill(state, pitch, outline_strength),
+                aura: note_fill(state, pitch, 1.0),
                 span: RollInstance::WHOLE,
                 ramp: [0.0, 0.0],
                 fade: [1.0, 1.0],
@@ -738,7 +739,7 @@ fn roll_instances_with_floor(
             let center_depth = (center - axes.at(0.5, time.split)).dot(axes.dir_depth());
             let offset =
                 |at| (time.depth_of_unclamped(at) - time.split) * axes.depth_len() - center_depth;
-            // Match vs_note's expanded quad: a cut at a pitch-segment end
+            // Match vs_note_cut's expanded quad: a cut at a pitch-segment end
             // still owes the outline and antialiasing beyond that body end.
             let extent = instance.half_extent[1] + outline_px + feather_px;
             let oldest = instance.span[1].min(extent);
@@ -967,8 +968,8 @@ fn read_through(look: Look, grow: f32) -> ([f32; 2], [f32; 4]) {
 ///
 /// A taper only narrows inside its box, so a segment swelling past the Ribbon
 /// width has its box grown across pitch to its widest point first, and every
-/// width handed over as a share of that. The quad, the culls and the shadow's
-/// cell all size themselves from the box, so they follow; a segment that never
+/// width handed over as a share of that. The quad and the culls both size
+/// themselves from the box, so they follow; a segment that never
 /// swells keeps its box, and its widths, exactly.
 fn push_pieces(
     instances: &mut Vec<RollInstance>,
@@ -1076,7 +1077,6 @@ pub(crate) fn note_fill(state: &PictureState, pitch: f32, strength: f32) -> [u8;
         brightest,
         state.appearance.view.pitch_gradient,
         state.appearance.spectrum.note_fill_lightness,
-        1.0,
     );
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     [byte(c.x), byte(c.y), byte(c.z), byte(strength)]
@@ -1099,11 +1099,11 @@ mod tests {
     /// [`MIN_LENGTH_PT`] comes to one point.
     const PPP: f32 = 2.0;
 
-    /// The surround reach, in points, the time- and pitch-cull fixtures below
-    /// are sized against: what the spectral geometry shadow of 2026-09-26
-    /// reached. Their notes are placed a set number of points from an edge, so
-    /// a wider default reach would move them across the boundary they are
-    /// there to stand either side of.
+    /// The Note surround's Cut reach, in points, the time- and pitch-cull
+    /// fixtures below set and are sized against, short of the bar's default.
+    /// Their notes are placed a set number of points from an edge, so a wider
+    /// reach would move them across the boundary they are there to stand
+    /// either side of.
     const OUTLINE_REACH: f32 = 7.154_435;
 
     /// The roll's geometry for `state`, derived exactly the way
@@ -1144,12 +1144,6 @@ mod tests {
 
     fn ribbon_with_range(reach: f32, range: f32) -> Vec<RollInstance> {
         ribbon_with_cut(1.0, reach, range)
-    }
-
-    /// The note is 12 semitones across a 100-point axis (a thick ribbon), so
-    /// it is bounded rather than drawn as a bare spine.
-    fn ribbon(reach: f32) -> Vec<RollInstance> {
-        ribbon_with_range(reach, 12.0)
     }
 
     /// A note must stay on screen until the last of its INK is past the far
@@ -1627,43 +1621,38 @@ mod tests {
         assert!(instances(&state, 1.0).is_empty(), "the fixture's note reaches the zoom at rest");
     }
 
-    /// A note cuts at a full 1 at every reach the surround draws at; how much
-    /// it takes is the cut's amount, which the shader applies. Anything less
-    /// here would weaken the cut a second time, by a number no bar shows.
-    ///
-    /// Off has to mean zero reach AND no strength, never one or the other: the
-    /// reach is what keeps a leaving note alive past the far edge, so a
-    /// surround that will not paint must not be paid for either.
+    /// Off has to mean zero reach: the reach is what keeps a leaving note alive
+    /// past the far edge, so a surround that will not paint must not be paid
+    /// for.
     #[test]
-    fn the_surround_is_at_full_strength_at_every_reach_that_draws() {
-        // The bar's whole travel: its least reach, the default, and its most.
-        let reaches = harmonigraph_render::SURROUND_REACH_RANGE;
-        for reach in [*reaches.start(), 15.0, *reaches.end()] {
-            let lit = ribbon(reach);
-            assert_eq!(one(&lit).aura[3], 255, "the cut is not at full strength at reach {reach}");
-        }
-
-        assert_eq!(one(&ribbon_with_cut(0.0, 15.0, 12.0)).aura[3], 0, "no cut left a strength");
+    fn a_cut_of_nothing_makes_no_room_for_a_surround() {
         let off = harmonigraph_render::SurroundCut {
             amount: 0.0,
             ..fresh().appearance.spectrum.note_cut()
         };
         assert!(off.reach > 0.0, "the fixture's reach is 0, which proves nothing below");
-        assert_eq!(outline(off, 1.0).0, 0.0, "a cut of nothing still made room for one");
+        assert_eq!(outline(off, 1.0), 0.0, "a cut of nothing still made room for one");
     }
 
-    /// A cut of nothing is off everywhere upstream of the renderer too: the
-    /// instance carries no strength, and the roll's far-edge cull keeps it only
-    /// for the ribbon's own pixel feather rather than for a reach-sized
-    /// surround that will not paint.
+    /// The renderer keeps its own copy of the cut's defaults
+    /// ([`SurroundCut::OFF`](harmonigraph_render::SurroundCut::OFF)), which its
+    /// timing probe draws a fresh look from; this keeps the two together.
     #[test]
-    fn a_cut_of_nothing_adds_no_roll_strength_or_culling_reach() {
+    fn a_fresh_cut_is_the_renders_defaults_at_a_full_amount() {
         assert_eq!(
-            one(&ribbon_with_cut(0.0, 15.0, 12.0)).aura[3],
-            0,
-            "the instance kept a strength"
+            fresh().appearance.spectrum.note_cut(),
+            harmonigraph_render::SurroundCut {
+                amount: 1.0,
+                ..harmonigraph_render::SurroundCut::OFF
+            },
         );
+    }
 
+    /// A cut of nothing is off upstream of the renderer too: the roll's
+    /// far-edge cull keeps a note only for the ribbon's own pixel feather
+    /// rather than for a reach-sized surround that will not paint.
+    #[test]
+    fn a_cut_of_nothing_adds_no_culling_reach() {
         let last_visible = |amount| {
             let mut state = fresh();
             state.appearance.spectrum.orientation = SpectralOrientation::Left;
@@ -2227,7 +2216,7 @@ mod tests {
         let now = 14.3;
         let time =
             super::super::axes::TimeAxis::new(&state, super::super::axes::spectrum_share(cfg), now);
-        let (outline_px, _) = surround(&state, 1.0);
+        let outline_px = surround(&state, 1.0);
         let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
         // Put the note's stop exactly on the live ink boundary, by the cull's
         // own arithmetic: solving for `now` from the stop instead lands it an
@@ -2449,7 +2438,7 @@ mod tests {
             // the line through the screen while the pane placed the note along
             // its own axis — the two orders of arithmetic part at the last bit.
             let tip = past_the_line(&note, &axes, split);
-            let (outline_px, _) = surround(&state, 1.0);
+            let outline_px = surround(&state, 1.0);
             let (drawn, over) = if note.lead > 0.0 {
                 (note.cap_reach > 0.0, tip - note.lead + note.cap_reach + 0.5 / PPP)
             } else {
@@ -2635,7 +2624,7 @@ mod tests {
 
         // Growing with the room, and never shrinking — the cap comes out of the
         // note's own end rather than being faded in over it.
-        let (outline_px, _) = surround(&state, 1.0);
+        let outline_px = surround(&state, 1.0);
         let mut previous = 0.0f32;
         let mut full_at = None;
         let mut elapsed = 0.0f64;
@@ -2721,7 +2710,7 @@ mod tests {
             }
         }
         let last = at(with);
-        let (outline_px, _) = surround(&state, 1.0);
+        let outline_px = surround(&state, 1.0);
         assert!(
             last.cap_reach >= outline_px - 1e-4,
             "the lead was given up at {without}s with its cap at {} of {outline_px} — the \
@@ -2853,7 +2842,7 @@ mod tests {
     /// glide's ink along pitch is bounded by the pitches it spans, however
     /// steep it is.
     ///
-    /// `vs_note` reads a Euclidean distance, so a segment's outline stands its
+    /// `vs_note_cut` reads a Euclidean distance, so a segment's outline stands its
     /// own reach off the box in every direction. It used to run on past a
     /// sheared box's ends by `slope` times that reach, and a glide the tuning
     /// lands in one block drew a strip through pitches nothing sounded; the
