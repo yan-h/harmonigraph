@@ -51,7 +51,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         plus_arm, plus_taper, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release, hide_behind);
     a.view.glow_curve.shape = v;
-    poison!(a.view.note_animation; radial_start, stagger_spread);
+    poison!(a.view.note_animation; radial_start, stagger_spread, fade_out_delay);
     poison!(a.view.intensity; opacity_rest, thickness_base, thickness_max);
     for source in [
         &mut a.view.intensity.velocity,
@@ -406,6 +406,7 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                 "Fade curve",
                 "Mark delay",
                 "Stagger spread",
+                "Fade-out delay",
                 "Starting offset & scale",
                 "Label size",
                 "Idle label/cross brightness",

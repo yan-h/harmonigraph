@@ -13,7 +13,9 @@ mod glow_curve;
 mod ring_stack;
 mod windowing;
 
-pub use animation::{NoteAnimationConfig, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE};
+pub use animation::{
+    NoteAnimationConfig, FADE_OUT_DELAY_RANGE, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE,
+};
 pub use drawn_window::DrawnWindow;
 pub use frame_params::FrameParams;
 pub use glow_curve::GlowCurve;

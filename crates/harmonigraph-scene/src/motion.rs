@@ -134,10 +134,10 @@ struct Motion {
     melody: MarkMotion,
     bass: MarkMotion,
     /// Time each slot's presence holds before a departure starts it falling:
-    /// the last slice's delay, so the ink outlasts every retraction rather
-    /// than dimming the whole wheel at the off. Only for slots lit at the off
-    /// -- one released earlier keeps fading, rather than freezing mid-fade
-    /// until the rest catch up. 0 otherwise.
+    /// the fade-out delay and then the last slice's delay, so the ink outlasts
+    /// every retraction rather than dimming the whole wheel at the off. Only
+    /// for slots lit at the off -- one released earlier keeps fading, rather
+    /// than freezing mid-fade until the rest catch up. 0 otherwise.
     level_wait: [f32; 11],
     audio_waiting: bool,
 }
@@ -196,8 +196,11 @@ const FADE_MAX: f32 = 1.0;
 /// wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
 /// puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
 /// that ceiling means raising this too, and 1.0 would leave none.
-fn horizon(duration: f32, mark_delay: f32) -> f64 {
-    f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay) + 0.001
+///
+/// A departure waits out `fade_out_delay` before its sweep starts, so the
+/// horizon carries that too.
+fn horizon(duration: f32, mark_delay: f32, fade_out_delay: f32) -> f64 {
+    f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay) + f64::from(fade_out_delay) + 0.001
 }
 
 fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
@@ -433,7 +436,8 @@ impl NodeMotion {
         env: &Envelope,
         now: f64,
     ) -> Vec<PitchClass> {
-        let floor = now - horizon(env.fade_time, view.mark_delay);
+        let floor =
+            now - horizon(env.fade_time, view.mark_delay, view.note_animation.fade_out_delay);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
         for note in tracker.roll().notes().filter(|note| note.end.is_none_or(|at| at >= floor)) {
             for ((at, pitch), (end, next)) in note.segments(now) {
@@ -466,6 +470,9 @@ impl NodeMotion {
         // the whole step, so the same for each.
         let order = view.note_animation.delays(&scene.octave_layout, duration);
         let last = order.into_iter().fold(0.0, f32::max);
+        // A departure's sweep starts once the fade-out delay has passed.
+        let hold = view.note_animation.fade_out_delay;
+        let departure = order.map(|delay| delay + hold);
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         let dense = self.dense();
@@ -594,8 +601,8 @@ impl NodeMotion {
             } else if motion.gate {
                 // The presence of a slot lit at the off outlasts the slice
                 // that retracts last; its colour does not wait (`colors`).
-                motion.level_wait = was_lit.map(|t| if t > 0.0 { last } else { 0.0 });
-                motion.push_edge(false, order);
+                motion.level_wait = was_lit.map(|t| if t > 0.0 { hold + last } else { 0.0 });
+                motion.push_edge(false, departure);
             }
             motion.gate = gate;
             #[cfg(test)]
@@ -659,7 +666,7 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
-        let horizon = horizon(env.fade_time, view.mark_delay);
+        let horizon = horizon(env.fade_time, view.mark_delay, view.note_animation.fade_out_delay);
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
         if self.at.is_some_and(|at| now < at || now - at > horizon) {
@@ -671,7 +678,12 @@ impl NodeMotion {
         // count as late again, whatever the settings do next, so its cursor
         // has nothing left to guard. Skipping it bounds this scan by the last
         // few seconds of playing rather than by the whole roll.
-        let retained = now - horizon.max(self::horizon(FADE_MAX, crate::MARK_DELAY_MAX));
+        let retained = now
+            - horizon.max(self::horizon(
+                FADE_MAX,
+                crate::MARK_DELAY_MAX,
+                *crate::FADE_OUT_DELAY_RANGE.end(),
+            ));
         let notes: Vec<_> = tracker
             .roll()
             .notes()
@@ -1217,6 +1229,83 @@ mod tests {
         let colour = origin(later).octaves[slot];
         assert!((colour - 0.1).abs() < 0.03, "the lit slot's colour waited at {colour}");
         assert!(origin(later).activation >= 0.3 - 1e-6, "the presence left with the colour");
+    }
+    /// The fade-out delay holds the whole departure -- the sweep and the
+    /// presence -- and not the colour, so the released wheel stands uncoloured
+    /// through the wait, then leaves in the sweep it would have left in at the
+    /// release. A press inside the wait takes it back with nothing retracted.
+    #[test]
+    fn the_fade_out_delay_holds_the_departure_but_not_the_colour() {
+        let hold = 0.5;
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = 0.9;
+        view.note_animation.fade_out_delay = hold;
+        let run = |events: &[NoteEvent]| {
+            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+            let mut pending = events.iter().peekable();
+            (0..)
+                .map(|k| f64::from(k) * 0.01)
+                .take_while(|&now| now <= 6.0)
+                .map(|now| {
+                    while let Some(event) = pending.next_if(|event| event.time <= now) {
+                        tracker.handle_event(*event);
+                    }
+                    (now, draw(&mut motion, &mut tracker, &view, now, false))
+                })
+                .collect::<Vec<_>>()
+        };
+        let off_at = 2.5;
+        let frames = run(&[on(0.0, 60), off(off_at, 60)]);
+        let (slot, _) = lit_by(&frames[0].1, 60);
+        let layout = &frames[0].1.octave_layout;
+        let (order, span) = (view.note_animation.delays(layout, 1.0), layout.span as usize);
+        let at = |t: f64| origin(&frames.iter().find(|(now, _)| *now >= t - 1e-9).unwrap().1);
+        // Most of the way through the wait: the colour has gone that far, and
+        // nothing else has moved.
+        let waiting = at(off_at + 0.4);
+        assert!((waiting.octaves[slot] - 0.6).abs() < 0.02, "the colour waited");
+        assert_eq!(waiting.activation, 1.0, "the presence did not wait");
+        assert_eq!(waiting.slice_progress[..span], [1.0; 11][..span], "a slice did not wait");
+        for (i, &delay) in order.iter().enumerate().take(span) {
+            let leaves = frames
+                .iter()
+                .find(|(now, s)| *now >= off_at && origin(s).slice_progress[i] < 1.0)
+                .map(|(now, _)| *now)
+                .unwrap();
+            let expected = off_at + f64::from(hold + delay);
+            assert!(
+                (leaves - expected).abs() <= 0.02,
+                "slice {i} left at {leaves}, not {expected}"
+            );
+        }
+        let last = order.iter().copied().fold(0.0, f32::max);
+        let end = off_at + f64::from(hold + last) + 1.0;
+        assert!(at(end - 0.05).activation > 0.0, "the presence left before the last slice");
+        assert_eq!(at(end + 0.02).activation, 0.0, "the departure outlasted its span");
+        // Pressed again inside the wait, nothing has left to come back.
+        let frames = run(&[on(0.0, 60), off(off_at, 60), on(off_at + 0.3, 60)]);
+        let after = frames.iter().filter(|(now, _)| *now >= off_at).map(|(_, s)| origin(s));
+        for node in after {
+            assert_eq!(node.activation, 1.0, "the presence fell under a re-press");
+            assert_eq!(node.slice_progress[..span], [1.0; 11][..span], "a slice retracted");
+        }
+    }
+    /// A surface hidden through most of a wait far longer than the fade comes
+    /// back to the wheel still standing: the replay horizon carries the delay,
+    /// or the reset would seed the node at rest mid-wait.
+    #[test]
+    fn a_surface_reopened_inside_the_fade_out_delay_finds_the_wheel_waiting() {
+        let mut view = view();
+        view.note_animation.fade_out_delay = *crate::FADE_OUT_DELAY_RANGE.end();
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        tracker.handle_event(on(0.0, 60));
+        draw_duration(&mut motion, &mut tracker, &view, 0.0, false, 0.1);
+        tracker.handle_event(off(0.5, 60));
+        draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.1);
+        // Hidden for well past twice the fade, which alone resets the surface.
+        let back = draw_duration(&mut motion, &mut tracker, &view, 2.0, false, 0.1);
+        assert_eq!(origin(&back).activation, 1.0, "the wheel left inside its wait");
+        assert_eq!(origin(&back).octaves, [0.0; 11], "the colour waited");
     }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
@@ -1856,6 +1945,7 @@ mod tests {
             let mut view = ViewConfig::default();
             view.note_animation.stagger_spread = 0.6;
             view.mark_delay = 0.15;
+            view.note_animation.fade_out_delay = 0.2;
             view.intensity.pressure.thickness = Some(0.5);
             let frame = FrameParams { fade_time: 0.35, ..Default::default() };
             let env = view.envelope(&frame);

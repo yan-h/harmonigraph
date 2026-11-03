@@ -482,21 +482,18 @@ pub fn draw_pane(
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// Whether a lattice note is still departing after its voice was pruned: an
-/// ordered release holds its presence for the stagger, so it runs
-/// `1 + stagger_spread` fades past the off where the voice lasts one.
+/// Whether a lattice note is still departing after its voice was pruned: a
+/// release holds its presence for the fade-out delay and the stagger, so it
+/// runs that delay and `1 + stagger_spread` fades past the off where the
+/// voice lasts one. Unguarded: with neither, the span is the voice's own, so
+/// asking costs nothing, and a setting that lengthens a departure later
+/// needs only to join the span.
 fn releasing(state: &SharedState, now: f64) -> bool {
     let animation = state.picture.appearance.view.note_animation;
-    let span = f64::from(state.picture.runtime.frame_params.fade_time)
-        * (1.0 + f64::from(animation.stagger_spread));
-    animation.staggers()
-        && state
-            .picture
-            .runtime
-            .tracker
-            .roll()
-            .latest_activity(now)
-            .is_some_and(|last| now - last <= span)
+    let span = f64::from(animation.fade_out_delay)
+        + f64::from(state.picture.runtime.frame_params.fade_time)
+            * (1.0 + f64::from(animation.stagger_spread));
+    state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| now - last <= span)
 }
 
 /// Whether the piano roll still has something moving across it: its window

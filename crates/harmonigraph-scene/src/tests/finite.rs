@@ -78,7 +78,11 @@ fn poisoned_view() -> ViewConfig {
         spectral_ring_release: nan,
         fade_shape: nan,
         note_bloom: nan,
-        note_animation: NoteAnimationConfig { stagger_spread: nan, radial_start: nan },
+        note_animation: NoteAnimationConfig {
+            stagger_spread: nan,
+            radial_start: nan,
+            fade_out_delay: nan,
+        },
         intensity: {
             let source = || crate::IntensitySource { opacity: Some(nan), thickness: Some(nan) };
             crate::IntensitySettings {
@@ -288,9 +292,10 @@ fn scene_floats(scene: &Scene) -> Floats {
 
     f.one("node_radius", *node_radius);
 
-    let NoteAnimationConfig { stagger_spread, radial_start } = note_animation;
+    let NoteAnimationConfig { stagger_spread, radial_start, fade_out_delay } = note_animation;
     f.one("note_animation.stagger_spread", *stagger_spread);
     f.one("note_animation.radial_start", *radial_start);
+    f.one("note_animation.fade_out_delay", *fade_out_delay);
 
     f.one("outer_inner", *outer_inner);
     f.one("outer_outer", *outer_outer);
