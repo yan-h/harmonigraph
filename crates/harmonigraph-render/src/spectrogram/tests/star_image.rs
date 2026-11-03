@@ -160,7 +160,13 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
             settings.stars.star_size = [40.0; 5];
             let layout = atmosphere::star_layout(settings.stars, cb.rect.aspect_ratio());
             let image = atmosphere::star_image_size([161, 121], settings.stars);
-            let slices = atmosphere::star_slices(settings.stars, 0.0, 0.0, &layout, image);
+            let slices = atmosphere::star_slices(
+                settings.stars,
+                0.0,
+                [0.0; atmosphere::STAR_SLICES],
+                &layout,
+                image,
+            );
             assert_eq!(slices.map(|s| s.gather)[..3], [2; 3], "jitter={jitter}: far not 2x2");
             assert_eq!(slices[4].gather, 3, "jitter={jitter}: nearest not 3x3");
             if memory {
@@ -315,7 +321,8 @@ fn a_core_depth_draws_its_stars_whole() {
         stars.star_size = [32.0; 5];
         let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
         let image = atmosphere::star_image_size([161, 121], *stars);
-        let slices = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image);
+        let slices =
+            atmosphere::star_slices(*stars, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image);
         assert_eq!(slices.map(|s| s.gather), [1; 5], "jitter={jitter}");
         let frames: Vec<_> = [Reference::Production, Reference::Wide]
             .into_iter()
@@ -354,7 +361,8 @@ fn a_capped_depth_draws_what_a_wide_read_draws() {
     stars.star_size = [16.0; 5];
     let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
     let image = atmosphere::star_image_size([161, 121], *stars);
-    let nearest = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[4];
+    let nearest =
+        atmosphere::star_slices(*stars, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image)[4];
     assert_eq!(nearest.gather, 2);
     let worst = StarGather::Two.half_width() - 0.5 * star_jitter_width(1.0);
     assert!(nearest.radius > worst * nearest.cell, "the old rule read 2x2 too");
@@ -475,12 +483,15 @@ fn stars_narrower_than_a_texel_all_show() {
         stars.star_twinkle = [0.0; 5];
         let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
         let image = atmosphere::star_image_size([width, height], *stars);
-        let slice = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[0];
+        let slice =
+            atmosphere::star_slices(*stars, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image)[0];
         let texel = crate::stars::STAR_PANE / image[1] as f32;
         assert!(slice.radius < 0.5 * texel && slice.inverse_floor == 1.0 / texel);
         let mut plan = *stars;
         plan.star_solo = [false; 5];
-        let read = atmosphere::star_slices(plan, 0.0, 0.0, &layout, image)[0].gather;
+        let read =
+            atmosphere::star_slices(plan, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image)[0]
+                .gather;
         assert_eq!(read, gather, "spacing {spacing}");
         // The read holds the floor even for the worst-placed star, though
         // 2x2 would hold it at a cell's centre.

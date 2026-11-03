@@ -50,25 +50,45 @@ pub(crate) fn star_px_per_second() -> f64 {
 /// against the music. The lattice has no scroll and always drifts at it.
 pub(crate) const STAR_SCROLL_REFERENCE: f64 = STAR_PANE as f64 * 16.0 / 9.0 / 163.330_38;
 
-/// The star pixels a depth at `Star speed` 1 has drifted, built up frame by
-/// frame so that a change of pace moves the stars on from where they are.
-/// Worked out as `now` times the pace instead, every zoom of the Span would
-/// carry the field as far as it had travelled since the clock started.
+/// The star pixels each depth has drifted after `seconds` at `pace` star
+/// pixels a second for a `Star speed` of 1, each at its own speed.
+pub(crate) fn star_travel(
+    settings: harmonigraph_scene::StarSettings,
+    seconds: f64,
+    pace: f64,
+) -> [f64; STAR_SLICES] {
+    settings.plan().depths.map(|depth| seconds * pace * f64::from(depth.speed))
+}
+
+/// The star pixels each depth has drifted, built up frame by frame so that a
+/// change of pace or of a depth's `Star speed` moves its stars on from where
+/// they are. Worked out as `now` times the pace instead, every zoom of the
+/// Span and every nudge of the dial would carry the field as far as it had
+/// travelled since the clock started.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StarTravel {
     clock: Option<f64>,
-    travel: f64,
+    travel: [f64; STAR_SLICES],
 }
 
 impl StarTravel {
-    /// The travel at `now`, the time since the last frame taken at `pace`
-    /// star pixels a second. A first frame, or a clock that ran backwards, as
-    /// a render started over does, takes `now` at `pace` from zero, so a
-    /// render is the same from its first frame however it was reached.
-    pub(crate) fn advance(&mut self, now: f64, pace: f64) -> f64 {
+    /// The travel at `now`, the time since the last frame taken at this
+    /// frame's `pace` and speeds ([`star_travel`]). A first frame, or a clock
+    /// that ran backwards, as a render started over does, takes all of `now`
+    /// from zero, so a render is the same from its first frame however it was
+    /// reached.
+    pub(crate) fn advance(
+        &mut self,
+        settings: harmonigraph_scene::StarSettings,
+        now: f64,
+        pace: f64,
+    ) -> [f64; STAR_SLICES] {
         self.travel = match self.clock {
-            Some(clock) if now >= clock => self.travel + (now - clock) * pace,
-            _ => now * pace,
+            Some(clock) if now >= clock => {
+                let step = star_travel(settings, now - clock, pace);
+                std::array::from_fn(|k| self.travel[k] + step[k])
+            }
+            _ => star_travel(settings, now, pace),
         };
         self.clock = Some(now);
         self.travel
@@ -292,8 +312,8 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 }
 
 /// Every slice's numbers for this frame, for a star image `image` texels
-/// across and down, `travel` star pixels on at a speed of one. Each depth
-/// moves as one sheet at its own speed.
+/// across and down, each depth `travel` star pixels on along `direction`, as
+/// one sheet.
 ///
 /// The star image is drawn by evaluating each star at its texel centres, so
 /// a star narrower than a texel would show only where a centre happened to
@@ -313,7 +333,7 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 pub(crate) fn star_slices(
     settings: harmonigraph_scene::StarSettings,
     direction: f32,
-    travel: f64,
+    travel: [f64; STAR_SLICES],
     layout: &StarLayout,
     image: [u32; 2],
 ) -> [StarSlice; STAR_SLICES] {
@@ -331,10 +351,8 @@ pub(crate) fn star_slices(
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
-        let speed = f64::from(depth.speed);
-        let shift = |axis: f64| {
-            (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
-        };
+        let shift =
+            |axis: f64| (axis * travel[k] / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32;
         let offset = [shift(cos), shift(sin)];
         let grid = layout.grids[k];
         // The cell a pixel at the pane's top left edge is in, as the shader
@@ -446,7 +464,7 @@ impl StarUniforms {
             star_slices: star_slices(
                 settings,
                 direction,
-                now * star_px_per_second(),
+                star_travel(settings, now, star_px_per_second()),
                 layout,
                 image,
             ),

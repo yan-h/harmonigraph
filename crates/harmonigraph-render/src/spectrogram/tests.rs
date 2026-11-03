@@ -635,7 +635,9 @@ fn the_starfield_moves_by_the_drift() {
         s.stars.star_spacing_ratio = spacing;
         let layout = atmosphere::star_layout(s.stars, 1.0);
         let image = atmosphere::star_image_size([PANE, PANE], s.stars);
-        let gathers = atmosphere::star_slices(s.stars, 0.0, 0.0, &layout, image).map(|s| s.gather);
+        let gathers =
+            atmosphere::star_slices(s.stars, 0.0, [0.0; atmosphere::STAR_SLICES], &layout, image)
+                .map(|s| s.gather);
         assert_eq!(gathers.contains(&3), three, "{gathers:?}");
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
