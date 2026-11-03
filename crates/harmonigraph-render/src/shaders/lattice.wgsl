@@ -2294,8 +2294,9 @@ fn base_node_ink(
     );
 }
 
-// Orders are computed on the CPU, never ranked per pixel. One inverse
-// transform moves a complete slice and its extension through both shadows.
+// A slice's progress is computed on the CPU, never ranked per pixel. One
+// inverse transform moves a complete slice and its extension through the
+// shadow.
 fn slice_progress(in: VsOut, i: u32) -> f32 {
     return f32((in.motion[i / 3u] >> ((i % 3u) * 10u)) & 1023u) / 1023.0;
 }
@@ -2380,7 +2381,8 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
     return AnimatedInk(result, marks);
 }
 
-// Plain Fade keeps the reference composition; settled pieces bypass the loop.
+// With no stagger and no radial move the reference composition draws;
+// settled pieces bypass the loop.
 fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeInk {
     if u.node.animation == 0.0 { return base_node_ink(src, d, aa, oct, analytic); }
     let settled = (src.motion.w & 0x80000000u) != 0u;

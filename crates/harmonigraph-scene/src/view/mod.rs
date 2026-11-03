@@ -358,7 +358,7 @@ pub struct ViewConfig {
     /// ([`derive_pluses`](crate::derive::derive_pluses)).
     ///
     /// And the grey a label on a node NOTHING is sounding under is drawn in
-    /// with it, before the note's activation carries that label toward white.
+    /// with it, before the note's colour carries that label toward white.
     ///
     /// A bar of its own rather than a share of the ground, so the two are read
     /// against each other by their numbers and set independently: equal numbers
@@ -797,11 +797,10 @@ pub struct ViewConfig {
     /// screen. Half the resolved width is σ (`shadow::sigma_points` in
     /// harmonigraph-render).
     ///
-    /// FOUR groups and not one bar because node geometry and the notation that
-    /// names its positions want independent shadows. Geometry and text repeat
+    /// THREE groups and not one bar because node geometry and the notation that
+    /// names its positions want independent shadows. Text repeats
     /// for the spectral pictures because their compositors use different
-    /// colours and paint order; the renderer and the three settings stay the
-    /// same.
+    /// colours and paint order.
     ///
     /// Each item multiplies whatever is already in the frame under it in the
     /// painter's order the pass already walks — so what it casts is read off
@@ -856,8 +855,8 @@ pub struct ViewConfig {
     /// `IntensitySettings::opacity_rest` below 1) the rear ring shows through at Width 0 and is
     /// hidden at the first step of Width, a jump this bar does not smooth.
     ///
-    /// Here rather than on [`ShadowStyle`](crate::ShadowStyle), which all four
-    /// groups share and where it would mean nothing for three of them.
+    /// Here rather than on [`ShadowStyle`](crate::ShadowStyle), which all three
+    /// groups share and where it would mean nothing for two of them.
     pub hide_behind: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
@@ -1520,7 +1519,7 @@ impl Default for ViewConfig {
             atmosphere: AtmosphereSettings::default(),
             glow_strength: 0.438_755_4,
             glow_curve: GlowCurve::default(),
-            // Four groups at four styles, which is the picture as captured
+            // Three groups at three styles, which is the picture as captured
             // from the DAW: the numbers themselves live in `impl Default for
             // ShadowSettings`, that being the one source of a persisted
             // group's fallback.

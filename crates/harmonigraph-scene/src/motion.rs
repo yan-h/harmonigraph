@@ -333,11 +333,7 @@ impl Motion {
             // This is the node's presence rather than any one slice's: it
             // reaches the shader as `ink.w` (`params.x` for a slot no note
             // lights) and is multiplied by the slice's own reveal, which is
-            // already nothing before that slice's delay. Waiting on the slice's
-            // own delay -- the tempting symmetry -- makes the whole wheel wait
-            // for whichever slice the note happens to light, and a note on a
-            // LATE slice then collapses the stagger: measured, every slice
-            // arrived within 0.08 of the others instead of spanning 0.9.
+            // already nothing before that slice's delay.
             //
             // The departure is the other way round. Falling from the off, the
             // presence dimmed every slice at once and reached 0 before the late

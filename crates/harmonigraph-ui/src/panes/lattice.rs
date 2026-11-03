@@ -555,7 +555,7 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// said something the label does not mean — the note the brighter, its cents
 /// the fainter — where they are one label naming one node.
 ///
-/// A grey off `lit`, the level the node under it is sounding at, between the
+/// A grey off `lit`, the level the node under it is drawn in, between the
 /// RESTING FIELD's own `L*`
 /// ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)) at 0 and white
 /// at 1.
@@ -668,13 +668,16 @@ pub(crate) fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Per NODE and off the note's own activation, which is what puts the
-        // crossing between the two ends on the Fade: `activation` is the same
-        // ramp the node's ink rides, so a name brightens and dims with the
-        // thing it names rather than on a clock of its own. Opacity included,
-        // where the name's strength above reads the unfaded envelope: a soft
-        // note is named whole in a greyer ink.
-        let ink = label_ink(view, node.activation);
+        // Per NODE and off the colour the node is drawn in (its loudest slice,
+        // Opacity included), which is what puts the crossing between the two
+        // ends on the Fade: it is the same ramp the node's ink rides, so a name
+        // brightens and dims with the thing it names rather than on a clock of
+        // its own. Not `activation`, the node's presence: that waits through a
+        // Fade-out delay while the colour is already leaving, and a name held
+        // white over a node going dark reads as a note still sounding. The
+        // name's strength above reads the unfaded envelope, so a soft note is
+        // named whole in a greyer ink.
+        let ink = label_ink(view, node.octaves.iter().copied().fold(0.0, f32::max));
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
         // behind the camera, so a node off to the side still lands at a
@@ -1771,6 +1774,38 @@ mod tests {
                 label.1,
             );
         }
+    }
+
+    /// A released note's name dims with its colour from the key-up, through a
+    /// Fade-out delay that holds the node's presence (and so its `activation`)
+    /// where it was. The ink reads the drawn colour, which leaves at the
+    /// release; the name itself stays drawn at full strength under `Past`.
+    #[test]
+    fn a_released_names_ink_dims_through_the_fade_out_delay() {
+        let mut state = fresh();
+        state.appearance.view.marker_ink = 24.0;
+        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.note_animation.stagger_spread = 0.0;
+        // Longer than the sample is after the off, so the presence is still
+        // held when the ink is read.
+        state.appearance.view.note_animation.fade_out_delay =
+            *harmonigraph_scene::FADE_OUT_DELAY_RANGE.end();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
+
+        let held = drawn_label(&mut state, 1.9);
+        let releasing = drawn_label(&mut state, 2.5);
+        let grey =
+            |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
+        assert_eq!(held.0, grey(100.0), "a sounding label is not drawn white");
+        assert!(
+            releasing.0.r() < held.0.r()
+                && releasing.0.r() > grey(state.appearance.view.marker_ink).r(),
+            "a label half way through its release, inside the Fade-out delay, is at {:?}, not \
+             between {:?} and the marker grey",
+            releasing.0,
+            held.0,
+        );
     }
 
     /// The ink and the text of every piece one node's label drew, `secs` into

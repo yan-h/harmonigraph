@@ -69,7 +69,7 @@ static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(1);
 ///
 /// A release approaches 0 without reaching it, so something has to say when a
 /// light has ended — the alternative is a row per node ever played, held for
-/// the session against a level nothing can see. At the Strength bar's own 1
+/// the session against a level nothing can see. At the Background glow gain bar's own 1
 /// this is 0.4/255 of light at the hottest pixel of the halo, which is under
 /// half a step of the 8-bit target it is composited into: the cut is invisible
 /// wherever it lands, and it lands a little over six release constants after
@@ -145,7 +145,7 @@ struct Lit {
 /// audio ring, which is not a light (see [`GlowFade::step`]'s target).
 ///
 /// With the light off nothing is stepped and nothing is allocated — the state
-/// is dropped instead, so the frame the Reach bar comes back off 0 starts a fresh attack.
+/// is dropped instead, so the frame Background glow reach comes back off 0 starts a fresh attack.
 pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize, now: f64) {
     // The renderer's own test for whether the light draws at all, asked of the
     // scene's normalized view so the two cannot disagree about the boundary.

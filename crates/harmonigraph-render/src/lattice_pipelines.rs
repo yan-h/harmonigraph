@@ -292,9 +292,8 @@ pub(super) fn create_cell_pipelines(
         pipeline(
             ("vs_node_cell", "fs_node_cell"),
             &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
-            // One node owns one cell. Overwrite lets an analytic distance keep
-            // its negative interior; MAX against the clear value would clamp
-            // every inside texel back to zero.
+            // One node owns one cell, so there is nothing for a blend to
+            // combine: Overwrite.
             None,
         ),
         // No instance data at all: the cell is one cross at the home sheet's

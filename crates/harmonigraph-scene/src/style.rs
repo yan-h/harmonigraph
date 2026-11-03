@@ -646,7 +646,7 @@ pub struct ShadowStyle {
 impl Default for ShadowStyle {
     /// The style a bare `ShadowStyle` opens on: a fixture, or the renderer's
     /// fallback for a caster handed no style. Not what a fresh VIEW draws —
-    /// its four groups are [`ShadowSettings::default`], and each of them
+    /// its three groups are [`ShadowSettings::default`], and each of them
     /// differs from this.
     ///
     /// It is ALSO what a group a blob carries with one FIELD missing fills that

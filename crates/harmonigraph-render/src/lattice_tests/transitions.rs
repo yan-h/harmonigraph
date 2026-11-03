@@ -126,28 +126,6 @@ fn each_arrival_casts_a_measurable_shadow() {
 }
 
 #[test]
-fn zero_spread_draws_the_same_smooth_arrival() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = single_marked_node(MIDDLE_C, 0);
-    scene.view.glow_reach = 1.5;
-    scene.view.glow_strength = 0.8;
-    scene.view.shadow = one_shadow(0.0, 0.0);
-    let phases = [0.15f32, 0.4, 0.7, 1.0, -0.7, -0.4, -0.15];
-    for phase in phases {
-        let node = &mut scene.nodes[0];
-        node.slice_progress = [phase.abs(); 11];
-        node.activation = phase.abs();
-        node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = phase.abs();
-        node.melody_level = phase.abs();
-        node.glow.level = phase.abs();
-        let frame = shooter.shot(&scene);
-        scene.view.note_animation.stagger_spread = 0.0;
-        assert_eq!(shooter.shot(&scene), frame, "zero spread changed the smooth arrival");
-        scene.view.note_animation = NoteAnimationConfig::default();
-    }
-}
-
-#[test]
 fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
     use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
     use harmonigraph_scene::{Camera, FrameParams, ViewConfig};

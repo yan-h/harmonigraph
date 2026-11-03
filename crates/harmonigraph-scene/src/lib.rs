@@ -459,7 +459,9 @@ pub struct NodeInstance {
     /// cross that is its complement. A name says which position this is, not
     /// how loud it sounded, and a name held at the note's Opacity would jump to
     /// the departing reserve at key-up (#1316). The name's grey-to-white ink
-    /// still follows `activation`.
+    /// follows neither: it reads the drawn colour, the loudest of
+    /// [`octaves`](Self::octaves), which leaves at the release while
+    /// `activation` waits through a Fade-out delay.
     pub envelope: f32,
     /// Whether the voice this node is lit by is on its way OUT — its key is
     /// up and its departure has begun.
