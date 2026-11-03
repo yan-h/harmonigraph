@@ -208,10 +208,14 @@ impl AppearanceEditor {
     ) {
         // A wheel or pinch zoom of a picture is a gesture like a drag: it
         // closes as one entry on the first frame after the scroll has settled.
-        // A frame that scrolls a settings pane changes no look, so this holds
-        // nothing open for it.
-        let navigating =
-            ctx.input(|i| i.smooth_scroll_delta != egui::Vec2::ZERO || i.zoom_delta() != 1.0);
+        // egui keeps `is_scrolling` true between a trackpad's events and until
+        // ~150 ms after the last wheel event, and a picture may zero the
+        // frame's scroll delta once it has taken it, so the delta says nothing
+        // about whether the wheel is still turning. Any scroll in the window
+        // holds the entry open, so two look edits made inside one continuous
+        // scroll merge; that is accepted. A frame that scrolls a settings pane
+        // changes no look, so it holds nothing open on its own.
+        let navigating = ctx.input(|i| i.is_scrolling() || i.zoom_delta() != 1.0);
         self.history.observe(
             before,
             appearance,
@@ -454,8 +458,13 @@ mod tests {
         assert!(editor.history.redo.is_empty());
     }
 
-    #[test]
-    fn a_wheel_zoom_of_the_docked_analyzer_is_one_undoable_look_edit() {
+    /// Zoom the Analyzer with `wheel(frame)` events over 40 frames and assert
+    /// the whole gesture, however many frames it changed the look on, is one
+    /// undo entry.
+    fn assert_one_undoable_zoom(
+        navigation: crate::panes::spectral::Navigation,
+        wheel: impl Fn(usize) -> Option<egui::Vec2>,
+    ) {
         let ctx = crate::tests::probe::themed();
         let mut state = crate::tests::probe::fresh_picture();
         state.appearance.spectrum.low_midi = 36.0;
@@ -465,14 +474,12 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 500.0));
         let pointer = rect.center();
         let mut zooming_frames = 0;
-        // Three wheel notches on consecutive frames, then the smoothed scroll
-        // running out over the frames after them.
         for frame in 0..40 {
             let mut events = vec![egui::Event::PointerMoved(pointer)];
-            if (2..5).contains(&frame) {
+            if let Some(delta) = wheel(frame) {
                 events.push(egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(0.0, 20.0),
+                    delta,
                     phase: egui::TouchPhase::Move,
                     modifiers: egui::Modifiers::NONE,
                 });
@@ -483,12 +490,7 @@ mod tests {
                     let before = Look::capture(&state.appearance);
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                     crate::panes::spectral::spectral_pane(
-                        &mut child,
-                        &mut state,
-                        0.0,
-                        1,
-                        1.0,
-                        crate::panes::spectral::Navigation::Docked,
+                        &mut child, &mut state, 0.0, 1, 1.0, navigation,
                     );
                     zooming_frames += usize::from(before != Look::capture(&state.appearance));
                     editor.end_frame(before, &mut state.appearance, ui.ctx(), false);
@@ -500,6 +502,33 @@ mod tests {
         assert_eq!(editor.history.undo.len(), 1);
         editor.history.undo(&mut state.appearance);
         assert_eq!(Look::capture(&state.appearance), original);
+    }
+
+    #[test]
+    fn a_wheel_zoom_of_the_docked_analyzer_is_one_undoable_look_edit() {
+        // Three wheel notches on consecutive frames, then the smoothed scroll
+        // running out over the frames after them.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+            (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
+        });
+    }
+
+    #[test]
+    fn a_trackpad_zoom_with_quiet_frames_between_events_is_one_undoable_look_edit() {
+        // Point deltas under 8 pt are applied unsmoothed, so the frames
+        // between two events read a zero scroll delta.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+            ((2..12).contains(&frame) && frame % 2 == 0).then(|| egui::vec2(0.0, 6.0))
+        });
+    }
+
+    #[test]
+    fn a_wheel_zoom_of_the_video_previews_analyzer_is_one_undoable_look_edit() {
+        // The preview takes the wheel's delta for itself, leaving the frame's
+        // scroll delta zero while the wheel is still turning.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, |frame| {
+            (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
+        });
     }
 
     #[test]
