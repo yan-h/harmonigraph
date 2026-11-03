@@ -1341,12 +1341,17 @@ mod tests {
             let cfg = SpectrumConfig { low_midi: 36.0, high_midi: 96.0, ..Default::default() };
             let s = Spiral::new(rect, &cfg);
             let (inner, outer) = s.bounds();
-            let tracks = (s.max_midi - s.min_midi) / 12.0 + 1.0;
+            // The fit's own budget, from the pane: `bounds` is defined off the
+            // track, so only the pane's rim and the hole say what was reserved.
+            let rim = (rect.width().min(rect.height()) * 0.5 - MARGIN_PT).max(1.0) - s.band;
             assert!(
-                (outer - inner - tracks * s.dr).abs() < 1e-3,
-                "{name}: {} across for {tracks} tracks of {}",
-                outer - inner,
-                s.dr,
+                (outer - rim).abs() < 1e-3,
+                "{name}: the track ends at {outer}, the rim is {rim}"
+            );
+            assert!(
+                (inner - rim * INNER_HOLE).abs() < 1e-3,
+                "{name}: the track starts at {inner}, the hole is {}",
+                rim * INNER_HOLE,
             );
         }
     }
