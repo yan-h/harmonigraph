@@ -298,8 +298,6 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
 fn a_drift_nudge_minutes_in_moves_the_material_one_frame_at_most() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let largest_step =
-        |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
     for style in
         [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
     {
@@ -311,25 +309,94 @@ fn a_drift_nudge_minutes_in_moves_the_material_one_frame_at_most() {
             a.breath_amount = 0.0;
             a.material_amount = 1.0;
             a.material_speed = 1.0;
-            scene.glow_timing =
-                Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
-            let held = glow(&mut shooter, &scene);
-            let a = &mut scene.view.atmosphere;
-            if direction {
-                a.material_direction += 1.0;
-            } else if style == LatticeMaterial::Stars {
-                a.stars.star_speed = a.stars.star_speed.map(|s| s * 0.99);
-            } else {
-                a.material_speed *= 0.99;
-            }
-            scene.glow_timing.as_mut().unwrap().now += 0.0001;
-            shooter.shot_again(&scene);
-            let carried = largest_step(&held, &read_glow(&shooter));
+            let (carried, restarted) = nudged(&mut shooter, scene, |a| {
+                if direction {
+                    a.material_direction += 1.0;
+                } else if style == LatticeMaterial::Stars {
+                    a.stars.star_speed = a.stars.star_speed.map(|s| s * 0.99);
+                } else {
+                    a.material_speed *= 0.99;
+                }
+            });
             assert!(carried <= 2, "{case}: sudden channel step {carried}");
-            let restarted = largest_step(&held, &glow(&mut shooter, &scene));
             assert!(restarted > 10, "{case}: a restart lands there too ({restarted})");
         }
     }
+}
+
+/// Ten minutes in, `nudge` a dial and run a frame on: the largest channel step
+/// of the carried light, and of a pane started over at that frame.
+fn nudged(
+    shooter: &mut Shooter,
+    mut scene: Scene,
+    nudge: impl FnOnce(&mut harmonigraph_scene::AtmosphereSettings),
+) -> (u8, u8) {
+    let largest_step =
+        |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
+    let held = glow(shooter, &scene);
+    nudge(&mut scene.view.atmosphere);
+    scene.glow_timing.as_mut().unwrap().now += 0.0001;
+    shooter.shot_again(&scene);
+    let carried = largest_step(&held, &read_glow(shooter));
+    (carried, largest_step(&held, &glow(shooter, &scene)))
+}
+
+#[test]
+fn a_texture_speed_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    let a = &mut scene.view.atmosphere;
+    a.material_amount = 0.0;
+    a.breath_amount = 0.0;
+    a.texture_depth = 1.0;
+    a.texture_scale = 4.0;
+    let (carried, restarted) = nudged(&mut shooter, scene, |a| a.texture_speed *= 0.99);
+    assert!(carried <= 2, "sudden channel step {carried}");
+    assert!(restarted > 10, "a restart lands there too ({restarted})");
+}
+
+#[test]
+fn a_breathing_speed_nudge_minutes_in_moves_the_light_one_frame_at_most() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    let a = &mut scene.view.atmosphere;
+    a.material_amount = 0.0;
+    a.texture_depth = 0.0;
+    a.breath_amount = 1.0;
+    let (carried, restarted) = nudged(&mut shooter, scene, |a| a.breath_speed *= 0.99);
+    assert!(carried <= 2, "sudden channel step {carried}");
+    assert!(restarted > 10, "a restart lands there too ({restarted})");
+}
+
+/// A frame with no glow clock, as one with the glow switched off draws, holds
+/// the textures where a drag left them: the glow comes back where it was
+/// rather than where `now × speed` would put it.
+#[test]
+fn a_frame_without_a_glow_clock_holds_the_travel() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let largest_step =
+        |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    let a = &mut scene.view.atmosphere;
+    a.material_amount = 0.0;
+    a.breath_amount = 0.0;
+    a.texture_depth = 1.0;
+    a.texture_scale = 4.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 600.0, attack: 0.0, release: 0.0 });
+    shooter.shot_again(&scene);
+    scene.view.atmosphere.texture_speed *= 0.99;
+    scene.glow_timing.as_mut().unwrap().now += 0.0001;
+    shooter.shot_again(&scene);
+    let dragged = read_glow(&shooter);
+    let clock = scene.glow_timing.take();
+    shooter.shot_again(&scene);
+    scene.glow_timing = clock.map(|c| harmonigraph_scene::GlowTiming { now: c.now + 0.0001, ..c });
+    shooter.shot_again(&scene);
+    let back = largest_step(&dragged, &read_glow(&shooter));
+    assert!(back <= 2, "sudden channel step {back}");
 }
 
 #[test]
