@@ -95,8 +95,9 @@ pub(super) fn system_pane(
             );
             crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")
                 .on_hover_text(
-                    "A draggable HUD: frame rate, worst recent frame, memory, and the \
-                 voice/node workload.",
+                    "A draggable HUD: frame rate (judged against the rate chosen above), \
+                 worst recent frame, the GPU's share, memory, and the voice/node \
+                 workload, with whether the editor is live or idle.",
                 );
             if interaction.show_perf {
                 crate::widgets::checkbox(ui, &mut interaction.show_perf_detail, "Frame breakdown")

@@ -25,10 +25,10 @@ mod tests;
 pub struct RenderRequest {
     pub program: std::path::PathBuf,
     /// A appearance document passed as `--appearance`, overriding the take's record-time
-    /// look — set for "Re-render take" so post-record settings reach the video;
+    /// look — set for an Exports queue job so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
     pub appearance: Option<String>,
-    /// Explicit output override for Re-render. Automatic exports read the
+    /// Explicit output override for a queued export. Automatic exports read the
     /// captured Aspect and Output size from their recorded appearance.
     pub size: Option<[u32; 2]>,
     /// A session-local completion notice, owned by this request so a new

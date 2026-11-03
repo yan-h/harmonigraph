@@ -1110,8 +1110,9 @@ where
             // On a successful paint, schedule the next deadline from THIS
             // instant rather than leaving it unset. Clearing it to `None`
             // costs a whole tick: the deadline would only be established on
-            // the following tick, from that later `now`, so every capped
-            // interval silently ran one tick long.
+            // the following tick, from that later `now`, so every delayed
+            // repaint (the idle poll, the startup delay) silently ran one
+            // tick long.
             self.repaint_after =
                 if presented { now.checked_add(repaint_delay) } else { Some(now) };
 

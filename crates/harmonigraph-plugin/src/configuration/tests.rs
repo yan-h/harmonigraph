@@ -1970,7 +1970,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
 /// count kept anywhere else (#818).
 ///
 /// The plugin's own recorder and the editor state wired to it, not an injected
-/// one: the claim is that the editor's frame-counted stop sees a note that
+/// one: the claim is that the editor's stop debounce sees a note that
 /// only the Hub carried. Nothing rewinds, so the debounce is the only thing
 /// here that can end the take.
 #[test]

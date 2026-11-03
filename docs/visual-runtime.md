@@ -33,7 +33,8 @@ Existing repeated/discarded-pass behavior and callback ownership remain unchange
 `VisualRuntime::advance` observes parameters before pruning,
 so an increased Fade is honored in the same frame.
 `advance_time` performs the same aging without parameter observation or drawing.
-The closed-window scheduler drains and advances with the last observed parameter mirrors,
+The input worker drains in every window state;
+with the window shut it also advances time with the last observed parameter mirrors,
 including the existing default mirrors before first open.
 Closed-only persisted-document adoption still happens before draining,
 so a restored analysis window affects the first consumed audio.
@@ -46,9 +47,11 @@ Both paths share one stopped-transport debounce, timed in seconds on `LiveInput:
 so it lasts as long whichever of them polls it, and however often.
 The completion poll does not run the GUI's full start/control synchronization.
 This boundary is covered by `a_take_ends_itself_while_the_editor_window_is_shut` in the background module.
-The open check, `try_lock`, window/context construction and restore boundaries remain in the host shell.
-The shared mutex still covers an open UI build;
-this extraction does not shorten that lock or change its scheduling.
+The open check, window/context construction and restore boundaries remain in the host shell.
+The worker waits for the shared mutex rather than trying it (#1566),
+holds it to move input out and to hand the columns back,
+and runs the FFTs with it free.
+A frame still holds the mutex for the whole UI build.
 Teardown still joins the existing background drainer and consumes its final owned publication payloads.
 
 Raw spectral history now expires after the existing 610-second retention window even when input has stopped.

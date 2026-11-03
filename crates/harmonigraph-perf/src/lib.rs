@@ -140,6 +140,20 @@ pub struct ShellTimings {
     pub verts: u32,
     pub encode_ms: f32,
     pub submit_ms: f32,
+    /// The frame rate the display link was asked for this frame (see
+    /// [`link_target_fps`]), or `None` for a frame the link did not ask for —
+    /// the watchdog's and the occlusion repaint's — and wherever no link drives
+    /// the window at all. The overlay keeps the last `Some` it saw
+    /// ([`PerfStats::target_fps`]).
+    pub target_fps: Option<f32>,
+}
+
+/// The frame rate a display link was asked for: the display's rate over the
+/// divisor it paces frames at. `None` for a refresh period that is not a
+/// positive number.
+pub fn link_target_fps(refresh_s: f64, divisor: u32) -> Option<f32> {
+    let period = refresh_s * f64::from(divisor.max(1));
+    (period.is_finite() && period > 0.0).then(|| (1.0 / period) as f32)
 }
 
 /// One frame's measured costs, in milliseconds — every stage of it that
@@ -208,6 +222,9 @@ pub struct FrameCosts {
     pub scene_ms: f32,
     pub encode_ms: f32,
     pub submit_ms: f32,
+    /// The link's target for this frame, if it asked for it; see
+    /// [`ShellTimings::target_fps`].
+    pub target_fps: Option<f32>,
 }
 
 /// One interactive frame's workload: what the overlay reports as the load
@@ -567,6 +584,12 @@ pub struct PerfStats {
     /// this pane's silent performance bugs sat at hundreds a second while a
     /// healthy build sits at zero.
     pub spec_fallbacks: (f32, f32),
+    /// The frame rate the display link was last asked for, which the headline
+    /// rate is judged against. Kept across the frames the link did not ask for
+    /// (the watchdog's and the occlusion repaint's, which carry none), so one
+    /// of them does not drop the colour back to the fixed thresholds. `None`
+    /// where no link ever paced the window: the standalone.
+    pub target_fps: Option<f32>,
     /// The totals the rates were last differenced from.
     last_fallbacks: (u32, u32),
     /// The host process's smoothed physical footprint in bytes, refreshed about
@@ -618,6 +641,7 @@ impl Default for PerfStats {
             verts: 0,
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
+            target_fps: None,
             last_fallbacks: (0, 0),
             footprint_bytes: 0,
             heap_bytes: None,
@@ -687,6 +711,7 @@ impl FrameCosts {
             spectrogram_fallbacks,
             encode_ms: shell.encode_ms,
             submit_ms: shell.submit_ms,
+            target_fps: shell.target_fps,
         }
     }
 }
@@ -707,6 +732,8 @@ impl PerfStats {
     pub fn record(&mut self, costs: FrameCosts, now: f64, workload: Workload) {
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
+        // A frame the link did not ask for carries no target; keep the last.
+        self.target_fps = costs.target_fps.or(self.target_fps);
         // Every stage the frame's costs answer for, off the table — so a stage
         // that exists is a stage that accumulates, with no second list to
         // remember it in.
@@ -948,6 +975,31 @@ fn footprint_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_target_rate_is_the_display_rate_over_the_divisor() {
+        assert_eq!(link_target_fps(1.0 / 144.0, 4).map(f32::round), Some(36.0));
+        assert_eq!(link_target_fps(1.0 / 60.0, 1).map(f32::round), Some(60.0));
+        assert_eq!(link_target_fps(0.0, 1), None, "a refresh period of nothing is no target");
+    }
+
+    /// The watchdog and the occlusion repaint run frames the display link did
+    /// not ask for, and those carry no target. The overlay keeps the last one
+    /// it was given rather than judging such a frame against the fixed
+    /// thresholds, which would flip a divided rate's colour for a tick.
+    #[test]
+    fn a_frame_without_link_timing_keeps_the_last_target() {
+        let mut perf = PerfStats::default();
+        let workload = Workload::default();
+        assert_eq!(perf.target_fps, None, "no link has paced anything yet");
+        let costs = |target_fps| FrameCosts { target_fps, ..Default::default() };
+        perf.record(costs(Some(36.0)), 1.0, workload);
+        assert_eq!(perf.target_fps, Some(36.0));
+        perf.record(costs(None), 2.0, workload);
+        assert_eq!(perf.target_fps, Some(36.0), "a watchdog frame keeps the target");
+        perf.record(costs(Some(72.0)), 3.0, workload);
+        assert_eq!(perf.target_fps, Some(72.0), "a new target replaces it");
+    }
 
     #[test]
     fn host_draw_completions_have_equal_weight_across_pending_gaps() {

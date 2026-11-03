@@ -725,8 +725,8 @@ impl AudioSpectrum {
     /// Whether audio has arrived within the hold window — i.e. the spectrum is
     /// still live. Drives continuous repaint so the curve and spectrogram stay
     /// smooth even when no MIDI is animating the frame. Reads true only while
-    /// samples are actually arriving (the shell pushes them when the spectrum is
-    /// shown), so it idles cleanly once audio stops.
+    /// samples are actually arriving (the input worker feeds them whether or not
+    /// the spectrum is shown), so it idles cleanly once audio stops.
     pub fn is_flowing(&self, now: f64) -> bool {
         self.store.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS)
     }

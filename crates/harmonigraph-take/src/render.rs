@@ -27,21 +27,22 @@
 pub enum RenderTrigger {
     /// When you switch Record take off. Predictable, and works no matter how
     /// the transport behaves.
-    #[default]
     OnDisarm,
-    /// As soon as the transport stops after recording something — so a
-    /// play-through, or an audio export, produces a video with nothing
-    /// further to click. Recording disarms itself at the same moment.
+    /// Once the transport has stayed stopped for 0.4 s after recording
+    /// something — so a play-through, or an audio export, produces a video
+    /// with nothing further to click. Recording disarms itself at the same
+    /// moment.
     ///
     /// Or when the transport goes BACKWARDS, whichever comes first — see
     /// [`ends_at_rewind`](Self::ends_at_rewind). A host puts the playhead back
-    /// when an export finishes, and it does so within the few frames the stop is
-    /// counted over, so the rewind is the earlier and the surer of the two
+    /// when an export finishes, and it does so within the 0.4 s of stillness the
+    /// stop is counted over, so the rewind is the earlier and the surer of the two
     /// signals. The cost is that rewinding mid-take ends it here.
     ///
     /// Falls back gracefully: if a host stops calling `process` the
     /// instant a render finishes AND leaves the playhead where it stopped,
     /// neither signal arrives and the take simply waits for you to disarm it.
+    #[default]
     OnTransportStop,
     /// When the arranger loop first repeats: exactly one loop is recorded, the
     /// take ends at the loop's end, and that pass renders — no catching the
@@ -61,7 +62,7 @@ pub enum RenderTrigger {
     /// The crossing is decided on the audio thread, off a position the host
     /// reports whether it is playing or not.
     ///
-    /// Unlike the other two it does NOT end at a backward jump
+    /// Unlike the three others it does NOT end at a backward jump
     /// ([`ends_at_rewind`](Self::ends_at_rewind) is false), because it has an
     /// end of its own and does not need to guess at one. A rewind therefore
     /// splits, as under [`OnDisarm`](Self::OnDisarm), and the pass that renders
@@ -82,7 +83,7 @@ impl RenderTrigger {
     /// [`AtLoopEnd`](Self::AtLoopEnd), and the host putting the playhead back
     /// for [`OnTransportStop`](Self::OnTransportStop) — which is what finishing
     /// an audio export looks like from inside the plugin, and arrives before a
-    /// stop counted in GUI frames can be sure of it.
+    /// stop counted in seconds of stillness can be sure of it.
     pub fn ends_at_rewind(self) -> bool {
         match self {
             // `AtBar` keeps splitting for the opposite reason to `OnDisarm`:
@@ -147,14 +148,13 @@ mod trigger_tests {
     }
 }
 
-/// Which spectrogram a render bakes: the Video pane's Spectrogram row.
+/// Which spectrogram a render bakes: the Video pane's Video history row.
 ///
 /// Both modes scroll the same history; the choice decides its visible span.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrogramRender {
     /// The live scrolling window, spanning the Analyzer's History duration —
     /// exactly what the preview shows.
-    #[default]
     Scrolling,
     /// The live scrolling window spanning the whole render instead, so the last
     /// frame reaches back to the first. Only a render knows its own length, so
@@ -169,10 +169,9 @@ pub enum SpectrogramRender {
 /// waits on the encoder and what the file costs. At 2560x1440@60 an 82.6 s take
 /// took 90.2 s end to end through x264 and 31.5 s through VideoToolbox on an
 /// M5 Pro, for a file about 1.1x the size.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VideoEncoder {
     /// libx264 at the `--crf` quality, tuned for the spectrogram's grain.
-    #[default]
     X264,
     /// The machine's hardware H.264 encoder (`h264_videotoolbox`) at a constant
     /// quality. About three times as fast as x264 at 1440p, for a slightly
@@ -181,7 +180,8 @@ pub enum VideoEncoder {
 }
 
 /// How a finished take gets turned into a video, edited in the Video
-/// pane's Record section and persisted with the UI state.
+/// pane (its trigger and stop bar beside Record take, the rest in its Render
+/// section) and persisted with the UI state.
 ///
 /// The plugin cannot render video itself — that is `harmonigraph-offline`, a
 /// separate binary with a headless GPU device and an ffmpeg pipe, and
@@ -231,11 +231,11 @@ pub struct RenderConfig {
     /// short: the render still runs to the end of the take's audio. So 0 ends an
     /// audio export at its range end rather than a few silent seconds past it.
     ///
-    /// A render choice like [`short_edge`](Self::short_edge): a Re-render's
+    /// A render choice like [`short_edge`](Self::short_edge): a queued export's
     /// appearance supplies it, and the offline renderer's `--tail` overrides it.
     pub tail: f64,
     /// Which H.264 encoder the export runs; see [`VideoEncoder`]. The Video
-    /// pane's Encoder. A render choice like the tail: a Re-render takes the
+    /// pane's Encoder. A render choice like the tail: a queued export takes the
     /// current one, and the offline renderer's `--encoder` overrides it.
     pub encoder: VideoEncoder,
 }
@@ -244,8 +244,10 @@ impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
             // Transport stop, the trigger that also ends a take during an
-            // arrangement export (see docs/intent/video-export.md).
-            trigger: RenderTrigger::OnTransportStop,
+            // arrangement export (see docs/intent/video-export.md). The
+            // offline renderer reads the same default for a take that cannot
+            // say how it ended.
+            trigger: RenderTrigger::default(),
             // Off-trigger by default, so this only ever matters once `AtBar`
             // is chosen. 65 rather than 1: a stop bar equal to the song start
             // can never be crossed from below, so the take would simply never
@@ -287,6 +289,29 @@ impl RenderConfig {
             self.tail = RenderConfig::default().tail;
         }
         self.tail = self.tail.clamp(TAIL_RANGE.0, TAIL_RANGE.1);
+    }
+
+    /// Take from `pane` the fields that say how big the video is, how long it
+    /// runs on and what encodes it: Output size, Tail and Encoder. These are
+    /// the Video pane's whichever look is drawn, where [`frame`](Self::frame),
+    /// Video history, the trigger and the stop bar say how a take was composed
+    /// and recorded, and a recorded look keeps its own.
+    ///
+    /// `pane` is destructured exhaustively, so a new field has to be classified
+    /// here as one or the other before this compiles.
+    pub fn take_output_from(&mut self, pane: &RenderConfig) {
+        let RenderConfig {
+            trigger: _,
+            stop_bar: _,
+            spectrogram: _,
+            frame: _,
+            short_edge,
+            tail,
+            encoder,
+        } = pane;
+        self.short_edge = *short_edge;
+        self.tail = *tail;
+        self.encoder = *encoder;
     }
 
     /// The bar to end the take at, or `None` when the trigger is not
