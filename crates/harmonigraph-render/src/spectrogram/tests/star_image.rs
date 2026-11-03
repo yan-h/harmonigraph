@@ -440,15 +440,15 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
     );
 }
 
-/// A dim near star never blacks out a bright far one. The far depth covers
-/// the sky with solid stars, the near one lays a second such sky over it, and
-/// their brightnesses spread wide, so many near stars sit over brighter far
-/// ones. Laid over them as paint, as
-/// before, 29% of the pixels fell below 85% of the far depth alone and 2% below
-/// half; as light, none may fall past the 8% `STAR_HOLD_POWER` allows, and the
-/// near stars brighter than those behind still show.
+/// At `Cover` 0 a dim near star never blacks out a bright far one, and at 1
+/// it does, as paint. The far depth covers the sky with solid stars, the near
+/// one lays a second such sky over it, and their brightnesses spread wide, so
+/// many near stars sit over brighter far ones. As paint, 29% of the pixels
+/// fell below 85% of the far depth alone and 2% below half; as light, none
+/// may fall past the 8% `STAR_HOLD_POWER` allows, and the near stars brighter
+/// than those behind still show.
 #[test]
-fn a_dim_near_star_never_blacks_out_a_far_one() {
+fn cover_decides_whether_a_dim_near_star_blacks_out_a_far_one() {
     let Some((device, queue)) = headless_device() else { return };
     let (width, height) = (480, 270);
     let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
@@ -465,8 +465,9 @@ fn a_dim_near_star_never_blacks_out_a_far_one() {
     let luma = |px: &[u8; 4]| {
         0.2126 * f32::from(px[0]) + 0.7152 * f32::from(px[1]) + 0.0722 * f32::from(px[2])
     };
-    let mut frame = |solo| {
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = solo;
+    let mut frame = |solo, cover| {
+        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+        (stars.star_solo, stars.star_cover) = (solo, cover);
         let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
         let side = width as usize + 1;
         let pixels = frame.as_chunks::<4>().0;
@@ -475,14 +476,19 @@ fn a_dim_near_star_never_blacks_out_a_far_one() {
             .map(|i| luma(&pixels[i]))
             .collect::<Vec<_>>()
     };
-    let far = frame([true, false, false, false, false]);
-    let both = frame([true, false, false, false, true]);
-    let pairs = || far.iter().zip(&both);
-    // Two 8-bit steps of slack on top of the hold's 8%.
-    let darkened = pairs().filter(|&(f, b)| *b < 0.92 * f - 2.0).count();
-    let brightened = pairs().filter(|&(f, b)| *b > f + 10.0).count();
+    let far = frame([true, false, false, false, false], 0.0);
+    let light = frame([true, false, false, false, true], 0.0);
+    let paint = frame([true, false, false, false, true], 1.0);
+    let below = |both: &[f32], share: f32| {
+        // Two 8-bit steps of slack.
+        far.iter().zip(both).filter(|&(f, b)| *b < share * f - 2.0).count()
+    };
+    let darkened = below(&light, 0.92);
+    let brightened = far.iter().zip(&light).filter(|&(f, b)| *b > f + 10.0).count();
     assert_eq!(darkened, 0, "{darkened} of {} pixels darkened past the hold", far.len());
     assert!(brightened > far.len() / 10, "the near stars showed at only {brightened} pixels");
+    let (holes, dimmed) = (below(&paint, 0.5), below(&paint, 0.85));
+    assert!(holes > 0 && dimmed > far.len() / 5, "as paint: {holes} holes, {dimmed} dimmed");
 }
 
 /// Every star narrower than a texel of the star image still shows (#1446).

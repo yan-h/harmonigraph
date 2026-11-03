@@ -290,9 +290,9 @@ struct Cloud {
     // none of the textures above.
     star_randomness: f32,
     star_life: f32,
-    // The starfield's `Size variation`, then the rest of its row.
+    // The starfield's `Size variation` and `Cover`, then the rest of its row.
     star_size_variation: f32,
-    star_pad0: u32,
+    star_cover: f32,
     star_pad1: u32,
     // The star image's actual size in texels; zw are padding.
     star_image_size: vec4<f32>,
@@ -952,6 +952,7 @@ fn star_size() -> vec2<f32> { return cloud.size; }
 fn star_randomness() -> f32 { return cloud.star_randomness; }
 fn star_life() -> f32 { return cloud.star_life; }
 fn star_size_variation() -> f32 { return cloud.star_size_variation; }
+fn star_cover() -> f32 { return cloud.star_cover; }
 fn star_image_size() -> vec2<f32> { return cloud.star_image_size.xy; }
 fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }

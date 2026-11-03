@@ -38,7 +38,9 @@ struct StarUniforms {
     star_randomness: f32,
     star_life: f32,
     star_size_variation: f32,
-    pad: f32,
+    // How far a star hides those behind it whatever their brightness
+    // (`star_layers`).
+    star_cover: f32,
     star_slices: array<StarSlice, 5>,
 };
 fn atlas_texel(index: i32) -> vec2<i32> {
@@ -290,21 +292,24 @@ fn star_gather3(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
 }
 
 // How steeply a star's hold over the stars behind it falls as it gets dimmer
-// than them: a star at half their brightness hides a sixteenth of them. Steep,
-// so a dimmer star in front darkens the one behind by at most 8%, where it is
-// four fifths as bright; a hard switch at equal brightness would never darken
-// it, but would flip a star's hue in and out as the light under the two moved.
+// than them, at `Cover` 0: a star at half their brightness hides a sixteenth of
+// them. Steep, so a dimmer star in front darkens the one behind by at most 8%,
+// where it is four fifths as bright; a hard switch at equal brightness would
+// never darken it, but would flip a star's hue in and out as the light under
+// the two moved.
 const STAR_HOLD_POWER: f32 = 4.0;
 
 // The consumer's floor, then every slice laid over it back to front: within a
 // slice the stars' coverages add and their colours average by coverage, and the
 // slice covers the floor by its summed coverage, capped at one. Over the slices
-// behind it, a slice is light rather than paint: it covers them only as far as it
-// is as bright as they are (`STAR_HOLD_POWER`), so a dim near star cannot black
-// out a bright far one. The slices gather premultiplied, apart from the floor,
-// so that comparison sees the stars behind alone. The salts (`fs_star_bake`)
-// are three apart: a star hashes at its salt and the one past it, a cell's
-// stagger at the second.
+// behind it, a slice hides `Cover`'s share of them by its coverage, as paint,
+// and the rest only as far as it is as bright as they are (`STAR_HOLD_POWER`),
+// as light. Light keeps a dim near star from blacking out a bright far one;
+// paint keeps the field's average colour, which light lifts where stars overlap,
+// because the brighter one shows. The slices gather premultiplied, apart from
+// the floor, so the comparison sees the stars behind alone. The salts
+// (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
+// it, a cell's stagger at the second.
 fn star_layers(pt: vec2<f32>) -> vec4<f32> {
     var stars = vec4<f32>(0.0);
     let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
@@ -332,7 +337,7 @@ fn star_layers(pt: vec2<f32>) -> vec4<f32> {
             let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
             let behind = dot(stars.rgb, luma);
             let ratio = select(1.0, saturate(dot(colour, luma) * stars.w / behind), behind > 0.0);
-            let hold = cover * pow(ratio, STAR_HOLD_POWER);
+            let hold = cover * mix(pow(ratio, STAR_HOLD_POWER), 1.0, star_cover());
             stars = vec4<f32>(
                 stars.rgb * (1.0 - hold) + colour * (cover * (1.0 - stars.w) + hold * stars.w),
                 stars.w + (1.0 - stars.w) * cover,
