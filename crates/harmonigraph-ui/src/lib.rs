@@ -491,19 +491,18 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 ///
 /// The Background glow's release is one: a halo falls on its own clock, which
 /// can outlast the slices by many seconds, and with the roll hidden and no
-/// audio nothing else keeps the frame loop awake for it. It joins only while
-/// the glow draws (`glow_fade::apply`'s own test), so a glow that is off does
-/// not hold the loop for a tail that is not there.
+/// audio nothing else keeps the frame loop awake for it. Each surface's glow
+/// says when its falling light stops moving a pixel
+/// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), from its
+/// own state, so a glow that is off keeps no state to ask and one that stops
+/// being drawn lapses at its deadline.
 fn releasing(state: &SharedState, now: f64) -> bool {
-    let view = &state.picture.appearance.view;
-    let animation = view.note_animation;
-    let fade = state.picture.runtime.frame_params.fade_time;
-    let mut span = f64::from(animation.fade_out_delay)
-        + f64::from(fade) * (1.0 + f64::from(animation.stagger_spread));
-    if view.glow_reach > 0.0 && view.glow_strength > 0.0 {
-        span = span.max(panes::glow_fade::halo_tail(view.glow_release, fade));
-    }
+    let animation = state.picture.appearance.view.note_animation;
+    let span = f64::from(animation.fade_out_delay)
+        + f64::from(state.picture.runtime.frame_params.fade_time)
+            * (1.0 + f64::from(animation.stagger_spread));
     state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| now - last <= span)
+        || state.picture.surfaces.glow_fade.values().any(|glow| glow.fading_at(now))
 }
 
 /// Whether the piano roll still has something moving across it: its window
