@@ -192,8 +192,8 @@ including the follow offset,
 and the Tuning pane reports how far following has moved it.
 While Follow harmony is on,
 the pane also shows the context settings Follow reads:
-**Context** under Follow harmony context,
-with Half-life, Same-note tolerance, Silence reset and the two Reset checkboxes.
+Follow harmony context,
+with no fold to open: Half-life, Same-note tolerance, Silence reset and the two Reset checkboxes.
 They are the values Adaptive edits;
 Weight per octave is Adaptive's alone.
 Shape edits are made against that same placement.

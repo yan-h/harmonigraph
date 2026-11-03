@@ -174,9 +174,24 @@ fn follow_harmony_shows_adaptive_context_under_lattice_map() {
             )
         };
         frame();
-        text_at(&frame(), "Context").is_some()
+        let out = frame();
+        // The fold, then every control the context has, none of them behind a
+        // fold that was never opened.
+        let controls = [
+            "Half-life",
+            "Same-note tolerance",
+            "Silence reset",
+            "Reset context on stop",
+            "Reset context on loop / seek",
+        ];
+        (text_at(&out, "Context").is_some(), controls.map(|label| text_at(&out, label).is_some()))
     };
-    assert!(drawn(TuningEngine::Adaptive, Follow::Off), "Adaptive always has its context");
-    assert!(drawn(TuningEngine::LatticeMap, Follow::Thirds), "Follow reads the context");
-    assert!(!drawn(TuningEngine::LatticeMap, Follow::Off), "nothing reads it with Follow off");
+    let (fold, controls) = drawn(TuningEngine::Adaptive, Follow::Off);
+    assert!(fold, "Adaptive keeps its Context fold");
+    assert_eq!(controls, [false; 5], "Adaptive's fold starts closed");
+    let (fold, controls) = drawn(TuningEngine::LatticeMap, Follow::Thirds);
+    assert!(!fold, "Follow's context has no fold of its own");
+    assert_eq!(controls, [true; 5], "Follow reads the context, reachable without opening a fold");
+    let (fold, controls) = drawn(TuningEngine::LatticeMap, Follow::Off);
+    assert!(!fold && controls == [false; 5], "nothing reads it with Follow off");
 }

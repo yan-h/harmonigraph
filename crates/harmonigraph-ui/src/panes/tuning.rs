@@ -452,7 +452,10 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        context_controls(ui, &mut p, &fresh, true);
+        let context = subsection(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true));
+        context.on_hover_text(
+            "New notes follow the moving context; sounding notes keep their correction.",
+        );
         if p != before {
             state.runtime.edit_tuning(
                 &mut state.appearance,
@@ -480,58 +483,54 @@ fn follow_context_controls(ui: &mut egui::Ui, state: &mut PictureState, params: 
     });
 }
 
-/// The context the adaptive policy votes with: edited under Adaptive, and
-/// under Lattice Map while Follow harmony reads it. Follow reads the decayed
+/// The context the adaptive policy votes with: edited in Adaptive's Context
+/// fold, and under Lattice Map directly under Follow harmony's heading, where
+/// it reads it. Follow reads the decayed
 /// context alone, so only Adaptive's own scoring takes `register`, the weight
 /// per octave.
 fn context_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig, register: bool) {
-    let context = subsection(ui, "Context", |ui| {
-        p.half_life_ms = adaptive_value(
+    p.half_life_ms = adaptive_value(
+        ui,
+        (p.half_life_ms.into(), fresh.half_life_ms.into()),
+        0..=20_000,
+        1000.0,
+        "Half-life",
+        "s",
+        "A note struck this long before the newest counts half. 0: no decay.",
+    ) as u16;
+    if register {
+        p.register = adaptive_value(
             ui,
-            (p.half_life_ms.into(), fresh.half_life_ms.into()),
-            0..=20_000,
+            (p.register.into(), fresh.register.into()),
+            10..=1000,
             1000.0,
-            "Half-life",
-            "s",
-            "A note struck this long before the newest counts half. 0: no decay.",
+            "Weight per octave",
+            "",
+            "Each octave between two notes multiplies the vote by this. 1: ignore register.",
         ) as u16;
-        if register {
-            p.register = adaptive_value(
-                ui,
-                (p.register.into(), fresh.register.into()),
-                10..=1000,
-                1000.0,
-                "Weight per octave",
-                "",
-                "Each octave between two notes multiplies the vote by this. 1: ignore register.",
-            ) as u16;
-        }
-        p.tolerance = adaptive_value(
-            ui,
-            (p.tolerance, fresh.tolerance),
-            0..=20_000_000,
-            1_000_000.0,
-            "Same-note tolerance",
-            "¢",
-            "Onsets this close in pitch count as one note.",
-        );
-        p.silence_ms = adaptive_value(
-            ui,
-            (p.silence_ms, fresh.silence_ms),
-            0..=120_000,
-            1000.0,
-            "Silence reset",
-            "s",
-            "Forget the context after this long with nothing held. 0: never.",
-        );
-        crate::widgets::checkbox(ui, &mut p.reset_stop, "Reset context on stop")
-            .on_hover_text("Forget the context when the transport stops.");
-        crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
-            .on_hover_text("Forget the context when playback jumps.");
-    });
-    context.on_hover_text(
-        "New notes follow the moving context; sounding notes keep their correction.",
+    }
+    p.tolerance = adaptive_value(
+        ui,
+        (p.tolerance, fresh.tolerance),
+        0..=20_000_000,
+        1_000_000.0,
+        "Same-note tolerance",
+        "¢",
+        "Onsets this close in pitch count as one note.",
     );
+    p.silence_ms = adaptive_value(
+        ui,
+        (p.silence_ms, fresh.silence_ms),
+        0..=120_000,
+        1000.0,
+        "Silence reset",
+        "s",
+        "Forget the context after this long with nothing held. 0: never.",
+    );
+    crate::widgets::checkbox(ui, &mut p.reset_stop, "Reset context on stop")
+        .on_hover_text("Forget the context when the transport stops.");
+    crate::widgets::checkbox(ui, &mut p.reset_loop, "Reset context on loop / seek")
+        .on_hover_text("Forget the context when playback jumps.");
 }
 
 fn instance_section(ui: &mut egui::Ui, state: &PictureState, params: &dyn ParamBackend) {
