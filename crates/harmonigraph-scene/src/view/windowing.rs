@@ -271,10 +271,10 @@ impl ViewConfig {
     /// That matters beyond the picture: the target is persisted, and it is the
     /// number a scroll without end would otherwise grow forever.
     ///
-    /// Once a frame, from the docked lattice — which the offline renderer also
-    /// reaches, drawing through the same pane function. It is idempotent on a
-    /// target already inside its cell, so the extra call costs a render
-    /// nothing and its frames stay reproducible.
+    /// Once a frame, from the docked lattice, which is the only caller:
+    /// `draw_pane` reaches `draw_lattice` directly, and the offline renderer
+    /// needs none because `set_camera_movement` already re-centres a replayed
+    /// camera. It is idempotent on a target already inside its cell.
     pub fn follow_camera(&mut self, camera: &mut Camera) {
         if !camera.target.is_finite() {
             return;

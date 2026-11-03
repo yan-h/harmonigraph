@@ -953,7 +953,7 @@ impl ViewConfig {
     /// invisible past this line and no caller can pair a duration with the
     /// wrong shape. The shape has already passed through `sanitize`.
     ///
-    /// The Note section's Fade curve bar builds one of its own, and it is the single
+    /// The Note animation section's Note fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
     /// of the curve, over a unit duration that is nothing a note ever fades
     /// on, so it has no note's seconds to pair with and could not reach for

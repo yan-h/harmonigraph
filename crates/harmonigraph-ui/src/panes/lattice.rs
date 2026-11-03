@@ -600,7 +600,7 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
 /// premultiplied nothing carries.
 const LABEL_SHADOW: egui::Color32 = egui::Color32::BLACK;
 
-/// Labels on hovered and sounding nodes, plus whatever else the Show row
+/// Labels on hovered and sounding nodes, plus whatever else Label visibility
 /// names -- every visited node under
 /// [`NoteNames::Past`](harmonigraph_scene::NoteNames::Past), every home-sheet
 /// node on screen under [`All`](harmonigraph_scene::NoteNames::All) --
@@ -1433,7 +1433,7 @@ mod tests {
     ///
     /// The reserve is a departure device and its argument only holds there:
     /// it stands in for a record that `node.trail` does not carry until the
-    /// frame the release finishes. A note on its way IN has no record coming
+    /// voice's Note fade ends. A note on its way IN has no record coming
     /// and nothing to settle onto, so reserving there pins the name at full
     /// brightness over a node still at a fraction of it — the same "holding
     /// steady and then switching" the reserve exists to remove, at the other
@@ -1504,7 +1504,7 @@ mod tests {
     /// Measured through the same derive as the reserve's own test rather than
     /// off a hand-built node, because the reserve needs a state only a
     /// release reaches — on the home sheet, under `Past`, with the trail not
-    /// written until the frame the release ends.
+    /// written until the voice's Note fade ends.
     #[test]
     fn a_departing_name_held_whole_leaves_no_marker_under_it() {
         let mut state = fresh();
