@@ -305,7 +305,7 @@ Host map-offset parameters explicitly name whole generator steps rather than tun
 
 Video keeps **Finish recording** and **Stop at bar** with Record take.
 Finishing a take starts rendering;
-**Re-render take** applies the current appearance and video settings to the last take.
+**Queue last take** in **Exports** renders the last take again with the current appearance and video settings.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
 Shift-drag either picture to an edge of the preview to arrange the pictures.
 Drag either picture without Shift to navigate,

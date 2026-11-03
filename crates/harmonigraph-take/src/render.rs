@@ -27,21 +27,22 @@
 pub enum RenderTrigger {
     /// When you switch Record take off. Predictable, and works no matter how
     /// the transport behaves.
-    #[default]
     OnDisarm,
-    /// As soon as the transport stops after recording something — so a
-    /// play-through, or an audio export, produces a video with nothing
-    /// further to click. Recording disarms itself at the same moment.
+    /// Once the transport has stayed stopped for 0.4 s after recording
+    /// something — so a play-through, or an audio export, produces a video
+    /// with nothing further to click. Recording disarms itself at the same
+    /// moment.
     ///
     /// Or when the transport goes BACKWARDS, whichever comes first — see
     /// [`ends_at_rewind`](Self::ends_at_rewind). A host puts the playhead back
-    /// when an export finishes, and it does so within the few frames the stop is
-    /// counted over, so the rewind is the earlier and the surer of the two
+    /// when an export finishes, and it does so within the 0.4 s of stillness the
+    /// stop is counted over, so the rewind is the earlier and the surer of the two
     /// signals. The cost is that rewinding mid-take ends it here.
     ///
     /// Falls back gracefully: if a host stops calling `process` the
     /// instant a render finishes AND leaves the playhead where it stopped,
     /// neither signal arrives and the take simply waits for you to disarm it.
+    #[default]
     OnTransportStop,
     /// When the arranger loop first repeats: exactly one loop is recorded, the
     /// take ends at the loop's end, and that pass renders — no catching the
@@ -61,7 +62,7 @@ pub enum RenderTrigger {
     /// The crossing is decided on the audio thread, off a position the host
     /// reports whether it is playing or not.
     ///
-    /// Unlike the other two it does NOT end at a backward jump
+    /// Unlike the three others it does NOT end at a backward jump
     /// ([`ends_at_rewind`](Self::ends_at_rewind) is false), because it has an
     /// end of its own and does not need to guess at one. A rewind therefore
     /// splits, as under [`OnDisarm`](Self::OnDisarm), and the pass that renders
@@ -82,7 +83,7 @@ impl RenderTrigger {
     /// [`AtLoopEnd`](Self::AtLoopEnd), and the host putting the playhead back
     /// for [`OnTransportStop`](Self::OnTransportStop) — which is what finishing
     /// an audio export looks like from inside the plugin, and arrives before a
-    /// stop counted in GUI frames can be sure of it.
+    /// stop counted in seconds of stillness can be sure of it.
     pub fn ends_at_rewind(self) -> bool {
         match self {
             // `AtBar` keeps splitting for the opposite reason to `OnDisarm`:
@@ -106,6 +107,16 @@ mod trigger_tests {
         assert!(RenderTrigger::OnTransportStop.ends_at_rewind());
         assert!(RenderTrigger::AtLoopEnd.ends_at_rewind());
         assert!(!RenderTrigger::AtBar.ends_at_rewind());
+    }
+
+    /// The enums' own defaults are the fresh `RenderConfig`'s choices, so a
+    /// fallback through `unwrap_or_default()` names what a fresh install does.
+    #[test]
+    fn the_enum_defaults_are_the_fresh_configs_choices() {
+        let fresh = super::RenderConfig::default();
+        assert_eq!(RenderTrigger::default(), fresh.trigger);
+        assert_eq!(super::SpectrogramRender::default(), fresh.spectrogram);
+        assert_eq!(super::VideoEncoder::default(), fresh.encoder);
     }
 
     /// The bar only reaches the audio thread under the one trigger that means
@@ -147,19 +158,19 @@ mod trigger_tests {
     }
 }
 
-/// Which spectrogram a render bakes: the Video pane's Spectrogram row.
+/// Which spectrogram a render bakes: the Video pane's Video history row.
 ///
 /// Both modes scroll the same history; the choice decides its visible span.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrogramRender {
     /// The live scrolling window, spanning the Analyzer's History duration —
     /// exactly what the preview shows.
-    #[default]
     Scrolling,
     /// The live scrolling window spanning the whole render instead, so the last
     /// frame reaches back to the first. Only a render knows its own length, so
     /// the preview keeps the dialled span; the offline renderer applies this,
     /// held to the History duration bar's ends.
+    #[default]
     WholeVideo,
 }
 
@@ -172,16 +183,17 @@ pub enum SpectrogramRender {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VideoEncoder {
     /// libx264 at the `--crf` quality, tuned for the spectrogram's grain.
-    #[default]
     X264,
     /// The machine's hardware H.264 encoder (`h264_videotoolbox`) at a constant
     /// quality. About three times as fast as x264 at 1440p, for a slightly
     /// larger file and no grain tuning.
+    #[default]
     Hardware,
 }
 
 /// How a finished take gets turned into a video, edited in the Video
-/// pane's Record section and persisted with the UI state.
+/// pane (its trigger and stop bar beside Record take, the rest in its Render
+/// section) and persisted with the UI state.
 ///
 /// The plugin cannot render video itself — that is `harmonigraph-offline`, a
 /// separate binary with a headless GPU device and an ffmpeg pipe, and
@@ -231,11 +243,11 @@ pub struct RenderConfig {
     /// short: the render still runs to the end of the take's audio. So 0 ends an
     /// audio export at its range end rather than a few silent seconds past it.
     ///
-    /// A render choice like [`short_edge`](Self::short_edge): a Re-render's
+    /// A render choice like [`short_edge`](Self::short_edge): a queued export's
     /// appearance supplies it, and the offline renderer's `--tail` overrides it.
     pub tail: f64,
     /// Which H.264 encoder the export runs; see [`VideoEncoder`]. The Video
-    /// pane's Encoder. A render choice like the tail: a Re-render takes the
+    /// pane's Encoder. A render choice like the tail: a queued export takes the
     /// current one, and the offline renderer's `--encoder` overrides it.
     pub encoder: VideoEncoder,
 }

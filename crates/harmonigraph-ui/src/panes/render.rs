@@ -87,8 +87,8 @@ pub(crate) fn render_pane(
         // Make the render frame obvious against the pane. The letterbox padding
         // takes the panel color, so it reads as inert chrome rather than part of
         // the shot; the aspect box takes the render's OWN frame background — the
-        // color the offline renderer shows in its margins and inter-pane gaps — so
-        // the box is exactly the pixels the video will contain. Painting the
+        // picture's black, which no composed layout shows through (margin and gap
+        // are 0) — so the box is exactly the pixels the video will contain. Painting the
         // padding and the pane fills both `picture()` leaves no way to tell where
         // the frame ends.
         let bg = layout.background;
@@ -324,7 +324,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
         // decides only how big, so each option shows the pixels it lands on and
         // the pair is what the plugin passes as `--size`.
         //
-        // 720 is the fresh size.
+        // 1440 is the fresh size.
         let frame = state.appearance.render.frame;
         let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
             .iter()
@@ -350,19 +350,19 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
 /// label history", the Spectrogram's "Clear history" — and those stay, since
 /// clearing what one pane draws is a real thing to want while dialing that pane
 /// in. This is for the other moment, when all four are wanted together and
-/// there is only one reason: a take about to be recorded should start on an
-/// empty picture, because whatever is left over is baked into the video's
-/// opening seconds. Two panes to visit for one intention is what makes it a
-/// button here.
+/// there is only one reason: to watch a take being recorded on an empty
+/// picture. Two panes to visit for one intention is what makes it a button here.
 ///
-/// It clears display state only — nothing about the take, the render, or the
-/// tuning — so there is nothing to undo and no confirmation to sit through.
+/// It clears what you see and nothing else — not the take, the render, or the
+/// tuning — so there is nothing to undo and no confirmation to sit through. It
+/// does not change a video: an export always starts from an empty picture,
+/// whatever the live one holds.
 fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
     button_row(ui, |ui| {
         if ui
             .button("Clear display history")
             .on_hover_text(
-                "Clear lattice label history, MIDI ribbons, spectrogram history and lingering glow before recording. Held MIDI notes stay on the lattice but leave the roll until played again.",
+                "Clear lattice label history, MIDI ribbons, spectrogram history and lingering glow from what you see while recording. Held MIDI notes stay on the lattice but leave the roll until played again. A video export always starts from an empty picture, so this does not change one.",
             )
             .clicked()
         {
@@ -371,17 +371,17 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
     });
 }
 
-/// Turning a recorded take into a video: its history window, re-render action
+/// Turning a recorded take into a video: its history window, export queue
 /// and progress. The finish trigger belongs beside Record take.
 ///
 /// Its own section rather than rows under Record, which is about CAPTURE: only
 /// the record switch, finish trigger, status and clear are about getting a take, and
-/// everything here happens after there is one. The Spectrogram row belongs here
+/// everything here happens after there is one. The Video history row belongs here
 /// rather than under a heading of its own, which would be one row calling
 /// itself "Spectrogram" beside the Analyzer settings' heading of that name; what it
 /// decides is what this render bakes.
 ///
-/// The Spectrogram row draws whatever the shell is, since a standalone with no
+/// The Video history row draws whatever the shell is, since a standalone with no
 /// transport still renders; the rows that need a take to exist follow the same
 /// `supported` gate Record does.
 ///
@@ -417,7 +417,7 @@ fn render_controls(
             ],
         );
         // Here rather than beside Finish recording: a render choice like Output
-        // size, which a Re-render takes from the current look. Always shown,
+        // size, which a queued export takes from the current look. Always shown,
         // because whether it applies turns on the trigger a take was RECORDED
         // under, not the one selected now.
         ui.horizontal_wrapped(|ui| {
@@ -435,7 +435,7 @@ fn render_controls(
             );
         });
         // A render choice like the Tail: the picture is the same either way,
-        // and a Re-render takes the current one.
+        // and a queued export takes the current one.
         choice_row(
             ui,
             "Encoder",
@@ -449,7 +449,7 @@ fn render_controls(
                 (
                     crate::VideoEncoder::Hardware,
                     "Hardware",
-                    "This Mac's hardware H.264 encoder: about three times as fast as x264 at 1440p, for a slightly larger file and no grain tuning. An export fails on a Mac without one or without Apple Silicon.",
+                    "This Mac's hardware H.264 encoder: about three times as fast as x264 at 1440p, for a slightly larger file and no grain tuning. An export fails on a Mac without one or without Apple Silicon. A frame over 4096 px on a side (21:9 at 2160) goes through x264 instead.",
                 ),
             ],
         );
@@ -642,7 +642,9 @@ fn record_controls(
 
 /// What both Queue buttons answer a hover with: what a queued job carries,
 /// and what the queue survives.
-const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings; recorded camera movement wins during replay. \
+const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings. \
+     With each take's recorded appearance, only Output size, Tail and Encoder are the current ones: the take keeps the frame and Video history it was recorded with. \
+     Recorded camera movement wins during replay. \
      The queue survives closing this editor, but removing the plugin or closing the project cancels unfinished jobs, and there is no resume after a crash.";
 
 /// Captured export requests and instance-owned job controls. The builder is
@@ -771,7 +773,19 @@ pub(crate) fn capture_export(
         }
         captured
     };
-    captured.render = appearance.render.clone();
+    // Output size, Tail and Encoder are the pane's whichever look is drawn:
+    // they say how big the video is, how long it runs on and what encodes it,
+    // where the frame and Video history say how the take was composed. A
+    // recorded look keeps its own, so queueing it does not recompose the take
+    // to the pane's aspect and split.
+    if interaction.take.export_recorded {
+        let (short_edge, tail, encoder) =
+            (appearance.render.short_edge, appearance.render.tail, appearance.render.encoder);
+        (captured.render.short_edge, captured.render.tail, captured.render.encoder) =
+            (short_edge, tail, encoder);
+    } else {
+        captured.render = appearance.render.clone();
+    }
     Ok(crate::ExportAction::Queue {
         take: path.to_owned(),
         appearance: captured.serialize(),
@@ -1425,6 +1439,55 @@ mod tests {
 #[cfg(test)]
 mod export_tests {
     use super::*;
+
+    /// A take queued under its recorded appearance keeps the frame and Video
+    /// history it was composed with, and takes only Output size, Tail and
+    /// Encoder from the pane. Recorded as 9:16 with the lattice on top and the
+    /// scrolling history, against a pane at the fresh 16:9 and Fit video.
+    #[test]
+    fn a_recorded_look_keeps_its_frame_and_takes_the_panes_size_tail_and_encoder() {
+        use crate::{LatticeSide, SpectrogramRender, VideoEncoder};
+        let mut recorded = crate::AppearanceDocument::default();
+        recorded.render.frame.aspect_w = 9;
+        recorded.render.frame.aspect_h = 16;
+        recorded.render.frame.lattice = LatticeSide::Top;
+        recorded.render.frame.split = 0.3;
+        recorded.render.spectrogram = SpectrogramRender::Scrolling;
+        recorded.render.short_edge = 720;
+        recorded.render.tail = 5.0;
+        recorded.render.encoder = VideoEncoder::X264;
+        let path = std::env::temp_dir()
+            .join(format!("harmonigraph-recorded-queue-{}.take", std::process::id()));
+        let header = harmonigraph_take::Header {
+            appearance: Some(recorded.serialize()),
+            ..Default::default()
+        };
+        drop(harmonigraph_take::Writer::create(&path, &header).unwrap());
+
+        let mut pane = crate::AppearanceDocument::default();
+        pane.render.short_edge = 1080;
+        pane.render.tail = 2.0;
+        pane.render.encoder = VideoEncoder::Hardware;
+        let mut interaction = crate::Interaction::default();
+        interaction.take.export_recorded = true;
+        let queued = capture_export(&pane, &interaction, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let crate::ExportAction::Queue { appearance, render, .. } = queued else {
+            panic!("queue action")
+        };
+        let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
+        for render in [&captured.render, &render] {
+            let frame = render.frame;
+            assert_eq!((frame.aspect_w, frame.aspect_h, frame.split), (9, 16, 0.3));
+            assert_eq!(frame.lattice, LatticeSide::Top);
+            assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
+            assert_eq!(render.short_edge, 1080);
+            assert_eq!(render.tail, 2.0);
+            assert_eq!(render.encoder, VideoEncoder::Hardware);
+        }
+    }
+
     #[test]
     fn expanded_builder_fits_and_queues_each_path_with_captured_settings() {
         let ctx = crate::tests::probe::themed();
