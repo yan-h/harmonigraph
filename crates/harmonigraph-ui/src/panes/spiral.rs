@@ -143,17 +143,6 @@ const DOT: (f32, f32) = (0.7, 3.0);
 /// from the track. On narrow tracks the body retains at least half its extent.
 const DOT_CLEARANCE_PT: f32 = 1.25;
 
-/// How far past the track's own thickness a note's mark may reach, as a share
-/// of half the track. The turns abut, so the overhang runs into the octaves
-/// either side — kept small for that reason, since a mark spilling far would
-/// read as the note claiming energy an octave away.
-///
-/// It is also a term in the FIT: [`Spiral::new`] reserves a whole reach at each
-/// end of the range rather than half a track, because the top note's dot is
-/// what reaches nearest the disc's edge, and every name outside it is placed
-/// off that edge.
-const VOICE_OVERHANG: f32 = 0.25;
-
 /// Points of type a sounding note's name is set in on the rim, on a pane large
 /// enough to give the names their whole band.
 ///
@@ -197,10 +186,9 @@ const NAME_BAND_SHARE: f32 = 0.15;
 ///
 /// An octave is a turn, so C4 and C5 leave the disc on the same ray and their
 /// names are the same word in the same place — printed twice it is just heavier
-/// ink, and printed at a bend's worth of angle apart it is a smear. The grain
-/// matches the roll's own thinning (`names::LANE_CENTS`): fine enough to keep a
-/// comma's two spellings apart, coarse enough that vibrato does not split one
-/// note into two names.
+/// ink, and printed at a bend's worth of angle apart it is a smear. The grain is
+/// fine enough to keep a comma's two spellings apart, coarse enough that
+/// vibrato does not split one note into two names.
 const NAME_GRAIN_CENTS: f32 = 10.0;
 
 /// How far the disc may be magnified, as a multiple of its own fit.
@@ -381,23 +369,22 @@ impl Spiral {
         let r_out = r_out - band;
         let hole = r_out * INNER_HOLE;
         let octaves = (max_midi - min_midi) / 12.0;
-        // A note's full REACH is reserved at each end, not half a track: the
-        // dot a sounding note draws is the one thing on the disc that stands
-        // out past the track it sits on, so a fit that reserved only the track
-        // puts the top note's dot over the disc's edge — and everything outside
+        // Half a track is reserved at each end: a sounding note's dot is held
+        // inside its own turn ([`Spiral::dot`]), so nothing the disc draws
+        // stands out past the track, and a fit that reserved the track's half
+        // keeps the top note's dot inside the disc's edge — everything outside
         // that edge is the names' band.
         // `a_notes_dot_stays_inside_the_pane` is what holds this.
         //
-        // So `dr * octaves + 2 * reach = r_out - hole` with
-        // `reach = dr / 2 * (1 + VOICE_OVERHANG)`, which solves for `dr`
-        // directly. Solving rather than clamping afterwards is what makes
+        // So `dr * octaves + 2 * half = r_out - hole` with `half = dr / 2`,
+        // which solves for `dr` directly. Solving rather than clamping afterwards is what makes
         // `r0 > 0` a property of the fit rather than a case to catch, and it
         // holds the hole at a constant SHARE of the disc, so zooming the pitch
         // range in does not eat it. The narrowest disc this has to fit is two
         // octaves, which is what `PITCH_RANGE_MIN_SPAN` holds the range open
         // to — the widest a single turn ever gets.
-        let dr = (r_out - hole) / (octaves + 1.0 + VOICE_OVERHANG);
-        let r0 = hole + dr * 0.5 * (1.0 + VOICE_OVERHANG);
+        let dr = (r_out - hole) / (octaves + 1.0);
+        let r0 = hole + dr * 0.5;
         Spiral { centre: rect.center(), r0, dr, band, min_midi, max_midi }
     }
 
@@ -407,9 +394,9 @@ impl Spiral {
     /// Two multiplies and an offset, on top of a fit left exactly as
     /// [`new`](Self::new) solved it. That is the whole reason the framing is a
     /// second step rather than a term in the fit: every argument there — the hole
-    /// as a share, the reach reserved at both ends, the band taken off the radius
-    /// first — is about the picture's proportions, and a magnifier keeps all of
-    /// them. What it does not keep is the promise that the disc is INSIDE the
+    /// as a share, half a track reserved at both ends, the band taken off the
+    /// radius first — is about the picture's proportions, and a magnifier keeps
+    /// all of them. What it does not keep is the promise that the disc is INSIDE the
     /// pane, which is what magnifying means; the pane paints through a clipping
     /// painter, so what hangs over the edge is cut off.
     ///
@@ -457,13 +444,6 @@ impl Spiral {
         self.dr * 0.5
     }
 
-    /// How far a sounding note's mark may stand out from the track's centre.
-    /// Wider than [`half`](Self::half) by [`VOICE_OVERHANG`], and the fit
-    /// reserves it at both ends of the range.
-    fn reach(&self) -> f32 {
-        self.half() * (1.0 + VOICE_OVERHANG)
-    }
-
     /// The radius of the coloured dot a sounding note is marked with: the
     /// extent [`DOT`] sets, less the body clearance
     /// ([`DOT_CLEARANCE_PT`]).
@@ -471,15 +451,15 @@ impl Spiral {
     /// Capped at HALF the track, which is the bound that is not a matter of
     /// taste: a dot past it crosses into the octaves either side, and which
     /// turn the note is on is what the dot is drawn to say. It answers the fit
-    /// as well, being the tighter of the two — [`reach`](Self::reach) is the
-    /// same half a whole [`VOICE_OVERHANG`] wider, so a dot held inside its own
-    /// turn is inside the disc without asking. What the cap binds on is the
+    /// as well: the fit reserves [`half`](Self::half) at each end of the range,
+    /// so a dot held inside its own turn is inside the disc without asking.
+    /// What the cap binds on is the
     /// floor in [`DOT`], which is a length in points and would otherwise draw a
     /// dot a quarter wider than the track on a small enough pane.
     fn dot(&self) -> f32 {
         let extent = (self.half() * DOT.0).max(DOT.1).min(self.half());
         // Never under half the extent, so a track thin enough to shrink the
-        // mark below two insets' worth still has a dot to carry the note's
+        // mark below two clearances' worth still has a dot to carry the note's
         // colour, which is what says WHICH note this is.
         (extent - DOT_CLEARANCE_PT).max(extent * 0.5)
     }
@@ -502,11 +482,10 @@ impl Spiral {
     /// the PICTURE lies between these two, dots included. The names do not —
     /// they are placed off the outer one, in the band beyond it.
     ///
-    /// The track itself stops fractionally inside them — the fit reserves a
-    /// note's whole reach at each end — so this is what the disc OCCUPIES
-    /// rather than where the spectrum is painted.
+    /// They are the track's outer edges, half a track beyond the first and last
+    /// note, which the fit reserves at each end of the range.
     fn bounds(&self) -> (f32, f32) {
-        (self.radius(self.min_midi) - self.reach(), self.radius(self.max_midi) + self.reach())
+        (self.radius(self.min_midi) - self.half(), self.radius(self.max_midi) + self.half())
     }
 }
 
@@ -1352,11 +1331,31 @@ mod tests {
     /// A sounding note's dot is inside the pane, at the top of the range and at
     /// the bottom of it.
     ///
-    /// The dot is the only painted thing on the disc that reaches past the
-    /// track it sits on, so it is the only one whose extent the disc's own fit
-    /// does not already answer for — and the pane paints through a clipping
-    /// painter, so what overruns is cut off rather than merely tight. Over
-    /// small and large panes alike, since the dot's floor is in points.
+    /// The disc reserves no room past its track: its bounds span exactly one
+    /// track for each octave and one more, the track's own half at each end.
+    /// The fit once reserved a quarter more than that, for a mark that has
+    /// since been clamped to the track.
+    #[test]
+    fn the_disc_reserves_no_room_past_its_track() {
+        for (name, rect) in FRAMES {
+            let cfg = SpectrumConfig { low_midi: 36.0, high_midi: 96.0, ..Default::default() };
+            let s = Spiral::new(rect, &cfg);
+            let (inner, outer) = s.bounds();
+            let tracks = (s.max_midi - s.min_midi) / 12.0 + 1.0;
+            assert!(
+                (outer - inner - tracks * s.dr).abs() < 1e-3,
+                "{name}: {} across for {tracks} tracks of {}",
+                outer - inner,
+                s.dr,
+            );
+        }
+    }
+
+    /// The fit reserves half a track at each end and [`Spiral::dot`] is held to
+    /// half a track, so this is the two agreeing — and the pane paints through
+    /// a clipping painter, so what overruns is cut off rather than merely
+    /// tight. Over small and large panes alike, since the dot's floor is in
+    /// points.
     #[test]
     fn a_notes_dot_stays_inside_the_pane() {
         for (name, rect) in FRAMES {
@@ -1547,9 +1546,9 @@ mod tests {
     /// anything a silent frame's call would keep alive: both renderers keep
     /// what they built for as long as they stand.
     ///
-    /// Counted rather than picked out of the frame, because the names and the
-    /// shadows are callbacks of their own and all of them are the same shape
-    /// from here.
+    /// Counted rather than picked out of the frame, because the names'
+    /// callback, which carries their shadow too, and the others are all the same
+    /// shape from here.
     #[test]
     fn the_halo_and_surround_are_asked_for_on_every_frame_with_a_dot() {
         // `visible` false sounds the note with its dot faded to nothing, which
@@ -1817,7 +1816,7 @@ mod tests {
         }
         // And at least one frame is on the far side of the cap, so the scaled
         // band is a path this suite runs rather than one it describes. Every
-        // frame sat at exactly the dialled size once, and the fixture said
+        // frame sat at exactly the fixed size once, and the fixture said
         // otherwise in its own doc.
         assert!(scaled > 0, "no frame here is small enough for the share to bind");
     }
@@ -1847,7 +1846,7 @@ mod tests {
     /// its own. A magnifier that also rotated or re-wound would still look like a
     /// spiral — which is the trap [`an_octave_is_one_turn_of_the_spiral`] exists
     /// for, one transform along. A band that scaled with the disc would set the
-    /// rim names at eight times their dialled size, a word across the pane. And a
+    /// rim names at eight times their fixed size, a word across the pane. And a
     /// track that did NOT scale would leave the dots and the seam drawn against a
     /// picture that had moved out from under them.
     #[test]
