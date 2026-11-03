@@ -940,13 +940,27 @@ impl AtmosphereSettings {
         self
     }
 
+    /// The two dials the lattice light breathes by.
+    pub fn breathing(&self) -> Breathing {
+        Breathing { amount: self.breath_amount, speed: self.breath_speed }
+    }
+}
+
+/// How the lattice light breathes: `Breathing amount` and `Breathing speed`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Breathing {
+    pub amount: f32,
+    pub speed: f32,
+}
+
+impl Breathing {
     /// Identity comes from the lattice coordinates, which survive a camera
     /// rebase. The modulation never feeds back into the carried glow history.
     ///
     /// `phase` is how far the breathing has run: `Breathing speed` built up
     /// over the frames, so a speed drag goes on from where the light is.
-    pub fn breath(self, position: LatticePos, phase: f64) -> f32 {
-        if self.breath_amount == 0.0 || self.breath_speed == 0.0 {
+    pub fn at(self, position: LatticePos, phase: f64) -> f32 {
+        if self.amount == 0.0 || self.speed == 0.0 {
             return 1.0;
         }
         let place = f64::from(position.fives) * 2.173
@@ -954,6 +968,6 @@ impl AtmosphereSettings {
             + f64::from(position.sevens) * 5.137;
         let wave =
             0.5 + (phase * 0.73 + place).sin() / 3.0 + (phase * 1.13 + place * 1.7).sin() / 6.0;
-        1.0 - self.breath_amount * (1.0 - wave as f32)
+        1.0 - self.amount * (1.0 - wave as f32)
     }
 }

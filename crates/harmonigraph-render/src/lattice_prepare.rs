@@ -342,8 +342,8 @@ impl LatticeCallback {
                 let mixed =
                     self.instances.iter().zip(mixes).enumerate().map(|(i, (&instance, &mix))| {
                         let [level, row, _, breath] = instance.glow;
-                        let breath = match self.breathing.get(i) {
-                            Some(&at) if level > 0.0 => self.atmosphere.breath(at, motion.breath),
+                        let breath = match self.breathing_at.get(i) {
+                            Some(&at) if level > 0.0 => self.breathing.at(at, motion.breath),
                             _ => breath,
                         };
                         GpuInstance { glow: [level, row, mix, breath], ..instance }

@@ -28,7 +28,7 @@ fn push_plus(draws: &mut Vec<Draw>, at: u32) {
 pub(crate) struct FrameVecs {
     pub(super) instances: Vec<GpuInstance>,
     pub(super) glow_owners: Vec<u64>,
-    pub(super) breathing: Vec<harmonigraph_core::LatticePos>,
+    pub(super) breathing_at: Vec<harmonigraph_core::LatticePos>,
     pub(super) glyphs: Vec<GlyphInstance>,
     pub(super) casters: Vec<shadow::Caster>,
     pub(super) node_cells: Vec<u32>,
@@ -79,7 +79,7 @@ impl LatticeCallback {
         let FrameVecs {
             instances,
             glow_owners,
-            breathing,
+            breathing_at,
             glyphs,
             casters,
             node_cells,
@@ -426,7 +426,7 @@ impl LatticeCallback {
             && scene.view.glow_strength > 0.0
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
-        let mut breathing = emptied(breathing, if breathes { order.len() } else { 0 });
+        let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
         for &(_, _, i, ships, inked) in &order {
             let instance = to_gpu(&scene.nodes[i]);
             // The cross, whether or not the node it stands on draws anything:
@@ -451,7 +451,7 @@ impl LatticeCallback {
                 // coefficient, and settled in prepare, where the pane's travel
                 // says how far the breathing has run.
                 if breathes {
-                    breathing.push(scene.nodes[i].lattice_pos);
+                    breathing_at.push(scene.nodes[i].lattice_pos);
                 }
                 instances.push(instance);
                 if scene.glow_timing.is_some() {
@@ -488,8 +488,9 @@ impl LatticeCallback {
                 stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
                 direction: atmosphere.material_direction,
             },
-            atmosphere,
-            breathing,
+            texture_speed: atmosphere.texture_speed,
+            breathing: atmosphere.breathing(),
+            breathing_at,
             glow_blend: scene.view.glow_blend,
             glyphs,
             casters,

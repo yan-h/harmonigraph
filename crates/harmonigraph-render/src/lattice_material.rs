@@ -399,20 +399,25 @@ pub(super) fn prepare(
     let material = &callback.material;
     // Every texture's motion advances whatever is drawn, so a change of
     // material goes on from where the new one would have been, and the glow's
-    // texture and breathing move with no material at all.
-    let motion = pane.material_travel.advance(
-        callback.glow_timing.map_or(0.0, |clock| clock.now),
-        crate::travel::Motion {
-            texture: f64::from(callback.atmosphere.texture_speed),
-            breath: f64::from(callback.atmosphere.breath_speed),
-            ..crate::travel::Motion::rate(
-                material.speed,
-                material.direction,
-                material.stars,
-                crate::stars::star_px_per_second(),
-            )
-        },
-    );
+    // texture and breathing move with no material at all. A frame with no
+    // glow clock draws none of them and holds them where they are, so a glow
+    // turned off and on again goes on from there rather than starting over.
+    let motion = match callback.glow_timing {
+        Some(clock) => pane.material_travel.advance(
+            clock.now,
+            crate::travel::Motion {
+                texture: f64::from(callback.texture_speed),
+                breath: f64::from(callback.breathing.speed),
+                ..crate::travel::Motion::rate(
+                    material.speed,
+                    material.direction,
+                    material.stars,
+                    crate::stars::star_px_per_second(),
+                )
+            },
+        ),
+        None => pane.material_travel.held(),
+    };
     let Some(offscreen) = pane.offscreen.as_mut() else { return motion };
     let Some(glow) = offscreen.glow.as_mut() else {
         pane.material_tile = None;

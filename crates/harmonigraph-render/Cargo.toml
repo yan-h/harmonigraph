@@ -25,7 +25,7 @@ test-support = []
 [dependencies]
 harmonigraph-scene = { workspace = true }
 # The lattice position a breathing instance is lit by (`LatticeCallback::breathing`).
-harmonigraph-core = { path = "../harmonigraph-core" }
+harmonigraph-core = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 bytemuck = { workspace = true }

@@ -33,7 +33,7 @@ pub(crate) struct Motion {
     /// [`Motion::rate`] leaves it still; the lattice sets its rate.
     pub(crate) texture: f64,
     /// The lattice glow's breathing clock, in seconds at a `Breathing speed`
-    /// of 1, which [`AtmosphereSettings::breath`](harmonigraph_scene::AtmosphereSettings::breath)
+    /// of 1, which [`Breathing::at`](harmonigraph_scene::Breathing::at)
     /// reads. Still at [`Motion::rate`] too.
     pub(crate) breath: f64,
 }
@@ -97,6 +97,11 @@ impl Travel {
             _ => Motion::default().after(rate, now),
         };
         self.clock = Some(now);
+        self.at
+    }
+
+    /// Where the textures were left, for a frame with no clock to advance by.
+    pub(crate) fn held(&self) -> Motion {
         self.at
     }
 }

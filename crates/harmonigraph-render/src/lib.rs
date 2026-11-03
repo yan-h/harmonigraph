@@ -881,13 +881,14 @@ struct LatticeCallback {
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
     glow_blend: f32,
     material: lattice_material::Material,
-    /// The scene's sanitized atmosphere: the Pattern and Breathing speeds the
-    /// pane's travel runs at, and the breathing `prepare` lights each
-    /// instance by once the travel says how far it has run.
-    atmosphere: harmonigraph_scene::AtmosphereSettings,
+    /// The Pattern speed the pane's travel turns the glow's texture at.
+    texture_speed: f32,
+    /// The breathing the travel runs at, and `prepare` lights each instance
+    /// by once the travel says how far it has run.
+    breathing: harmonigraph_scene::Breathing,
     /// Each instance's lattice position, parallel to `instances` on a frame
     /// whose light breathes and empty otherwise.
-    breathing: Vec<harmonigraph_core::LatticePos>,
+    breathing_at: Vec<harmonigraph_core::LatticePos>,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -942,7 +943,7 @@ impl Drop for LatticeCallback {
         frames.give_back(lattice_frame::FrameVecs {
             instances: take(&mut self.instances),
             glow_owners: take(&mut self.glow_owners),
-            breathing: take(&mut self.breathing),
+            breathing_at: take(&mut self.breathing_at),
             glyphs: take(&mut self.glyphs),
             casters: take(&mut self.casters),
             node_cells: take(&mut self.node_cells),
