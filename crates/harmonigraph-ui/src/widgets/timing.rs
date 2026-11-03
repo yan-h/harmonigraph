@@ -36,7 +36,7 @@ pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32, fresh: (f32,
     curve(&plot, ui, |p| (p * *seconds, sample(*shape, p as f64)), super::value::curve_color());
     plot.dot(ui, *seconds, 1.0);
     plot.dot(ui, *seconds * 0.5, sample(*shape, 0.5));
-    plot.response.on_hover_text("Note fade controls MIDI slices, marks, labels and ring visibility. A release during arrival reverses from the current level.");
+    plot.response.on_hover_text("Note fade controls MIDI slices, marks, labels and ring visibility. A release during arrival reverses from the current level. The background glow has its own attack and release, and Fade-out delay adds a hold before a released node leaves.");
     duration_response | numeric
 }
 

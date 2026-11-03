@@ -333,11 +333,7 @@ impl Motion {
             // This is the node's presence rather than any one slice's: it
             // reaches the shader as `ink.w` (`params.x` for a slot no note
             // lights) and is multiplied by the slice's own reveal, which is
-            // already nothing before that slice's delay. Waiting on the slice's
-            // own delay -- the tempting symmetry -- makes the whole wheel wait
-            // for whichever slice the note happens to light, and a note on a
-            // LATE slice then collapses the stagger: measured, every slice
-            // arrived within 0.08 of the others instead of spanning 0.9.
+            // already nothing before that slice's delay.
             //
             // The departure is the other way round. Falling from the off, the
             // presence dimmed every slice at once and reached 0 before the late
@@ -942,8 +938,7 @@ impl NodeMotion {
             // as its target. The ink strip's history (`ink_history` in
             // harmonigraph-render) compares this same max of what it ships, so
             // the colour picks attack or release by the test the level does.
-            let ink = node.octaves.iter().copied().fold(0.0, f32::max);
-            node.glow.level = ink.max(node.melody_level).max(node.bass_level);
+            node.glow.level = node.drawn_level().max(node.melody_level).max(node.bass_level);
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -1543,7 +1538,7 @@ mod tests {
         let (soft, loud) = (held(0.0), held(1.0));
         assert!(soft.melody_level > 0.0, "the fixture lights a mark as well as a slot");
         assert!((soft.activation - 0.81).abs() < 0.01, "{}", soft.activation);
-        assert_eq!(soft.glow.level, soft.activation.max(soft.melody_level));
+        assert_eq!(soft.glow.level, soft.drawn_level().max(soft.melody_level));
         assert!(soft.glow.level < 0.82, "a soft note's halo dims: {}", soft.glow.level);
         assert_eq!(loud.glow.level, 1.0, "a loud note's halo is full");
     }

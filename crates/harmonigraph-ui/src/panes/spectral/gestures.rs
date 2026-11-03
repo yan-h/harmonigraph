@@ -20,33 +20,11 @@ use crate::panes::{zoom_gesture, DOCKED_SURFACE};
 use crate::PictureState;
 use egui::Sense;
 
-/// Half-width of the divider's grab band, in points. Wider than the hairline
+/// Half-width of the divider's grab band, in points. Wider than the 2 pt line
 /// it drags: the band is invisible until the pointer is inside it, so it has
 /// to forgive an aim that is a few points off the line.
 pub(super) const SPLIT_GRAB_HALF: f32 = 6.0;
 
-/// The spectrum/far-region divider, draggable where it is drawn.
-///
-/// Deliberately NOT a dock separator: the spectrum, spectrogram and roll are
-/// one pane on purpose — the spectrum's baseline sits ON this line and the
-/// roll's notes arrive at it, which is how you see they are sounding — so
-/// making them separate
-/// panes would put that shared calibration across a pane boundary (and dock
-/// panes detach, which this divider must not). Instead the handle drags
-/// [`roll_fraction`](crate::SpectrumConfig::roll_fraction) directly, so the
-/// drag persists with the rest of the UI state. It is the only way to set the
-/// split: a "Roll share" bar on the Analyzer section would be a second control for
-/// the same field, and dragging the boundary you can see beats aiming a number
-/// at it.
-///
-/// Returns the handle's response so the caller can paint its highlight last,
-/// over the plots. `surface` keeps the docked pane and the Video preview from
-/// sharing one interaction id.
-///
-/// `split` is where the divider is DRAWN on this pane — the caller's one
-/// reading of [`spectrum_split`], so the band cannot end up straddling a line
-/// somewhere else. Writing the dial rather than that is what makes the drag a
-/// re-dial: it lands at the pointer, and the hold takes it from there.
 /// Which axis a depth drag committed to, once it has.
 ///
 /// `Default` is egui's, asked of anything `remove_temp` can remove; the value
@@ -118,6 +96,28 @@ fn lean_is_depth(
     committed.unwrap_or(false)
 }
 
+/// The spectrum/far-region divider, draggable where it is drawn.
+///
+/// Deliberately NOT a dock separator: the spectrum, spectrogram and roll are
+/// one pane on purpose — the spectrum's baseline sits ON this line and the
+/// roll's notes arrive at it, which is how you see they are sounding — so
+/// making them separate
+/// panes would put that shared calibration across a pane boundary (and dock
+/// panes detach, which this divider must not). Instead the handle drags
+/// [`roll_fraction`](crate::SpectrumConfig::roll_fraction) directly, so the
+/// drag persists with the rest of the UI state. It is the only way to set the
+/// split: a "Roll share" bar on the Analyzer section would be a second control for
+/// the same field, and dragging the boundary you can see beats aiming a number
+/// at it.
+///
+/// Returns the handle's response so the caller can paint its highlight last,
+/// over the plots. `surface` keeps the docked pane and the Video preview from
+/// sharing one interaction id.
+///
+/// `split` is where the divider is DRAWN on this pane — the caller's one
+/// reading of [`spectrum_split`], so the band cannot end up straddling a line
+/// somewhere else. Writing the dial rather than that is what makes the drag a
+/// re-dial: it lands at the pointer, and the hold takes it from there.
 pub(super) fn drag_split(
     ui: &mut egui::Ui,
     axes: &Axes,
@@ -337,8 +337,8 @@ pub(crate) const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 /// learning the code's seam rather than the pane's.
 ///
 /// Sized on the time axis, which is the wider range of the two: the whole
-/// 1 s..600 s sweep is ~1070 points of drag. The captured 39-second default
-/// leaves about 610 points toward the past to reach 1 s and 455 the other way
+/// 1 s..600 s sweep is ~1070 points of drag. The fresh 163-second default
+/// leaves about 850 points toward the past to reach 1 s and 215 the other way
 /// to reach 600 s. The level range is shorter at the same gain — its whole
 /// 12..100 dB sweep is ~350 points — because a dB window has less room to
 /// travel, not because it is dialled differently.

@@ -50,13 +50,16 @@ by the length of any callback pause over a second,
 and on a source rewind by re-anchoring the newest sample at the shown time or later.
 Its shown time never rewinds,
 so mapped dates only advance and audio does not pin a separate permanent offset that could drift away from notes.
-A clock that corrected backwards could place new columns at or before the retained history tail.
-`AudioSpectrum` still omits such overlapping columns from live history until mapped time passes the tail,
-while every FFT hop and the current spectrum curve continue advancing;
-with the current mapper that rule is defensive, and no plugin path reaches it.
-Existing history stays sorted for incremental heatmap aggregation;
-timestamps are neither clamped nor rewritten.
-Offline arrival-dated analysis is unchanged.
+So new columns never land at or before the retained history tail.
+`SpectrumStore::push_history` asserts that order (a `debug_assert!`) rather than enforcing it:
+the incremental heatmap aggregation relies on strictly increasing dates, and no plugin path breaks them.
+Timestamps are neither clamped nor rewritten.
+Arrival-dated analysis still appends every column.
+Its smoothed anchor can step back by up to 50 ms in one batch,
+which the offline renderer's contiguous batches never do,
+nor the standalone app's synth, which never renders more samples than the time elapsed;
+a build without the assert would meet such a date in the heatmap aggregator,
+which rebuilds its grid on a date that steps back.
 Factual note timestamps and take/export clocks are unchanged.
 
 This is a timing and ownership contract improvement,

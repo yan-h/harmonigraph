@@ -91,15 +91,18 @@
 //!
 //! Two costs worth stating rather than discovering:
 //!
-//! - **Down low the floor eats the fundamental.** An FFT bin is a constant
-//!   number of Hz. At Balanced's 8192 samples and 48 kHz, a bin at 65 Hz (C2)
-//!   is 151¢ wide and one Hann main lobe
+//! - **Down low the floor eats the fundamental.** A peak is a constant
+//!   number of Hz wide: every listen is as wide at half power as a Hann
+//!   window of two thirds of its frame was (`FIXED_SPREAD`), which at
+//!   Balanced and 48 kHz is the 8192-sample window's. At 65 Hz (C2) that
+//!   peak's main lobe
 //!   spans about 600¢ — wider than the whole median window, which then sits
 //!   INSIDE the lobe and subtracts most of it. The pitch class still lights,
 //!   from the 2nd harmonic up, and it lights the right node; what goes dark is
 //!   its lowest wedge. That is the same limit #350 names under "low
 //!   fundamentals blur", showing up here as a floor rather than as a smear.
-//!   Fast's 4096-sample bins are twice as wide, so this loss reaches higher
+//!   Fast's peaks, as wide as a 4096-sample window's, are twice as wide, so
+//!   this loss reaches higher
 //!   pitches. The boundary depends on sample rate and the signal's harmonics;
 //!   Fast deliberately keeps this limitation rather than changing the floor.
 //! - **Up high the floor rises between partials.** Harmonics crowd together in
@@ -616,8 +619,9 @@ mod tests {
             // hops the fixture happened to push.
             state.appearance.spectrum.attack = 0.0;
             state.appearance.spectrum.release = 0.0;
-            // The 8192-sample window the bin widths quoted below (38¢ at C4)
-            // are measured at, pinned so that retuning the fresh window moves
+            // The Balanced peak width (that of an 8192-sample Hann window, a
+            // 38¢ bin at C4) the widths quoted below are measured at, pinned
+            // so that retuning the fresh window moves
             // the analyzer's tests and not the fold's.
             state.appearance.spectrum.window = crate::SpectrumWindow::Balanced;
             let cfg = state.appearance.spectrum;
@@ -706,7 +710,7 @@ mod tests {
     ///
     /// Measured on a saw at C3 and not at the C2 the issue's check names,
     /// because C3 is where the analyzer resolves BOTH ends of the picture. At
-    /// C2 one FFT bin is 151¢ and the fundamental's main lobe is wider than the
+    /// C2 the peak's main lobe is about 600¢ wide, wider than the
     /// noise floor's own window, so the floor sits inside the lobe and takes
     /// 4 dB off the node the other five are measured against — the whole
     /// constellation then comes out 3 dB compressed. The measurement is on the
@@ -744,7 +748,7 @@ mod tests {
     ///   and they are genuinely sounding — a node near either lights, correctly.
     /// - At the fresh extents the just lattice is FINER than the analyzer: 21
     ///   fifths by 13 thirds puts a node every few cents, and pairs a syntonic
-    ///   comma apart (21.5¢) are closer than an 8192-point window resolves below
+    ///   comma apart (21.5¢) are closer than a Balanced peak (an 8192-sample window's) resolves below
     ///   about a kilohertz. Both of the pair light, and they are far apart ON
     ///   SCREEN. That is the panel's sharpness limit and it is the ANALYZER's,
     ///   not the kernel's — which is what the second half of this test pins, so
@@ -763,8 +767,8 @@ mod tests {
         }
         // And the resolution that costs: 20¢ off a tone at C4 is barely dimmer,
         // where 20¢ off one at C6 is well down — the same kernel both times, so
-        // what changed is what the FFT can see. One bin spans 38¢ at C4 and 10¢
-        // at C6.
+        // what changed is how wide the peak is, a constant number of Hz: an
+        // 8192-sample bin of it spans 38¢ at C4 and 10¢ at C6.
         let low = Bench::on(&sine(60.0));
         let high = Bench::on(&sine(84.0));
         let near = |bench: &Bench, base: f32| {
@@ -772,7 +776,7 @@ mod tests {
                 - power_db(bench.at_class(NARROW, base.rem_euclid(12.0) * 100.0 + 20.0).total)
         };
         assert!(near(&low, 60.0) < 3.0, "the analyzer resolved 20¢ at C4, which it cannot");
-        assert!(near(&high, 84.0) > 5.0, "20¢ at C6 is inside one bin, which it is not");
+        assert!(near(&high, 84.0) > 5.0, "20¢ at C6 is inside one peak width, which it is not");
     }
 
     /// The wheels say which REGISTER each partial sounds in — the reading the
@@ -857,7 +861,7 @@ mod tests {
     /// answers in the analyzer's own units, so the shared loudness curve maps
     /// it the way it maps the Spectral pane's own buckets.
     ///
-    /// At C4, where a bin is 38¢ and the tone's main lobe is comfortably wider
+    /// At C4, where an 8192-sample bin of the peak is 38¢ and the tone's main lobe is comfortably wider
     /// than the kernel that reads it. Higher up the two cross over and the mean
     /// starts averaging a narrow lobe against the quiet either side of it, which
     /// is the cost the module docs name — a full-scale tone at C7 folds to
@@ -875,7 +879,7 @@ mod tests {
     /// vibrato breathes where a gate would flicker.
     ///
     /// Swept at C6, which is where the KERNEL is what answers: lower down the
-    /// analyzer's own bin is wider than the whole sweep and the curve is its
+    /// analyzer's own peak is wider than the whole sweep and the curve is its
     /// rather than the fold's (see
     /// [`a_node_the_analyzer_resolves_apart_stays_dark`]).
     #[test]

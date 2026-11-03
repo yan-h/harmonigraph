@@ -60,9 +60,8 @@ pub struct SurroundCut {
     pub tint_fade: f32,
 }
 
-/// The cut's reach, in points, that [`SurroundCut::reach`] is held to: the
-/// range the earlier `1..=8` σ of the Notes shadow's default σ (3.75 points)
-/// spanned.
+/// The cut's reach, in points, that [`SurroundCut::reach`] is held to, and the
+/// Cut reach bar's whole travel.
 pub const SURROUND_REACH_RANGE: std::ops::RangeInclusive<f32> = 3.75..=30.0;
 
 /// [`SurroundCut::shape`]'s range: a bipolar bend about the straight line.
@@ -95,6 +94,9 @@ pub fn surround_fade(shape: f32, x: f32) -> f32 {
 
 impl SurroundCut {
     /// No surround: what a cut at its defaults but for its amount draws.
+    /// `harmonigraph-ui` pins the rest to `SpectrumConfig::default`
+    /// (`a_fresh_cut_is_the_renders_defaults_at_a_full_amount`), which the
+    /// timing probe leans on.
     pub const OFF: Self = Self { amount: 0.0, reach: 15.0, shape: 0.0, tint_fade: 3.0 };
 
     /// Every field in its range, a non-finite one taken as [`Self::OFF`]'s.

@@ -362,15 +362,8 @@ impl SpectrumAnalysis {
 
 impl SpectrumStore {
     /// Advance the curve by one analyzed column and, if `keep`, keep it as
-    /// history. `source_dated` is the plugin's exact source-time feed, whose
-    /// history must stay strictly increasing (see below).
-    pub(crate) fn take(
-        &mut self,
-        column: AnalyzedColumn,
-        config: &SpectrumConfig,
-        source_dated: bool,
-        keep: bool,
-    ) {
+    /// history.
+    pub(crate) fn take(&mut self, column: AnalyzedColumn, config: &SpectrumConfig, keep: bool) {
         // Two coefficients, chosen per bucket by which way it is moving.
         // Derived from the hop actually in use rather than set on the bar,
         // so the times mean seconds at any hop this loop runs at.
@@ -390,14 +383,7 @@ impl SpectrumStore {
         // `display` would smear one column into the next). Retention is
         // span-INDEPENDENT (see `push_history`): shrinking the span and
         // widening it again must not lose the history in between.
-        //
-        // A source clock conversion can correct backwards while old
-        // history remains on its previous mapping. The incremental
-        // heatmap requires strictly increasing dates. Omit overlapping
-        // history until mapped time passes its tail, without re-dating
-        // samples or skipping any FFT/curve progression above. Offline
-        // arrival-dated feeding retains its existing append behavior.
-        if keep && (!source_dated || self.history.back().is_none_or(|c| column.time > c.time)) {
+        if keep {
             self.push_history(column.time, &column.power);
         }
     }
@@ -413,24 +399,38 @@ impl SpectrumStore {
     /// control silently erased spectrogram history. The heatmap simply reads
     /// back as far as the span asks; anything it isn't showing yet stays in the
     /// store until it ages past the cap.
+    ///
+    /// Dates must be strictly increasing, which the incremental heatmap
+    /// aggregation relies on. Today's callers deliver them so: the plugin's
+    /// source-dated path, whose mapper never rewinds its shown time; the
+    /// offline renderer, whose contiguous batches keep one arrival anchor; and
+    /// the standalone app's synth, whose anchor only drifts forward because
+    /// `Synth::render` never renders more samples than the time elapsed.
+    /// Arrival-dated input does not promise it in general: the anchor is
+    /// smoothed, so one batch can step it back by up to `ANCHOR_SMOOTHING` of
+    /// `ANCHOR_SNAP` (50 ms), more than the hop between two columns.
+    ///
+    /// So the `debug_assert!` checks those callers, and nothing here enforces
+    /// the order. A build with it compiled out leans on the aggregator, which
+    /// rebuilds on a date that steps back (`SpectrogramAgg::window`,
+    /// `SlabGrid::fold`).
     pub(crate) fn push_history(&mut self, now: f64, power: &SpectrumBuckets) {
+        debug_assert!(
+            self.history.back().is_none_or(|c| now > c.time),
+            "history dates must strictly increase: {now} after {:?}",
+            self.history.back().map(|c| c.time),
+        );
         self.history.push(SpectrogramColumn::from_power(now, power));
         self.history.trim_older_than(now - AudioSpectrum::HISTORY_MAX_SECONDS);
     }
 
     /// Apply one delivery, as [`AudioSpectrum::give_back`] describes.
     /// `keep` false moves the curve without keeping the column as history.
-    fn apply(
-        &mut self,
-        delivery: Delivery,
-        config: &SpectrumConfig,
-        source_dated: bool,
-        keep: bool,
-    ) {
+    fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig, keep: bool) {
         match delivery {
             Delivery::Restart => self.restart(),
             Delivery::Arrival(newest) => self.last_samples = Some(newest),
-            Delivery::Column(column) => self.take(column, config, source_dated, keep),
+            Delivery::Column(column) => self.take(column, config, keep),
         }
     }
 
@@ -621,7 +621,7 @@ impl AudioSpectrum {
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         let keep = lent.epoch == self.store.history.clears();
         for delivery in deliveries {
-            self.store.apply(delivery, config, true, keep);
+            self.store.apply(delivery, config, keep);
         }
         self.analysis = Some(lent.analysis);
     }
@@ -656,7 +656,7 @@ impl AudioSpectrum {
         let analysis = analysis.as_mut().expect("an inline shell never lends its analysis");
         store.last_samples = Some(now);
         analysis.feed(batch, channels, sample_rate, now, config, None, consume, |column| {
-            store.take(column, config, false, true)
+            store.take(column, config, true)
         })
     }
 
@@ -786,8 +786,9 @@ mod tests {
     /// no new column reuses the measurement instead of taking it again.
     ///
     /// Beside its siblings in `tests::spectrum`, which cover the key's other
-    /// two inputs (a width edit and same-frame audio) and its hold-window
-    /// early return.
+    /// two inputs (a width edit, and audio pushed at the same shell time,
+    /// which the revision sees and a clock in the key would not)
+    /// and its hold-window early return.
     #[test]
     fn a_fold_outlives_a_frame_that_brought_no_new_column() {
         let cfg = SpectrumConfig::default();

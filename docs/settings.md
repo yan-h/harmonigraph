@@ -246,7 +246,7 @@ A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
 | Octave layout | MIDI ring, audio ring and melody/bass marks. The layer stack controls their widths and visibility. |
 | Note fade | MIDI slices, marks and labels, plus audio-ring visibility. Background glow has its own response. |
 | Motion and starting pose | MIDI slices and marks ease smoothly from the selected starting offset and scale. |
-| Fade-out delay | Holds a node's MIDI slices after its last note is released, before they sweep out. The released pitches' colour, the node glow and the marks fade at the release regardless, so the node stands uncoloured through the wait. |
+| Fade-out delay | Holds a node's MIDI slices after its last note is released, before they sweep out. The released pitches' colour, the node glow, the marks and the note names' ink dim from white at the release regardless, so the node stands uncoloured through the wait. |
 | Audio level colors | Shared palette; lattice rings substitute gray at Silent slice brightness for its quiet endpoint. |
 | Glow pattern, material and breathing | Require nonzero Background glow reach and gain. Pattern varies the glow; material reshapes the result. Each effect retains its own settings when bypassed. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
@@ -328,7 +328,7 @@ not evidence of how often a setting is used.
 | Candidate | Recommendation and tradeoff |
 | --- | --- |
 | Stagger, starting offset/scale | Best candidate for motion presets with an expandable custom section. Keep the current freedom until preferred presets are known. |
-| Four shadow groups, each with width/darkness/spread | Prefer basic width/darkness and an expandable spread if the page still feels too long. |
+| Three shadow groups, each with width/darkness/spread | Prefer basic width/darkness and an expandable spread if the page still feels too long. |
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
 | Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
 | Lattice resolution above 100% | Candidate for removing costly supersampling if visual comparison shows no useful improvement. Existing range is retained. |

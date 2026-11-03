@@ -357,4 +357,13 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
 }
 
 // Shared full-strength node-light coverage, including material output.
+//
+// The node glow's base amplitude at a node's centre, before Background glow
+// gain scales it — what a gain of 1 lays down where the light is fullest.
+//
+// The amplitude is spent over a falloff spanning the node's outermost edge plus
+// the whole Background glow reach, so by the rim there is a fraction of it
+// left. Tuned so the gain reads: at 1 a node's middle is unmistakably lit and
+// its halo plainly visible, at 2 — the bar's top — the middle saturates and the
+// halo doubles.
 const GLOW_BASE: f32 = 0.8;

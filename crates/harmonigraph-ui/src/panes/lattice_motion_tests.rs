@@ -37,6 +37,10 @@ fn frame(state: &mut PictureState, now: f64, surface: usize, audio: bool) -> Sce
         let samples: Vec<_> = (0..48000)
             .map(|i| (std::f32::consts::TAU * 523.2511 * i as f32 / 48000.0).sin())
             .collect();
+        // A whole second at every call, which overlaps the one before and
+        // dates its columns backwards. These tests read the ring and never the
+        // history, which asserts the order, so it is emptied.
+        state.runtime.spectrum.clear_history();
         state.runtime.spectrum.push_samples(&samples, 1, 48000.0, now, &state.appearance.spectrum);
     }
     let window = state.appearance.view.reach();

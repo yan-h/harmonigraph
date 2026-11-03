@@ -172,9 +172,11 @@ pub(crate) const PANE_GUTTER: f32 = 7.0;
 /// The design size, at [scale](ui_scale) 1.0.
 pub(crate) const ROW_GAP: f32 = 3.5;
 
-/// The width of every line, chrome and picture alike: a divider, a widget's
+/// The width of a line, chrome and picture alike: a divider, a widget's
 /// outline, a curve. Otonal's mark width, and like
-/// otonal's the floor: only a grid is ruled finer ([`GRID_WIDTH`]).
+/// otonal's the floor for chrome: a grid is ruled finer ([`GRID_WIDTH`]), and
+/// so is the spectrum outline, which is 1 pt so as not to outweigh the
+/// spectrum it traces.
 ///
 /// FIXED at every [UI scale](ui_scale), as a separator is under a larger text
 /// size: the scale grows what the lines divide, not the lines. What does scale

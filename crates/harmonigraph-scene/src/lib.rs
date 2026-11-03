@@ -459,7 +459,9 @@ pub struct NodeInstance {
     /// cross that is its complement. A name says which position this is, not
     /// how loud it sounded, and a name held at the note's Opacity would jump to
     /// the departing reserve at key-up (#1316). The name's grey-to-white ink
-    /// still follows `activation`.
+    /// follows neither: it reads the drawn colour, the loudest of
+    /// [`octaves`](Self::octaves), which leaves at the release while
+    /// `activation` waits through a Fade-out delay.
     pub envelope: f32,
     /// Whether the voice this node is lit by is on its way OUT — its key is
     /// up and its departure has begun.
@@ -764,6 +766,19 @@ impl NodeInstance {
     /// One spelling still: this IS the level, asked for any at all.
     pub fn is_named(&self, view: &ViewConfig) -> bool {
         self.name_level(view) > 0.0
+    }
+
+    /// How lit the node is DRAWN: its most opaque octave slot's colour, Opacity
+    /// included, which leaves at the release rather than waiting out a Fade-out
+    /// delay as [`activation`](Self::activation) does.
+    ///
+    /// The one spelling of "the drawn colour" for everything that follows it:
+    /// the glow's target (which adds the marks), the ink strip's attack or
+    /// release test (`ink_history` in `harmonigraph-render`) and the name's
+    /// ink, so a name, a halo and the colour they follow cannot disagree about
+    /// whether the node is going dark.
+    pub fn drawn_level(&self) -> f32 {
+        self.octaves.iter().copied().fold(0.0, f32::max)
     }
 }
 

@@ -292,9 +292,8 @@ pub(super) fn create_cell_pipelines(
         pipeline(
             ("vs_node_cell", "fs_node_cell"),
             &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
-            // One node owns one cell. Overwrite lets an analytic distance keep
-            // its negative interior; MAX against the clear value would clamp
-            // every inside texel back to zero.
+            // One node owns one cell, so there is nothing for a blend to
+            // combine: Overwrite.
             None,
         ),
         // No instance data at all: the cell is one cross at the home sheet's
@@ -318,7 +317,7 @@ pub(super) fn create_cell_pipelines(
 ///
 /// **Why two.** A blur cannot read the target it is writing. The first pass
 /// lays the reading down over the instance buffer, one row per node; the second
-/// convolves each row with the Spread bar's lobe.
+/// convolves each row with the Color smoothing bar's lobe.
 ///
 /// **Both are over the INSTANCES**, each drawing the one row its node was
 /// handed rather than a quad over the whole strip. A strip is as tall as the
