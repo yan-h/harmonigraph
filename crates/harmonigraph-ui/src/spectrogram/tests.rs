@@ -223,7 +223,7 @@ fn a_single_missed_slab_holds_instead_of_going_black() {
     assert_eq!(power[2][5], q(0.5));
 }
 
-/// Time running backwards (a transport jump) starts a fresh row rather
+/// Time running backwards starts a fresh row rather
 /// than trying to fill a negative gap — which would be an enormous loop,
 /// or a silent no-row.
 #[test]
@@ -2253,8 +2253,10 @@ mod gpu {
 
         // A moving peak over a low bed, so consecutive slabs differ and a slab
         // written into the wrong slot draws a different picture. Straight into
-        // the history, since the transport jump below dates columns backwards,
-        // which `push_history` asserts never happens.
+        // the history, since the jump below dates columns backwards, which
+        // `push_history` asserts against in debug builds. Bypassing it is the
+        // point: this exercises the aggregator's release-build backstop, where
+        // that assert is compiled out.
         let push = |t: &mut Tally, spectrum: &mut crate::AudioSpectrum, n: u32, gap: f64| {
             t.clock += gap;
             for _ in 0..n {
@@ -2353,7 +2355,7 @@ mod gpu {
         // fills by holding the column before it.
         push(&mut tally, &mut spectrum, 6, 0.024);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
-        // A transport jump backwards, which no delta can describe.
+        // Dates stepping backwards, which no delta can describe.
         tally.clock -= 0.4;
         push(&mut tally, &mut spectrum, 40, 0.0);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));

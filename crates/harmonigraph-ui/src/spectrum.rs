@@ -401,9 +401,17 @@ impl SpectrumStore {
     /// store until it ages past the cap.
     ///
     /// Dates must be strictly increasing, which the incremental heatmap
-    /// aggregation relies on. Every feed delivers them so (the source-time
-    /// mapper never rewinds, and arrival time only advances), so this asserts
-    /// the order and does not enforce it.
+    /// aggregation relies on. Today's callers deliver them so: the plugin's
+    /// source-dated path, whose mapper never rewinds its shown time, and the
+    /// offline renderer, whose contiguous batches keep one arrival anchor.
+    /// Arrival-dated input does not promise it in general: the anchor is
+    /// smoothed, so one batch can step it back by up to `ANCHOR_SMOOTHING` of
+    /// `ANCHOR_SNAP` (50 ms), more than the hop between two columns.
+    ///
+    /// So the `debug_assert!` checks those callers, and nothing here enforces
+    /// the order. A build with it compiled out leans on the aggregator, which
+    /// rebuilds on a date that steps back (`SpectrogramAgg::window`,
+    /// `SlabGrid::fold`).
     pub(crate) fn push_history(&mut self, now: f64, power: &SpectrumBuckets) {
         debug_assert!(
             self.history.back().is_none_or(|c| now > c.time),

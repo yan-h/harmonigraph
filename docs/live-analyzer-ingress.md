@@ -54,7 +54,11 @@ So new columns never land at or before the retained history tail.
 `SpectrumStore::push_history` asserts that order (a `debug_assert!`) rather than enforcing it:
 the incremental heatmap aggregation relies on strictly increasing dates, and no plugin path breaks them.
 Timestamps are neither clamped nor rewritten.
-Offline arrival-dated analysis is unchanged.
+Arrival-dated analysis still appends every column.
+Its smoothed anchor can step back by up to 50 ms in one batch,
+which the offline renderer's contiguous batches never do;
+a build without the assert would meet such a date in the heatmap aggregator,
+which rebuilds its grid on a date that steps back.
 Factual note timestamps and take/export clocks are unchanged.
 
 This is a timing and ownership contract improvement,
