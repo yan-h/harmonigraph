@@ -223,12 +223,6 @@ mod tests {
     /// three phases, and a run would never see the rest.
     const DRAIN: f64 = 0.00413;
 
-    /// The same with the window shut: `background::SHUT_POLL` plus a little,
-    /// for the same reason. The drain and block lengths are what size the
-    /// lead's buckets, so a clock only tested at [`DRAIN`] never asks the
-    /// sizing for more than its minimum.
-    const SHUT_DRAIN: f64 = 0.0203;
-
     /// A window drawing every `frame` seconds for `seconds`, its worker
     /// draining every `drain` seconds, blocks of `block` seconds, block `k`
     /// (whose last sample is due at `(k + 1) * block`) arriving at wall time
@@ -291,25 +285,36 @@ mod tests {
     /// Twelve seconds roll the longest window over several times. The frames
     /// of the first second are skipped, while the window first fills.
     ///
-    /// Drained at both of the worker's cadences. At [`DRAIN`] a fixed quarter
-    /// second bucket does as well as the sized one; at [`SHUT_DRAIN`] it steps
-    /// 4096-sample blocks by 3.8 ms and 512-sample ones by 0.7 ms, which these
-    /// limits refuse.
+    /// Drained as the two real configurations drain. The input worker with
+    /// the window open drains every [`DRAIN`], whatever the frame rate. The
+    /// frame-drain fallback, when the worker's thread could not be spawned
+    /// (`EditorShared::frame_drains`), drains once per frame, just before the
+    /// frame reads the clock: at 60 and 15 fps that is a 17 and 67 ms gap,
+    /// which is what sizes the lead's buckets past their minimum. A fixed
+    /// quarter second bucket does as well as the sized one at [`DRAIN`], but
+    /// steps 4096-sample blocks by 8.7 ms at 60 fps and 10.7 ms at 15, where
+    /// the sized one steps 0.7 and 0.0 ms; these limits refuse the former. A
+    /// worker shut with the window drains at its own slower cadence, but then
+    /// no frame is drawn to step, so that pairing is not a row. 512-sample
+    /// blocks are not run through the fallback: at 60 fps they step 0.67 ms,
+    /// which does not fit the 0.5 ms limit, and the fallback is the rare path.
     #[test]
     fn block_delivery_does_not_step_the_drawn_time() {
-        for (drain, samples, limit) in [
-            (DRAIN, 512.0, 5e-4),
-            (DRAIN, 4096.0, 1.5e-3),
-            (SHUT_DRAIN, 512.0, 5e-4),
-            (SHUT_DRAIN, 4096.0, 1.5e-3),
+        // A drain of `None` is the frame-drain fallback: one per frame.
+        let (fast, slow) = ([FRAME, 1.0 / 60.0, 1.0 / 15.0], [1.0 / 60.0, 1.0 / 15.0]);
+        for (drain, samples, limit, frames) in [
+            (Some(DRAIN), 512.0, 5e-4, &fast[..]),
+            (Some(DRAIN), 4096.0, 1.5e-3, &fast[..]),
+            (None, 4096.0, 1.5e-3, &slow[..]),
         ] {
             let block = samples / 48_000.0;
-            for frame in [1.0 / 144.0, 1.0 / 60.0, 1.0 / 15.0] {
-                let frames = frames_at(frame, block, 12.0, drain, on_time(block));
+            for &frame in frames {
+                let every = drain.unwrap_or(frame);
+                let frames = frames_at(frame, block, 12.0, every, on_time(block));
                 let worst = worst_step(&frames[(0.5 / frame) as usize..], frame);
                 assert!(
                     worst < limit,
-                    "{samples} samples drained every {drain:.4} s at {frame:.4} s a frame \
+                    "{samples} samples drained every {every:.4} s at {frame:.4} s a frame \
                      advanced {worst:.4} s away from it"
                 );
             }
