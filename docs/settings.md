@@ -52,8 +52,6 @@ a ratio just below 100% saves almost nothing yet softens the stars nearly as muc
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
 
-Renamed sections start unfolded when opening older projects;
-visual values and their saved keys are unchanged.
 Detail folds such as **Map offsets** reopen closed with the editor.
 
 ## Combined controls
@@ -80,8 +78,6 @@ drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
 
-These controls edit the existing saved values.
-Saved keys are unchanged.
 
 ## Condensed appearance controls
 
@@ -115,7 +111,8 @@ Changing either slider changes both pictures.
 It runs from 0 (off) to 2×,
 with 1× as the reference halo.
 The Spiral keeps its separate **Spiral bloom** control.
-Bloom is independent of the note intensity mappings.
+Bloom has no mapping of its own;
+each note's bloom follows its Opacity.
 
 ## MIDI note intensity
 
@@ -131,7 +128,7 @@ Every target starts at its base and adds the weighted contributions routed to it
 **Thickness base** applies too,
 in multiples of the pane's reference width:
 **Ribbon width** in the Analyzer and the MIDI layer width in the Lattice.
-Its default of 1× starts at that reference width;
+Its default of 0.989× starts at about that reference width;
 0.5× starts at half of it.
 A thickness contribution of 1 adds one such width;
 a zero-width layer remains hidden.
@@ -171,15 +168,9 @@ Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 Old one-target-per-source routes and weights are ignored on load,
 so those mappings must be added again.
 Base values are retained.
-New mappings use these additions:
-velocity no longer subtracts,
-gain no longer uses a signed dB offset,
-and timbre has twice its former range.
-The retired **Gain range** setting is ignored on load.
-Saved opacity bases above 1 are clamped to 1,
-and saved bases now apply even when opacity has no route.
-Saved projects without **Thickness base** load it at 1×,
-preserving their pane widths.
+A saved **Gain range** setting is ignored on load.
+Saved opacity bases above 1 are clamped to 1.
+Saved projects without **Thickness base** load it at its default of 0.989×.
 
 ## Layout and folding
 
@@ -227,10 +218,21 @@ Restoring both regions brings back their previous split at the original spectrum
 Changing the spectrum position while folded does not lose the width owed to the editor window.
 Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
-Frameless mode hides their controls;
+Hide tab bars hides their controls;
 press Tab to show them again.
 Hide tab bars is saved with the editor workspace and never in an appearance or take.
 Tab takes priority over focus traversal except while editing text.
+
+## Slots and undo
+
+The numbered slots above the panes compare appearances:
+each holds a look, edits land in the active slot,
+and an unused slot starts as a copy of the current look.
+**Save to** copies the current look into another slot.
+Camera movement, tuning and output stay as they are when a slot is chosen.
+Each slot keeps its own undo history:
+Cmd-Z undoes the last edit and Cmd-Shift-Z redoes it (Ctrl on other systems).
+A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
 
 ## Shared settings and dependencies
 
@@ -245,7 +247,7 @@ Tab takes priority over focus traversal except while editing text.
 | Octave layout | MIDI ring, audio ring and melody/bass marks. The layer stack controls their widths and visibility. |
 | Note fade | MIDI slices, marks and labels, plus audio-ring visibility. Background glow has its own response. |
 | Motion and starting pose | MIDI slices and marks ease smoothly from the selected starting offset and scale. |
-| Fade-out delay | Holds a node's MIDI slices after its last note is released, before they sweep out. The released pitches' colour, the node glow and the marks fade at the release regardless, so the node stands uncoloured through the wait. |
+| Fade-out delay | Holds a node's MIDI slices after its last note is released, before they sweep out. The released pitches' colour, the node glow, the marks and the note names' ink dim from white at the release regardless, so the node stands uncoloured through the wait. |
 | Audio level colors | Shared palette; lattice rings substitute gray at Silent slice brightness for its quiet endpoint. |
 | Glow pattern, material and breathing | Require nonzero Background glow reach and gain. Pattern varies the glow; material reshapes the result. Each effect retains its own settings when bypassed. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
@@ -295,6 +297,8 @@ There is no separate Auto setting.
 Saved links and recorded configurations are restored as saved,
 without running recognition again.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
+In Lattice Map mode with Follow harmony on,
+**Follow harmony context** shows the same settings as **Context**, except Weight per octave, directly under its heading.
 In Lattice Map mode,
 **Saved map**,
 **Edit shape on lattice**,
@@ -306,7 +310,10 @@ Host map-offset parameters explicitly name whole generator steps rather than tun
 
 Video keeps **Finish recording** and **Stop at bar** with Record take.
 Finishing a take starts rendering;
-**Re-render take** applies the current appearance and video settings to the last take.
+**Queue last take** in **Exports** renders the last take again with the selected look and the current video settings.
+Under **Use each take's recorded appearance** only Output size, Tail and Encoder are the current ones:
+the take keeps the frame and Video history it was recorded with.
+A take recorded without a look exports as an ordinary queued export.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
 Shift-drag either picture to an edge of the preview to arrange the pictures.
 Drag either picture without Shift to navigate,
@@ -322,7 +329,7 @@ not evidence of how often a setting is used.
 | Candidate | Recommendation and tradeoff |
 | --- | --- |
 | Stagger, starting offset/scale | Best candidate for motion presets with an expandable custom section. Keep the current freedom until preferred presets are known. |
-| Four shadow groups, each with width/darkness/spread | Prefer basic width/darkness and an expandable spread if the page still feels too long. |
+| Three shadow groups, each with width/darkness/spread | Prefer basic width/darkness and an expandable spread if the page still feels too long. |
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
 | Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
 | Lattice resolution above 100% | Candidate for removing costly supersampling if visual comparison shows no useful improvement. Existing range is retained. |

@@ -314,8 +314,9 @@ pub(crate) fn derive_pluses(
     //
     // A name and NOTHING else, which is the whole rule: the cross disappears if
     // and only if a name is present. A note reaches it through the name rather
-    // than beside it, and does so under every Show mode — `name_level` is
-    // `envelope.max(resting)`, so a sounding note is named at its own envelope
+    // than beside it, and does so under every Label visibility mode —
+    // `name_level` is `envelope.max(resting)` and, on the way out under `Past`,
+    // the departing reserve, so a sounding note is named at its own envelope
     // even under `Played`, where nothing rests. Asking the note a second time
     // here would therefore change nothing.
     //

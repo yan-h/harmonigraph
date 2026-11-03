@@ -190,6 +190,12 @@ so a passage that switches shapes keeps its place on the lattice.
 The lattice and the assignments list show the map where it sounds,
 including the follow offset,
 and the Tuning pane reports how far following has moved it.
+While Follow harmony is on,
+the pane also shows the context settings Follow reads:
+Follow harmony context,
+with no fold to open: Half-life, Same-note tolerance, Silence reset and the two Reset checkboxes.
+They are the values Adaptive edits;
+Weight per octave is Adaptive's alone.
 Shape edits are made against that same placement.
 
 This is a prototype.
@@ -202,7 +208,7 @@ at its strongest weight,
 so an octave doubling adds nothing.
 Changing either mode clears the context,
 so notes held or heard before the change are not weighed.
-In Lattice Map mode the Hub's diagnostic count of context voices now counts mapped voices too.
+In Lattice Map mode the Hub's diagnostic count of context voices counts mapped voices too.
 
 ## Saved identity and geometry
 
@@ -214,7 +220,8 @@ Delete leaves a tombstone;
 no slot is ever recycled.
 An unused,
 deleted or invalid slot adds no correction and the UI reports it as unavailable.
-Capturing fails visibly at capacity.
+At capacity Duplicate as new map is disabled,
+and the pane says all 128 stable map identities have been used.
 Editing a shape rewrites its slot in place and keeps its identity;
 Duplicate as new map is how a revision gets an identity of its own.
 
@@ -258,26 +265,19 @@ The offset and extension add together,
 so every integer total from −99 to +99 is reachable.
 For example,
 Fine +4 and Coarse +20 give a total of +24.
-Use Coarse when a passage outgrows the fine lane;
-existing automation stays intact because neither lane's range changes.
+Use Coarse when a passage outgrows the fine lane.
 The editor shows both controls and the total separately for each axis.
 
 All six plain saved parameters range from −9 to +9 and default to zero;
 coarse counts are multiplied by 10 only when displayed or added to the total.
 CLAP exposes stepped indices 0–18 with neutral index 9.
-The former ±4096 offset lanes are narrowed in this release:
-old host automation is reinterpreted,
-and saved offsets outside ±9 are clamped.
+Saved offsets outside ±9 are clamped.
 Missing lanes restore to zero.
-There is no automatic migration of old envelopes.
 Dynamic range expansion was rejected after [the Bitwig probe](evidence/1051/README.md) doubled existing automation.
-The earlier prototype's per-map `position` field is removed:
-previously captured shapes remain,
-but their saved positions are ignored and must be set using the offset parameters.
 
 Temperament,
 axis values and reference pitch remain shared musical settings.
-Selecting or capturing a map cannot restore another tuning.
+Selecting a map cannot restore another tuning.
 Tuning entries recognize shared temperament links;
 map selection does not change them.
 Learn is suspended while Lattice Map is active,

@@ -930,9 +930,12 @@ impl NoteTracker {
     /// Drop released voices whose fade has fully completed, folding each
     /// into the history as it goes. Call once per frame before iterating.
     ///
-    /// A voice becomes a memory in the same step it stops being drawn, so
-    /// the two never describe one note at once and a trail picks the note
-    /// up exactly where its fade lets go. Drawn and remembered are one
+    /// A voice becomes a memory in the step its Note fade ends, so the tracker
+    /// never holds one note as a voice and a memory at once, and a trail
+    /// picks the note up where that fade lets go. The lattice's own release
+    /// can outlast it, with the Fade-out delay and the last slice's delay
+    /// ahead of its Note fade, and the scene's departing-name reserve covers
+    /// the part before the trail lands. Drawn and remembered are one
     /// question here, asked once: [`Voice::visible_at_release`] decides both,
     /// so a voice whose source was hidden when it let go is never drawn AND
     /// never recorded, and one visible then finishes its fade on screen and

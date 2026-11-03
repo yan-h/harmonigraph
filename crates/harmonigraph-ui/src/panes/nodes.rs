@@ -100,7 +100,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // It asks about the nodes NOBODY IS PLAYING, and that is worth knowing
     // while dragging it: a node the keys have lit keeps its ring for as long as
     // the note lasts whatever this says, and a ring comes and goes on the Note
-    // section's Fade rather than at the instant the level crosses. Both are in
+    // animation section's Note fade rather than at the instant the level crosses. Both are in
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
     let fresh = super::fresh_view();

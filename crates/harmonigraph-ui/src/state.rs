@@ -251,9 +251,9 @@ pub struct Interaction {
     /// piece, which is why it is here beside `frame_rate` and not in `view`:
     /// `ViewConfig` is what a recorded frame is composed from, and a laptop
     /// dialling its panel down must not change what a render of the same
-    /// project comes out looking like. [`root_ui`](crate::root_ui) is the
-    /// only thing that reads it, and the offline renderer never reaches
-    /// there.
+    /// project comes out looking like. [`root_ui`](crate::root_ui), the
+    /// System bar and `load_persist` read it; the offline renderer never
+    /// reaches any of them.
     pub ui_scale: f32,
     /// Hide the editor's tab and fold bars for a continuous live picture.
     /// Tab toggles them back; this preference is never recorded in a take.
@@ -476,7 +476,8 @@ impl FrameRate {
 /// A saved camera angle: what the built-in Flat/Isometric buttons are,
 /// but user-defined. Only the orbit angles — projection, zoom, and pan
 /// are deliberately not captured, so a preset composes with any of them.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CameraPreset {
     pub name: String,
     pub yaw: f32,

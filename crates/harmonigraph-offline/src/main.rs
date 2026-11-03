@@ -103,8 +103,6 @@ fn main() -> std::process::ExitCode {
 struct Args {
     take: Option<String>,
     out: Option<String>,
-    /// `None` means "use the frame the take was composed for" (its RenderFrame),
-    /// falling back to the default RenderFrame.
     /// `None` means "size to the take's frame aspect".
     size: Option<[u32; 2]>,
     scale: Option<f32>,
@@ -284,7 +282,7 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
 /// How long the picture runs past the last event when `--tail` does not say.
 ///
 /// The Video pane's Tail, from the appearance this render draws with — the
-/// replacement's on a Re-render, so a run-out chosen after recording reaches
+/// replacement's on a queued export, so a run-out chosen after recording reaches
 /// the video like Output size does — except for a take recorded
 /// [`AtLoopEnd`](RenderTrigger::AtLoopEnd), which ends exactly where its loop
 /// does (#1125). That take is one pass of a loop meant to be seen as a loop,
@@ -293,7 +291,7 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
 /// loop's end rather than at the last note. An explicit `--tail` still applies
 /// to every kind of take.
 ///
-/// `trigger` is the one the take was RECORDED under, not the one a Re-render's
+/// `trigger` is the one the take was RECORDED under, not the one a queued export's
 /// `--appearance` carries: how the take ended is fixed when it was captured,
 /// and a trigger changed since then says nothing about this file.
 fn tail_of_render(explicit: Option<f64>, trigger: RenderTrigger, tail: f64) -> f64 {

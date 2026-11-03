@@ -35,10 +35,11 @@
 // behind it uncut. Outside every body the holdout is 0 and the cut is what it
 // was.
 //
-// What that costs is the seam between two notes that TOUCH: same key, no gap,
-// and the bodies now meet directly in one color where the surround used to
-// stand between them. A gap of a point or more still reads as two notes, since
-// the surround takes it.
+// What that costs is the seam between two notes that TOUCH: only across
+// voices now, since same-voice repeats keep a 2 pt gap or fuse into one dense
+// run (`GAP_PT` in the pane's density pass). There the bodies meet directly in
+// one color where the surround used to stand between them. A gap of a point or
+// more still reads as two notes, since the surround takes it.
 //
 // The surround is read straight off the note's distance, so it is as strong
 // against a hairline ribbon as against a wide one. Its reach, amount, shape and

@@ -58,18 +58,6 @@ pub(crate) fn spectral_sigma_points(
     sigma_points(style.width, SPECTRAL_WIDTH_POINTS) * point_scale.max(0.0)
 }
 
-/// How far a spectral style's shadow can paint past its caster.
-/// `point_scale` scales the drawing after clamping the dial, so an enlarged
-/// composed preview can exceed the dial's maximum point reach.
-pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> f32 {
-    let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-    if style.casts() {
-        spectral_sigma_points(style, point_scale) * reach_sigmas(style)
-    } else {
-        0.0
-    }
-}
-
 /// σ of a caster's shadow in the pane's POINTS, for a group whose Shadow is
 /// `width` node radii over a node of `node_points` points.
 ///
@@ -1353,19 +1341,6 @@ pub(crate) mod tests {
         assert_eq!(sigma_points(0.2, 0.0), 0.0);
         assert_eq!(sigma_points(f32::NAN, 30.0), 0.0);
         assert_eq!(sigma_points(-1.0, 30.0), 0.0);
-    }
-
-    /// Reach is paint reach, not merely the kernel's mathematical support. Either shut bar leaves no pixels for the caller to cull or
-    /// enlarge geometry around.
-    #[test]
-    fn a_spectral_style_that_cannot_cast_has_no_reach() {
-        let style =
-            |width, depth| harmonigraph_scene::ShadowStyle { width, depth, ..Default::default() };
-        assert!(spectral_shadow_reach(style(1.0, 1.0), 1.0) > 0.0, "the live fixture is shut");
-        assert_eq!(spectral_shadow_reach(style(0.0, 1.0), 1.0), 0.0, "width endpoint");
-        assert_eq!(spectral_shadow_reach(style(1.0, 0.0), 1.0), 0.0, "depth endpoint");
-        assert_eq!(spectral_shadow_reach(style(f32::NAN, 1.0), 1.0), 0.0, "repaired width");
-        assert_eq!(spectral_shadow_reach(style(1.0, f32::NAN), 1.0), 0.0, "repaired depth");
     }
 
     /// The blur of one cell's ink stays inside that cell and keeps its mass:

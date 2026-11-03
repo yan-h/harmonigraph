@@ -72,7 +72,8 @@ pub(super) const GLOW_DIVISOR: u32 = 4;
 /// and the scene pass then lays that one layer down at its bottom and reads it
 /// again per node.
 ///
-/// Created and dropped as the Reach bar crosses 0, independently of the resize
+/// Created and dropped as Background glow reach or gain crosses 0
+/// (`lattice_frame`'s `lights`), independently of the resize
 /// that rebuilds everything around it: the two changes have nothing to do with
 /// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.

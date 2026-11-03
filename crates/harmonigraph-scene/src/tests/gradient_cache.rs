@@ -269,7 +269,7 @@ fn gradients_drawing_one_picture_are_one_entry() {
 /// a drag of either, with the roll on screen, is no reason to rebuild it.
 #[test]
 fn a_brightness_drag_leaves_the_glow_table_alone() {
-    let glow = |g: Gradient| pitch_glow_color(64.0, 24.0, 108.0, g, 30.0, 0.6);
+    let glow = |g: Gradient| pitch_glow_color(64.0, 24.0, 108.0, g, 30.0);
     let first = glow(Gradient::default());
     let before = GLOW_REBUILDS.with(|n| n.get());
     for step in 0..10 {

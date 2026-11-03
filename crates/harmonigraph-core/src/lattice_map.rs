@@ -13,6 +13,14 @@ pub enum TuningEngine {
     LatticeMap,
 }
 
+impl TuningEngine {
+    /// Whether Learn runs under this engine. Lattice Map reads its own map
+    /// instead, so Learn is suspended there.
+    pub fn learns(self) -> bool {
+        self != Self::LatticeMap
+    }
+}
+
 /// Whether Lattice Map moves the selected map by itself, and along which axes.
 ///
 /// A prototype of adaptive tuning from the map's side: the map keeps its
@@ -95,7 +103,7 @@ pub struct LatticeMap {
 impl Default for LatticeMap {
     fn default() -> Self {
         let mut nodes = [LatticePos::ORIGIN; 12];
-        // Four fifth rows, three third columns: F C G D / A E B F# /
+        // Four fifth columns, three third rows: F C G D / A E B F# /
         // C# G# D# A#. C is the zero-correction origin under just axes.
         for fifth in -1..=2 {
             for third in 0..=2 {

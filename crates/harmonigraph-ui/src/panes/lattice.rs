@@ -325,10 +325,9 @@ pub(crate) fn draw_lattice(
     // Only the interactive copy shows it at all: the badge is chrome about
     // the working view being in learn mode, and the preview is a picture of
     // the render, not a place to work.
-    let map_mode = state.runtime.lattice_maps.as_ref().is_some_and(|maps| {
-        maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-    });
-    let badge = (response.is_some() && state.runtime.learn_active && !map_mode)
+    let learns =
+        state.runtime.lattice_maps.as_ref().is_none_or(|maps| maps.playback.engine.learns());
+    let badge = (response.is_some() && state.runtime.learn_active && learns)
         .then(|| learn_badge(ui, rect, now));
     ui.painter().set(
         lattice,
@@ -555,7 +554,7 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// said something the label does not mean — the note the brighter, its cents
 /// the fainter — where they are one label naming one node.
 ///
-/// A grey off `lit`, the level the node under it is sounding at, between the
+/// A grey off `lit`, the level the node under it is drawn in, between the
 /// RESTING FIELD's own `L*`
 /// ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)) at 0 and white
 /// at 1.
@@ -600,7 +599,7 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
 /// premultiplied nothing carries.
 const LABEL_SHADOW: egui::Color32 = egui::Color32::BLACK;
 
-/// Labels on hovered and sounding nodes, plus whatever else the Show row
+/// Labels on hovered and sounding nodes, plus whatever else Label visibility
 /// names -- every visited node under
 /// [`NoteNames::Past`](harmonigraph_scene::NoteNames::Past), every home-sheet
 /// node on screen under [`All`](harmonigraph_scene::NoteNames::All) --
@@ -668,13 +667,16 @@ pub(crate) fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Per NODE and off the note's own activation, which is what puts the
-        // crossing between the two ends on the Fade: `activation` is the same
-        // ramp the node's ink rides, so a name brightens and dims with the
-        // thing it names rather than on a clock of its own. Opacity included,
-        // where the name's strength above reads the unfaded envelope: a soft
-        // note is named whole in a greyer ink.
-        let ink = label_ink(view, node.activation);
+        // Per NODE and off the colour the node is drawn in (its loudest slice,
+        // Opacity included), which is what puts the crossing between the two
+        // ends on the Fade: it is the same ramp the node's ink rides, so a name
+        // brightens and dims with the thing it names rather than on a clock of
+        // its own. Not `activation`, the node's presence: that waits through a
+        // Fade-out delay while the colour is already leaving, and a name held
+        // white over a node going dark reads as a note still sounding. The
+        // name's strength above reads the unfaded envelope, so a soft note is
+        // named whole in a greyer ink.
+        let ink = label_ink(view, node.drawn_level());
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
         // behind the camera, so a node off to the side still lands at a
@@ -1433,7 +1435,7 @@ mod tests {
     ///
     /// The reserve is a departure device and its argument only holds there:
     /// it stands in for a record that `node.trail` does not carry until the
-    /// frame the release finishes. A note on its way IN has no record coming
+    /// voice's Note fade ends. A note on its way IN has no record coming
     /// and nothing to settle onto, so reserving there pins the name at full
     /// brightness over a node still at a fraction of it — the same "holding
     /// steady and then switching" the reserve exists to remove, at the other
@@ -1504,7 +1506,7 @@ mod tests {
     /// Measured through the same derive as the reserve's own test rather than
     /// off a hand-built node, because the reserve needs a state only a
     /// release reaches — on the home sheet, under `Past`, with the trail not
-    /// written until the frame the release ends.
+    /// written until the voice's Note fade ends.
     #[test]
     fn a_departing_name_held_whole_leaves_no_marker_under_it() {
         let mut state = fresh();
@@ -1771,6 +1773,38 @@ mod tests {
                 label.1,
             );
         }
+    }
+
+    /// A released note's name dims with its colour from the key-up, through a
+    /// Fade-out delay that holds the node's presence (and so its `activation`)
+    /// where it was. The ink reads the drawn colour, which leaves at the
+    /// release; the name itself stays drawn at full strength under `Past`.
+    #[test]
+    fn a_released_names_ink_dims_through_the_fade_out_delay() {
+        let mut state = fresh();
+        state.appearance.view.marker_ink = 24.0;
+        state.runtime.frame_params.fade_time = 1.0;
+        state.appearance.view.note_animation.stagger_spread = 0.0;
+        // Longer than the sample is after the off, so the presence is still
+        // held when the ink is read.
+        state.appearance.view.note_animation.fade_out_delay =
+            *harmonigraph_scene::FADE_OUT_DELAY_RANGE.end();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 60));
+
+        let held = drawn_label(&mut state, 1.9);
+        let releasing = drawn_label(&mut state, 2.5);
+        let grey =
+            |l: f32| super::super::scene_color(harmonigraph_scene::grey_of_lightness(l), 1.0);
+        assert_eq!(held.0, grey(100.0), "a sounding label is not drawn white");
+        assert!(
+            releasing.0.r() < held.0.r()
+                && releasing.0.r() > grey(state.appearance.view.marker_ink).r(),
+            "a label half way through its release, inside the Fade-out delay, is at {:?}, not \
+             between {:?} and the marker grey",
+            releasing.0,
+            held.0,
+        );
     }
 
     /// The ink and the text of every piece one node's label drew, `secs` into

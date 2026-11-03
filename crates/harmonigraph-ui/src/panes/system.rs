@@ -95,8 +95,9 @@ pub(super) fn system_pane(
             );
             crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")
                 .on_hover_text(
-                    "A draggable HUD: frame rate, worst recent frame, memory, and the \
-                 voice/node workload.",
+                    "A draggable HUD: frame rate (judged against the rate chosen above), \
+                 worst recent frame, the GPU's share, memory, and the voice/node \
+                 workload, with whether the editor is live or idle.",
                 );
             if interaction.show_perf {
                 crate::widgets::checkbox(ui, &mut interaction.show_perf_detail, "Frame breakdown")
@@ -155,7 +156,7 @@ pub(super) fn system_pane(
             |hue, amount| rgb(skin::accent_color(hue, amount)),
         );
         crate::widgets::checkbox(ui, &mut interaction.frameless, "Hide tab bars (Tab)").on_hover_text(
-            "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
+            "Hide the dock's tab bars, pane headers, fold buttons and rails for a continuous picture; a folded section then takes no room. Press Tab to toggle while not editing text.",
         );
         if let Some(own) = &mut interaction.own_window {
             crate::widgets::checkbox(ui, own, "Own window").on_hover_text(

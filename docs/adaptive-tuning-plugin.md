@@ -131,13 +131,14 @@ Learn fills it.
 Whenever Learn hears a fifth, the keyboard tuning becomes the one that fifth generates:
 5 and 7 sit at the positions on the chain of fifths, within fourteen either way of C, nearest a just 5/4 and a just 7/4, with ties going to the shorter chain.
 The learned third and seventh are not used, because on a Pythagorean-side keyboard Learn's third is whichever pressed key sits nearest a just third, which spells prime 5 wrong until the other key has been pressed.
-The Tuning pane shows the three sizes, still editable, in a collapsed group under the Learn toggle,
+The Tuning pane shows the three sizes, still editable, under Adaptive tuning → Keyboard,
 with a **Derive from fifth** button that does from the fifth shown what Learn does from the fifth it hears.
 
 Pass through, the default, lets Learn update the lattice axes even when a source has Retune checked.
 The lattice is then a picture of unchanged input.
-While the engine actively retunes a source,
+While Adaptive retunes a source,
 the lattice is its fixed target and Learn moves only the shared C offset and keyboard tuning.
+Lattice Map suspends Learn.
 Toggling Retune copies nothing in either direction.
 
 The simulator uses the same score but has no keyboard filter.

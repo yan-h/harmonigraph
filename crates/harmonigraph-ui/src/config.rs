@@ -92,10 +92,10 @@ pub enum SpectralOrientation {
     /// Time runs left(now)->right(past) along the pane, pitch climbs
     /// bottom->top, and the spectrum sits on the left, joined to the
     /// spectrogram.
-    #[default]
     Left,
     /// Time runs right(now)->left(past); pitch climbs bottom->top, and the
-    /// spectrum sits on the right.
+    /// spectrum sits on the right. The fresh instance's, as captured in #834.
+    #[default]
     Right,
     /// Time runs top(now)->bottom(past) down the pane, pitch runs left->right,
     /// and the spectrum sits on top, joined to the spectrogram.
@@ -165,8 +165,8 @@ impl SpectralOrientation {
 /// **A stop list interpolates in sRGB BYTES, which is not a perceptual space.**
 /// Its grey ramp puts mid-grey at `L*` 54 where an even one puts 50, and its
 /// colored ramps wander off the straight line between their own ends by as much
-/// as a tenth of the black-to-white distance in Oklab — measured against these
-/// four. A heatmap is read for its quiet detail, and an even ramp is what reads
+/// as a tenth of the black-to-white distance in Oklab — measured against the
+/// stop lists these presets replaced. A heatmap is read for its quiet detail, and an even ramp is what reads
 /// that detail honestly, so evenness is the property worth having and a line
 /// straight in `L*` is what has it.
 ///
@@ -457,8 +457,8 @@ pub struct SpectrumConfig {
     /// [`roll_lead_release`](Self::roll_lead_release)'s.
     ///
     /// A FRACTION OF THE ANALYZER rather than a length in points, which is where
-    /// this parts company with the spectral geometry Shadow beside it,
-    /// and the two are worth telling apart. An outline is an EDGE: its job is to
+    /// this parts company with the Note surround's Cut reach beside it,
+    /// and the two are worth telling apart. A surround is an EDGE: its job is to
     /// be seen at a fixed weight whatever it wraps, so a constant in points is
     /// exactly right and a share of anything would make it thin out. A lead is a
     /// DISTANCE INTO another picture, and "a tenth of the way across the
@@ -476,7 +476,7 @@ pub struct SpectrumConfig {
     /// 0 ends the ribbon square in the middle of the spectrum, and the whole
     /// reach fades it from the now-line outward.
     ///
-    /// One control with the reach, on the same Lead bar: both are distances
+    /// One control with the reach, on the same Held-note extension bar: both are distances
     /// from the now-line, which makes them two points on one axis.
     pub roll_lead_fade: f32,
     /// How long a note's lead takes to fade away once the key comes up, in
@@ -486,7 +486,7 @@ pub struct SpectrumConfig {
     /// sounding — so it has to go when the note does, and going in one frame is
     /// a tongue of ink vanishing rather than ending. That reads as a glitch at
     /// the exact moment the eye is on the note, and worse the wider the lead is
-    /// set. Taken out over a fifth of a second instead, the release is something
+    /// set. Taken out over a quarter of a second instead, the release is something
     /// the picture DOES rather than something that happens to it.
     ///
     /// The lead dims rather than retracting, and detaches at the now-line while
@@ -496,7 +496,7 @@ pub struct SpectrumConfig {
     /// In SECONDS, and so independent of the Span: the fade is the ear's
     /// timescale, not the picture's, and a release read as a fraction of the
     /// window would last four seconds at a ten-minute Span. What that costs is
-    /// at the long end, where a fifth of a second is a fraction of a point of
+    /// at the long end, where a quarter of a second is a fraction of a point of
     /// scrolling and the dissolve happens on the spot.
     ///
     /// Bounded by [`ROLL_LEAD_RELEASE_MAX`] rather than open: past a couple of
@@ -573,9 +573,9 @@ pub struct SpectrumConfig {
     ///
     /// One type for both, because a heatmap's palette and a pitch ramp are the
     /// same object asked of different axes, and the six knobs say more about a
-    /// ramp than a list of four names can: how far round the circle it walks,
+    /// ramp than a list of three names can: how far round the circle it walks,
     /// how much brightness it spends on level, how much color, and which end
-    /// carries each. [`SpectrogramPreset`] is where the four names went — a row
+    /// carries each. [`SpectrogramPreset`] is where the three names went — a row
     /// of buttons that WRITE these six, rather than a mode the picture is in.
     ///
     /// The presets all open at `L*` 0. Nothing enforces it — a gradient that
@@ -721,7 +721,7 @@ impl SpectrumConfig {
             *harmonigraph_render::SURROUND_SHAPE_RANGE.end(),
         );
         // The lead and its fade, which are the same shape of pair on the same
-        // shape of bar (the Lead bar), and carry the same trap: a NaN reach
+        // shape of bar (the Held-note extension bar), and carry the same trap: a NaN reach
         // becomes the MAX of the fade's clamp, and `f32::clamp` asserts
         // `min <= max`.
         self.roll_lead = if self.roll_lead.is_finite() { self.roll_lead } else { fresh.roll_lead }
@@ -840,7 +840,7 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
 pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two
-/// controls now set it — the Analyzer section's Span bar and the drag across the
+/// controls now set it — the Analyzer section's History duration bar and the drag across the
 /// picture — and a gesture that clamped to its own idea of the limits would
 /// push the bar past its own ends. The maximum is also what
 /// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS)
@@ -850,7 +850,7 @@ pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;
 pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
 
 /// How far a sounding note's ribbon may be carried into the spectrum, and how
-/// much of that may be fade — one number for both ends of the Lead bar, a fade
+/// much of that may be fade — one number for both ends of the Held-note extension bar, a fade
 /// past the reach it softens having nothing left to soften.
 ///
 /// Half the analyzer, which still leaves the far half of the curve clear of
@@ -887,8 +887,8 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// this is all edge and no picture — and, unclamped, a collapsed one divides
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 ///
-/// Three controls hold to it, as with the Span: the Analyzer section's Level
-/// range bar, the drag across the spectrum, and the Mappings page's Level color range
+/// Three controls hold to it, as with the History duration: the Analyzer
+/// section's Spectrum level range bar, the drag across the spectrum, and the Mappings page's Level color range
 /// bar. A gesture clamping to its own idea of how close the pair may come
 /// would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
@@ -992,8 +992,8 @@ impl Default for SpectrumConfig {
             // goes looking for the note that made it.
             roll_lead_release: 0.25,
             note_names: true,
-            // The leading edge: a held note's name waits where you can read it
-            // while you play, which is what the naming was dialled in against.
+            // The end that reads first, which in the fresh orientation is the
+            // onset: a name travels from the key-down (`Anchor::of`).
             note_names_travel: false,
             note_name_scale: 1.415_327_1,
             show_spectrogram: true,

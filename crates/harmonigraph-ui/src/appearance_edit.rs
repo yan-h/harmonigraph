@@ -185,7 +185,7 @@ impl AppearanceEditor {
 
     /// Copies the current look into another slot. Overwriting a stored look is
     /// undoable from that slot; an empty slot had no look to go back to.
-    fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
+    pub(crate) fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
         if slot == self.slots.active {
             return;
         }
@@ -206,12 +206,22 @@ impl AppearanceEditor {
         ctx: &egui::Context,
         text_edit_was_focused: bool,
     ) {
+        // A wheel or pinch zoom of a picture is a gesture like a drag: it
+        // closes as one entry on the first frame after the scroll has settled.
+        // egui keeps `is_scrolling` true between a trackpad's events and until
+        // ~150 ms after the last wheel event, and a picture may zero the
+        // frame's scroll delta once it has taken it, so the delta says nothing
+        // about whether the wheel is still turning. Any scroll in the window
+        // holds the entry open, so two look edits made inside one continuous
+        // scroll merge; that is accepted. A frame that scrolls a settings pane
+        // changes no look, so it holds nothing open on its own.
+        let navigating = ctx.input(|i| i.is_scrolling() || i.zoom_delta() != 1.0);
         self.history.observe(
             before,
             appearance,
             crate::kept_focus(ctx)
-                && ctx.dragged_id().is_some()
-                && ctx.input(|i| i.pointer.primary_down()),
+                && (navigating
+                    || ctx.dragged_id().is_some() && ctx.input(|i| i.pointer.primary_down())),
         );
         // TextEdit leaves key events in the input even after handling them.
         // Keep its ownership for the whole frame: Undo followed by Enter can
@@ -253,11 +263,13 @@ impl AppearanceEditor {
 
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
+            // Each slot stands on its own fill, as every choice option does.
+            let mut chosen = self.slots.active;
             for slot in 0..SLOT_COUNT {
-                let active = self.slots.active == slot;
-                if ui.selectable_label(active, (slot + 1).to_string()).clicked() && !active {
-                    self.command = Some(Command::Switch(slot));
-                }
+                crate::widgets::option_button(ui, &mut chosen, slot, &(slot + 1).to_string(), "");
+            }
+            if chosen != self.slots.active {
+                self.command = Some(Command::Switch(chosen));
             }
             ui.menu_button("Save to", |ui| {
                 for slot in (0..SLOT_COUNT).filter(|&slot| slot != self.slots.active) {
@@ -269,11 +281,14 @@ impl AppearanceEditor {
             });
         })
         .response
-        .on_hover_text(
+        .on_hover_text(format!(
             "Slots compare appearances; camera movement, tuning and output stay as they are. \
-             Edits land in the active slot, each slot keeps its own undo history, and an \
-             unused slot starts as a copy of the current look.",
-        );
+                 Edits land in the active slot, each slot keeps its own undo history, and an \
+                 unused slot starts as a copy of the current look. {} undoes an edit and {} \
+                 redoes it.",
+            ui.ctx().format_shortcut(&APPEARANCE_SHORTCUTS[0]),
+            ui.ctx().format_shortcut(&APPEARANCE_SHORTCUTS[1]),
+        ));
     }
 }
 
@@ -441,6 +456,113 @@ mod tests {
         appearance.spectrum.attack = 0.2;
         editor.history.observe(before, &appearance, false);
         assert!(editor.history.redo.is_empty());
+    }
+
+    /// Zoom the Analyzer with `wheel(frame)` events over 40 frames and assert
+    /// the whole gesture, however many frames it changed the look on, is one
+    /// undo entry.
+    fn assert_one_undoable_zoom(
+        navigation: crate::panes::spectral::Navigation,
+        wheel: impl Fn(usize) -> Option<egui::Vec2>,
+    ) {
+        let ctx = crate::tests::probe::themed();
+        let mut state = crate::tests::probe::fresh_picture();
+        state.appearance.spectrum.low_midi = 36.0;
+        state.appearance.spectrum.high_midi = 96.0;
+        let original = Look::capture(&state.appearance);
+        let mut editor = AppearanceEditor::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 500.0));
+        let pointer = rect.center();
+        let mut zooming_frames = 0;
+        for frame in 0..40 {
+            let mut events = vec![egui::Event::PointerMoved(pointer)];
+            if let Some(delta) = wheel(frame) {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta,
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let _ = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(rect), events, ..Default::default() },
+                |ui| {
+                    let before = Look::capture(&state.appearance);
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    crate::panes::spectral::spectral_pane(
+                        &mut child, &mut state, 0.0, 1, 1.0, navigation,
+                    );
+                    zooming_frames += usize::from(before != Look::capture(&state.appearance));
+                    editor.end_frame(before, &mut state.appearance, ui.ctx(), false);
+                },
+            );
+        }
+        assert!(zooming_frames >= 3, "the wheel must zoom over several frames: {zooming_frames}");
+        assert_ne!(Look::capture(&state.appearance), original);
+        assert_eq!(editor.history.undo.len(), 1);
+        editor.history.undo(&mut state.appearance);
+        assert_eq!(Look::capture(&state.appearance), original);
+    }
+
+    #[test]
+    fn a_wheel_zoom_of_the_docked_analyzer_is_one_undoable_look_edit() {
+        // Three wheel notches on consecutive frames, then the smoothed scroll
+        // running out over the frames after them.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+            (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
+        });
+    }
+
+    #[test]
+    fn a_trackpad_zoom_with_quiet_frames_between_events_is_one_undoable_look_edit() {
+        // Point deltas under 8 pt are applied unsmoothed, so the frames
+        // between two events read a zero scroll delta.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Docked, |frame| {
+            ((2..12).contains(&frame) && frame % 2 == 0).then(|| egui::vec2(0.0, 6.0))
+        });
+    }
+
+    #[test]
+    fn a_wheel_zoom_of_the_video_previews_analyzer_is_one_undoable_look_edit() {
+        // The preview takes the wheel's delta for itself, leaving the frame's
+        // scroll delta zero while the wheel is still turning.
+        assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, |frame| {
+            (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
+        });
+    }
+
+    #[test]
+    fn every_slot_stands_on_its_own_fill() {
+        let ctx = crate::tests::probe::themed();
+        let mut editor = AppearanceEditor::default();
+        let size = egui::vec2(400.0, 100.0);
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ui| editor.toolbar(ui),
+        );
+        let fills: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == crate::theme::widget() => Some(rect.rect),
+                _ => None,
+            })
+            .collect();
+        for slot in 0..SLOT_COUNT {
+            let label = (slot + 1).to_string();
+            let at = out
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("slot {label} is drawn"));
+            assert!(fills.iter().any(|fill| fill.contains(at)), "slot {label} has no fill");
+        }
     }
 
     #[test]

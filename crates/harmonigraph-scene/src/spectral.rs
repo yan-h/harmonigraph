@@ -518,7 +518,7 @@ impl RingGate {
 }
 
 /// How far open the gate stands at every bucket of the analyzer's grid, carried
-/// across frames so that a ring ARRIVES and LEAVES on the Note section's Fade
+/// across frames so that a ring ARRIVES and LEAVES on the Note animation section's Note fade
 /// rather than switching on and off with the spectrum.
 ///
 /// The gate is a threshold and a threshold flickers: what it is asked of is a
@@ -1224,7 +1224,7 @@ mod tests {
     /// The trap it is against: the fade's own level is the tempting stand-in
     /// for "this bucket was open", and it is not one. A level part way up says
     /// how long ago the gate opened, not what the gate said — so reading the
-    /// band off it puts the Note section's Fade, a duration chosen for MIDI
+    /// band off it puts the Note fade, a duration chosen for MIDI
     /// transients, in charge of whether the band works at all. On the curve a
     /// half-open level is 28.7% of the way through the Fade at the fresh shape,
     /// which at the Fade's top of 1 s is 287 ms of continuous above-gate

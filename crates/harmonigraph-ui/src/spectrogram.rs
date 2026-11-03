@@ -150,10 +150,12 @@ fn held_slab(window: f64, target_cols: usize, held: Option<f64>) -> f64 {
 /// now land on a sample grid finer than the narrowest live slab
 /// (see `AudioSpectrum::push_samples`), so an ordinary stream cannot skip one at
 /// all. What is left for this to cover is a real gap in the samples — a host
-/// dropout, the pane being switched on, a transport jump re-anchoring the grid.
-/// A stall, by contrast — switching the FFT window empties the ring for a
-/// window's worth of samples, 341 ms at 48 kHz on Precise — is many slabs wide
-/// and genuinely was silence as far as the analyzer is concerned.
+/// dropout, the pane being switched on, an arrival-dated stream re-anchoring
+/// its grid.
+/// A stall, by contrast — a sample-rate change empties the ring, and a longer
+/// frame leaves it unfilled for the extra samples, up to 341 ms at 48 kHz on
+/// Precise — is many slabs wide and genuinely was silence as far as the
+/// analyzer is concerned.
 const JITTER_SLABS: i64 = 1;
 
 /// Where the visible slabs sit in absolute time — everything the mesh's slab
@@ -701,9 +703,14 @@ impl SlabGrid {
                 self.cur_key = Some(key);
                 true
             }
-            // First column (None), or time running backwards (Some, key < k, a
-            // transport jump): start a fresh row rather than fill a negative
-            // gap. Only the backward case breaks the incremental invariant.
+            // First column (None), or time running backwards (Some, key < k):
+            // start a fresh row rather than fill a negative gap. Only the
+            // backward case breaks the incremental invariant.
+            //
+            // Not expected from today's callers, and `push_history` asserts
+            // as much in debug builds. This is what a release build, where
+            // that assert is compiled out, does instead, and the caller
+            // (`SpectrogramAgg::window`) rebuilds on the `false`.
             other => {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
@@ -882,7 +889,9 @@ impl SlabGrid {
 /// It reproduces `aggregate_slabs` over the columns AS THEY ARRIVED: the shared
 /// [`SlabGrid::fold`] gives identical slab values, and the window is served from
 /// the same first slab batch would start at. A slab-width change (the Span
-/// crossing a ladder rung), a backward transport jump, or a window that jumped
+/// crossing a ladder rung), a column dated backwards (which `push_history`
+/// asserts against in debug builds, so this is the release-build backstop), or
+/// a window that jumped
 /// outside the kept grid falls back to a full rebuild — each of which is just
 /// `aggregate_slabs` again, so correctness never rides on the fast path alone;
 /// and the refold adds linear powers, then quantizes once per slab.
@@ -1017,7 +1026,8 @@ impl SpectrogramAgg {
         let layout_same = self.bucket_bits == bucket.to_bits();
         // The fast path is valid only when: the layout is unchanged, we have a
         // prior grid of this history (not one cleared since), time hasn't gone
-        // backwards, and the admitted first slab doesn't reach behind the kept
+        // backwards (the release-build backstop for the order `push_history`
+        // asserts), and the admitted first slab doesn't reach behind the kept
         // grid. New columns can extend its newest end, including across a gap.
         // An excluded old target must not force another rebuild on every
         // resumed frame.
@@ -1048,7 +1058,8 @@ impl SpectrogramAgg {
                 self.last_time = col.time;
             }
             if !forward {
-                // A mid-stream backward jump broke the grid; rebuild clean.
+                // A column dated backwards broke the grid (see `SlabGrid::fold`);
+                // rebuild clean.
                 self.rebuild(history, bucket, min_key);
             }
         }

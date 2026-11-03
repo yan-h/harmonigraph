@@ -459,7 +459,9 @@ pub struct NodeInstance {
     /// cross that is its complement. A name says which position this is, not
     /// how loud it sounded, and a name held at the note's Opacity would jump to
     /// the departing reserve at key-up (#1316). The name's grey-to-white ink
-    /// still follows `activation`.
+    /// follows neither: it reads the drawn colour, the loudest of
+    /// [`octaves`](Self::octaves), which leaves at the release while
+    /// `activation` waits through a Fade-out delay.
     pub envelope: f32,
     /// Whether the voice this node is lit by is on its way OUT — its key is
     /// up and its departure has begun.
@@ -689,8 +691,8 @@ impl NodeInstance {
     /// marker only says that there is one.
     ///
     /// So the label layer is the one that decides, and this is the whole of
-    /// its rule: the node is sounding, hovered, or one the Show row keeps at
-    /// rest.
+    /// its rule: the node is sounding, hovered, or one Label visibility keeps
+    /// at rest.
     ///
     /// A LEVEL rather than a yes or no, and that is the whole of what keeps
     /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
@@ -736,9 +738,9 @@ impl NodeInstance {
         };
         // A name on its way to being KEPT settles on the level its record takes
         // over at rather than easing out and being popped back: `trail` is not
-        // written until the frame the release finishes, so through the release
-        // there is nothing to settle onto and the level has to be reserved
-        // ahead of the record. Reserved on the way OUT alone, where a record
+        // written until the voice's Note fade ends, so until then there is
+        // nothing to settle onto and the level has to be reserved ahead of the
+        // record. Reserved on the way OUT alone, where a record
         // can actually land, and under the one mode that keeps one.
         //
         // Here rather than in the label pass alone, because the marker under
@@ -764,6 +766,19 @@ impl NodeInstance {
     /// One spelling still: this IS the level, asked for any at all.
     pub fn is_named(&self, view: &ViewConfig) -> bool {
         self.name_level(view) > 0.0
+    }
+
+    /// How lit the node is DRAWN: its most opaque octave slot's colour, Opacity
+    /// included, which leaves at the release rather than waiting out a Fade-out
+    /// delay as [`activation`](Self::activation) does.
+    ///
+    /// The one spelling of "the drawn colour" for everything that follows it:
+    /// the glow's target (which adds the marks), the ink strip's attack or
+    /// release test (`ink_history` in `harmonigraph-render`) and the name's
+    /// ink, so a name, a halo and the colour they follow cannot disagree about
+    /// whether the node is going dark.
+    pub fn drawn_level(&self) -> f32 {
+        self.octaves.iter().copied().fold(0.0, f32::max)
     }
 }
 

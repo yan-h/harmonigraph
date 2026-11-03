@@ -27,7 +27,8 @@ Nothing is captured from a screen, so nothing is limited by your monitor, your r
 ## The short version
 
 ```sh
-# 1. In Bitwig: arm "Record take" (Video pane), play the piece, disarm.
+# 1. In Bitwig: arm "Record take" (Video pane) and play the piece;
+#    the take ends when the transport stops.
 #    The take captures the selected Main or Sidechain audio as its soundtrack.
 # 2. Render:
 cargo build --release -p harmonigraph-offline
@@ -44,6 +45,9 @@ dock layout, selected editor page, the Spiral's framing and other workspace sett
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.
 In **Exports**, **Queue last take** and **Queue paths** capture the selected current, saved or recorded appearance,
 with the current Video output settings and dimensions.
+Under **Use each take's recorded appearance** only Output size, Tail and Encoder are the current ones:
+each take keeps the frame (aspect, lattice side and split) and Video history it was recorded with.
+A take recorded without a look exports as an ordinary queued export.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
 
@@ -147,7 +151,7 @@ Manual renders use this same captured WAV.
 Yes.
 Recording is not gated on the host's process mode —
 if Record take is on and the transport is moving, the take is captured, offline render or not.
-Set **Finish recording** to *Transport stop* and the video renders itself when the export finishes.
+**Finish recording** is *Transport stop* by default, so the video renders itself when the export finishes.
 
 Two subtleties are what make it land on the right file.
 
@@ -173,7 +177,7 @@ That is how an 82-second export came out as a 63 KB video of a 0.1-second fragme
 Under *Transport stop* and *Loop end* a stopped backward step after accepted forward progress ends the take instead,
 including a restore after just one accepted callback.
 Audio-only takes and takes whose notes are still waiting for publication finish there too.
-The frame-counted *Transport stop* also accepts recorded transport progress without waiting for a note.
+*Transport stop*, counted in 0.4 s of stillness, also accepts recorded transport progress without waiting for a note.
 Playing hosts retain a 50 ms backward jitter allowance for loop detection.
 
 A forward jump more than 50 ms beyond the recorded audio's expected end also breaks continuity,
@@ -288,7 +292,7 @@ The flags worth knowing (`--help` lists them all):
 | flag | what it does |
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
-| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Output size, whose fresh short edge is 720 |
+| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Output size, whose fresh short edge is 1440 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
@@ -321,7 +325,7 @@ the recording already begins at the start, so there is nothing to trim.
 
 `--size` is a *size*, not a shape.
 Left off, it takes the aspect and short edge the take was framed at —
-fresh 720, so 16:9 renders 1280x720 and 9:16 renders 720x1280. Given a different aspect it does not letterbox or crop:
+fresh 1440, so 16:9 renders 2560x1440 and 9:16 renders 1440x2560. Given a different aspect it does not letterbox or crop:
 the layout recomposes at whatever pixels it is handed, so the split falls elsewhere and the lattice camera exposes a different amount of the board.
 That is a legitimate thing to ask for, so it is allowed, but it renders a different picture from the preview and the renderer says so.
 

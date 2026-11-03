@@ -139,15 +139,6 @@ const QUAD_MARGIN: f32 = 1.6;
 // fade was tuned, so widening the billboard for the marks doesn't
 // quietly restyle the glyph edges.
 const GLYPH_FADE_LIMIT: f32 = 1.3;
-// The node glow's base amplitude at a node's centre, before the Strength bar
-// scales it — what a strength of 1 lays down where the light is fullest.
-//
-// The amplitude is spent over a falloff spanning the node's outermost edge plus
-// the whole Reach, so by the rim there is a fraction of it left. Tuned so the
-// Strength bar reads: at 1 a node's middle is unmistakably lit and its halo
-// plainly visible, at 2 — the bar's top — the middle saturates and the halo
-// doubles.
-
 // How many angles a node's own ink is read at — the width of the strip that
 // reading is kept in (`fs_ink_strip`), and the only rate at which anything
 // about the colour of that node's light is resolved.
@@ -2294,8 +2285,9 @@ fn base_node_ink(
     );
 }
 
-// Orders are computed on the CPU, never ranked per pixel. One inverse
-// transform moves a complete slice and its extension through both shadows.
+// A slice's progress is computed on the CPU, never ranked per pixel. One
+// inverse transform moves a complete slice and its extension through the
+// shadow.
 fn slice_progress(in: VsOut, i: u32) -> f32 {
     return f32((in.motion[i / 3u] >> ((i % 3u) * 10u)) & 1023u) / 1023.0;
 }
@@ -2380,7 +2372,8 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
     return AnimatedInk(result, marks);
 }
 
-// Plain Fade keeps the reference composition; settled pieces bypass the loop.
+// With no stagger and no radial move the reference composition draws;
+// settled pieces bypass the loop.
 fn node_ink(src: VsOut, d: f32, aa: f32, oct: OctRing, analytic: bool) -> NodeInk {
     if u.node.animation == 0.0 { return base_node_ink(src, d, aa, oct, analytic); }
     let settled = (src.motion.w & 0x80000000u) != 0u;
@@ -3022,8 +3015,8 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 //  - `fs_ink_strip` lays the reading down, one ROW per lit node and
 //    [`INK_STRIP_N`] columns across the turn, mixed into what that row already
 //    held on the glow's own attack and release.
-//  - `fs_ink_blur` convolves each row with the von Mises lobe the Color blend bar
-//    asks for and normalises it, so what it leaves behind is the finished
+//  - `fs_ink_blur` convolves each row with the von Mises lobe the Color
+//    smoothing bar asks for and normalises it, so what it leaves behind is the finished
 //    colour per angle. Its last column is the same average at no concentration
 //    at all — the mean, which [`glow_ink`] eases the middle of a node toward.
 //
@@ -3125,7 +3118,7 @@ fn vs_ink_blur(
     return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
 }
 
-/// Each row of the raw strip, convolved with the Color blend bar's lobe and
+/// Each row of the raw strip, convolved with the Color smoothing bar's lobe and
 /// normalised by the weights the ink itself carried — so the hue is the ink's
 /// hue and how bright the light is stays [`glow_level`]'s answer.
 ///
@@ -3285,11 +3278,12 @@ fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     // what it is putting on the node and how much of the node that is.
     let ink = glow_ink(light.y, atan2(uv.y, uv.x), mix_out);
     // A node lighting NOTHING gives off nothing, and the level above does not
-    // say so: it is the largest envelope on the node, and a view with every
-    // layer dialled off leaves a held note a full envelope with no ink under
-    // it — as does a node the audio ring is showing on with nothing sounding
-    // anywhere in it, whose every wedge is the ground. Lighting either would be
-    // a black halo, or a grey one: a colour invented for a node that has none.
+    // say so: it is the node's drawn colour after Opacity (`glow.level`), and
+    // a view with every layer dialled off leaves a held note a full level with
+    // no ink under it — as does a node the audio ring is showing on with
+    // nothing sounding anywhere in it, whose every wedge is the ground.
+    // Lighting either would be a black halo, or a grey one: a colour invented
+    // for a node that has none.
     if ink.w <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -3390,8 +3384,9 @@ fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     // Pattern sizes its cells shrink under the glow resolve texel and alias.
     // Fade it toward its mean (0.5) by how many detail cells one texel spans,
     // from about three texels a cell to under one (#1319). Exactly 0 at the
-    // fresh size on any target over ~46 texels tall, so those frames are
-    // untouched.
+    // fresh size (Pattern 0.24, #1475) on any glow target over about 160
+    // texels tall, which is about 640 scene pixels (the target is a quarter of
+    // the scene, #1461), so those frames are untouched.
     let footprint = 5.0 / (u.texture.scale * f32(textureDimensions(glow_sum).y));
     let detail = mix(
         nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4)),
@@ -3552,9 +3547,9 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     // where the light is brightest. A node's rings take it on the same terms,
     // and a lattice whose structure sits inside the light is what that buys.
     //
-    // The WHOLE field, at any setting of the Wash bar: a cross is the resting
-    // field's own grey and never a slice anything has lit, so it is on the side
-    // of that bar that takes all of the light (`glow_wash`).
+    // The WHOLE field, at any setting of the Light on notes bar: a cross is
+    // the resting field's own grey and never a slice anything has lit, so it
+    // is on the side of that bar that takes all of the light (`glow_wash`).
     //
     // The RAW light, as a node's ink takes it: a marker's own shadow does not
     // darken the light it is washed with.

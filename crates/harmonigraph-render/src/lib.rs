@@ -67,7 +67,7 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{roll_paint_callback, RollAxes, RollInstance};
+pub use roll::{roll_paint_callback, RollAxes, RollInstance, DEFAULT_RIBBON_SEMITONES};
 
 /// The backdrop cut round a note, shared by the roll's ribbons and the
 /// Spiral's dots.
@@ -108,7 +108,7 @@ pub use text::{text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, SheetUp
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
-pub use shadow::{spectral_shadow_reach, SPECTRAL_WIDTH_POINTS};
+pub use shadow::SPECTRAL_WIDTH_POINTS;
 /// A spectral text pane's own shadow atlas and blur.
 mod spectral_shadow;
 
@@ -325,9 +325,12 @@ mod reload {
 /// the ceiling.
 ///
 /// One function rather than a bound at each place a strength is read, because
-/// the lattice, the piano roll and the spiral's dots all read their respective
-/// strengths through it. Their UI controls are independent; the renderer's
-/// defensive limit remains wider than either control's range.
+/// the lattice, the piano roll and the spiral's dots all read their
+/// strengths through it. The lattice and the roll share one control
+/// (`note_bloom`) and the Spiral has its own. Load and scene entry already
+/// sanitize both to 0..2 (#1421, #1422), so this wider limit is a backstop for
+/// a strength built in code and not a guard: `f32::clamp` hands NaN straight
+/// back, so it is not a NaN guard either.
 pub fn bloom_strength(raw: f32) -> f32 {
     raw.clamp(0.0, 4.0)
 }
@@ -1076,8 +1079,8 @@ struct CompiledLatticeResources {
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
     /// standing in for the glow target at group 1 wherever there is not one.
     ///
-    /// Two places there is not, and neither is an error state: the Reach bar at
-    /// 0 drops the target entirely (`Offscreen::ensure_glow`), and the
+    /// Two places there is not, and neither is an error state: Background glow
+    /// reach or gain at 0 drops the target entirely (`Offscreen::ensure_glow`), and the
     /// single-attachment `fs_main`/`fs_plus` path the parity test draws through
     /// has no glow pass at all. Transparent light composites to the plain
     /// ground, so `node_paint` needs no branch for either — which is the whole
@@ -1761,7 +1764,8 @@ const INITIAL_OCCLUDER_CAPACITY: usize = 4096;
 /// (`offscreen_size`, `screen_size`) are a different question and stay separate.
 struct PaneTargets {
     bloom: bool,
-    /// The node light, which the Reach bar switches (`Offscreen::ensure_glow`).
+    /// The node light, which Background glow reach or gain at 0 switches off
+    /// (`Offscreen::ensure_glow`).
     glow: bool,
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).

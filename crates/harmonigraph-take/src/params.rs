@@ -29,10 +29,12 @@ pub enum ParamKey {
     /// Node matching tolerance in cents.
     Tolerance,
     /// Seconds a note takes to arrive, and to leave — both ends of it, on
-    /// the one dial and never at once. ONE time for every note indicator
-    /// too: the pitch class core, the octave glyphs, and the melody/bass
-    /// marks all ride it, so a note is a single gesture across the whole
-    /// node instead of layers starting and ending at different moments.
+    /// the one dial and never at once. The octave glyphs and the melody/bass
+    /// marks ride it together, so a note is a single gesture across the whole
+    /// node instead of layers starting and ending at different moments; a
+    /// Stagger spread stretches the slices to this × (1 + spread) in all. The
+    /// background glow runs on its own attack and release, and the Fade-out
+    /// delay holds a release before it starts.
     Fade,
     /// Pitch (MIDI note) shown darkest on the gradient. Every note is
     /// colored by pitch, whatever channel carried it.

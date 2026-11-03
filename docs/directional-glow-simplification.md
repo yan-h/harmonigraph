@@ -162,6 +162,9 @@ additional precision work is not a merge prerequisite.
 
 ## Shipped in #879: half-resolution glow and cached angular blur
 
+Superseded in size by #1461, which made the glow target a quarter of the scene's width and height (`GLOW_DIVISOR`).
+The half-size memory figures below are #879's own.
+
 Branch `codex/glow-resolution-and-kernel`,
 merged as #879,
 tried both follow-up optimizations together.

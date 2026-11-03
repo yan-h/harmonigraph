@@ -405,8 +405,8 @@ fn glyph_light(points: vec2<f32>) -> vec4<f32> {
 /// name reading as a hole punched in the light precisely where the light is
 /// brightest. The wash is what makes a lit node's name stand IN its halo.
 ///
-/// The WHOLE field, at any setting of the lattice's Wash bar, and the RAW
-/// light rather than the shaded one: both are the cross's terms (see
+/// The WHOLE field, at any setting of the lattice's Light on notes bar, and
+/// the RAW light rather than the shaded one: both are the cross's terms (see
 /// `plus_paint`, which sets out why), and the resting field is one field
 /// whether a position is showing its name or its marker.
 ///

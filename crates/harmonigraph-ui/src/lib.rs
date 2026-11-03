@@ -250,7 +250,7 @@ pub fn root_ui(
     }
     if state.picture.runtime.tracker.history_missing() {
         ui.colored_label(
-            egui::Color32::from_rgb(240, 180, 70),
+            theme::armed(),
             "Some note history is missing. Current notes may be incomplete until their source recovers.",
         );
     }
@@ -314,10 +314,10 @@ pub fn root_ui(
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
     // Render continuously only while something is animating (sounding or
-    // decaying voices); otherwise poll so newly arriving MIDI still shows
-    // up promptly. egui repaints on input events by itself, so interaction
-    // never waits on this. The plugin shell additionally requests a
-    // repaint the moment it drains new note events.
+    // decaying voices); otherwise poll, which bounds how stale a change that
+    // animates nothing gets: an automated parameter, the console, a take's
+    // status. egui repaints on input events by itself, so interaction never
+    // waits on this, and a note repaints itself, since it makes a voice.
     //
     // The piano roll keeps animating well past the last release fade — it
     // scrolls for as long as its window still reaches a played note — so
@@ -488,12 +488,21 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// voice lasts one. Unguarded: with neither, the span is the voice's own, so
 /// asking costs nothing, and a setting that lengthens a departure later
 /// needs only to join the span.
+///
+/// The Background glow's release is one: a halo falls on its own clock, which
+/// can outlast the slices by many seconds, and with the roll hidden and no
+/// audio nothing else keeps the frame loop awake for it. Each surface's glow
+/// says when its falling light stops moving a pixel
+/// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), from its
+/// own state, so a glow that is off keeps no state to ask and one that stops
+/// being drawn lapses at its deadline.
 fn releasing(state: &SharedState, now: f64) -> bool {
     let animation = state.picture.appearance.view.note_animation;
     let span = f64::from(animation.fade_out_delay)
         + f64::from(state.picture.runtime.frame_params.fade_time)
             * (1.0 + f64::from(animation.stagger_spread));
     state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| now - last <= span)
+        || state.picture.surfaces.glow_fade.values().any(|glow| glow.fading_at(now))
 }
 
 /// Whether the piano roll still has something moving across it: its window

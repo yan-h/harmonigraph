@@ -20,6 +20,157 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     assert!(!crate::roll_scrolling(&state, 2.2));
 }
 
+/// A background glow's release outlasts the note's own departure, and with the
+/// roll hidden and no audio nothing else keeps the frame loop awake through it:
+/// the halo's tail would repaint at the idle poll. The loop stays awake while
+/// the glow's fade state says its light still moves a pixel (level times the
+/// glow gain over half a code value), and settles after.
+///
+/// Driven through the real lattice pass, with the stepped levels read back from
+/// the nodes it drew as the independent measure of when the fade is invisible.
+#[test]
+fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    state.picture.appearance.spectrum.show_roll = false;
+    state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    let view = state.picture.appearance.view.clone();
+    assert!(view.glow_reach > 0.0 && view.glow_strength > 0.0, "the fresh glow draws");
+    let gain = view.glow_strength;
+    let span = f64::from(view.note_animation.fade_out_delay)
+        + f64::from(state.picture.runtime.frame_params.fade_time)
+            * (1.0 + f64::from(view.note_animation.stagger_spread));
+    assert!(span < 2.0, "the note's own departure ({span} s) must be over 3 s after the off");
+
+    let ctx = super::probe::themed();
+    let backend = RecordingBackend::default();
+    // The brightest light on the last drawn frame, after the filter stepped it.
+    let draw = |state: &mut SharedState, t: f64| {
+        begin_frame(&mut state.picture, &backend, t);
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                time: Some(t),
+                ..Default::default()
+            },
+            |ui| crate::draw_pane(ui, Pane::Lattice, &mut state.picture, t, 0),
+        );
+        state.picture.surfaces.spare_nodes.iter().map(|n| n.glow.level).fold(0.0_f32, f32::max)
+    };
+
+    let (mut awake, mut idle) = (0, 0);
+    let mut first_idle = None;
+    let mut released = false;
+    let mut t = 0.0;
+    while t < 60.0 {
+        // Fed as a shell feeds it, when the clock gets there: an off dated
+        // ahead of the frame is read as no note at all.
+        if t >= 1.0 && !released {
+            released = true;
+            state.picture.runtime.tracker.handle_event(NoteEvent::off(t, SourceId::DIRECT, 0, 60));
+        }
+        let level = draw(&mut state, t);
+        if t < 0.9 {
+            // Fixture reach: the node is in the window and lit.
+            if t > 0.8 {
+                assert!(level > 0.5, "the held note's light never arrived ({level})");
+            }
+        } else if t >= 3.0 {
+            assert!(
+                !crate::roll_scrolling(&state, t),
+                "the roll must not be what keeps this awake"
+            );
+            let visible = level * gain > 0.5 / 255.0;
+            assert_eq!(
+                crate::releasing(&state, t),
+                visible,
+                "at {t} s the light is {level} at gain {gain}"
+            );
+            if visible {
+                awake += 1;
+            } else {
+                idle += 1;
+                first_idle.get_or_insert(t);
+            }
+        }
+        t += if t < 3.0 { 0.05 } else { 0.25 };
+    }
+    // The tail is a long one and it does end: a loop that never idled would
+    // pass the equality above only by the light never falling.
+    assert!(awake > 20, "the tail never outlasted the note ({awake} frames)");
+    assert!(idle > 20, "the loop never went idle ({idle} frames)");
+    assert!(first_idle.is_some_and(|t| t < 40.0), "went idle at {first_idle:?}");
+
+    // A surface that stops being drawn mid-tail lapses at its deadline.
+    let mut abandoned = fresh();
+    abandoned.picture.appearance.spectrum.show_roll = false;
+    abandoned.picture.runtime.tracker.handle_event(NoteEvent::on(
+        0.0,
+        SourceId::DIRECT,
+        0,
+        60,
+        1.0,
+    ));
+    for k in 0..=80 {
+        let t = f64::from(k) * 0.05;
+        if k == 20 {
+            abandoned.picture.runtime.tracker.handle_event(NoteEvent::off(
+                t,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
+        }
+        draw(&mut abandoned, t);
+    }
+    assert!(crate::releasing(&abandoned, 5.0));
+    assert!(!crate::releasing(&abandoned, 200.0), "an undrawn surface held the loop awake");
+
+    state.picture.appearance.view.glow_strength = 0.0;
+    draw(&mut state, 60.0);
+    assert!(!crate::releasing(&state, 60.0), "a glow that does not draw held the loop awake");
+}
+
+/// A note arriving in an idle editor paints on the next tick, not at the idle
+/// poll: it makes a voice, and a voice is what `root_ui` paces by. The input
+/// worker's drain no longer reports an arrival, so this is what tells an idle
+/// editor one came.
+///
+/// The roll and the release fade also keep a fresh note animating, so the voice
+/// is isolated by clearing the roll before the frame (Clear display history on
+/// a held note), leaving the voice as the only thing in motion.
+#[test]
+fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let delay = |output: &egui::FullOutput| {
+        output.viewport_output.values().map(|viewport| viewport.repaint_delay).min().unwrap()
+    };
+    let mut state = fresh();
+    let mut harness = DockHarness::new();
+    // Settled: the opening frames lay the dock out and ask to be redrawn.
+    let mut idle = harness.frame(&mut state, vec![]);
+    for _ in 0..4 {
+        idle = harness.frame(&mut state, vec![]);
+    }
+    assert!(
+        delay(&idle) > std::time::Duration::ZERO,
+        "an idle editor waits for the next poll: {:?}",
+        delay(&idle),
+    );
+
+    let at = harness.next_time();
+    state.picture.runtime.tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 60, 1.0));
+    state.picture.runtime.tracker.clear_roll();
+    assert!(state.picture.runtime.tracker.voices().next().is_some(), "the note still sounds");
+    let sounding = harness.frame(&mut state, vec![]);
+    assert_eq!(delay(&sounding), std::time::Duration::ZERO, "a voice repaints at once");
+}
+
 /// Every tab needs an id of its own, and the title is not allowed to be its
 /// source: the workspace keys each tab BODY's `Ui` on `Viewer::id`
 /// (`workspace.rs`), so two tabs whose ids came from a shared title would

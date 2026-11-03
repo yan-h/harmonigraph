@@ -507,9 +507,10 @@ pub(crate) fn spectral_pane(
     // built around, so the boundary is marked whether or not anything is
     // sounding on it.
     //
-    // In the spectrum outline's color at silence, which is where that outline
-    // lies on this line: a silent stretch of the curve runs into the boundary
-    // as one line instead of a bright one meeting a grey one, and both answer
+    // In the spectrum outline's color at silence, at the heavier line weight
+    // (2 pt to the outline's 1): where that outline lies on this line, a
+    // silent stretch of the curve runs into the boundary without a bright one
+    // meeting a grey one, and both answer
     // the outline's Intensity dial (see `profile::handover_color`).
     if split < 1.0 && split > 0.0 {
         painter.line_segment(

@@ -79,17 +79,10 @@ pub fn accent_active() -> Color32 {
 pub fn accent_edge() -> Color32 {
     c(active_skin().accent_edge)
 }
-/// Armed-mode indicator (learn mode).
+/// Armed-mode indicator (learn mode), and the colour of a notice about a
+/// status to inspect.
 pub fn armed() -> Color32 {
     c(active_skin().armed)
-}
-/// Warning text (e.g. notes not represented on the lattice).
-pub fn warning_text() -> Color32 {
-    c(active_skin().warning_text)
-}
-/// Background band behind warning rows.
-pub fn warning_bg() -> Color32 {
-    c(active_skin().warning_bg)
 }
 
 // ---- Picture colors -------------------------------------------------------
@@ -179,9 +172,11 @@ pub(crate) const PANE_GUTTER: f32 = 7.0;
 /// The design size, at [scale](ui_scale) 1.0.
 pub(crate) const ROW_GAP: f32 = 3.5;
 
-/// The width of every line, chrome and picture alike: a divider, a widget's
+/// The width of a line, chrome and picture alike: a divider, a widget's
 /// outline, a curve. Otonal's mark width, and like
-/// otonal's the floor: only a grid is ruled finer ([`GRID_WIDTH`]).
+/// otonal's the floor for chrome: a grid is ruled finer ([`GRID_WIDTH`]), and
+/// so is the spectrum outline, which is 1 pt so as not to outweigh the
+/// spectrum it traces.
 ///
 /// FIXED at every [UI scale](ui_scale), as a separator is under a larger text
 /// size: the scale grows what the lines divide, not the lines. What does scale
@@ -752,12 +747,12 @@ fn style_at(scale: f32) -> egui::Style {
 /// Multiply every SIZE in `style` by `scale` — type, spacing, control heights,
 /// the radii and margins that go with them.
 ///
-/// Colors and STROKE WIDTHS are the deliberate exceptions. A hairline is a
-/// hairline at any size, and the widths here are all 1-1.2 points: taken down
-/// to 0.7 they land under a single pixel on a display with only one per point,
-/// where the rasterizer pays for the shortfall in alpha. The border would then
-/// read as having faded rather than as having shrunk, which is a different
-/// control, not a smaller one.
+/// Colors and STROKE WIDTHS are the deliberate exceptions. A line is a line at
+/// any size, and the widths here are all the fixed [`LINE_WIDTH`] of 2 points:
+/// scaled with the chrome, down to the 0.75 floor of [`UI_SCALE_RANGE`], they
+/// would land on fractions of a pixel, where the rasterizer pays for the
+/// shortfall in alpha. The border would then read as having faded rather than
+/// as having shrunk, which is a different control, not a smaller one.
 ///
 /// Written field by field rather than swept generically because egui's `Style`
 /// mixes sizes with counts, ratios and opacities in the same structs; the ones

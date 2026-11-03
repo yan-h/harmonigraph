@@ -69,12 +69,21 @@ static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(1);
 ///
 /// A release approaches 0 without reaching it, so something has to say when a
 /// light has ended — the alternative is a row per node ever played, held for
-/// the session against a level nothing can see. At the Strength bar's own 1
+/// the session against a level nothing can see. At the Background glow gain bar's own 1
 /// this is 0.4/255 of light at the hottest pixel of the halo, which is under
 /// half a step of the 8-bit target it is composited into: the cut is invisible
 /// wherever it lands, and it lands a little over six release constants after
 /// the note (`ln(1/0.002)`).
 const GONE: f32 = 0.002;
+
+/// Half a step of the 8-bit target the glow is composited into: a change in
+/// the light smaller than this does not move a pixel, so a fade that has fallen
+/// under it has nothing left to repaint for ([`GlowFade::fading_at`]).
+///
+/// Measured as level times the Background glow gain, which is the shader's
+/// peak without its `GLOW_BASE` of 0.8, so the window errs toward staying
+/// awake a little long rather than stopping on a visible step.
+const VISIBLE_STEP: f32 = 0.5 / 255.0;
 
 /// The fewest rows the strip is ever built for, and the floor the doubling
 /// starts from.
@@ -122,6 +131,13 @@ pub struct GlowFade {
     frame: u64,
     /// The clock the levels stand at, or `None` before the first step.
     at: Option<f64>,
+    /// When the largest falling light stops moving a pixel, as of the last
+    /// step: the clock at which its distance above its target times the glow
+    /// gain falls under [`VISIBLE_STEP`], at the Glow release the filter falls
+    /// at. `None` when no light is falling. What the frame loop stays awake
+    /// for (`releasing` in `lib.rs`); a surface that stops being drawn stops
+    /// moving it, and it lapses on its own.
+    visible_until: Option<f64>,
 }
 
 /// One node's light: where it has got to, and where its colour is kept.
@@ -145,7 +161,7 @@ struct Lit {
 /// audio ring, which is not a light (see [`GlowFade::step`]'s target).
 ///
 /// With the light off nothing is stepped and nothing is allocated — the state
-/// is dropped instead, so the frame the Reach bar comes back off 0 starts a fresh attack.
+/// is dropped instead, so the frame Background glow reach comes back off 0 starts a fresh attack.
 pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize, now: f64) {
     // The renderer's own test for whether the light draws at all, asked of the
     // scene's normalized view so the two cannot disagree about the boundary.
@@ -259,6 +275,20 @@ impl GlowFade {
             kept
         });
         scene.glow_rows = self.handed.next_power_of_two().max(FIRST_ROWS);
+        // Only a light above its target is moving on its own: one that is
+        // rising belongs to a note being played, and one at its target is
+        // still, so a mark held with no key down never keeps the loop awake.
+        // A level falls as `exp(-t / release)` toward its target, exactly, at
+        // whatever cadence the frames come.
+        let falling = self.nodes.values().map(|lit| lit.level - lit.target).fold(0.0, f32::max);
+        let seen = falling * scene.view.glow_strength;
+        self.visible_until = (seen > VISIBLE_STEP)
+            .then(|| now + f64::from(view.glow_release) * f64::from(seen / VISIBLE_STEP).ln());
+    }
+
+    /// Whether some node's light is still falling by a visible step at `now`.
+    pub(crate) fn fading_at(&self, now: f64) -> bool {
+        self.visible_until.is_some_and(|until| until > now)
     }
 }
 
@@ -350,6 +380,24 @@ mod tests {
         let over = level(&mut fade, &state, 7.0 * TAU);
         assert_eq!(over, 0.0, "the light never ended: {over}");
         assert!(fade.nodes.is_empty(), "a light that is over still holds a row");
+    }
+
+    /// Only a light that is falling holds the frame loop: a sounding note's is
+    /// still at its target, and so is a mark held with no key down.
+    #[test]
+    fn a_light_at_its_target_asks_for_no_repaint() {
+        let mut state = lit(0.0, 2.0);
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let mut fade = GlowFade::default();
+        for now in [0.0, 0.5, 1.0] {
+            let mut scene = scene_at(&state, now);
+            fade.step(&mut scene, &state.appearance.view, now);
+            assert!(!fade.fading_at(now), "a held light asked to be repainted at {now}");
+        }
+        state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+        let mut scene = scene_at(&state, 1.5);
+        fade.step(&mut scene, &state.appearance.view, 1.5);
+        assert!(fade.fading_at(1.5), "a released light is falling");
     }
 
     #[test]
