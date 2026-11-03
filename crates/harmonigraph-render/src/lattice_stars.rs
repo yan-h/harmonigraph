@@ -145,6 +145,8 @@ pub(super) struct Targets {
     bake: wgpu::BindGroup,
     image_group: wgpu::BindGroup,
     material: wgpu::BindGroup,
+    /// How far the stars have drifted, at [`stars::star_px_per_second`].
+    travel: stars::StarTravel,
 }
 impl Targets {
     fn new(
@@ -213,6 +215,7 @@ impl Targets {
             })
         };
         Self {
+            travel: stars::StarTravel::default(),
             bake: group(&atlas_scratch, &scratch),
             image_group: group(&atlas, &scratch),
             material: group(&atlas, &image),
@@ -243,12 +246,23 @@ impl Targets {
             image: stars::star_image_size(size, stars),
         };
         if held.as_ref().is_none_or(|t| t.allocation != allocation) {
-            *held = Some(Self::new(device, pipelines, source, allocation));
+            // The drift goes on from where it was whatever was reallocated.
+            let travel = held.as_ref().map_or_else(Default::default, |t| t.travel);
+            *held = Some(Self { travel, ..Self::new(device, pipelines, source, allocation) });
         }
         let held = held.as_mut().unwrap();
         held.atlas_scissor = layout.scissor();
+        let travel = held.travel.advance(stars, now, stars::star_px_per_second());
         let settings = Settings {
-            stars: StarUniforms::new(stars, direction, now, size, &layout, held.allocation.image),
+            stars: StarUniforms::new(
+                stars,
+                direction,
+                now,
+                travel,
+                size,
+                &layout,
+                held.allocation.image,
+            ),
             depth: amount,
             _pad0: 0.0,
             _pad1: 0.0,

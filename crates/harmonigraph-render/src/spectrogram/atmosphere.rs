@@ -1999,7 +1999,7 @@ mod tests {
         })
     }
 
-    /// Every slice `now` seconds on at the reference scroll, over a 16:9 pane.
+    /// Every slice `now` seconds on at the lattice's fixed pace, over a 16:9 pane.
     fn slices(
         settings: harmonigraph_scene::SpectralAtmosphere,
         now: f64,

@@ -169,8 +169,10 @@ pub const STAR_SIZE_MAX: f32 = 64.0;
 /// How many times its stored `Star size` the lattice draws and shows it, and
 /// so its spacing, which is a multiple of the size. The glow has no fine detail for stars to pick up, so its
 /// stars run bigger. Applied where the lattice draws and in its bars, never
-/// stored, so both panes share one [`StarSettings::default`] and a key a blob
-/// lacks takes the right fresh value in either.
+/// stored, so a stored size means the same in either pane. A stored speed does
+/// not ([`StarPane`]), so the sanitizer falls back to each pane's own fresh
+/// stars ([`StarPane::fresh`]); a key a blob lacks still takes
+/// [`StarSettings::default`]'s, the lattice's.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
 /// Bounds of every depth's `Star speed` ([`StarSettings::star_speed`]) and
 /// its sanitizer on the lattice, as a share of the prototype's pace: at the
@@ -209,6 +211,14 @@ impl StarPane {
         match self {
             Self::Spectrogram => SPECTRAL_STAR_SPEED_MAX,
             Self::Lattice => STAR_SPEED_MAX,
+        }
+    }
+
+    /// The pane's fresh stars, in its own units.
+    pub fn fresh(self) -> StarSettings {
+        match self {
+            Self::Spectrogram => SpectralAtmosphere::default().stars,
+            Self::Lattice => AtmosphereSettings::default().stars,
         }
     }
 }
@@ -603,9 +613,10 @@ impl StarSettings {
     pub fn scaled(self, scale: f32) -> Self {
         Self { star_size: self.star_size.map(|size| size * scale), ..self }
     }
-    /// These settings held to the ranges of the `pane` that draws them.
+    /// These settings held to the ranges of the `pane` that draws them, a
+    /// value that is no number taking the pane's fresh one.
     pub fn sanitized(mut self, pane: StarPane) -> Self {
-        let fresh = Self::default();
+        let fresh = pane.fresh();
         let clamp = |value: f32, fallback: f32, low, high| {
             if value.is_finite() {
                 value.clamp(low, high)

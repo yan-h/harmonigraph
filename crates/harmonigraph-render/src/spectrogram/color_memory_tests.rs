@@ -986,3 +986,41 @@ fn a_tide_lines_width_resets_the_history_only_while_one_is_drawn() {
         );
     }
 }
+
+/// A Span drag or a resize rebuilds the pane's targets, and the stars go on
+/// from where they were across it: a quarter second on at the new pane's
+/// pace, not restarted at that pace from the clock's start, which would jump
+/// them as far as they had come since.
+#[test]
+fn stars_drift_on_across_a_rebuilt_pane() {
+    let Some((device, queue)) = headless_device() else { return };
+    let targets = |resources: &CallbackResources| {
+        let panes = &resources.get::<SpectrogramResources>().unwrap().panes;
+        panes.get(&0).unwrap().cloud.as_ref().unwrap().shape
+    };
+    let mut cb = fixture(CloudStyle::Stars);
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let (shape, before) = (targets(&resources), memory(&resources).frame.as_ref().unwrap().slices);
+    // Taller, so the pane reallocates and its pace drops.
+    cb.rect.max.y += 40.0;
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.now += 0.25;
+    let pace = star_pace(a.points_per_ms, cb.rect.height());
+    let (now, stars, direction) = (a.now, a.settings.stars, a.settings.cloud_direction);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert_ne!(targets(&resources).size, shape.size, "fixture did not rebuild the targets");
+    let after = memory(&resources).frame.as_ref().unwrap().slices;
+    let cos = f64::from(direction).to_radians().cos();
+    let at = |travel: f64, cell: f32| (cos * travel / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD);
+    for k in 0..STAR_SLICES {
+        let (cell, speed) = (after[k].cell, f64::from(stars.star_speed[k]));
+        assert_eq!(before[k].cell, cell, "fixture moved the cells");
+        let went_on = (f64::from(before[k].offset.0[0]) + at(0.25 * pace * speed, cell))
+            .rem_euclid(STAR_HASH_PERIOD);
+        let restarted = at(now * pace * speed, cell);
+        let got = f64::from(after[k].offset.0[0]);
+        assert!((got - went_on).abs() < 0.01, "depth {k}: {got} against {went_on}");
+        assert!((restarted - went_on).abs() > 1.0, "depth {k}: a restart lands there too");
+    }
+}

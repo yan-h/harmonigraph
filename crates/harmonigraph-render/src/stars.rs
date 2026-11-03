@@ -443,6 +443,7 @@ impl StarUniforms {
         settings: harmonigraph_scene::StarSettings,
         direction: f32,
         now: f64,
+        travel: [f64; STAR_SLICES],
         pixels: [u32; 2],
         layout: &StarLayout,
         image: [u32; 2],
@@ -454,13 +455,7 @@ impl StarUniforms {
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,
             star_cover: settings.star_cover,
-            star_slices: star_slices(
-                settings,
-                direction,
-                star_travel(settings, now, star_px_per_second()),
-                layout,
-                image,
-            ),
+            star_slices: star_slices(settings, direction, travel, layout, image),
         }
     }
 }
