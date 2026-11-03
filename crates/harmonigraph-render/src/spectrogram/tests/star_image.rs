@@ -440,6 +440,51 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
     );
 }
 
+/// A dim near star never blacks out a bright far one. The far depth covers
+/// the sky with solid stars, the near one lays a second such sky over it, and
+/// their brightnesses spread wide, so many near stars sit over brighter far
+/// ones. Laid over them as paint, as
+/// before, 29% of the pixels fell below 85% of the far depth alone and 2% below
+/// half; as light, none may fall past the 8% `STAR_HOLD_POWER` allows, and the
+/// near stars brighter than those behind still show.
+#[test]
+fn a_dim_near_star_never_blacks_out_a_far_one() {
+    let Some((device, queue)) = headless_device() else { return };
+    let (width, height) = (480, 270);
+    let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
+    cb.grid.fill(220);
+    // Black to pale blue, as dark palettes run, so a dim star is a dark one.
+    cb.shades.lut = Arc::new((0..=255u8).map(|v| [v / 3, v / 2, v, 255]).collect());
+    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+    stars.star_resolution = 1.0;
+    stars.star_size = [30.0; 5];
+    stars.star_spacing_ratio = [harmonigraph_scene::STAR_SPACING_MIN; 5];
+    stars.star_twinkle = [0.0; 5];
+    (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (1.0, 0.0, 1.0);
+    (stars.star_solid, stars.star_glow_falloff) = ([0.9; 5], 0.0);
+    let luma = |px: &[u8; 4]| {
+        0.2126 * f32::from(px[0]) + 0.7152 * f32::from(px[1]) + 0.0722 * f32::from(px[2])
+    };
+    let mut frame = |solo| {
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = solo;
+        let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
+        let side = width as usize + 1;
+        let pixels = frame.as_chunks::<4>().0;
+        (10..height as usize - 10)
+            .flat_map(|y| (10..width as usize - 10).map(move |x| y * side + x))
+            .map(|i| luma(&pixels[i]))
+            .collect::<Vec<_>>()
+    };
+    let far = frame([true, false, false, false, false]);
+    let both = frame([true, false, false, false, true]);
+    let pairs = || far.iter().zip(&both);
+    // Two 8-bit steps of slack on top of the hold's 8%.
+    let darkened = pairs().filter(|&(f, b)| *b < 0.92 * f - 2.0).count();
+    let brightened = pairs().filter(|&(f, b)| *b > f + 10.0).count();
+    assert_eq!(darkened, 0, "{darkened} of {} pixels darkened past the hold", far.len());
+    assert!(brightened > far.len() / 10, "the near stars showed at only {brightened} pixels");
+}
+
 /// Every star narrower than a texel of the star image still shows (#1446).
 /// The far stars sit one to a cell, alike and steady, 2 star pixels in
 /// radius under a 25% texel of 7.2, so a texel centre lands inside only some

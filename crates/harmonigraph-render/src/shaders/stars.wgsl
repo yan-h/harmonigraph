@@ -289,13 +289,24 @@ fn star_gather3(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     return result;
 }
 
-// The consumer's floor, then every slice laid over it back to front: within a slice
-// the stars' coverages add and their colours average by coverage, and the slice
-// covers what is under it by its summed coverage, capped at one. The salts
-// (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
-// it, a cell's stagger at the second.
+// How steeply a star's hold over the stars behind it falls as it gets dimmer
+// than them: a star at half their brightness hides a sixteenth of them. Steep,
+// so a dimmer star in front darkens the one behind by at most 8%, where it is
+// four fifths as bright; a hard switch at equal brightness would never darken
+// it, but would flip a star's hue in and out as the light under the two moved.
+const STAR_HOLD_POWER: f32 = 4.0;
+
+// The consumer's floor, then every slice laid over it back to front: within a
+// slice the stars' coverages add and their colours average by coverage, and the
+// slice covers the floor by its summed coverage, capped at one. Over the slices
+// behind it, a slice is light rather than paint: it covers them only as far as it
+// is as bright as they are (`STAR_HOLD_POWER`), so a dim near star cannot black
+// out a bright far one. The slices gather premultiplied, apart from the floor,
+// so that comparison sees the stars behind alone. The salts (`fs_star_bake`)
+// are three apart: a star hashes at its salt and the one past it, a cell's
+// stagger at the second.
 fn star_layers(pt: vec2<f32>) -> vec4<f32> {
-    var out = star_floor();
+    var stars = vec4<f32>(0.0);
     let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
         let s = star_slice(k);
@@ -314,11 +325,25 @@ fn star_layers(pt: vec2<f32>) -> vec4<f32> {
         }
         if slice.w > 0.0 {
             let cover = min(slice.w, 1.0);
-            // Preserve the spectral RGB arithmetic; alpha independently follows over.
-            out = vec4<f32>(mix(out.rgb, slice.rgb / slice.w, cover), out.a + (1.0 - out.a) * cover);
+            let colour = slice.rgb / slice.w;
+            // Gamma-coded luma: what reads as a dark hole is a darker colour,
+            // whatever palette position it is. Zero stars behind are no
+            // brighter than anything.
+            let luma = vec3<f32>(0.2126, 0.7152, 0.0722);
+            let behind = dot(stars.rgb, luma);
+            let ratio = select(1.0, saturate(dot(colour, luma) * stars.w / behind), behind > 0.0);
+            let hold = cover * pow(ratio, STAR_HOLD_POWER);
+            stars = vec4<f32>(
+                stars.rgb * (1.0 - hold) + colour * (cover * (1.0 - stars.w) + hold * stars.w),
+                stars.w + (1.0 - stars.w) * cover,
+            );
         }
     }
-    return out;
+    // The stars over the floor: where every slice is as bright as those behind
+    // it, what laying each over the floor in turn drew. Preserve the spectral RGB
+    // arithmetic; alpha independently follows over.
+    let under = star_floor();
+    return vec4<f32>(under.rgb * (1.0 - stars.w) + stars.rgb, under.a + (1.0 - under.a) * stars.w);
 }
 
 // Every slice into the star image, at `Stars resolution` of the pane. Its
