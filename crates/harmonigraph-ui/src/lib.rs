@@ -372,7 +372,6 @@ pub fn root_ui(
             ui.max_rect(),
             &mut state.workspace.interaction.perf_pos,
             &state.picture.instruments.perf,
-            state.picture.instruments.timings.target_fps(),
             state.workspace.interaction.show_perf_detail,
             build_tag,
         );

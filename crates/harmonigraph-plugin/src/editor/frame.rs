@@ -55,7 +55,10 @@ pub(super) fn frame(
     // are analyzed.
     state.params.ui_state.apply_restore(&mut shared.ui);
 
-    shared.note_frame(queue.frame_timing().is_some() || !cfg!(target_os = "macos"));
+    // The display link's timing for this frame, or `None` for one it did not ask
+    // for (the watchdog's, an occlusion repaint).
+    let timing = queue.frame_timing();
+    shared.note_frame(timing.is_some() || !cfg!(target_os = "macos"));
 
     // The input worker ([`crate::background`]) drains the rings and runs the
     // analysis, and a frame reads what it left — unless it never started.
@@ -65,7 +68,7 @@ pub(super) fn frame(
         shared.input.drain(runtime, &shared.ui.picture.appearance, now);
     }
     // Drained on the clock it arrived by, drawn at the refresh it is for.
-    let wall = shared.input.frame_wall(queue.frame_timing(), now);
+    let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);
     let sample_rate = shared.input.sample_rate();
     // Snapshot current host movement before arming or queuing a render.
@@ -104,8 +107,8 @@ pub(super) fn frame(
         verts: queue.verts(),
         encode_ms: queue.encode_ms(),
         submit_ms: queue.submit_ms(),
-        link_refresh_s: queue.frame_timing().map_or(0.0, |timing| timing.refresh),
-        link_divisor: queue.frame_timing().map_or(0, |timing| timing.divisor),
+        target_fps: timing
+            .and_then(|timing| harmonigraph_perf::link_target_fps(timing.refresh, timing.divisor)),
         shell_ms: shell_start.elapsed().as_secs_f32() * 1000.0,
     };
     // A fold is priced against `egui_state.size`, which is the size the window

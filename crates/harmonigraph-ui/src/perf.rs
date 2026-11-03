@@ -218,12 +218,11 @@ pub(crate) fn draw_overlay(
     editor: egui::Rect,
     pos: &mut Option<egui::Pos2>,
     perf: &PerfStats,
-    target_fps: Option<f32>,
     detail: bool,
     build_tag: &str,
 ) {
     let fps = perf.fps();
-    let health = frame_health(fps, target_fps, perf.workload.animating);
+    let health = frame_health(fps, perf.target_fps, perf.workload.animating);
     let state = if perf.workload.animating { "live" } else { "idle" };
 
     let dim = egui::Color32::from_gray(0x9A);
@@ -609,6 +608,7 @@ mod tests {
             verts: 5000,
             roll_notes: 13,
             spectrogram_fallbacks: Default::default(),
+            target_fps: None,
         };
         let mut perf = PerfStats::default();
         let mut now = 0.0;
@@ -777,6 +777,7 @@ mod tests {
                 scene_ms: 0.25,
                 encode_ms: 10.0,
                 submit_ms: 11.0,
+                target_fps: None,
             },
             1.0,
             Workload { animating: true, ..Default::default() },
@@ -790,7 +791,7 @@ mod tests {
             ctx.run_ui(
                 egui::RawInput { screen_rect: Some(area), ..Default::default() },
                 // Detail on: the widest case.
-                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, None, true, "test @0123456"),
+                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true, "test @0123456"),
             )
         };
         frame();
