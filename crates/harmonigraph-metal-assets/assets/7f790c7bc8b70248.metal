@@ -17,7 +17,7 @@ struct StarSlice {
     float width;
     float inverse_floor;
     uint gather;
-    float twinkle;
+    uint _pad;
 };
 struct type_8 {
     StarSlice inner[5];
@@ -42,7 +42,7 @@ struct Cloud {
     float star_life;
     float star_size_variation;
     float star_cover;
-    uint star_pad1_;
+    float star_twinkle;
     metal::float4 star_image_size;
     type_8 star_slices;
     uint memory_enabled;
