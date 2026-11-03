@@ -85,14 +85,12 @@ fn cloud_offset(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [
 
 /// The star pixels a second a depth at `Star speed` 1 drifts over a
 /// spectrogram scrolling `points_per_ms` along its time axis, on a pane
-/// `height` points tall: [`star_px_per_second`] at
-/// [`STAR_SCROLL_REFERENCE`], and in proportion to the scroll either side, so
-/// the stars keep their pace against the music through a zoom. Still on a
-/// pane with no height, which would otherwise carry an infinite drift into
+/// `height` points tall: the scroll itself, so the stars keep their pace
+/// against the music through a zoom of the Span or a reshaped pane. Still on
+/// a pane with no height, which would otherwise carry an infinite drift into
 /// every frame after it.
 pub(super) fn star_pace(points_per_ms: f32, height: f32) -> f64 {
-    let scroll = f64::from(points_per_ms) * 1000.0 * f64::from(STAR_PANE) / f64::from(height);
-    let pace = star_px_per_second() * scroll / STAR_SCROLL_REFERENCE;
+    let pace = f64::from(points_per_ms) * 1000.0 * f64::from(STAR_PANE) / f64::from(height);
     if pace.is_finite() {
         pace
     } else {
@@ -2443,24 +2441,25 @@ mod tests {
         }
     }
 
-    /// The spectrogram's stars drift in proportion to its scroll, at the
-    /// prototype's pace at the reference scroll, so a zoom of the Span keeps
-    /// them moving against the music as they were. A change of pace or of a
+    /// A spectrogram star at `Star speed` 1 moves as fast as the music
+    /// scrolls, so a zoom of the Span keeps it moving against the music as it
+    /// was. A change of pace or of a
     /// depth's speed goes on from where the field is, rather than carrying it
     /// as far as the clock has run, and a render started over begins again
     /// from its own clock.
     #[test]
     fn stars_keep_pace_with_the_scroll_and_go_on_from_where_they_are() {
-        // A 16:9 pane at the reference's 163.33 s Span.
+        // A pane 900 points tall scrolling 1600 points in 160 s: ten points,
+        // six star pixels, a second.
         let height = 900.0;
-        let reference = 1600.0 / (163.330_38 * 1000.0);
-        let pace = super::star_pace(reference, height);
-        assert!((pace / super::star_px_per_second() - 1.0).abs() < 1e-6, "{pace}");
+        let scroll = 1600.0 / (160.0 * 1000.0);
+        let pace = super::star_pace(scroll, height);
+        assert!((pace - 6.0).abs() < 1e-5, "{pace}");
         // Zoomed in to a tenth of the Span, the music and the stars scroll ten
         // times as fast.
-        let zoomed = super::star_pace(reference * 10.0, height);
+        let zoomed = super::star_pace(scroll * 10.0, height);
         assert!((zoomed / pace - 10.0).abs() < 1e-5, "{zoomed} against {pace}");
-        assert_eq!(super::star_pace(reference, 0.0), 0.0);
+        assert_eq!(super::star_pace(scroll, 0.0), 0.0);
 
         let fresh = harmonigraph_scene::StarSettings {
             star_speed: [0.2, 0.4, 0.6, 0.8, 1.0],

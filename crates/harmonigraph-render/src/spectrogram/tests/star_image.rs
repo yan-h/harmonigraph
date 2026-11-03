@@ -467,8 +467,8 @@ fn stars_narrower_than_a_texel_all_show() {
     use harmonigraph_scene::star_plan::star_jitter_width;
     let Some((device, queue)) = headless_device() else { return };
     let (width, height) = (400, 300);
-    // Measured 0.64, 0.50 and 0.44: the last two as the same stars drawn
-    // whole by 3x3 with no cap at all.
+    // Measured 0.51, 0.53 and 0.55 with the stars held still: the last two
+    // as the same stars drawn whole by 3x3 with no cap at all.
     for (spacing, jitter, gather, bound) in
         [(8.0, 0.0, 1, 0.5), (1.85, 0.5, 3, 0.45), (1.85, 1.0, 3, 0.38)]
     {
@@ -481,6 +481,9 @@ fn stars_narrower_than_a_texel_all_show() {
             (4.0, spacing, jitter);
         (stars.star_size_variation, stars.star_randomness) = (0.0, 0.0);
         stars.star_twinkle = [0.0; 5];
+        // Held still, so the cells the pixels are keyed by below are the
+        // undrifted ones the frame draws, whatever the fresh speeds are.
+        stars.star_speed = [0.0; 5];
         let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
         let image = atmosphere::star_image_size([width, height], *stars);
         let slice =

@@ -262,7 +262,7 @@ mod tests {
             star_speed: reversed(fresh.star_speed),
             ..fresh
         };
-        assert_eq!(reversed.sanitized(), reversed);
+        assert_eq!(reversed.sanitized(crate::StarPane::Lattice), reversed);
         let [far, .., near] = reversed.plan().depths;
         assert!(far.cell > near.cell && far.radius > near.radius && far.speed > near.speed);
     }

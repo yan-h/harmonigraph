@@ -91,12 +91,12 @@ pub(super) fn edge_pooling(
 /// a bar here rather than a choice made in the shader, because Yan's pick was a
 /// starting point "with sliders exposed". The fresh values are his controls as
 /// captured from the DAW on 2026-09-26.
-/// `size_scale` is how many times its stored sizes and spacings this pane draws and shows.
+/// The `pane` says how its sizes and speeds read ([`crate::widgets::star_layers`]).
 pub(super) fn stars(
     ui: &mut egui::Ui,
     atmosphere: &mut harmonigraph_scene::StarSettings,
     fresh: &harmonigraph_scene::StarSettings,
-    size_scale: f32,
+    pane: harmonigraph_scene::StarPane,
 ) {
     // The layer count first: it says which layers the editor below shows.
     let mut layers = atmosphere.star_layers as f32;
@@ -114,7 +114,7 @@ pub(super) fn stars(
         atmosphere.star_solo = Default::default();
     }
     atmosphere.star_layers = layers as u32;
-    crate::widgets::star_layers(ui, atmosphere, size_scale);
+    crate::widgets::star_layers(ui, atmosphere, pane);
     star_solo(ui, atmosphere);
     let drawn = harmonigraph_scene::star_plan::star_layer_depths(atmosphere.star_layers);
     let (back, front) =

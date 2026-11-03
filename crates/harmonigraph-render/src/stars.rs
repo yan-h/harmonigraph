@@ -30,7 +30,7 @@ pub(crate) const STAR_HASH_PERIOD: f64 = 65536.0;
 /// shader's mask on the life index wraps with it and a star's life runs
 /// straight across the wrap. The shader's own constant, checked against it.
 pub(crate) const STAR_LIFE_PERIOD: f64 = 4096.0;
-/// How fast a depth at `Star speed` 1 travels, in star pixels (a
+/// How fast a lattice depth at `Star speed` 1 travels, in star pixels (a
 /// 540th of the pane's height) per second: the prototype's `(-60, -14)` px/s
 /// over its 540-pixel pane, which is about a ninth of the pane's height a
 /// second, while the music scrolled at 192 px/s under it.
@@ -42,13 +42,6 @@ pub(crate) const STAR_LIFE_PERIOD: f64 = 4096.0;
 pub(crate) fn star_px_per_second() -> f64 {
     (60.0f64 * 60.0 + 14.0 * 14.0).sqrt()
 }
-
-/// The spectrogram's scroll, in star pixels a second, at which its stars drift
-/// at [`star_px_per_second`]: a 16:9 pane at a 163.33 s Span, the fresh Span
-/// when the stars began following the scroll. They drift in proportion to the
-/// scroll past it, so a zoom of the Span or a reshaped pane keeps their pace
-/// against the music. The lattice has no scroll and always drifts at it.
-pub(crate) const STAR_SCROLL_REFERENCE: f64 = STAR_PANE as f64 * 16.0 / 9.0 / 163.330_38;
 
 /// The star pixels each depth has drifted after `seconds` at `pace` star
 /// pixels a second for a `Star speed` of 1, each at its own speed.

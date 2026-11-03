@@ -65,7 +65,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             let stars = settings.material_style == LatticeMaterial::Stars;
             if stars {
                 super::block(ui, "Appearance", |ui| {
-                    super::material::stars(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
+                    super::material::stars(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars, harmonigraph_scene::StarPane::Lattice);
                 });
             }
             super::block(ui, "Motion", |ui| {

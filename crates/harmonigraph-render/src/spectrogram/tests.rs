@@ -601,7 +601,7 @@ fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
 fn the_starfield_moves_by_the_drift() {
     const PANE: u32 = 540;
     const SHIFT: usize = 8;
-    const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
+    const SPEED: f32 = harmonigraph_scene::SPECTRAL_STAR_SPEED_MAX;
     let Some((device, queue)) = headless_device() else { return };
     let fresh = harmonigraph_scene::StarSettings::default();
     // Every depth at the far spacing, which 2x2 reads, then the fresh
