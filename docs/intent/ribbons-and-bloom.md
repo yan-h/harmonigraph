@@ -69,3 +69,7 @@ These settle the open questions from the first trial above.
 - Rejected: lower chroma goes grey-olive and loses the tint; a shorter reach is the worst for legibility; pulling hues toward violet ties the fill to one heatmap, Aurora.
 - Picked (Y3): Tint fade 3 at Fill lightness 25, so the hue stays by the note and the cut carries on dark to its reach. Any lifted fill costs some legibility against the near-black one; the faster fade wins part of it back.
 - Fill lightness now stops at 55, about the full tint: the default gradient's fills hold the most chroma there on average, and higher takes them toward white, which Yan never wants.
+
+## 2026-11-02 (drift audit, #1635)
+
+- At the shipped look (Fill lightness 25, Tint fade 3) a rest between fast repeats of one key reads about 0.53 of the body, and that still counts as the visible gap of 2026-10-03: the tint stays in the gaps. The gap test runs at the fresh defaults with a bar to match. #1635 Roll Q1, #1630

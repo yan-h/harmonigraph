@@ -323,6 +323,7 @@ Already sounding notes keep their correction through release, including subseque
 turning Retune back on admits new attacks only.
 An off/on between callbacks still forgets the old context, and queued input from an earlier participation generation cannot reintroduce it.
 The delay stays in place in both modes.
+It also stays under every Note retuning engine, Pass through included, so switching engines never makes the host reactivate a Tune.
 
 Show controls the source's output notes in the picture independently of Retune.
 Hidden sources keep updating, and Show restores their retained notes and history;
