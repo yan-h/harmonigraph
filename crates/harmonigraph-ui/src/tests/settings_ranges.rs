@@ -102,13 +102,12 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
         star_randomness, star_size_variation, star_jitter, star_glow_falloff,
-        star_resolution, star_lifetime, star_cover);
+        star_resolution, star_lifetime, star_twinkle_dip, star_cover);
         for depths in [
             &mut stars.star_speed,
             &mut stars.star_spacing_ratio,
             &mut stars.star_size,
             &mut stars.star_solid,
-            &mut stars.star_twinkle,
         ] {
             *depths = [v; harmonigraph_scene::star_plan::STAR_DEPTHS];
         }
@@ -541,6 +540,7 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
             "Size variation",
             "Position variation",
             "Star lifetime",
+            "Twinkle",
         ]);
     }
     labels

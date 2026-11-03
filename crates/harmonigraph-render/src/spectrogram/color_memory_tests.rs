@@ -241,7 +241,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let mut cb = fixture(CloudStyle::Stars);
         if held {
             let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-            stars.star_twinkle = [0.0; STAR_SLICES];
+            stars.star_twinkle_dip = 0.0;
         }
         if wrap {
             let a = cb.atmosphere.as_mut().unwrap();
@@ -458,7 +458,7 @@ fn star_passes_shade_the_layouts_rows_and_carry_its_last_one() {
     let a = cb.atmosphere.as_mut().unwrap();
     // Every star keeps its place, and with it its colour across its lives.
     a.settings.stars.star_speed = [0.0; STAR_SLICES];
-    a.settings.stars.star_twinkle = [0.0; STAR_SLICES];
+    a.settings.stars.star_twinkle_dip = 0.0;
     let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
     let mut resources = CallbackResources::default();
     cb.grid.fill(255);
@@ -560,6 +560,33 @@ fn jitter_edits_reset_only_the_stars_color_history() {
             assert_ne!(edited, lit, "moved stars retained the old light");
         } else {
             assert_eq!(edited, lit, "inactive jitter reset {style:?}");
+        }
+    }
+}
+
+/// Whether the stars keep their place is their identity, so a Twinkle edit
+/// across 100% resets their colour history; one below it only changes how far
+/// a held star dips, and carries it.
+#[test]
+fn twinkle_resets_the_stars_color_history_only_across_full() {
+    let Some((device, queue)) = headless_device() else { return };
+    for (from, to, resets) in [(0.5, 0.3, false), (0.9, 1.0, true)] {
+        let mut cb = fixture(CloudStyle::Stars);
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_twinkle_dip = from;
+        let mut resources = CallbackResources::default();
+        cb.grid.fill(255);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        cb.grid.fill(0);
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_twinkle_dip = to;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let edited = pixels(&device, &queue, memory(&resources));
+        let mut fresh = CallbackResources::default();
+        prepare_once(&device, &queue, &mut fresh, &cb);
+        let reset = pixels(&device, &queue, memory(&fresh));
+        if resets {
+            assert_eq!(edited, reset, "{from} -> {to} carried the stars' history");
+        } else {
+            assert_ne!(edited, reset, "{from} -> {to} reset the stars' history");
         }
     }
 }

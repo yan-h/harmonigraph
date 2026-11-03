@@ -13,7 +13,8 @@ uniform_group! {
     struct Settings {
         stars: StarUniforms,
         depth: f32,
-        _pad0: f32,
+        /// `Twinkle`, which the shared stars read through `star_twinkle`.
+        star_twinkle: f32,
         _pad1: f32,
         _pad2: f32,
     }
@@ -264,7 +265,7 @@ impl Targets {
                 held.allocation.image,
             ),
             depth: amount,
-            _pad0: 0.0,
+            star_twinkle: stars.star_twinkle_dip,
             _pad1: 0.0,
             _pad2: 0.0,
         };

@@ -27,9 +27,7 @@ struct StarSlice {
     // 0 not drawn, 1 the whole star from its own cell, 2 from a 2x2 read, 3
     // from a 3x3 read.
     gather: u32,
-    // How far its stars fade between lives; below 1 a star keeps its place
-    // across them (`star_draw`).
-    twinkle: f32,
+    _pad: u32,
 };
 struct StarUniforms {
     // The pane, and the star image's actual size, in device pixels.
@@ -127,7 +125,8 @@ fn star_draw(s: StarSlice, hashed: vec2<i32>, salt: u32) -> StarDraw {
     d.life = life;
     let key = salt + ((life + 1u) << 16u);
     let through = fract(age);
-    let held = s.twinkle < 1.0;
+    let twinkle = star_twinkle();
+    let held = twinkle < 1.0;
     d.held = held;
     // Position variation. Every life holds a star, so a depth's count is its
     // cell size alone. A star that keeps its place hashes it at the salt
@@ -138,9 +137,9 @@ fn star_draw(s: StarSlice, hashed: vec2<i32>, salt: u32) -> StarDraw {
     d.other = d.own;
     d.blend = 0.0;
     // It fades in over the start of its life and out over the end, as far
-    // as its slice twinkles: all the way at 1, as before the dial.
+    // as the field twinkles: all the way at 1, as before the dial.
     let dip = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
-    d.fade = 1.0 - s.twinkle * (1.0 - dip);
+    d.fade = 1.0 - twinkle * (1.0 - dip);
     let early = through < STAR_FADE;
     if held && (early || through > 1.0 - STAR_FADE) {
         // Where it keeps its place it turns into the next life's star over

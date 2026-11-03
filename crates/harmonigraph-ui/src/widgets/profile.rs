@@ -14,7 +14,6 @@ pub(crate) enum Depth {
     Spacing,
     Speed,
     Solid,
-    Twinkle,
 }
 
 /// The per-layer star properties in one editor: a row choosing which one the
@@ -37,11 +36,6 @@ pub(crate) fn star_layers(
             (Depth::Spacing, "Spacing", "How far apart each layer's stars sit"),
             (Depth::Speed, "Speed", "How fast each layer drifts"),
             (Depth::Solid, "Solid", "How much of each layer's stars is solid rather than glow"),
-            (
-                Depth::Twinkle,
-                "Twinkle",
-                "How far each layer's stars fade as one life gives way to the next",
-            ),
         ],
     );
     ui.data_mut(|d| d.insert_temp(id, kind));
@@ -50,7 +44,6 @@ pub(crate) fn star_layers(
         Depth::Spacing => &mut stars.star_spacing_ratio,
         Depth::Speed => &mut stars.star_speed,
         Depth::Solid => &mut stars.star_solid,
-        Depth::Twinkle => &mut stars.star_twinkle,
     };
     depth(ui, values, stars.star_layers, kind, pane);
 }
@@ -108,12 +101,6 @@ pub(crate) fn depth(
             percent,
             "The share of each star's radius at full strength, from its centre out, from the least solid layer to the most; the rest is glow, fading to the star's edge as Glow falloff says. Drag an end to stretch every layer's share with it, or the middle to slide them all.",
         ),
-        Depth::Twinkle => (
-            "Twinkle",
-            0.0..=1.0,
-            percent,
-            "How far each layer's stars fade out when their lifetime ends, from the least to the most. At 100% each star fades to nothing and a new one appears somewhere else nearby. Below 100% each star stays in its place, dims only this far and changes into its next life's brightness and size. At 0% it never dims, so a layer packed tight enough to cover the sky never shows a gap. Drag an end to stretch every layer's twinkle with it, or the middle to slide them all.",
-        ),
     };
     // Sizes and spacings run in octaves, the shares linearly, on the plot and
     // the bar alike; the bar's octaves are of the value as shown, so its
@@ -121,7 +108,7 @@ pub(crate) fn depth(
     let (octaves, shown) = match kind {
         Depth::Size => (true, pane.size_scale()),
         Depth::Spacing => (true, 1.0),
-        Depth::Speed | Depth::Solid | Depth::Twinkle => (false, 1.0),
+        Depth::Speed | Depth::Solid => (false, 1.0),
     };
     let to_bar = |v: f32| if octaves { (v * shown).log2() } else { v };
     let from_bar = |u: f32| if octaves { u.exp2() / shown } else { u };
