@@ -85,7 +85,6 @@ impl Worker {
         self.control.as_ref().unwrap().stop(RenderRequest {
             program,
             appearance: None,
-            size: Some([16, 16]),
             notice: None,
         });
         assert_no_alloc(|| self.close(1));
@@ -259,19 +258,14 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         let control = worker.control.as_ref().unwrap();
         control.set_end_at_rewind(true);
         let program = worker.directory.join("renderer");
-        // spawn_render passes take, --out, output, --size, dimensions.
+        // spawn_render passes take, --out, output.
         std::fs::write(
             &program,
             "#!/bin/sh\nprintf 'video' > \"$3\"\nprintf 'warning: fixture warning\\n' >&2\n",
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let request = || RenderRequest {
-            program: program.clone(),
-            appearance: None,
-            size: Some([16, 16]),
-            notice: None,
-        };
+        let request = || RenderRequest { program: program.clone(), appearance: None, notice: None };
         let recorder = worker.recorder.as_mut().unwrap();
         let duration = 64.0 / 48_000.0;
         assert_no_alloc(|| {

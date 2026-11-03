@@ -808,10 +808,19 @@ impl Control {
     }
 
     /// Append an independent export with settings already captured by the caller.
-    pub fn queue_export(&self, path: std::path::PathBuf, request: RenderRequest) {
+    ///
+    /// `size` is only what the Exports list shows for the job; the renderer
+    /// derives the real size from the request's appearance.
+    pub fn queue_export(
+        &self,
+        path: std::path::PathBuf,
+        request: RenderRequest,
+        size: Option<[u32; 2]>,
+    ) {
         spawn_render(
             request,
             path,
+            size,
             self.status.clone(),
             self.progress.clone(),
             self.render.clone(),

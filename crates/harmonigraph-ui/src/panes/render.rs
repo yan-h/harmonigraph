@@ -818,7 +818,7 @@ pub(crate) fn capture_export(
     Ok(crate::ExportAction::Queue {
         take: path.to_owned(),
         appearance: captured.serialize(),
-        render: captured.render,
+        size: captured.render.frame.pixels(captured.render.short_edge),
     })
 }
 
@@ -1486,19 +1486,19 @@ mod export_tests {
         let queued = capture_export(&pane, &interaction, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
 
-        let crate::ExportAction::Queue { appearance, render, .. } = queued else {
+        let crate::ExportAction::Queue { appearance, size, .. } = queued else {
             panic!("queue action")
         };
         let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
-        for render in [&captured.render, &render] {
-            let frame = render.frame;
-            assert_eq!((frame.aspect_w, frame.aspect_h, frame.split), (9, 16, 0.3));
-            assert_eq!(frame.lattice, LatticeSide::Top);
-            assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
-            assert_eq!(render.short_edge, 1080);
-            assert_eq!(render.tail, 2.0);
-            assert_eq!(render.encoder, VideoEncoder::Hardware);
-        }
+        let render = &captured.render;
+        let frame = render.frame;
+        assert_eq!((frame.aspect_w, frame.aspect_h, frame.split), (9, 16, 0.3));
+        assert_eq!(frame.lattice, LatticeSide::Top);
+        assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
+        assert_eq!(render.short_edge, 1080);
+        assert_eq!(render.tail, 2.0);
+        assert_eq!(render.encoder, VideoEncoder::Hardware);
+        assert_eq!(size, [1080, 1920]);
     }
 
     /// A take whose header holds no appearance has no frame to keep: queueing
@@ -1528,16 +1528,13 @@ mod export_tests {
         let queued = capture_export(&pane, &interaction, &path).unwrap();
         std::fs::remove_file(&path).unwrap();
 
-        let crate::ExportAction::Queue { appearance, render, .. } = queued else {
-            panic!("queue action")
-        };
+        let crate::ExportAction::Queue { appearance, .. } = queued else { panic!("queue action") };
         let captured = crate::AppearanceDocument::parse(&appearance).unwrap();
         assert_eq!(captured.spectrum.attack, 0.2, "the selected export look");
-        for render in [&captured.render, &render] {
-            assert_eq!((render.frame.aspect_w, render.frame.aspect_h), (9, 16));
-            assert_eq!(render.frame.lattice, LatticeSide::Top);
-            assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
-        }
+        let render = &captured.render;
+        assert_eq!((render.frame.aspect_w, render.frame.aspect_h), (9, 16));
+        assert_eq!(render.frame.lattice, LatticeSide::Top);
+        assert_eq!(render.spectrogram, SpectrogramRender::Scrolling);
     }
 
     #[test]
@@ -1610,15 +1607,13 @@ mod export_tests {
             .iter()
             .zip(["/tmp/first.take", "/tmp/path with spaces/second.take"])
         {
-            let crate::ExportAction::Queue { take, appearance, render } = action else {
+            let crate::ExportAction::Queue { take, appearance, size } = action else {
                 panic!("queue action")
             };
             assert_eq!(take, std::path::Path::new(path));
+            let render = crate::AppearanceDocument::parse(appearance).unwrap().render;
             assert_eq!(render.short_edge, 1080);
-            assert_eq!(
-                crate::AppearanceDocument::parse(appearance).unwrap().render.short_edge,
-                1080
-            );
+            assert_eq!(*size, render.frame.pixels(render.short_edge));
         }
     }
 }

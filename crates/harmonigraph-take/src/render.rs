@@ -610,7 +610,10 @@ pub struct ExportJob {
     pub id: u64,
     pub take: std::path::PathBuf,
     pub output: std::path::PathBuf,
-    /// None means the recorded appearance supplies the output size.
+    /// What the Exports list shows for the job, and nothing the render reads:
+    /// the renderer derives the real size from the appearance it is given.
+    /// `None` for a recorded take's automatic export, whose appearance is not
+    /// read until the job is queued.
     pub size: Option<[u32; 2]>,
     pub state: ExportStatus,
     pub progress: RenderProgress,
