@@ -308,6 +308,7 @@ Finishing a take starts rendering;
 **Queue last take** in **Exports** renders the last take again with the selected look and the current video settings.
 Under **Use each take's recorded appearance** only Output size, Tail and Encoder are the current ones:
 the take keeps the frame and Video history it was recorded with.
+A take recorded without a look exports as an ordinary queued export.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
 Shift-drag either picture to an edge of the preview to arrange the pictures.
 Drag either picture without Shift to navigate,

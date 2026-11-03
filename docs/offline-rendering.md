@@ -47,6 +47,7 @@ In **Exports**, **Queue last take** and **Queue paths** capture the selected cur
 with the current Video output settings and dimensions.
 Under **Use each take's recorded appearance** only Output size, Tail and Encoder are the current ones:
 each take keeps the frame (aspect, lattice side and split) and Video history it was recorded with.
+A take recorded without a look exports as an ordinary queued export.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
 
