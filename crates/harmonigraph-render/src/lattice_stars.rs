@@ -330,9 +330,10 @@ mod tests {
             ..Default::default()
         };
         let slices = |settings: harmonigraph_scene::StarSettings, now| {
-            let rate = crate::travel::Motion::rate(1.0, 0.0, settings, stars::star_px_per_second());
-            let motion = crate::travel::Travel::default().advance(now, rate);
             let layout = stars::star_layout(settings, 16.0 / 9.0);
+            let pace = stars::star_px_per_second();
+            let rate = crate::travel::Motion::rate(1.0, 0.0, 1.0, settings, pace, layout.cells);
+            let motion = crate::travel::Travel::default().advance(now, rate);
             stars::star_slices(settings, motion.stars, &layout, [1920, 1080])
         };
         let travelled = |settings, now| {

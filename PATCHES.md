@@ -219,7 +219,7 @@ The repaint deadline was recomputed as `now + repaint_delay` on *every* tick tha
 So a steady `request_repaint_after(N)` re-based the deadline on each tick, and for any N longer than the tick interval (then ~15 ms, the macOS frame timer; now one display refresh) `now` never caught up:
 the deadline receded forever and the window painted nothing until an input event or a texture upload forced it.
 Every delayed repaint was silently dead —
-the idle poll included, which went unnoticed because the plugin shell requests a repaint whenever it drains MIDI, and an idle window has nothing to show anyway.
+the idle poll included, which went unnoticed because the plugin shell then requested a repaint whenever it drained MIDI, and an idle window has nothing to show anyway.
 Fix:
 keep the EARLIEST pending deadline rather than overwriting it, and schedule the next one from the instant a frame actually painted instead of leaving it unset (clearing it to `None` cost a whole tick, so every capped interval ran one tick long).
 Found while adding the System pane's frame-rate cap, which was first built on exactly this mechanism and did nothing at all without the fix;
@@ -229,7 +229,7 @@ app can pace its own window.
 `Queue::set_frame_divisor` sets it from inside a frame (applied after the frame returns, where the `Window` is reachable —
 the same deferred shape `resize` already uses).
 This is what makes a frame rate setting enforceable:
-egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a host draining MIDI) also forces the next pass to zero —
+egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a sounding voice) also forces the next pass to zero —
 so a cap built on it evaporates exactly when the UI is busy.
 Nor can the two be combined: a repaint delay of one frame skips every frame that arrives a hair early, halving the rate (#1551).
 `Queue::frame_timing` hands the frame its link timing from baseview patch 4, so the app can time its content by the refresh rather than by when the callback ran,
@@ -351,6 +351,7 @@ a `free`-only delta on a bailing frame used to drop egui's texture-manager ids p
 `KeyCapture::CaptureShortcuts` captures its listed `egui::KeyboardShortcut`s even when no widget has keyboard focus, so the editor's appearance undo and redo (Cmd+Z, Cmd+Shift+Z, and Ctrl+Y off macOS) never reach the DAW while the editor window has the keyboard.
 Every other key still passes to the host unless egui has a use for it, which `egui_claims_key` decides:
 a focused widget takes every key, unless the app says through `Queue::set_focus_takes_only_arrows` that it uses just the arrows, when it keeps those and Escape, so Space still reaches the DAW after a click leaves a plot handle focused.
+A label holding a selection claims the copy chord (Cmd-C, Ctrl-Insert off macOS), which egui turns into its own copy, so the DAW does not copy too (#1608).
 Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
 `translate_virtual_key` lowercases a character before matching it,
 so Shift and Caps Lock letters still produce egui key events.

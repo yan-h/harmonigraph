@@ -77,12 +77,30 @@ pub struct SpectrogramAtmosphere {
     pub light_hold: Option<[SpectrogramVertex; 6]>,
 }
 
-/// Cloud-space sampling offset for a texture that has drifted `drift`
-/// ([`Motion::drift`]), unreduced and still in f64. The shader samples
-/// `screen + drift`, so the sampling offset moves opposite the texture itself.
-fn cloud_offset(drift: [f64; 2]) -> [f64; 2] {
+/// The drawn material's cells to a cloud unit, which its drift is counted in
+/// ([`Motion::drift`]): what `wash_cell_at` multiplies the offset by, or for
+/// Scales what `fs_velvet_tone` does, its cell `24/405` of the pane's height
+/// at a `Scale size` of 1. Stars draw no material, and take the wash's.
+fn material_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
+    let material = settings.material_settings;
+    match settings.cloud_style {
+        harmonigraph_scene::CloudStyle::VelvetScales => {
+            405.0 / (240.0 * f64::from(material.velvet_size))
+        }
+        harmonigraph_scene::CloudStyle::Watercolor | harmonigraph_scene::CloudStyle::Stars => {
+            f64::from(WASH_CELLS / material.wash_size)
+        }
+    }
+}
+
+/// Cloud-space sampling offset for a texture that has drifted `drift` of its
+/// `cells` to a cloud unit ([`Motion::drift`]), unreduced and still in f64.
+/// The shader samples `screen + drift`, so the sampling offset moves opposite
+/// the texture itself, and multiplies it by the cells again, so a size change
+/// scales the texture about the pane rather than sliding it by its history.
+fn cloud_offset(drift: [f64; 2], cells: f64) -> [f64; 2] {
     let start = harmonigraph_scene::MaterialSettings::DRIFT_START;
-    std::array::from_fn(|axis| start[axis] + drift[axis])
+    std::array::from_fn(|axis| start[axis] + drift[axis] / cells)
 }
 
 /// [`cloud_offset`] after `now` seconds at the dials' drift, as a first frame
@@ -93,7 +111,8 @@ fn cloud_offset_at(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -
         settings.cloud_speed,
         settings.cloud_direction,
     );
-    cloud_offset(rate.map(|v| v * now))
+    let cells = material_cells(settings);
+    cloud_offset(rate.map(|v| v * cells * now), cells)
 }
 
 /// The star pixels a second a depth at `Star speed` 1 drifts over a
@@ -1437,7 +1456,14 @@ impl Targets {
                 &wgpu::BufferDescriptor {
                     label: Some(label),
                     size,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    // A test reads back what a frame told the shader.
+                    usage: wgpu::BufferUsages::UNIFORM
+                        | wgpu::BufferUsages::COPY_DST
+                        | if cfg!(test) {
+                            wgpu::BufferUsages::COPY_SRC
+                        } else {
+                            wgpu::BufferUsages::empty()
+                        },
                     mapped_at_creation: false,
                 },
             )
@@ -1794,10 +1820,19 @@ impl Targets {
         // units — ten across the pane's height, so 1x travels about one pane
         // height every four minutes.
         let pace = star_pace(atmosphere.points_per_ms, rect.height());
-        let rate =
-            Motion::rate(settings.cloud_speed, settings.cloud_direction, settings.stars, pace);
+        // Each texture travels in the cells it is drawn in: the stars'
+        // layout's where they are drawn, the plan's where they are not.
+        let cells = material_cells(settings);
+        let rate = Motion::rate(
+            settings.cloud_speed,
+            settings.cloud_direction,
+            cells,
+            settings.stars,
+            pace,
+            stars.map_or_else(|| star_cells(settings.stars), |layout| layout.cells),
+        );
         let motion = travel.advance(atmosphere.now, rate);
-        let offset = cloud_offset(motion.drift);
+        let offset = cloud_offset(motion.drift, cells);
         let drift = cloud_drift(settings, offset, tile);
         let image = self.shape.stars.map_or([1, 1], |stars| stars.image);
         let slices = stars
@@ -2418,7 +2453,10 @@ mod tests {
         // Along x: each depth's travel across the pane.
         let mut travel = super::Travel::default();
         let mut advance = |stars, now, pace| {
-            travel.advance(now, super::Motion::rate(0.0, 0.0, stars, pace)).stars.map(|t| t[0])
+            let cells = super::star_cells(stars);
+            let motion =
+                travel.advance(now, super::Motion::rate(0.0, 0.0, 1.0, stars, pace, cells));
+            std::array::from_fn(|k| motion.stars[k][0] * f64::from(cells[k]))
         };
         let near = |t: [f64; STAR_SLICES]| t[STAR_SLICES - 1];
         assert_eq!(near(advance(fresh, 100.0, pace)), 100.0 * pace);

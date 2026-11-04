@@ -386,6 +386,53 @@ impl Source {
     }
 }
 
+/// The material's cells to a cloud unit, which its travel is counted in.
+fn material_cells(material: &Material) -> f64 {
+    let (scale, cells) = size_and_cells(material.style, &material.settings);
+    f64::from(cells / scale)
+}
+
+/// How far the material and the stars go in a second at this frame's dials,
+/// in the cells this frame draws them with: the stars' layout on a pane
+/// `aspect` wide where they are drawn, the plan's where they are not.
+fn rate(material: &Material, aspect: Option<f32>) -> crate::travel::Motion {
+    let star_cells = match aspect {
+        Some(aspect) if material.style == harmonigraph_scene::LatticeMaterial::Stars => {
+            crate::stars::star_layout(material.stars, aspect).cells
+        }
+        _ => crate::stars::star_cells(material.stars),
+    };
+    crate::travel::Motion::rate(
+        material.speed,
+        material.direction,
+        material_cells(material),
+        material.stars,
+        crate::stars::star_px_per_second(),
+        star_cells,
+    )
+}
+
+/// The material's sampling offset in cells, as the shader takes it: the
+/// travel, already in cells, from the start, which the size scales as it
+/// scales the pane.
+fn drift(material: &Material, motion: crate::travel::Motion) -> [f32; 2] {
+    let velvet = material.style == harmonigraph_scene::LatticeMaterial::VelvetScales;
+    // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling its
+    // 40-cell tile, so a screen-axis wrap spans five tile periods and the
+    // rotated jump is still a whole-number tile repeat. Velvet's domain warp
+    // is nonperiodic: wrapping would jump.
+    let drift_period = 200.0;
+    let per_unit = material_cells(material);
+    std::array::from_fn(|axis| {
+        if velvet {
+            motion.drift[axis] as f32
+        } else {
+            let start = harmonigraph_scene::MaterialSettings::DRIFT_START[axis];
+            (start * per_unit + motion.drift[axis]).rem_euclid(drift_period) as f32
+        }
+    })
+}
+
 /// Draws the frame's material, and returns where the pane's textures are,
 /// which the glow's texture and breathing read too.
 pub(super) fn prepare(
@@ -398,22 +445,19 @@ pub(super) fn prepare(
 ) -> crate::travel::Motion {
     let material = &callback.material;
     // Every texture's motion advances whatever is drawn, so a change of
-    // material goes on from where the new one would have been, and the glow's
-    // texture and breathing move with no material at all. A frame with no
-    // glow clock draws none of them and holds them where they are, so a glow
-    // turned off and on again goes on from there rather than starting over.
+    // material goes on from the travel so far, read in the new one's cells,
+    // and the glow's texture and breathing move with no material at all. A
+    // frame with no glow clock draws none of them and holds them where they
+    // are, so a glow turned off and on again goes on from there rather than
+    // starting over.
+    let aspect = pane.offscreen.as_ref().map(|o| o.size[0] as f32 / o.size[1] as f32);
     let motion = match callback.glow_timing {
         Some(clock) => pane.material_travel.advance(
             clock.now,
             crate::travel::Motion {
                 texture: f64::from(callback.texture_speed),
                 breath: f64::from(callback.breathing.speed),
-                ..crate::travel::Motion::rate(
-                    material.speed,
-                    material.direction,
-                    material.stars,
-                    crate::stars::star_px_per_second(),
-                )
+                ..rate(material, aspect)
             },
         ),
         None => pane.material_travel.held(),
@@ -453,20 +497,7 @@ pub(super) fn prepare(
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
     let (scale, cells) = size_and_cells(material.style, &material.settings);
     let cell = size[1] as f32 * scale / (10.0 * cells);
-    // The offset in cells. Watercolor rotates by (cos, sin) = (4/5, 3/5)
-    // before sampling its 40-cell tile, so a screen-axis wrap spans five tile
-    // periods and the rotated jump is still a whole-number tile repeat.
-    // Velvet's domain warp is nonperiodic: wrapping would jump.
-    let drift_period = 200.0;
-    let drift = std::array::from_fn(|axis| {
-        let per_unit = f64::from(cells / scale);
-        if velvet {
-            (motion.drift[axis] * per_unit) as f32
-        } else {
-            let start = harmonigraph_scene::MaterialSettings::DRIFT_START[axis];
-            ((start + motion.drift[axis]) * per_unit).rem_euclid(drift_period) as f32
-        }
-    });
+    let drift = drift(material, motion);
     let dials = &material.settings;
     let geometry = [dials.wash_fuzz.to_bits(), dials.wash_lobe.to_bits()];
     let texels = ((40.0 * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
@@ -510,6 +541,97 @@ mod tests {
     fn settings_match_the_shader() {
         crate::uniforms::layout::check_binding::<Settings>(SOURCE, 0, 0);
         crate::uniforms::layout::check_binding::<Geometry>(SOURCE, 0, 3);
+    }
+
+    /// A Material size or Star size drag minutes in scales the texture about
+    /// its origin, moving it on by one frame's travel, where a travel held in
+    /// units the size then divides would slide it by that fraction of all it
+    /// had travelled: the material's sampling offset in its cells, as `prepare`
+    /// hands it to the shader, and each star layer's offset in its cells.
+    #[test]
+    fn a_size_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
+        use crate::stars::{star_layout, star_slices, STAR_HASH_PERIOD, STAR_SLICES};
+        use harmonigraph_scene::LatticeMaterial;
+        let (step, aspect) = (1.0 / 60.0, 16.0 / 9.0);
+        // How far apart two offsets are, a repeat's wrap taken out.
+        let apart = |a: [f64; 2], b: [f64; 2], repeat: f64| {
+            (0..2)
+                .map(|i| {
+                    let d = a[i] - b[i];
+                    if repeat > 0.0 {
+                        (d - repeat * (d / repeat).round()).abs()
+                    } else {
+                        d.abs()
+                    }
+                })
+                .fold(0.0, f64::max)
+        };
+        for style in
+            [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
+        {
+            let mut material = Material {
+                style,
+                amount: 1.0,
+                speed: 3.0,
+                settings: Default::default(),
+                stars: harmonigraph_scene::StarSettings {
+                    star_speed: [0.2, 0.4, 0.6, 0.8, 1.0],
+                    ..Default::default()
+                },
+                direction: 37.0,
+            };
+            let cells = material_cells;
+            let slices = |material: &Material, motion: crate::travel::Motion| {
+                let layout = star_layout(material.stars, aspect);
+                star_slices(material.stars, motion.stars, &layout, [1920, 1080])
+            };
+            let mut travel = crate::travel::Travel::default();
+            let held = travel.advance(600.0, rate(&material, Some(aspect)));
+            let (held_drift, held_slices) = (drift(&material, held), slices(&material, held));
+            let held_cells = cells(&material);
+            match style {
+                LatticeMaterial::VelvetScales => material.settings.velvet_size *= 1.01,
+                LatticeMaterial::Stars => {
+                    let s = &mut material.stars;
+                    s.star_size = s.star_size.map(|v| v * 1.01)
+                }
+                _ => material.settings.wash_size *= 1.01,
+            }
+            let moved = travel.advance(600.0 + step, rate(&material, Some(aspect)));
+            let restarted = crate::travel::Travel::default()
+                .advance(600.0 + step, rate(&material, Some(aspect)));
+            if style == LatticeMaterial::Stars {
+                let pace = crate::stars::star_px_per_second();
+                let offset = |s: crate::stars::StarSlice| s.offset.0.map(f64::from);
+                let (moved, restarted) = (slices(&material, moved), slices(&material, restarted));
+                for k in 0..STAR_SLICES {
+                    assert_ne!(held_slices[k].cell, moved[k].cell, "the nudge moved no cell");
+                    let speed = f64::from(material.stars.star_speed[k]);
+                    let frame = pace * speed * step / f64::from(moved[k].cell);
+                    let gone = |s| apart(offset(s), offset(held_slices[k]), STAR_HASH_PERIOD);
+                    let (moved, restarted) = (gone(moved[k]), gone(restarted[k]));
+                    assert!(moved <= frame + 0.01, "depth {k}: {moved} cells, not {frame}");
+                    assert!(restarted > 1.0, "depth {k}: a restart lands there too");
+                }
+            } else {
+                let repeat = if style == LatticeMaterial::Watercolor { 200.0 } else { 0.0 };
+                let gone = |motion| {
+                    let at = drift(&material, motion).map(f64::from);
+                    apart(at, held_drift.map(f64::from), repeat)
+                };
+                // One frame's drift, and the start the sampling offset holds,
+                // which the size scales as it scales the pane.
+                let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
+                    material.speed,
+                    material.direction,
+                );
+                let frame = x.hypot(y) * step * cells(&material)
+                    + 0.6 * (cells(&material) - held_cells).abs();
+                let (moved, restarted) = (gone(moved), gone(restarted));
+                assert!(moved <= frame + 0.01, "{style:?}: {moved} cells, not {frame}");
+                assert!(restarted > 0.5, "{style:?}: a restart lands there too ({restarted})");
+            }
+        }
     }
 
     #[test]

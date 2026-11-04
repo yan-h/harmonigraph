@@ -50,8 +50,11 @@ use std::path::{Path, PathBuf};
 /// as in any saved blob (the `persistence-contract` skill), so how it ages is
 /// worth knowing before a frame moves:
 ///
-/// - A NEW field enters at its `Default`. A feature that ships on moves the
-///   frames that draw it, which is a picture change and stated as one.
+/// - A NEW field is pinned here too, at its fresh value, or
+///   `harmonigraph-offline`'s `the_pinned_look_pins_every_field` fails: left
+///   out, it draws at its `Default`, and the next capture that moves that
+///   default moves frames. A feature that ships on moves the frames that draw
+///   it, which is a picture change and stated as one.
 /// - A RENAMED or retyped field drops its pinned value for the new `Default`.
 ///   If that moves a frame, carry the value over to the new key here rather
 ///   than stating it as a picture change.

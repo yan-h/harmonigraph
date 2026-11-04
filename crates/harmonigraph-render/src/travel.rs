@@ -15,6 +15,13 @@
 //! One clock for all of them, held in each pane's own buffers, which outlive
 //! the targets that draw them. So a rebuilt target (a resize, a Span zoom, a
 //! change of style) goes on from where its texture was.
+//!
+//! The material and each star layer travel in their OWN cells, each frame
+//! adding the rate over that frame's cell. A travel held in cloud units or
+//! star pixels would be divided by the cell as it is drawn, so minutes into a
+//! session a nudge of `Material size`, `Patch size` or `Star size` would slide
+//! the texture by that fraction of everything it had travelled. Counted in
+//! cells, a size change scales the texture about its origin instead.
 
 use crate::stars::STAR_SLICES;
 
@@ -22,10 +29,11 @@ use crate::stars::STAR_SLICES;
 /// second at this frame's dials ([`Motion::rate`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Motion {
-    /// The material's sampling offset in cloud units, less
-    /// [`MaterialSettings::DRIFT_START`](harmonigraph_scene::MaterialSettings::DRIFT_START).
+    /// The material's sampling offset in its own cells, less
+    /// [`MaterialSettings::DRIFT_START`](harmonigraph_scene::MaterialSettings::DRIFT_START)
+    /// in them.
     pub(crate) drift: [f64; 2],
-    /// Each star layer's travel in star pixels, across and down.
+    /// Each star layer's travel in its own cells, across and down.
     pub(crate) stars: [[f64; 2]; STAR_SLICES],
     /// The stars' life clock, in lives.
     pub(crate) life: f64,
@@ -40,20 +48,28 @@ pub(crate) struct Motion {
 
 impl Motion {
     /// How far each texture goes in a second: the material at `speed` along
-    /// `direction`, each of the `stars`' layers at `pace` star pixels a second
-    /// for a `Star speed` of 1 along the same direction, and the life clock
-    /// once a `Star lifetime`.
+    /// `direction`, at `material_cells` of its cells to a cloud unit, each of
+    /// the `stars`' layers at `pace` star pixels a second for a `Star speed`
+    /// of 1 along the same direction, over its cell of `star_cells` star
+    /// pixels, and the life clock once a `Star lifetime`.
+    ///
+    /// The cells are the ones this frame draws with — a star layer's is the
+    /// layout's, which the atlas may have raised past the plan's.
     pub(crate) fn rate(
         speed: f32,
         direction: f32,
+        material_cells: f64,
         stars: harmonigraph_scene::StarSettings,
         pace: f64,
+        star_cells: [f32; STAR_SLICES],
     ) -> Self {
         let (sin, cos) = f64::from(direction).to_radians().sin_cos();
+        let plan = stars.plan();
         Self {
-            drift: harmonigraph_scene::MaterialSettings::drift_rate(speed, direction),
-            stars: stars.plan().depths.map(|depth| {
-                let along = pace * f64::from(depth.speed);
+            drift: harmonigraph_scene::MaterialSettings::drift_rate(speed, direction)
+                .map(|v| v * material_cells),
+            stars: std::array::from_fn(|k| {
+                let along = pace * f64::from(plan.depths[k].speed) / f64::from(star_cells[k]);
                 [along * cos, along * sin]
             }),
             life: 1.0 / f64::from(stars.star_lifetime),

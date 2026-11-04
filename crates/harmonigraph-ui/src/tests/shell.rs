@@ -171,6 +171,32 @@ fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
     assert_eq!(delay(&sounding), std::time::Duration::ZERO, "a voice repaints at once");
 }
 
+/// Tab with a modifier goes to the host, so it must not also run egui's focus
+/// traversal: Shift-Tab would focus the last widget, and from then on the
+/// editor claims every key, so Space presses that widget instead of reaching
+/// the DAW.
+#[test]
+fn a_tab_with_a_modifier_moves_no_focus_and_keeps_the_chrome() {
+    let tab = |modifiers| egui::Event::Key {
+        key: egui::Key::Tab,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let mut state = fresh();
+    let mut harness = DockHarness::new();
+    harness.frame(&mut state, vec![]);
+    harness.frame(&mut state, vec![tab(egui::Modifiers::SHIFT)]);
+    harness.frame(&mut state, vec![]);
+    assert_eq!(harness.ctx.memory(|m| m.focused()), None, "Shift-Tab focused a widget");
+    assert!(!state.workspace.interaction.frameless, "Shift-Tab is not the chrome toggle");
+    harness.frame(&mut state, vec![tab(egui::Modifiers::NONE)]);
+    harness.frame(&mut state, vec![]);
+    assert_eq!(harness.ctx.memory(|m| m.focused()), None, "Tab focused a widget");
+    assert!(state.workspace.interaction.frameless, "bare Tab hides the chrome");
+}
+
 /// Every tab needs an id of its own, and the title is not allowed to be its
 /// source: the workspace keys each tab BODY's `Ui` on `Viewer::id`
 /// (`workspace.rs`), so two tabs whose ids came from a shared title would

@@ -12,7 +12,7 @@ use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
 use crate::HarmonigraphParams;
 
-use super::frame::{frame, WindowState};
+use super::frame::{frame, key_capture, WindowState};
 use super::persist::EguiState;
 use super::pop_out::{PopOut, Sized};
 use super::shared::EditorShared;
@@ -211,9 +211,7 @@ impl Editor for LatticeEditor {
                 .with_size_source(size_source),
             WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
             |egui_ctx: &Context, queue, state: &mut WindowState| {
-                let mut shortcuts = harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec();
-                shortcuts.push(harmonigraph_ui::FRAMELESS_SHORTCUT);
-                queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(shortcuts));
+                queue.set_key_capture(key_capture(false));
                 // egui-baseview installs the current font texture in
                 // CallbackResources after applying this frame's deltas.
                 harmonigraph_ui::use_renderer_font_texture(egui_ctx);
@@ -353,6 +351,7 @@ impl Drop for LatticeEditorHandle {
             }
         }
         self.params.ui_state.store_close(&mut shared.ui);
+        shared.forget_frames();
         drop(shared);
         self.egui_state.set_open(false);
         self.window.close();
