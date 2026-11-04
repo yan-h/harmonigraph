@@ -263,6 +263,7 @@
             split: 0.36334875,
             lattice: Right,
         ),
+        frame_notes: false,
         short_edge: 1440,
         tail: 0.0,
         encoder: Hardware,

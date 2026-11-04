@@ -15,7 +15,7 @@ impl AppearanceDocument {
         ]
     }
 
-    fn set_camera_movement(&mut self, values: [f32; 5]) {
+    pub(crate) fn set_camera_movement(&mut self, values: [f32; 5]) {
         self.camera.yaw = values[0];
         self.camera.pitch = values[1];
         self.camera.distance = values[2];

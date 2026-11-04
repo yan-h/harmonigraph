@@ -317,6 +317,10 @@ Under **Use each take's recorded appearance** only Output size, Tail and Encoder
 the take keeps the frame and Video history it was recorded with.
 A take recorded without a look exports as an ordinary queued export.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
+**Frame notes** pans and zooms the lattice onto every note drawn since Clear display history and sizes the lattice's share of the frame to fit them,
+so play the piece through first.
+**Frame lattice to the take's notes** does the same at render time over the whole take,
+holding that one camera in place of the take's recorded camera movement.
 Shift-drag either picture to an edge of the preview to arrange the pictures.
 Drag either picture without Shift to navigate,
 and scroll or pinch to zoom.

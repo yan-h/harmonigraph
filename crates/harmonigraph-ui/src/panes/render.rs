@@ -340,7 +340,42 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
         let options: Vec<(u32, &str, &str)> =
             sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
         choice_row(ui, "Output size (px)", &mut state.appearance.render.short_edge, &options);
+        frame_notes(ui, state);
     });
+}
+
+/// Framing the lattice on a piece's notes, the two ways round: now, on what
+/// has been drawn, or at render time, on the whole take.
+fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
+    let id = ui.id().with("frame_notes_cut_off");
+    let tracker = &state.runtime.tracker;
+    let drawn = !tracker.history().is_empty() || tracker.voices().next().is_some();
+    button_row(ui, |ui| {
+        let clicked = ui
+            .add_enabled(drawn, egui::Button::new("Frame notes"))
+            .on_hover_text(
+                "Pan and zoom the lattice onto every note drawn since Clear display history, and size the lattice's share of the frame to fit them. Play the piece through first.",
+            )
+            .on_disabled_hover_text("Play the piece through first: nothing has been drawn since Clear display history.")
+            .clicked();
+        if clicked {
+            let heard = crate::framing::Heard::drawn(&state.runtime.tracker, state.runtime.tuning);
+            let positions = heard.positions(&state.appearance);
+            if let Some(fits) = state.appearance.frame_lattice(&positions) {
+                ui.data_mut(|data| data.insert_temp(id, !fits));
+            }
+        }
+    });
+    if ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
+        crate::widgets::label(
+            ui,
+            "The notes span more than the camera can show zoomed out; the outermost are cut off.",
+        );
+    }
+    ui.checkbox(&mut state.appearance.render.frame_notes, "Frame lattice to the take's notes")
+        .on_hover_text(
+            "When the video renders, frame the lattice as Frame notes does, on every note the whole take plays, so nothing has to be played first. The take's recorded camera movement is replaced by that one framing.",
+        );
 }
 
 /// Empty the four things that accumulate, in one press, next to the button

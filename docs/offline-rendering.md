@@ -298,6 +298,7 @@ The flags worth knowing (`--help` lists them all):
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — the appearance's **Tail**, or none for a *Loop end* take, which ends with its loop |
 | `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, Hardware fresh; `--crf` applies to x264 only |
+| `--frame-notes` | frame the lattice to every note the take plays, as the appearance's **Frame lattice to the take's notes** does |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts
@@ -391,6 +392,12 @@ Dragging or navigating the lattice, and choosing a camera preset, writes those p
 Every take records the camera at its start.
 Recorded camera movement also overrides replacement camera movement during replay;
 camera projection remains part of the selected appearance.
+**Frame lattice to the take's notes** (or `--frame-notes`) is the exception:
+before the first frame the renderer replays the take's notes without drawing,
+pans and zooms the lattice onto every node they light,
+sizes the lattice's share of the frame to their shape,
+and holds that camera for the whole video.
+The orbit stays the take's opening one, and a take that moves its camera says that the movement is not replayed.
 
 **Not captured:** anything else you click mid-piece.
 

@@ -28,6 +28,9 @@ use harmonigraph_ui::PictureState;
 pub struct ReplayParams {
     values: [Cell<f32>; ParamKey::ALL.len()],
     present: [Cell<bool>; ParamKey::ALL.len()],
+    /// Frame lattice to notes chose the camera for the whole render, so the
+    /// recorded camera channels are kept but no longer drive it.
+    camera_held: bool,
 }
 
 impl Default for ReplayParams {
@@ -35,11 +38,18 @@ impl Default for ReplayParams {
         ReplayParams {
             values: std::array::from_fn(|i| Cell::new(ParamKey::ALL[i].default_value())),
             present: std::array::from_fn(|_| Cell::new(false)),
+            camera_held: false,
         }
     }
 }
 
 impl ReplayParams {
+    /// Stop the recorded camera from overriding the appearance's own: the
+    /// camera Frame lattice to notes chose holds for the rest of the replay.
+    pub fn hold_camera(&mut self) {
+        self.camera_held = true;
+    }
+
     fn index(key: ParamKey) -> usize {
         ParamKey::ALL.iter().position(|k| *k == key).expect("ParamKey::ALL is exhaustive")
     }
@@ -47,7 +57,7 @@ impl ReplayParams {
 
 impl ParamBackend for ReplayParams {
     fn camera_value(&self, key: ParamKey) -> Option<f32> {
-        self.present[Self::index(key)].get().then(|| self.get(key))
+        (!self.camera_held && self.present[Self::index(key)].get()).then(|| self.get(key))
     }
 
     fn get(&self, key: ParamKey) -> f32 {
