@@ -12,6 +12,32 @@
 
 use crate::wgpu;
 
+/// Read a production uniform buffer after prepare has submitted its writes.
+#[cfg(test)]
+pub(crate) fn read_uniform<T: bytemuck::Pod>(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    source: &wgpu::Buffer,
+) -> T {
+    let size = std::mem::size_of::<T>() as u64;
+    let buffer = crate::gpu_memory::buffer(
+        device,
+        &wgpu::BufferDescriptor {
+            label: Some("uniform_readback"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        },
+    );
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_buffer_to_buffer(source, 0, &buffer, 0, size);
+    queue.submit([encoder.finish()]);
+    let slice = buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    bytemuck::pod_read_unaligned(&slice.get_mapped_range())
+}
+
 /// Shared GPU-test setup. CI sets `HARMONIGRAPH_REQUIRE_GPU=1`, so a missing
 /// adapter fails before a caller can return successfully without assertions.
 /// Local machines may still skip. `WGPU_BACKEND` selects test backends; an
