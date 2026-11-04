@@ -149,6 +149,7 @@ run python3 -B .claude/tests/semantic-breaks.py
 # and so must repository paths written as inline code.
 quick run python3 -B .claude/markdown-links.py
 run python3 -B .claude/tests/markdown-links.py
+run python3 -B .claude/tests/local-ci.py
 
 # Real compressed state sections must retain distinct instances and JSON strings.
 run python3 -B .claude/tests/read-plugin-state.py

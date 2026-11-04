@@ -78,6 +78,8 @@ It passes only with `1 passed`:
 the catalog compiles on macOS alone,
 so elsewhere it runs 0 tests and proves nothing.
 `Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
+The owner-approved [local outage fallback](docs/development.md#local-validation-during-a-hosted-runner-outage) can replace hosted execution only for proven runner-acquisition failures;
+it runs both sets of checks locally and records an owner merge exception.
 Regenerate on the runner, never locally:
 on a PR, the `Metal shader assets` run that finds the corpus stale builds the replacement as its artifact,
 and the `metal-corpus` skill has the import, what to run off macOS, and why grepping the fallback notice is not a check (#947).

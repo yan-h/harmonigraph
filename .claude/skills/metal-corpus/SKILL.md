@@ -42,6 +42,9 @@ a whole batch of sessions read that silence as a pass (#947).
 The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on a stale corpus —
 but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the corpus's recorded compiler flags and fallback controls, and still arrives as a separate workflow.
 So a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable.
+The owner-approved [local outage fallback](../../../docs/development.md#local-validation-during-a-hosted-runner-outage) runs the committed corpus check and its controls locally when hosted jobs cannot acquire a runner.
+This replaces validation execution, not production corpus generation;
+a stale corpus still fails and is regenerated as below.
 
 Regenerate on the runner, not here.
 On a PR there is nothing to dispatch:
