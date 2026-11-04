@@ -187,6 +187,25 @@ impl Encoded {
         self.latest = self.counts.try_iter().last().unwrap_or(self.latest);
         self.latest
     }
+
+    /// Every count to the end, handed to `progress` as it comes: ffmpeg
+    /// closing its stdout on exit is what ends them.
+    fn drain(&mut self, progress: &mut impl FnMut(u64)) {
+        for count in self.counts.iter() {
+            self.latest = count;
+            progress(count);
+        }
+    }
+
+    /// Whether ffmpeg encoded every frame it was meant to. An encoder that
+    /// exits cleanly short of them has silently truncated the video.
+    fn reached(&self, frames: u64) -> Result<(), String> {
+        if self.latest == frames {
+            Ok(())
+        } else {
+            Err(format!("ffmpeg encoded {} frames; expected {frames}", self.latest))
+        }
+    }
 }
 
 /// How a video sink should be set up.
@@ -339,10 +358,7 @@ impl Sink {
                 // which is ffmpeg's EOF. ffmpeg closing its stdout on exit is
                 // what ends the reports.
                 writer.frames = None;
-                for count in encoded.counts.iter() {
-                    encoded.latest = count;
-                    progress(count);
-                }
+                encoded.drain(&mut progress);
                 let written = writer.collect();
                 let status = child.wait().map_err(|e| format!("waiting for ffmpeg: {e}"))?;
                 // The exit status first, when it says something went wrong.
@@ -369,13 +385,7 @@ impl Sink {
                 // Whereas a write that failed against an encoder that exited
                 // CLEANLY is its own thing, and silently truncates the video.
                 written?;
-                if encoded.latest != frames {
-                    return Err(format!(
-                        "ffmpeg encoded {} frames; expected {frames}",
-                        encoded.latest
-                    ));
-                }
-                Ok(())
+                encoded.reached(frames)
             }
             Sink::Raw { mut file } => file.flush().map_err(|e| e.to_string()),
             Sink::Pngs { .. } => Ok(()),
@@ -540,6 +550,121 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     );
     args.push(path.to_string_lossy().into_owned());
     args
+}
+
+/// SVT-AV1's speed preset and constant quality for the archive copy.
+///
+/// Measured on a 20 s slice of a 2560x1440@60 export at 67 Mb/s, against that
+/// export: 6.3% of its bytes at VMAF 96.3 (worst frame 95.8). The whole
+/// 88 s export it came from: 66.5 MB against 925.3 MB, in 51.7 s on an M5 Pro. x265 at CRF 20 drew
+/// the same scores at 9.7%. 10-bit output, preset 4 at CRF 30 and `tune=0`
+/// each scored within 0.1 of this for no fewer bytes; CRF 32 at 10-bit saved
+/// a further 22% for a worst frame of 95.0. No film-grain synthesis: it
+/// would replace the spectrogram's noise floor with a model of it.
+const ARCHIVE_PRESET: u32 = 6;
+const ARCHIVE_CRF: u32 = 28;
+
+/// Every argument the archive pass starts ffmpeg with, bar the program.
+///
+/// From the finished video rather than the rendered frames, so the soundtrack
+/// is COPIED: its priming seek, padding and trim (see [`video_args`]) are
+/// already in the stream, and re-deriving them for a second output is how
+/// they would drift. The video's colour tags carry over through the decoder,
+/// all but one: see the filter below.
+fn archive_args(video: &std::path::Path, archive: &std::path::Path) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    args.extend(["-hide_banner", "-loglevel", "warning", "-y"].map(String::from));
+    args.extend(["-progress", "pipe:1"].map(String::from));
+    args.extend(["-i".to_string(), video.to_string_lossy().into_owned()]);
+    // The video says its chroma sits centred between luma columns, which an
+    // AV1 stream cannot state and MP4 has no other place for: libsvtav1 warns
+    // on every export and writes it unspecified anyway. Saying so up front
+    // keeps the warning off the Video pane's status line. A player that
+    // assumes "left" draws thin lines' colour up to half a pixel off.
+    args.extend(["-vf", "setparams=chroma_location=unspecified"].map(String::from));
+    args.extend(["-c:v", "libsvtav1"].map(String::from));
+    args.extend(["-preset".to_string(), ARCHIVE_PRESET.to_string()]);
+    args.extend(["-crf".to_string(), ARCHIVE_CRF.to_string()]);
+    args.extend(["-c:a", "copy"].map(String::from));
+    // The video's muxer flags bar `negative_cts_offsets`, which answers the
+    // B-frames' reorder delay; AV1 reorders behind hidden frames instead, so
+    // its presentation stamps start at 0 without one.
+    args.extend(["-movflags", "+faststart", "-use_editlist", "0"].map(String::from));
+    args.push(archive.to_string_lossy().into_owned());
+    args
+}
+
+/// Encode `video`'s archive copy to `archive`, handing `progress` ffmpeg's
+/// count of encoded frames, and check it reaches `frames`.
+///
+/// A failed copy is removed rather than left half-written beside a video
+/// that is fine: the caller warns and keeps the video.
+pub fn archive(
+    video: &std::path::Path,
+    archive: &std::path::Path,
+    ffmpeg: Option<&str>,
+    frames: u64,
+    mut progress: impl FnMut(u64),
+) -> Result<(), String> {
+    let ffmpeg = find_ffmpeg(ffmpeg)?;
+    let made = (|| {
+        let mut child = Command::new(&ffmpeg)
+            .args(archive_args(video, archive))
+            // SVT-AV1 prints its configuration banner at info level, onto the
+            // stderr the Video pane keeps the last line of.
+            .env("SVT_LOG", "2")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
+        let mut encoded = Encoded::spawn(child.stdout.take().ok_or("ffmpeg stdout closed")?);
+        // Passed through as the video's ffmpeg does, its first and last lines
+        // kept: the failure is reported after the video, where only the line
+        // the Video pane keeps says why. ffmpeg names the cause first ("Unknown
+        // encoder 'libsvtav1'") and ends on a summary ("Encoder not found").
+        // Read to the end whatever the bytes, as `follow` does: a reader that
+        // stopped early would close the pipe and kill ffmpeg on its next write.
+        let said = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let (mut first, mut last) = (String::new(), String::new());
+                let mut reader = std::io::BufReader::new(stderr);
+                let mut line = Vec::new();
+                while reader.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
+                    let text = String::from_utf8_lossy(&line);
+                    let text = text.trim();
+                    eprintln!("{text}");
+                    if !text.is_empty() {
+                        if first.is_empty() {
+                            first = text.to_owned();
+                        }
+                        last = text.to_owned();
+                    }
+                    line.clear();
+                }
+                if first == last {
+                    first
+                } else {
+                    format!("{first} … {last}")
+                }
+            })
+        });
+        encoded.drain(&mut progress);
+        let status = child.wait().map_err(|e| format!("waiting for ffmpeg: {e}"))?;
+        let said = said.and_then(|thread| thread.join().ok()).unwrap_or_default();
+        if !status.success() {
+            return Err(match said.as_str() {
+                "" => format!("ffmpeg exited with {status}"),
+                said => format!("ffmpeg exited with {status}: {said}"),
+            });
+        }
+        encoded.reached(frames)
+    })();
+    if made.is_err() {
+        let _ = std::fs::remove_file(archive);
+    }
+    made
 }
 
 /// Where ffmpeg is installed, when it isn't simply on `PATH`.
@@ -1239,5 +1364,125 @@ mod tests {
     fn the_search_list_covers_both_homebrew_prefixes() {
         assert!(FFMPEG_LOCATIONS.contains(&"/opt/homebrew/bin/ffmpeg"));
         assert!(FFMPEG_LOCATIONS.contains(&"/usr/local/bin/ffmpeg"));
+    }
+
+    /// The archive copy is the video's soundtrack and picture re-encoded, not
+    /// re-planned: the click stays on the flash, the frame count and colour
+    /// tags carry over, and the stream is AV1, from either encoder's video:
+    /// they state their chroma by different routes. 64 px, SVT-AV1 runs every
+    /// tool at it; at 16 it turns some off and warns.
+    #[test]
+    fn the_archive_copy_keeps_the_videos_sync_frames_and_colour() {
+        let Some(ffmpeg) = real_ffmpeg() else { return };
+        let encoders = Command::new(&ffmpeg).args(["-hide_banner", "-encoders"]).output().unwrap();
+        if !String::from_utf8_lossy(&encoders.stdout).contains("libsvtav1") {
+            assert!(
+                std::env::var("HARMONIGRAPH_REQUIRE_FFMPEG").as_deref() != Ok("1"),
+                "HARMONIGRAPH_REQUIRE_FFMPEG=1: the archive copy needs ffmpeg with libsvtav1"
+            );
+            eprintln!("skipping: this ffmpeg has no libsvtav1");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-real-archive-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for &encoder in real_encoders() {
+            let wav = dir.join("click.wav");
+            write_wav(&wav, 48_000, 1.25, Some(0.75));
+            let out = dir.join("video.mp4");
+            let options = VideoOptions {
+                size: [64, 64],
+                fps: 30.0,
+                frames: 30,
+                audio: Some(&wav),
+                encoder,
+                crf: 20,
+                ffmpeg: ffmpeg.to_str(),
+                audio_offset: 0.25,
+            };
+            encode(&options, &out, Some(15));
+            let copy = harmonigraph_take::render::archive_path(&out);
+            let mut counts = Vec::new();
+            archive(&out, &copy, ffmpeg.to_str(), 30, |count| counts.push(count)).unwrap();
+            assert_eq!(counts.last(), Some(&30));
+            let peak = |path: &std::path::Path| {
+                let decoded = Command::new(&ffmpeg)
+                    .args(["-v", "error", "-i"])
+                    .arg(path)
+                    .args(["-map", "0:a:0", "-f", "f32le", "-ac", "1", "-"])
+                    .output()
+                    .unwrap();
+                assert!(decoded.status.success());
+                decoded
+                    .stdout
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| f32::from_le_bytes(*bytes).abs())
+                    .enumerate()
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .unwrap()
+                    .0
+            };
+            assert_eq!(peak(&copy), peak(&out));
+            let flash = Command::new(&ffmpeg)
+                .args(["-v", "error", "-i"])
+                .arg(&copy)
+                .args(["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+                .output()
+                .unwrap();
+            let brightest = flash
+                .stdout
+                .as_chunks::<{ 64 * 64 }>()
+                .0
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, frame)| frame.iter().map(|p| u32::from(*p)).sum::<u32>())
+                .unwrap()
+                .0;
+            assert_eq!(brightest, 15);
+            assert_eq!(probe(&ffmpeg, &copy), probe(&ffmpeg, &out));
+            let tags = Command::new(ffmpeg.with_file_name("ffprobe"))
+                .args(["-v", "error", "-select_streams", "v", "-of", "flat", "-show_entries"])
+                .arg("stream=codec_name,color_space,color_primaries,color_transfer")
+                .arg(&copy)
+                .output()
+                .unwrap();
+            let tags = String::from_utf8(tags.stdout).unwrap();
+            for tag in [
+                "codec_name=\"av1\"",
+                "color_space=\"bt709\"",
+                "color_primaries=\"bt709\"",
+                "color_transfer=\"bt709\"",
+            ] {
+                assert!(tags.contains(tag), "{tag}: {tags}");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A copy ffmpeg fails to finish is not left beside the video looking
+    /// like one.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_archive_copy_is_removed() {
+        // Writes a partial file at the output path, its last argument.
+        let dir = fake_ffmpeg(
+            "archive-fails",
+            // ffmpeg 9's own lines for a missing encoder, in its order.
+            r#"for a; do last=$a; done; echo partial > "$last"
+echo "[vost#0:0 @ 0x1] Unknown encoder 'libsvtav1'" >&2
+echo "[vost#0:0 @ 0x1] Error selecting an encoder" >&2
+echo "Error opening output files: Encoder not found" >&2
+exit 8"#,
+        );
+        let copy = dir.join("video-archive.mp4");
+        let ffmpeg = dir.join("ffmpeg.sh");
+        let error =
+            archive(&dir.join("video.mp4"), &copy, ffmpeg.to_str(), 30, |_| {}).unwrap_err();
+        assert!(error.contains("Unknown encoder 'libsvtav1'"), "{error}");
+        assert!(error.contains("Encoder not found"), "{error}");
+        assert!(!copy.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

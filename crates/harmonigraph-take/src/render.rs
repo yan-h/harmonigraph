@@ -239,6 +239,14 @@ pub struct RenderConfig {
     /// pane's Encoder. A render choice like the tail: a queued export takes the
     /// current one, and the offline renderer's `--encoder` overrides it.
     pub encoder: VideoEncoder,
+    /// Also write a small AV1 copy beside the video, for keeping once the full
+    /// video has been uploaded. The Video pane's Archive copy. A render choice
+    /// like the encoder: a queued export takes the current one.
+    ///
+    /// Encoded from the finished video, so it carries the video's soundtrack
+    /// and timing as they are rather than deriving them a second time; see
+    /// `harmonigraph-offline`'s `sink::archive`.
+    pub archive: bool,
 }
 
 impl Default for RenderConfig {
@@ -263,6 +271,8 @@ impl Default for RenderConfig {
             // VideoToolbox: the same picture in under half the export time at
             // 1440p, for a larger file (see [`VideoEncoder`]).
             encoder: VideoEncoder::Hardware,
+            // Off: the copy roughly doubles an export's wait.
+            archive: false,
         }
     }
 }
@@ -293,7 +303,7 @@ impl RenderConfig {
     }
 
     /// Take from `pane` the fields that say how big the video is, how long it
-    /// runs on and what encodes it: Output size, Tail and Encoder. These are
+    /// runs on and what encodes it: Output size, Tail, Encoder and Archive copy. These are
     /// the Video pane's whichever look is drawn, where [`frame`](Self::frame),
     /// Video history, the trigger and the stop bar say how a take was composed
     /// and recorded, and a recorded look keeps its own.
@@ -309,10 +319,12 @@ impl RenderConfig {
             short_edge,
             tail,
             encoder,
+            archive,
         } = pane;
         self.short_edge = *short_edge;
         self.tail = *tail;
         self.encoder = *encoder;
+        self.archive = *archive;
     }
 
     /// The bar to end the take at, or `None` when the trigger is not
@@ -506,11 +518,13 @@ impl Default for RenderFrame {
 pub struct RenderProgress {
     /// Frames finished so far: encoded, for a video, which trails the frames
     /// drawn by the encoder's backlog and reaches `total` only once the video
-    /// is written.
+    /// is written — and its archive copy, when [`RenderConfig::archive`]
+    /// asks for one, whose frames count after the video's.
     pub done: u64,
     /// Frames the render is aiming for — 0 until the renderer has said, which
     /// is a moment into the run (it has a take to read and an encoder to
-    /// start first).
+    /// start first). Twice the video's with an archive copy, which encodes
+    /// every frame again.
     pub total: u64,
 }
 
@@ -591,6 +605,23 @@ mod tests {
         }
     }
 }
+
+/// Where [`RenderConfig::archive`] puts a video's archive copy: beside it, as
+/// `<stem>-archive.mp4`. One function because two processes name it — the
+/// offline renderer writes it, and the export queue publishes it beside the
+/// video it published.
+pub fn archive_path(video: &std::path::Path) -> std::path::PathBuf {
+    video.with_file_name(format!(
+        "{}-archive.mp4",
+        video.file_stem().unwrap_or_default().to_string_lossy()
+    ))
+}
+
+/// How the offline renderer starts the line saying an archive copy failed.
+/// The export queue keeps that line apart from the first `warning:` it keeps,
+/// because the copy's is the one that decides whether the video may be
+/// deleted, and it comes last.
+pub const ARCHIVE_FAILED: &str = "warning: no archive copy: ";
 
 /// Session-only export state; never persisted in a project or take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

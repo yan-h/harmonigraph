@@ -1,7 +1,7 @@
 //! Instance-owned sequential export queue and renderer subprocess lifetime.
 use super::home_dir;
 use harmonigraph_take::{
-    render::{ExportJob, ExportStatus},
+    render::{archive_path, ExportJob, ExportStatus, ARCHIVE_FAILED},
     RenderProgress,
 };
 use parking_lot::Mutex;
@@ -230,8 +230,11 @@ pub(super) fn spawn_render(
     }
     queue.next_id += 1;
     let id = queue.next_id;
+    // A name is taken by its archive copy's file too, so publishing one never
+    // has to overwrite a copy an earlier export left.
     let output = available_output(&take, |candidate| {
         candidate.symlink_metadata().is_ok()
+            || archive_path(candidate).symlink_metadata().is_ok()
             || queue.jobs.iter().any(|job| job.snapshot.output == candidate)
     });
     queue.jobs.push(Job {
@@ -435,10 +438,20 @@ fn run_job(
     if queue.jobs[index].snapshot.state != ExportStatus::Running {
         return Err("cancelled".into());
     }
+    // The renderer writes the archive copy beside its output when the
+    // appearance asks for one; this side only publishes what is there.
+    let archive = archive_path(&partial);
+    let archived = archive.is_file();
     let mut output = job.output.clone();
     let mut suffix = 0;
     loop {
-        match std::fs::hard_link(&partial, &output) {
+        // The rule enqueue picks a name by: taken by either file.
+        let linked = if archive_path(&output).symlink_metadata().is_ok() {
+            Err(std::io::ErrorKind::AlreadyExists.into())
+        } else {
+            std::fs::hard_link(&partial, &output)
+        };
+        match linked {
             Ok(()) => break,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 output = output_candidate(&job.take, suffix);
@@ -455,11 +468,18 @@ fn run_job(
             Err(e) => return Err(format!("could not publish video without overwriting: {e}")),
         }
     }
+    // The video is published either way; a copy lost to a race with another
+    // writer says so rather than failing the export it belongs to.
+    let archive_lost = archived
+        .then(|| std::fs::hard_link(&archive, archive_path(&output)).err())
+        .flatten()
+        .map(|e| format!("archive copy not saved: {e}"));
     let current = &mut queue.jobs[index];
     current.snapshot.state = ExportStatus::Completed;
     current.snapshot.output = output.clone();
     current.snapshot.progress = progress.read().unwrap_or_default();
-    let detail = rendered_status(&output, request.notice, tail.warning.as_deref());
+    let archive_warning = archive_lost.as_deref().or(tail.archive.as_deref());
+    let detail = rendered_status(&output, request.notice, tail.warning.as_deref(), archive_warning);
     current.snapshot.detail = detail.clone();
     Ok((output, detail))
 }
@@ -502,14 +522,24 @@ struct Tail {
     /// before anything the command line can add, so what a person is told
     /// about is the recording rather than the flags.
     warning: Option<String>,
+    /// The renderer's [`ARCHIVE_FAILED`] line, kept apart from
+    /// [`warning`](Self::warning): it is printed after the video, so a take
+    /// that warned first would otherwise hide that the copy someone means to
+    /// keep was never made.
+    archive: Option<String>,
 }
 
 /// What the status line says when a render finished. A warning it printed on
 /// the way rides along, because "rendered X" alone would say a take with holes
-/// in its note history came out whole.
-fn rendered_status(out: &std::path::Path, notice: Option<&str>, warning: Option<&str>) -> String {
+/// in its note history came out whole; so does a missing archive copy.
+fn rendered_status(
+    out: &std::path::Path,
+    notice: Option<&str>,
+    warning: Option<&str>,
+    archive: Option<&str>,
+) -> String {
     let mut status = format!("rendered {}", out.display());
-    for detail in [notice, warning].into_iter().flatten() {
+    for detail in [notice, warning, archive].into_iter().flatten() {
         status.push_str(" — ");
         status.push_str(detail);
     }
@@ -544,7 +574,9 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
             // `warning:` among them is its own, because success discards the
             // last and a warned-about export still needs to say so.
             None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {
-                if tail.warning.is_none() && text.starts_with("warning:") {
+                if text.starts_with(ARCHIVE_FAILED) {
+                    tail.archive = Some(text.to_owned());
+                } else if tail.warning.is_none() && text.starts_with("warning:") {
                     tail.warning = Some(text.to_owned());
                 }
                 tail.last = text.to_owned();
