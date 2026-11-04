@@ -1339,9 +1339,8 @@ const SCALES: [f32; 5] = [0.75, 0.9, 1.0, 1.1, 1.6];
 /// their bars in two different places, no one pointer is over both, and the lane
 /// is the bar's full width in from its right edge however thin it is painted.
 ///
-/// Both readout panes list what has come in, and an empty one has nothing to
-/// scroll, so the fixture gives the Console lines and the Tuning pane's
-/// "Assignments and sounding intervals" list held voices.
+/// The Console lists what has come in, and an empty one has nothing to
+/// scroll, so the fixture gives it lines.
 fn scrolling_settings_pane(
     pane: panes::Tab,
     scale: f32,
@@ -1361,15 +1360,6 @@ fn scrolling_settings_pane(
             .runtime
             .console
             .log(format!("{i:02} a log line long enough to run the width of the pane"));
-    }
-    for note in 40..80 {
-        state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-            0.5,
-            harmonigraph_core::SourceId::DIRECT,
-            0,
-            note,
-            1.0,
-        ));
     }
     // The window scales with the chrome, so every pane overflows it by the same
     // margin at every scale rather than the sweep having a size per scale.

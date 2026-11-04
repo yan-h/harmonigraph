@@ -52,7 +52,7 @@ a ratio just below 100% saves almost nothing yet softens the stars nearly as muc
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
 
-Detail folds such as **Map offsets** reopen closed with the editor.
+Detail folds such as **Source details** reopen closed with the editor.
 
 ## Combined controls
 
@@ -296,15 +296,17 @@ so switching off a link does not clamp the pitch to an older slider limit.
 There is no separate Auto setting.
 Saved links and recorded configurations are restored as saved,
 without running recognition again.
-**Keyboard** and **Context** are expandable parts of Adaptive tuning.
-In Lattice Map mode with Follow harmony on,
-**Follow harmony context** shows the same settings as **Context**, except Weight per octave, directly under its heading.
-In Lattice Map mode,
-**Saved map**,
-**Edit shape on lattice**,
-**Undo shape edit** and **Duplicate as new map** are always visible;
-offsets,
-map management and assignments are folds below them.
+**Note retuning** holds only the engine choice;
+each engine's controls follow in a section of their own.
+Adaptive tuning's **Keyboard** and **Context** are blocks,
+open like the rest of the section.
+The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,
+then **Show map dots**, **Edit shape on lattice**, **Undo shape edit** and **Duplicate as new map**,
+then the **Position** offsets and **Follow harmony**.
+With Follow harmony on,
+its block shows the same settings as Adaptive's **Context**, except Weight per octave.
+Pending map and tuning changes are reported at the end of the pane,
+so a notice never moves a control being dragged.
 **Tuning sources** appears only when connected tuning sources are available.
 Host map-offset parameters explicitly name whole generator steps rather than tuning intervals.
 

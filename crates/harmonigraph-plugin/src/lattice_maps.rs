@@ -230,18 +230,9 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         // Every document mutation goes through a `MapDocument` method, because
         // each one has to move the revision two derived values are keyed on:
         // `MapEditor::names` here, and `AudioMaps::bank` on the audio thread.
-        MapEdit::Rename(id, name) => {
-            params.maps.write().rename(id, name);
-            true
-        }
-        MapEdit::Delete(id) => {
-            params.maps.write().delete(id);
-            true
-        }
-        MapEdit::MoveEarlier(id) => {
-            params.maps.write().move_earlier(id);
-            true
-        }
+        MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
+        MapEdit::Delete(id) => params.maps.write().delete(id),
+        MapEdit::Move(id, step) => params.maps.write().move_by(id, step),
     };
     if document_changed {
         if let Some(mailbox) = params.configuration.get() {
@@ -544,7 +535,7 @@ mod tests {
         assert_ne!(maps.bank_revision, revision);
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
         let revision = maps.bank_revision;
-        params.maps.write().move_earlier(1);
+        params.maps.write().move_by(1, MapMove::Earlier);
         maps.adopt(config);
         assert_ne!(maps.bank_revision, revision);
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));

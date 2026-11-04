@@ -322,8 +322,8 @@ fn scenarios() -> Vec<Scenario> {
             ..base
         });
     }
-    // Keyboard and Context bars appear only when their groups expand.
-    // Cover both open for each comma derivation branch, including both modes.
+    // Cover each comma derivation branch, including both modes, with every
+    // fold open.
     for (meantone, marvel) in [(false, false), (true, false), (false, true), (true, true)] {
         cases.push(Scenario { expanded: true, meantone, marvel, ..base });
     }
@@ -363,18 +363,14 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
                 "Note match tolerance",
                 "Pitch flexibility",
                 "Search radius",
+                "Fifth",
+                "Third",
+                "Seventh",
+                "Half-life",
+                "Weight per octave",
+                "Same-note tolerance",
+                "Silence reset",
             ]);
-            if scenario.expanded {
-                labels.extend([
-                    "Fifth",
-                    "Third",
-                    "Seventh",
-                    "Half-life",
-                    "Weight per octave",
-                    "Same-note tolerance",
-                    "Silence reset",
-                ]);
-            }
         }
         Tab::Mappings => {
             labels.extend([

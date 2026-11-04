@@ -6,6 +6,7 @@
 //! each frame and pad themselves their own way — and the app should have one.
 
 use egui::style::StyleModifier;
+use egui::{Atom, Rect, Ui, Vec2};
 
 use crate::theme;
 
@@ -33,4 +34,39 @@ pub(crate) fn menu_style(ctx: &egui::Context) -> StyleModifier {
         style.visuals.window_stroke = egui::Stroke::NONE;
         style.wrap_mode = Some(egui::TextWrapMode::Extend);
     })
+}
+
+/// A square button of three dots that opens `contents` as a menu, for actions
+/// too rare for a row of their own. Clicks inside leave it open, so a step
+/// can be repeated; an action that should close it calls `ui.close()`.
+pub(crate) fn more_menu(
+    ui: &mut Ui,
+    id_salt: &str,
+    hint: &str,
+    contents: impl FnOnce(&mut Ui),
+) -> egui::Response {
+    let icon = ui.make_persistent_id((id_salt, "more icon"));
+    let response = egui::Button::new(Atom::custom(icon, Vec2::splat(ui.spacing().icon_width)))
+        .min_size(Vec2::splat(ui.spacing().interact_size.y))
+        .atom_ui(ui);
+    if let Some(rect) = response.rect(icon) {
+        paint_dots(ui, rect, theme::text());
+    }
+    let response = response.response.on_hover_text(hint);
+    egui::Popup::menu(&response)
+        .id(ui.make_persistent_id((id_salt, "more menu")))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .style(menu_style(ui.ctx()))
+        .show(contents);
+    response
+}
+
+/// Three dots across the middle: the "more" glyph, painted rather than typed
+/// because the interface font has no ellipsis of its own weight.
+pub(super) fn paint_dots(ui: &Ui, rect: Rect, color: egui::Color32) {
+    let scale = theme::ui_scale(ui.ctx());
+    let step = rect.width() * 0.3;
+    for offset in [-step, 0.0, step] {
+        ui.painter().circle_filled(rect.center() + egui::vec2(offset, 0.0), 1.3 * scale, color);
+    }
 }

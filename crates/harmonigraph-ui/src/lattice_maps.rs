@@ -147,30 +147,44 @@ impl MapDocument {
         self.touch();
         true
     }
-    pub fn rename(&mut self, id: usize, name: String) {
-        if let Some(slot) = self.slots.get_mut(id) {
-            slot.name = name;
-            self.touch();
-        }
+    /// Rename, delete and move each say whether the document changed, and
+    /// leave it and its revision alone when not, so an edit that does nothing
+    /// never marks the host project modified.
+    pub fn rename(&mut self, id: usize, name: String) -> bool {
+        let Some(slot) = self.slots.get_mut(id).filter(|slot| slot.name != name) else {
+            return false;
+        };
+        slot.name = name;
+        self.touch();
+        true
     }
-    pub fn delete(&mut self, id: usize) {
-        if let Some(slot) = self.slots.get_mut(id) {
-            slot.deleted = true;
-            self.touch();
-        }
+    pub fn delete(&mut self, id: usize) -> bool {
+        let Some(slot) = self.slots.get_mut(id).filter(|slot| !slot.deleted) else {
+            return false;
+        };
+        slot.deleted = true;
+        self.touch();
+        true
     }
-    /// Move `id` one place earlier in the display order, rebuilding `order`
-    /// from the visible sequence so a hand-edited file's stray entries do not
-    /// survive the swap.
-    pub fn move_earlier(&mut self, id: usize) {
+    /// Move `id` one place earlier or later in the display order, rebuilding
+    /// `order` from the visible sequence so a hand-edited file's stray entries
+    /// do not survive the swap. A move past either end changes nothing.
+    pub fn move_by(&mut self, id: usize, step: MapMove) -> bool {
         let mut order: Vec<_> = self.names().iter().map(|(id, _)| *id).collect();
-        if let Some(index) = order.iter().position(|&item| item == id) {
-            if index > 0 {
-                order.swap(index, index - 1);
-            }
-        }
+        let Some(index) = order.iter().position(|&item| item == id) else {
+            return false;
+        };
+        let other = match step {
+            MapMove::Earlier => index.checked_sub(1),
+            MapMove::Later => Some(index + 1).filter(|&other| other < order.len()),
+        };
+        let Some(other) = other else {
+            return false;
+        };
+        order.swap(index, other);
         self.order = order;
         self.touch();
+        true
     }
     /// The visible slots in display order. [`MapNames`] says why the names are
     /// shared rather than copied; [`MapEditor::names`] is what the editor
@@ -398,8 +412,15 @@ pub enum MapEdit {
     /// Copy the selected shape into a new slot and select it.
     Duplicate,
     Rename(usize, String),
-    MoveEarlier(usize),
+    Move(usize, MapMove),
     Delete(usize),
+}
+
+/// Which way [`MapEdit::Move`] takes a map in the display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapMove {
+    Earlier,
+    Later,
 }
 
 #[cfg(test)]
@@ -411,13 +432,13 @@ mod tests {
         let mut map = LatticeMap { position: LatticePos::new(50, 0, 0), ..Default::default() };
         map.replace(LatticePos::new(54, 0, 0));
         assert_eq!(doc.capture(map, "Passage".into()), Some(1));
+        assert!(doc.move_by(1, MapMove::Earlier));
         doc.delete(0);
         assert!(!doc.reshape(0, LatticeMap::default()), "a tombstone is never revived");
         doc.rename(1, "Renamed".into());
-        doc.move_earlier(1);
         let saved = ron::to_string(&doc).unwrap();
         assert!(saved.starts_with("(slots:"));
-        assert!(saved.contains("order:[1]"));
+        assert!(saved.contains("order:[1,0]"));
         let recalled: MapDocument = ron::from_str(&saved).unwrap();
         map.position = LatticePos::ORIGIN;
         assert_eq!(recalled.map(1), Some(map));
@@ -433,6 +454,43 @@ mod tests {
         }
         assert!(doc.is_full());
         assert_eq!(doc.capture(LatticeMap::default(), "Full".into()), None);
+    }
+
+    #[test]
+    fn a_map_moves_either_way_and_stops_at_the_ends() {
+        let mut doc = MapDocument::default();
+        for name in ["B", "C"] {
+            doc.capture(LatticeMap::default(), name.into());
+        }
+        doc.rename(0, "A".into());
+        let order = |doc: &MapDocument| doc.names().iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        assert!(doc.move_by(1, MapMove::Later));
+        assert_eq!(order(&doc), [0, 2, 1]);
+        assert!(!doc.move_by(1, MapMove::Later), "the last map has nowhere later to go");
+        assert!(!doc.move_by(0, MapMove::Earlier), "the first map has nowhere earlier to go");
+        assert_eq!(order(&doc), [0, 2, 1]);
+        assert!(doc.move_by(1, MapMove::Earlier));
+        assert_eq!(order(&doc), [0, 1, 2]);
+    }
+
+    /// An edit that changes nothing keeps the revision, which is what keeps
+    /// the plugin from marking the host project modified for it.
+    #[test]
+    fn an_edit_that_changes_nothing_keeps_the_revision() {
+        let mut doc = MapDocument::default();
+        doc.capture(LatticeMap::default(), "B".into());
+        assert!(doc.delete(1));
+        let revision = doc.revision();
+        for (what, changed) in [
+            ("same name", doc.rename(0, "C · 3×4".into())),
+            ("deleted again", doc.delete(1)),
+            ("first moved earlier", doc.move_by(0, MapMove::Earlier)),
+            ("last moved later", doc.move_by(0, MapMove::Later)),
+            ("deleted map moved", doc.move_by(1, MapMove::Earlier)),
+        ] {
+            assert!(!changed, "{what} reported a change");
+        }
+        assert_eq!(doc.revision(), revision);
     }
 
     /// `Arc::ptr_eq` is the instrument: a memo hit hands back the very
@@ -452,7 +510,7 @@ mod tests {
         // What was done, how, and the names it must leave visible.
         type Mutation<'a> = (&'a str, &'a dyn Fn(&mut MapDocument), &'a [&'a str]);
         let mutations: [Mutation; 5] = [
-            ("rename", &|doc| doc.rename(1, "Renamed".into()), &["C · 3×4", "Renamed"]),
+            ("rename", &|doc| assert!(doc.rename(1, "Renamed".into())), &["C · 3×4", "Renamed"]),
             (
                 "reshape",
                 &|doc| {
@@ -470,8 +528,12 @@ mod tests {
                 },
                 &["C · 3×4", "Renamed", "Added"],
             ),
-            ("reorder", &|doc| doc.move_earlier(1), &["Renamed", "C · 3×4", "Added"]),
-            ("delete", &|doc| doc.delete(1), &["C · 3×4", "Added"]),
+            (
+                "reorder",
+                &|doc| assert!(doc.move_by(1, MapMove::Earlier)),
+                &["Renamed", "C · 3×4", "Added"],
+            ),
+            ("delete", &|doc| assert!(doc.delete(1)), &["C · 3×4", "Added"]),
         ];
         for (what, mutate, visible) in mutations {
             mutate(&mut doc);

@@ -428,18 +428,25 @@ fn draw_map_overlay(
     let label = if let Some(maps) =
         maps.filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
     {
-        if let Some((destination, mut map)) =
-            state.surfaces.hovered.zip(maps.playback.map).filter(|_| maps.editing())
-        {
+        let hovered = state.surfaces.hovered.zip(maps.playback.map).map(|(destination, map)| {
             let midi = harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
+            (destination, map, midi, crate::lattice_maps::MIDI_LABELS[midi as usize])
+        });
+        if let Some((destination, mut map, midi, name)) = hovered.filter(|_| maps.editing()) {
             let old = map.correction(midi, state.runtime.tuning);
             map.replace(destination);
             let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
             format!(
-                "{} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
-                crate::lattice_maps::MIDI_LABELS[midi as usize],
+                "{name} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
                 cents - old as f64 / 1e6
             )
+        } else if let Some((_, map, midi, name)) =
+            hovered.filter(|&(destination, map, midi, _)| map.node(midi) == destination)
+        {
+            // An assigned node names its key's full correction, so drift is
+            // read where the map is drawn. Only the assigned node: another
+            // node of the same key would claim a pitch it does not sound.
+            format!("{name} · {:+.2}¢", map.correction(midi, state.runtime.tuning) as f64 / 1e6)
         } else if maps.playback.map.is_none() {
             "Map unavailable · new attacks pass through".into()
         } else {
@@ -1073,6 +1080,58 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, ["Map unavailable · new attacks pass through"]);
+    }
+
+    /// Outside Edit shape, hovering the node a key is assigned to names that
+    /// key's full correction; another node of the same key, which the map
+    /// does not sound, says nothing.
+    #[test]
+    fn hovering_an_assigned_node_names_its_correction_and_no_other_node_does() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+        use harmonigraph_core::LatticePos;
+        let mut state = fresh();
+        let window = state.appearance.view.reach();
+        let scene = compose_scene(&mut state, &window, 1.0, None, 0, 0.0);
+        let map = LatticeMap::default();
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback {
+                engine: TuningEngine::LatticeMap,
+                map: Some(map),
+                ..Default::default()
+            },
+            offsets: Default::default(),
+            followed: LatticePos::ORIGIN,
+            pending: false,
+            names: Default::default(),
+            edit_shape: false,
+            can_undo: false,
+            full: false,
+        });
+        let cents = map.correction(4, state.runtime.tuning) as f64 / 1e6;
+        let mut hover = |pos: LatticePos| {
+            state.surfaces.hovered = Some(pos);
+            let screen = egui::vec2(512.0, 512.0);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+            let output = frame_full(&themed(), screen, |ui| {
+                draw_map_overlay(ui, rect, &scene, &window, &state)
+            });
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // The default shape's E is the 5/4 one; four fifths up is the
+        // Pythagorean E, the same key on a node the map does not use.
+        let (assigned, other) = (LatticePos::new(0, 1, 0), LatticePos::new(4, 0, 0));
+        assert_eq!(map.node(4), assigned, "the fixture's E must be the 5/4 node");
+        assert_eq!(LatticeMap::midi_class(other), 4, "the other node must also be an E");
+        assert_eq!(hover(assigned), [format!("E · {cents:+.2}¢")]);
+        assert!(hover(other).is_empty(), "an unassigned E must not claim the map's pitch");
     }
 
     #[test]

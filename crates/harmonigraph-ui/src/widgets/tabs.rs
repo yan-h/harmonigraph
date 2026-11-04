@@ -91,7 +91,7 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
         if current.is_some() {
             paint_chevron(ui, rect, color);
         } else {
-            paint_dots(ui, rect, color);
+            super::menu::paint_dots(ui, rect, color);
         }
     }
     let response = response.response.on_hover_text("More tabs");
@@ -109,16 +109,6 @@ fn overflow<T: Copy + PartialEq>(ui: &mut Ui, id: &str, value: &mut T, hidden: &
                 }
             }
         });
-}
-
-/// Three dots across the middle: the "more" glyph, painted rather than typed
-/// because the interface font has no ellipsis of its own weight.
-fn paint_dots(ui: &Ui, rect: Rect, color: egui::Color32) {
-    let scale = theme::ui_scale(ui.ctx());
-    let step = rect.width() * 0.3;
-    for offset in [-step, 0.0, step] {
-        ui.painter().circle_filled(rect.center() + egui::vec2(offset, 0.0), 1.3 * scale, color);
-    }
 }
 
 /// A downward chevron in the fold buttons' stroke: this button opens a menu.
