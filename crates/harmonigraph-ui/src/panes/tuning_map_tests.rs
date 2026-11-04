@@ -5,16 +5,17 @@ use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use std::cell::RefCell;
 
 /// A Hub with `engine` and `follow` selected and `maps` saved maps, recording
-/// the edits the pane sends.
+/// the edits the pane sends. `pending` is whether audio has yet to adopt them.
 struct Edits {
     engine: TuningEngine,
     follow: Follow,
     maps: usize,
+    pending: bool,
     edits: RefCell<Vec<MapEdit>>,
 }
 impl Edits {
     fn new(engine: TuningEngine, follow: Follow, maps: usize) -> Self {
-        Self { engine, follow, maps, edits: Default::default() }
+        Self { engine, follow, maps, pending: false, edits: Default::default() }
     }
 }
 impl ParamBackend for Edits {
@@ -37,7 +38,7 @@ impl ParamBackend for Edits {
             names: document.names(),
             offsets: Default::default(),
             followed: harmonigraph_core::LatticePos::ORIGIN,
-            pending: false,
+            pending: self.pending,
             edit_shape: false,
             can_undo: false,
             full: false,
@@ -163,37 +164,107 @@ fn the_last_saved_map_cannot_be_deleted() {
         assert_eq!(confirm.is_some(), maps > 1, "{maps} saved maps: the confirmation");
         if let Some(confirm) = confirm {
             click(&mut frame, confirm);
+            let after = frame(vec![]);
+            assert!(text_at(&after, "Delete map").is_none(), "confirming must close the menu");
         }
         let sent = params.edits.borrow().last().map(|edit| format!("{edit:?}"));
         assert_eq!(sent.as_deref(), expected, "{maps} saved maps");
     }
 }
 
-/// The name field renames on Enter, never on a keystroke, since each rename
-/// has the host reread the Map parameter's names; Escape keeps the old name.
+/// The lines that change while music plays or an edit lands never stand
+/// above a map control, so none of them moves a control under the pointer:
+/// the follow readout is drawn at zero as well, and the pending notice ends
+/// the pane.
 #[test]
-fn the_name_field_renames_on_enter_and_not_while_typing() {
-    for (key, expected) in
-        [(egui::Key::Enter, Some("Rename(0, \"C · 3×4 B\")")), (egui::Key::Escape, None)]
+fn map_status_lines_never_move_a_map_control() {
+    let ctx = themed();
+    let params = Edits { pending: true, ..Edits::new(TuningEngine::LatticeMap, Follow::Thirds, 1) };
+    let mut state = fresh_picture();
+    let size = egui::vec2(420.0, 2000.0);
+    let mut frame = || {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
+            tuning_pane(ui, &mut state, &params, 0.0)
+        })
+    };
+    frame();
+    let out = frame();
+    assert!(
+        text_at(&out, "Moved: fifths +0, thirds +0").is_some(),
+        "the follow readout must stand while following has not moved the map"
+    );
+    let pending = text_at(&out, "Map state pending audio adoption").expect("the pending notice");
+    for control in
+        ["Edit shape on lattice", "Duplicate as new map", "Fifths", "Reset context on loop / seek"]
     {
+        let at = text_at(&out, control).unwrap_or_else(|| panic!("{control} must be drawn"));
+        assert!(at.y < pending.y, "the pending notice stands above {control}");
+    }
+}
+
+/// How a test leaves the name field after typing in it.
+#[derive(Clone, Copy, Debug)]
+enum Leave {
+    Key(egui::Key),
+    /// A click on the selector's number, drawn left of the field and so
+    /// before it in the frame.
+    Number,
+    /// Cmd-click on a bar above, which opens a typed entry that takes the
+    /// keyboard before the name field is drawn.
+    TypeIntoBar,
+}
+
+/// The name field renames when it is left — by Enter, or by a click on
+/// another control, even one that takes the keyboard before the field is
+/// drawn — never on a keystroke, since each rename has the host reread the
+/// Map parameter's names; Escape keeps the old name.
+#[test]
+fn the_name_field_renames_when_left_and_not_while_typing() {
+    let renamed = Some("Rename(0, \"C · 3×4 B\")");
+    for (leave, expected) in [
+        (Leave::Key(egui::Key::Enter), renamed),
+        (Leave::Key(egui::Key::Escape), None),
+        (Leave::Number, renamed),
+        (Leave::TypeIntoBar, renamed),
+    ] {
         let ctx = themed();
         let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, 1);
         let mut state = fresh_picture();
         let size = egui::vec2(420.0, 2000.0);
-        let mut frame = |events| {
-            events_into(
+        let mut frame = |modifiers, events| {
+            crate::tests::probe::held_into(
                 &ctx,
                 size,
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                modifiers,
                 events,
                 |ui| {
                     tuning_pane(ui, &mut state, &params, 0.0);
                 },
             )
         };
-        frame(vec![]);
-        let field = text_at(&frame(vec![]), "C · 3×4").expect("the name field");
-        click(&mut frame, field);
+        let none = egui::Modifiers::NONE;
+        frame(none, vec![]);
+        let out = frame(none, vec![]);
+        let field = text_at(&out, "C · 3×4").expect("the name field");
+        let number = out.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "1" => {
+                Some(text.pos + egui::vec2(2.0, 4.0))
+            }
+            _ => None,
+        });
+        let number = number.expect("the map number");
+        let bar = text_at(&out, "C pitch offset").expect("a bar above the field");
+        fn click(
+            frame: &mut impl FnMut(egui::Modifiers, Vec<egui::Event>) -> egui::FullOutput,
+            modifiers: egui::Modifiers,
+            at: egui::Pos2,
+        ) {
+            frame(modifiers, vec![egui::Event::PointerMoved(at)]);
+            frame(modifiers, vec![press(at, true)]);
+            frame(modifiers, vec![press(at, false)]);
+        }
+        click(&mut frame, none, field);
         // Move to the end, wherever the click put the cursor.
         let key_event = |key| egui::Event::Key {
             key,
@@ -202,14 +273,21 @@ fn the_name_field_renames_on_enter_and_not_while_typing() {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         };
-        frame(vec![key_event(egui::Key::End)]);
-        frame(vec![egui::Event::Text(" B".into())]);
-        assert!(text_at(&frame(vec![]), "C · 3×4 B").is_some(), "the typing must reach the field");
+        frame(none, vec![key_event(egui::Key::End)]);
+        frame(none, vec![egui::Event::Text(" B".into())]);
+        let typed = text_at(&frame(none, vec![]), "C · 3×4 B");
+        assert!(typed.is_some(), "the typing must reach the field");
         assert!(params.edits.borrow().is_empty(), "typing sent {:?}", params.edits.borrow());
-        frame(vec![key_event(key)]);
-        frame(vec![]);
-        let sent = params.edits.borrow().last().map(|edit| format!("{edit:?}"));
-        assert_eq!(sent.as_deref(), expected, "{key:?}");
+        match leave {
+            Leave::Key(key) => {
+                frame(none, vec![key_event(key)]);
+            }
+            Leave::Number => click(&mut frame, none, number),
+            Leave::TypeIntoBar => click(&mut frame, egui::Modifiers::COMMAND, bar),
+        }
+        frame(none, vec![]);
+        let sent = params.edits.borrow().first().map(|edit| format!("{edit:?}"));
+        assert_eq!(sent.as_deref(), expected, "left by {leave:?}");
     }
 }
 

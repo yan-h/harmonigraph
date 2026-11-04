@@ -74,9 +74,8 @@ pub(super) fn engine_view(
 /// moved off the offsets, Edit shape on with an edit to undo, offsets off
 /// zero, every slot used, and the whole still pending adoption. With Learn
 /// held on (which the case's state does, [`SettingsCase::state`]) that draws
-/// every conditional row of `map_controls` but two: "Map unavailable", which
-/// a sounding map excludes, and the Assignments fold's interval lines, which
-/// need held voices.
+/// every conditional row of `map_controls` but one: "Map unavailable", which
+/// a sounding map excludes.
 pub(super) fn lattice_map_view() -> crate::lattice_maps::MapView {
     use harmonigraph_core::{lattice_map::Follow, LatticePos};
     let mut view = engine_view(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
