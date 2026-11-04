@@ -380,7 +380,10 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
     });
     let outcome = ui.data(|data| data.get_temp::<Option<(&'static str, [f32; 5])>>(id)).flatten();
     if let Some((text, camera)) = outcome {
-        if camera == state.appearance.camera_movement() {
+        // Within a hair rather than exactly: the host hands the camera back
+        // through its normalized parameters, which rarely round-trip an f32.
+        let now = state.appearance.camera_movement();
+        if camera.iter().zip(now).all(|(a, b)| (a - b).abs() <= 1e-3 * a.abs().max(1.0)) {
             crate::widgets::label(ui, text);
         }
     }

@@ -17,9 +17,9 @@ const PAD: f32 = 0.5;
 
 /// Recentre-then-zoom rounds. Under orthographic and cabinet, whose screen
 /// position is affine in the camera, the first is exact; under perspective,
-/// recentring at one distance shifts the centre a little at another, and this
-/// many rounds leave it far under a pixel.
-const PASSES: usize = 8;
+/// recentring at one distance shifts the centre a little at another, and the
+/// rounds close in on it.
+const PASSES: usize = 16;
 
 /// Halvings of the distance range per zoom: past the f32 resolution of a
 /// distance in `MIN_DISTANCE..=MAX_DISTANCE`.
@@ -93,8 +93,8 @@ pub struct Framed {
 /// kept: framing is pan and zoom, the two moves done by hand.
 ///
 /// The target stays on the home sheet, as the camera's pan parameters keep it,
-/// and is relative to `view`'s center like every camera target. `None` for no
-/// positions.
+/// and is relative to `view`'s center like every camera target. `None` only
+/// for no positions (or a pane with no shape).
 pub fn frame(
     camera: Camera,
     view: &ViewConfig,
@@ -124,28 +124,14 @@ pub fn frame(
         extent(camera, &nodes, aspect)
             .is_some_and(|(lo, hi)| lo.min_element() >= -1.0 && hi.max_element() <= 1.0)
     };
+    // Recentring at one distance moves the picture a little at another under
+    // perspective, so the rounds alternate, and the best-centred camera that
+    // fits is the answer: a round can only make things worse where the view
+    // is all but edge-on to the sheet.
+    let mut best: Option<(f32, Camera)> = None;
     for _ in 0..PASSES {
-        if let Some((lo, hi)) = extent(&camera, &nodes, aspect) {
-            let middle = (lo + hi) * 0.5;
-            // How far the picture moves per step of target along each sheet
-            // axis. Moving the target is moving every node the other way, so
-            // this is where one step from the target lands.
-            let to_ndc = |p: Vec3| {
-                let clip = camera.view_proj(aspect) * p.extend(1.0);
-                clip.truncate().truncate() / clip.w
-            };
-            let x = to_ndc(camera.target + Vec3::X);
-            let y = to_ndc(camera.target + Vec3::Y);
-            let det = x.x * y.y - y.x * x.y;
-            // Edge-on to the sheet, where no pan in it moves the picture
-            // sideways; the zoom below still applies.
-            if det.abs() > 1e-6 {
-                let step = Vec2::new(
-                    (middle.x * y.y - y.x * middle.y) / det,
-                    (x.x * middle.y - middle.x * x.y) / det,
-                );
-                camera.target += step.extend(0.0);
-            }
+        if let Some(target) = recentred(&camera, &nodes, aspect) {
+            camera.target = target;
         }
         // The nearest distance that holds every node. Pulling the eye back
         // along its own axis shrinks every node's offset from the middle of
@@ -156,9 +142,9 @@ pub fn frame(
         // faster than one farther off, and the scaled step overshoots, or
         // walks past a node behind the eye that `extent` cannot see.
         let at = |distance: f32| Camera { distance, ..camera };
-        camera.distance = if fits(&at(Camera::MIN_DISTANCE)) {
-            Camera::MIN_DISTANCE
-        } else if !fits(&at(Camera::MAX_DISTANCE)) {
+        // A piece that fits even at the nearest distance ends there, the
+        // bisection closing on the near end.
+        camera.distance = if !fits(&at(Camera::MAX_DISTANCE)) {
             Camera::MAX_DISTANCE
         } else {
             let (mut near, mut far) = (Camera::MIN_DISTANCE, Camera::MAX_DISTANCE);
@@ -172,10 +158,76 @@ pub fn frame(
             }
             far
         };
+        if let Some((lo, hi)) = extent(&camera, &nodes, aspect).filter(|_| fits(&camera)) {
+            let off = ((lo + hi) * 0.5).abs().max_element();
+            if best.is_none_or(|(nearest, _)| off < nearest) {
+                best = Some((off, camera));
+            }
+        }
     }
-    let (lo, hi) = extent(&camera, &nodes, aspect)?;
-    let half = (hi - lo) * 0.5;
-    Some(Framed { camera, aspect: half.x / half.y * aspect, fits: fits(&camera) })
+    let camera = best.map_or(camera, |(_, camera)| camera);
+    let shape = match extent(&camera, &nodes, aspect) {
+        Some((lo, hi)) => {
+            let half = (hi - lo) * 0.5;
+            half.x / half.y * aspect
+        }
+        // Too big to show whole even at the farthest distance, with a node
+        // left behind the eye: the sheet's own shape is the best guess.
+        None => {
+            let rim = nodes.iter().map(|&(_, r)| r).fold(0.0, f32::max);
+            let size = hi - lo + Vec2::splat(2.0 * rim);
+            size.x / size.y
+        }
+    };
+    Some(Framed { camera, aspect: shape, fits: fits(&camera) })
+}
+
+/// Where on the home sheet to stand for the nodes to sit in the middle of
+/// the screen: a Newton step on the middle of what they cover, as a function
+/// of the target, halved until it improves on where the camera stands.
+/// `None` where no pan in the sheet moves the picture sideways (a camera
+/// edge-on to it) or none helps.
+///
+/// Solved against the nodes' own middle rather than how the target's
+/// neighbourhood moves on screen, because the two differ wherever depth does:
+/// under perspective a nearer node moves further for one step of pan, so a
+/// node off the home sheet, or a tilted view of the home sheet itself, sent a
+/// step solved at the target's depth wide of the middle and sometimes far down
+/// the view axis. Under orthographic and cabinet the middle is affine in the
+/// target, and the first step is exact.
+fn recentred(camera: &Camera, nodes: &[(Vec3, f32)], aspect: f32) -> Option<Vec3> {
+    // Where the middle falls is the same at every distance under the affine
+    // projections, so they find it from the farthest, where a pan that
+    // changes a node's depth cannot take it behind the near plane.
+    let distance = match camera.projection {
+        crate::Projection::Perspective => camera.distance,
+        crate::Projection::Orthographic | crate::Projection::Cabinet => Camera::MAX_DISTANCE,
+    };
+    let middle = |target: Vec3| {
+        let (lo, hi) = extent(&Camera { target, distance, ..*camera }, nodes, aspect)?;
+        Some((lo + hi) * 0.5)
+    };
+    let here = middle(camera.target)?;
+    let dx = middle(camera.target + Vec3::X)? - here;
+    let dy = middle(camera.target + Vec3::Y)? - here;
+    let det = dx.x * dy.y - dy.x * dx.y;
+    if det.abs() < 1e-6 {
+        return None;
+    }
+    // Solve [dx dy] · step = -here.
+    let mut step = Vec3::new(
+        (dy.x * here.y - here.x * dy.y) / det,
+        (here.x * dx.y - dx.x * here.y) / det,
+        0.0,
+    );
+    for _ in 0..HALVINGS {
+        let target = camera.target + step;
+        if middle(target).is_some_and(|m| m.abs().max_element() < here.abs().max_element()) {
+            return Some(target);
+        }
+        step *= 0.5;
+    }
+    None
 }
 
 /// Where a node `centered` steps from the window center draws, and how far its
@@ -288,13 +340,66 @@ mod tests {
         assert!((hi - lo - Vec2::splat(2.0)).abs().max_element() < 1e-3, "{lo} {hi}");
     }
 
-    /// A piece bigger than the zoomed-out window stops at the limit and says so.
+    /// Views that graze the sheet, where a pan solved at the target's own
+    /// depth was ill-conditioned: under perspective it left the piece a tenth
+    /// of the screen off centre, and with a node off the home sheet it sent
+    /// the target down the view axis until nothing fitted and no framing came
+    /// back at all. That last one is edge-on to the sevens axis, which is the
+    /// screen's horizontal there, so no pan on the home sheet can centre its
+    /// off-sheet node; it is held to fitting.
     #[test]
-    fn a_piece_past_the_zoom_limit_is_framed_as_far_as_it_goes() {
+    fn a_grazing_view_still_frames_and_centres() {
+        let mut stacked = view();
+        (stacked.min_sevens, stacked.max_sevens) = (-1, 1);
+        let p = LatticePos::new;
+        let cases = [
+            (
+                Projection::Perspective,
+                2.33,
+                -0.77,
+                2.0,
+                view(),
+                vec![p(2, -2, 0), p(-1, 1, 0), p(0, -1, 0), p(2, 0, 0)],
+            ),
+            (Projection::Perspective, 1.68, 0.53, 6.0, view(), vec![p(-5, 5, 0), p(-6, -4, 0)]),
+            (
+                Projection::Perspective,
+                1.61,
+                1.44,
+                24.0,
+                view(),
+                vec![p(-1, 4, 0), p(0, 2, 0), p(-4, 4, 0), p(2, -1, 0)],
+            ),
+            (Projection::Orthographic, -1.57, 0.32, 6.0, stacked, vec![p(-4, -1, 1)]),
+        ];
+        for (projection, yaw, pitch, distance, view, piece) in cases {
+            let camera = Camera { projection, yaw, pitch, distance, ..Camera::default() };
+            let at = format!("{projection:?} yaw {yaw} pitch {pitch}");
+            let framed = frame(camera, &view, &piece, 16.0 / 9.0).expect(&at);
+            assert!(framed.fits, "{at}");
+            let (lo, hi) = extent(&framed.camera, &drawn(&view, &piece), 16.0 / 9.0).unwrap();
+            if projection == Projection::Perspective {
+                assert!(((lo + hi) * 0.5).abs().max_element() < 1e-2, "{at}: {lo} {hi}");
+            }
+        }
+    }
+
+    /// A piece bigger than the zoomed-out window stops at the limit and says
+    /// so, under every projection, even where some of it is behind the eye;
+    /// one node fits, nearer.
+    #[test]
+    fn a_piece_frames_from_one_node_to_past_the_zoom_limit() {
         let far = [LatticePos::new(0, -40, 0), LatticePos::new(0, 40, 0)];
-        let framed = frame(Camera::default(), &view(), &far, 1.0).unwrap();
-        assert_eq!(framed.camera.distance, Camera::MAX_DISTANCE);
-        assert!(!framed.fits);
+        for projection in [Projection::Cabinet, Projection::Orthographic, Projection::Perspective] {
+            let camera = Camera { projection, pitch: 0.9, ..Camera::default() };
+            let framed = frame(camera, &view(), &far, 1.0).expect("framed as far as it goes");
+            assert_eq!(framed.camera.distance, Camera::MAX_DISTANCE, "{projection:?}");
+            assert!(!framed.fits, "{projection:?}");
+
+            let one = frame(camera, &view(), &[LatticePos::new(2, 3, 0)], 1.0).unwrap();
+            assert!(one.camera.distance < framed.camera.distance, "{projection:?}");
+            assert!(one.fits, "{projection:?}");
+        }
         assert!(frame(Camera::default(), &view(), &[], 1.0).is_none());
     }
 
