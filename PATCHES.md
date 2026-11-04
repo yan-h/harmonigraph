@@ -352,6 +352,8 @@ a `free`-only delta on a bailing frame used to drop egui's texture-manager ids p
 Every other key still passes to the host unless egui has a use for it, which `egui_claims_key` decides:
 a focused widget takes every key, unless the app says through `Queue::set_focus_takes_only_arrows` that it uses just the arrows, when it keeps those and Escape, so Space still reaches the DAW after a click leaves a plot handle focused.
 A label holding a selection claims the copy chord (Cmd-C, Ctrl-Insert off macOS), which egui turns into its own copy, so the DAW does not copy too (#1608).
+An open memory-tracked popup claims Escape even without widget focus,
+so closing a combo box does not also send Escape to the DAW (#1659).
 Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
 `translate_virtual_key` lowercases a character before matching it,
 so Shift and Caps Lock letters still produce egui key events.

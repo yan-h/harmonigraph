@@ -1462,6 +1462,9 @@ fn egui_claims_key(
         Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Escape
     );
     ctx.egui_wants_keyboard_input() && (kept || !arrows_only)
+        // Popup Escape works without widget focus. Read persistent popup
+        // memory here: this runs between egui passes, before Escape closes it.
+        || matches!(event.key, Key::Escape) && egui::Popup::is_any_open(ctx)
         || is_copy_command(modifiers, event.code)
             && ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
 }
@@ -1499,6 +1502,51 @@ fn calculate_screen_rect(physical_size: PhySize, points_per_pixel: f32) -> Rect 
 #[cfg(test)]
 mod key_capture_tests {
     use super::*;
+
+    #[test]
+    fn escape_closes_an_unfocused_combo_without_reaching_the_host() {
+        use keyboard_types::{Key, KeyState, KeyboardEvent};
+        let ctx = egui::Context::default();
+        let combo = std::cell::Cell::new(egui::Id::NULL);
+        let mut draw = |ui: &mut egui::Ui| {
+            combo.set(
+                egui::ComboBox::from_id_salt("popup escape")
+                    .selected_text("choice")
+                    .show_ui(ui, |ui| {
+                        let _ = ui.selectable_label(false, "choice");
+                    })
+                    .response
+                    .id,
+            );
+        };
+        let _ = ctx.run_ui(egui::RawInput::default(), &mut draw);
+        egui::Popup::open_id(&ctx, combo.get().with("popup"));
+        let _ = ctx.run_ui(egui::RawInput::default(), &mut draw);
+        assert!(egui::ComboBox::is_open(&ctx, combo.get()));
+        assert!(!ctx.egui_wants_keyboard_input());
+        let event = KeyboardEvent { key: Key::Escape, state: KeyState::Down, ..Default::default() };
+        for arrows_only in [false, true] {
+            let claimed = egui_claims_key(&ctx, egui::Modifiers::NONE, &event, arrows_only);
+            assert!(claimed, "the popup uses Escape even without widget focus");
+            assert_eq!(
+                KeyCapture::CaptureShortcuts(vec![]).status(&event, claimed),
+                EventStatus::Captured
+            );
+        }
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, &mut draw);
+        assert!(!egui::ComboBox::is_open(&ctx, combo.get()));
+        assert!(!egui_claims_key(&ctx, egui::Modifiers::NONE, &event, false));
+    }
 
     #[test]
     fn reserved_shortcuts_are_not_forwarded_to_the_host_without_widget_focus() {
