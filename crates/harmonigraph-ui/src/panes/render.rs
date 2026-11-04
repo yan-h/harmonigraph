@@ -504,7 +504,7 @@ fn render_controls(
              About a fourteenth of the size and close to the video's quality, but upload the video itself: \
              YouTube re-encodes what it gets, and the copy has already lost a little. \
              Adds about 0.6 s of encoding per second of video. \
-             Needs ffmpeg with SVT-AV1, as Homebrew's has; without it the video still saves and the status line says why.",
+             Needs ffmpeg with SVT-AV1, as Homebrew's has; without it the video still saves and its export row says why.",
         );
         if !interaction.take.supported {
             return;

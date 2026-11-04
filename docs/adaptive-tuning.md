@@ -615,7 +615,7 @@ Replay uses recorded output pitches and never reruns adaptive selection.
 
 **A take that parsed is rendered;
 a take that did not parse is refused.** Missing note history is a warning, not a refusal:
-the renderer prints it on stderr before anything the command line can complain about, and the Video pane's status line carries it onto the render it succeeded on.
+the renderer prints it on stderr before anything the command line can complain about, and the Video pane's export row carries it onto the render it succeeded on.
 Surviving data is drawn with its gaps;
 nothing invents missing notes or durations.
 The warning's lifetime is the recording rather than the file, so a hole that outlived the pass it happened in still marks the pass that exports.
