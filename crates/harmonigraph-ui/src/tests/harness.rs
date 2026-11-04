@@ -182,9 +182,20 @@ impl DockHarness {
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, f64) {
         self.t += 1.0 / 60.0;
+        // Held as a shell holds them: the modifiers its key events carry. egui
+        // matches a shortcut against these, not the event's own.
+        let modifiers = events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
         let raw = egui::RawInput {
             screen_rect: Some(self.screen),
             time: Some(self.t),
+            modifiers,
             events,
             ..Default::default()
         };

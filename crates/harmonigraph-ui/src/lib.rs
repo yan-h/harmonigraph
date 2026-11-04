@@ -277,12 +277,20 @@ pub fn root_ui(
     // It takes precedence over keyboard focus traversal outside text edits;
     // cancelling the queued focus move keeps the toggle from moving focus too.
     // Bare Tab alone, as the shell reserves it: a shortcut is otherwise matched
-    // through Shift, which would then act here and in the host.
-    if !ui.ctx().text_edit_focused()
-        && ui.input_mut(|i| i.modifiers.is_none() && i.consume_shortcut(&FRAMELESS_SHORTCUT))
-    {
-        state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
-        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    // through Shift, which would then act here and in the host. A Tab with a
+    // modifier goes to the host, so it moves no focus here either: Shift-Tab
+    // would otherwise focus the last widget, which then claims every key.
+    if !ui.ctx().text_edit_focused() {
+        let (tab, toggle) = ui.input_mut(|i| {
+            let tab = i.key_pressed(egui::Key::Tab);
+            (tab, i.modifiers.is_none() && i.consume_shortcut(&FRAMELESS_SHORTCUT))
+        });
+        if toggle {
+            state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
+        }
+        if tab {
+            ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
     }
     let before_camera = state.picture.appearance.camera_movement();
     let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
