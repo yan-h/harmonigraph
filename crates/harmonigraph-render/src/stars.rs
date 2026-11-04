@@ -261,8 +261,8 @@ pub(crate) fn star_life(life: f64) -> f32 {
 }
 
 /// Every slice's numbers for this frame, for a star image `image` texels
-/// across and down, each depth `travel` star pixels on across and down
-/// ([`Motion::stars`]), as one sheet.
+/// across and down, each depth `travel` of its own cells on across and down
+/// ([`Motion::stars`], counted in `layout`'s cells), as one sheet.
 ///
 /// The star image is drawn by evaluating each star at its texel centres, so
 /// a star narrower than a texel would show only where a centre happened to
@@ -298,7 +298,7 @@ pub(crate) fn star_slices(
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
-        let offset = travel[k].map(|t| (t / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32);
+        let offset = travel[k].map(|t| t.rem_euclid(STAR_HASH_PERIOD) as f32);
         let grid = layout.grids[k];
         // The cell a pixel at the pane's top left edge is in, as the shader
         // works it out, with the original conservative neighbor and margin.
