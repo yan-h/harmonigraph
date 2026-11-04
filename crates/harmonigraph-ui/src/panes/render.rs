@@ -345,8 +345,12 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
 }
 
 /// Framing the lattice on what has been drawn of a piece's notes.
+///
+/// What a click could not do is said under the button for as long as the
+/// camera is still where that click left it, and no longer: a hand zoom or a
+/// second framing makes it a statement about some other picture.
 fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
-    let id = ui.id().with("frame_notes_cut_off");
+    let id = ui.id().with("frame_notes_outcome");
     let tracker = &state.runtime.tracker;
     let drawn = !tracker.history().is_empty() || tracker.voices().next().is_some();
     button_row(ui, |ui| {
@@ -363,16 +367,22 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
                 &state.runtime.tuning,
                 &state.appearance,
             );
-            if let Some(fits) = state.appearance.frame_lattice(&positions) {
-                ui.data_mut(|data| data.insert_temp(id, !fits));
-            }
+            let outcome = match state.appearance.frame_lattice(&positions) {
+                Some(true) => None,
+                Some(false) => Some(
+                    "The notes span more than the camera can show zoomed out; the outermost are cut off.",
+                ),
+                None => Some("None of the notes drawn lights a node near the camera, so there is nothing to frame."),
+            };
+            let camera = state.appearance.camera_movement();
+            ui.data_mut(|data| data.insert_temp(id, outcome.map(|text| (text, camera))));
         }
     });
-    if ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
-        crate::widgets::label(
-            ui,
-            "The notes span more than the camera can show zoomed out; the outermost are cut off.",
-        );
+    let outcome = ui.data(|data| data.get_temp::<Option<(&'static str, [f32; 5])>>(id)).flatten();
+    if let Some((text, camera)) = outcome {
+        if camera == state.appearance.camera_movement() {
+            crate::widgets::label(ui, text);
+        }
     }
 }
 

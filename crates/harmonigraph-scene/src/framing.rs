@@ -7,26 +7,28 @@
 use glam::{Vec2, Vec3, Vec4};
 use harmonigraph_core::{LatticePos, PitchClass, Tuning};
 
-use crate::{lattice_to_world, Camera, ViewConfig, NODE_RADIUS_FACTOR};
+use crate::derive::marker_world;
+use crate::{lattice_to_world, Camera, ViewConfig};
 
 /// How far past the rim of the outermost framed node the picture runs, in
-/// lattice steps: half a step, so an edge node's name and halo have room and
-/// the next node out is not half on screen.
+/// lattice steps: half a step, so the next node out is not half on screen.
+/// A wide glow is left to run off the edge, as it does beside any neighbour.
 const PAD: f32 = 0.5;
 
-/// How far a played pitch is looked for from where the camera stands, in steps
-/// along the fifths and the thirds. Past the zoomed-out window, which is about
-/// twenty steps tall (see [`Camera::MAX_DISTANCE`]), so a node beyond it could
-/// not have been framed with the rest anyway.
-const REACH: i32 = 24;
-
-/// Recentring and rescaling is exact in one pass under orthographic and
-/// cabinet, whose screen position is affine in the camera; perspective
-/// converges on it, and this many passes leave it well under a pixel.
+/// Recentre-then-zoom rounds. Under orthographic and cabinet, whose screen
+/// position is affine in the camera, the first is exact; under perspective,
+/// recentring at one distance shifts the centre a little at another, and this
+/// many rounds leave it far under a pixel.
 const PASSES: usize = 8;
 
+/// Halvings of the distance range per zoom: past the f32 resolution of a
+/// distance in `MIN_DISTANCE..=MAX_DISTANCE`.
+const HALVINGS: usize = 32;
+
 /// The node each of `classes` lights under `tuning`, the one nearest `near`
-/// (absolute fifths and thirds) where several do, on the sheets `view` draws.
+/// (absolute fifths and thirds) where several do, within the naming reach
+/// ([`ViewConfig::reach`]): the block a played pitch is hunted through for a
+/// name and a node.
 ///
 /// Several do under a tempered tuning, where a pitch class repeats across the
 /// whole sheet, and under a just one wherever a comma falls inside the
@@ -42,50 +44,31 @@ pub fn lit_positions(
     view: &ViewConfig,
     near: Vec2,
 ) -> Vec<LatticePos> {
-    let mut classes = classes.to_vec();
-    classes.sort_unstable();
-    classes.dedup();
-    let n = classes.len();
-    if n == 0 || !near.is_finite() {
+    if !near.is_finite() {
         return Vec::new();
     }
-    let (low, high) = view.sevens_window();
-    let (fives, threes) = (near.x.round() as i32, near.y.round() as i32);
-    let mut best: Vec<Option<(f32, LatticePos)>> = vec![None; n];
-    for sevens in low..=high {
-        for t in threes - REACH..=threes + REACH {
-            for f in fives - REACH..=fives + REACH {
-                let pos = LatticePos::new(t, f, sevens);
-                let node = tuning.pitch_class(pos);
-                let d = Vec3::new(
-                    f as f32 - near.x,
-                    t as f32 - near.y,
-                    (sevens - view.center_sevens) as f32,
-                )
-                .length_squared();
-                // Sorted and unique, so the classes this node matches are one
-                // run either side of where it would sort, wrapping at the
-                // octave. Up from there and then down, never visiting one twice.
-                let at = classes.partition_point(|&c| c < node);
-                let mut take = |i: usize| {
-                    if best[i].is_none_or(|(nearest, _)| d < nearest) {
-                        best[i] = Some((d, pos));
-                    }
-                };
-                let mut up = 0;
-                while up < n && tuning.matches(classes[(at + up) % n], node) {
-                    take((at + up) % n);
-                    up += 1;
-                }
-                let mut down = 1;
-                while up + down <= n && tuning.matches(classes[(at + n - down) % n], node) {
-                    take((at + n - down) % n);
-                    down += 1;
-                }
-            }
-        }
-    }
-    let mut positions: Vec<_> = best.into_iter().flatten().map(|(_, pos)| pos).collect();
+    let nodes: Vec<_> = view
+        .reach()
+        .positions()
+        .map(|pos| {
+            let offset = Vec3::new(
+                pos.fives as f32 - near.x,
+                pos.threes as f32 - near.y,
+                (pos.sevens - view.center_sevens) as f32,
+            );
+            (pos, tuning.pitch_class(pos), offset.length_squared())
+        })
+        .collect();
+    let mut positions: Vec<_> = classes
+        .iter()
+        .filter_map(|&class| {
+            nodes
+                .iter()
+                .filter(|&&(_, node, _)| tuning.matches(class, node))
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|&(pos, ..)| pos)
+        })
+        .collect();
     positions.sort_unstable_by_key(crate::derive::lattice_order);
     positions.dedup();
     positions
@@ -122,14 +105,11 @@ pub fn frame(
         return None;
     }
     let center = view.center();
-    let outer = view.rings().outer * NODE_RADIUS_FACTOR;
     let nodes: Vec<(Vec3, f32)> = positions
         .iter()
         .map(|&pos| {
-            let centered = pos - center;
-            // Drawn at the size `derive_scene` gives the node's sheet.
-            let size = view.sevens_size.powi(centered.sevens.unsigned_abs() as i32);
-            (lattice_to_world(centered), outer * size + PAD)
+            let (world, rim) = footprint(view, pos - center);
+            (world, rim + PAD)
         })
         .collect();
     let (lo, hi) = nodes
@@ -140,47 +120,76 @@ pub fn frame(
     let mut camera = camera;
     camera.target = ((lo + hi) * 0.5).extend(0.0);
     camera.distance = camera.distance.clamp(Camera::MIN_DISTANCE, Camera::MAX_DISTANCE);
+    let fits = |camera: &Camera| {
+        extent(camera, &nodes, aspect)
+            .is_some_and(|(lo, hi)| lo.min_element() >= -1.0 && hi.max_element() <= 1.0)
+    };
     for _ in 0..PASSES {
-        let (lo, hi) = extent(&camera, &nodes, aspect)?;
-        let middle = (lo + hi) * 0.5;
-        // How far the picture moves per step of target along each sheet axis.
-        // Moving the target is moving every node the other way, so this is
-        // where one step from the target lands.
-        let to_ndc = |p: Vec3| {
-            let clip = camera.view_proj(aspect) * p.extend(1.0);
-            clip.truncate().truncate() / clip.w
+        if let Some((lo, hi)) = extent(&camera, &nodes, aspect) {
+            let middle = (lo + hi) * 0.5;
+            // How far the picture moves per step of target along each sheet
+            // axis. Moving the target is moving every node the other way, so
+            // this is where one step from the target lands.
+            let to_ndc = |p: Vec3| {
+                let clip = camera.view_proj(aspect) * p.extend(1.0);
+                clip.truncate().truncate() / clip.w
+            };
+            let x = to_ndc(camera.target + Vec3::X);
+            let y = to_ndc(camera.target + Vec3::Y);
+            let det = x.x * y.y - y.x * x.y;
+            // Edge-on to the sheet, where no pan in it moves the picture
+            // sideways; the zoom below still applies.
+            if det.abs() > 1e-6 {
+                let step = Vec2::new(
+                    (middle.x * y.y - y.x * middle.y) / det,
+                    (x.x * middle.y - middle.x * x.y) / det,
+                );
+                camera.target += step.extend(0.0);
+            }
+        }
+        // The nearest distance that holds every node. Pulling the eye back
+        // along its own axis shrinks every node's offset from the middle of
+        // the screen, under every projection, so whether it fits is monotone
+        // in distance and a bisection finds the edge exactly. Scaling the
+        // distance by the overshoot does too, but only where the screen is
+        // affine in it: under perspective a node nearer the eye shrinks
+        // faster than one farther off, and the scaled step overshoots, or
+        // walks past a node behind the eye that `extent` cannot see.
+        let at = |distance: f32| Camera { distance, ..camera };
+        camera.distance = if fits(&at(Camera::MIN_DISTANCE)) {
+            Camera::MIN_DISTANCE
+        } else if !fits(&at(Camera::MAX_DISTANCE)) {
+            Camera::MAX_DISTANCE
+        } else {
+            let (mut near, mut far) = (Camera::MIN_DISTANCE, Camera::MAX_DISTANCE);
+            for _ in 0..HALVINGS {
+                let mid = 0.5 * (near + far);
+                if fits(&at(mid)) {
+                    far = mid;
+                } else {
+                    near = mid;
+                }
+            }
+            far
         };
-        let x = to_ndc(camera.target + Vec3::X);
-        let y = to_ndc(camera.target + Vec3::Y);
-        let det = x.x * y.y - y.x * x.y;
-        // Edge-on to the sheet, where no pan in it moves the picture sideways;
-        // the zoom below still applies.
-        if det.abs() > 1e-6 {
-            let step = Vec2::new(
-                (middle.x * y.y - y.x * middle.y) / det,
-                (x.x * middle.y - middle.x * x.y) / det,
-            );
-            camera.target += step.extend(0.0);
-        }
-        let reach = ((hi - lo) * 0.5).max_element();
-        if !(reach.is_finite() && reach > 0.0) {
-            return None;
-        }
-        camera.distance =
-            (camera.distance * reach).clamp(Camera::MIN_DISTANCE, Camera::MAX_DISTANCE);
     }
     let (lo, hi) = extent(&camera, &nodes, aspect)?;
     let half = (hi - lo) * 0.5;
-    Some(Framed {
-        camera,
-        aspect: half.x / half.y * aspect,
-        fits: half.max_element() <= 1.0 + 1e-3,
-    })
+    Some(Framed { camera, aspect: half.x / half.y * aspect, fits: fits(&camera) })
+}
+
+/// Where a node `centered` steps from the window center draws, and how far its
+/// outermost ring reaches in world units, at the size `derive_scene` gives the
+/// node's sheet.
+fn footprint(view: &ViewConfig, centered: LatticePos) -> (Vec3, f32) {
+    let size = view.sevens_size.powi(centered.sevens.unsigned_abs() as i32);
+    (lattice_to_world(centered), marker_world(view.rings().outer) * size)
 }
 
 /// The NDC rectangle the nodes' billboards cover, each `(center, radius)`
-/// facing the camera as a node's quad does. Points behind the eye are left
-/// out: perspective cannot frame them and they draw nothing.
+/// facing the camera as a node's quad does. `None` where any corner is behind
+/// the eye or nearer than the near plane: that node cannot be on screen at
+/// this distance, which is not the same as being inside it.
 fn extent(camera: &Camera, nodes: &[(Vec3, f32)], aspect: f32) -> Option<(Vec2, Vec2)> {
     let transform = camera.view_proj(aspect);
     let (right, up) = camera.right_up();
@@ -189,11 +198,12 @@ fn extent(camera: &Camera, nodes: &[(Vec3, f32)], aspect: f32) -> Option<(Vec2, 
     for &(p, r) in nodes {
         for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             let clip: Vec4 = transform * (p + (right * x + up * y) * r).extend(1.0);
-            if clip.w > 0.0 && clip.z >= 0.0 {
-                let ndc = clip.truncate().truncate() / clip.w;
-                lo = lo.min(ndc);
-                hi = hi.max(ndc);
+            if clip.w <= 0.0 || clip.z < 0.0 {
+                return None;
             }
+            let ndc = clip.truncate().truncate() / clip.w;
+            lo = lo.min(ndc);
+            hi = hi.max(ndc);
         }
     }
     (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
@@ -210,6 +220,22 @@ mod tests {
         view
     }
 
+    /// Each node's center and the reach of its padded rim, measured as the
+    /// scene draws it: the ring stack's outer edge is in quad uv, which
+    /// `derive`'s own `marker_world` turns into world units, and an off-sheet
+    /// node is drawn smaller by its sheet's scale.
+    fn drawn(view: &ViewConfig, positions: &[LatticePos]) -> Vec<(Vec3, f32)> {
+        let rim = crate::derive::marker_world(view.rings().outer);
+        positions
+            .iter()
+            .map(|&p| {
+                let c = p - view.center();
+                let size = view.sevens_size.powi(c.sevens.unsigned_abs() as i32);
+                (Vec3::new(c.fives as f32, c.threes as f32, c.sevens as f32), rim * size + PAD)
+            })
+            .collect()
+    }
+
     fn piece() -> Vec<LatticePos> {
         // A spread wider than tall, off the origin, across two sheets.
         vec![
@@ -220,36 +246,30 @@ mod tests {
         ]
     }
 
-    /// Every node's rim is on screen and the tighter axis is filled, under all
-    /// three projections, at a wide and a tall pane.
+    /// Every node's rim is on screen, one edge is touched and the piece is
+    /// centred, under all three projections, at a wide and a tall pane, from
+    /// a straight-on orbit and an oblique one. The oblique perspective camera
+    /// is the one a scaled zoom overshot by 5% and collapsed to the nearest
+    /// distance on.
     #[test]
     fn a_framed_piece_fills_the_pane_along_one_axis_and_stays_inside_it() {
         let mut view = view();
         view.max_sevens = 1;
-        let center = view.center();
-        let outer = view.rings().outer * NODE_RADIUS_FACTOR;
+        let nodes = drawn(&view, &piece());
         for projection in [Projection::Cabinet, Projection::Orthographic, Projection::Perspective] {
-            for aspect in [0.5, 1.0, 2.4] {
-                let camera = Camera { projection, ..Camera::default() };
-                let framed = frame(camera, &view, &piece(), aspect).unwrap();
-                assert!(framed.fits, "{projection:?} at {aspect}");
-                let nodes: Vec<_> = piece()
-                    .iter()
-                    .map(|&p| {
-                        let c = p - center;
-                        let size = view.sevens_size.powi(c.sevens.unsigned_abs() as i32);
-                        (lattice_to_world(c), outer * size + PAD)
-                    })
-                    .collect();
-                let (lo, hi) = extent(&framed.camera, &nodes, aspect).unwrap();
-                let tolerance = if projection == Projection::Perspective { 1e-2 } else { 1e-4 };
-                assert!(lo.min_element() >= -1.0 - tolerance, "{projection:?} {aspect}: {lo}");
-                assert!(hi.max_element() <= 1.0 + tolerance, "{projection:?} {aspect}: {hi}");
-                let fill = ((hi - lo) * 0.5).max_element();
-                assert!((fill - 1.0).abs() < tolerance, "{projection:?} {aspect}: fills {fill}");
-                // Centred on the axis it fills, and on the other one too.
-                assert!(((lo + hi) * 0.5).abs().max_element() < tolerance);
-                assert_eq!(framed.camera.target.z, 0.0, "the target stays on the home sheet");
+            for (yaw, pitch) in [(0.4, 0.3), (1.2, 0.0), (0.4, 0.9)] {
+                for aspect in [0.5, 1.0, 2.4] {
+                    let camera = Camera { projection, yaw, pitch, ..Camera::default() };
+                    let at = format!("{projection:?} yaw {yaw} pitch {pitch} at {aspect}");
+                    let framed = frame(camera, &view, &piece(), aspect).unwrap();
+                    assert!(framed.fits, "{at}");
+                    let (lo, hi) = extent(&framed.camera, &nodes, aspect).unwrap();
+                    assert!(lo.min_element() >= -1.0 && hi.max_element() <= 1.0, "{at}: {lo} {hi}");
+                    let edge = (-lo.min_element()).max(hi.max_element());
+                    assert!(edge > 1.0 - 1e-4, "{at}: reaches only {edge}");
+                    assert!(((lo + hi) * 0.5).abs().max_element() < 1e-3, "{at}: {lo} {hi}");
+                    assert_eq!(framed.camera.target.z, 0.0, "the target stays on the home sheet");
+                }
             }
         }
     }
@@ -264,20 +284,7 @@ mod tests {
         let wide = frame(camera, &view, &flat, 16.0 / 9.0).unwrap();
         assert!(wide.aspect > 1.0, "the piece is wider than tall: {}", wide.aspect);
         let exact = frame(camera, &view, &flat, wide.aspect).unwrap();
-        let (lo, hi) = extent(
-            &exact.camera,
-            &flat
-                .iter()
-                .map(|&p| {
-                    (
-                        lattice_to_world(p - view.center()),
-                        view.rings().outer * NODE_RADIUS_FACTOR + PAD,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            wide.aspect,
-        )
-        .unwrap();
+        let (lo, hi) = extent(&exact.camera, &drawn(&view, &flat), wide.aspect).unwrap();
         assert!((hi - lo - Vec2::splat(2.0)).abs().max_element() < 1e-3, "{lo} {hi}");
     }
 
@@ -325,5 +332,18 @@ mod tests {
 
         let between = PitchClass::from_cents(450.0);
         assert!(lit_positions(&[between], &tempered, &view, Vec2::ZERO).is_empty());
+
+        // Pitches inside the tolerance but off the node: E a fifth of a cent
+        // flat is found below where E sorts, and C a fifth of a cent flat is
+        // found across the octave's wrap, below 0.
+        let off = [399.8, 700.0, 100.0, 1199.8].map(PitchClass::from_cents);
+        let found = lit_positions(&off, &tempered, &view, Vec2::ZERO);
+        assert_eq!(found.len(), 4, "{found:?}");
+        for class in off {
+            assert!(
+                found.iter().any(|&p| tempered.matches(class, tempered.pitch_class(p))),
+                "{class:?} lights none of {found:?}"
+            );
+        }
     }
 }
