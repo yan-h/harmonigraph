@@ -1150,8 +1150,8 @@ fn map_selector(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: 
                         if ui
                             .button(confirm)
                             .on_hover_text(
-                                "Automation for this map will pass through without correction. \
-                                 Its number is never reused.",
+                                "The next map is selected. Automation for this map will pass \
+                                 through without correction. Its number is never reused.",
                             )
                             .clicked()
                         {
