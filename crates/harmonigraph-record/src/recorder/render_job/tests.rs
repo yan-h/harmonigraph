@@ -248,6 +248,7 @@ look=$(cat "$5")
 case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
+ archive) printf 'copy' > "${3%.mp4}-archive.mp4" ;;
 esac
 printf '%s %s' "$look" "${6:-unsized}" > "$3"
 echo 'progress: 10/10 frames (100%)' >&2
@@ -347,6 +348,32 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
     assert_eq!(std::fs::read_to_string(retried.output).unwrap(), "retry unsized");
     assert_eq!(std::fs::read_to_string(f.dir.join("music.mp4")).unwrap(), "existing video");
     assert_eq!(std::fs::read_link(f.dir.join("music-1.mp4")).unwrap(), f.dir.join("missing-video"));
+}
+
+/// The renderer leaves an archive copy beside its output when the look asks;
+/// the queue publishes it beside the video under the video's name, and a name
+/// whose copy is already taken is skipped like a taken video's.
+#[cfg(unix)]
+#[test]
+fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
+    let f = Fixture::new("archive");
+    std::fs::write(f.dir.join("music-archive.mp4"), "earlier copy").unwrap();
+    let gate = f.control.running.lock();
+    f.enqueue(f.request("archive"));
+    f.enqueue(f.request("plain"));
+    assert_eq!(f.jobs()[0].output, f.dir.join("music-1.mp4"));
+    // Another writer takes the chosen name's copy after enqueue.
+    std::fs::write(f.dir.join("music-1-archive.mp4"), "raced copy").unwrap();
+    drop(gate);
+    f.finished();
+    let jobs = f.jobs();
+    assert!(jobs.iter().all(|j| j.state == ExportStatus::Completed), "{jobs:?}");
+    assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "archive unsized");
+    assert_eq!(std::fs::read_to_string(archive_path(&jobs[0].output)).unwrap(), "copy");
+    assert!(!f.dir.join("music-1.mp4").exists());
+    assert_eq!(std::fs::read_to_string(f.dir.join("music-archive.mp4")).unwrap(), "earlier copy");
+    assert_eq!(std::fs::read_to_string(f.dir.join("music-1-archive.mp4")).unwrap(), "raced copy");
+    assert!(!archive_path(&jobs[1].output).exists());
 }
 
 #[cfg(unix)]

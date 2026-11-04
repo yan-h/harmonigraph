@@ -1,7 +1,7 @@
 //! Instance-owned sequential export queue and renderer subprocess lifetime.
 use super::home_dir;
 use harmonigraph_take::{
-    render::{ExportJob, ExportStatus},
+    render::{archive_path, ExportJob, ExportStatus},
     RenderProgress,
 };
 use parking_lot::Mutex;
@@ -230,8 +230,11 @@ pub(super) fn spawn_render(
     }
     queue.next_id += 1;
     let id = queue.next_id;
+    // A name is taken by its archive copy's file too, so publishing one never
+    // has to overwrite a copy an earlier export left.
     let output = available_output(&take, |candidate| {
         candidate.symlink_metadata().is_ok()
+            || archive_path(candidate).symlink_metadata().is_ok()
             || queue.jobs.iter().any(|job| job.snapshot.output == candidate)
     });
     queue.jobs.push(Job {
@@ -435,10 +438,19 @@ fn run_job(
     if queue.jobs[index].snapshot.state != ExportStatus::Running {
         return Err("cancelled".into());
     }
+    // The renderer writes the archive copy beside its output when the
+    // appearance asks for one; this side only publishes what is there.
+    let archive = archive_path(&partial);
+    let archived = archive.is_file();
     let mut output = job.output.clone();
     let mut suffix = 0;
     loop {
-        match std::fs::hard_link(&partial, &output) {
+        let linked = if archived && archive_path(&output).symlink_metadata().is_ok() {
+            Err(std::io::ErrorKind::AlreadyExists.into())
+        } else {
+            std::fs::hard_link(&partial, &output)
+        };
+        match linked {
             Ok(()) => break,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 output = output_candidate(&job.take, suffix);
@@ -455,11 +467,18 @@ fn run_job(
             Err(e) => return Err(format!("could not publish video without overwriting: {e}")),
         }
     }
+    // The video is published either way; a copy lost to a race with another
+    // writer says so rather than failing the export it belongs to.
+    let archive_lost = archived
+        .then(|| std::fs::hard_link(&archive, archive_path(&output)).err())
+        .flatten()
+        .map(|e| format!("archive copy not saved: {e}"));
     let current = &mut queue.jobs[index];
     current.snapshot.state = ExportStatus::Completed;
     current.snapshot.output = output.clone();
     current.snapshot.progress = progress.read().unwrap_or_default();
-    let detail = rendered_status(&output, request.notice, tail.warning.as_deref());
+    let warning = archive_lost.as_deref().or(tail.warning.as_deref());
+    let detail = rendered_status(&output, request.notice, warning);
     current.snapshot.detail = detail.clone();
     Ok((output, detail))
 }

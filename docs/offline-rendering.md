@@ -45,7 +45,7 @@ dock layout, selected editor page, the Spiral's framing and other workspace sett
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.
 In **Exports**, **Queue last take** and **Queue paths** capture the selected current, saved or recorded appearance,
 with the current Video output settings and dimensions.
-Under **Use each take's recorded appearance** only Output size, Tail and Encoder are the current ones:
+Under **Use each take's recorded appearance** only Output size, Tail, Encoder and Archive copy are the current ones:
 each take keeps the frame (aspect, lattice side and split) and Video history it was recorded with.
 A take recorded without a look exports as an ordinary queued export.
 Camera movement is recorded through host parameters;
@@ -351,6 +351,19 @@ The GPU draws each frame while the CPU builds and submits the next one and emits
 so `readback` is only the drawing those did not cover, and a large `readback` share means the GPU is the bottleneck.
 The shares are of the drawing clock;
 the gap between it and the total is setup plus the encoder's backlog after the last frame.
+
+### Archive copy
+
+With the appearance's **Archive copy** on, a video export also writes `<name>-archive.mp4` beside it:
+the finished video re-encoded to AV1 (SVT-AV1, preset 6, CRF 28) with its soundtrack copied as it is.
+At 2560x1440@60 it is about a sixteenth of the video's size, and it encodes at about half a second per second of video, after the video and on the same progress bar.
+It is for keeping once the video is uploaded, not for uploading:
+YouTube's upload guidance names only H.264, and the copy has already lost a little that a re-encode would add to.
+It needs an ffmpeg with `libsvtav1`, which Homebrew's has;
+a copy that fails is removed and reported as a warning, and the video still saves.
+The copy's chroma position reads unspecified, because AV1 in MP4 cannot say "centred";
+macOS plays AV1 natively only on M3 and later.
+`docs/intent/video-export.md` has the measurements behind the settings.
 
 ## Recorded audio
 

@@ -453,6 +453,13 @@ fn render_controls(
                 ),
             ],
         );
+        ui.checkbox(&mut state.appearance.render.archive, "Archive copy").on_hover_text(
+            "Also save a small AV1 copy beside the video as <name>-archive.mp4, to keep once the video is uploaded. \
+             About a sixteenth of the size and close to the video's quality, but upload the video itself: \
+             YouTube re-encodes what it gets, and the copy has already lost a little. \
+             Adds about half a second of encoding per second of video. \
+             Needs ffmpeg with SVT-AV1, as Homebrew's has; without it the video still saves and the status line says why.",
+        );
         if !interaction.take.supported {
             return;
         }
@@ -643,7 +650,7 @@ fn record_controls(
 /// What both Queue buttons answer a hover with: what a queued job carries,
 /// and what the queue survives.
 const QUEUE_HINT: &str = "Every job captures the selected look and the current Video settings. \
-     With each take's recorded appearance, only Output size, Tail and Encoder are the current ones: the take keeps the frame and Video history it was recorded with, and one recorded without a look exports as an ordinary queued export. \
+     With each take's recorded appearance, only Output size, Tail, Encoder and Archive copy are the current ones: the take keeps the frame and Video history it was recorded with, and one recorded without a look exports as an ordinary queued export. \
      Recorded camera movement wins during replay. \
      The queue survives closing this editor, but removing the plugin or closing the project cancels unfinished jobs, and there is no resume after a crash.";
 
@@ -793,7 +800,7 @@ pub(crate) fn capture_export(
 ) -> Result<crate::ExportAction, String> {
     // A recorded look keeps its own frame and Video history, so queueing it
     // does not recompose the take to the pane's aspect and split; only the
-    // pane's Output size, Tail and Encoder apply. A take that carries none has
+    // pane's Output size, Tail, Encoder and Archive copy apply. A take that carries none has
     // no frame to keep and exports as an ordinary queued export.
     let recorded = if interaction.take.export_recorded {
         let header = harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
@@ -1459,7 +1466,7 @@ mod export_tests {
     /// Encoder from the pane. Recorded as 9:16 with the lattice on top and the
     /// scrolling history, against a pane at the fresh 16:9 and Fit video.
     #[test]
-    fn a_recorded_look_keeps_its_frame_and_takes_the_panes_size_tail_and_encoder() {
+    fn a_recorded_look_keeps_its_frame_and_takes_the_panes_output_settings() {
         use crate::{LatticeSide, SpectrogramRender, VideoEncoder};
         let mut recorded = crate::AppearanceDocument::default();
         recorded.render.frame.aspect_w = 9;
@@ -1470,6 +1477,7 @@ mod export_tests {
         recorded.render.short_edge = 720;
         recorded.render.tail = 5.0;
         recorded.render.encoder = VideoEncoder::X264;
+        recorded.render.archive = false;
         let path = std::env::temp_dir()
             .join(format!("harmonigraph-recorded-queue-{}.take", std::process::id()));
         let header = harmonigraph_take::Header {
@@ -1482,6 +1490,7 @@ mod export_tests {
         pane.render.short_edge = 1080;
         pane.render.tail = 2.0;
         pane.render.encoder = VideoEncoder::Hardware;
+        pane.render.archive = true;
         let mut interaction = crate::Interaction::default();
         interaction.take.export_recorded = true;
         let queued = capture_export(&pane, &interaction, &path).unwrap();
@@ -1499,6 +1508,7 @@ mod export_tests {
         assert_eq!(render.short_edge, 1080);
         assert_eq!(render.tail, 2.0);
         assert_eq!(render.encoder, VideoEncoder::Hardware);
+        assert!(render.archive);
         assert_eq!(size, [1080, 1920]);
     }
 
