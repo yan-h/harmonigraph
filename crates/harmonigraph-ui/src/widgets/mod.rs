@@ -40,7 +40,7 @@ pub(crate) use label::{
     cap_trim, group_box, group_end, group_space, group_space_of, mark_heading, text_at, GROUP_GAP,
 };
 pub use layer::LayerStrip;
-pub(crate) use menu::{menu_style, more_menu};
+pub(crate) use menu::menu_style;
 pub use range::RangeBar;
 pub use rows::{button_row, checkbox, choice_row, record_button, row_field, toggle_switch};
 pub(crate) use rows::{

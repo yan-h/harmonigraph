@@ -59,20 +59,6 @@ fn text_at(out: &egui::FullOutput, needle: &str) -> Option<egui::Pos2> {
     })
 }
 
-/// Where the more button's three dots are painted: the middle of the three
-/// small circles, which is the button's centre.
-fn dots_at(out: &egui::FullOutput) -> Option<egui::Pos2> {
-    let dots: Vec<_> = out
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Circle(c) if (c.radius - 1.3).abs() < 0.01 => Some(c.center),
-            _ => None,
-        })
-        .collect();
-    (dots.len() == 3).then(|| dots[1])
-}
-
 /// One click at `at`: the pointer arrives a frame before the press, because
 /// egui resolves the widget under it from the previous pass.
 fn click(frame: &mut impl FnMut(Vec<egui::Event>) -> egui::FullOutput, at: egui::Pos2) {
@@ -85,7 +71,7 @@ fn click(frame: &mut impl FnMut(Vec<egui::Event>) -> egui::FullOutput, at: egui:
 fn every_map_control_needs_no_fold_opened() {
     // A fresh context, where a fold would start closed.
     let ctx = themed();
-    let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, 1);
+    let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, 2);
     let mut state = fresh_picture();
     let size = egui::vec2(420.0, 2000.0);
     let mut frame = |events| {
@@ -96,9 +82,12 @@ fn every_map_control_needs_no_fold_opened() {
     frame(vec![]);
     let out = frame(vec![]);
     assert!(text_at(&out, "Fifths").is_some(), "the offsets must be drawn without a fold");
-    for (label, expected) in
-        [("Edit shape on lattice", "EditShape(true)"), ("Duplicate as new map", "Duplicate")]
-    {
+    for (label, expected) in [
+        ("Map 1", "Select(1)"),
+        ("Move down", "Move(0, Later)"),
+        ("Edit shape on lattice", "EditShape(true)"),
+        ("Duplicate as new map", "Duplicate"),
+    ] {
         let at = text_at(&out, label).unwrap_or_else(|| panic!("{label} must be visible"));
         click(&mut frame, at);
         let last = params.edits.borrow_mut().pop().map(|edit| format!("{edit:?}"));
@@ -134,13 +123,12 @@ fn the_learn_ring_is_drawn_only_where_learn_acts() {
     assert!(!learn_ring_drawn(TuningEngine::LatticeMap), "Lattice Map suspends Learn");
 }
 
-/// Delete waits behind the dots and a confirming submenu, and the last saved
-/// map offers neither.
+/// Delete is one click on the selected map, and the last saved map cannot
+/// be deleted.
 #[test]
 fn the_last_saved_map_cannot_be_deleted() {
     for (maps, expected) in [(1, None), (2, Some("Delete(0)"))] {
         let ctx = themed();
-        ctx.all_styles_mut(|style| style.animation_time = 0.0);
         let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, maps);
         let mut state = fresh_picture();
         let size = egui::vec2(420.0, 2000.0);
@@ -156,17 +144,8 @@ fn the_last_saved_map_cannot_be_deleted() {
             )
         };
         frame(vec![]);
-        let dots = dots_at(&frame(vec![])).expect("the more button");
-        click(&mut frame, dots);
-        let delete = text_at(&frame(vec![]), "Delete map").expect("the open menu");
+        let delete = text_at(&frame(vec![]), "Delete map").expect("the delete button");
         click(&mut frame, delete);
-        let confirm = text_at(&frame(vec![]), "Delete “");
-        assert_eq!(confirm.is_some(), maps > 1, "{maps} saved maps: the confirmation");
-        if let Some(confirm) = confirm {
-            click(&mut frame, confirm);
-            let after = frame(vec![]);
-            assert!(text_at(&after, "Delete map").is_none(), "confirming must close the menu");
-        }
         let sent = params.edits.borrow().last().map(|edit| format!("{edit:?}"));
         assert_eq!(sent.as_deref(), expected, "{maps} saved maps");
     }
@@ -206,7 +185,7 @@ fn map_status_lines_never_move_a_map_control() {
 #[derive(Clone, Copy, Debug)]
 enum Leave {
     Key(egui::Key),
-    /// A click on the selector's number, drawn left of the field and so
+    /// A click on the selected row's number, drawn left of the field and so
     /// before it in the frame.
     Number,
     /// Cmd-click on a bar above, which opens a typed entry that takes the
