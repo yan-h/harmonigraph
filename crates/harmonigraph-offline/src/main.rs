@@ -502,6 +502,13 @@ fn export(args: Args) -> Result<(), String> {
             audio_offset,
         },
     )?;
+    // Only a video has an archive copy: a PNG sequence or raw stream is
+    // already the material one would be made from.
+    let archive = (render_config.archive && matches!(sink, Sink::Video { .. }))
+        .then(|| harmonigraph_take::render::archive_path(&out));
+    // One bar over both encodes: the archive pass is as long again in frames,
+    // and a bar that sat full through it would read as a hang.
+    let progress_total = if archive.is_some() { total * 2 } else { total };
 
     let [w, h] = size;
     // The take's own length: `duration()` is where it ENDS on the host's
@@ -513,7 +520,7 @@ fn export(args: Args) -> Result<(), String> {
         args.fps,
         out.display(),
     );
-    eprintln!("{}", RenderProgress { done: 0, total });
+    eprintln!("{}", RenderProgress { done: 0, total: progress_total });
     // Progress on one rewritten line; renders are long enough that silence
     // reads as a hang.
     //
@@ -524,8 +531,8 @@ fn export(args: Args) -> Result<(), String> {
     let mut written = 0u64;
     let mut report = |done: u64| {
         written = done;
-        if done != shown.0 && (done == total || shown.1.elapsed() >= PROGRESS_PERIOD) {
-            eprint!("\r{progress}", progress = RenderProgress { done, total });
+        if done != shown.0 && (done == progress_total || shown.1.elapsed() >= PROGRESS_PERIOD) {
+            eprint!("\r{progress}", progress = RenderProgress { done, total: progress_total });
             shown = (done, std::time::Instant::now());
         }
     };
@@ -553,13 +560,13 @@ fn export(args: Args) -> Result<(), String> {
              raise --end (or drop it to render the whole take)"
         );
     }
-    // Always publish the encoder's final count, even inside the reporting period.
-    eprintln!("{}", RenderProgress { done: written, total });
-    eprintln!("done: {written} frames -> {}", out.display());
+    // `finish` held the video's count to `total`.
+    eprintln!("done: {total} frames -> {}", out.display());
     // Where the time went. Printed for every export rather than behind a flag:
     // a number nobody asked for is what makes the next question askable, and
     // the alternative is that the tool's cost stays unattributed exactly as
-    // long as nobody remembers the flag exists (#895, stream B).
+    // long as nobody remembers the flag exists (#895, stream B). Before the
+    // archive pass, whose time is its own line rather than a gap in this one.
     eprintln!("{}", stages.summary(began.elapsed()));
     if matches!(out.extension().and_then(|e| e.to_str()), Some("rgba") | Some("raw")) {
         eprintln!(
@@ -568,6 +575,23 @@ fn export(args: Args) -> Result<(), String> {
             out.display()
         );
     }
+    // After the video, which is the export: a copy that fails leaves it whole
+    // and says why on the line the Video pane keeps.
+    if let Some(archive) = &archive {
+        let began = std::time::Instant::now();
+        match sink::archive(&out, archive, args.ffmpeg.as_deref(), total, |count| {
+            report(total + count)
+        }) {
+            Ok(()) => eprintln!(
+                "\narchive: {} in {:.1}s",
+                archive.display(),
+                began.elapsed().as_secs_f64()
+            ),
+            Err(error) => eprintln!("\n{}{error}", harmonigraph_take::render::ARCHIVE_FAILED),
+        }
+    }
+    // Always publish the encoder's final count, even inside the reporting period.
+    eprintln!("{}", RenderProgress { done: written, total: progress_total });
     Ok(())
 }
 

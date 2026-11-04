@@ -117,11 +117,11 @@ fn a_render_that_warned_carries_it_onto_the_detail_it_succeeded_with() {
         "the warning is kept BESIDE the last word, which ffmpeg has taken",
     );
 
-    let detail = rendered_detail(None, tail.warning.as_deref());
+    let detail = rendered_detail(None, tail.warning.as_deref(), None);
     assert!(detail.contains("note history 6..=8 is missing"), "{detail}");
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
-    assert_eq!(rendered_detail(None, None), "");
+    assert_eq!(rendered_detail(None, None, None), "");
 }
 
 /// A render killed mid-frame leaves its last counter unterminated. It is
@@ -242,6 +242,8 @@ look=$(cat "$5")
 case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
+ archive) printf 'copy' > "${3%.mp4}-archive.mp4" ;;
+ nocopy) echo 'warning: take ends mid-record' >&2; echo 'warning: no archive copy: ffmpeg exited with 1: Unknown encoder' >&2 ;;
 esac
 printf '%s %s' "$look" "${6:-unsized}" > "$3"
 echo 'progress: 10/10 frames (100%)' >&2
@@ -339,6 +341,52 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
     assert_eq!(std::fs::read_to_string(retried.output).unwrap(), "retry unsized");
     assert_eq!(std::fs::read_to_string(f.dir.join("music.mp4")).unwrap(), "existing video");
     assert_eq!(std::fs::read_link(f.dir.join("music-1.mp4")).unwrap(), f.dir.join("missing-video"));
+}
+
+/// The renderer leaves an archive copy beside its output when the look asks;
+/// the queue publishes it beside the video under the video's name, and a name
+/// whose copy is already taken is skipped like a taken video's.
+#[cfg(unix)]
+#[test]
+fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
+    let f = Fixture::new("archive");
+    std::fs::write(f.dir.join("music-archive.mp4"), "earlier copy").unwrap();
+    let gate = f.control.running.lock();
+    f.enqueue(f.request("archive"));
+    f.enqueue(f.request("plain"));
+    assert_eq!(f.jobs()[0].output, f.dir.join("music-1.mp4"));
+    assert_eq!(f.jobs()[1].output, f.dir.join("music-2.mp4"));
+    // Another writer takes each chosen name's copy after enqueue: a plain
+    // export must not land beside a copy that is not its own either.
+    std::fs::write(f.dir.join("music-1-archive.mp4"), "raced copy").unwrap();
+    std::fs::write(f.dir.join("music-2-archive.mp4"), "raced plain").unwrap();
+    drop(gate);
+    f.finished();
+    let jobs = f.jobs();
+    assert!(jobs.iter().all(|j| j.state == ExportStatus::Completed), "{jobs:?}");
+    assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "archive unsized");
+    assert_eq!(std::fs::read_to_string(archive_path(&jobs[0].output)).unwrap(), "copy");
+    assert!(!f.dir.join("music-1.mp4").exists());
+    assert_eq!(std::fs::read_to_string(f.dir.join("music-archive.mp4")).unwrap(), "earlier copy");
+    assert_eq!(std::fs::read_to_string(f.dir.join("music-1-archive.mp4")).unwrap(), "raced copy");
+    assert!(!f.dir.join("music-2.mp4").exists());
+    assert_eq!(std::fs::read_to_string(&jobs[1].output).unwrap(), "plain unsized");
+    assert!(!archive_path(&jobs[1].output).exists());
+    assert_eq!(std::fs::read_to_string(f.dir.join("music-2-archive.mp4")).unwrap(), "raced plain");
+}
+
+/// A copy that failed says so on its job's detail even when the take warned
+/// first, and the take's warning stays beside it.
+#[cfg(unix)]
+#[test]
+fn a_failed_archive_copy_is_in_the_detail_beside_the_takes_warning() {
+    let f = Fixture::new("nocopy");
+    f.enqueue(f.request("nocopy"));
+    f.finished();
+    let job = &f.jobs()[0];
+    assert_eq!(job.state, ExportStatus::Completed);
+    assert!(job.detail.contains("take ends mid-record"), "{}", job.detail);
+    assert!(job.detail.contains("no archive copy: ffmpeg exited"), "{}", job.detail);
 }
 
 #[cfg(unix)]

@@ -313,10 +313,12 @@ Host map-offset parameters explicitly name whole generator steps rather than tun
 Video keeps **Finish recording** and **Stop at bar** with Record take.
 Finishing a take starts rendering;
 **Queue last take** in **Exports** renders the last take again with the selected look and the current video settings.
-Under **Use each take's recorded appearance** only Output size, Tail and Encoder are the current ones:
+Under **Use each take's recorded appearance** only Output size, Tail, Encoder and Archive copy are the current ones:
 the take keeps the frame and Video history it was recorded with.
 A take recorded without a look exports as an ordinary queued export.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
+**Archive copy** also saves a small AV1 copy beside each video, to keep once the video is uploaded;
+see [Archive copy](offline-rendering.md#archive-copy).
 **Frame notes** pans and zooms the lattice onto every note drawn since Clear display history and sizes the lattice's share of the frame to fit them,
 so play the piece through first.
 Shift-drag either picture to an edge of the preview to arrange the pictures.

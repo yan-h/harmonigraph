@@ -266,5 +266,6 @@
         short_edge: 1440,
         tail: 0.0,
         encoder: Hardware,
+        archive: false,
     ),
 )

@@ -21,3 +21,9 @@
 - Hardware stays the fresh Encoder only if its keyframes do not pop: measure the keyframe grey change on the #833 take by #1411's method, and if it is worse than x264 with `-tune grain`, give Hardware a longer GOP or make x264 fresh again. #1635 Video Q2, #1637
 - Keep Clear display history beside Record take: it clears what you see while recording, so the screen matches the export, which always starts from an empty picture. #1635 Video Q3, #1637
 - Outcome, measured 2026-11-03: Hardware's keyframe pop is no worse than x264's with `-tune grain` (0.225 against 0.255 grey levels of excess change at a keyframe, 720p60, `take-2026-10-21_14-31-37`, since #833's take is gone), so Hardware stays the fresh Encoder and neither GOP changes. #1635 Video Q2, #1637
+
+## 2026-11-03 (archive copy)
+
+- Upload the full H.264 video; keep a small AV1 copy (SVT-AV1, preset 6, CRF 28) rather than the video once it is uploaded. **Archive copy** writes it beside each export, off fresh, and a recorded look takes it from the Video pane like the Encoder.
+- Why AV1 from the finished video, measured on a 20 s slice of `take-2026-11-04_04-22-42` at 2560x1440@60: 6.3% of the video's bytes at VMAF 96.3 (worst frame 95.8) against it. x265 at CRF 20 matched that at 9.7%; 10-bit, preset 4 and `tune=0` bought nothing. Encoding it from the finished video copies the soundtrack and its alignment as they are.
+- Why not upload the copy instead: YouTube names only H.264 for uploads, and a simulated YouTube re-encode lost 0.5-0.8 VMAF more from the copy than from the full video.
