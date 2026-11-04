@@ -963,7 +963,7 @@ impl Breathing {
     /// `phase` is how far the breathing has run: `Breathing speed` built up
     /// over the frames, so a speed drag goes on from where the light is.
     pub fn at(self, position: LatticePos, phase: f64) -> f32 {
-        if self.amount == 0.0 || self.speed == 0.0 {
+        if self.amount == 0.0 {
             return 1.0;
         }
         let place = f64::from(position.fives) * 2.173

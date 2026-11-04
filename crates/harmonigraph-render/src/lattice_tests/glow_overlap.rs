@@ -360,14 +360,21 @@ fn a_texture_speed_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
 #[test]
 fn a_breathing_speed_nudge_minutes_in_moves_the_light_one_frame_at_most() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    let a = &mut scene.view.atmosphere;
-    a.material_amount = 0.0;
-    a.texture_depth = 0.0;
-    a.breath_amount = 1.0;
-    let (carried, restarted) = nudged(&mut shooter, scene, |a| a.breath_speed *= 0.99);
-    assert!(carried <= 2, "sudden channel step {carried}");
-    assert!(restarted > 10, "a restart lands there too ({restarted})");
+    for stopping in [false, true] {
+        let mut scene = scene(&[1.0, 1.0], 0.75, true);
+        let a = &mut scene.view.atmosphere;
+        a.material_amount = 0.0;
+        a.texture_depth = 0.0;
+        a.breath_amount = 1.0;
+        if stopping {
+            a.breath_speed = 0.01;
+        }
+        let (carried, restarted) = nudged(&mut shooter, scene, |a| {
+            a.breath_speed = if stopping { 0.0 } else { a.breath_speed * 0.99 };
+        });
+        assert!(carried <= 2, "stopping={stopping}: sudden channel step {carried}");
+        assert!(restarted > 10, "stopping={stopping}: a restart lands there too ({restarted})");
+    }
 }
 
 /// A frame with no glow clock, as one with the glow switched off draws, holds
