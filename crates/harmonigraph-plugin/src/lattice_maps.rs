@@ -231,7 +231,19 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         // each one has to move the revision two derived values are keyed on:
         // `MapEditor::names` here, and `AudioMaps::bank` on the audio thread.
         MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
-        MapEdit::Delete(id) => params.maps.write().delete(id),
+        // Deleting the selected map selects its neighbour, as Duplicate selects
+        // its copy, rather than leaving new attacks on a map that is gone.
+        MapEdit::Delete(id) => {
+            let mut document = params.maps.write();
+            // Only a live map has a neighbour, so a delete that found one went through.
+            let neighbour = document.neighbour(id).filter(|_| id == selected);
+            let deleted = document.delete(id);
+            drop(document);
+            if let Some(neighbour) = neighbour {
+                set(&params.map, neighbour as i32);
+            }
+            deleted
+        }
         MapEdit::Move(id, step) => params.maps.write().move_by(id, step),
     };
     if document_changed {

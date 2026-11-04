@@ -2467,6 +2467,15 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
             !crate::lattice_maps::view(&plugin.params).can_undo,
             "undo never reaches past the selected map to slot 1's edits"
         );
+        crate::lattice_maps::edit(&plugin.params, &setter, MapEdit::Delete(2));
+    });
+    device.run(96, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let playback = *plugin.params.map_playback.lock();
+        assert_eq!(playback.selected, 1, "deleting the last map in order selects the previous");
+        let moved = crate::lattice_maps::offsets(&plugin.params).total();
+        let neighbour = LatticeMap { position: moved, ..changed };
+        assert_eq!(playback.map, Some(neighbour), "new attacks are tuned by the neighbour");
     });
     device.load(saved, false);
     device.wrapper().test_inspect_plugin(|plugin| {

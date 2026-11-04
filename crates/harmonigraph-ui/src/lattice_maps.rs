@@ -166,6 +166,13 @@ impl MapDocument {
         self.touch();
         true
     }
+    /// The live map to select once `id` is deleted: the next in display
+    /// order, else the previous, else none when `id` is the last one left.
+    pub fn neighbour(&self, id: usize) -> Option<usize> {
+        let names = self.names();
+        let index = names.iter().position(|(item, _)| *item == id)?;
+        names.get(index + 1).or(index.checked_sub(1).map(|i| &names[i])).map(|(id, _)| *id)
+    }
     /// Move `id` one place earlier or later in the display order, rebuilding
     /// `order` from the visible sequence so a hand-edited file's stray entries
     /// do not survive the swap. A move past either end changes nothing.
@@ -471,6 +478,26 @@ mod tests {
         assert_eq!(order(&doc), [0, 2, 1]);
         assert!(doc.move_by(1, MapMove::Earlier));
         assert_eq!(order(&doc), [0, 1, 2]);
+    }
+
+    #[test]
+    fn a_deleted_maps_neighbour_is_the_next_in_display_order_else_the_previous() {
+        let mut doc = MapDocument::default();
+        for name in ["B", "C", "D"] {
+            doc.capture(LatticeMap::default(), name.into());
+        }
+        // Display order 0, 2, 1, 3: the neighbour follows the order, not the ids.
+        assert!(doc.move_by(2, MapMove::Earlier));
+        assert_eq!(doc.neighbour(2), Some(1));
+        assert_eq!(doc.neighbour(0), Some(2));
+        assert_eq!(doc.neighbour(3), Some(1), "the last map has only a previous one");
+        assert!(doc.delete(1));
+        assert_eq!(doc.neighbour(2), Some(3), "a deleted map is never the neighbour");
+        assert_eq!(doc.neighbour(1), None, "a deleted map has no place to start from");
+        for id in [0, 2] {
+            assert!(doc.delete(id));
+        }
+        assert_eq!(doc.neighbour(3), None, "the only map left has no neighbour");
     }
 
     /// An edit that changes nothing keeps the revision, which is what keeps
