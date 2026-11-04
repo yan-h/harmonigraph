@@ -297,12 +297,14 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         }
         assert_no_alloc(|| worker.close(1));
         worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
-        wait_for("successful seek render", || {
+        let completed = || {
             let jobs = worker.control.as_ref().unwrap().export_jobs();
-            jobs.iter().any(|job| job.state == harmonigraph_take::render::ExportStatus::Completed)
-        });
+            jobs.into_iter()
+                .find(|job| job.state == harmonigraph_take::render::ExportStatus::Completed)
+        };
+        wait_for("successful seek render", || completed().is_some());
+        let detail = completed().unwrap().detail;
         let control = worker.control.as_ref().unwrap();
-        let detail = &control.export_jobs()[0].detail;
         assert!(detail.contains("take ended before a forward transport seek"), "{detail}");
         assert!(detail.contains("warning: fixture warning"), "{detail}");
         assert!(!worker.fence.failed.load(Ordering::Acquire));

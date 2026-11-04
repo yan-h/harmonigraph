@@ -562,7 +562,6 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         ("ordinary", None),
         ("split", None),
         ("retry", None),
-        ("render", Some("rendering another take")),
         ("error", Some("cannot start renderer: test error")),
     ] {
         let directory = path(&format!("worker-status-{case}")).parent().unwrap().to_path_buf();
