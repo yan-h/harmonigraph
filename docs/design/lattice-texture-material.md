@@ -48,8 +48,9 @@ dim effect controls when glow reach or gain is zero.
 Preserve the existing glow-statistics and resolve passes.
 The resolve applies only the chosen texture to combined note light.
 The material pass consumes that resolved texture using the existing optional source target and geometry tiles.
-Compute texture and material drift independently from the existing decorative clock.
-Keep texture uniforms distinct from material uniforms so neither stage borrows the other's depth, scale or clock.
+Accumulate texture and material drift on the pane's shared travel clock,
+with a separate phase for each stage.
+Keep texture uniforms distinct from material uniforms so neither stage borrows the other's depth, scale or phase.
 All materials use the same resolved note illumination.
 The former per-node source roughness and its dedicated splat pipeline are removed.
 Materials drift at constant screen direction using the spectrogram’s motion calculation;

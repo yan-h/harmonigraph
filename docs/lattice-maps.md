@@ -24,6 +24,9 @@ Escape keeps the old name.
 Each row ends in three buttons acting on that row's map, selected or not:
 the up and down arrows change only the list's order,
 and the cross deletes the map at once, which cannot be undone.
+Deleting the selected map selects the next map in display order,
+or the previous map when it was last.
+The last saved map cannot be deleted.
 Each lattice click then edits the selected saved map itself:
 the destination's fixed-generator MIDI class determines which assignment moves,
 and the edit is saved at once,
@@ -232,6 +235,9 @@ Slot indices are stable identities.
 Rename and display-order changes do not change them.
 Delete leaves a tombstone;
 no slot is ever recycled.
+Deleting the selected map selects its next live neighbour in display order,
+or the previous when it was last;
+the last live map cannot be deleted.
 An unused,
 deleted or invalid slot adds no correction and the UI reports it as unavailable.
 At capacity Duplicate as new map is disabled,

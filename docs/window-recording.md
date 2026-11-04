@@ -59,8 +59,10 @@ which contains a ready-made capture texture + readback buffer + blit (upstream `
 Frame pacing.
 The plugin repaints **on demand**, not at a fixed rate:
 continuously only while voices are sounding or decaying, otherwise a 50 ms poll (`IDLE_REPAINT_INTERVAL` in `crates/harmonigraph-ui/src/lib.rs`), on top of frames driven by the view's display link on macOS (one per refresh, `vendor/baseview/src/platform/macos/view.rs`) and a Fifo swapchain.
-Presents are also skipped outright on Occluded/Outdated/Lost (`renderer.rs:214-262`) —
-the editor already logs these stalls (`note_frame` in `editor/shared.rs`).
+Presents are also skipped outright on Occluded/Outdated/Lost (`renderer.rs:214-262`).
+The editor logs gaps after paced GUI frames (`note_frame` in `editor/shared.rs`),
+not skipped presents;
+a frame that runs on time but skips its present produces no such warning.
 
 A recorder that counts frames will therefore produce video that drifts against the music.
 Any live-capture route **must** force continuous repaint while recording, stamp each frame with a real timestamp, and let the encoder normalize to constant frame rate.
