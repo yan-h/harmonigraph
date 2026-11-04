@@ -13,6 +13,10 @@ pub struct VisualRuntime {
     /// Arrow keys pressed over the lattice, as one map translation.
     pub map_translation:
         Option<(harmonigraph_core::LatticePos, crate::lattice_maps::MapOffsetLane)>,
+    /// Whether the lattice takes the arrow keys this frame, to translate the
+    /// map: the shell then claims [`MAP_ARROW_SHORTCUTS`](crate::MAP_ARROW_SHORTCUTS)
+    /// from the host, which would act on them too. Cleared before the panes run.
+    pub map_arrows: bool,
     pub console: Console,
     pub tracker: NoteTracker,
     /// Snapshot of the tuning parameters, refreshed each frame in
@@ -57,6 +61,7 @@ impl Default for VisualRuntime {
             lattice_maps: None,
             map_destination: None,
             map_translation: None,
+            map_arrows: false,
             console: Console::default(),
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),

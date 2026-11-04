@@ -271,6 +271,7 @@ pub fn root_ui(
     // Spectral pane not on screen at all) reports zero notes rather than
     // whatever the last frame that had one reported.
     state.picture.instruments.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
+    state.picture.runtime.map_arrows = false;
 
     // Hide chrome for a continuous live picture. Tab stays available even
     // when hidden bars leave no route to System settings or a folded pane.
@@ -538,5 +539,23 @@ pub use widgets::plot_handle_focused;
 /// Toggles the hidden chrome, so the native shell keeps it from the host too.
 pub const FRAMELESS_SHORTCUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Tab);
+
+/// The arrows that move a Lattice Map while the pointer is over the lattice
+/// (`VisualRuntime::map_arrows`), bare and with Shift. The lattice takes
+/// exactly these, so the native shell claims exactly these from the host.
+pub const MAP_ARROW_SHORTCUTS: [egui::KeyboardShortcut; 8] = {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let (bare, shift) = (Modifiers::NONE, Modifiers::SHIFT);
+    [
+        KeyboardShortcut::new(bare, Key::ArrowLeft),
+        KeyboardShortcut::new(bare, Key::ArrowRight),
+        KeyboardShortcut::new(bare, Key::ArrowUp),
+        KeyboardShortcut::new(bare, Key::ArrowDown),
+        KeyboardShortcut::new(shift, Key::ArrowLeft),
+        KeyboardShortcut::new(shift, Key::ArrowRight),
+        KeyboardShortcut::new(shift, Key::ArrowUp),
+        KeyboardShortcut::new(shift, Key::ArrowDown),
+    ]
+};
 mod camera_movement;
 pub use appearance::AppearanceDocument;
