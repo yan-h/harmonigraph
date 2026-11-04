@@ -31,8 +31,8 @@ use lifecycle::{Action, End, History, Observation, Policy, State};
 /// scheduling delays; the separate canonical publication lane has its own cap.
 const TAKE_RING_CAPACITY: usize = 1 << 16;
 
-const FINISHING: &str = "finishing — waiting for the recording prefix";
-const FINISHING_PREVIOUS: &str = "finishing the previous take — waiting for its recording prefix";
+const FINISHING: &str = "finishing…";
+const FINISHING_PREVIOUS: &str = "finishing the previous take…";
 const CONFIGURATION_FAILURE: &str =
     "recording incomplete: configuration/audio ownership failed; no render started";
 
@@ -817,14 +817,7 @@ impl Control {
         request: RenderRequest,
         size: Option<[u32; 2]>,
     ) {
-        spawn_render(
-            request,
-            path,
-            size,
-            self.status.clone(),
-            self.progress.clone(),
-            self.render.clone(),
-        );
+        spawn_render(request, path, size, self.progress.clone(), self.render.clone());
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
         self.render.snapshots(&self.progress)
@@ -833,7 +826,7 @@ impl Control {
         self.render.cancel_job(id);
     }
     pub fn retry_export(&self, id: u64) {
-        self.render.retry(id, self.status.clone(), self.progress.clone());
+        self.render.retry(id, self.progress.clone());
     }
     pub fn clear_finished_exports(&self) {
         self.render.clear_finished();
@@ -897,7 +890,7 @@ impl Control {
         self.latches.clear();
         // Finishing barred Start until every old armed callback retired.
         self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
-        *self.status.lock() = "armed — waiting for the transport to roll".into();
+        *self.status.lock() = "waiting for playback".into();
     }
 
     /// Stop recording and render the finished take to video.
@@ -933,11 +926,11 @@ impl Control {
         } else if dropped > 0 {
             format!("RECORDS DROPPED ({dropped}) — the take is incomplete")
         } else if rolling {
-            format!("recording — {events} events")
+            format!("recording · {events} events")
         } else if events > 0 {
-            format!("paused ({events} events) — transport stopped")
+            format!("paused · {events} events")
         } else {
-            "armed — waiting for the transport to roll".into()
+            "waiting for playback".into()
         };
     }
 }

@@ -1236,7 +1236,7 @@ fn re_checking_armed_mid_take_does_not_reset_the_take() {
 /// waiting, and from one that captured something and then stopped.
 ///
 /// It is the only feedback there is that arming while the transport is
-/// parked records nothing — "paused (0 events)" and "armed — waiting" look
+/// parked records nothing — "paused · 0 events" and "waiting for playback" look
 /// alike but mean opposite things about whether the take has anything in
 /// it.
 #[test]
@@ -1245,15 +1245,15 @@ fn the_status_line_separates_waiting_from_paused_from_recording() {
     ctrl.recording.store(true, Ordering::Relaxed);
 
     ctrl.tick(false, 0);
-    assert_eq!(ctrl.status(), "armed — waiting for the transport to roll");
+    assert_eq!(ctrl.status(), "waiting for playback");
 
     ctrl.tick(true, 12);
-    assert_eq!(ctrl.status(), "recording — 12 events");
+    assert_eq!(ctrl.status(), "recording · 12 events");
 
     // Rolled, then stopped: what it caught is worth saying, and it is not
     // the same as never having started.
     ctrl.tick(false, 12);
-    assert_eq!(ctrl.status(), "paused (12 events) — transport stopped");
+    assert_eq!(ctrl.status(), "paused · 12 events");
 }
 
 #[test]

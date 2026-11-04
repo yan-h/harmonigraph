@@ -63,7 +63,7 @@ fn the_rewritten_counter_reaches_the_bar_as_the_render_goes() {
     assert_eq!(progress.read(), None, "no bar once nothing is rendering");
 }
 
-/// What the status line shows when a render fails is the renderer's own
+/// What a job's detail shows when its render fails is the renderer's own
 /// last word — which means the counters have to be passed over on the way
 /// to it, however recently they were printed.
 #[test]
@@ -81,7 +81,7 @@ fn a_failed_renders_last_word_is_kept_over_the_counters() {
 }
 
 /// #712's other half: a render that WARNED and then succeeded says so on
-/// the status line, which is the only place a plugin user sees the
+/// its job's detail line, which is the only place a plugin user sees the
 /// renderer's output.
 ///
 /// The fixture is shaped like the real stream rather than like a warning on
@@ -91,7 +91,7 @@ fn a_failed_renders_last_word_is_kept_over_the_counters() {
 /// successful render. `last` is therefore NOT the warning by the end, which
 /// is the whole reason the warning is carried separately.
 #[test]
-fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
+fn a_render_that_warned_carries_it_onto_the_detail_it_succeeded_with() {
     let warning = "warning: take-1.take: note history 6..=8 is missing \
                        (PublicationFull) — rendering the records that survived.";
     let muxed = "video:512kB audio:0kB subtitle:0kB muxing overhead: 1.234567%";
@@ -117,16 +117,11 @@ fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
         "the warning is kept BESIDE the last word, which ffmpeg has taken",
     );
 
-    let status =
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, tail.warning.as_deref());
-    assert!(status.contains("rendered /takes/take-1.mp4"), "{status}");
-    assert!(status.contains("note history 6..=8 is missing"), "{status}");
+    let detail = rendered_detail(None, tail.warning.as_deref());
+    assert!(detail.contains("note history 6..=8 is missing"), "{detail}");
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
-    assert_eq!(
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, None),
-        "rendered /takes/take-1.mp4",
-    );
+    assert_eq!(rendered_detail(None, None), "");
 }
 
 /// A render killed mid-frame leaves its last counter unterminated. It is
@@ -155,7 +150,7 @@ fn the_default_renderer_path_is_where_update_plugin_installs_it() {
 /// `Interrupted` means a signal landed — and one does, every time
 /// `cancel_in_flight` kills a child — not that the renderer stopped
 /// talking. Treating it as the end would freeze the bar partway and leave
-/// the status line holding whatever had arrived before the signal, for a
+/// the job's detail holding whatever had arrived before the signal, for a
 /// render still going perfectly well. Treating a REAL error as a signal is
 /// the opposite mistake: the loop would go round again on a pipe that has
 /// nothing more to give.
@@ -233,7 +228,6 @@ struct Fixture {
     dir: std::path::PathBuf,
     control: Arc<RenderControl>,
     progress: Arc<Progress>,
-    status: Arc<Mutex<String>>,
 }
 #[cfg(unix)]
 impl Fixture {
@@ -258,7 +252,6 @@ echo 'progress: 10/10 frames (100%)' >&2
             dir,
             control: Arc::new(RenderControl::default()),
             progress: Arc::new(Progress::default()),
-            status: Arc::new(Mutex::new(String::new())),
         }
     }
     fn request(&self, look: &str) -> RenderRequest {
@@ -276,7 +269,6 @@ echo 'progress: 10/10 frames (100%)' >&2
             request,
             self.dir.join("music.take"),
             size,
-            self.status.clone(),
             self.progress.clone(),
             self.control.clone(),
         );
@@ -339,7 +331,7 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
     assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first unsized");
     assert_eq!(std::fs::read_to_string(&jobs[2].output).unwrap(), "third unsized");
     assert_eq!(jobs[2].progress, RenderProgress { done: 10, total: 10 });
-    f.control.retry(2, f.status.clone(), f.progress.clone());
+    f.control.retry(2, f.progress.clone());
     f.finished();
     let retried = f.jobs().into_iter().find(|j| j.id == 2).unwrap();
     assert_eq!(retried.state, ExportStatus::Completed);
@@ -427,14 +419,7 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     .unwrap();
     let other = Arc::new(RenderControl::default());
     let other_progress = Arc::new(Progress::default());
-    spawn_render(
-        f.request("other instance"),
-        take,
-        None,
-        f.status.clone(),
-        other_progress.clone(),
-        other.clone(),
-    );
+    spawn_render(f.request("other instance"), take, None, other_progress.clone(), other.clone());
     drop(gate);
     f.finished();
     wait_until("second instance", || !other.queue.lock().working);

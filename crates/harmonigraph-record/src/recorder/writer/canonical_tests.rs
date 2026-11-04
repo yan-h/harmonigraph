@@ -4,6 +4,11 @@ use harmonigraph_core::confirmed::PitchProvenance;
 use harmonigraph_core::notes::NoteEvent;
 use publication::Lane;
 
+/// Whether an [`unlaunchable_render`] was reached: its job failed to start.
+fn could_not_run(control: &Control) -> bool {
+    control.export_jobs().iter().any(|job| job.detail.contains("could not run"))
+}
+
 fn path(name: &str) -> std::path::PathBuf {
     let directory =
         std::env::temp_dir().join(format!("harmonigraph-canonical-{}-{name}", std::process::id()));
@@ -412,7 +417,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
 ///
 /// The real worker, a real 4,096-cell overflow, and the real Stop the Video
 /// pane sends. `program` points at nothing, so the launch is observable
-/// (and instant) through the status line it leaves rather than by running a
+/// (and instant) through the export job's detail rather than by running a
 /// GPU render: the message only exists if `spawn_render` was reached at all,
 /// which is the assertion the old behaviour failed. That the resulting file
 /// warns rather than refuses is
@@ -477,13 +482,13 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
     assert!(!fence.failed.load(Ordering::Acquire));
     assert_eq!(finished, worker_take(&directory), "Render targets THIS take, not an earlier one");
     let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !control.status().contains("could not run") && std::time::Instant::now() < until {
+    while !could_not_run(&control) && std::time::Instant::now() < until {
         std::thread::yield_now();
     }
     assert!(
-        control.status().contains("could not run"),
-        "Stop-and-render reached the renderer: {}",
-        control.status()
+        could_not_run(&control),
+        "Stop-and-render reached the renderer: {:?}",
+        control.export_jobs()
     );
     let take = harmonigraph_take::Take::read(&finished).unwrap();
     let loss = take.incomplete.expect("the missing history is on the file, not silent");
@@ -636,19 +641,11 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         assert!(take.incomplete.is_none());
         assert_eq!(take.notes().count(), 2, "fixture must finish a nonempty prefix");
         let selected = if case == "split" { Pass::path_for(&file, 2) } else { file };
-        assert_eq!(
-            control.status(),
-            newer.map_or_else(|| format!("recorded {}", selected.display()), str::to_owned)
-        );
+        assert_eq!(control.status(), newer.unwrap_or_default());
         assert!(control.last_take().is_none(), "old completion handler is still parked");
         control.start(48000.0, String::new());
         assert!(control.is_recording());
         let armed = control.status();
-        // The old handler launches this take's render, which announces itself
-        // on the status line. Another take's render in flight queues it before
-        // it says anything, so what is left to read is the handler's own.
-        let render = control.render.clone();
-        let queued = render.running.lock();
         // Park at the next command poll: the old handler runs, but the new
         // Start has not opened a file or published its own writer message.
         fence.worker_before_commands.enabled.store(true, Ordering::Release);
@@ -656,13 +653,13 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         wait_for(&fence.worker_before_commands.entered);
         assert_eq!(control.last_take(), Some(selected));
         assert_eq!(control.status(), armed, "old completion overwrote the new Start");
-        // And the render really was queued behind the hold, not never launched.
-        drop(queued);
+        // And the handler really launched this take's render.
         let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !control.status().contains("could not run") && std::time::Instant::now() < until {
+        while !could_not_run(&control) && std::time::Instant::now() < until {
             std::thread::yield_now();
         }
-        assert!(control.status().contains("could not run"), "{}", control.status());
+        assert!(could_not_run(&control), "{:?}", control.export_jobs());
+        assert_eq!(control.status(), armed, "the render wrote onto the record line");
         drop(recorder);
         drop(control);
         fence.worker_before_commands.enabled.store(false, Ordering::Release);

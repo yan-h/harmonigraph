@@ -782,17 +782,16 @@ fn export_queue(
     });
     for job in &interaction.take.exports {
         ui.push_id(job.id, |ui| {
-            crate::widgets::label(
-                ui,
-                format!(
-                    "#{} {:?} · {} · {}",
-                    job.id,
-                    job.state,
-                    job.size.map_or_else(|| "captured size".into(), |[w, h]| format!("{w}×{h}")),
-                    job.take.file_name().unwrap_or_default().to_string_lossy()
-                ),
-            );
-            crate::widgets::label(ui, job.output.display().to_string());
+            // The video's name stands for both: it shares the take's stem and
+            // folder, so the name tells jobs apart and the full path is a hover
+            // away. A recorded take's own export has no size to show until the
+            // renderer reads its header, so it shows none.
+            let name = job.output.file_name().unwrap_or_default().to_string_lossy();
+            let line = match job.size {
+                Some([w, h]) => format!("{:?} · {w}×{h} · {name}", job.state),
+                None => format!("{:?} · {name}", job.state),
+            };
+            crate::widgets::label(ui, line).on_hover_text(job.output.display().to_string());
             if matches!(job.state, ExportStatus::Running | ExportStatus::Cancelling) {
                 let progress = job.progress;
                 let value = progress.fraction().map_or_else(
