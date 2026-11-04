@@ -367,8 +367,11 @@ fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
     f.enqueue(f.request("archive"));
     f.enqueue(f.request("plain"));
     assert_eq!(f.jobs()[0].output, f.dir.join("music-1.mp4"));
-    // Another writer takes the chosen name's copy after enqueue.
+    assert_eq!(f.jobs()[1].output, f.dir.join("music-2.mp4"));
+    // Another writer takes each chosen name's copy after enqueue: a plain
+    // export must not land beside a copy that is not its own either.
     std::fs::write(f.dir.join("music-1-archive.mp4"), "raced copy").unwrap();
+    std::fs::write(f.dir.join("music-2-archive.mp4"), "raced plain").unwrap();
     drop(gate);
     f.finished();
     let jobs = f.jobs();
@@ -378,7 +381,10 @@ fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
     assert!(!f.dir.join("music-1.mp4").exists());
     assert_eq!(std::fs::read_to_string(f.dir.join("music-archive.mp4")).unwrap(), "earlier copy");
     assert_eq!(std::fs::read_to_string(f.dir.join("music-1-archive.mp4")).unwrap(), "raced copy");
+    assert!(!f.dir.join("music-2.mp4").exists());
+    assert_eq!(std::fs::read_to_string(&jobs[1].output).unwrap(), "plain unsized");
     assert!(!archive_path(&jobs[1].output).exists());
+    assert_eq!(std::fs::read_to_string(f.dir.join("music-2-archive.mp4")).unwrap(), "raced plain");
 }
 
 /// A copy that failed says so on the status line even when the take warned

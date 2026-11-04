@@ -619,21 +619,35 @@ pub fn archive(
             .spawn()
             .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
         let mut encoded = Encoded::spawn(child.stdout.take().ok_or("ffmpeg stdout closed")?);
-        // Passed through as the video's ffmpeg does, and its last line kept:
-        // the failure is reported after the video, where only the line the
-        // Video pane keeps says why, and "Unknown encoder 'libsvtav1'" is
-        // ffmpeg's to say rather than a guess here.
+        // Passed through as the video's ffmpeg does, its first and last lines
+        // kept: the failure is reported after the video, where only the line
+        // the Video pane keeps says why. ffmpeg names the cause first ("Unknown
+        // encoder 'libsvtav1'") and ends on a summary ("Encoder not found").
+        // Read to the end whatever the bytes, as `follow` does: a reader that
+        // stopped early would close the pipe and kill ffmpeg on its next write.
         let said = child.stderr.take().map(|stderr| {
             std::thread::spawn(move || {
                 use std::io::BufRead;
-                let mut last = String::new();
-                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
-                    eprintln!("{line}");
-                    if !line.trim().is_empty() {
-                        last = line.trim().to_owned();
+                let (mut first, mut last) = (String::new(), String::new());
+                let mut reader = std::io::BufReader::new(stderr);
+                let mut line = Vec::new();
+                while reader.read_until(b'\n', &mut line).is_ok_and(|read| read > 0) {
+                    let text = String::from_utf8_lossy(&line);
+                    let text = text.trim();
+                    eprintln!("{text}");
+                    if !text.is_empty() {
+                        if first.is_empty() {
+                            first = text.to_owned();
+                        }
+                        last = text.to_owned();
                     }
+                    line.clear();
                 }
-                last
+                if first == last {
+                    first
+                } else {
+                    format!("{first} … {last}")
+                }
             })
         });
         encoded.drain(&mut progress);
@@ -1455,13 +1469,19 @@ mod tests {
         // Writes a partial file at the output path, its last argument.
         let dir = fake_ffmpeg(
             "archive-fails",
-            r#"for a; do last=$a; done; echo partial > "$last"; exit 3"#,
+            // ffmpeg 9's own lines for a missing encoder, in its order.
+            r#"for a; do last=$a; done; echo partial > "$last"
+echo "[vost#0:0 @ 0x1] Unknown encoder 'libsvtav1'" >&2
+echo "[vost#0:0 @ 0x1] Error selecting an encoder" >&2
+echo "Error opening output files: Encoder not found" >&2
+exit 8"#,
         );
         let copy = dir.join("video-archive.mp4");
         let ffmpeg = dir.join("ffmpeg.sh");
         let error =
             archive(&dir.join("video.mp4"), &copy, ffmpeg.to_str(), 30, |_| {}).unwrap_err();
-        assert!(error.contains("exited with"), "{error}");
+        assert!(error.contains("Unknown encoder 'libsvtav1'"), "{error}");
+        assert!(error.contains("Encoder not found"), "{error}");
         assert!(!copy.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
