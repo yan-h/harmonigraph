@@ -351,6 +351,7 @@ impl Drop for LatticeEditorHandle {
             }
         }
         self.params.ui_state.store_close(&mut shared.ui);
+        shared.forget_frames();
         drop(shared);
         self.egui_state.set_open(false);
         self.window.close();

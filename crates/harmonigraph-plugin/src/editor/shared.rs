@@ -241,6 +241,13 @@ impl EditorShared {
         self.note_frame_at(Instant::now(), paced);
     }
 
+    /// Forget the last frame as the editor closes: this state outlives the
+    /// window, and the reopened editor's first frame is no stall, however long
+    /// it was shut.
+    pub(super) fn forget_frames(&mut self) {
+        self.last_frame = None;
+    }
+
     fn note_frame_at(&mut self, now: Instant, paced: bool) {
         let gap = self.last_frame.map(|t| now.duration_since(t).as_secs_f64());
         self.last_frame = paced.then_some(now);
@@ -428,5 +435,8 @@ mod tests {
         shared.note_frame_at(at(11.5), true);
         shared.note_frame_at(at(11.507), true);
         assert_eq!(stalls(&shared), 2, "neither the watchdog's ticks nor the link's return");
+        shared.forget_frames();
+        shared.note_frame_at(at(16.5), false);
+        assert_eq!(stalls(&shared), 2, "nor the first frame of a reopened editor");
     }
 }
