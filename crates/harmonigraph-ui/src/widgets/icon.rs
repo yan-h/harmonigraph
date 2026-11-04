@@ -13,14 +13,16 @@ pub(crate) enum Icon {
     Delete,
 }
 
-/// A square button as tall as a row, bearing `icon` and named `label` for
-/// screen readers; the caller gives it the hover text. Painted inside the
+/// A button as tall as a row and only as wide as its glyph, bearing `icon`
+/// and named `label` for screen readers; the caller gives it the hover text.
+/// It shows a frame only under the pointer, so a row of them reads as glyphs
+/// beside a name rather than as a second row of buttons. Painted inside the
 /// enabled scope, so a disabled one fades as a disabled word would.
 pub(crate) fn icon_button(ui: &mut Ui, icon: Icon, enabled: bool, label: &str) -> Response {
     ui.add_enabled_ui(enabled, |ui| {
         let glyph = ui.id().with(("icon", label));
         let response = egui::Button::new(Atom::custom(glyph, Vec2::splat(ui.spacing().icon_width)))
-            .min_size(Vec2::splat(ui.spacing().interact_size.y))
+            .frame_when_inactive(false)
             .atom_ui(ui);
         if let Some(rect) = response.rect(glyph) {
             let hot = response.response.hovered() || response.response.has_focus();
