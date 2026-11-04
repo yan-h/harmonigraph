@@ -59,21 +59,18 @@ fn text_at(out: &egui::FullOutput, needle: &str) -> Option<egui::Pos2> {
     })
 }
 
-/// The centres of the clickable widgets on the row through `y`, left to
-/// right: a map row's number, its name, then its Move up, Move down and
-/// Delete map buttons, disabled ones included.
-fn row_widgets(ctx: &egui::Context, y: f32) -> Vec<egui::Pos2> {
-    let mut rects: Vec<egui::Rect> = ctx.viewport(|viewport| {
-        let widgets = &viewport.this_pass.widgets;
-        widgets
-            .layer_ids()
-            .flat_map(|layer| widgets.get_layer(layer))
-            .filter(|widget| widget.sense.senses_click() && widget.rect.y_range().contains(y))
-            .map(|widget| widget.rect)
-            .collect()
-    });
-    rects.sort_by(|a, b| a.left().total_cmp(&b.left()));
-    rects.iter().map(|rect| rect.center()).collect()
+/// Where `glyph` is painted on the row whose text starts at `row`: the
+/// row's own move or delete button, drawn whether or not it is enabled.
+fn glyph_on_row(out: &egui::FullOutput, row: egui::Pos2, glyph: &str) -> Option<egui::Pos2> {
+    out.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text)
+            if text.galley.text() == glyph
+                && (text.visual_bounding_rect().center().y - row.y).abs() < 8.0 =>
+        {
+            Some(text.visual_bounding_rect().center())
+        }
+        _ => None,
+    })
 }
 
 /// One click at `at`: the pointer arrives a frame before the press, because
@@ -144,16 +141,13 @@ fn the_learn_ring_is_drawn_only_where_learn_acts() {
 /// on the last, and Delete map while only one map is saved.
 #[test]
 fn each_rows_buttons_act_on_its_own_map() {
-    const UP: usize = 2;
-    const DOWN: usize = 3;
-    const DELETE: usize = 4;
-    for (maps, row, button, expected) in [
-        (2, "C · 3×4", DOWN, Some("Move(0, Later)")),
-        (2, "C · 3×4", UP, None),
-        (2, "Map 1", UP, Some("Move(1, Earlier)")),
-        (2, "Map 1", DOWN, None),
-        (2, "Map 1", DELETE, Some("Delete(1)")),
-        (1, "C · 3×4", DELETE, None),
+    for (maps, row, glyph, expected) in [
+        (2, "C · 3×4", "↓", Some("Move(0, Later)")),
+        (2, "C · 3×4", "↑", None),
+        (2, "Map 1", "↑", Some("Move(1, Earlier)")),
+        (2, "Map 1", "↓", None),
+        (2, "Map 1", "×", Some("Delete(1)")),
+        (1, "C · 3×4", "×", None),
     ] {
         let ctx = themed();
         let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, maps);
@@ -171,12 +165,12 @@ fn each_rows_buttons_act_on_its_own_map() {
             )
         };
         frame(vec![]);
-        let y = text_at(&frame(vec![]), row).expect("the map's row").y;
-        let widgets = row_widgets(&ctx, y);
-        assert_eq!(widgets.len(), 5, "{row}: number, name and three buttons");
-        click(&mut frame, widgets[button]);
+        let out = frame(vec![]);
+        let at = text_at(&out, row).expect("the map's row");
+        let button = glyph_on_row(&out, at, glyph).expect("every row draws all three buttons");
+        click(&mut frame, button);
         let sent = params.edits.borrow().last().map(|edit| format!("{edit:?}"));
-        assert_eq!(sent.as_deref(), expected, "{maps} saved maps, {row}, button {button}");
+        assert_eq!(sent.as_deref(), expected, "{maps} saved maps, {row}, {glyph}");
     }
 }
 

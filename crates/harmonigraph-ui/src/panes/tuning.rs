@@ -1022,9 +1022,12 @@ fn map_controls(
     section(ui, "Lattice Map", |ui| {
         map_list(ui, view, params);
         if view.playback.map.is_none() {
+            // The list has no row for a deleted map, so this line is the only
+            // place that names the Map value automation chose.
+            let number = view.playback.selected + 1;
             crate::widgets::label(
                 ui,
-                egui::RichText::new("Map unavailable: new attacks pass through.")
+                egui::RichText::new(format!("Map {number} unavailable: new attacks pass through."))
                     .color(theme::armed()),
             );
         }
@@ -1103,6 +1106,13 @@ fn map_list(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn
         .x;
     let number_width = digits + 2.0 * ui.spacing().button_padding.x;
     let count = view.names.len();
+    // A glyph button would otherwise be read aloud as its glyph.
+    let named = |button: egui::Response, name: &str| {
+        button.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, button.enabled(), name)
+        });
+        button
+    };
     for (index, (id, name)) in view.names.iter().enumerate() {
         let chosen = *id == selected;
         ui.push_id(id, |ui| {
@@ -1122,8 +1132,8 @@ fn map_list(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Nothing in the pane makes a map once none is left, so
                     // the last live one stays.
-                    let delete = ui
-                        .add_enabled(count > 1, egui::Button::new("×"))
+                    let delete = ui.add_enabled(count > 1, egui::Button::new("×"));
+                    let delete = named(delete, "Delete map")
                         .on_hover_text(
                             "Delete this map. This cannot be undone. If it is selected, the map \
                              below it is selected, or the one above if it is last. Automation \
@@ -1142,7 +1152,7 @@ fn map_list(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn
                         (MapMove::Earlier, "↑", "Move up", index > 0),
                     ] {
                         let button = ui.add_enabled(possible, egui::Button::new(glyph));
-                        if button.on_hover_text(hint).clicked() {
+                        if named(button, hint).on_hover_text(hint).clicked() {
                             params.edit_lattice_map(MapEdit::Move(*id, step));
                         }
                     }
