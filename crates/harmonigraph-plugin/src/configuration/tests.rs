@@ -2467,6 +2467,19 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
             !crate::lattice_maps::view(&plugin.params).can_undo,
             "undo never reaches past the selected map to slot 1's edits"
         );
+        // Each row of the editor's list deletes its own map, so a delete can
+        // name a map that is not selected.
+        crate::lattice_maps::edit(&plugin.params, &setter, MapEdit::Delete(0));
+    });
+    device.run(80, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let playback = *plugin.params.map_playback.lock();
+        assert_eq!(playback.selected, 2, "deleting another map leaves the selection alone");
+        let moved = crate::lattice_maps::offsets(&plugin.params).total();
+        let kept = LatticeMap { position: moved, ..changed };
+        assert_eq!(playback.map, Some(kept), "new attacks keep the selected map");
+        let names = crate::lattice_maps::view(&plugin.params).names;
+        assert!(names.iter().all(|(id, _)| *id != 0), "the deleted map leaves the list");
         crate::lattice_maps::edit(&plugin.params, &setter, MapEdit::Delete(2));
     });
     device.run(96, vec![], false);

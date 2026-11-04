@@ -14,15 +14,16 @@ Mode is saved but is not automatable in this prototype.
 ## Compose passages
 
 Choose Lattice Map in Tuning's Note retuning,
-pick a saved map from the numbered list at the top of the Lattice Map section,
+pick a saved map from the list at the top of the Lattice Map section,
 and tick Edit shape on lattice.
-The field beside the number is the map's name:
+Each row is a map's number, its Map automation value, and its name;
+a click on either selects it.
+The selected row's name is a field:
 type and press Enter, or leave the field, to rename it;
 Escape keeps the old name.
-The dots after it hold Move up and Move down,
-which change only the list's order,
-and Delete map,
-which asks once more in a submenu naming the map.
+Each row ends in three buttons acting on that row's map, selected or not:
+the up and down arrows change only the list's order,
+and the cross deletes the map at once, which cannot be undone.
 Each lattice click then edits the selected saved map itself:
 the destination's fixed-generator MIDI class determines which assignment moves,
 and the edit is saved at once,
