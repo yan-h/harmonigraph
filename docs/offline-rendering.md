@@ -108,7 +108,7 @@ Takes are written to `~/Music/Harmonigraph Takes/take-<stamp>.take`, where the s
 so the directory sorts chronologically by name.
 A second take inside the same second gets `_1`, `_2`.
 (`LATTICE_TAKE_DIR` overrides the directory).
-The status line under the toggle tells you where the file is going and how many events have landed.
+The status line under the toggle says whether the take is waiting for playback, recording or paused, and how many events have landed.
 
 The plugin also writes a WAV beside the take —
 always, with nothing to tick —
@@ -259,8 +259,9 @@ a macOS app launched from Finder gets a `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin
 Override with `--ffmpeg /path` when running the renderer by hand, or set `LATTICE_FFMPEG`.
 
 The render runs on its own thread and never touches the audio thread or the GUI, so a long one does not hold up the DAW.
-The status line reports `rendering ...`, then either the finished path or the renderer's own error —
-which is the only place you'll see it, since a plugin has no terminal.
+Each export gets a row under Render, named for its video, with a progress bar while it runs.
+A finished row shows the renderer's own error or warning, if it printed one —
+the only place you'll see it, since a plugin has no terminal.
 
 `./load-plugin.sh` with no argument builds the renderer alongside the plugin and installs it to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
 they share the take format, so a mismatched pair would fail at the version check.

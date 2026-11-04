@@ -167,12 +167,7 @@ impl RenderControl {
             let _ = worker.join();
         }
     }
-    pub(super) fn retry(
-        self: &Arc<Self>,
-        id: u64,
-        status: Arc<Mutex<String>>,
-        progress: Arc<Progress>,
-    ) {
+    pub(super) fn retry(self: &Arc<Self>, id: u64, progress: Arc<Progress>) {
         let mut queue = self.queue.lock();
         if queue.closed {
             return;
@@ -200,7 +195,7 @@ impl RenderControl {
             job.snapshot.detail.clear();
             job.snapshot.progress = RenderProgress::default();
             queue.jobs.push(job);
-            start_worker(self, &mut queue, status, progress);
+            start_worker(self, &mut queue, progress);
         }
     }
 }
@@ -209,7 +204,6 @@ pub(super) fn spawn_render(
     mut request: RenderRequest,
     take: PathBuf,
     size: Option<[u32; 2]>,
-    status: Arc<Mutex<String>>,
     progress: Arc<Progress>,
     control: Arc<RenderControl>,
 ) {
@@ -250,15 +244,10 @@ pub(super) fn spawn_render(
         },
         request,
     });
-    start_worker(&control, &mut queue, status, progress);
+    start_worker(&control, &mut queue, progress);
 }
 
-fn start_worker(
-    control: &Arc<RenderControl>,
-    queue: &mut Queue,
-    status: Arc<Mutex<String>>,
-    progress: Arc<Progress>,
-) {
+fn start_worker(control: &Arc<RenderControl>, queue: &mut Queue, progress: Arc<Progress>) {
     if queue.working {
         return;
     }
@@ -279,7 +268,6 @@ fn start_worker(
             job.snapshot.state = ExportStatus::Running;
             (job.snapshot.clone(), job.request.clone())
         };
-        *status.lock() = format!("rendering {}...", snapshot.output.display());
         let result = run_job(&control, &snapshot, &request, &progress);
         let mut queue = control.queue.lock();
         let final_progress = progress.read().unwrap_or_default();
@@ -290,7 +278,6 @@ fn start_worker(
         job.snapshot.progress = final_progress;
         if job.snapshot.state == ExportStatus::Cancelling {
             job.snapshot.state = ExportStatus::Cancelled;
-            job.snapshot.detail = "Cancelled; partial output removed".into();
         } else {
             match result {
                 Ok((output, detail)) => {
@@ -304,7 +291,6 @@ fn start_worker(
                 }
             }
         }
-        *status.lock() = job.snapshot.detail.clone();
     }) {
         Ok(worker) => queue.worker = Some(worker),
         Err(error) => {
@@ -479,7 +465,7 @@ fn run_job(
     current.snapshot.output = output.clone();
     current.snapshot.progress = progress.read().unwrap_or_default();
     let archive_warning = archive_lost.as_deref().or(tail.archive.as_deref());
-    let detail = rendered_status(&output, request.notice, tail.warning.as_deref(), archive_warning);
+    let detail = rendered_detail(request.notice, tail.warning.as_deref(), archive_warning);
     current.snapshot.detail = detail.clone();
     Ok((output, detail))
 }
@@ -515,8 +501,8 @@ struct Tail {
     /// A render that warns and finishes is the case #712 asks for — the video
     /// exists and something about it is not what was played — and success
     /// otherwise throws [`last`](Self::last) away, so without this the only
-    /// notice of it is a stderr pipe nobody reads. The status line is the one
-    /// place a plugin user sees the renderer at all.
+    /// notice of it is a stderr pipe nobody reads. The job's detail line is the
+    /// one place a plugin user sees the renderer at all.
     ///
     /// First rather than last: the renderer prints the take's own warnings
     /// before anything the command line can add, so what a person is told
@@ -529,21 +515,13 @@ struct Tail {
     archive: Option<String>,
 }
 
-/// What the status line says when a render finished. A warning it printed on
-/// the way rides along, because "rendered X" alone would say a take with holes
-/// in its note history came out whole; so does a missing archive copy.
-fn rendered_status(
-    out: &std::path::Path,
-    notice: Option<&str>,
-    warning: Option<&str>,
-    archive: Option<&str>,
-) -> String {
-    let mut status = format!("rendered {}", out.display());
-    for detail in [notice, warning, archive].into_iter().flatten() {
-        status.push_str(" — ");
-        status.push_str(detail);
-    }
-    status
+/// What a finished job's detail line says beyond its Completed state: the
+/// take's notice, the renderer's warning and a missing archive copy, because
+/// Completed alone would say a take with holes in its note history came out
+/// whole. Empty for a clean render, since the job row already names the video
+/// it wrote.
+fn rendered_detail(notice: Option<&str>, warning: Option<&str>, archive: Option<&str>) -> String {
+    [notice, warning, archive].into_iter().flatten().collect::<Vec<_>>().join(" — ")
 }
 
 /// Follow the renderer's stderr to its end, publishing progress as it arrives,
@@ -570,7 +548,7 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
                 progress.total.store(total, Ordering::Relaxed);
             }
             // Diagnostics, warnings, the renderer's own error. The last of
-            // them is the status line's if the render fails; the first
+            // them is the job's detail if the render fails; the first
             // `warning:` among them is its own, because success discards the
             // last and a warned-about export still needs to say so.
             None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {

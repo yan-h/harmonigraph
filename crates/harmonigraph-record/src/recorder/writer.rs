@@ -15,7 +15,7 @@ mod tests;
 
 /// The render request a fixture's Stop has to carry, aimed at a program that
 /// does not exist: a take that finishes launches nothing, and its render
-/// leaves only "could not run" on the status line.
+/// leaves only "could not run" on its export job's detail.
 #[cfg(test)]
 fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
     RenderRequest { program: directory.join("no-such-renderer"), appearance: None, notice: None }
@@ -134,8 +134,7 @@ pub fn channel() -> (Recorder, Control) {
                 #[cfg(all(test, feature = "test-support"))]
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
-                spawn_render(*render, path, None, thread_status.clone(),
-                    thread_progress.clone(), thread_render.clone());
+                spawn_render(*render, path, None, thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {
@@ -320,12 +319,14 @@ impl Pump {
                 if self.latches.end() == Some(End::ForwardSeek) {
                     render.notice = Some("take ended before a forward transport seek");
                 }
-                // Publish before Start is permitted again. A render or error
-                // may already own the line; completion only retires its own
+                // Publish before Start is permitted again. An error may
+                // already own the line; completion only retires its own
                 // finishing message, under the same lock as a refused Start.
+                // Nothing replaces it: the take's export job names the video
+                // from here on, beside Open video folder.
                 let mut status = status.lock();
                 if matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
-                    *status = format!("recorded {}", path.display());
+                    status.clear();
                 }
                 fence.finishing.store(false, Ordering::Release);
                 pumped.finished = Some((path, render));
