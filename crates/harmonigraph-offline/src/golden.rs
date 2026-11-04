@@ -319,6 +319,39 @@ fn pinned_look() -> harmonigraph_ui::AppearanceDocument {
         .expect("the golden look parses")
 }
 
+/// The pinned look names every field the document saves. One it leaves out
+/// draws at its `Default`, so the next DAW capture that moves that default
+/// moves the frames drawing it, which the pin exists to prevent.
+#[test]
+fn the_pinned_look_pins_every_field() {
+    fn paths(value: &ron::Value, at: &str, out: &mut Vec<String>) {
+        match value {
+            ron::Value::Map(map) => {
+                for (key, value) in map.iter() {
+                    let ron::Value::String(key) = key else { continue };
+                    let path = format!("{at}.{key}");
+                    paths(value, &path, out);
+                    out.push(path);
+                }
+            }
+            ron::Value::Option(Some(value)) => paths(value, at, out),
+            ron::Value::Seq(items) => items.iter().for_each(|item| paths(item, at, out)),
+            _ => {}
+        }
+    }
+    let keys = |text: &str| {
+        let mut out = Vec::new();
+        paths(&ron::from_str(text).expect("RON"), "", &mut out);
+        out
+    };
+    let pinned = keys(harmonigraph_golden::LOOK);
+    let missing: Vec<_> = keys(&pinned_look().serialize())
+        .into_iter()
+        .filter(|path| !pinned.contains(path))
+        .collect();
+    assert!(missing.is_empty(), "look.ron draws these at their Default: {missing:#?}");
+}
+
 /// Render `shot` and hold its LAST frame against the one on record.
 ///
 /// The last, because that is the frame whose window is full: an earlier one is
