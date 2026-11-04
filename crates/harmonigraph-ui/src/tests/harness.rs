@@ -398,24 +398,19 @@ impl SettingsCase {
 
     /// How many closed folds the page draws, which [`open_settings_pane`]
     /// has to open: the Sources table's Source details and Tuning delay on
-    /// every Tuning page, then Keyboard and Context under Adaptive tuning, or
-    /// Map offsets, Manage selected saved map and Assignments under Lattice
-    /// Map; the Video page's Exports. Follow harmony's context controls sit
-    /// under its heading with no fold.
+    /// every Tuning page, whatever the engine, whose own controls are all
+    /// blocks; the Video page's Exports.
     pub(super) fn folds(self) -> usize {
-        use harmonigraph_core::lattice_map::TuningEngine;
-        match (self.pane, self.variant) {
-            (panes::Tab::Tuning, Variant::Engine(TuningEngine::Adaptive)) => 2 + 2,
-            (panes::Tab::Tuning, Variant::Engine(TuningEngine::LatticeMap)) => 2 + 3,
-            (panes::Tab::Tuning, _) => 2,
-            (panes::Tab::Video, _) => 1,
+        match self.pane {
+            panes::Tab::Tuning => 2,
+            panes::Tab::Video => 1,
             _ => 0,
         }
     }
 
     /// Where the page's text fields are, by what the fixture puts in them:
     /// the empty camera preset name's hint, the saved map's name in its
-    /// Rename field, and the selected source's name in Source details.
+    /// field, and the selected source's name in Source details.
     ///
     /// A field is a well a row high or less, like a bar, and is told from one
     /// by what it holds rather than by its size, which is exactly what a

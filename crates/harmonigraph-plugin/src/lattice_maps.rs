@@ -238,8 +238,8 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             params.maps.write().delete(id);
             true
         }
-        MapEdit::MoveEarlier(id) => {
-            params.maps.write().move_earlier(id);
+        MapEdit::Move(id, step) => {
+            params.maps.write().move_by(id, step);
             true
         }
     };
@@ -544,7 +544,7 @@ mod tests {
         assert_ne!(maps.bank_revision, revision);
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));
         let revision = maps.bank_revision;
-        params.maps.write().move_earlier(1);
+        params.maps.write().move_by(1, MapMove::Earlier);
         maps.adopt(config);
         assert_ne!(maps.bank_revision, revision);
         assert_eq!(maps.bank_revision, Some(params.maps.read().revision()));

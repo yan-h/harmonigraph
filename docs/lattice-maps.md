@@ -13,9 +13,16 @@ Mode is saved but is not automatable in this prototype.
 
 ## Compose passages
 
-Choose Lattice Map in Tuning,
-pick a Saved map,
+Choose Lattice Map in Tuning's Note retuning,
+pick a saved map from the numbered list at the top of the Lattice Map section,
 and tick Edit shape on lattice.
+The field beside the number is the map's name:
+type and press Enter, or leave the field, to rename it;
+Escape keeps the old name.
+The dots after it hold Move up and Move down,
+which change only the list's order,
+and Delete map,
+which asks once more in a submenu naming the map.
 Each lattice click then edits the selected saved map itself:
 the destination's fixed-generator MIDI class determines which assignment moves,
 and the edit is saved at once,
@@ -46,7 +53,7 @@ Each axis also has a Coarse lane that adds multiples of 10 without changing exis
 The coarse parameters are named Map Fifths x10,
 Map Thirds x10 and Map Sevenths x10;
 the editor labels the two columns Fine and Coarse.
-These controls sit in the Map offsets fold.
+These controls sit in the Position block.
 Positive values move along the corresponding generator;
 negative values move back.
 Zero on all six lanes places the shape at its origin.
@@ -75,14 +82,20 @@ a host ramp that explicitly sends intervening IDs selects those IDs.
 There is no smoothing or interpolation in the plugin.
 Map and all six offset lanes do not advertise CLAP additive modulation.
 
-Assignments and sounding intervals shows all twelve full corrections and exact coordinates,
-plus actual held-note intervals above the lowest sounding voice.
-It does not judge which musical intervals a passage ought to use.
+Outside editing,
+hovering the node a key is assigned to shows that key's full correction in the lattice's corner label,
+such as E · −13.69¢,
+so drift is read where the map is drawn;
+another node of the same key shows nothing,
+since the map does not sound it.
+There is no list of sounding intervals:
+the lattice draws held notes at their actual lattice relations,
+with commas spelled in their names.
 The lattice marks the next-attack mapping with a dot above each assigned node,
 independently of sounding notes.
 Dots use the fully sounding lettering's ink and shadow at all times,
 even when a node is silent or its name is hidden.
-Show map indicators in the Lattice Map controls hides those assignment dots without changing the selected map or its tuning;
+Show map dots in the Lattice Map section hides those assignment dots without changing the selected map or its tuning;
 the hovered edit destination and map status remain visible while editing.
 Stopped edits and restored maps are visible before audio resumes,
 with a pending-audio indication until adoption.
@@ -187,13 +200,13 @@ which starts from the automated place with an empty context,
 so switching following off and on again with nothing played starts over.
 Selecting another saved map keeps the offset,
 so a passage that switches shapes keeps its place on the lattice.
-The lattice and the assignments list show the map where it sounds,
-including the follow offset,
-and the Tuning pane reports how far following has moved it.
+The lattice and its hover readout show the map where it sounds,
+including the follow offset.
 While Follow harmony is on,
-the pane also shows the context settings Follow reads:
-Follow harmony context,
-with no fold to open: Half-life, Same-note tolerance, Silence reset and the two Reset checkboxes.
+its block in the Tuning pane reports how far following has moved the map,
+zero included,
+and shows the context settings Follow reads:
+Half-life, Same-note tolerance, Silence reset and the two Reset checkboxes.
 They are the values Adaptive edits;
 Weight per octave is Adaptive's alone.
 Shape edits are made against that same placement.
@@ -221,7 +234,7 @@ no slot is ever recycled.
 An unused,
 deleted or invalid slot adds no correction and the UI reports it as unavailable.
 At capacity Duplicate as new map is disabled,
-and the pane says all 128 stable map identities have been used.
+and its tooltip says all 128 stable map identities have been used.
 Editing a shape rewrites its slot in place and keeps its identity;
 Duplicate as new map is how a revision gets an identity of its own.
 

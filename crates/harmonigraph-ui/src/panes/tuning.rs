@@ -337,23 +337,19 @@ pub(super) fn tuning_pane(
         param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
     });
 
-    let mode = map_controls(ui, state, params);
-    use harmonigraph_core::lattice_map::{Follow, TuningEngine};
-    if mode == TuningEngine::Adaptive {
-        adaptive_controls(ui, state, params);
-    } else if mode == TuningEngine::LatticeMap
-        && state
-            .runtime
-            .lattice_maps
-            .as_ref()
-            .is_some_and(|maps| maps.playback.follow != Follow::Off)
-    {
-        follow_context_controls(ui, state, params);
+    use harmonigraph_core::lattice_map::TuningEngine;
+    match retuning_controls(ui, state, params) {
+        TuningEngine::Adaptive => adaptive_controls(ui, state, params),
+        TuningEngine::LatticeMap => map_controls(ui, state, params),
+        TuningEngine::Off => {}
     }
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
     if !configuration_notice && state.runtime.configuration_pending {
         crate::widgets::label(ui, "Tuning change pending audio adoption");
+    }
+    if state.runtime.lattice_maps.as_ref().is_some_and(|maps| maps.pending) {
+        crate::widgets::label(ui, "Map state pending audio adoption");
     }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
@@ -370,7 +366,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     let mut p = state.runtime.adaptive_policy;
     let before = p;
     let mut derive_keyboard = false;
-    subsection(ui, "Keyboard", |ui| {
+    super::block(ui, "Keyboard", |ui| {
         let fresh = PolicyConfig::default().keyboard;
         for ((value, fresh), label) in
             p.keyboard.iter_mut().zip(fresh).zip(["Fifth", "Third", "Seventh"])
@@ -396,6 +392,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             derive_keyboard = true;
         }
     })
+    .response
     .on_hover_text(
         "Tuning of the incoming keyboard. A key may only become a lattice node this keyboard would play at the pitch the key \
          sent; when no key matches, all local nodes compete. A note stays unsnapped when \
@@ -421,9 +418,11 @@ fn fifths(steps: i32) -> String {
     format!("{n} fifth{plural} {}", if steps < 0 { "down" } else { "up" })
 }
 
+/// The policy's own rows first and its two blocks after them, so no row
+/// reads as the end of a block. Keyboard edits travel on their own, and each
+/// edit carries only the fields it changed, so the two compose in one frame.
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning", |ui| {
-        keyboard_controls(ui, state, params);
         let mut p = state.runtime.adaptive_policy;
         let before = p;
         let fresh = PolicyConfig::default();
@@ -452,10 +451,12 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        let context = subsection(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true));
-        context.on_hover_text(
-            "New notes follow the moving context; sounding notes keep their correction.",
-        );
+        keyboard_controls(ui, state, params);
+        super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
+            .response
+            .on_hover_text(
+                "New notes follow the moving context; sounding notes keep their correction.",
+            );
         if p != before {
             state.runtime.edit_tuning(
                 &mut state.appearance,
@@ -466,28 +467,68 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     });
 }
 
-/// Follow harmony's context, under Lattice Map: the same policy values Adaptive
-/// edits, which Follow reads. Drawn only while Follow is on.
-fn follow_context_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
-    section(ui, "Follow harmony context", |ui| {
-        let mut p = state.runtime.adaptive_policy;
-        let before = p;
-        context_controls(ui, &mut p, &PolicyConfig::default(), false);
-        if p != before {
-            state.runtime.edit_tuning(
-                &mut state.appearance,
-                params,
-                ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
-            );
-        }
-    });
+/// Follow harmony's rows: the mode, how far it has moved the map, and while it
+/// is on the context it decides from — the same policy values Adaptive edits,
+/// which Follow reads.
+fn follow_controls(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    params: &dyn ParamBackend,
+    view: &crate::lattice_maps::MapView,
+) {
+    use crate::lattice_maps::MapEdit;
+    use harmonigraph_core::lattice_map::Follow;
+    let mut follow = view.playback.follow;
+    crate::widgets::choice_buttons(
+        ui,
+        "map follow",
+        &mut follow,
+        &[
+            (Follow::Off, "Off", "The map stays where its offsets put it."),
+            (
+                Follow::Thirds,
+                "Thirds",
+                "Move the map a step along thirds when that spells a chord more simply, \
+                 such as Ab major taking C as a major third rather than a diminished fourth.",
+            ),
+            (
+                Follow::ThirdsAndFifths,
+                "Thirds and fifths",
+                "Also step along fifths when that clearly helps, such as D F A taking a \
+                 10/9 D instead of a wolf fifth. Held notes keep their tuning, so the map \
+                 can drift by a comma when a held note forces it.",
+            ),
+        ],
+    );
+    if follow != view.playback.follow {
+        params.edit_lattice_map(MapEdit::Follow(follow));
+    }
+    if follow == Follow::Off {
+        return;
+    }
+    // Drawn at every place, zero included, so the line comes and goes with the
+    // choice above it and never with the music.
+    crate::widgets::label(
+        ui,
+        format!("Moved: fifths {:+}, thirds {:+}", view.followed.threes, view.followed.fives),
+    )
+    .on_hover_text("How far following has moved the map beyond its Position offsets.");
+    let mut p = state.runtime.adaptive_policy;
+    let before = p;
+    context_controls(ui, &mut p, &PolicyConfig::default(), false);
+    if p != before {
+        state.runtime.edit_tuning(
+            &mut state.appearance,
+            params,
+            ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
+        );
+    }
 }
 
 /// The context the adaptive policy votes with: edited in Adaptive's Context
-/// fold, and under Lattice Map directly under Follow harmony's heading, where
-/// it reads it. Follow reads the decayed
-/// context alone, so only Adaptive's own scoring takes `register`, the weight
-/// per octave.
+/// block, and under Lattice Map in the Follow harmony block, which reads it.
+/// Follow reads the decayed context alone, so only Adaptive's own scoring
+/// takes `register`, the weight per octave.
 fn context_controls(ui: &mut egui::Ui, p: &mut PolicyConfig, fresh: &PolicyConfig, register: bool) {
     p.half_life_ms = adaptive_value(
         ui,
@@ -907,25 +948,25 @@ fn adaptive_value(
     }
 }
 
-fn map_controls(
+/// Note retuning: which engine retunes incoming notes, and nothing else, so
+/// it keeps its height whichever is chosen. Each engine's own controls follow
+/// in a section of their own. Returns the engine chosen this frame, so a
+/// click draws its controls at once rather than a frame later.
+fn retuning_controls(
     ui: &mut egui::Ui,
     state: &mut PictureState,
     params: &dyn ParamBackend,
 ) -> harmonigraph_core::lattice_map::TuningEngine {
-    use crate::lattice_maps::{
-        MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, MIDI_LABELS, OFFSET_LIMIT,
-    };
-    use harmonigraph_core::lattice_map::{Follow, TuningEngine};
+    use crate::lattice_maps::MapEdit;
+    use harmonigraph_core::lattice_map::TuningEngine;
     let Some(view) = params.lattice_maps() else {
         return TuningEngine::Off;
     };
-    // Stored first and read back by reference: this pane and the rest of the
-    // editor want the same view.
+    let engine = view.playback.engine;
+    // Stored for the rest of the editor, which wants the same view.
     state.runtime.lattice_maps = Some(view);
-    let view = state.runtime.lattice_maps.as_ref().expect("just stored");
     section(ui, "Note retuning", |ui| {
-        let mut mode = view.playback.engine;
-        let before = mode;
+        let mut mode = engine;
         crate::widgets::choice_buttons(
             ui,
             "retuning engine",
@@ -948,88 +989,51 @@ fn map_controls(
                 ),
             ],
         );
-        if mode != before {
+        if mode != engine {
             params.edit_lattice_map(MapEdit::Engine(mode));
         }
-        if view.pending {
-            crate::widgets::label(ui, "Map state pending audio adoption");
-        }
-        if mode != TuningEngine::LatticeMap {
-            return mode;
-        }
         if state.runtime.learn_active && !mode.learns() {
-            crate::widgets::label(ui, egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()));
-        }
-        crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
-            .on_hover_text(
-                "Show a bright dot above each destination in the selected map. This \
-                 does not change the map or its tuning.",
-            );
-        let selected = view.playback.selected;
-        let name = view
-            .names
-            .iter()
-            .find(|(id, _)| *id == selected)
-            .map(|(_, name)| &**name)
-            .unwrap_or("unavailable");
-        crate::widgets::label(ui, "Saved map");
-        crate::widgets::selected_combo(
-            ui,
-            egui::ComboBox::from_id_salt("saved-lattice-map")
-                .selected_text(format!("{} · {name}", selected + 1)),
-            |ui| {
-                for (id, name) in view.names.iter() {
-                    if ui.selectable_label(selected == *id, format!("{} · {name}", id + 1)).clicked() {
-                        params.edit_lattice_map(MapEdit::Select(*id));
-                    }
-                }
-            },
-        )
-        .response
-        .on_hover_text(
-            "The map new notes are tuned by. Map changes affect new attacks; held notes keep \
-             their onset tuning.",
-        );
-        if view.playback.map.is_none() {
-            crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
-        }
-        crate::widgets::label(ui, "Follow harmony");
-        let mut follow = view.playback.follow;
-        crate::widgets::choice_buttons(
-            ui,
-            "map follow",
-            &mut follow,
-            &[
-                (Follow::Off, "Off", "The map stays where its offsets put it."),
-                (
-                    Follow::Thirds,
-                    "Thirds",
-                    "Move the map a step along thirds when that spells a chord more simply, \
-                     such as Ab major taking C as a major third rather than a diminished fourth.",
-                ),
-                (
-                    Follow::ThirdsAndFifths,
-                    "Thirds and fifths",
-                    "Also step along fifths when that clearly helps, such as D F A taking a \
-                     10/9 D instead of a wolf fifth. Held notes keep their tuning, so the map \
-                     can drift by a comma when a held note forces it.",
-                ),
-            ],
-        );
-        if follow != view.playback.follow {
-            params.edit_lattice_map(MapEdit::Follow(follow));
-        }
-        if view.followed != harmonigraph_core::LatticePos::ORIGIN {
             crate::widgets::label(
                 ui,
-                format!(
-                    "Following: fifths {:+}, thirds {:+} beyond the offsets",
-                    view.followed.threes, view.followed.fives
-                ),
+                egui::RichText::new("Learn is suspended in Lattice Map.").color(theme::armed()),
             );
         }
-        // Shape editing sits beside the selector, outside every fold: it is the
-        // control a passage is composed with, and it edits the map shown above.
+        mode
+    })
+    // A folded section changes nothing, so the engine stands as it was.
+    .unwrap_or(engine)
+}
+
+/// Lattice Map's own controls, in the order a passage is made with them: the
+/// saved map that plays, its shape edited on the lattice, where the shape
+/// sits, then Follow harmony moving it from there.
+fn map_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+    use crate::lattice_maps::MapEdit;
+    // A clone is a refcount on the names; Follow harmony edits the runtime
+    // the view is kept in.
+    let Some(view) = state.runtime.lattice_maps.clone() else {
+        return;
+    };
+    section(ui, "Lattice Map", |ui| {
+        map_selector(ui, &view, params);
+        if view.playback.map.is_none() {
+            crate::widgets::label(
+                ui,
+                egui::RichText::new("Map unavailable: new attacks pass through.")
+                    .color(theme::armed()),
+            );
+        }
+        crate::widgets::checkbox(
+            ui,
+            &mut state.appearance.view.show_map_indicators,
+            "Show map dots",
+        )
+        .on_hover_text(
+            "Show a bright dot above each destination in the selected map. This \
+             does not change the map or its tuning.",
+        );
+        // Shape editing sits under the selector, outside every fold: it is the
+        // control a passage is composed with, and it edits the map named above.
         let mut editing = view.edit_shape;
         if crate::widgets::checkbox(ui, &mut editing, "Edit shape on lattice")
             .on_hover_text(
@@ -1040,29 +1044,176 @@ fn map_controls(
         {
             params.edit_lattice_map(MapEdit::EditShape(editing));
         }
-        crate::widgets::button_row(ui, |ui| {
+        button_row(ui, |ui| {
             if ui.add_enabled(view.can_undo, egui::Button::new("Undo shape edit")).clicked() {
                 params.edit_lattice_map(MapEdit::Undo);
             }
-            let duplicate = egui::Button::new("Duplicate as new map");
-            if ui
-                .add_enabled(!view.full && view.playback.map.is_some(), duplicate)
+            let duplicate = ui
+                .add_enabled(
+                    !view.full && view.playback.map.is_some(),
+                    egui::Button::new("Duplicate as new map"),
+                )
                 .on_hover_text("Copy this shape to a new saved map and select it.")
-                .clicked()
-            {
+                .on_disabled_hover_text(if view.full {
+                    "All 128 stable map identities have been used."
+                } else {
+                    "The selected map is unavailable, so there is no shape to copy."
+                });
+            if duplicate.clicked() {
                 params.edit_lattice_map(MapEdit::Duplicate);
             }
         });
-        if view.full {
-            crate::widgets::label(ui, egui::RichText::new("All 128 stable map identities have been used.").color(theme::armed()));
+        super::block(ui, "Position", |ui| map_offsets(ui, &view, params)).response.on_hover_text(
+            "Maps save shape only; these move it. Automate Fine for single steps and Coarse \
+             for steps of 10. The two lanes add together. With the pointer over the lattice \
+             and no field focused, the arrow keys step the map; Shift steps Coarse.",
+        );
+        super::block(ui, "Follow harmony", |ui| follow_controls(ui, state, params, &view))
+            .response
+            .on_hover_text(
+                "Let the map step by itself when that spells a chord more simply. Its context \
+                 settings are Adaptive's own: changing them here changes them there.",
+            );
+    });
+}
+
+/// The saved map new notes take, as its number and its name: the number picks
+/// another from the list, the field is the name and renames it, and the rarer
+/// actions wait behind the dots. The number is the map's Map automation value.
+fn map_selector(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn ParamBackend) {
+    use crate::lattice_maps::{MapEdit, MapMove, MAP_CAPACITY};
+    let selected = view.playback.selected;
+    let name = view.names.iter().find(|(id, _)| *id == selected).map(|(_, name)| &**name);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = theme::button_gap(theme::ui_scale(ui.ctx()));
+        // As wide as the widest number, so the name field never moves when
+        // the selection crosses a digit.
+        let digits = ui
+            .painter()
+            .layout_no_wrap(
+                MAP_CAPACITY.to_string(),
+                egui::TextStyle::Button.resolve(ui.style()),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x;
+        let spacing = ui.spacing();
+        let width =
+            digits + spacing.icon_spacing + spacing.icon_width + 2.0 * spacing.button_padding.x;
+        crate::widgets::selected_combo(
+            ui,
+            egui::ComboBox::from_id_salt("saved-lattice-map")
+                .selected_text((selected + 1).to_string())
+                .width(width),
+            |ui| {
+                for (id, name) in view.names.iter() {
+                    if ui
+                        .selectable_label(selected == *id, format!("{} · {name}", id + 1))
+                        .clicked()
+                    {
+                        params.edit_lattice_map(MapEdit::Select(*id));
+                    }
+                }
+            },
+        )
+        .response
+        .on_hover_text(
+            "The map new notes are tuned by, numbered as its Map automation value. Map \
+             changes affect new attacks; held notes keep their onset tuning.",
+        );
+        // Right to left, so the field takes exactly the room the dots leave.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::widgets::more_menu(ui, "saved-lattice-map", "More for this map", |ui| {
+                let index = view.names.iter().position(|(id, _)| *id == selected);
+                for (step, label, possible) in [
+                    (MapMove::Earlier, "Move up", index.is_some_and(|i| i > 0)),
+                    (MapMove::Later, "Move down", index.is_some_and(|i| i + 1 < view.names.len())),
+                ] {
+                    if ui.add_enabled(possible, egui::Button::new(label)).clicked() {
+                        params.edit_lattice_map(MapEdit::Move(selected, step));
+                    }
+                }
+                ui.separator();
+                // Nothing in the pane makes a map once none is left, so the last
+                // live one stays. The submenu is the confirmation: a delete cannot
+                // be undone, and automation selecting this map then passes through.
+                let others = view.names.iter().any(|(id, _)| *id != selected);
+                ui.add_enabled_ui(others && name.is_some(), |ui| {
+                    ui.menu_button("Delete map", |ui| {
+                        let confirm = format!("Delete “{}”", name.unwrap_or_default());
+                        if ui
+                            .button(confirm)
+                            .on_hover_text(
+                                "Automation for this map will pass through without correction. \
+                                 Its number is never reused.",
+                            )
+                            .clicked()
+                        {
+                            params.edit_lattice_map(MapEdit::Delete(selected));
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_disabled_hover_text(
+                        "This is the last saved map, and a project needs one to duplicate from.",
+                    );
+                });
+            });
+            match name {
+                Some(name) => map_name_field(ui, selected, name, ui.available_width(), params),
+                None => {
+                    crate::widgets::label(ui, "unavailable");
+                }
+            }
+        });
+    });
+}
+
+/// The selected map's name, renamed in place. Typing edits a copy held while
+/// the field has focus, and Enter or leaving the field saves it — not each
+/// keystroke, since every rename marks the project changed and has the host
+/// reread the Map parameter's names. Escape, or an empty name, keeps the old.
+///
+/// The field is the selected map's own, so automation selecting another map
+/// mid-edit drops the typing rather than renaming the new selection.
+fn map_name_field(
+    ui: &mut egui::Ui,
+    selected: usize,
+    name: &str,
+    width: f32,
+    params: &dyn ParamBackend,
+) {
+    let id = ui.id().with(("map-name", selected));
+    let buffer = id.with("typed");
+    // Read only while focused: typing a selection change cut short is left
+    // behind, and must not stand in for the name when the map comes back.
+    let typed = ui.memory(|memory| memory.has_focus(id));
+    let typed = typed.then(|| ui.data(|data| data.get_temp::<String>(buffer))).flatten();
+    let mut text = typed.unwrap_or_else(|| name.into());
+    let field = ui.add(crate::widgets::row_field(ui, &mut text).id(id).desired_width(width));
+    let field = field.on_hover_text("This map's name. Enter or leaving the field renames it.");
+    if field.lost_focus() {
+        let escaped = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        let text = text.trim();
+        if !escaped && !text.is_empty() && text != name {
+            params.edit_lattice_map(crate::lattice_maps::MapEdit::Rename(selected, text.into()));
         }
-        subsection(ui, "Map offsets", |ui| {
-        let mut fine = view.offsets.fine;
-        let mut extension = view.offsets.extension;
-        // A grid does not wrap, so under the narrowest column the dock can
-        // still draw it scrolls on its own rather than running off the pane.
-        theme::reserve_scroll_gutter(ui);
-        egui::ScrollArea::horizontal().id_salt("map-offsets-scroll").show(ui, |ui| {
+        ui.data_mut(|data| data.remove::<String>(buffer));
+    } else if field.has_focus() {
+        ui.data_mut(|data| data.insert_temp(buffer, text));
+    }
+}
+
+/// The offset lanes, Fine and Coarse per axis, and the total they place the
+/// shape at. Each drag is one host gesture per lane.
+fn map_offsets(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn ParamBackend) {
+    use crate::lattice_maps::{MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
+    let mut fine = view.offsets.fine;
+    let mut extension = view.offsets.extension;
+    // A grid does not wrap, so under the narrowest column the dock can
+    // still draw it scrolls on its own rather than running off the pane.
+    theme::reserve_scroll_gutter(ui);
+    egui::ScrollArea::horizontal().id_salt("map-offsets-scroll").show(ui, |ui| {
         egui::Grid::new("map-offsets").show(ui, |ui| {
             for heading in ["Axis", "Fine", "Coarse", "Total"] {
                 crate::widgets::label(ui, heading);
@@ -1106,71 +1257,5 @@ fn map_controls(
                 ui.end_row();
             }
         });
-        });
-        })
-        .on_hover_text(
-            "Maps save shape only; these move it. Automate Fine for single steps and Coarse \
-             for steps of 10. The two lanes add together.",
-        );
-        subsection(ui, "Manage selected saved map", |ui| {
-            let key = ui.id().with(("rename-map", selected));
-            let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
-            // Wrapping, so a narrow column puts Rename under the field
-            // rather than past the pane edge.
-            crate::widgets::button_row(ui, |ui| {
-                let field = crate::widgets::row_field(ui, &mut renamed)
-                    .desired_width(140.0 * theme::ui_scale(ui.ctx()));
-                ui.add(field);
-                if ui.button("Rename").clicked() { params.edit_lattice_map(MapEdit::Rename(selected, renamed.clone())); }
-            });
-            ui.data_mut(|data| data.insert_temp(key, renamed));
-            crate::widgets::button_row(ui, |ui| {
-                if ui.button("Move earlier in list").clicked() { params.edit_lattice_map(MapEdit::MoveEarlier(selected)); }
-                // Nothing in the pane makes a map once none is left, so the last live
-                // one stays.
-                let others = view.names.iter().any(|(id, _)| *id != selected);
-                let delete = ui.add_enabled(others, egui::Button::new("Delete saved map"));
-                let delete = if others {
-                    delete.on_hover_text("Automation for this identity will pass through without correction. The identity is never reused.")
-                } else {
-                    delete.on_disabled_hover_text("This is the last saved map, and a project needs one to duplicate from.")
-                };
-                if delete.clicked() { params.edit_lattice_map(MapEdit::Delete(selected)); }
-            });
-        });
-        subsection(ui, "Assignments and sounding intervals", |ui| {
-            if let Some(map) = view.playback.map {
-                for (midi, name) in MIDI_LABELS.iter().enumerate() {
-                    let p = map.node(midi as i64);
-                    ui.monospace(format!(
-                        "{name:2} · {:+.2}¢ · ({}, {}, {})",
-                        map.correction(midi as i64, state.runtime.tuning) as f64 / 1e6,
-                        p.threes,
-                        p.fives,
-                        p.sevens
-                    ));
-                }
-            }
-            let mut voices: Vec<_> = state
-                .runtime
-                .tracker
-                .voices()
-                .filter(|v| v.state == harmonigraph_core::VoiceState::Held)
-                .collect();
-            voices.sort_by(|a, b| a.pitch.total_cmp(&b.pitch));
-            if let Some(lowest) = voices.first() {
-                for voice in &voices[1..] {
-                    crate::widgets::label(ui, format!(
-                        "{}–{} · {:.2}¢",
-                        MIDI_LABELS[lowest.note as usize % 12],
-                        MIDI_LABELS[voice.note as usize % 12],
-                        (voice.pitch - lowest.pitch) * 100.0
-                    ));
-                }
-            }
-        });
-        mode
-    })
-    // A folded section changes nothing, so the engine stands as it was.
-    .unwrap_or(view.playback.engine)
+    });
 }

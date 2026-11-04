@@ -159,14 +159,18 @@ impl MapDocument {
             self.touch();
         }
     }
-    /// Move `id` one place earlier in the display order, rebuilding `order`
-    /// from the visible sequence so a hand-edited file's stray entries do not
-    /// survive the swap.
-    pub fn move_earlier(&mut self, id: usize) {
+    /// Move `id` one place earlier or later in the display order, rebuilding
+    /// `order` from the visible sequence so a hand-edited file's stray entries
+    /// do not survive the swap. A move past either end changes nothing.
+    pub fn move_by(&mut self, id: usize, step: MapMove) {
         let mut order: Vec<_> = self.names().iter().map(|(id, _)| *id).collect();
         if let Some(index) = order.iter().position(|&item| item == id) {
-            if index > 0 {
-                order.swap(index, index - 1);
+            let other = match step {
+                MapMove::Earlier => index.checked_sub(1),
+                MapMove::Later => Some(index + 1).filter(|&other| other < order.len()),
+            };
+            if let Some(other) = other {
+                order.swap(index, other);
             }
         }
         self.order = order;
@@ -398,8 +402,15 @@ pub enum MapEdit {
     /// Copy the selected shape into a new slot and select it.
     Duplicate,
     Rename(usize, String),
-    MoveEarlier(usize),
+    Move(usize, MapMove),
     Delete(usize),
+}
+
+/// Which way [`MapEdit::Move`] takes a map in the display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapMove {
+    Earlier,
+    Later,
 }
 
 #[cfg(test)]
@@ -414,7 +425,7 @@ mod tests {
         doc.delete(0);
         assert!(!doc.reshape(0, LatticeMap::default()), "a tombstone is never revived");
         doc.rename(1, "Renamed".into());
-        doc.move_earlier(1);
+        doc.move_by(1, MapMove::Earlier);
         let saved = ron::to_string(&doc).unwrap();
         assert!(saved.starts_with("(slots:"));
         assert!(saved.contains("order:[1]"));
@@ -433,6 +444,24 @@ mod tests {
         }
         assert!(doc.is_full());
         assert_eq!(doc.capture(LatticeMap::default(), "Full".into()), None);
+    }
+
+    #[test]
+    fn a_map_moves_either_way_and_stops_at_the_ends() {
+        let mut doc = MapDocument::default();
+        for name in ["B", "C"] {
+            doc.capture(LatticeMap::default(), name.into());
+        }
+        doc.rename(0, "A".into());
+        let order = |doc: &MapDocument| doc.names().iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        doc.move_by(1, MapMove::Later);
+        assert_eq!(order(&doc), [0, 2, 1]);
+        doc.move_by(1, MapMove::Later);
+        assert_eq!(order(&doc), [0, 2, 1], "the last map has nowhere later to go");
+        doc.move_by(0, MapMove::Earlier);
+        assert_eq!(order(&doc), [0, 2, 1], "the first map has nowhere earlier to go");
+        doc.move_by(1, MapMove::Earlier);
+        assert_eq!(order(&doc), [0, 1, 2]);
     }
 
     /// `Arc::ptr_eq` is the instrument: a memo hit hands back the very
@@ -470,7 +499,7 @@ mod tests {
                 },
                 &["C · 3×4", "Renamed", "Added"],
             ),
-            ("reorder", &|doc| doc.move_earlier(1), &["Renamed", "C · 3×4", "Added"]),
+            ("reorder", &|doc| doc.move_by(1, MapMove::Earlier), &["Renamed", "C · 3×4", "Added"]),
             ("delete", &|doc| doc.delete(1), &["C · 3×4", "Added"]),
         ];
         for (what, mutate, visible) in mutations {
