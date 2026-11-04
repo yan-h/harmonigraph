@@ -237,7 +237,7 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
 /// resolve here, once, rather than the shader carrying a second copy of the
 /// convention for one more layer. The home sheet has no scale of its own, which
 /// is the sheet every marker stands on ([`derive_pluses`]).
-fn marker_world(uv: f32) -> f32 {
+pub(crate) fn marker_world(uv: f32) -> f32 {
     NODE_RADIUS_FACTOR * 1.8 * uv
 }
 

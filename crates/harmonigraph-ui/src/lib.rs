@@ -558,4 +558,5 @@ pub const MAP_ARROW_SHORTCUTS: [egui::KeyboardShortcut; 8] = {
     ]
 };
 mod camera_movement;
+pub mod framing;
 pub use appearance::AppearanceDocument;

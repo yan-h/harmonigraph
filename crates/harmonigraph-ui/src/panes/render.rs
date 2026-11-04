@@ -340,7 +340,53 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
         let options: Vec<(u32, &str, &str)> =
             sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
         choice_row(ui, "Output size (px)", &mut state.appearance.render.short_edge, &options);
+        frame_notes(ui, state);
     });
+}
+
+/// Framing the lattice on what has been drawn of a piece's notes.
+///
+/// What a click could not do is said under the button for as long as the
+/// camera is still where that click left it, and no longer: a hand zoom or a
+/// second framing makes it a statement about some other picture.
+fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
+    let id = ui.id().with("frame_notes_outcome");
+    let tracker = &state.runtime.tracker;
+    let drawn = !tracker.history().is_empty() || tracker.voices().next().is_some();
+    button_row(ui, |ui| {
+        let clicked = ui
+            .add_enabled(drawn, egui::Button::new("Frame notes"))
+            .on_hover_text(
+                "Pan and zoom the lattice onto every note drawn since Clear display history, and size the lattice's share of the frame to fit them. Play the piece through first.",
+            )
+            .on_disabled_hover_text("Play the piece through first: nothing has been drawn since Clear display history.")
+            .clicked();
+        if clicked {
+            let positions = crate::framing::drawn_positions(
+                &state.runtime.tracker,
+                &state.runtime.tuning,
+                &state.appearance,
+            );
+            let outcome = match state.appearance.frame_lattice(&positions) {
+                Some(true) => None,
+                Some(false) => Some(
+                    "The notes span more than the camera can show zoomed out; the outermost are cut off.",
+                ),
+                None => Some("None of the notes drawn lights a node near the camera, so there is nothing to frame."),
+            };
+            let camera = state.appearance.camera_movement();
+            ui.data_mut(|data| data.insert_temp(id, outcome.map(|text| (text, camera))));
+        }
+    });
+    let outcome = ui.data(|data| data.get_temp::<Option<(&'static str, [f32; 5])>>(id)).flatten();
+    if let Some((text, camera)) = outcome {
+        // Within a hair rather than exactly: the host hands the camera back
+        // through its normalized parameters, which rarely round-trip an f32.
+        let now = state.appearance.camera_movement();
+        if camera.iter().zip(now).all(|(a, b)| (a - b).abs() <= 1e-3 * a.abs().max(1.0)) {
+            crate::widgets::label(ui, text);
+        }
+    }
 }
 
 /// Empty the four things that accumulate, in one press, next to the button
