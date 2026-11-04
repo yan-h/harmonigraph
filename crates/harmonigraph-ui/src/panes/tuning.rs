@@ -1084,11 +1084,13 @@ fn map_controls(
 }
 
 /// The saved maps, one row each in the list's order: the number is the map's
-/// Map automation value, and a click on either half of a row selects it. The
-/// selected row's name is a field that renames it, and the actions under the
-/// list act on that map.
+/// Map automation value, and a click on it or the name selects the map. The
+/// selected row's name is a field that renames it. Each row ends in its own
+/// move and delete buttons, which act on that row's map whether or not it is
+/// selected.
 fn map_list(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn ParamBackend) {
     use crate::lattice_maps::{MapEdit, MapMove, MAP_CAPACITY};
+    use crate::widgets::{icon_button, Icon};
     let selected = view.playback.selected;
     // As wide as the widest number, so the names start in one column.
     let digits = ui
@@ -1101,61 +1103,63 @@ fn map_list(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn
         .size()
         .x;
     let number_width = digits + 2.0 * ui.spacing().button_padding.x;
-    for (id, name) in view.names.iter() {
+    let count = view.names.len();
+    for (index, (id, name)) in view.names.iter().enumerate() {
         let chosen = *id == selected;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = theme::button_gap(theme::ui_scale(ui.ctx()));
-            let number = egui::Button::selectable(chosen, (id + 1).to_string())
-                .min_size(egui::vec2(number_width, 0.0));
-            let mut clicked = ui
-                .add(number)
-                .on_hover_text(
-                    "The number is this map's Map automation value. Map changes affect new \
-                     attacks; held notes keep their onset tuning.",
-                )
-                .clicked();
-            if chosen {
-                map_name_field(ui, selected, name, ui.available_width(), params);
-            } else {
-                let row = egui::Button::selectable(false, (&**name, egui::Atom::grow()))
-                    .truncate()
-                    .min_size(egui::vec2(ui.available_width(), 0.0));
-                clicked |= ui.add(row).clicked();
-            }
-            if clicked && !chosen {
-                params.edit_lattice_map(MapEdit::Select(*id));
-            }
+        ui.push_id(id, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::button_gap(theme::ui_scale(ui.ctx()));
+                let number = egui::Button::selectable(chosen, (id + 1).to_string())
+                    .min_size(egui::vec2(number_width, 0.0));
+                let mut clicked = ui
+                    .add(number)
+                    .on_hover_text(
+                        "The number is this map's Map automation value. Map changes affect \
+                         new attacks; held notes keep their onset tuning.",
+                    )
+                    .clicked();
+                // Right to left, so the name takes exactly the room the
+                // buttons leave.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Nothing in the pane makes a map once none is left, so
+                    // the last live one stays.
+                    let delete = icon_button(ui, Icon::Delete, count > 1, "Delete map")
+                        .on_hover_text(
+                            "Delete this map. This cannot be undone. If it is selected, the map \
+                             below it is selected, or the one above if it is last. Automation \
+                             for this map will pass through without correction. Its number is \
+                             never reused.",
+                        )
+                        .on_disabled_hover_text(
+                            "This is the last saved map, and a project needs one to duplicate \
+                             from.",
+                        );
+                    if delete.clicked() {
+                        params.edit_lattice_map(MapEdit::Delete(*id));
+                    }
+                    for (step, icon, label, possible) in [
+                        (MapMove::Later, Icon::Down, "Move down", index + 1 < count),
+                        (MapMove::Earlier, Icon::Up, "Move up", index > 0),
+                    ] {
+                        if icon_button(ui, icon, possible, label).on_hover_text(label).clicked() {
+                            params.edit_lattice_map(MapEdit::Move(*id, step));
+                        }
+                    }
+                    if chosen {
+                        map_name_field(ui, selected, name, ui.available_width(), params);
+                    } else {
+                        let row = egui::Button::selectable(false, (&**name, egui::Atom::grow()))
+                            .truncate()
+                            .min_size(egui::vec2(ui.available_width(), 0.0));
+                        clicked |= ui.add(row).clicked();
+                    }
+                });
+                if clicked && !chosen {
+                    params.edit_lattice_map(MapEdit::Select(*id));
+                }
+            });
         });
     }
-    let index = view.names.iter().position(|(id, _)| *id == selected);
-    button_row(ui, |ui| {
-        for (step, label, possible) in [
-            (MapMove::Earlier, "Move up", index.is_some_and(|i| i > 0)),
-            (MapMove::Later, "Move down", index.is_some_and(|i| i + 1 < view.names.len())),
-        ] {
-            if ui.add_enabled(possible, egui::Button::new(label)).clicked() {
-                params.edit_lattice_map(MapEdit::Move(selected, step));
-            }
-        }
-        // Nothing in the pane makes a map once none is left, so the last
-        // live one stays.
-        let others = view.names.iter().any(|(id, _)| *id != selected);
-        let delete = ui
-            .add_enabled(others && index.is_some(), egui::Button::new("Delete map"))
-            .on_hover_text(
-                "Delete the selected map. This cannot be undone. The map below it is \
-                 selected, or the one above if it is last. Automation for this map will pass \
-                 through without correction. Its number is never reused.",
-            )
-            .on_disabled_hover_text(if index.is_none() {
-                "The selected map is unavailable, so there is nothing to delete."
-            } else {
-                "This is the last saved map, and a project needs one to duplicate from."
-            });
-        if delete.clicked() {
-            params.edit_lattice_map(MapEdit::Delete(selected));
-        }
-    });
 }
 
 /// The selected map's name, renamed in place. Typing edits a copy held while

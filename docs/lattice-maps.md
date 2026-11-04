@@ -21,8 +21,9 @@ a click on either selects it.
 The selected row's name is a field:
 type and press Enter, or leave the field, to rename it;
 Escape keeps the old name.
-Under the list, Move up and Move down change only the list's order,
-and Delete map deletes the selected map at once and cannot be undone.
+Each row ends in three buttons acting on that row's map, selected or not:
+the up and down arrows change only the list's order,
+and the cross deletes the map at once, which cannot be undone.
 Each lattice click then edits the selected saved map itself:
 the destination's fixed-generator MIDI class determines which assignment moves,
 and the edit is saved at once,

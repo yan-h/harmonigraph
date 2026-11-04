@@ -59,6 +59,23 @@ fn text_at(out: &egui::FullOutput, needle: &str) -> Option<egui::Pos2> {
     })
 }
 
+/// The centres of the clickable widgets on the row through `y`, left to
+/// right: a map row's number, its name, then its Move up, Move down and
+/// Delete map buttons, disabled ones included.
+fn row_widgets(ctx: &egui::Context, y: f32) -> Vec<egui::Pos2> {
+    let mut rects: Vec<egui::Rect> = ctx.viewport(|viewport| {
+        let widgets = &viewport.this_pass.widgets;
+        widgets
+            .layer_ids()
+            .flat_map(|layer| widgets.get_layer(layer))
+            .filter(|widget| widget.sense.senses_click() && widget.rect.y_range().contains(y))
+            .map(|widget| widget.rect)
+            .collect()
+    });
+    rects.sort_by(|a, b| a.left().total_cmp(&b.left()));
+    rects.iter().map(|rect| rect.center()).collect()
+}
+
 /// One click at `at`: the pointer arrives a frame before the press, because
 /// egui resolves the widget under it from the previous pass.
 fn click(frame: &mut impl FnMut(Vec<egui::Event>) -> egui::FullOutput, at: egui::Pos2) {
@@ -84,7 +101,6 @@ fn every_map_control_needs_no_fold_opened() {
     assert!(text_at(&out, "Fifths").is_some(), "the offsets must be drawn without a fold");
     for (label, expected) in [
         ("Map 1", "Select(1)"),
-        ("Move down", "Move(0, Later)"),
         ("Edit shape on lattice", "EditShape(true)"),
         ("Duplicate as new map", "Duplicate"),
     ] {
@@ -123,11 +139,22 @@ fn the_learn_ring_is_drawn_only_where_learn_acts() {
     assert!(!learn_ring_drawn(TuningEngine::LatticeMap), "Lattice Map suspends Learn");
 }
 
-/// Delete is one click on the selected map, and the last saved map cannot
-/// be deleted.
+/// Each row's buttons act on that row's map, selected or not, and are
+/// disabled where they could do nothing: Move up on the first row, Move down
+/// on the last, and Delete map while only one map is saved.
 #[test]
-fn the_last_saved_map_cannot_be_deleted() {
-    for (maps, expected) in [(1, None), (2, Some("Delete(0)"))] {
+fn each_rows_buttons_act_on_its_own_map() {
+    const UP: usize = 2;
+    const DOWN: usize = 3;
+    const DELETE: usize = 4;
+    for (maps, row, button, expected) in [
+        (2, "C · 3×4", DOWN, Some("Move(0, Later)")),
+        (2, "C · 3×4", UP, None),
+        (2, "Map 1", UP, Some("Move(1, Earlier)")),
+        (2, "Map 1", DOWN, None),
+        (2, "Map 1", DELETE, Some("Delete(1)")),
+        (1, "C · 3×4", DELETE, None),
+    ] {
         let ctx = themed();
         let params = Edits::new(TuningEngine::LatticeMap, Follow::Off, maps);
         let mut state = fresh_picture();
@@ -144,10 +171,12 @@ fn the_last_saved_map_cannot_be_deleted() {
             )
         };
         frame(vec![]);
-        let delete = text_at(&frame(vec![]), "Delete map").expect("the delete button");
-        click(&mut frame, delete);
+        let y = text_at(&frame(vec![]), row).expect("the map's row").y;
+        let widgets = row_widgets(&ctx, y);
+        assert_eq!(widgets.len(), 5, "{row}: number, name and three buttons");
+        click(&mut frame, widgets[button]);
         let sent = params.edits.borrow().last().map(|edit| format!("{edit:?}"));
-        assert_eq!(sent.as_deref(), expected, "{maps} saved maps");
+        assert_eq!(sent.as_deref(), expected, "{maps} saved maps, {row}, button {button}");
     }
 }
 
