@@ -587,7 +587,7 @@ fn export(args: Args) -> Result<(), String> {
                 archive.display(),
                 began.elapsed().as_secs_f64()
             ),
-            Err(error) => eprintln!("\nwarning: no archive copy: {error}"),
+            Err(error) => eprintln!("\n{}{error}", harmonigraph_take::render::ARCHIVE_FAILED),
         }
     }
     // Always publish the encoder's final count, even inside the reporting period.

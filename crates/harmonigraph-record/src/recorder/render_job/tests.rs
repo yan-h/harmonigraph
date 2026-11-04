@@ -117,14 +117,18 @@ fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
         "the warning is kept BESIDE the last word, which ffmpeg has taken",
     );
 
-    let status =
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, tail.warning.as_deref());
+    let status = rendered_status(
+        std::path::Path::new("/takes/take-1.mp4"),
+        None,
+        tail.warning.as_deref(),
+        None,
+    );
     assert!(status.contains("rendered /takes/take-1.mp4"), "{status}");
     assert!(status.contains("note history 6..=8 is missing"), "{status}");
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
     assert_eq!(
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, None),
+        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, None, None),
         "rendered /takes/take-1.mp4",
     );
 }
@@ -249,6 +253,7 @@ case "$look" in
  retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
  slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
  archive) printf 'copy' > "${3%.mp4}-archive.mp4" ;;
+ nocopy) echo 'warning: take ends mid-record' >&2; echo 'warning: no archive copy: ffmpeg exited with 1: Unknown encoder' >&2 ;;
 esac
 printf '%s %s' "$look" "${6:-unsized}" > "$3"
 echo 'progress: 10/10 frames (100%)' >&2
@@ -374,6 +379,20 @@ fn an_archive_copy_is_published_beside_its_video_without_overwriting_one() {
     assert_eq!(std::fs::read_to_string(f.dir.join("music-archive.mp4")).unwrap(), "earlier copy");
     assert_eq!(std::fs::read_to_string(f.dir.join("music-1-archive.mp4")).unwrap(), "raced copy");
     assert!(!archive_path(&jobs[1].output).exists());
+}
+
+/// A copy that failed says so on the status line even when the take warned
+/// first, and the take's warning stays beside it.
+#[cfg(unix)]
+#[test]
+fn a_failed_archive_copy_is_on_the_status_line_beside_the_takes_warning() {
+    let f = Fixture::new("nocopy");
+    f.enqueue(f.request("nocopy"));
+    f.finished();
+    let job = &f.jobs()[0];
+    assert_eq!(job.state, ExportStatus::Completed);
+    assert!(job.detail.contains("take ends mid-record"), "{}", job.detail);
+    assert!(job.detail.contains("no archive copy: ffmpeg exited"), "{}", job.detail);
 }
 
 #[cfg(unix)]

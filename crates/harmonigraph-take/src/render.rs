@@ -518,11 +518,13 @@ impl Default for RenderFrame {
 pub struct RenderProgress {
     /// Frames finished so far: encoded, for a video, which trails the frames
     /// drawn by the encoder's backlog and reaches `total` only once the video
-    /// is written.
+    /// is written — and its archive copy, when [`RenderConfig::archive`]
+    /// asks for one, whose frames count after the video's.
     pub done: u64,
     /// Frames the render is aiming for — 0 until the renderer has said, which
     /// is a moment into the run (it has a take to read and an encoder to
-    /// start first).
+    /// start first). Twice the video's with an archive copy, which encodes
+    /// every frame again.
     pub total: u64,
 }
 
@@ -614,6 +616,12 @@ pub fn archive_path(video: &std::path::Path) -> std::path::PathBuf {
         video.file_stem().unwrap_or_default().to_string_lossy()
     ))
 }
+
+/// How the offline renderer starts the line saying an archive copy failed.
+/// The export queue keeps that line apart from the first `warning:` it keeps,
+/// because the copy's is the one that decides whether the video may be
+/// deleted, and it comes last.
+pub const ARCHIVE_FAILED: &str = "warning: no archive copy: ";
 
 /// Session-only export state; never persisted in a project or take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -356,11 +356,12 @@ the gap between it and the total is setup plus the encoder's backlog after the l
 
 With the appearance's **Archive copy** on, a video export also writes `<name>-archive.mp4` beside it:
 the finished video re-encoded to AV1 (SVT-AV1, preset 6, CRF 28) with its soundtrack copied as it is.
-At 2560x1440@60 it is about a sixteenth of the video's size, and it encodes at about half a second per second of video, after the video and on the same progress bar.
+At 2560x1440@60 it is about a fourteenth of the video's size, and it encodes at about 0.6 s per second of video, after the video and on the same progress bar.
 It is for keeping once the video is uploaded, not for uploading:
 YouTube's upload guidance names only H.264, and the copy has already lost a little that a re-encode would add to.
 It needs an ffmpeg with `libsvtav1`, which Homebrew's has;
 a copy that fails is removed and reported as a warning, and the video still saves.
+Cancelling during the copy cancels the export, video included.
 The copy's chroma position reads unspecified, because AV1 in MP4 cannot say "centred";
 macOS plays AV1 natively only on M3 and later.
 `docs/intent/video-export.md` has the measurements behind the settings.

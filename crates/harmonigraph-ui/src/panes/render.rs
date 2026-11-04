@@ -501,9 +501,9 @@ fn render_controls(
         );
         ui.checkbox(&mut state.appearance.render.archive, "Archive copy").on_hover_text(
             "Also save a small AV1 copy beside the video as <name>-archive.mp4, to keep once the video is uploaded. \
-             About a sixteenth of the size and close to the video's quality, but upload the video itself: \
+             About a fourteenth of the size and close to the video's quality, but upload the video itself: \
              YouTube re-encodes what it gets, and the copy has already lost a little. \
-             Adds about half a second of encoding per second of video. \
+             Adds about 0.6 s of encoding per second of video. \
              Needs ffmpeg with SVT-AV1, as Homebrew's has; without it the video still saves and the status line says why.",
         );
         if !interaction.take.supported {
@@ -808,7 +808,7 @@ fn export_queue(
                 );
                 crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value)
                     .on_hover_text(format!(
-                        "{} of {} frames encoded",
+                        "{} of {} frames encoded, an archive copy's counted after the video's",
                         progress.done, progress.total
                     ));
             }
