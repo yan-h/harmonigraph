@@ -214,15 +214,6 @@ pub struct RenderConfig {
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
     pub frame: RenderFrame,
-    /// Frame lattice to notes: before the first frame, the offline renderer
-    /// pans and zooms the lattice onto every node the take lights and sizes
-    /// [`frame`](Self::frame)'s split to hold them, holding that camera for the
-    /// whole video in place of the take's recorded camera movement.
-    ///
-    /// Part of the composition, like the frame it rewrites: it rides in a take
-    /// with the rest of the look, so an export of the recorded look keeps the
-    /// framing it was recorded to make.
-    pub frame_notes: bool,
     /// The render's short edge in pixels; with [`frame`](Self::frame)'s aspect
     /// this is the whole output size (see [`RenderFrame::pixels`]). The Video
     /// pane's Output size.
@@ -265,7 +256,6 @@ impl Default for RenderConfig {
             stop_bar: 65.0,
             spectrogram: SpectrogramRender::WholeVideo,
             frame: RenderFrame::default(),
-            frame_notes: false,
             // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
             // as captured from the DAW on 2026-10-07.
             short_edge: 1440,
@@ -316,7 +306,6 @@ impl RenderConfig {
             stop_bar: _,
             spectrogram: _,
             frame: _,
-            frame_notes: _,
             short_edge,
             tail,
             encoder,

@@ -2,9 +2,7 @@
 //! where the camera has to stand to show all of them, and what shape of pane
 //! holds them with nothing to spare.
 //!
-//! The Video pane's Frame notes button and the offline renderer's Frame
-//! lattice to notes both come here, so a framing chosen live and one chosen at
-//! render time are the same framing.
+//! What the Video pane's Frame notes button does, in geometry.
 
 use glam::{Vec2, Vec3, Vec4};
 use harmonigraph_core::{LatticePos, PitchClass, Tuning};

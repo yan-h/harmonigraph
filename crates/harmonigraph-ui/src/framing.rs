@@ -1,69 +1,38 @@
-//! Framing the lattice on the notes a piece plays: the Video pane's Frame
-//! notes button over what has been drawn, and the offline renderer's Frame
-//! lattice to notes over a whole take.
+//! Framing the lattice on the notes a piece plays, for the Video pane's Frame
+//! notes button.
 //!
 //! The geometry is `harmonigraph_scene::framing`. This is the half that knows
 //! the appearance — the camera's pan parameters and the frame's split — and
 //! what counts as heard.
 
 use glam::Vec2;
-use harmonigraph_core::{LatticePos, NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
 use harmonigraph_scene::framing;
-use std::collections::BTreeSet;
 
 use crate::{AppearanceDocument, RenderFrame};
 
-/// Pitch classes heard, under the tuning each was heard under: a piece whose
-/// tuning moves lights different nodes with the same pitch before and after.
-#[derive(Default)]
-pub struct Heard {
-    by_tuning: Vec<(Tuning, BTreeSet<PitchClass>)>,
-}
-
-impl Heard {
-    /// Everything the lattice has drawn since its history was last cleared
-    /// (Clear display history): the remembered pitches the label trail draws,
-    /// and the voices still sounding or fading. The history keeps the most
-    /// recent [`NoteHistory::MAX_VISITS`](harmonigraph_core::NoteHistory::MAX_VISITS)
-    /// distinct pitches, which a piece only passes by bending through them.
-    pub fn drawn(tracker: &NoteTracker, tuning: Tuning) -> Heard {
-        let mut heard = Heard::default();
-        heard.hear(tuning, tracker.history().visits().map(|visit| visit.pitch_class));
-        heard.hear(tuning, tracker.voices().map(|voice| voice.pitch_class));
-        heard
-    }
-
-    pub fn hear(&mut self, tuning: Tuning, classes: impl IntoIterator<Item = PitchClass>) {
-        let at = match self.by_tuning.iter().position(|(t, _)| *t == tuning) {
-            Some(at) => at,
-            None => {
-                self.by_tuning.push((tuning, BTreeSet::new()));
-                self.by_tuning.len() - 1
-            }
-        };
-        self.by_tuning[at].1.extend(classes);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.by_tuning.iter().all(|(_, classes)| classes.is_empty())
-    }
-
-    /// The nodes these pitches light on `appearance`'s sheets, each the copy
-    /// nearest where its camera stands (see [`framing::lit_positions`]).
-    pub fn positions(&self, appearance: &AppearanceDocument) -> Vec<LatticePos> {
-        let [_, _, _, fives, threes] = appearance.camera_movement();
-        let mut positions: Vec<_> = self
-            .by_tuning
-            .iter()
-            .flat_map(|(tuning, classes)| {
-                let classes: Vec<_> = classes.iter().copied().collect();
-                framing::lit_positions(&classes, tuning, &appearance.view, Vec2::new(fives, threes))
-            })
-            .collect();
-        positions.sort_unstable_by_key(|p| (p.threes, p.fives, p.sevens));
-        positions.dedup();
-        positions
-    }
+/// The nodes lit by everything the lattice has drawn since its history was
+/// last cleared (Clear display history): the remembered pitches the label
+/// trail draws, and the voices still sounding or fading. Each is the copy
+/// nearest where `appearance`'s camera stands (see
+/// [`framing::lit_positions`]), under the tuning in force now.
+///
+/// The history keeps the most recent
+/// [`NoteHistory::MAX_VISITS`](harmonigraph_core::NoteHistory::MAX_VISITS)
+/// distinct pitches, which a piece only passes by bending through them.
+pub fn drawn_positions(
+    tracker: &NoteTracker,
+    tuning: &Tuning,
+    appearance: &AppearanceDocument,
+) -> Vec<LatticePos> {
+    let classes: Vec<_> = tracker
+        .history()
+        .visits()
+        .map(|visit| visit.pitch_class)
+        .chain(tracker.voices().map(|voice| voice.pitch_class))
+        .collect();
+    let [_, _, _, fives, threes] = appearance.camera_movement();
+    framing::lit_positions(&classes, tuning, &appearance.view, Vec2::new(fives, threes))
 }
 
 impl AppearanceDocument {
@@ -172,9 +141,9 @@ mod tests {
         tracker.handle_event(NoteEvent::on(100.0, SourceId::DIRECT, 0, 64, 0.8));
         let look = AppearanceDocument::default();
         let tuning = Tuning::default();
-        let positions = Heard::drawn(&tracker, tuning).positions(&look);
+        let positions = drawn_positions(&tracker, &tuning, &look);
         assert_eq!(positions.len(), 2, "{positions:?}");
         tracker.clear_history();
-        assert_eq!(Heard::drawn(&tracker, tuning).positions(&look).len(), 1);
+        assert_eq!(drawn_positions(&tracker, &tuning, &look).len(), 1);
     }
 }

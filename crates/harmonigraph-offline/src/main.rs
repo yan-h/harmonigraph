@@ -13,7 +13,6 @@
 //! See `docs/offline-rendering.md` for the whole workflow.
 
 mod frames;
-mod framing;
 #[cfg(test)]
 mod golden;
 mod render;
@@ -79,12 +78,6 @@ OPTIONS:
                            720p; at 4K, lower it to get there. x264 only:
                            the hardware encoder has its own quality.
                            [default: 10]
-        --frame-notes      Frame the lattice to every note the take plays:
-                           pan and zoom onto them and size the lattice's
-                           share of the frame to fit, holding that camera in
-                           place of the take's recorded camera movement.
-                           [default: the appearance's Frame lattice to the
-                           take's notes (off fresh)]
         --appearance <FILE>  Override the look recorded in the take with a
                            versioned appearance RON (read-plugin-state.py --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
@@ -132,8 +125,6 @@ struct Args {
     /// the tail.
     encoder: Option<VideoEncoder>,
     crf: u32,
-    /// Frame lattice to notes, on top of whatever the appearance says.
-    frame_notes: bool,
     appearance: Option<String>,
     ffmpeg: Option<String>,
 }
@@ -158,7 +149,6 @@ impl Default for Args {
             // more of them, so the larger sizes land below YouTube's figures
             // — roughly on it at 1440p, 29 Mbps against 53 on a 4K segment.
             crf: 10,
-            frame_notes: false,
             appearance: None,
             ffmpeg: None,
         }
@@ -207,7 +197,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             }
             "--encoder" => args.encoder = Some(parse_encoder(&value("--encoder")?)?),
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
-            "--frame-notes" => args.frame_notes = true,
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
             other if other.starts_with('-') => {
@@ -423,11 +412,11 @@ fn export(args: Args) -> Result<(), String> {
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
     // take.take` reproduces exactly what was previewed; --appearance and --size
     // explicitly override it.
-    let mut appearance = render::appearance_for(&take, replacement.as_deref())?;
-    // A copy: framing below rewrites the split, which nothing here reads.
-    let render_config = appearance.render.clone();
+    let appearance = render::appearance_for(&take, replacement.as_deref())?;
+    let render_config = &appearance.render;
     let frame = render_config.frame;
-    let size = output_size(args.size, &render_config);
+    let layout = Layout::split(frame.lattice, frame.split);
+    let size = output_size(args.size, render_config);
     // An explicit --size at a different aspect renders a DIFFERENT picture
     // from the one the take was framed in — nothing letterboxes or crops to
     // reconcile them, the layout simply recomposes at the pixels it is given.
@@ -486,33 +475,6 @@ fn export(args: Args) -> Result<(), String> {
         (None, only) => only,
     };
     let start = start_of_render(args.start, capture_start, lead);
-    // Before the layout, whose split it sets. Aspect and size are untouched,
-    // so nothing above reads what this changes.
-    let mut camera_held = false;
-    if args.frame_notes || appearance.render.frame_notes {
-        match framing::frame_take(&take, &mut appearance, start, end) {
-            framing::Outcome::Framed { fits } => {
-                camera_held = true;
-                if !fits {
-                    eprintln!(
-                        "warning: the take's notes span more than the lattice camera shows \
-                         zoomed out; the outermost are cut off"
-                    );
-                }
-                if framing::camera_moves(&take, start) {
-                    eprintln!(
-                        "note: framing to the take's notes holds one camera for the whole \
-                         video; the take's recorded camera movement is not replayed"
-                    );
-                }
-            }
-            framing::Outcome::Nothing => eprintln!(
-                "note: the take lights no lattice node to frame; rendering with its own camera"
-            ),
-        }
-    }
-    let frame = appearance.render.frame;
-    let layout = Layout::split(frame.lattice, frame.split);
     let settings =
         Settings { layout, size, pixels_per_point: scale, fps: args.fps, start, end, audio_start };
     if settings.frame_count() == 0 {
@@ -568,9 +530,6 @@ fn export(args: Args) -> Result<(), String> {
         }
     };
     let mut replay = Replay::new(take);
-    if camera_held {
-        replay.params.hold_camera();
-    }
     let mut pushed = 0u64;
     let rendered = render::render(&mut replay, audio.as_mut(), &settings, appearance, |frame| {
         let next = sink.push(frame)?;

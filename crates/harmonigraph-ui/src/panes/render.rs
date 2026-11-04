@@ -344,8 +344,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
     });
 }
 
-/// Framing the lattice on a piece's notes, the two ways round: now, on what
-/// has been drawn, or at render time, on the whole take.
+/// Framing the lattice on what has been drawn of a piece's notes.
 fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
     let id = ui.id().with("frame_notes_cut_off");
     let tracker = &state.runtime.tracker;
@@ -359,8 +358,11 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
             .on_disabled_hover_text("Play the piece through first: nothing has been drawn since Clear display history.")
             .clicked();
         if clicked {
-            let heard = crate::framing::Heard::drawn(&state.runtime.tracker, state.runtime.tuning);
-            let positions = heard.positions(&state.appearance);
+            let positions = crate::framing::drawn_positions(
+                &state.runtime.tracker,
+                &state.runtime.tuning,
+                &state.appearance,
+            );
             if let Some(fits) = state.appearance.frame_lattice(&positions) {
                 ui.data_mut(|data| data.insert_temp(id, !fits));
             }
@@ -372,10 +374,6 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
             "The notes span more than the camera can show zoomed out; the outermost are cut off.",
         );
     }
-    ui.checkbox(&mut state.appearance.render.frame_notes, "Frame lattice to the take's notes")
-        .on_hover_text(
-            "When the video renders, frame the lattice as Frame notes does, on every note the whole take plays, so nothing has to be played first. The take's recorded camera movement is replaced by that one framing.",
-        );
 }
 
 /// Empty the four things that accumulate, in one press, next to the button
