@@ -338,18 +338,24 @@ pub(super) fn tuning_pane(
     });
 
     use harmonigraph_core::lattice_map::TuningEngine;
-    match retuning_controls(ui, state, params) {
-        TuningEngine::Adaptive => adaptive_controls(ui, state, params),
-        TuningEngine::LatticeMap => map_controls(ui, state, params),
-        TuningEngine::Off => {}
+    let maps = params.lattice_maps();
+    match (retuning_controls(ui, state, params, maps.as_ref()), &maps) {
+        (TuningEngine::Adaptive, _) => adaptive_controls(ui, state, params),
+        (TuningEngine::LatticeMap, Some(view)) => map_controls(ui, state, params, view),
+        _ => {}
     }
     instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
     if !configuration_notice && state.runtime.configuration_pending {
         crate::widgets::label(ui, "Tuning change pending audio adoption");
     }
-    if state.runtime.lattice_maps.as_ref().is_some_and(|maps| maps.pending) {
+    if maps.as_ref().is_some_and(|maps| maps.pending) {
         crate::widgets::label(ui, "Map state pending audio adoption");
+    }
+    // Kept for the rest of the editor — the lattice's dots and edits, and the
+    // Learn ring above, next frame — which wants the same view.
+    if maps.is_some() {
+        state.runtime.lattice_maps = maps;
     }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
@@ -954,17 +960,16 @@ fn adaptive_value(
 /// click draws its controls at once rather than a frame later.
 fn retuning_controls(
     ui: &mut egui::Ui,
-    state: &mut PictureState,
+    state: &PictureState,
     params: &dyn ParamBackend,
+    view: Option<&crate::lattice_maps::MapView>,
 ) -> harmonigraph_core::lattice_map::TuningEngine {
     use crate::lattice_maps::MapEdit;
     use harmonigraph_core::lattice_map::TuningEngine;
-    let Some(view) = params.lattice_maps() else {
+    let Some(view) = view else {
         return TuningEngine::Off;
     };
     let engine = view.playback.engine;
-    // Stored for the rest of the editor, which wants the same view.
-    state.runtime.lattice_maps = Some(view);
     section(ui, "Note retuning", |ui| {
         let mut mode = engine;
         crate::widgets::choice_buttons(
@@ -1007,15 +1012,15 @@ fn retuning_controls(
 /// Lattice Map's own controls, in the order a passage is made with them: the
 /// saved map that plays, its shape edited on the lattice, where the shape
 /// sits, then Follow harmony moving it from there.
-fn map_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
+fn map_controls(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    params: &dyn ParamBackend,
+    view: &crate::lattice_maps::MapView,
+) {
     use crate::lattice_maps::MapEdit;
-    // A clone is a refcount on the names; Follow harmony edits the runtime
-    // the view is kept in.
-    let Some(view) = state.runtime.lattice_maps.clone() else {
-        return;
-    };
     section(ui, "Lattice Map", |ui| {
-        map_selector(ui, &view, params);
+        map_selector(ui, view, params);
         if view.playback.map.is_none() {
             crate::widgets::label(
                 ui,
@@ -1029,8 +1034,9 @@ fn map_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamB
             "Show map dots",
         )
         .on_hover_text(
-            "Show a bright dot above each destination in the selected map. This \
-             does not change the map or its tuning.",
+            "Show a bright dot above each destination in the selected map. Hovering a \
+             destination names its correction either way. This does not change the map \
+             or its tuning.",
         );
         // Shape editing sits under the selector, outside every fold: it is the
         // control a passage is composed with, and it edits the map named above.
@@ -1063,12 +1069,12 @@ fn map_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamB
                 params.edit_lattice_map(MapEdit::Duplicate);
             }
         });
-        super::block(ui, "Position", |ui| map_offsets(ui, &view, params)).response.on_hover_text(
+        super::block(ui, "Position", |ui| map_offsets(ui, view, params)).response.on_hover_text(
             "Maps save shape only; these move it. Automate Fine for single steps and Coarse \
              for steps of 10. The two lanes add together. With the pointer over the lattice \
              and no field focused, the arrow keys step the map; Shift steps Coarse.",
         );
-        super::block(ui, "Follow harmony", |ui| follow_controls(ui, state, params, &view))
+        super::block(ui, "Follow harmony", |ui| follow_controls(ui, state, params, view))
             .response
             .on_hover_text(
                 "Let the map step by itself when that spells a chord more simply. Its context \
@@ -1154,9 +1160,11 @@ fn map_selector(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: 
                         }
                     })
                     .response
-                    .on_disabled_hover_text(
-                        "This is the last saved map, and a project needs one to duplicate from.",
-                    );
+                    .on_disabled_hover_text(if name.is_none() {
+                        "The selected map is unavailable, so there is nothing to delete."
+                    } else {
+                        "This is the last saved map, and a project needs one to duplicate from."
+                    });
                 });
             });
             match name {
