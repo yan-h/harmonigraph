@@ -32,6 +32,7 @@ pub mod atmosphere;
 pub mod camera;
 pub mod color;
 pub mod derive;
+pub mod framing;
 pub mod intensity;
 pub mod motion;
 pub mod octaves;
