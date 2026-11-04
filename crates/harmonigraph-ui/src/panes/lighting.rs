@@ -266,7 +266,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .percent().show(ui).on_hover_text("Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.");
         ValueBar::new(&mut view.atmosphere.breath_speed, BREATH_SPEED_MIN..=BREATH_SPEED_MAX, "Breathing speed")
             .default_value(super::fresh_view().atmosphere.breath_speed)
-            .unit(1.0, "×").show(ui).on_hover_text("1× is the original slow breathing. 0 keeps the halo at its normal brightness.");
+            .unit(1.0, "×").show(ui).on_hover_text("1× is the original slow breathing. 0 freezes the breathing where it is; set depth to 0% to turn it off.");
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Reset breathing").clicked() {
                 let fresh = AtmosphereSettings::default();

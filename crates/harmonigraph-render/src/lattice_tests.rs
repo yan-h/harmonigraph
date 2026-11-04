@@ -6,7 +6,7 @@
 mod compose;
 mod contract;
 mod device;
-mod fixtures;
+pub(super) mod fixtures;
 mod glow_colour;
 mod glow_markers;
 mod glow_overlap;

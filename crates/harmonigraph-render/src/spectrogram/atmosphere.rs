@@ -7,6 +7,9 @@
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
+use crate::material_cells::CLOUD_UNITS;
+#[cfg(test)]
+use crate::material_cells::WASH_CELLS;
 pub(super) use crate::stars::*;
 use crate::travel::{Motion, Travel};
 use crate::{create_vertex_buffer, wgpu};
@@ -82,15 +85,10 @@ pub struct SpectrogramAtmosphere {
 /// Scales what `fs_velvet_tone` does, its cell `24/405` of the pane's height
 /// at a `Scale size` of 1. Stars draw no material, and take the wash's.
 fn material_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
-    let material = settings.material_settings;
-    match settings.cloud_style {
-        harmonigraph_scene::CloudStyle::VelvetScales => {
-            405.0 / (240.0 * f64::from(material.velvet_size))
-        }
-        harmonigraph_scene::CloudStyle::Watercolor | harmonigraph_scene::CloudStyle::Stars => {
-            f64::from(WASH_CELLS / material.wash_size)
-        }
-    }
+    crate::material_cells::cells_per_unit(
+        settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales,
+        &settings.material_settings,
+    )
 }
 
 /// Cloud-space sampling offset for a texture that has drifted `drift` of its
@@ -147,15 +145,14 @@ fn cloud_drift(
     tile: Option<TileKey>,
 ) -> [f32; 2] {
     let repeat = tile.map(|tile| {
-        let material = settings.material_settings;
-        let (cells, periods) = match settings.cloud_style {
-            harmonigraph_scene::CloudStyle::Watercolor => (WASH_CELLS / material.wash_size, 5),
+        let periods = match settings.cloud_style {
+            harmonigraph_scene::CloudStyle::Watercolor => 5,
             harmonigraph_scene::CloudStyle::Stars
             | harmonigraph_scene::CloudStyle::VelvetScales => {
                 unreachable!("only Watercolor draws out of a tile")
             }
         };
-        f64::from(tile.period() * periods) / f64::from(cells)
+        f64::from(tile.period() * periods) / material_cells(settings)
     });
     offset.map(|v| repeat.map_or(v, |r| v - r * (v / r).round()) as f32)
 }
@@ -279,7 +276,7 @@ pub(super) fn tone_size(
         // selecting/truncating contributors or changing their sampled light.
         // Power-of-two spacings keep nearby dial values on one allocation.
         let material = settings.material_settings;
-        let cell = pixels[1] as f32 * (24.0 / 405.0) * material.velvet_size;
+        let cell = pixels[1] as f32 / (CLOUD_UNITS * material_cells(settings) as f32);
         let samples = 32.0 * (0.34 / material.velvet_edge).max(1.0);
         let spacing = 2.0f32.powf((cell / samples).max(1.0).log2().floor());
         return Some(pixels.map(|n| (n as f32 / spacing).ceil().max(1.0) as u32));
@@ -291,15 +288,6 @@ pub(super) fn tone_size(
     Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
 }
 
-/// The shader's own `CLOUD_UNITS` and `WASH_CELLS`: how many cloud units cross
-/// the pane's height and how many of the wash's cells cross one unit at a size
-/// of 1x. Nothing else here needs to know what a cell is —
-/// the tile does, because how fine it has to be is how fine the pane draws one.
-///
-/// Held against the shipped shader text by
-/// `the_tile_is_as_fine_as_the_pane_draws_a_cell`.
-const CLOUD_UNITS: f32 = 10.0;
-const WASH_CELLS: f32 = 5.25;
 /// The tile's texel size: a whole number of these, and never fewer or more.
 ///
 /// Quantised because the pane's own pixels feed it: at one texel per pixel a
@@ -402,7 +390,7 @@ pub(super) fn tile_key(
                 velvet_shape: _,
                 velvet_square: _,
                 velvet_tilt: _,
-                wash_size,
+                wash_size: _,
                 wash_fuzz,
                 wash_lobe,
                 wash_refract: _,    // applied after the tile bake
@@ -414,7 +402,7 @@ pub(super) fn tile_key(
     // live-walk arm was retired because, never taken, it still cost the
     // full-resolution shader 16 to 21% (#1100).
     assert!(period > 0, "a cloud is drawn only out of a tile, so its period cannot be 0");
-    let cells = WASH_CELLS / wash_size;
+    let cells = material_cells(settings) as f32;
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
     // [`TILE_STEP`], which is what keeps a resize off the bake. The 3-4-5

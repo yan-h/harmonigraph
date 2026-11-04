@@ -424,8 +424,7 @@ impl LatticeCallback {
         let breathes = scene.glow_timing.is_some()
             && scene.view.glow_reach > 0.0
             && scene.view.glow_strength > 0.0
-            && atmosphere.breath_amount > 0.0
-            && atmosphere.breath_speed > 0.0;
+            && atmosphere.breath_amount > 0.0;
         let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
         for &(_, _, i, ships, inked) in &order {
             let instance = to_gpu(&scene.nodes[i]);

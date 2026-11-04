@@ -121,6 +121,7 @@ impl Pipelines {
 
 pub(super) struct Frame {
     pub settings: harmonigraph_scene::StarSettings,
+    pub layout: stars::StarLayout,
     /// How far the stars have travelled and their lives run, at
     /// [`stars::star_px_per_second`] (`PaneBuffers::material_travel`).
     pub motion: crate::travel::Motion,
@@ -181,7 +182,13 @@ impl Targets {
             &wgpu::BufferDescriptor {
                 label: Some("lattice_star_settings"),
                 size: std::mem::size_of::<Settings>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::UNIFORM
+                    | wgpu::BufferUsages::COPY_DST
+                    | if cfg!(test) {
+                        wgpu::BufferUsages::COPY_SRC
+                    } else {
+                        wgpu::BufferUsages::empty()
+                    },
                 mapped_at_creation: false,
             },
         );
@@ -228,6 +235,11 @@ impl Targets {
             source,
         }
     }
+    #[cfg(test)]
+    pub(super) fn uniforms(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Settings {
+        crate::gpu_harness::read_uniform(device, queue, &self.uniform)
+    }
+
     pub(super) fn prepare(
         held: &mut Option<Self>,
         device: &wgpu::Device,
@@ -237,8 +249,7 @@ impl Targets {
         size: [u32; 2],
         frame: Frame,
     ) {
-        let Frame { settings: stars, motion, amount } = frame;
-        let layout = stars::star_layout(stars, size[0] as f32 / size[1] as f32);
+        let Frame { settings: stars, layout, motion, amount } = frame;
         let allocation = Allocation {
             output: size,
             atlas: stars::star_atlas_size(layout.size(), held.as_ref().map(|t| t.allocation.atlas)),

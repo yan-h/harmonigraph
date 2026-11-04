@@ -1147,52 +1147,30 @@ fn cloud_uniforms(
 ) -> Uniforms {
     let panes = &resources.get::<SpectrogramResources>().unwrap().panes;
     let targets = panes.get(&0).unwrap().cloud.as_ref().unwrap();
-    let size = std::mem::size_of::<Uniforms>() as u64;
-    let buffer = crate::gpu_memory::buffer(
-        device,
-        &wgpu::BufferDescriptor {
-            label: Some("cloud_uniform_readback"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        },
-    );
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(&targets.uniform, 0, &buffer, 0, size);
-    queue.submit([encoder.finish()]);
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::pod_read_unaligned(&slice.get_mapped_range())
+    crate::gpu_harness::read_uniform(device, queue, &targets.uniform)
 }
 
-/// A Patch size, Scale size or Star size drag minutes in scales the texture
-/// about its origin, moving it on by one frame's travel, where a travel held
-/// in units the size then divides would slide it by that fraction of all it
-/// had travelled: the material's sampling offset in its own cells as the
-/// shader works it out (`wash_cell_at`, `fs_velvet_tone`), and each star
-/// layer's offset in its cells.
+/// Every saved numeric atmosphere dial is exercised through production prepare,
+/// including GPU drift uniforms and all star slice offsets. A size edit may
+/// scale the initial sampling origin, but never the accumulated travel.
 #[test]
-fn a_size_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
+fn every_saved_dial_nudge_moves_the_texture_one_frame_at_most() {
+    use crate::dial_nudges::{apart, nudges};
     let Some((device, queue)) = headless_device() else { return };
     let step = 1.0 / 60.0;
     for style in [CloudStyle::Watercolor, CloudStyle::VelvetScales, CloudStyle::Stars] {
         let mut cb = fixture(style);
         cb.atmosphere.as_mut().unwrap().now = 600.0;
-        // The material's cells per cloud unit, and where its sampling sits in
-        // them, with the repeat a Watercolor offset is reduced by.
-        let cells = |cb: &SpectrogramCallback| {
-            let m = cb.atmosphere.unwrap().settings.sanitized().material_settings;
-            match style {
-                CloudStyle::VelvetScales => 405.0 / (240.0 * f64::from(m.velvet_size)),
-                _ => f64::from(WASH_CELLS / m.wash_size),
-            }
-        };
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_layers = STAR_SLICES as u32;
+        let base = cb.atmosphere.unwrap().settings.sanitized();
+        let cells =
+            |cb: &SpectrogramCallback| material_cells(cb.atmosphere.unwrap().settings.sanitized());
         let drawn = |cb: &SpectrogramCallback, resources: &CallbackResources| {
             let uniforms = cloud_uniforms(&device, &queue, resources);
-            let start = match style {
-                CloudStyle::VelvetScales => harmonigraph_scene::MaterialSettings::DRIFT_START,
-                _ => [0.0; 2],
+            let start = if style == CloudStyle::VelvetScales {
+                harmonigraph_scene::MaterialSettings::DRIFT_START
+            } else {
+                [0.0; 2]
             };
             let at =
                 std::array::from_fn(|a| (f64::from(uniforms.drift.0[a]) - start[a]) * cells(cb));
@@ -1200,68 +1178,57 @@ fn a_size_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
         };
         let slices =
             |resources: &CallbackResources| memory(resources).frame.as_ref().unwrap().slices;
-        // How far apart two offsets are, a repeat's wrap taken out.
-        let apart = |a: [f64; 2], b: [f64; 2], repeat: f64| {
-            (0..2)
-                .map(|i| {
-                    let d = a[i] - b[i];
-                    if repeat > 0.0 {
-                        (d - repeat * (d / repeat).round()).abs()
-                    } else {
-                        d.abs()
-                    }
-                })
-                .fold(0.0, f64::max)
-        };
-        let mut resources = CallbackResources::default();
-        prepare_once(&device, &queue, &mut resources, &cb);
-        let (held, held_slices) = match style {
-            CloudStyle::Stars => (([0.0; 2], 0.0), slices(&resources)),
-            _ => (drawn(&cb, &resources), [StarSlice::default(); STAR_SLICES]),
-        };
-        let held_cells = cells(&cb);
-        let a = cb.atmosphere.as_mut().unwrap();
-        let m = &mut a.settings.material_settings;
-        match style {
-            CloudStyle::Watercolor => m.wash_size *= 1.01,
-            CloudStyle::VelvetScales => m.velvet_size *= 1.01,
-            CloudStyle::Stars => {
-                let s = &mut a.settings.stars;
-                s.star_size = s.star_size.map(|v| v * 1.01)
+        for (path, edited) in nudges(base, harmonigraph_scene::SpectralAtmosphere::sanitized) {
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.settings = base;
+            a.now = 600.0;
+            let mut resources = CallbackResources::default();
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let (held, held_slices) = if style == CloudStyle::Stars {
+                (([0.0; 2], 0.0), slices(&resources))
+            } else {
+                (drawn(&cb, &resources), [StarSlice::default(); STAR_SLICES])
+            };
+            let held_cells = cells(&cb);
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.settings = edited;
+            a.now += step;
+            prepare_once(&device, &queue, &mut resources, &cb);
+            let a = cb.atmosphere.unwrap();
+            if style == CloudStyle::Stars {
+                let pace = star_pace(a.points_per_ms, cb.rect.height());
+                let moved = slices(&resources);
+                let layout = star_layout(edited.stars, cb.rect.width() / cb.rect.height());
+                let rate = Motion::rate(
+                    edited.cloud_speed,
+                    edited.cloud_direction,
+                    cells(&cb),
+                    edited.stars,
+                    pace,
+                    layout.cells,
+                );
+                for k in 0..STAR_SLICES {
+                    let frame = rate.stars[k][0].hypot(rate.stars[k][1]) * step;
+                    let gone = apart(
+                        moved[k].offset.0.map(f64::from),
+                        held_slices[k].offset.0.map(f64::from),
+                        STAR_HASH_PERIOD,
+                    );
+                    assert!(
+                        gone <= frame + 0.01,
+                        "{style:?} {path} depth {k}: {gone} exceeds {frame}"
+                    );
+                }
+            } else {
+                let (moved, repeat) = drawn(&cb, &resources);
+                let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
+                    edited.cloud_speed,
+                    edited.cloud_direction,
+                );
+                let frame = x.hypot(y) * step * cells(&cb) + 0.6 * (cells(&cb) - held_cells).abs();
+                let gone = apart(moved, held.0, repeat);
+                assert!(gone <= frame + 0.01, "{style:?} {path}: {gone} exceeds {frame}");
             }
-        }
-        a.now += step;
-        prepare_once(&device, &queue, &mut resources, &cb);
-        let mut restart = CallbackResources::default();
-        prepare_once(&device, &queue, &mut restart, &cb);
-        let a = cb.atmosphere.unwrap();
-        if style == CloudStyle::Stars {
-            let pace = star_pace(a.points_per_ms, cb.rect.height());
-            let (moved, restarted) = (slices(&resources), slices(&restart));
-            let offset = |s: StarSlice| s.offset.0.map(f64::from);
-            for k in 0..STAR_SLICES {
-                assert_ne!(held_slices[k].cell, moved[k].cell, "the nudge moved no cell");
-                let speed = f64::from(a.settings.stars.star_speed[k]);
-                let frame = pace * speed * step / f64::from(moved[k].cell);
-                let gone = |s| apart(offset(s), offset(held_slices[k]), STAR_HASH_PERIOD);
-                let (moved, restarted) = (gone(moved[k]), gone(restarted[k]));
-                assert!(moved <= frame + 0.01, "{style:?}, depth {k}: {moved} cells, not {frame}");
-                assert!(restarted > 1.0, "{style:?}, depth {k}: a restart lands there too");
-            }
-        } else {
-            let (moved, repeat) = drawn(&cb, &resources);
-            let (restarted, _) = drawn(&cb, &restart);
-            let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
-                a.settings.cloud_speed,
-                a.settings.cloud_direction,
-            );
-            // One frame's drift, and the start the sampling offset holds,
-            // which the size scales as it scales the pane.
-            let frame = x.hypot(y) * step * cells(&cb) + 0.6 * (cells(&cb) - held_cells).abs();
-            let (moved, restarted) =
-                (apart(moved, held.0, repeat), apart(restarted, held.0, repeat));
-            assert!(moved <= frame + 0.01, "{style:?}: {moved} cells, not {frame}");
-            assert!(restarted > 2.0, "{style:?}: a restart lands there too ({restarted})");
         }
     }
 }

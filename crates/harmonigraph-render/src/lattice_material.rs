@@ -9,24 +9,6 @@ const SOURCE: &str = concat!(
 );
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// How many cells cross one of the pane height's ten units at Size 1x, matching
-/// the spectrogram: a Scales cell is 24/405 of the height, and Watercolor packs
-/// its `WASH_CELLS` into each unit.
-const SCALES_CELLS: f32 = 405.0 / 240.0;
-const WATERCOLOR_CELLS: f32 = 5.25;
-
-/// A displaced material's Size dial and its cells per unit at Size 1x.
-pub(super) fn size_and_cells(
-    style: harmonigraph_scene::LatticeMaterial,
-    settings: &harmonigraph_scene::MaterialSettings,
-) -> (f32, f32) {
-    if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
-        (settings.velvet_size, SCALES_CELLS)
-    } else {
-        (settings.wash_size, WATERCOLOR_CELLS)
-    }
-}
-
 /// The material dials one lattice frame draws with. CPU-side only: [`prepare`]
 /// derives the pass's [`Settings`] from them by name.
 #[derive(Clone, Copy)]
@@ -326,7 +308,13 @@ impl Source {
             &wgpu::BufferDescriptor {
                 label: Some("lattice_material_settings"),
                 size: size_of::<Settings>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::UNIFORM
+                    | wgpu::BufferUsages::COPY_DST
+                    | if cfg!(test) {
+                        wgpu::BufferUsages::COPY_SRC
+                    } else {
+                        wgpu::BufferUsages::empty()
+                    },
                 mapped_at_creation: false,
             },
         );
@@ -388,20 +376,17 @@ impl Source {
 
 /// The material's cells to a cloud unit, which its travel is counted in.
 fn material_cells(material: &Material) -> f64 {
-    let (scale, cells) = size_and_cells(material.style, &material.settings);
-    f64::from(cells / scale)
+    crate::material_cells::cells_per_unit(
+        material.style == harmonigraph_scene::LatticeMaterial::VelvetScales,
+        &material.settings,
+    )
 }
 
 /// How far the material and the stars go in a second at this frame's dials,
-/// in the cells this frame draws them with: the stars' layout on a pane
-/// `aspect` wide where they are drawn, the plan's where they are not.
-fn rate(material: &Material, aspect: Option<f32>) -> crate::travel::Motion {
-    let star_cells = match aspect {
-        Some(aspect) if material.style == harmonigraph_scene::LatticeMaterial::Stars => {
-            crate::stars::star_layout(material.stars, aspect).cells
-        }
-        _ => crate::stars::star_cells(material.stars),
-    };
+/// in the cells this frame draws them with: the shared star layout where
+/// they are drawn, the plan's where they are not.
+fn rate(material: &Material, layout: Option<&crate::stars::StarLayout>) -> crate::travel::Motion {
+    let star_cells = layout.map_or_else(|| crate::stars::star_cells(material.stars), |l| l.cells);
     crate::travel::Motion::rate(
         material.speed,
         material.direction,
@@ -451,13 +436,16 @@ pub(super) fn prepare(
     // are, so a glow turned off and on again goes on from there rather than
     // starting over.
     let aspect = pane.offscreen.as_ref().map(|o| o.size[0] as f32 / o.size[1] as f32);
+    let layout = aspect
+        .filter(|_| material.style == harmonigraph_scene::LatticeMaterial::Stars)
+        .map(|aspect| crate::stars::star_layout(material.stars, aspect));
     let motion = match callback.glow_timing {
         Some(clock) => pane.material_travel.advance(
             clock.now,
             crate::travel::Motion {
                 texture: f64::from(callback.texture_speed),
                 breath: f64::from(callback.breathing.speed),
-                ..rate(material, aspect)
+                ..rate(material, layout.as_ref())
             },
         ),
         None => pane.material_travel.held(),
@@ -489,14 +477,19 @@ pub(super) fn prepare(
             &pipelines.stars,
             &source.view,
             offscreen.size,
-            lattice_stars::Frame { settings: material.stars, motion, amount: material.amount },
+            lattice_stars::Frame {
+                settings: material.stars,
+                layout: layout.expect("drawn stars have a pane layout"),
+                motion,
+                amount: material.amount,
+            },
         );
         return motion;
     }
     // Match the spectrogram's pane-height calibration. Quantized density keeps
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
-    let (scale, cells) = size_and_cells(material.style, &material.settings);
-    let cell = size[1] as f32 * scale / (10.0 * cells);
+    let (scale, cells) = crate::material_cells::size_and_cells(velvet, &material.settings);
+    let cell = size[1] as f32 * scale / (crate::material_cells::CLOUD_UNITS * cells);
     let drift = drift(material, motion);
     let dials = &material.settings;
     let geometry = [dials.wash_fuzz.to_bits(), dials.wash_lobe.to_bits()];
@@ -543,93 +536,149 @@ mod tests {
         crate::uniforms::layout::check_binding::<Geometry>(SOURCE, 0, 3);
     }
 
-    /// A Material size or Star size drag minutes in scales the texture about
-    /// its origin, moving it on by one frame's travel, where a travel held in
-    /// units the size then divides would slide it by that fraction of all it
-    /// had travelled: the material's sampling offset in its cells, as `prepare`
-    /// hands it to the shader, and each star layer's offset in its cells.
+    /// Walk the saved numeric dials at ten minutes of travel. Read production
+    /// GPU sampling uniforms and the pane's integrated phases after prepare.
     #[test]
-    fn a_size_nudge_minutes_in_moves_the_texture_one_frame_at_most() {
-        use crate::stars::{star_layout, star_slices, STAR_HASH_PERIOD, STAR_SLICES};
-        use harmonigraph_scene::LatticeMaterial;
-        let (step, aspect) = (1.0 / 60.0, 16.0 / 9.0);
-        // How far apart two offsets are, a repeat's wrap taken out.
-        let apart = |a: [f64; 2], b: [f64; 2], repeat: f64| {
-            (0..2)
-                .map(|i| {
-                    let d = a[i] - b[i];
-                    if repeat > 0.0 {
-                        (d - repeat * (d / repeat).round()).abs()
+    fn every_saved_dial_nudge_moves_the_texture_one_frame_at_most() {
+        use crate::dial_nudges::{apart, nudges};
+        use crate::stars::{star_layout, STAR_HASH_PERIOD, STAR_SLICES};
+        use harmonigraph_scene::{AtmosphereSettings, LatticeMaterial};
+        let Some((device, queue)) = crate::gpu_harness::headless_device() else { return };
+        let mut resources = CallbackResources::default();
+        let step = 1.0 / 60.0;
+        for aspect in [16.0 / 9.0, 64.0] {
+            let size = if aspect > 10.0 { [1024, 16] } else { [256, 144] };
+            let prepare_at =
+                |settings: AtmosphereSettings, now, resources: &mut CallbackResources| {
+                    let mut scene = crate::lattice_tests::fixtures::single_marked_node(0, 0);
+                    scene.view.glow_reach = 2.88;
+                    scene.view.glow_strength = 0.75;
+                    scene.view.atmosphere = settings;
+                    scene.glow_timing =
+                        Some(harmonigraph_scene::GlowTiming { now, attack: 0.0, release: 0.0 });
+                    let callback = LatticeCallback::from_scene(
+                        &scene,
+                        LatticeLabels::default(),
+                        egui::vec2(size[0] as f32, size[1] as f32),
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        0,
+                        None,
+                    );
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    let buffers = callback.prepare(
+                        &device,
+                        &queue,
+                        &ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 },
+                        &mut encoder,
+                        resources,
+                    );
+                    queue.submit(buffers.into_iter().chain([encoder.finish()]));
+                    let pane = &resources.get::<LatticeResources>().unwrap().panes[&0];
+                    let source = pane
+                        .offscreen
+                        .as_ref()
+                        .unwrap()
+                        .glow
+                        .as_ref()
+                        .unwrap()
+                        .material_source
+                        .as_ref()
+                        .unwrap();
+                    let (drift, slices) = if let Some(stars) = &source.stars {
+                        ([0.0; 2], stars.uniforms(&device, &queue).stars.star_slices)
                     } else {
-                        d.abs()
-                    }
-                })
-                .fold(0.0, f64::max)
-        };
-        for style in
-            [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
-        {
-            let mut material = Material {
-                style,
-                amount: 1.0,
-                speed: 3.0,
-                settings: Default::default(),
-                stars: harmonigraph_scene::StarSettings {
-                    star_speed: [0.2, 0.4, 0.6, 0.8, 1.0],
-                    ..Default::default()
-                },
-                direction: 37.0,
-            };
-            let cells = material_cells;
-            let slices = |material: &Material, motion: crate::travel::Motion| {
-                let layout = star_layout(material.stars, aspect);
-                star_slices(material.stars, motion.stars, &layout, [1920, 1080])
-            };
-            let mut travel = crate::travel::Travel::default();
-            let held = travel.advance(600.0, rate(&material, Some(aspect)));
-            let (held_drift, held_slices) = (drift(&material, held), slices(&material, held));
-            let held_cells = cells(&material);
-            match style {
-                LatticeMaterial::VelvetScales => material.settings.velvet_size *= 1.01,
-                LatticeMaterial::Stars => {
-                    let s = &mut material.stars;
-                    s.star_size = s.star_size.map(|v| v * 1.01)
-                }
-                _ => material.settings.wash_size *= 1.01,
-            }
-            let moved = travel.advance(600.0 + step, rate(&material, Some(aspect)));
-            let restarted = crate::travel::Travel::default()
-                .advance(600.0 + step, rate(&material, Some(aspect)));
-            if style == LatticeMaterial::Stars {
-                let pace = crate::stars::star_px_per_second();
-                let offset = |s: crate::stars::StarSlice| s.offset.0.map(f64::from);
-                let (moved, restarted) = (slices(&material, moved), slices(&material, restarted));
-                for k in 0..STAR_SLICES {
-                    assert_ne!(held_slices[k].cell, moved[k].cell, "the nudge moved no cell");
-                    let speed = f64::from(material.stars.star_speed[k]);
-                    let frame = pace * speed * step / f64::from(moved[k].cell);
-                    let gone = |s| apart(offset(s), offset(held_slices[k]), STAR_HASH_PERIOD);
-                    let (moved, restarted) = (gone(moved[k]), gone(restarted[k]));
-                    assert!(moved <= frame + 0.01, "depth {k}: {moved} cells, not {frame}");
-                    assert!(restarted > 1.0, "depth {k}: a restart lands there too");
-                }
-            } else {
-                let repeat = if style == LatticeMaterial::Watercolor { 200.0 } else { 0.0 };
-                let gone = |motion| {
-                    let at = drift(&material, motion).map(f64::from);
-                    apart(at, held_drift.map(f64::from), repeat)
+                        (
+                            crate::gpu_harness::read_uniform::<Settings>(
+                                &device,
+                                &queue,
+                                &source.buffer,
+                            )
+                            .drift
+                            .0,
+                            [crate::stars::StarSlice::default(); STAR_SLICES],
+                        )
+                    };
+                    (drift.map(f64::from), slices, pane.material_travel.held())
                 };
-                // One frame's drift, and the start the sampling offset holds,
-                // which the size scales as it scales the pane.
-                let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
-                    material.speed,
-                    material.direction,
-                );
-                let frame = x.hypot(y) * step * cells(&material)
-                    + 0.6 * (cells(&material) - held_cells).abs();
-                let (moved, restarted) = (gone(moved), gone(restarted));
-                assert!(moved <= frame + 0.01, "{style:?}: {moved} cells, not {frame}");
-                assert!(restarted > 0.5, "{style:?}: a restart lands there too ({restarted})");
+            for style in
+                [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
+            {
+                let mut base = AtmosphereSettings {
+                    material_style: style,
+                    material_amount: 0.8,
+                    ..Default::default()
+                };
+                base.stars.star_layers = STAR_SLICES as u32;
+                base.stars.star_speed = [0.2, 0.4, 0.6, 0.8, 1.0];
+                // The wide, fine field must reach the atlas's cell-size floor.
+                if aspect > 10.0 {
+                    base.stars.star_size = [harmonigraph_scene::STAR_SIZE_MIN; STAR_SLICES];
+                }
+                let material = |a: AtmosphereSettings| Material {
+                    style: a.material_style,
+                    amount: a.material_amount,
+                    speed: a.material_speed,
+                    settings: a.material_settings,
+                    stars: a.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                    direction: a.material_direction,
+                };
+                let motion_rate = |a: AtmosphereSettings| {
+                    let m = material(a);
+                    crate::travel::Motion {
+                        texture: f64::from(a.texture_speed),
+                        breath: f64::from(a.breath_speed),
+                        ..rate(&m, Some(&star_layout(m.stars, aspect)))
+                    }
+                };
+                let before = material(base);
+                let layout = star_layout(before.stars, aspect);
+                if aspect > 10.0 {
+                    assert!(
+                        layout
+                            .cells
+                            .iter()
+                            .zip(crate::stars::star_cells(before.stars))
+                            .any(|(a, b)| *a > b),
+                        "fixture missed the atlas floor"
+                    );
+                }
+                for (path, edited) in nudges(base, AtmosphereSettings::sanitized) {
+                    if let Some(resources) = resources.get_mut::<LatticeResources>() {
+                        resources.panes.remove(&0);
+                    }
+                    let (held_drift, held_slices, held) = prepare_at(base, 600.0, &mut resources);
+                    let m = material(edited);
+                    let rate = motion_rate(edited);
+                    let (moved_drift, slices, moved) =
+                        prepare_at(edited, 600.0 + step, &mut resources);
+                    let repeat = if style == LatticeMaterial::Watercolor { 200.0 } else { 0.0 };
+                    let frame = rate.drift[0].hypot(rate.drift[1]) * step
+                        + 0.6 * (material_cells(&m) - material_cells(&before)).abs();
+                    let gone = apart(moved_drift, held_drift, repeat);
+                    assert!(gone <= frame + 0.01, "{style:?} {path}: drift {gone} exceeds {frame}");
+                    for k in 0..STAR_SLICES {
+                        let gone = apart(
+                            slices[k].offset.0.map(f64::from),
+                            held_slices[k].offset.0.map(f64::from),
+                            STAR_HASH_PERIOD,
+                        );
+                        let frame = rate.stars[k][0].hypot(rate.stars[k][1]) * step;
+                        assert!(
+                            gone <= frame + 0.01,
+                            "{style:?} {path} depth {k}: {gone} exceeds {frame}"
+                        );
+                    }
+                    for (name, before, after, speed) in [
+                        ("texture", held.texture, moved.texture, rate.texture),
+                        ("breath", held.breath, moved.breath, rate.breath),
+                        ("life", held.life, moved.life, rate.life),
+                    ] {
+                        assert!(
+                            (after - before).abs() <= speed.abs() * step + 1e-9,
+                            "{path}: {name} restarted"
+                        );
+                    }
+                }
             }
         }
     }

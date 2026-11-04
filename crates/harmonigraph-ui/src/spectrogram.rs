@@ -676,7 +676,9 @@ impl SlabGrid {
     /// slabs and adding the column to the current power mean. Returns `false` iff
     /// the column ran BACKWARDS in time relative to the current slab — batch
     /// ignores the result (it just starts a fresh row, as before), while the
-    /// incremental aggregator treats it as a broken invariant and rebuilds.
+    /// incremental aggregator rebuilds if a backward column reaches this fold.
+    /// Its admission search assumes ordered history, so this is not a general
+    /// recovery path for unordered input.
     /// `min_key` is an explicit live retention bound; the batch driver passes
     /// `None`. One older seed may survive until an admitted column arrives.
     fn fold(&mut self, col: &crate::SpectrogramColumn, bucket: f64, min_key: Option<i64>) -> bool {
@@ -708,9 +710,9 @@ impl SlabGrid {
             // backward case breaks the incremental invariant.
             //
             // Not expected from today's callers, and `push_history` asserts
-            // as much in debug builds. This is what a release build, where
-            // that assert is compiled out, does instead, and the caller
-            // (`SpectrogramAgg::window`) rebuilds on the `false`.
+            // as much in debug builds. If a backward column reaches this fold,
+            // `SpectrogramAgg::window` rebuilds on the `false`; its admission
+            // search can skip an out-of-order column before it gets here.
             other => {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
@@ -1026,11 +1028,12 @@ impl SpectrogramAgg {
         let layout_same = self.bucket_bits == bucket.to_bits();
         // The fast path is valid only when: the layout is unchanged, we have a
         // prior grid of this history (not one cleared since), time hasn't gone
-        // backwards (the release-build backstop for the order `push_history`
-        // asserts), and the admitted first slab doesn't reach behind the kept
-        // grid. New columns can extend its newest end, including across a gap.
+        // backwards at its newest column, and the admitted first slab doesn't
+        // reach behind the kept grid. New columns can extend its newest end,
+        // including across a gap.
         // An excluded old target must not force another rebuild on every
-        // resumed frame.
+        // resumed frame. History must still be ordered as `push_history`
+        // asserts: an intermediate backward column can escape this check.
         let can_increment = layout_same
             && self.grid.cur_key.is_some()
             && self.clears == history.clears()

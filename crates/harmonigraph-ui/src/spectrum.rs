@@ -411,9 +411,8 @@ impl SpectrumStore {
     /// `ANCHOR_SNAP` (50 ms), more than the hop between two columns.
     ///
     /// So the `debug_assert!` checks those callers, and nothing here enforces
-    /// the order. A build with it compiled out leans on the aggregator, which
-    /// rebuilds on a date that steps back (`SpectrogramAgg::window`,
-    /// `SlabGrid::fold`).
+    /// the order. The aggregator assumes it in release builds too: a backward
+    /// column followed by a newer one before its next window can be skipped.
     pub(crate) fn push_history(&mut self, now: f64, power: &SpectrumBuckets) {
         debug_assert!(
             self.history.back().is_none_or(|c| now > c.time),

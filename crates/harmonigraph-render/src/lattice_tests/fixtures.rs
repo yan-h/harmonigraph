@@ -492,7 +492,7 @@ pub(super) fn probe_octave_layout() -> harmonigraph_scene::OctaveLayout {
 /// backdrop for measuring how much of the picture a mark actually
 /// covers. parity_scene deliberately overlaps its nodes, which hides
 /// most of a mark behind whatever draws in front of it.
-pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
+pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
 
