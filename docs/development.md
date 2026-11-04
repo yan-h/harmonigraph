@@ -78,57 +78,6 @@ and an empty value disables all backends for testing the unavailable-adapter pat
 CI also sets `HARMONIGRAPH_REQUIRE_FFMPEG=1` and installs ffmpeg for the group that runs `harmonigraph-offline`'s tests,
 so the real encoder and export-length tests fail rather than skip without `ffmpeg` and `ffprobe`.
 
-## Local validation during a hosted runner outage
-
-The normal merge gate remains hosted `Full CI` and the separate Metal check.
-On 2026-11-04 Yan approved a fallback for hosted macOS jobs abandoned before execution because no runner could acquire them.
-An ordinary queue, a test failure, or an unrelated failing check does not qualify.
-The hosted Security audit must still pass;
-this exception replaces macOS execution only.
-
-From the PR's clean, committed and pushed worktree on a Mac with Metal,
-Node, sccache, ffmpeg with libsvtav1, ffprobe and Apple's Metal compiler available:
-
-```sh
-./local-ci.py 1667
-```
-
-The command runs through the lifecycle guard and calls the existing full `ci.sh`,
-requiring GPU and encoder tests instead of allowing local skips.
-It also runs `tools/shader-assets.py check` and `controls`,
-including embedded-versus-source golden parity and deliberately invalid asset controls.
-It does not generate a replacement production corpus or turn a failed corpus check into a pass.
-The PR head must include the current base;
-merge the base into the branch first when needed.
-Golden changes must appear verbatim in the live PR body,
-using the same validator as hosted CI.
-
-On success it posts a PR comment and preserves logs, golden reports and checksums under `local-ci/` in the repository's common Git directory,
-which survives worktree cleanup.
-The receipt records the exact PR head and base plus the local OS, architecture, Rust and Metal compiler.
-This is the same gate suite on the recorded local platform,
-not a claim that the Mac reproduces the pinned hosted image.
-Keep this evidence with the repository for review;
-it is owner-local and is not uploaded as a hosted artifact.
-
-After an explicit owner merge request, or under an already authorized merge skill,
-use the receipt path printed by validation:
-
-```sh
-./local-ci.py 1667 --merge /absolute/path/to/receipt.json
-# A PR with independent decisions worth retaining can select --method merge.
-```
-
-The merge action verifies evidence checksums, the clean checkout, live head/base and current golden declarations again.
-It refuses real test failures and checks from other workflows;
-each waived macOS job needs GitHub's runner-acquisition failure annotation and no executed steps.
-Only the repository owner's account can use the exception.
-It records the outage exception on the PR and uses the existing administrator bypass with an atomic expected-head check.
-The base is rechecked immediately before that merge request;
-GitHub's merge API guards the head, not a simultaneous base update.
-No branch protection is disabled and no hosted check is forged green.
-Review, shader regeneration, build handoff and normal merge-method requirements still apply.
-
 ## Loading a worktree build in Bitwig
 
 This repository's Bitwig workflow uses one bundle location:

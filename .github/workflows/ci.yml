@@ -208,12 +208,6 @@ jobs:
           echo "gate groups: ${{ needs.full-ci.result }}"
           [ "${{ needs.full-ci.result }}" = "success" ]
 
-      - name: Check out the golden policy helper
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Download the golden diff
         if: github.event_name == 'pull_request'
         uses: actions/download-artifact@v4
@@ -232,4 +226,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-        run: python3 tools/golden_policy.py golden-diff
+        run: |
+          cat golden-diff/report.md
+          [ -s golden-diff/changed ] || exit 0
+          body=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .body)
+          # Every row verbatim, mean and max included, so a statement written
+          # for one push covers neither a frame a later push moves nor the same
+          # frame moving again by a different amount.
+          unstated=0
+          while IFS= read -r row; do
+            grep -qF -- "$row" <<<"$body" || { echo "not in the PR body: $row"; unstated=1; }
+          done < golden-diff/changed
+          if [ "$unstated" = 0 ]; then
+            echo "every changed frame is stated in the PR body"
+            exit 0
+          fi
+          echo "::error::Golden frames changed against main and the PR body does not carry their rows (listed above). Read the moved frames' contact sheets in this run's golden-diff artifact, paste the table above into the PR body with what moved and why, and re-run this job alone: gh run rerun $GITHUB_RUN_ID --job <this job's id>."
+          exit 1
