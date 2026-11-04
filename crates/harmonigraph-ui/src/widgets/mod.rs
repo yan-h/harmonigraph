@@ -16,7 +16,6 @@ mod bar;
 mod bend;
 mod fold;
 mod gradient;
-mod icon;
 mod label;
 mod layer;
 mod menu;
@@ -36,7 +35,6 @@ pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
 pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
-pub(crate) use icon::{icon_button, Icon};
 pub use label::label;
 pub(crate) use label::{
     cap_trim, group_box, group_end, group_space, group_space_of, mark_heading, text_at, GROUP_GAP,
