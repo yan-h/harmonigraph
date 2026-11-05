@@ -137,6 +137,9 @@ mod macos {
         settling: Option<(i32, u8)>,
         /// Whom the close button tells, absent where there is no CLAP host.
         editor_host: Option<Arc<dyn EditorHost>>,
+        /// Already told the host to destroy this editor. The callback may
+        /// return before destruction; docking does not make it a new editor.
+        closing: bool,
     }
 
     fn main_thread() -> MainThreadMarker {
@@ -536,19 +539,26 @@ mod macos {
         }
 
         /// The close button, deferred from the window's asking: the host is
-        /// told, and destroys the editor through [`Self::close`]. No state borrow is
-        /// held across the call, which may run it.
+        /// told once for this editor, even when destruction comes on a later
+        /// turn. No state borrow is held across the call, which may run
+        /// [`Self::close`] synchronously.
         fn ask_host_close(&self) {
             let (host, window) = {
-                let state = self.state().borrow();
-                (state.editor_host.clone(), state.window.clone())
+                let mut state = self.state().borrow_mut();
+                if state.closing {
+                    return;
+                }
+                let Some(window) = state.window.clone() else { return };
+                state.closing = true;
+                (state.editor_host.clone(), window)
             };
             if host.is_some_and(|host| host.closed()) {
                 return;
             }
-            if let Some(window) = window {
-                window.miniaturize(None);
-            }
+            // No usable host GUI extension: minimizing is reversible, so a
+            // later close may try again. A delivered close stays latched.
+            self.state().borrow_mut().closing = false;
+            window.miniaturize(None);
         }
 
         /// Another app came to the front, or the host did: float above the
