@@ -137,6 +137,9 @@ mod macos {
         settling: Option<(i32, u8)>,
         /// Whom the close button tells, absent where there is no CLAP host.
         editor_host: Option<Arc<dyn EditorHost>>,
+        /// Already told the host to destroy this editor. The callback may
+        /// return before destruction; docking does not make it a new editor.
+        closing: bool,
     }
 
     fn main_thread() -> MainThreadMarker {
@@ -507,14 +510,23 @@ mod macos {
         /// closed. The view keeps its size; the size source asks the host for
         /// the same ([`Sized::Docked`]).
         fn dock(&self) {
-            let (window, host, view) = {
+            let (window, host, view, agent) = {
                 let mut state = self.state().borrow_mut();
                 let Some(window) = state.window.take() else { return };
                 // Before the move, which can draw a frame on the spot: that
                 // frame's size source must already find it docked.
                 state.redocked = true;
-                (window, state.host.clone(), state.view.clone())
+                (window, state.host.clone(), state.view.clone(), state.agent.clone())
             };
+            if let Some(agent) = agent {
+                // A close belongs to the window being removed, not to the
+                // docked editor or a window opened again before the next turn.
+                agent.cancel_host_close();
+            }
+            window.setDelegate(None);
+            // SAFETY: clear the unretained link while State still owns its
+            // host view, just as in editor teardown.
+            unsafe { window.setNextResponder(None) };
             if let (Some(host), Some(view)) = (host, view) {
                 view.removeFromSuperview();
                 host.addSubview(&view);
@@ -536,19 +548,26 @@ mod macos {
         }
 
         /// The close button, deferred from the window's asking: the host is
-        /// told, and destroys the editor through [`Self::close`]. No state borrow is
-        /// held across the call, which may run it.
+        /// told once for this editor, even when destruction comes on a later
+        /// turn. No state borrow is held across the call, which may run
+        /// [`Self::close`] synchronously.
         fn ask_host_close(&self) {
             let (host, window) = {
-                let state = self.state().borrow();
-                (state.editor_host.clone(), state.window.clone())
+                let mut state = self.state().borrow_mut();
+                if state.closing {
+                    return;
+                }
+                let Some(window) = state.window.clone() else { return };
+                state.closing = true;
+                (state.editor_host.clone(), window)
             };
             if host.is_some_and(|host| host.closed()) {
                 return;
             }
-            if let Some(window) = window {
-                window.miniaturize(None);
-            }
+            // No usable host GUI extension: minimizing is reversible, so a
+            // later close may try again. A delivered close stays latched.
+            self.state().borrow_mut().closing = false;
+            window.miniaturize(None);
         }
 
         /// Another app came to the front, or the host did: float above the
@@ -629,6 +648,7 @@ mod macos {
             // size source or frame. Those callbacks find the empty state.
             let state = std::mem::take(&mut *self.state.borrow_mut());
             if let Some(agent) = &state.agent {
+                agent.cancel_host_close();
                 // SAFETY: removing an observer this added, still alive.
                 unsafe {
                     NSWorkspace::sharedWorkspace().notificationCenter().removeObserver(agent)
@@ -674,15 +694,7 @@ mod macos {
             /// then.
             #[unsafe(method(windowShouldClose:))]
             fn window_should_close(&self, _: &NSWindow) -> bool {
-                // SAFETY: cancelling this object's own pending `hostClose:`.
-                let () = unsafe {
-                    msg_send![
-                        NSObject::class(),
-                        cancelPreviousPerformRequestsWithTarget: self,
-                        selector: sel!(hostClose:),
-                        object: None::<&AnyObject>
-                    ]
-                };
+                self.cancel_host_close();
                 // SAFETY: `hostClose:` is the agent's own method, taking an
                 // object it ignores; the run loop retains the target until
                 // then, so the host destroying the editor cannot free it
@@ -734,6 +746,18 @@ mod macos {
     );
 
     impl Agent {
+        fn cancel_host_close(&self) {
+            // SAFETY: cancelling this object's own pending `hostClose:`.
+            let () = unsafe {
+                msg_send![
+                    NSObject::class(),
+                    cancelPreviousPerformRequestsWithTarget: self,
+                    selector: sel!(hostClose:),
+                    object: None::<&AnyObject>
+                ]
+            };
+        }
+
         fn settle_later(&self) {
             // One chain of looks at a time: a switch mid-chain starts afresh.
             // SAFETY: cancelling this object's own pending `settle:`, then
