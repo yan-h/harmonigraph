@@ -244,8 +244,14 @@ A machine with no hardware encoder fails the export and says so rather than fall
 and so does an Intel Mac, whose encoder has no constant-quality mode.
 
 At 1440p the encoder is what an export waits on, whichever it is.
-On an M5 Pro an 82.6 s take at 2560x1440@60 took 90.2 s end to end through x264 and 31.5 s through the hardware encoder,
-for 460 MB against 502.
+On an M5 Pro an 82.6 s video at 2560x1440@60 took 40-42 s end to end through x264 and 30.1 s through the hardware encoder,
+for 548 MB against 527;
+a denser 88.4 s one took 46-48 s against 32.4 s, for 650 MB against 818.
+x264 keeps about fifteen of the eighteen cores busy for that time, the hardware encoder about two.
+Those are timed at the priority the plugin launches the renderer with.
+A shell held to utility QoS, as an agent session started from a LaunchAgent with no `ProcessType` is, ran the same x264 export in 176 s,
+which is the likely source of the 90.2 s this section used to give;
+the hardware figure reads the same either way.
 The hardware encoder runs at about 155 fps there, the same given ready-made YUV as given RGBA to convert,
 so converting colour on the GPU would not shorten an export;
 and with one encode engine on the chip, two encodes at once are no faster than one.
