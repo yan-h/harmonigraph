@@ -704,9 +704,11 @@ impl Default for Harmonigraph {
 
 impl Plugin for Harmonigraph {
     fn filter_state(state: &mut nice_plug::plugin::PluginState) {
-        // Plain restore bypasses IntParam's range normalization. Repair all six
-        // lanes and Map Follow, and default absent ones so a previous preset
-        // cannot leak in.
+        // Plain restore bypasses IntParam's range normalization, while the
+        // host's label clamps. Clamp all six lanes, Map Follow, the engine and
+        // the map index, so the value loaded is the value shown. Absent lanes
+        // and Follow default so a previous preset cannot leak in; an absent
+        // engine or map keeps the instance's own.
         for id in [
             "map-fifths",
             "map-thirds",
@@ -726,6 +728,11 @@ impl Plugin for Harmonigraph {
             _ => 0,
         };
         state.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(follow));
+        for (id, max) in [("tuning-engine", 2), ("lattice-map", 127)] {
+            if let Some(nice_plug::plugin::ParamValue::I32(value)) = state.params.get_mut(id) {
+                *value = (*value).clamp(0, max);
+            }
+        }
     }
 
     const NAME: &'static str = "Harmonigraph";

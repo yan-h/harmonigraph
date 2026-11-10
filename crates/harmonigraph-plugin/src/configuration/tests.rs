@@ -2525,6 +2525,34 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
 }
 
+/// A plain restore stores an `IntParam`'s value unclamped, while the host's
+/// label clamps it. An engine or map index past its range — hand-edited or
+/// foreign state, since the plugin never saves one — must load as the value
+/// the host shows, in the editor and in the audio alike.
+#[test]
+fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let mut state = device.save();
+    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(3));
+    state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(200));
+    device.load(state, false);
+    device.run(0, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let preview = crate::lattice_maps::view(&plugin.params);
+        assert_eq!(plugin.params.tuning_engine.to_string(), "Lattice Map");
+        assert_eq!(preview.playback.engine, TuningEngine::LatticeMap, "the editor disagrees");
+        assert_eq!(plugin.params.map_playback.lock().engine, TuningEngine::LatticeMap);
+        assert_eq!(plugin.params.map.to_string(), "128 · unavailable");
+        assert_eq!(preview.playback.selected, 127);
+    });
+    let repaired = device.save();
+    assert!(matches!(repaired.params["tuning-engine"], nice_plug::plugin::ParamValue::I32(2)));
+    assert!(matches!(repaired.params["lattice-map"], nice_plug::plugin::ParamValue::I32(127)));
+}
+
 #[test]
 fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
     let _scope = crate::test_scope::enter();
