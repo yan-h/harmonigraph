@@ -49,12 +49,12 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
         ValueBar::new(&mut appearance.view.spiral_bloom, SPIRAL_BLOOM_RANGE, "Spiral bloom")
             .default_value(super::fresh_view().spiral_bloom)
             .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Soft halos around bright MIDI notes in the Spiral. \
                  0 turns bloom off; \
                  1× is the reference strength.",
-            );
+            )
+            .show(ui);
     });
     let shadow = &mut appearance.view.shadow;
     section(ui, "Shadows", |ui| {
@@ -78,12 +78,12 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
         ValueBar::new(&mut cfg.note_cut, 0.0..=1.0, "Backdrop cut")
             .default_value(super::fresh_spectrum().note_cut)
             .percent()
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "How much of the picture is taken away next to a note, so the note \
                  holds over bright energy as well as over dark. 0% turns the surround off. \
                  Over black it changes nothing but the fill.",
-            );
+            )
+            .show(ui);
         ValueBar::new(
             &mut cfg.note_cut_reach,
             harmonigraph_render::SURROUND_REACH_RANGE,
@@ -92,11 +92,11 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
         .default_value(super::fresh_spectrum().note_cut_reach)
         .decimals(1)
         .unit(1.0, " pt")
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How far out from a note the cut fades away. \
                  Longer is softer, and takes more of the gap between close notes.",
-        );
+        )
+        .show(ui);
         ValueBar::new(
             &mut cfg.note_cut_shape,
             harmonigraph_render::SURROUND_SHAPE_RANGE,
@@ -106,12 +106,12 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
         .percent()
         .magnet(0.0, 0.03)
         .curve(harmonigraph_render::surround_fade)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "The curve the cut fades along. 0% is a straight line; \
                  -100% drops steeply at the note and leaves a long soft tail; \
                  100% holds near the note and drops steeply at the far end.",
-        );
+        )
+        .show(ui);
         ValueBar::new(
             &mut cfg.note_fill_lightness,
             crate::config::NOTE_FILL_LIGHTNESS_RANGE,
@@ -119,12 +119,12 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
         )
         .default_value(super::fresh_spectrum().note_fill_lightness)
         .decimals(0)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Lightness (L*) of what fills the cut, drawn in each note's own hue. \
              0 is black; the top of the bar is about the fullest tint, before it pales. \
              Notes stand out most where this is far from their own lightness.",
-        );
+        )
+        .show(ui);
         ValueBar::new(
             &mut cfg.note_tint_fade,
             harmonigraph_render::SURROUND_TINT_FADE_RANGE,
@@ -132,12 +132,12 @@ fn note_surround(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
         )
         .default_value(super::fresh_spectrum().note_tint_fade)
         .decimals(1)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "The power of the cut's fade that the fill's color follows. \
              1 fades them together; higher keeps the color close to the note, \
              and the cut stays dark out to its reach.",
-        );
+        )
+        .show(ui);
     })
     .response
     .on_hover_text("MIDI ribbons and Spiral note dots");
@@ -148,11 +148,11 @@ pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
     ValueBar::new(strength, NOTE_BLOOM_RANGE, "Note bloom")
         .unit(1.0, "×")
         .default_value(super::fresh_view().note_bloom)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Soft halos around bright notes. Shared by the Lattice and MIDI ribbons in the Analyzer. \
              Changing this control updates both pictures. 0 turns bloom off; 1× is the reference strength.",
-        );
+        )
+        .show(ui);
 }
 
 /// The background glow: its reach, strength, colour, wash and clock.
@@ -170,20 +170,20 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .eased(true)
         .unit(super::QUAD_UV_PERCENT, "%")
         .decimals(1)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Distance the background glow extends beyond a node, as a percentage of its radius. \
                      Larger values blend neighboring glows. \
                      0% turns the background glow off.",
-        );
+        )
+        .show(ui);
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Background glow gain")
             .default_value(super::fresh_view().glow_strength)
             .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Brightness of the background glow. 0 removes the light; 1× is the reference gain.",
-            );
+            )
+            .show(ui);
     });
     // Everything below shapes a light that draws only at a Reach and a gain
     // both above 0, so either at 0 greys it, as it does the breathing.
@@ -191,13 +191,13 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ValueBar::new(&mut view.glow_accumulation, GLOW_ACCUMULATION_RANGE, "Overlap buildup")
                 .default_value(super::fresh_view().glow_accumulation)
                 .percent()
-                .show(ui)
-                .on_hover_text(
+                .hint(
                     "Controls how light builds up where note glows overlap. \
                      0% caps their combined brightness at the level set by Background glow gain. \
                      100% lets their light build up where they overlap. \
                      A single note's glow stays unchanged.",
-                );
+                )
+                .show(ui);
             ValueBar::new(
                 &mut view.glow_curve.shape,
                 GLOW_CURVE_SHAPE_MIN..=GLOW_CURVE_SHAPE_MAX,
@@ -208,12 +208,12 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .magnet(0.0, 0.15)
             .display(|shape| format!("{shape:+.2}"))
             .curve(|shape, p| GlowCurve { shape }.sample(p))
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Light falloff from node center to outer edge. \
-                     0 falls evenly; positive values fade near the center; negative values hold brightness until the edge. \
-                     The line previews the falloff.",
-            );
+                 0 falls evenly; positive values fade near the center; negative values hold brightness until the edge. \
+                 The line previews the falloff.",
+            )
+            .show(ui);
             // What colour the light comes out, between the amount of it and the
             // Shadow under it. "Color smoothing" and not "Spread": under this heading,
             // beside a Reach that is about distance, a "spread" reads as how far
@@ -223,13 +223,13 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ValueBar::new(&mut view.glow_blend, GLOW_BLEND_RANGE, "Color smoothing")
                 .default_value(super::fresh_view().glow_blend)
                 .percent()
-                .show(ui)
-                .on_hover_text(
+                .hint(
                     "Mix the MIDI octave and melody/bass colors around each node. \
                      0% keeps separate colored arcs; \
                      100% makes one average color. \
                      Audio-ring colors do not feed the glow.",
-                );
+                )
+                .show(ui);
         });
     ui.add_enabled_ui(view.glow_draws(), |ui| {
         // The INK's own share of the light, where a Shadow depth says the
@@ -241,13 +241,13 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.glow_wash, GLOW_WASH_RANGE, "Light on notes")
             .default_value(super::fresh_view().glow_wash)
             .percent()
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Amount of glow laid over active rings and marks. \
                      0% preserves their original colors; \
                      100% blends them into the surrounding light. \
                      Idle shapes always receive the full glow.",
-            );
+            )
+            .show(ui);
         super::block(ui, "Glow response", |ui| {
             crate::widgets::response(
                 ui,
@@ -263,10 +263,18 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.add_enabled_ui(view.glow_draws(), |ui| {
         ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
             .default_value(super::fresh_view().atmosphere.breath_amount)
-            .percent().show(ui).on_hover_text("Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.");
+            .percent()
+            .hint(
+                "Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.",
+            )
+            .show(ui);
         ValueBar::new(&mut view.atmosphere.breath_speed, BREATH_SPEED_MIN..=BREATH_SPEED_MAX, "Breathing speed")
             .default_value(super::fresh_view().atmosphere.breath_speed)
-            .unit(1.0, "×").show(ui).on_hover_text("1× is the original slow breathing. 0 freezes the breathing where it is; set depth to 0% to turn it off.");
+            .unit(1.0, "×")
+            .hint(
+                "1× is the original slow breathing. 0 freezes the breathing where it is; set depth to 0% to turn it off.",
+            )
+            .show(ui);
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Reset breathing").clicked() {
                 let fresh = AtmosphereSettings::default();
@@ -297,12 +305,12 @@ fn shadow_group(
                 ValueBar::new(hide_behind, HIDE_BEHIND_RANGE, "Hide behind")
                     .percent()
                     .default_value(super::fresh_view().hide_behind)
-                    .show(ui)
-                    .on_hover_text(
+                    .hint(
                         "How much a ring in front hides the rings, marks, names and crosses \
                          behind it, whatever the shadow's Darkness. 0% hides nothing; a Width \
                          of 0 turns it off with the shadow.",
-                    );
+                    )
+                    .show(ui);
             });
         }
     })

@@ -16,7 +16,7 @@
 use egui::Sense;
 
 use super::{section, subsection};
-use crate::widgets::{button_row, choice_row, record_button};
+use crate::widgets::{button_row, choice_row, record_button, ValueBar};
 use crate::{theme, LatticeSide, Layout, Pane, PictureState, RenderFrame};
 
 /// The surface this preview's panes draw on. Every copy of a pane holds
@@ -463,23 +463,27 @@ fn render_controls(
             ],
         );
         // Here rather than beside Finish recording: a render choice like Output
-        // size, which a queued export takes from the current look. Always shown,
-        // because whether it applies turns on the trigger a take was RECORDED
-        // under, not the one selected now.
-        ui.horizontal_wrapped(|ui| {
-            crate::widgets::label(ui, "Tail").on_hover_text(
+        // size, which a queued export takes from the current look.
+        //
+        // Stored in f64 seconds, which the export's frame count reads; the bar
+        // edits an f32 copy and writes back only on an edit, so an untouched
+        // tail keeps its exact stored value. Eased because a release worth
+        // waiting for is a few seconds, at the fine end of a minute's range.
+        let mut tail = state.appearance.render.tail as f32;
+        if ValueBar::new(&mut tail, crate::TAIL_RANGE.0 as f32..=crate::TAIL_RANGE.1 as f32, "Tail")
+            .eased(true)
+            .unit(1.0, " s")
+            .default_value(crate::RenderConfig::default().tail as f32)
+            .hint(
                 "How long the video runs past the last recorded note or automation, so releases finish fading. \
                  The video always runs to the end of the recorded audio, so 0 ends an audio export at its \
-                 range end. A take recorded under Loop end ends with its loop and ignores this.",
-            );
-            ui.add(
-                egui::DragValue::new(&mut state.appearance.render.tail)
-                    .range(crate::TAIL_RANGE.0..=crate::TAIL_RANGE.1)
-                    .speed(0.05)
-                    .max_decimals(2)
-                    .suffix(" s"),
-            );
-        });
+                 range end.",
+            )
+            .show(ui)
+            .changed()
+        {
+            state.appearance.render.tail = f64::from(tail);
+        }
         // A render choice like the Tail: the picture is the same either way,
         // and a queued export takes the current one.
         choice_row(
@@ -682,6 +686,9 @@ fn record_controls(
                      Recording must reach this bar from before it — arming with the playhead \
                      already past it records until you turn Record take off.",
                 );
+                // A drag value rather than a ValueBar: a bar's travel across
+                // 100,000 bars would move hundreds of bars a point (#1677).
+                #[allow(clippy::disallowed_methods)]
                 ui.add(
                     egui::DragValue::new(&mut state.appearance.render.stop_bar)
                         .range(crate::STOP_BAR_RANGE.0..=crate::STOP_BAR_RANGE.1)
@@ -1499,6 +1506,44 @@ mod tests {
         assert!(samples[1].0 > 1.0, "the large preview did not exercise enlargement");
         assert!(samples[0].1 < samples[1].1, "the enlarged preview kept the smaller floor");
         assert!((samples[0].1 / samples[1].1 - samples[0].0 / samples[1].0).abs() < 1e-3);
+    }
+
+    /// The Tail is a value bar like every other number: a double-click puts it
+    /// back on a fresh render's tail.
+    #[test]
+    fn a_double_click_resets_the_tail() {
+        use crate::tests::probe::{events_into, press, themed};
+        let ctx = themed();
+        let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        let mut interaction = crate::Interaction::default();
+        state.appearance.render.tail = 7.5;
+        let size = egui::vec2(400.0, 800.0);
+        let mut frame = |events| {
+            events_into(
+                &ctx,
+                size,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                events,
+                |ui| render_controls(ui, &mut state, &mut interaction),
+            )
+        };
+        let at = frame(vec![])
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Tail" => {
+                    Some(text.pos + egui::vec2(4.0, 4.0))
+                }
+                _ => None,
+            })
+            .expect("the Tail is drawn");
+        frame(vec![egui::Event::PointerMoved(at)]);
+        for _ in 0..2 {
+            frame(vec![press(at, true)]);
+            frame(vec![press(at, false)]);
+        }
+        frame(vec![]);
+        assert_eq!(state.appearance.render.tail, crate::RenderConfig::default().tail);
     }
 }
 

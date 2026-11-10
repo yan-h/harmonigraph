@@ -268,9 +268,9 @@ pub struct Recorder {
     run_live: bool,
     /// Set by the GUI for every trigger whose take is over the moment the
     /// transport goes backwards — a loop wrapping under
-    /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd), and the host
+    /// `AtLoopEnd`, and the host
     /// returning the playhead under
-    /// [`OnTransportStop`](harmonigraph_take::RenderTrigger::OnTransportStop).
+    /// `OnTransportStop`.
     /// The take ends there rather than splitting into another pass.
     end_at_rewind: Arc<AtomicBool>,
     /// What the take in progress has latched, shared with the [`Control`] that
@@ -628,7 +628,7 @@ impl Recorder {
     /// **The test is a CROSSING, not a level.** A take armed with the playhead
     /// already past the bar never sees a position below it, so it never fires
     /// and simply runs until you disarm — the same graceful nothing
-    /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd) does with
+    /// `AtLoopEnd` does with
     /// looping off. A level test would instead end it on the first block, with
     /// an empty file and a render of nothing, which is #569's failure exactly.
     ///
@@ -783,7 +783,7 @@ impl Control {
 
     /// Tell the audio thread whether a backward jump ends the take rather than
     /// splitting it — true for every trigger but
-    /// [`OnDisarm`](harmonigraph_take::RenderTrigger::OnDisarm), which is the
+    /// `OnDisarm`, which is the
     /// one that has to survive a looping transport. Called every GUI frame.
     pub fn set_end_at_rewind(&self, on: bool) {
         self.end_at_rewind.store(on, Ordering::Relaxed);
@@ -807,7 +807,7 @@ impl Control {
     }
 
     /// The bar to end the take at, or `None` for every trigger but
-    /// [`AtBar`](harmonigraph_take::RenderTrigger::AtBar). Called every GUI
+    /// `AtBar`. Called every GUI
     /// frame, like [`set_end_at_rewind`](Self::set_end_at_rewind), so a
     /// mid-take change of mind reaches the audio thread.
     pub fn set_stop_bar(&self, bar: Option<f64>) {

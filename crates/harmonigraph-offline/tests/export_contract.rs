@@ -1,5 +1,6 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
-use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RenderTrigger, WavWriter, Writer};
+use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, WavWriter, Writer};
+use harmonigraph_ui::RenderTrigger;
 use std::path::Path;
 use std::process::Command;
 
@@ -72,23 +73,16 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     replacement.render.tail = 0.0;
     std::fs::write(&tail_zero, replacement.serialize()).unwrap();
     let tail_zero = tail_zero.to_str().unwrap();
-    // A queued export's current look on a different trigger, with a 4 s Tail.
-    let fresh = dir.join("fresh.ron");
-    let mut with_tail = harmonigraph_ui::AppearanceDocument::default();
-    with_tail.render.tail = 4.0;
-    std::fs::write(&fresh, with_tail.serialize()).unwrap();
-    let fresh = fresh.to_str().unwrap();
     for (name, seconds, trigger, tail, extra, frames) in [
         // The fresh Tail is 0: the video ends with the last note.
         ("default-tail", 0.25, RenderTrigger::OnDisarm, None, vec![], 5),
         ("recorded-tail", 0.25, RenderTrigger::OnDisarm, Some(4.0), vec![], 85),
         ("explicit-end", 10.0, RenderTrigger::OnDisarm, None, vec!["--end", "1"], 20),
         ("late-start", 0.25, RenderTrigger::OnDisarm, None, vec!["--start", "3", "--end", "4"], 20),
-        // A loop-end take ends where its recording, and so its loop, does:
-        // at 1 s, past the last note at 0.25 s but with no tail (#1125).
-        ("loop-end", 1.0, RenderTrigger::AtLoopEnd, None, vec![], 20),
-        // A typed --tail still runs past it.
-        ("loop-explicit-tail", 1.0, RenderTrigger::AtLoopEnd, None, vec!["--tail", "4"], 85),
+        // A loop-end take runs its Tail past the last note like any other.
+        ("loop-end", 1.0, RenderTrigger::AtLoopEnd, Some(4.0), vec![], 85),
+        // A typed --tail wins over the Tail the take carries.
+        ("explicit-tail", 0.25, RenderTrigger::OnDisarm, Some(4.0), vec!["--tail", "0"], 5),
         // An audio export's shape: the last note well before the audio ends.
         // The recorded Tail of 0 ends the video with the audio at 1 s rather
         // than at the last note plus a longer Tail.
@@ -101,16 +95,6 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
             RenderTrigger::OnTransportStop,
             Some(4.0),
             vec!["--appearance", tail_zero],
-            20,
-        ),
-        // But whether it applies is the RECORDING's: a loop-end take exported again
-        // with a Manually look and its 4 s Tail still ends with its loop.
-        (
-            "loop-end-replacement",
-            1.0,
-            RenderTrigger::AtLoopEnd,
-            None,
-            vec!["--appearance", fresh],
             20,
         ),
     ] {

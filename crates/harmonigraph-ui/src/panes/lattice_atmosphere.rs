@@ -20,15 +20,20 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         ui.add_enabled_ui(glow_enabled, |ui| {
             ValueBar::new(&mut settings.texture_depth, 0.0..=1.0, "Pattern contrast")
                 .default_value(super::fresh_view().atmosphere.texture_depth)
-                .percent().show(ui).on_hover_text("Pattern contrast before the material shapes the light. 0% restores smooth halos; material settings remain active.");
+                .percent()
+                .hint(
+                    "Pattern contrast before the material shapes the light. 0% restores smooth halos; material settings remain active.",
+                )
+                .show(ui);
             ValueBar::new(&mut settings.texture_scale, NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX, "Pattern size")
                 .default_value(super::fresh_view().atmosphere.texture_scale)
                 .eased(true)
                 .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text("Larger values make broader patterns. The material can reshape this pattern.");
-            multiplier(ui, (&mut settings.texture_speed, super::fresh_view().atmosphere.texture_speed), "Pattern speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
-                .on_hover_text("Pattern motion before the material. 0 freezes this motion; notes and the material can still change the picture.");
+                .hint(
+                    "Larger values make broader patterns. The material can reshape this pattern.",
+                )
+                .show(ui);
+            multiplier(ui, (&mut settings.texture_speed, super::fresh_view().atmosphere.texture_speed), "Pattern speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX, "Pattern motion before the material. 0 freezes this motion; notes and the material can still change the picture.");
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Reset pattern").on_hover_text("Reset only the pattern contrast, size and speed.").clicked() {
                 let fresh = AtmosphereSettings::default();
@@ -56,7 +61,11 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .default_value(super::fresh_view().atmosphere.material_amount)
-                .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
+                .percent()
+                .hint(
+                    "How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.",
+                )
+                .show(ui);
             if settings.material_style == LatticeMaterial::Stars {
                 super::material::stars_resolution(ui, &mut settings.stars, &super::fresh_view().atmosphere.stars);
             }
@@ -115,6 +124,11 @@ fn multiplier(
     (value, fresh): (&mut f32, f32),
     label: &str,
     range: std::ops::RangeInclusive<f32>,
+    hint: &str,
 ) -> egui::Response {
-    crate::widgets::ValueBar::new(value, range, label).unit(1.0, "×").default_value(fresh).show(ui)
+    crate::widgets::ValueBar::new(value, range, label)
+        .unit(1.0, "×")
+        .default_value(fresh)
+        .hint(hint)
+        .show(ui)
 }

@@ -6,9 +6,10 @@
 use crate::{AppearanceDocument, SpectrumConfig};
 use harmonigraph_scene::{Camera, ViewConfig};
 
-/// Appearance shortcuts also reserved by the native shell, so the same key
-/// cannot edit plugin history and the host's history at once.
-pub const APPEARANCE_SHORTCUTS: &[egui::KeyboardShortcut] = &[
+/// Undo, then the redo chords. Taken through [`crate::keys`], so the native
+/// shell keeps them from the host: the same key cannot edit plugin history and
+/// the host's history at once.
+pub(crate) const APPEARANCE_SHORTCUTS: &[egui::KeyboardShortcut] = &[
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z),
     egui::KeyboardShortcut::new(
         egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
@@ -216,29 +217,21 @@ impl AppearanceEditor {
         // Keep its ownership for the whole frame: Undo followed by Enter can
         // undo text and release focus in one pass, but must not also undo a look.
         if crate::kept_focus(ctx) && !text_edit_was_focused && !ctx.text_edit_focused() {
-            let mut handled = false;
-            ctx.input_mut(|input| {
-                input.events.retain(|event| {
-                    let egui::Event::Key { key, modifiers, pressed: true, .. } = event else {
-                        return true;
-                    };
-                    if !APPEARANCE_SHORTCUTS.iter().any(|shortcut| {
-                        *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers)
-                    }) {
-                        return true;
-                    }
-                    handled = true;
-                    if *key == egui::Key::Z && !modifiers.shift {
-                        self.history.undo(appearance);
-                    } else {
-                        self.history.redo(appearance);
-                    }
-                    false
-                });
-            });
-            if handled {
+            let taken = crate::keys::take_each(ctx, APPEARANCE_SHORTCUTS);
+            for shortcut in &taken {
+                if *shortcut == APPEARANCE_SHORTCUTS[0] {
+                    self.history.undo(appearance);
+                } else {
+                    self.history.redo(appearance);
+                }
+            }
+            if !taken.is_empty() {
                 ctx.request_repaint();
             }
+        } else {
+            // Read by the text edit, and kept from the host by its focus: claimed
+            // as well for a frame that ends the edit, which the next one undoes on.
+            crate::keys::claim(ctx, APPEARANCE_SHORTCUTS);
         }
         if let Some(command) = self.command.take() {
             self.history.finish(appearance);

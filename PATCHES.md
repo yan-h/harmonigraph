@@ -174,10 +174,15 @@ through one the button reads down.
 `Cargo.toml` gains an empty `[workspace]` table so `cargo test --manifest-path` reaches the unit tests over the mask arithmetic;
 ci.sh runs them.
 macOS only.
+- **Patch 7** (`src/platform/macos/view.rs`): a new frame divisor takes effect at once (#1676).
+The link schedules its next frame before running this one, so a divisor set from a frame paced only the interval after the next frame, and one set between frames waited out the old divisor's whole interval.
+Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw.
+egui-baseview Patch 21 needs both, to slow the link while the editor idles and restore it on the next refresh.
+macOS only, like the divisor.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
 baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
 Download the new crates.io tarball into `vendor/baseview`,
-re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor, watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
+re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor (re-paced at once when it changes), watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
 - **Upstreaming**: declined (2026-07-19).
 Kept as a local patch rather than proposed upstream.
 
@@ -354,6 +359,9 @@ a focused widget takes every key, unless the app says through `Queue::set_focus_
 A label holding a selection claims the copy chord (Cmd-C, Ctrl-Insert off macOS), which egui turns into its own copy, so the DAW does not copy too (#1608).
 An open memory-tracked popup claims Escape even without widget focus,
 so closing a combo box does not also send Escape to the DAW (#1659).
+A cut, copy or paste chord reaches egui only when egui claims the key, so Cmd-X with a label selected goes to the DAW alone rather than also copying the label (#1674).
+A label holding a selection claims Escape as well, which clears that selection (#1674);
+the arrows and Cmd-A, which move it, stay the host's, since a stray click on a label would otherwise take the arrows from the DAW.
 Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
 `translate_virtual_key` lowercases a character before matching it,
 so Shift and Caps Lock letters still produce egui key events.
@@ -376,6 +384,14 @@ Together they classify a missed refresh as a late link callback, a wait for a dr
 `frame_log::event` is public so the plugin can add its own rows on the same clock and frame (#1670).
 Built only on request (`--features frame-log` on the plugin);
 `tools/frame-log-summary.py` reads the log.
+- **Patch 21** (`src/window.rs`): skip the display link's frames that could draw nothing (#1676).
+The UI pass runs on every frame the link paces, drawn or not, so an idle editor waiting out its 50 ms poll ran it on every refresh: 107 ms per second of Bitwig's main thread at 144 Hz.
+After the render decision, `paced_divisor` sets the link to the first of the app's chosen frames (`Queue::set_frame_divisor`) strictly past the next repaint deadline, which is the frame that would draw anyway (one exactly on it draws only if its UI pass runs no faster, so it is skipped), never more than `MAX_FRAME_GAP` (0.08 s) apart unless the chosen rate is.
+`MAX_FRAME_GAP` is public so the plugin can assert its 0.1 s stall threshold sits a refresh above it.
+A frame asked for at once (an animating editor, input, an egui animation) puts the chosen divisor back, and so does any event, before egui sees it (`on_event`), so input draws on the next refresh.
+A size change holds the chosen divisor for `RESIZE_HOLD` (0.2 s): on macOS a host resize is no event, only a size polled at the top of a frame, so an idling link stepped a border drag at the poll.
+What changes on another thread, a note, audio or a host parameter, is seen at the next deadline, up to one poll later than on a link that ran every refresh.
+Needs baseview Patch 7.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);

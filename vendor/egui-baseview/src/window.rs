@@ -274,7 +274,9 @@ impl<'a> Queue<'a> {
 
     /// Run the frame callback on every `divisor`th refresh of the display
     /// from here on; 0 and 1 are every refresh. See
-    /// [`baseview::Window::set_frame_divisor`].
+    /// [`baseview::Window::set_frame_divisor`]. While the UI waits on a later
+    /// repaint deadline, the window skips the frames before it
+    /// ([`paced_divisor`]).
     ///
     /// Applied once the frame returns (the window isn't reachable from
     /// inside), so calling it repeatedly within one frame keeps only the last
@@ -317,7 +319,7 @@ impl<'a> Queue<'a> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum KeyCapture {
     #[default]
-    /// All keys will be captured from the host.
+    /// Every key egui claims ([`egui_claims_key`]) is captured from the host.
     CaptureAll,
     /// No keys will be captured from the host.
     IgnoreAll,
@@ -400,6 +402,13 @@ where
     /// `repaint_after` is what the UI asked for, this is what the surface has
     /// shown it will accept. See [`wants_render`].
     retry_after: Option<Instant>,
+    /// The divisor the app last chose ([`Queue::set_frame_divisor`]): the
+    /// link's rate whenever the UI wants a frame at once, and the one any
+    /// event restores. See [`paced_divisor`] for the rest of the time.
+    frame_divisor: u32,
+    /// When the window last changed size, by [`SizeSource`] or a `Resized`
+    /// event: the chosen rate is held for [`RESIZE_HOLD`] after it.
+    resized_at: Option<Instant>,
     key_capture: KeyCapture,
     /// See [`Queue::set_focus_takes_only_arrows`].
     focus_takes_only_arrows: bool,
@@ -569,6 +578,8 @@ where
             repaint_after: Some(start_time),
             refused_presents: 0,
             retry_after: None,
+            frame_divisor: frame_divisor.unwrap_or(1),
+            resized_at: None,
             key_capture,
             focus_takes_only_arrows,
             tess_ms: 0.0,
@@ -742,6 +753,69 @@ fn wants_render(
         Some(t) => now >= t || repaint_delay.is_zero(),
         None => repaint_delay.is_zero(),
     }
+}
+
+/// The furthest apart, in seconds, [`paced_divisor`] spaces the link's frames
+/// beyond the app's chosen rate, whatever the UI waits for: a UI that asks for
+/// no repaint at all still runs a pass this often, and so still sees what
+/// changed outside it. It bounds the gap between UI passes while the editor
+/// idles, and so how late a change from another thread is seen; a chosen rate
+/// slower than this is kept as it is, never sped up.
+///
+/// Public so the app's own check for a stalled loop can sit clear above it:
+/// paced gaps land on whole refreshes and run-loop jitter on top, so a cap
+/// equal to a stall threshold reads half its idle gaps as stalls.
+pub const MAX_FRAME_GAP: f64 = 0.08;
+
+/// How long after a size change [`paced_divisor`] keeps the chosen rate.
+///
+/// A host resizing the window on macOS sends no event: the size is polled at
+/// the top of each frame ([`SizeSource`]), so a link slowed to the idle poll
+/// would take each step of a border drag up to a poll late, about 18 a second.
+/// Held, the next size of the drag is seen within one chosen frame. The hold
+/// restarts at every size, so it need only bridge the gap between two host
+/// updates, which follow the pointer's moves; 0.2 s bridges a hand slowing
+/// mid-drag. What it costs is a fifth of a second of undrawn passes at the
+/// chosen rate once a resize ends, under 30 at 144 Hz, and nothing while idle.
+const RESIZE_HOLD: Duration = Duration::from_millis(200);
+
+/// The divisor to pace the display link at until the next frame: `chosen`, or
+/// a whole multiple of it that skips the frames which could draw nothing
+/// because they fall before the deadline `until_due` away (`None`: there is
+/// none).
+///
+/// The UI pass runs on every frame the link paces, drawn or not, and an idle
+/// editor waiting out its 50 ms poll ran it on every refresh for nothing
+/// (#1676). So the link skips to the first of the chosen rate's frames
+/// strictly past the deadline, which is the frame `wants_render` would draw
+/// on anyway: the drawn cadence is the one the chosen rate gives, and only the
+/// undrawn passes go. One that lands exactly on the deadline is skipped,
+/// because it need not draw: the deadline is `now` after this frame's UI pass,
+/// and that frame compares it with `now` after its own, so it draws only if
+/// its pass ran no faster than this one. A deadline of now (the UI asked for
+/// a frame at once, as an animating editor does every frame) is the chosen
+/// rate itself, so the first animating frame restores it. A frame that still
+/// lands a hair before its deadline is no loss: it reads the deadline as
+/// moments away and paces the next of the chosen rate's frames. What the UI
+/// does not schedule waits for the next of these frames:
+/// an event restores the chosen rate at once (see `on_event`), but a change
+/// from another thread (a note, audio, a host parameter) is seen when the
+/// deadline comes.
+///
+/// A size change is the exception: `since_resize` (how long ago the window
+/// last changed size) within [`RESIZE_HOLD`] keeps the chosen rate.
+fn paced_divisor(
+    chosen: u32, refresh: f64, until_due: Option<Duration>, since_resize: Option<Duration>,
+) -> u32 {
+    let chosen = chosen.max(1);
+    let period = refresh * f64::from(chosen);
+    if !(period.is_finite() && period > 0.0) || since_resize.is_some_and(|t| t < RESIZE_HOLD) {
+        return chosen;
+    }
+    let wait = until_due.map_or(MAX_FRAME_GAP, |due| due.as_secs_f64().min(MAX_FRAME_GAP));
+    let most = (MAX_FRAME_GAP / period).floor().max(1.0);
+    let frames = ((wait / period).floor() + 1.0).min(most);
+    chosen * frames as u32
 }
 
 /// What a finished render leaves behind for [`wants_render`] to read next
@@ -961,6 +1035,57 @@ mod wants_render_tests {
         // No deadline yet and nothing urgent asked for: still waits.
         assert!(!wants_render(false, None, None, capped, now));
     }
+
+    /// Waiting out the 50 ms idle poll, the link skips to the first of the
+    /// chosen rate's frames past it, at any display rate, never further apart
+    /// than the cap unless the chosen rate is, and never faster than the
+    /// chosen rate; a frame asked for at once (an animating editor) puts the
+    /// chosen rate back.
+    #[test]
+    fn an_idle_poll_slows_the_link_to_the_frame_it_draws_on() {
+        let poll = Some(Duration::from_millis(50));
+        for hz in [60.0, 100.0, 120.0, 144.0] {
+            let refresh = 1.0 / hz;
+            for chosen in 1..=4 {
+                let idle = paced_divisor(chosen, refresh, poll, None);
+                let gap = f64::from(idle) * refresh;
+                let step = f64::from(chosen) * refresh;
+                assert_eq!(idle % chosen, 0, "{hz} Hz, divisor {chosen}: off the chosen grid");
+                assert!(gap > 0.05 - 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap < 0.05 + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap <= MAX_FRAME_GAP + 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
+                assert_eq!(paced_divisor(chosen, refresh, Some(Duration::ZERO), None), chosen);
+            }
+        }
+        // #1673's still picture in Bitwig drew every 8th refresh at 144 Hz.
+        assert_eq!(paced_divisor(1, 1.0 / 144.0, poll, None), 8);
+        // Third at 60 Hz is the poll's own period: doubling it to the next
+        // frame past the poll would space passes 100 ms apart, which the
+        // plugin's stall check reads as a stall. The cap keeps it at Third.
+        assert_eq!(paced_divisor(3, 1.0 / 60.0, poll, None), 3);
+        // Quarter at 60 Hz is already slower than the poll.
+        assert_eq!(paced_divisor(4, 1.0 / 60.0, poll, None), 4);
+        // Nothing asked for at all: still a pass every 0.08 s or sooner.
+        assert_eq!(paced_divisor(1, 1.0 / 144.0, None, None), 11);
+    }
+
+    /// A host resize on macOS arrives as no event, only as a size the next
+    /// frame polls, so a still editor whose link idles would step a border
+    /// drag at the poll. Within the hold after a size change the link keeps
+    /// the chosen rate, whatever the deadline; after it the link idles again.
+    #[test]
+    fn a_resize_holds_the_chosen_rate_for_a_moment() {
+        let poll = Some(Duration::from_millis(50));
+        let refresh = 1.0 / 144.0;
+        let just = Some(Duration::from_millis(10));
+        let late = Some(RESIZE_HOLD - Duration::from_millis(1));
+        assert_eq!(paced_divisor(1, refresh, poll, just), 1);
+        assert_eq!(paced_divisor(2, refresh, poll, late), 2);
+        assert_eq!(paced_divisor(1, refresh, None, just), 1);
+        let after = Some(RESIZE_HOLD + Duration::from_millis(1));
+        assert_eq!(paced_divisor(1, refresh, poll, after), 8);
+        assert_eq!(paced_divisor(2, refresh, poll, after), 8);
+    }
 }
 
 impl<State, U> WindowHandler for EguiWindow<State, U>
@@ -993,6 +1118,7 @@ where
                 (size.height * self.pixels_per_point as f64).round().max(1.0) as u32,
             );
             self.physical_size = adopted;
+            self.resized_at = Some(tick_start);
         }
 
         self.egui_time = egui_time(self.egui_time, self.start_time, window.frame_timing());
@@ -1032,7 +1158,7 @@ where
         });
 
         if let Some(divisor) = frame_divisor {
-            window.set_frame_divisor(divisor);
+            self.frame_divisor = divisor;
         }
 
         if self.close_requested {
@@ -1149,6 +1275,19 @@ where
                 Some(self.repaint_after.map_or(candidate, |pending| pending.min(candidate)));
         }
 
+        // The link's rate until the next frame, now that what that frame waits
+        // for is known: the deadline `wants_render` reads next.
+        let until_due =
+            self.retry_after.or(self.repaint_after).map(|due| due.saturating_duration_since(now));
+        let since_resize = self.resized_at.map(|at| now.saturating_duration_since(at));
+        let divisor = match window.frame_timing() {
+            Some(timing) => {
+                paced_divisor(self.frame_divisor, timing.refresh, until_due, since_resize)
+            }
+            None => self.frame_divisor,
+        };
+        window.set_frame_divisor(divisor);
+
         for command in full_output.platform_output.commands {
             match command {
                 egui::OutputCommand::CopyText(text) => {
@@ -1203,6 +1342,11 @@ where
 
     #[allow(unused_variables)]
     fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
+        // Back to the chosen rate, so an editor the link has slowed to its
+        // poll ([`paced_divisor`]) draws this event on the next refresh rather
+        // than a poll later. Nothing changes while the link is not slowed.
+        window.set_frame_divisor(self.frame_divisor);
+
         // Parent/embedded windows do not always gain keyboard focus
         // Automatically on click. Request focus explicitly before forwarding the event.
         if matches!(
@@ -1315,12 +1459,26 @@ where
                     // so we detect these things manually:
                     //
                     // TODO: See if this is an issue in baseview as well.
-                    if is_cut_command(self.egui_input.modifiers, event.code) {
-                        self.egui_input.events.push(egui::Event::Cut);
-                    } else if is_copy_command(self.egui_input.modifiers, event.code) {
-                        self.egui_input.events.push(egui::Event::Copy);
-                    } else if is_paste_command(self.egui_input.modifiers, event.code) {
-                        if let Some(clipboard_ctx) = &mut self.clipboard_ctx {
+                    let modifiers = self.egui_input.modifiers;
+                    let cut = is_cut_command(modifiers, event.code);
+                    let copy = is_copy_command(modifiers, event.code);
+                    if cut || copy || is_paste_command(modifiers, event.code) {
+                        // A clipboard chord reaches egui only when egui claims
+                        // the key, on the same verdict that decides below
+                        // whether the host sees it. A label selection claims
+                        // the copy chord alone, so a cut there is the host's:
+                        // egui would copy the read-only label on it (#1674).
+                        let claims = egui_claims_key(
+                            &self.egui_ctx,
+                            modifiers,
+                            event,
+                            self.focus_takes_only_arrows,
+                        );
+                        if claims && cut {
+                            self.egui_input.events.push(egui::Event::Cut);
+                        } else if claims && copy {
+                            self.egui_input.events.push(egui::Event::Copy);
+                        } else if claims && let Some(clipboard_ctx) = &mut self.clipboard_ctx {
                             match clipboard_ctx.get_contents() {
                                 Ok(contents) => {
                                     self.egui_input.events.push(egui::Event::Text(contents))
@@ -1363,8 +1521,11 @@ where
                     viewport_info.native_pixels_per_point = Some(self.pixels_per_point);
                     viewport_info.inner_rect = Some(screen_rect);
 
-                    // Schedule to repaint on the next frame.
-                    self.repaint_after = Some(Instant::now());
+                    // Schedule to repaint on the next frame, and hold the
+                    // chosen rate for the rest of a drag (`RESIZE_HOLD`).
+                    let now = Instant::now();
+                    self.repaint_after = Some(now);
+                    self.resized_at = Some(now);
                 }
                 baseview::WindowEvent::Focused => {
                     self.egui_input
@@ -1441,13 +1602,17 @@ where
 /// things. `arrows_only` is the app's word that this one uses just the arrows
 /// ([`Queue::set_focus_takes_only_arrows`]), and it keeps those and Escape.
 ///
-/// A selection in a label claims only the copy chord: unclaimed, the same
-/// Cmd-C also goes up to the DAW (#1433), and its own Copy competes with the
-/// label's for the pasteboard. A click without a drag counts, because egui
-/// copies the whole label from a bare cursor.
+/// A selection in a label claims the copy chord and Escape: unclaimed, the
+/// same Cmd-C also goes up to the DAW (#1433), and its own Copy competes with
+/// the label's for the pasteboard; Escape clears the selection, and would
+/// clear the DAW's too (#1674). A click without a drag counts, because egui
+/// copies the whole label from a bare cursor. The arrows and Cmd-A, which
+/// also move a label selection, stay the host's: claiming them would take
+/// the arrows from the DAW after any stray click on a label.
 ///
-/// The chord is the one `on_event` turns into `Event::Copy`, so a key is
-/// either egui's copy or the host's, never both.
+/// `on_event` sends egui a cut, copy or paste only on this verdict, so under
+/// the capture modes that honour it alone (`CaptureAll`, `CaptureShortcuts`) a
+/// clipboard chord is either egui's or the host's, never both.
 fn egui_claims_key(
     ctx: &egui::Context,
     modifiers: egui::Modifiers,
@@ -1461,12 +1626,14 @@ fn egui_claims_key(
         event.key,
         Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Escape
     );
+    let label_selected = || {
+        ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
+    };
     ctx.egui_wants_keyboard_input() && (kept || !arrows_only)
         // Popup Escape works without widget focus. Read persistent popup
         // memory here: this runs between egui passes, before Escape closes it.
-        || matches!(event.key, Key::Escape) && egui::Popup::is_any_open(ctx)
-        || is_copy_command(modifiers, event.code)
-            && ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
+        || matches!(event.key, Key::Escape) && (egui::Popup::is_any_open(ctx) || label_selected())
+        || is_copy_command(modifiers, event.code) && label_selected()
 }
 
 fn is_cut_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
@@ -1594,6 +1761,11 @@ mod key_capture_tests {
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| ui.button("button").request_focus());
         assert!(ctx.egui_wants_keyboard_input());
+        let cut = KeyboardEvent { code: keyboard_types::Code::KeyX, ..Default::default() };
+        let cuts = |ctx, arrows_only| egui_claims_key(ctx, egui::Modifiers::COMMAND, &cut, arrows_only);
+        assert!(cuts(&ctx, false), "focus takes a cut");
+        assert!(!cuts(&ctx, true));
+        assert!(!cuts(&egui::Context::default(), false), "unfocused, a cut is the host's");
 
         assert!(claims(&ctx, space(), false), "Space clicks a focused button");
         assert!(!claims(&ctx, space(), true), "a plot handle leaves it to the host");
@@ -1643,5 +1815,62 @@ mod key_capture_tests {
         assert!(claims(&ctx, copy), "a selected label claims Cmd-C");
         assert!(!claims(&ctx, (egui::Modifiers::NONE, Code::KeyC)));
         assert!(!claims(&ctx, (egui::Modifiers::COMMAND, Code::KeyV)));
+    }
+
+    #[test]
+    fn a_label_selection_takes_escape_from_the_host() {
+        use keyboard_types::{Key, KeyboardEvent};
+        let claims = |ctx: &egui::Context, key: Key| {
+            let event = KeyboardEvent { key, ..Default::default() };
+            egui_claims_key(ctx, egui::Modifiers::NONE, &event, false)
+        };
+
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut label = Rect::NOTHING;
+            let _ = ctx.run_ui(raw, |ui| label = ui.label("frame stall 41 ms").rect);
+            label
+        };
+        let label = frame(vec![]);
+        assert!(!claims(&ctx, Key::Escape), "nothing selected: the host keeps Escape");
+
+        // A bare click arms it: egui holds a cursor in the label as a selection.
+        let at = label.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(at), press(true)]);
+        frame(vec![press(false)]);
+        frame(vec![]);
+
+        assert!(claims(&ctx, Key::Escape), "Escape clears the selection, so it is egui's");
+        let cut = KeyboardEvent {
+            key: Key::Character("x".into()),
+            code: keyboard_types::Code::KeyX,
+            ..Default::default()
+        };
+        assert!(
+            !egui_claims_key(&ctx, egui::Modifiers::COMMAND, &cut, false),
+            "a cut means nothing on a label: the host cuts alone"
+        );
+        assert!(!claims(&ctx, Key::ArrowLeft), "the arrows stay the host's");
+
+        frame(vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        frame(vec![]);
+        assert!(!claims(&ctx, Key::Escape), "cleared: the next Escape is the host's");
     }
 }

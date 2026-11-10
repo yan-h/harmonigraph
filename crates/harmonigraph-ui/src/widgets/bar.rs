@@ -84,6 +84,59 @@ pub(super) fn bar_width(ui: &Ui) -> f32 {
     ui.available_width().max(0.0)
 }
 
+/// The click that opens a [`ValueBar`]'s number for typing, named the way
+/// this platform's keyboard is: egui's `command` is Cmd on macOS and Ctrl
+/// elsewhere.
+///
+/// [`ValueBar`]: super::value::ValueBar
+pub(super) fn type_gesture(ctx: &egui::Context) -> &'static str {
+    match ctx.os() {
+        egui::os::OperatingSystem::Mac => "Cmd-click",
+        _ => "Ctrl-click",
+    }
+}
+
+/// The gestures a bar answers to, in the one wording every bar's hover ends
+/// with: a drag always, a double-click where the bar has a `reset` to go
+/// back to, and a typed number where the bar is `typed` (a [`ValueBar`];
+/// a bar holding two numbers or more has no single one to type).
+///
+/// [`ValueBar`]: super::value::ValueBar
+pub(super) fn gestures(ctx: &egui::Context, reset: bool, typed: bool) -> String {
+    let mut text = "Drag to adjust".to_owned();
+    if reset {
+        text.push_str(", double-click to reset");
+    }
+    if typed {
+        text.push_str(", ");
+        text.push_str(type_gesture(ctx));
+        text.push_str(" to type");
+    }
+    text.push('.');
+    text
+}
+
+/// A bar's hover: `hint`, what the setting is, then on a line of its own
+/// the [`gestures`] the bar answers to. The bar supplies the second half,
+/// so no caller writes it and none can promise a gesture its bar lacks.
+/// Built only while the hover shows, so an unhovered bar formats nothing.
+pub(super) fn with_gestures(
+    response: Response,
+    hint: Option<&str>,
+    reset: bool,
+    typed: bool,
+) -> Response {
+    response.on_hover_ui(|ui| {
+        // As `Response::on_hover_text` does, so a long hint wraps the same.
+        ui.set_max_width(ui.spacing().tooltip_width);
+        let gestures = gestures(ui.ctx(), reset, typed);
+        ui.add(egui::Label::new(match hint {
+            Some(hint) if !hint.is_empty() => format!("{hint}\n{gestures}"),
+            _ => gestures,
+        }));
+    })
+}
+
 /// How near a handle the pointer has to start for the drag to take that
 /// handle rather than the span between them. Generous on purpose: grabbing
 /// the span when you meant an end is the easy mistake, and the expensive one

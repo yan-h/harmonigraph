@@ -1,5 +1,4 @@
 use super::*;
-use harmonigraph_take::{RenderConfig, RenderTrigger};
 
 const BLOCK: f64 = 64.0 / 48_000.0;
 // 120 BPM, 4/4: two seconds per bar.
@@ -32,21 +31,26 @@ fn recording(motion: Motion, deferred: Deferred) -> State {
     State::Recording { motion, deferred }
 }
 
-fn policy(trigger: RenderTrigger) -> Policy {
-    let config = RenderConfig { trigger, stop_bar: 6.0, ..Default::default() };
-    Policy { end_at_rewind: trigger.ends_at_rewind(), stop_bar: config.stop_at_bar() }
-}
+// What each Video trigger hands the recorder, with the stop bar at 6: the
+// plain values `RenderTrigger::ends_at_rewind` and `RenderConfig::stop_at_bar`
+// compute in `harmonigraph-ui`, whose own tests pin that mapping. This crate
+// links no editor, so it names the policies rather than the triggers.
+const ON_DISARM: Policy = Policy { end_at_rewind: false, stop_bar: None };
+const AT_BAR: Policy = Policy { end_at_rewind: false, stop_bar: Some(5.0) };
+const ON_TRANSPORT_STOP: Policy = Policy { end_at_rewind: true, stop_bar: None };
+const AT_LOOP_END: Policy = Policy { end_at_rewind: true, stop_bar: None };
+const TRIGGERS: [(&str, Policy); 4] = [
+    ("OnDisarm", ON_DISARM),
+    ("AtBar", AT_BAR),
+    ("OnTransportStop", ON_TRANSPORT_STOP),
+    ("AtLoopEnd", AT_LOOP_END),
+];
 
 #[test]
 fn trigger_table_reaches_playback_and_stopped_export_rewind_actions() {
-    for (trigger, end) in [
-        (RenderTrigger::OnDisarm, false),
-        (RenderTrigger::AtBar, false),
-        (RenderTrigger::OnTransportStop, true),
-        (RenderTrigger::AtLoopEnd, true),
-    ] {
+    for (trigger, policy) in TRIGGERS {
+        let end = policy.end_at_rewind;
         for playing in [false, true] {
-            let policy = policy(trigger);
             let mut next = transport(fresh(), 5.0, playing, policy);
             assert_eq!(next.action, if playing { Action::Record } else { Action::HistoryOnly });
             for block in 1..=4 {
@@ -67,7 +71,7 @@ fn trigger_table_reaches_playback_and_stopped_export_rewind_actions() {
                 } else {
                     Action::HistoryOnly
                 },
-                "{trigger:?}, playing={playing}"
+                "{trigger}, playing={playing}"
             );
             if end {
                 assert_eq!(next.state, State::Complete);
@@ -139,13 +143,7 @@ fn continuity_uses_previous_timing_with_inclusive_tolerance() {
 
 #[test]
 fn pre_roll_scrubs_and_first_playing_snapback_do_not_complete_or_split() {
-    for trigger in [
-        RenderTrigger::OnDisarm,
-        RenderTrigger::AtBar,
-        RenderTrigger::OnTransportStop,
-        RenderTrigger::AtLoopEnd,
-    ] {
-        let policy = policy(trigger);
+    for (_, policy) in TRIGGERS {
         let mut next = fresh();
         for position in [10.0, 30.0, 5.0, 5.0] {
             next = transport(next, position, false, policy);
@@ -176,7 +174,7 @@ fn playing_jitter_and_stopped_restore_have_distinct_boundaries() {
         (0.0, false, false),
         (BLOCK / 100.0, false, true),
     ] {
-        let policy = policy(RenderTrigger::OnTransportStop);
+        let policy = ON_TRANSPORT_STOP;
         let next = transport(fresh(), -BLOCK, true, policy);
         let next = transport(next, 0.0, true, policy);
         assert_eq!(next.state, recording(Motion::Forward, Deferred::None));
@@ -197,7 +195,7 @@ fn playing_jitter_and_stopped_restore_have_distinct_boundaries() {
 #[test]
 fn policy_changes_drop_real_split_debt_in_both_resumption_directions() {
     for forward in [false, true] {
-        for trigger in [RenderTrigger::OnTransportStop, RenderTrigger::AtLoopEnd] {
+        for policy in [ON_TRANSPORT_STOP, AT_LOOP_END] {
             let mut next = transport(fresh(), 10.0, true, Policy::default());
             next = transport(next, 5.0, false, Policy::default());
             assert_eq!(
@@ -206,9 +204,9 @@ fn policy_changes_drop_real_split_debt_in_both_resumption_directions() {
                 "must reach the debt rule"
             );
             // Repeated parked blocks preserve the debt until a recording block.
-            next = transport(next, 5.0, false, policy(trigger));
+            next = transport(next, 5.0, false, policy);
             assert_eq!(next.state, recording(Motion::Initial, Deferred::Split));
-            next = transport(next, if forward { 5.0 + BLOCK } else { 0.0 }, true, policy(trigger));
+            next = transport(next, if forward { 5.0 + BLOCK } else { 0.0 }, true, policy);
             assert_eq!(next.action, Action::Record);
             assert_eq!(
                 next.state,
@@ -247,7 +245,7 @@ fn bar_table_preserves_crossing_history_and_preempts_a_deferred_split() {
         let next = transport(next, 10.0, true, Policy::default());
         assert_eq!(next.action, if completes { Action::None } else { Action::SplitAndRecord });
     }
-    let p = policy(RenderTrigger::AtBar);
+    let p = AT_BAR;
     let next = observe(fresh(), Observation::Bar(Some(5.0 - BAR_BLOCK)), p);
     let next = observe(next, Observation::Bar(None), p);
     let next = observe(next, Observation::Bar(Some(5.0)), p);
@@ -256,7 +254,7 @@ fn bar_table_preserves_crossing_history_and_preempts_a_deferred_split() {
 
 #[test]
 fn arm_edges_reset_history_but_repeated_arm_cannot_revive_completion() {
-    let p = policy(RenderTrigger::AtBar);
+    let p = AT_BAR;
     let mut next = observe(fresh(), Observation::Bar(Some(5.0 - BAR_BLOCK)), p);
     next = observe(next, Observation::Bar(Some(5.0)), p);
     assert_eq!(next.state, State::Complete);

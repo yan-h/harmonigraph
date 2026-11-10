@@ -4,7 +4,7 @@
 //! The grid travels as DATA rather than as a picture — `capacity` slots of one
 //! slab's stored dB bytes each — so a pitch zoom, a resize, a Level drag or a
 //! palette change normally moves only uniforms. A larger retention can also
-//! recover a clipped gap (see [`FoldedGrid::hit`](crate::spectrogram::FoldedGrid::hit)). What a frame owes the
+//! recover a clipped gap (see `admitted_first_slab`). What a frame owes the
 //! GPU is an immutable snapshot of the slabs it draws. The renderer owns
 //! upload history; the read that turns those bytes into pixels lives in
 //! [`harmonigraph_render`]'s shader.
@@ -117,10 +117,9 @@ const RUNG_HOLD: f64 = 0.05;
 /// The ladder alone re-decides the rung from the window on every frame, so a
 /// Span parked within a drag-point of a boundary alternates its slab width for
 /// as long as the hand holds still. That is not merely frequent but expensive:
-/// `bucket` is the aggregator's one layout input AND a [`RunKey`] field, so
-/// both caches miss together and every frame pays a full refold and rewrites
-/// every slab it folded. One drag-point is 0.6% of the Span, which a resting
-/// finger clears on tremor alone.
+/// `bucket` is the aggregator's one layout input, so every frame pays a full
+/// refold and rewrites every slab it folded. One drag-point is 0.6% of the
+/// Span, which a resting finger clears on tremor alone.
 ///
 /// The hold is on the way DOWN only, and the asymmetry is what keeps it safe
 /// rather than being a preference. A held rung is always the COARSER one, so
@@ -288,7 +287,6 @@ pub(crate) struct FoldedGrid {
 }
 
 struct FoldedRun {
-    key: RunKey,
     first_key: i64,
     capacity: usize,
     run: Arc<[SpectrogramSlab]>,
@@ -296,26 +294,28 @@ struct FoldedRun {
 }
 
 impl FoldedGrid {
-    /// Reuse the folded bytes only when their source and retained extent still fit.
-    fn hit(&self, plan: &Plan, history: &crate::SpectrumHistory) -> Option<TexLayout> {
-        let held = self.run.as_ref().filter(|held| held.key == plan.key)?;
-        // Sampling clamps to this edge, so reusing a longer run would change
-        // interpolation even if it contains every requested slab.
-        admitted_first_slab(history, plan.first, plan.bucket, plan.capacity)
-            .is_none_or(|first| first == held.first_key)
-            .then_some(held.layout)
-    }
-
+    /// Hold the run the aggregator served and where it sits in time — or keep
+    /// what is already held, when the aggregator handed back the very run it
+    /// served last (see [`SpectrogramAgg::view`]). Whether the snapshot is
+    /// current is the aggregator's call alone; this side only recognises the
+    /// allocation.
+    ///
+    /// The held run keeps its ring capacity, which is what keeps a pane resize
+    /// that moves no slab from reallocating and re-uploading the GPU's copy.
+    /// It still fits: it was sized for this same run.
     fn accept(
         &mut self,
-        key: RunKey,
         first_key: i64,
         capacity: usize,
         run: Arc<[SpectrogramSlab]>,
         layout: TexLayout,
-    ) {
+    ) -> TexLayout {
+        if let Some(held) = self.run.as_ref().filter(|held| Arc::ptr_eq(&held.run, &run)) {
+            return held.layout;
+        }
         debug_assert!(run.len() <= capacity);
-        self.run = Some(FoldedRun { key, first_key, capacity, run, layout });
+        self.run = Some(FoldedRun { first_key, capacity, run, layout });
+        layout
     }
 
     fn grid(&self) -> Option<SpectrogramGrid> {
@@ -387,26 +387,16 @@ pub(crate) struct Columns {
     /// The oldest in-window column; it advances as the window scrolls one off
     /// the far end.
     pub(crate) first: usize,
-    pub(crate) len: usize,
-    /// The newest column's time, which moves whenever a fresh column arrives —
-    /// catching one even in a saturated store, where the count holds steady.
+    /// The newest column's time, where the drawn strip's data ends. The plan
+    /// does not read it: whether a fresh column arrived is the aggregator's
+    /// question, answered by the columns it has already folded.
     pub(crate) newest: f64,
 }
 
-/// Source columns and slab width used to fold a run. The admitted oldest slab
-/// is checked separately in [`FoldedGrid::hit`]: scrolling within one completed
-/// slab cannot change its bytes, but crossing its edge changes shader sampling.
-/// A fresh column changes `newest_bits`, even when the store's count is stable.
-/// Pitch, rows, level and palette only change how the same bytes are read.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RunKey {
-    cols_len: usize,
-    newest_bits: u64,
-    bucket_bits: u64,
-}
-
-/// What this frame's heatmap needs folded, and the key that says whether the
-/// memoized snapshot already IS it.
+/// What this frame's heatmap needs folded. Whether the memoized snapshot
+/// already IS it is the aggregator's call (see [`SpectrogramAgg::view`]); the
+/// pitch, rows, level and palette only change how the same bytes are read, and
+/// reach neither.
 ///
 /// Pure, and deliberately so. Every cliff this pipeline has fallen off has been
 /// in this arithmetic — a slab against the analyzer's lag, a window against the
@@ -430,7 +420,6 @@ pub(crate) struct Plan {
     /// pane's own pixel count moves every frame of one.
     capacity: usize,
     first: usize,
-    pub(crate) key: RunKey,
 }
 
 impl Plan {
@@ -451,12 +440,7 @@ impl Plan {
         let depth_px = (view.depth_len * view.ppp).round();
         let target_cols = depth_px.clamp(2.0, LIVE_SLAB_CAP) as usize;
         let bucket = held_slab(view.window, target_cols, held);
-        let key = RunKey {
-            cols_len: columns.len,
-            newest_bits: columns.newest.to_bits(),
-            bucket_bits: bucket.to_bits(),
-        };
-        Plan { rows, bucket, capacity: ring_slots(target_cols), first: columns.first, key }
+        Plan { rows, bucket, capacity: ring_slots(target_cols), first: columns.first }
     }
 }
 
@@ -534,48 +518,12 @@ pub(crate) fn read_of(view: &PaneView, rows: usize) -> SpectrogramRead {
     }
 }
 
-/// Fold the run a [`Plan`] describes into the surface's immutable snapshot.
-/// Returns where the visible slabs sit in time, or `None` if the fold came out
-/// too short to draw.
-pub(crate) fn build(
-    history: &crate::SpectrumHistory,
-    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
-    surface: usize,
-    plan: &Plan,
-) -> Option<TexLayout> {
-    let bucket = plan.bucket;
-    // Aggregate the in-window columns into one slab per depth pixel by a FIXED
-    // time grid, mean linear power within each slab. Slabs stay in BUCKET
-    // space: the rows read them in the fragment shader, so the fold is blind to
-    // the pitch axis and a zoom or pan of it re-reads this grid instead of
-    // re-walking the store.
-    let agg = surfaces.at(surface).agg.get_or_insert_with(SpectrogramAgg::new);
-    let (centers, power) = agg.window(history, plan.first, bucket, plan.capacity);
-    let w = centers.len();
-    if w < 2 {
-        return None;
-    }
-    // The run covers absolute time `[t_origin, t_origin + w*bucket]` — the
-    // oldest slab's start to the newest slab's end. Slab centres sit half a slab
-    // inside each, so a time places itself at `(t - t_origin) / bucket` slabs.
-    let t_origin = centers[0] - 0.5 * bucket;
-    let tex_span = w as f64 * bucket;
-    if tex_span < 1e-9 {
-        return None;
-    }
-    // The slab `window` cut at, `admitted_first_slab`, read back off the slab
-    // itself: the renderer places the run by this key, so it must name the
-    // slab that is really first.
-    let first_key = (centers[0] / bucket).floor() as i64;
-    let capacity = ring_capacity(plan.capacity, w);
-    let layout = TexLayout { bucket, t_origin, tex_span };
-    surfaces.at(surface).folded.accept(plan.key.clone(), first_key, capacity, power, layout);
-    Some(layout)
-}
-
-/// The run this frame draws, and where it sits in time: the one already on the
-/// surface when the source key and oldest slab still fit, and a fresh fold
-/// otherwise.
+/// The run this frame draws, folded into the surface's immutable snapshot, and
+/// where it sits in time — `None` if the fold came out too short to draw.
+///
+/// Every frame asks the aggregator, which folds only what arrived since it
+/// last did, and hands back the run it served last when nothing arrived and
+/// the first slab has not moved: a still frame keeps the same snapshot.
 pub(crate) fn run_for(
     history: &crate::SpectrumHistory,
     surfaces: &mut crate::spectrum::SpectrogramSurfaces,
@@ -584,10 +532,31 @@ pub(crate) fn run_for(
 ) -> Option<TexLayout> {
     // The next frame retains this slab width until it crosses a ladder rung.
     surfaces.at(surface).held_bucket = Some(plan.bucket);
-    match surfaces.at(surface).folded.hit(plan, history) {
-        Some(layout) => Some(layout),
-        None => build(history, surfaces, surface, plan),
+    let bucket = plan.bucket;
+    // Aggregate the in-window columns into one slab per depth pixel by a FIXED
+    // time grid, mean linear power within each slab. Slabs stay in BUCKET
+    // space: the rows read them in the fragment shader, so the fold is blind to
+    // the pitch axis and a zoom or pan of it re-reads this grid instead of
+    // re-walking the store.
+    let agg = surfaces.at(surface).agg.get_or_insert_with(SpectrogramAgg::new);
+    let (first_center, power) = agg.serve(history, plan.first, bucket, plan.capacity);
+    let w = power.len();
+    let first_center = first_center.filter(|_| w >= 2)?;
+    // The run covers absolute time `[t_origin, t_origin + w*bucket]` — the
+    // oldest slab's start to the newest slab's end. Slab centres sit half a slab
+    // inside each, so a time places itself at `(t - t_origin) / bucket` slabs.
+    let t_origin = first_center - 0.5 * bucket;
+    let tex_span = w as f64 * bucket;
+    if tex_span < 1e-9 {
+        return None;
     }
+    // The slab `serve` cut at, `admitted_first_slab`, read back off the slab
+    // itself: the renderer places the run by this key, so it must name the
+    // slab that is really first.
+    let first_key = (first_center / bucket).floor() as i64;
+    let capacity = ring_capacity(plan.capacity, w);
+    let layout = TexLayout { bucket, t_origin, tex_span };
+    Some(surfaces.at(surface).folded.accept(first_key, capacity, power, layout))
 }
 
 /// The grid and the gradient table this frame's callback carries.
@@ -707,7 +676,7 @@ impl SlabGrid {
             //
             // Not expected from today's callers, and `push_history` asserts
             // as much in debug builds. If a backward column reaches this fold,
-            // `SpectrogramAgg::window` rebuilds on the `false`; its admission
+            // `SpectrogramAgg::serve` rebuilds on the `false`; its admission
             // search can skip an out-of-order column before it gets here.
             other => {
                 self.cur_key = Some(key);
@@ -871,10 +840,12 @@ impl SlabGrid {
 
 /// Live-only incremental spectrogram aggregation. `aggregate_slabs` re-scans
 /// EVERY in-window column on each ~20 Hz rebuild — O(columns-in-window), which
-/// grows with the roll Span and is the residual creep the run key didn't
-/// remove. This keeps the slab grid across frames instead: a rebuild folds only
-/// the newly-arrived column(s) and drops the scrolled-out front, so its cost is
-/// O(new columns), independent of how much history has accumulated.
+/// grows with the roll Span. This keeps the slab grid across frames instead: a
+/// rebuild folds only the newly-arrived column(s) and drops the scrolled-out
+/// front, so its cost is O(new columns), independent of how much history has
+/// accumulated. A frame that brings no column and moves no first slab hands
+/// back the very run it served last, which makes this the one owner of whether
+/// a surface's snapshot is current (see [`view`](Self::view)).
 ///
 /// The grid's one layout input is the slab width. The pitch axis — its range,
 /// its row count, which buckets a row reads — is applied downstream, in the
@@ -934,6 +905,9 @@ pub(crate) struct SpectrogramAgg {
     /// other suspects. Twice this pane has cost a round trip of measurement to
     /// learn what this number would have said at a glance.
     rebuilds: u32,
+    /// The run [`view`](Self::view) served last, until a rebuild or a folded
+    /// column changes the grid under it.
+    served: Option<Arc<[SpectrogramSlab]>>,
 }
 
 /// The columns a full refold folds: the retention and one complete
@@ -965,12 +939,12 @@ fn retained_from(history: &crate::SpectrumHistory, bucket: f64, keep: usize) -> 
 /// is `first`: that column's slab, raised to the retention bound. `None` while
 /// the history is empty or `first` is past its end.
 ///
-/// The one statement of the rule, because three readers must agree on it.
-/// [`SpectrogramAgg::window`] refolds when its kept grid starts after this slab
-/// and slices the grid here, and [`FoldedGrid::hit`] reuses a snapshot only when
-/// it starts here. A `hit` that disagreed went on reusing a run the aggregator
-/// would have cut elsewhere: a resize followed by Span growth drew the old,
-/// shorter extent (#714).
+/// The one statement of the rule. [`SpectrogramAgg::serve`] refolds when its
+/// kept grid starts after this slab, and [`view`](SpectrogramAgg::view) slices
+/// the grid here, handing back the run it served last only while that run still
+/// starts here. A second memo of the snapshot, outside the aggregator, once
+/// reused a run the aggregator would have cut elsewhere: a resize followed by
+/// Span growth drew the old, shorter extent (#714).
 fn admitted_first_slab(
     history: &crate::SpectrumHistory,
     first: usize,
@@ -1006,6 +980,7 @@ impl SpectrogramAgg {
             last_time: f64::NEG_INFINITY,
             clears: 0,
             rebuilds: 0,
+            served: None,
         }
     }
 
@@ -1021,6 +996,7 @@ impl SpectrogramAgg {
     /// refold rate pinned at the frame rate for the length of the drag.
     fn rebuild(&mut self, history: &crate::SpectrumHistory, bucket: f64, min_key: Option<i64>) {
         self.rebuilds += 1;
+        self.served = None;
         let columns = refold_columns(history, bucket, min_key);
         let runs = (columns.len() / REFOLD_RUN_COLUMNS).clamp(
             1,
@@ -1032,10 +1008,9 @@ impl SpectrogramAgg {
         self.clears = history.clears();
     }
 
-    /// The window's `(centers, power)`, maintained incrementally. `first` is the
-    /// oldest in-window column index (as `draw_spectrogram` computes it), so the
-    /// window's first slab is `floor(history[first].time / bucket)` — exactly
-    /// where batch would start.
+    /// The window's `(centers, power)`: [`serve`](Self::serve) with every
+    /// centre rather than the first, for tests that compare whole runs.
+    #[cfg(test)]
     fn window(
         &mut self,
         history: &crate::SpectrumHistory,
@@ -1043,6 +1018,22 @@ impl SpectrogramAgg {
         bucket: f64,
         keep: usize,
     ) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
+        let (_, power) = self.serve(history, first, bucket, keep);
+        let centers = &self.grid.centers;
+        (centers[centers.len() - power.len()..].to_vec(), power)
+    }
+
+    /// The window's first slab centre and its slabs, maintained incrementally.
+    /// `first` is the oldest in-window column index (as `draw_spectrogram`
+    /// computes it), so the window's first slab is
+    /// `floor(history[first].time / bucket)` — exactly where batch would start.
+    fn serve(
+        &mut self,
+        history: &crate::SpectrumHistory,
+        first: usize,
+        bucket: f64,
+        keep: usize,
+    ) -> (Option<f64>, Arc<[SpectrogramSlab]>) {
         let admitted = admitted_first_slab(history, first, bucket, keep);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
         let min_key = retained_from(history, bucket, keep);
@@ -1074,6 +1065,7 @@ impl SpectrogramAgg {
             let start = history.partition_point(|c| c.time <= self.last_time);
             let mut forward = true;
             for col in history.iter_from(start) {
+                self.served = None;
                 if !self.grid.fold(col, bucket, min_key) {
                     forward = false;
                     break;
@@ -1096,24 +1088,47 @@ impl SpectrogramAgg {
         self.view(bucket, admitted)
     }
 
-    /// Slice the complete slabs at [`admitted_first_slab`]. Completed
-    /// averages and jitter copies stay unchanged as individual source columns
-    /// scroll out. Keeping the preceding slabs internally lets a widening Span
-    /// or a history-tier merge reach back without refolding the retained grid.
+    /// Slice the complete slabs at [`admitted_first_slab`], with the first
+    /// one's centre. Completed averages and jitter copies stay unchanged as
+    /// individual source columns scroll out. Keeping the preceding slabs
+    /// internally lets a widening Span or a history-tier merge reach back
+    /// without refolding the retained grid.
     ///
-    /// The slabs come out shared, not copied — see [`SlabGrid`].
+    /// The slabs come out shared, not copied — see [`SlabGrid`]. The run
+    /// holding them comes out shared as well when it is the run served last:
+    /// nothing folded and no rebuild since (`served` stands), and the same
+    /// length, which with the grid's newest end unmoved is the same first slab.
+    /// That is the whole test of whether a surface's snapshot is current, so a
+    /// still frame allocates no run and hands the renderer the pointer it
+    /// already uploaded. The length rather than the slab's key, because it is
+    /// exact even where the clamp below binds: with nothing folded the grid
+    /// only loses slabs at its front, so its tail of a given length is the
+    /// one already served.
     ///
     /// The clamp never binds on a time-ordered history (see
     /// [`grid_holds`](Self::grid_holds)); it is there for one dated out of
     /// order, which `push_history` asserts against.
-    fn view(&self, bucket: f64, admitted: Option<i64>) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
-        let (Some(admitted), Some(&front_center)) = (admitted, self.grid.centers.first()) else {
-            return (self.grid.centers.clone(), self.grid.power.as_slice().into());
+    fn view(
+        &mut self,
+        bucket: f64,
+        admitted: Option<i64>,
+    ) -> (Option<f64>, Arc<[SpectrogramSlab]>) {
+        let start = match (admitted, self.grid.centers.first()) {
+            (Some(admitted), Some(&front_center)) => {
+                let front = (front_center / bucket).floor() as i64;
+                let kept = self.grid.centers.len().saturating_sub(1) as i64;
+                (admitted - front).clamp(0, kept) as usize
+            }
+            _ => 0,
         };
-        let front = (front_center / bucket).floor() as i64;
-        let kept = self.grid.centers.len().saturating_sub(1) as i64;
-        let start = (admitted - front).clamp(0, kept) as usize;
-        (self.grid.centers[start..].to_vec(), self.grid.power[start..].into())
+        let first_center = self.grid.centers.get(start).copied();
+        let len = self.grid.power.len() - start;
+        if let Some(served) = self.served.as_ref().filter(|served| served.len() == len) {
+            return (first_center, served.clone());
+        }
+        let run: Arc<[SpectrogramSlab]> = self.grid.power[start..].into();
+        self.served = Some(run.clone());
+        (first_center, run)
     }
 
     /// Whether the kept grid holds the admitted slab, so that [`view`](Self::view)

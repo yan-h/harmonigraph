@@ -472,17 +472,9 @@ struct Uniforms {
     tile_cells: u32,
     /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
-    /// The starfield's brightness variation and life clock ([`star_life`]).
-    /// The image and slice rows that follow all start on 16-byte boundaries.
-    star_randomness: f32,
-    star_life: f32,
-    /// The starfield's size variation, cover and twinkle.
-    star_size_variation: f32,
-    star_cover: f32,
-    star_twinkle: f32,
-    /// The star image's actual dimensions; zw are padding.
-    star_image_size: Float4,
-    star_slices: [StarSlice; STAR_SLICES],
+    _pad: u32,
+    /// The starfield's block, the one the lattice nests too.
+    stars: StarUniforms,
     memory_enabled: u32,
     memory_valid: u32,
     pickup_alpha: f32,
@@ -511,25 +503,12 @@ struct Uniforms {
 /// validation error on the first clouded frame.
 ///
 /// Retiring `Ragged` once left the members four bytes short of 112 and needed an
-/// explicit tail. The starfield's scalars now fill the row the tone controls
-/// left as padding; adding or dropping a field can move the edge again and this
+/// explicit tail; adding or dropping a field can move the edge again and this
 /// catches it.
 const _: () = assert!(
     std::mem::size_of::<Uniforms>().is_multiple_of(16),
     "the cloud uniform is not a whole number of 16-byte rows, so the shader's rounded-up \
      struct is larger than the buffer Rust writes",
-);
-/// WGSL puts an array in the uniform address space on a 16-byte boundary and a
-/// `StarSlice` on a 16-byte stride, where `repr(C)` would pack both to four. So
-/// both are held here rather than trusted: a scalar added before the array would
-/// otherwise shift every slice by a word on the Rust side only. Likewise the
-/// `vec2<i32>` a slice ends with, which WGSL aligns to eight where Rust's
-/// `[i32; 2]` aligns to four.
-const _: () = assert!(
-    std::mem::offset_of!(Uniforms, star_slices).is_multiple_of(16)
-        && std::mem::size_of::<StarSlice>().is_multiple_of(16)
-        && std::mem::offset_of!(StarSlice, origin).is_multiple_of(8),
-    "the star slices are not where the shader's 16-byte uniform layout reads them",
 );
 
 /// The production uniform fields read by `wash_tile_field`, for its direct
@@ -1917,13 +1896,8 @@ impl Targets {
             // drawn and the shader returns before the tone.
             tile_cells: tile.map_or(0, TileKey::period),
             pitch_vertical: u32::from(pitch_vertical),
-            star_randomness: settings.stars.star_randomness,
-            star_life: life,
-            star_size_variation: settings.stars.star_size_variation,
-            star_cover: settings.stars.star_cover,
-            star_twinkle: settings.stars.star_twinkle_dip,
-            star_image_size: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
-            star_slices: slices,
+            _pad: 0,
+            stars: StarUniforms::new(settings.stars, motion, rect.size().into(), image, slices),
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(step.valid),
             pickup_alpha: step.alphas[0],

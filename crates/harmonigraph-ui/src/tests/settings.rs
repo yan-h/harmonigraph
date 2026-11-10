@@ -4,6 +4,7 @@
 
 use super::harness::*;
 use crate::*;
+use harmonigraph_take::RenderProgress;
 
 #[test]
 fn opening_analyzer_settings_does_not_change_loaded_values() {
@@ -507,6 +508,11 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // the page's less the fold's or the block's indent. Counted per case, and
     // held to the same count at every width, for the reason the weight bars are.
     let indent = fold_indent(&super::probe::themed());
+    // The gap between two bars sharing a row: the pane's own item spacing.
+    let mut gap = 0.0;
+    let _ = super::probe::themed().run_ui(Default::default(), |ui| {
+        gap = ui.spacing().item_spacing.x;
+    });
     let cases = settings_cases();
     let mut nested_per_case: Vec<Option<usize>> = vec![None; cases.len()];
     for width in [400.0f32, 240.0, crate::theme::SETTINGS_MIN_CONTENT, 190.0] {
@@ -541,7 +547,34 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
             let mut weights = 0;
             let mut nested = 0;
             let mut links = Vec::new();
+            // A lattice map's Position block lays each axis out as one row of
+            // two bars, Fine and Coarse, each half the block's column with the
+            // pane's gap between. Counted for the reason the spectrum track
+            // is — a sweep merely permitting the half length passes a Position
+            // gone back to full bars, or a half that lost its partner — so the
+            // count is exact: three of each half on
+            // the Tuning page's Lattice Map case, the one case whose backend
+            // draws a map, and none anywhere else. Placed as well as sized:
+            // the left half starts at the block column's edge and the right
+            // one ends at the column's, so the pair lines up with the full
+            // bars over and under it.
+            let maps = case.variant
+                == Variant::Engine(harmonigraph_core::lattice_map::TuningEngine::LatticeMap);
+            let half = (width - crate::panes::BLOCK_INDENT - gap) / 2.0;
+            let block_left = crate::theme::PANE_INSET + crate::panes::BLOCK_INDENT;
+            let column_right = crate::theme::PANE_INSET + width;
+            let (mut left_halves, mut right_halves) = (0, 0);
             for (track_rect, bar) in tracks.iter().zip(&widths) {
+                if (bar - half).abs() < 1.0 {
+                    if (track_rect.left() - block_left).abs() < 1.0 {
+                        left_halves += 1;
+                        continue;
+                    }
+                    if (track_rect.right() - column_right).abs() < 1.0 {
+                        right_halves += 1;
+                        continue;
+                    }
+                }
                 // Placed too: a bar in a block or a fold sized to the whole
                 // column starts an indent in and overruns it, widening the
                 // column for every row under it.
@@ -590,6 +623,13 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                 assert!((links[0] - links[1]).abs() < 1.0, "interval columns align");
                 assert!(links[0] > width / 2.0 && links[0] < width);
             }
+            let want = if maps { 3 } else { 0 };
+            assert_eq!(
+                (left_halves, right_halves),
+                (want, want),
+                "{case:?} at {width}pt drew {left_halves} left and {right_halves} right \
+                 half-column bars, not {want} of each (all of {widths:?})"
+            );
             let want = if pane == panes::Tab::Mappings { 2 } else { 0 };
             assert_eq!(
                 short, want,
