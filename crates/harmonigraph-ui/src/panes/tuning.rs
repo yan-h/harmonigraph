@@ -52,22 +52,8 @@ fn interval_bar(
         ParamKey::Seven => current.seven_cents(),
         _ => unreachable!(),
     };
-<<<<<<< HEAD
     let linked = comma_deriving(key, state.runtime.tempered);
-    // The host's own reset, which under a temperament releases the derived
-    // axis the way an entered value does.
-    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
-        .decimals(2)
-        .unit(1.0, "¢")
-        .default_value(key.default_value());
-    if linked.is_some() {
-        bar = bar.badge("↔");
-    }
-    let response = bar.show(ui).on_hover_text(match linked {
-=======
-    let linked = comma_deriving(key, &state.appearance.view);
     let hint = match linked {
->>>>>>> origin/main
         Some(comma) => format!(
             "{}: the {} follows {}. Enter an independent value to change the relationship.",
             comma.temperament(),
