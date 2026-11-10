@@ -720,7 +720,7 @@ mod tests {
         still.camera.cabinet_scale = 0.6;
         still.spectrum.attack = 0.2;
         let mut moved = still.clone();
-        moved.set_camera_movement([0.4, -0.3, 9.0, 12.25, -3.75]);
+        moved.set_camera_movement([1.1, -0.3, 9.0, 12.25, -3.75]);
         assert_ne!(moved.camera_movement(), still.camera_movement());
         assert_eq!(Look::capture(&moved), Look::capture(&still), "capture saw the host camera");
 
