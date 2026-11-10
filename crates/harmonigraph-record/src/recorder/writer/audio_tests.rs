@@ -257,7 +257,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         // spawn_render passes take, --out, output.
         std::fs::write(
             &program,
-            "#!/bin/sh\nprintf 'video' > \"$3\"\nprintf 'warning: fixture warning\\nencoder: x264\\n' >&2\n",
+            "#!/bin/sh\nprintf 'video' > \"$3\"\nprintf 'warning: fixture warning\\n' >&2\n",
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -299,10 +299,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
                 .find(|job| job.state == harmonigraph_take::render::ExportStatus::Completed)
         };
         wait_for("successful seek render", || completed().is_some());
-        let job = completed().unwrap();
-        // The automatic export reports the encoder its renderer said it started.
-        assert_eq!(job.encoder, Some(harmonigraph_take::render::VideoEncoder::X264));
-        let detail = job.detail;
+        let detail = completed().unwrap().detail;
         let control = worker.control.as_ref().unwrap();
         assert!(detail.contains("take ended before a forward transport seek"), "{detail}");
         assert!(detail.contains("warning: fixture warning"), "{detail}");

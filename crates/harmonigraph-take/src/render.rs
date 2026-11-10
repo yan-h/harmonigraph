@@ -15,19 +15,19 @@
 //!
 //! Nothing in the format needs them here. The UI re-exports them beside its
 //! other settings, and the plugin and the offline renderer reach them mostly
-//! through it; the offline renderer also names [`RenderTrigger`] and
+//! through it. The offline renderer also names [`RenderTrigger`] and
 //! [`VideoEncoder`] here directly, and `harmonigraph-record` names
-//! `VideoEncoder` for the encoder a render reports. Moving them beside the
-//! UI's other settings is rework candidate R9 in #1677, undecided.
+//! `RenderTrigger` in its docs and `RenderConfig` in its tests. Moving them
+//! beside the UI's other settings is rework candidate R9 in #1677, undecided.
 //!
 //! The export queue's vocabulary — [`RenderProgress`], [`ExportJob`],
-//! [`ExportStatus`], the renderer's encoder record and the archive copy's
-//! name — is the part that is not settings: no serde, and it never enters a take. Progress is counted off the
-//! renderer subprocess's stderr and lives only as long as that process. It
-//! sits here because `harmonigraph-record` drives that subprocess and reports
-//! back through it, and must not link the editor to do so. Moving it to the UI
-//! would put the GUI stack back on the record path, which is what #176
-//! removed.
+//! [`ExportStatus`] and the archive copy's name — is the part that is not
+//! settings: no serde, and it never enters a take. Progress is counted off
+//! the renderer subprocess's stderr and lives only as long as that process.
+//! It sits here because `harmonigraph-record` drives that subprocess and
+//! reports back through it, and must not link the editor to do so. Moving it
+//! to the UI would put the GUI stack back on the record path, which is what
+//! #176 removed.
 
 /// What counts as "the take is done", and so when a video gets rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -184,32 +184,6 @@ pub enum VideoEncoder {
     /// quality. About a third faster than x264 at 1440p on a fraction of the
     /// processor, for a file up to a quarter larger and no grain tuning.
     Hardware,
-}
-
-impl VideoEncoder {
-    /// Reserved stderr prefix for the renderer's line naming the encoder it
-    /// started, which is not always the one asked for: a frame too big for
-    /// VideoToolbox goes through x264.
-    pub const PREFIX: &str = "encoder: ";
-
-    /// The name the renderer's `--encoder` flag and its encoder record use.
-    pub fn name(self) -> &'static str {
-        match self {
-            VideoEncoder::X264 => "x264",
-            VideoEncoder::Hardware => "hardware",
-        }
-    }
-
-    /// The line the renderer prints once its encoder is running.
-    pub fn record(self) -> String {
-        format!("{}{}", Self::PREFIX, self.name())
-    }
-
-    /// Read one complete encoder record.
-    pub fn parse_record(record: &str) -> Option<Self> {
-        let name = record.strip_prefix(Self::PREFIX)?;
-        [VideoEncoder::X264, VideoEncoder::Hardware].into_iter().find(|e| e.name() == name)
-    }
 }
 
 /// How a finished take gets turned into a video, edited in the Video
@@ -621,16 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn encoder_records_round_trip_and_require_the_whole_record() {
-        for encoder in [VideoEncoder::X264, VideoEncoder::Hardware] {
-            assert_eq!(VideoEncoder::parse_record(&encoder.record()), Some(encoder));
-        }
-        for text in ["x264", "encoder: x265", "encoder: hardware ", "warning: encoder: x264"] {
-            assert_eq!(VideoEncoder::parse_record(text), None, "{text}");
-        }
-    }
-
-    #[test]
     fn retired_export_fields_are_ignored_and_not_saved_again() {
         let config: RenderConfig = ron::from_str(
             r#"(record_audio:true,auto_render:false,audio_path:"old.wav",audio_offset:"12.5",
@@ -691,10 +655,6 @@ pub struct ExportJob {
     /// `None` for a recorded take's automatic export: its appearance rides in
     /// the take's header, and this crate never parses an appearance.
     pub size: Option<[u32; 2]>,
-    /// The encoder the renderer said it started ([`VideoEncoder::PREFIX`]),
-    /// for the frame log. `None` until it has said, and for a job that never
-    /// started one.
-    pub encoder: Option<VideoEncoder>,
     pub state: ExportStatus,
     pub progress: RenderProgress,
     pub detail: String,

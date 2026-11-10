@@ -217,24 +217,15 @@ impl Logged {
             self.animating = Some(animating);
             egui_baseview::frame_log::event(&format!("animating {animating}"));
         }
-        let mut exports = ui.workspace.interaction.take.exports.iter();
-        let running = exports
-            .clone()
-            .filter(|job| job.state == harmonigraph_take::render::ExportStatus::Running)
-            .count();
+        // A cancelled job's renderer runs until it is reaped, so it counts.
+        // No encoder: the pane's says nothing about what an automatic export
+        // or an over-size frame ran through.
+        use harmonigraph_take::render::ExportStatus::{Cancelling, Running};
+        let exports = ui.workspace.interaction.take.exports.iter();
+        let running = exports.filter(|job| matches!(job.state, Running | Cancelling)).count();
         if self.exports != Some(running) {
             self.exports = Some(running);
-            // The encoder the renderer said it started, not the pane's: a frame
-            // over the hardware limit runs x264, and an automatic export the
-            // take's own look.
-            let job =
-                exports.find(|job| job.state == harmonigraph_take::render::ExportStatus::Running);
-            let encoder = match job.map(|job| job.encoder) {
-                Some(Some(encoder)) => encoder.name(),
-                Some(None) => "starting",
-                None => "none",
-            };
-            egui_baseview::frame_log::event(&format!("exports {running} {encoder}"));
+            egui_baseview::frame_log::event(&format!("exports {running}"));
         }
     }
 }

@@ -17,11 +17,11 @@ fn diagnostics_and_malformed_records_do_not_retarget_progress() {
     let progress = Progress::default();
     progress.begin();
     let warning = "warning: only 30 frames fit the soundtrack";
-    let records = "progress: broken\nencoder: x264\nencoder: broken\n";
-    let tail =
-        follow(format!("progress: 0/300 frames (0%)\n{warning}\n{records}").as_bytes(), &progress);
+    let tail = follow(
+        format!("progress: 0/300 frames (0%)\n{warning}\nprogress: broken\n").as_bytes(),
+        &progress,
+    );
     assert_eq!(progress.read(), Some(RenderProgress { done: 0, total: 300 }));
-    assert_eq!(progress.encoder(), Some(VideoEncoder::X264));
     assert_eq!(tail.warning.as_deref(), Some(warning));
     assert_eq!(tail.last, warning);
     follow(
@@ -234,7 +234,6 @@ case "$look" in
  nocopy) echo 'warning: take ends mid-record' >&2; echo 'warning: no archive copy: ffmpeg exited with 1: Unknown encoder' >&2 ;;
 esac
 printf '%s %s' "$look" "${6:-unsized}" > "$3"
-echo 'encoder: hardware' >&2
 echo 'progress: 10/10 frames (100%)' >&2
 "#).unwrap();
         std::fs::set_permissions(dir.join("renderer"), std::fs::Permissions::from_mode(0o755))
@@ -317,11 +316,6 @@ fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure
         [ExportStatus::Completed, ExportStatus::Failed, ExportStatus::Completed]
     );
     assert!(jobs[1].detail.contains("transient encoder failure"));
-    // What the renderer said it started, for a job that got that far.
-    assert_eq!(
-        jobs.iter().map(|j| j.encoder).collect::<Vec<_>>(),
-        [Some(VideoEncoder::Hardware), None, Some(VideoEncoder::Hardware)]
-    );
     assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first unsized");
     assert_eq!(std::fs::read_to_string(&jobs[2].output).unwrap(), "third unsized");
     assert_eq!(jobs[2].progress, RenderProgress { done: 10, total: 10 });

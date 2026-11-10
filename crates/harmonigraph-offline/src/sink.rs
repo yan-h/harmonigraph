@@ -296,9 +296,6 @@ impl Sink {
 
         let mut child =
             command.spawn().map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
-        // Said once it runs, rather than left for the plugin to predict: the
-        // size rule above decides here, and the export job reports this line.
-        eprintln!("{}", options.encoder().record());
         // The writer thread OWNS the pipe from here. Nothing else may hold a
         // handle on it: ffmpeg reaches EOF when the last one drops, so a
         // second copy left in `child` would keep the encoder waiting for
@@ -583,9 +580,8 @@ fn archive_args(video: &std::path::Path, archive: &std::path::Path) -> Vec<Strin
     // The video says its chroma sits centred between luma columns, which an
     // AV1 stream cannot state and MP4 has no other place for: libsvtav1 warns
     // on every export and writes it unspecified anyway. Saying so up front
-    // keeps the warning off the stderr an export job's row is read from. A
-    // player that assumes "left" draws thin lines' colour up to half a pixel
-    // off.
+    // keeps the warning off the stderr an export job's row is read from.
+    // A player that assumes "left" draws thin lines' colour up to half a pixel off.
     args.extend(["-vf", "setparams=chroma_location=unspecified"].map(String::from));
     args.extend(["-c:v", "libsvtav1"].map(String::from));
     args.extend(["-preset".to_string(), ARCHIVE_PRESET.to_string()]);
