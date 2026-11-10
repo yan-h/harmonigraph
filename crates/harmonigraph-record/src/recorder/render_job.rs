@@ -227,12 +227,8 @@ pub(super) fn spawn_render(
     }
     queue.next_id += 1;
     let id = queue.next_id;
-    // A name is taken by its archive copy's file too, so publishing one never
-    // has to overwrite a copy an earlier export left.
     let output = available_output(&take, |candidate| {
-        candidate.symlink_metadata().is_ok()
-            || archive_path(candidate).symlink_metadata().is_ok()
-            || queue.jobs.iter().any(|job| job.snapshot.output == candidate)
+        candidate.symlink_metadata().is_ok() || held(&queue.jobs, id, candidate)
     });
     queue.jobs.push(Job {
         capture_failed: error.is_some(),
@@ -317,6 +313,15 @@ fn available_output(take: &Path, mut occupied: impl FnMut(&Path) -> bool) -> Pat
         }
     }
     unreachable!()
+}
+
+/// Whether a video name is taken by something other than its own file: the
+/// archive copy an earlier export left there, which publishing must never
+/// overwrite, or another job's name. Enqueue also checks the video file;
+/// publishing leaves that to `hard_link`, which refuses it without a race.
+fn held(jobs: &[Job], id: u64, candidate: &Path) -> bool {
+    archive_path(candidate).symlink_metadata().is_ok()
+        || jobs.iter().any(|job| job.snapshot.id != id && job.snapshot.output == candidate)
 }
 
 fn output_candidate(take: &Path, suffix: u64) -> PathBuf {
@@ -435,8 +440,7 @@ fn run_job(
     let mut output = job.output.clone();
     let mut suffix = 0;
     loop {
-        // The rule enqueue picks a name by: taken by either file.
-        let linked = if archive_path(&output).symlink_metadata().is_ok() {
+        let linked = if held(&queue.jobs, job.id, &output) {
             Err(std::io::ErrorKind::AlreadyExists.into())
         } else {
             std::fs::hard_link(&partial, &output)
@@ -446,14 +450,6 @@ fn run_job(
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 output = output_candidate(&job.take, suffix);
                 suffix += 1;
-                while queue
-                    .jobs
-                    .iter()
-                    .any(|j| j.snapshot.id != job.id && j.snapshot.output == output)
-                {
-                    output = output_candidate(&job.take, suffix);
-                    suffix += 1;
-                }
             }
             Err(e) => return Err(format!("could not publish video without overwriting: {e}")),
         }
