@@ -214,8 +214,10 @@ pub struct SurfaceState {
 }
 
 /// The editor's preferences: how this editor, on this screen, is set up to
-/// work, as against the user's content (the look, its slots, the camera
-/// presets and the layout), which [`UiPersist`] keeps beside it.
+/// work. The line between these and what [`UiPersist`] keeps beside them is
+/// what a reset costs: each of these is a moment's redo (a scale, a switch, a
+/// fold, a framing), where the look, its slots, the camera presets and the
+/// layout with its folded regions are the user's work.
 ///
 /// Saved whole under one key, so a preference is a field here, its line in
 /// `Default`, and a repair in [`Self::sanitize`] if it needs one; saving and
