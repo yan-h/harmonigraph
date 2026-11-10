@@ -971,6 +971,196 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
     }
 }
 
+/// The nested groups whose owner's `Default` deliberately builds them off their
+/// own bare default, as path prefixes with that bare default serialized and the
+/// reason each: a key missing INSIDE one comes back at the same key of the
+/// group's bare default, which is not the value a fresh save holds there. Any
+/// other key must come back at the fresh save's value. An entry no dropped key
+/// needs any more fails the sweep.
+fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
+    fn bare<T: Default + serde::Serialize>() -> String {
+        ron::to_string(&T::default()).expect("a default serializes")
+    }
+    use harmonigraph_scene::{Gradient, MaterialSettings, ShadowStyle, StarSettings};
+    let shadow =
+        "each Shadow group is tuned apart from the bare `ShadowStyle` (its `impl Default`)";
+    [
+        (
+            "layout.below",
+            bare::<workspace::Sizes>(),
+            "the dock below the lattice has its own sizes; `Sizes` defaults to the right's",
+        ),
+        (
+            "appearance.view.pitch_gradient",
+            bare::<Gradient>(),
+            "the lattice's pitch gradient is a tuned look",
+        ),
+        (
+            "appearance.spectrum.spectrogram_gradient",
+            bare::<Gradient>(),
+            "the heatmap's gradient and its bend are tuned",
+        ),
+        (
+            "appearance.view.atmosphere.material_settings",
+            bare::<MaterialSettings>(),
+            "the lattice glow's captured Watercolor",
+        ),
+        (
+            "appearance.view.atmosphere.stars",
+            bare::<StarSettings>(),
+            "the lattice's captured stars, four layers of five",
+        ),
+        (
+            "appearance.spectrum.atmosphere.material_settings",
+            bare::<MaterialSettings>(),
+            "the spectrogram's captured texture",
+        ),
+        (
+            "appearance.spectrum.atmosphere.stars",
+            bare::<StarSettings>(),
+            "the spectrogram's captured stars",
+        ),
+        ("appearance.view.shadow.lattice_geometry", bare::<ShadowStyle>(), shadow),
+        ("appearance.view.shadow.lattice_text", bare::<ShadowStyle>(), shadow),
+        ("appearance.view.shadow.spectral_text", bare::<ShadowStyle>(), shadow),
+    ]
+}
+
+/// The layer under the missing-key tests above and below: every key of every
+/// struct the editor save holds, at any depth, dropped in turn — through
+/// `Some`, tuples, lists and enum payloads as well — and the rest parsed with
+/// the parse `load_persist` runs.
+///
+/// Those tests each sweep one level through the real doors, `load_persist` or
+/// `AppearanceDocument::parse`, and compare what loads: the persist sections
+/// (`a_persist_blob_missing_any_one_section_keeps_the_rest`), the appearance's
+/// groups (`an_appearance_missing_any_one_group_keeps_the_rest`), the view's
+/// keys (`a_view_missing_any_one_key_reloads_at_the_fresh_value`), and the
+/// spectrum, Spiral, glow curve, atmosphere and preset or look below them.
+/// This one adds what a level-by-level sweep does not reach: the structs
+/// nested further in (`Camera`, `IntensitySettings`, `Gradient`, `Bend`,
+/// `SkinDials`, `RenderConfig` among them), asked at the parse alone, since
+/// normalization may rightly move a sibling of the dropped key.
+///
+/// Each drop must cost that key alone: the rest reserializes at the value
+/// saved, and the dropped key comes back at the value a fresh save holds there
+/// — or, inside one of [`nested_defaults`], at its group's bare default. A
+/// struct without its container-level `#[serde(default)]` fails the parse, and
+/// one whose fields carry their own defaults loads the key at 0 or `false`.
+/// Exempt from the value check are keys inside a list a fresh save leaves
+/// empty, which the preset/look test pins, and the editor's `version`, which
+/// reads as 0 for the floor to refuse.
+///
+/// The fixture is `dialled`, which moves a few values in the camera, view,
+/// spectrum, render and workspace off fresh, plus a camera preset and a stored
+/// look, so the walk reaches the structs inside a list, a tuple and a `Some`.
+#[test]
+fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
+    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
+
+    let mut state = dialled();
+    state.workspace.interaction.camera_presets.push(CameraPreset {
+        name: "reading".into(),
+        yaw: 0.7,
+        pitch: 0.2,
+    });
+    let mut stored = AppearanceDocument::default();
+    stored.spectrum.attack = 0.2;
+    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
+    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
+        .expect("a slot holding a look parses");
+    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
+    let saved = state.save_persist();
+    let pairs = nested_pairs(&saved);
+    let fresh_save = fresh().save_persist();
+    let fresh_pairs: std::collections::HashMap<_, _> = nested_pairs(&fresh_save)
+        .into_iter()
+        .map(|(path, range)| (path, fresh_save[range].to_string()))
+        .collect();
+    // The fixture has to reach the nested structs, or the sweep passes over
+    // the top level alone and reads as coverage.
+    for deep in [
+        "appearance.camera.yaw",
+        "appearance.view.pitch_gradient.bend.at",
+        "appearance.view.intensity.velocity.opacity",
+        "appearance.view.atmosphere.stars.star_jitter",
+        "appearance.spectrum.atmosphere.material_settings.wash_size",
+        "appearance.render.frame.split",
+        "skin_dials.tint",
+        "spiral.zoom",
+        "camera_presets[0].yaw",
+        "look_slots.stored[1].view.shadow.lattice_text.width",
+    ] {
+        assert!(pairs.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
+    }
+
+    // Each group's bare default, by its path within the group.
+    let nested: Vec<_> = nested_defaults()
+        .into_iter()
+        .map(|(owner, bare, _)| {
+            let keys: std::collections::HashMap<_, _> = nested_pairs(&bare)
+                .into_iter()
+                .map(|(path, range)| (path, bare[range].to_string()))
+                .collect();
+            (owner, keys)
+        })
+        .collect();
+    let (mut needed, mut stale_values) = (std::collections::HashSet::new(), Vec::new());
+    for (path, range) in &pairs {
+        // A blob without the editor's `version` reads as 0, which the floor
+        // refuses whole on purpose.
+        let refused = path == "version";
+        // The pair and the comma that separates it from a neighbour.
+        let cut = if saved[range.end..].starts_with(',') {
+            range.start..range.end + 1
+        } else if saved[..range.start].ends_with(',') {
+            range.start - 1..range.end
+        } else {
+            range.clone()
+        };
+        let without = format!("{}{}", &saved[..cut.start], &saved[cut.end..]);
+        let parsed = ron::from_str::<crate::state::UiPersist>(&without).unwrap_or_else(|e| {
+            panic!("dropping {path} sank the whole document instead of costing itself: {e}")
+        });
+        let again = ron::to_string(&parsed).expect("a persist serializes");
+        let (_, back) = nested_pairs(&again)
+            .into_iter()
+            .find(|(p, _)| p == path)
+            .unwrap_or_else(|| panic!("dropping {path} lost the key from the next save"));
+        // The dropped key's own value.
+        let came_back = &again[back.clone()];
+        let group = nested.iter().find_map(|(owner, keys)| {
+            let inner = path.strip_prefix(owner)?.strip_prefix('.')?;
+            Some((owner, &keys[inner]))
+        });
+        let want = match (group, fresh_pairs.get(path)) {
+            (Some((owner, bare)), Some(fresh)) => {
+                if bare != fresh {
+                    needed.insert(*owner);
+                }
+                Some(bare)
+            }
+            (None, fresh) if !refused => fresh,
+            _ => None,
+        };
+        if let Some(want) = want.filter(|want| came_back != *want) {
+            stale_values.push(format!("{path}: {came_back} where it should load {want}"));
+        }
+        // Everything else: put the saved value back where the reparsed one
+        // stands and compare.
+        let masked =
+            format!("{}{}{}", &again[..back.start], &saved[range.clone()], &again[back.end..]);
+        assert_eq!(masked, saved, "dropping {path} changed more than {path}");
+    }
+    assert!(stale_values.is_empty(), "a dropped key loaded the wrong value: {stale_values:#?}");
+    let stale: Vec<_> =
+        nested.iter().map(|(owner, _)| owner).filter(|owner| !needed.contains(*owner)).collect();
+    assert!(
+        stale.is_empty(),
+        "nested_defaults names groups whose bare default is fresh: {stale:?}"
+    );
+}
+
 /// Workspace settings stay alongside one nested appearance document.
 #[test]
 fn the_persist_blob_carries_exactly_these_top_level_keys() {
@@ -1983,29 +2173,112 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
 /// a whole persist section (`render:(...)`, `dock:(...)`) be dropped or
 /// counted as one.
 fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
+    pair_ranges(blob).into_iter().map(|(key, range)| (key, blob[range].to_string())).collect()
+}
+
+/// [`top_level_pairs`], with each whole pair as its byte range in `blob`.
+fn pair_ranges(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    item_ranges(blob)
+        .into_iter()
+        .map(|range| {
+            let text = &blob[range.clone()];
+            (text[..text.find(':').expect("a pair has a colon")].to_string(), range)
+        })
+        .collect()
+}
+
+/// The top-level items of a serialized struct, tuple or list, as byte ranges
+/// in `blob`. Depth-aware, and a quoted string's characters count for nothing.
+fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
+    let lead = blob.len() - blob.trim_start().len();
     let trimmed = blob.trim();
     // Exactly ONE enclosing paren off each end. Trimming every one of them takes
     // the last field's own closer along with the container's wherever that field
     // is itself a struct — `(zoom:2.75,look:(0.4,-0.6))` comes back with `look`
     // one paren short, which reads as a pair and rebuilds into a blob that will
     // not parse.
-    let inner = trimmed.strip_prefix('(').and_then(|s| s.strip_suffix(')')).unwrap_or(trimmed);
+    let (inner, base) =
+        match trimmed.strip_prefix(['(', '[']).and_then(|s| s.strip_suffix([')', ']'])) {
+            Some(inner) => (inner, lead + 1),
+            None => (trimmed, lead),
+        };
+    if inner.is_empty() {
+        return Vec::new();
+    }
     let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+    let (mut quoted, mut escaped) = (false, false);
     for (i, c) in inner.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
         match c {
+            '"' => quoted = true,
             '(' | '[' => depth += 1,
             ')' | ']' => depth -= 1,
             ',' if depth == 0 => {
-                out.push(inner[start..i].to_string());
+                out.push(base + start..base + i);
                 start = i + 1;
             }
             _ => {}
         }
     }
-    out.push(inner[start..].to_string());
-    out.into_iter()
-        .map(|text| (text[..text.find(':').expect("a pair has a colon")].to_string(), text))
-        .collect()
+    out.push(base + start..base + inner.len());
+    out
+}
+
+/// Every `key:value` pair of every struct a serialized blob holds, at any
+/// depth, as its path and its byte range in `blob`: through nested structs,
+/// tuples and lists, whose items are numbered (`stored[1]`), and through a
+/// `Some` or an enum variant's payload at the path of the value it is.
+fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    fn named_struct(text: &str) -> bool {
+        let Some(inner) = text.strip_prefix('(') else { return false };
+        let key = inner.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
+        key > 0 && inner[key..].starts_with(':')
+    }
+    fn walk(
+        blob: &str,
+        value: std::ops::Range<usize>,
+        path: &str,
+        out: &mut Vec<(String, std::ops::Range<usize>)>,
+    ) {
+        let text = &blob[value.clone()];
+        let name = text.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
+        if name > 0 && text[name..].starts_with('(') {
+            // A struct variant's payload is its struct; a `Some` or other
+            // newtype's single item is the value itself.
+            let payload = value.start + name..value.end;
+            let items = item_ranges(&blob[payload.clone()]);
+            return match items.as_slice() {
+                [one] if !named_struct(&blob[payload.clone()]) => {
+                    walk(blob, payload.start + one.start..payload.start + one.end, path, out)
+                }
+                _ => walk(blob, payload, path, out),
+            };
+        }
+        if named_struct(text) {
+            for (name, range) in pair_ranges(text) {
+                let range = value.start + range.start..value.start + range.end;
+                let path = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
+                out.push((path.clone(), range.clone()));
+                walk(blob, range.start + name.len() + 1..range.end, &path, out);
+            }
+        } else if text.starts_with(['(', '[']) {
+            for (index, range) in item_ranges(text).into_iter().enumerate() {
+                let range = value.start + range.start..value.start + range.end;
+                walk(blob, range, &format!("{path}[{index}]"), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(blob, 0..blob.len(), "", &mut out);
+    out
 }
 
 /// Replace one `key:value` pair in a serialized blob. RON has no trailing
