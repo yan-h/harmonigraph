@@ -359,6 +359,9 @@ a focused widget takes every key, unless the app says through `Queue::set_focus_
 A label holding a selection claims the copy chord (Cmd-C, Ctrl-Insert off macOS), which egui turns into its own copy, so the DAW does not copy too (#1608).
 An open memory-tracked popup claims Escape even without widget focus,
 so closing a combo box does not also send Escape to the DAW (#1659).
+A cut, copy or paste chord reaches egui only when egui claims the key, so Cmd-X with a label selected goes to the DAW alone rather than also copying the label (#1674).
+A label holding a selection claims Escape as well, which clears that selection (#1674);
+the arrows and Cmd-A, which move it, stay the host's, since a stray click on a label would otherwise take the arrows from the DAW.
 Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
 `translate_virtual_key` lowercases a character before matching it,
 so Shift and Caps Lock letters still produce egui key events.

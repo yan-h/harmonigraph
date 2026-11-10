@@ -678,10 +678,13 @@ impl NodeInstance {
     }
 
     /// Whether this node is somewhere the picture accounts for, and so can
-    /// carry pitch info (hover label, tuning readout). Sounding nodes always
-    /// draw; an idle one draws nothing at all, but a home-sheet position is
-    /// still a place the marker field says is there — a marker stands exactly
-    /// where a pointer goes looking.
+    /// carry pitch info (hover label, tuning readout). A sounding node always
+    /// counts, on its presence WITHOUT Opacity as its name reads it: a note
+    /// Opacity draws at nothing is still held there, and off the home sheet it
+    /// would otherwise be the one held note with no name and no hover (#1677
+    /// area 6 Q1). An idle node draws nothing at all, but a home-sheet position
+    /// is still a place the marker field says is there — a marker stands
+    /// exactly where a pointer goes looking.
     ///
     /// So this is deliberately NOT "does this node paint a pixel": an empty
     /// home sheet would then be uninspectable, and it is the thing most worth
@@ -697,7 +700,7 @@ impl NodeInstance {
     /// actually played, the node carrying it is one to reveal the pitch of,
     /// and that is the reasoning here rather than in the caller.
     pub fn is_visible(&self) -> bool {
-        self.presence_with_opacity > 0.0 || self.on_home || self.trail > 0.0
+        self.presence_without_opacity > 0.0 || self.on_home || self.trail > 0.0
     }
 
     /// How much NOTE NAME stands over this node, 0 to 1.
@@ -735,7 +738,7 @@ impl NodeInstance {
     /// and `hovered` is picking's alone, so it is a second lock on one door.
     /// It stays because the field is public shared state rather than picking's
     /// private output, and what it costs to be wrong is a name floating in the
-    /// sevens dimension on a node that draws nothing.
+    /// sevens dimension on a node nothing is sounding on.
     ///
     /// What it does NOT answer is whether the name lands on the PANE — that
     /// needs a rect and a projector, which is the label pass's business and

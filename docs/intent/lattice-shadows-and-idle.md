@@ -21,3 +21,7 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-03 (drift audit, #1635)
 
 - The fresh text-shadow Spread (lattice 0.129, spectral 0.136, about ×1.6) and the 5-stop ceiling on the lift (`TEXT_SPREAD_STOPS`, #1513) are the intended look, though both values were captured while Spread was a dilation. #1635 Glow Q1
+
+## 2026-11-10 (maintainability audit, #1677)
+
+- A node's rim and swell stay decided twice, on the CPU for the shadow caster's box and in WGSL for the billboard, rather than computed once and shipped; the caster-box test added in #1682 guards the two copies. #1677 area 8 Q1

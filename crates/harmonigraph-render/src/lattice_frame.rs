@@ -159,7 +159,7 @@ impl LatticeCallback {
         // light of its own and carries no trail mark, so a still lattice ships
         // its markers and nothing else.
         //
-        // The gates are the ones `fs_main`'s idle branch reads, in the same
+        // The gates are the ones `node_geom`'s idle branch reads, in the same
         // order, off the packed instance rather than the scene node — so this
         // asks the question the shader answers, not a restatement of it that
         // could drift. Reading the PACKED octave word is what makes that exact
