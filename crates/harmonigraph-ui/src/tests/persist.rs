@@ -1308,6 +1308,72 @@ fn a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest() {
     }
 }
 
+/// What a project saved before the preferences moved under one key (#1677)
+/// opens to: every preference at its default, and the user's content —
+/// layout, folded Analyzer regions, look, slots and camera presets — as saved.
+/// The break the move owes is exactly that, and no more.
+///
+/// The blob is a dialled save put back into the older shape by
+/// [`before_prefs`], so each preference sits at the top level in the form
+/// that build wrote it, and every one is dialled so its old key carries a real
+/// value for the parser to skip.
+#[test]
+fn a_save_from_before_prefs_keeps_its_content_and_resets_its_preferences() {
+    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
+
+    let mut state = dialled();
+    state.workspace.layout.select(panes::Tab::Spiral);
+    state.workspace.interaction.analyzer_regions.collapsed = [true, false];
+    state.workspace.interaction.camera_presets.push(CameraPreset {
+        name: "reading".into(),
+        yaw: 0.7,
+        pitch: 0.2,
+    });
+    let mut stored = AppearanceDocument::default();
+    stored.spectrum.attack = 0.2;
+    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
+    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
+        .expect("a slot holding a look parses");
+    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
+    let prefs = &mut state.workspace.interaction.prefs;
+    prefs.folded_sections.insert("System/Performance".into());
+    prefs.frame_rate = crate::FrameRate::Third;
+    prefs.frameless = true;
+    prefs.skin_dials.accent_hue = 120.0;
+    prefs.perf_pos = Some(egui::pos2(40.0, 60.0));
+    prefs.show_perf = true;
+    prefs.show_perf_detail = true;
+    prefs.spiral.zoom = 2.75;
+    let saved = state.save_persist();
+    let old = before_prefs(&saved);
+    for pair in [
+        "folded_sections:[\"System/Performance\"]",
+        "frame_rate:Third",
+        "ui_scale:1.25",
+        "frameless:true",
+        "perf_pos:Some((x:40.0,y:60.0))",
+        "show_perf:true",
+        "show_perf_detail:true",
+        "spiral:(zoom:2.75",
+    ] {
+        assert!(old.contains(&format!(",{pair}")), "the old shape must carry {pair}: {old}");
+    }
+    assert!(!old.contains("prefs:"), "the old shape has no prefs key");
+
+    let mut restored = fresh();
+    assert!(restored.load_persist(&old), "a save from before prefs was refused");
+    let again = restored.save_persist();
+    let fresh_save = fresh().save_persist();
+    let pair = |blob: &str, key: &str| {
+        top_level_pairs(blob).into_iter().find(|(k, _)| k == key).map(|(_, text)| text)
+    };
+    for key in ["layout", "analyzer_regions", "appearance", "camera_presets", "look_slots"] {
+        assert_ne!(pair(&saved, key), pair(&fresh_save, key), "the fixture must dial {key}");
+        assert_eq!(pair(&again, key), pair(&saved, key), "{key} did not survive the old shape");
+    }
+    assert_eq!(pair(&again, "prefs"), pair(&fresh_save, "prefs"), "a preference survived");
+}
+
 #[test]
 fn workspace_edits_do_not_change_recorded_appearance() {
     let mut state = fresh();
