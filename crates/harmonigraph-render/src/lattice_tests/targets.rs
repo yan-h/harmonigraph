@@ -360,9 +360,10 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
 
 /// The colour takes the rate the node's glow target says, through the instance
 /// `to_gpu` packs: a release under a held presence at the release rate, then a
-/// re-strike while the light is still falling at the attack rate. The three
-/// readings a slot could carry instead each fail one frame: the presence
-/// (`activation`) the release, and the stepped `glow.level` the re-strike.
+/// re-strike while the light is still falling at the attack rate, then a mark
+/// alone at the attack rate. The readings a slot could carry instead each fail
+/// one frame: the presence (`activation`) the release, the stepped
+/// `glow.level` the re-strike, and the drawn colour (`drawn_level`) the mark.
 #[test]
 fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
@@ -393,6 +394,14 @@ fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
     scene.glow_timing.as_mut().unwrap().now = 0.2;
     let restruck = mix(&mut shooter, &scene);
     assert!((restruck - up).abs() < 1e-6, "a re-strike during the release: {restruck}");
+    // Lit by a mark alone: the target counts the marks, which the drawn
+    // colour (`drawn_level`) in the slot would leave out.
+    scene.nodes[0].octaves.fill(0.0);
+    scene.nodes[0].melody_level = 1.0;
+    scene.nodes[0].glow.level = 0.6;
+    scene.glow_timing.as_mut().unwrap().now = 0.3;
+    let marked = mix(&mut shooter, &scene);
+    assert!((marked - up).abs() < 1e-6, "a mark lighting a node with no colour: {marked}");
 }
 
 #[test]
