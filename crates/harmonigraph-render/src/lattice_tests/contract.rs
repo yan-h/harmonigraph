@@ -3,11 +3,18 @@
 
 use crate::*;
 
+/// Parse and validation only: that the module declares each entry point a
+/// pipeline names is held by the device tests, which build them all from it
+/// (see `entry_points`).
 #[test]
 fn baked_shader_validates() {
-    let source = with_common(SHADER_SRC);
-    validate_wgsl("lattice.wgsl", &source, common_lines(COMMON_SRC), &entry_points(&source))
-        .expect("baked lattice.wgsl must parse and validate");
+    validate_wgsl(
+        "lattice.wgsl",
+        &with_common(SHADER_SRC),
+        common_lines(COMMON_SRC),
+        &[] as &[&str],
+    )
+    .expect("baked lattice.wgsl must parse and validate");
 }
 
 /// The `const _: () = assert!(PITCH_LUT_N == 64)` in `lib.rs` ties one Rust

@@ -470,10 +470,9 @@ impl ShaderWatcher {
 /// `source` is a WHOLE module — what [`with_common`] or the watcher hands back,
 /// never lattice.wgsl on its own, which names functions it does not declare and
 /// would fail here for that alone. `name` is the module's own file, and
-/// `required` the entry points it has to keep — for the lattice and text
-/// modules, [`entry_points`] of the baked one: the modules validated here
-/// declare different ones, and a list checked against the wrong module reports
-/// every entry point in it missing.
+/// `required` the entry points it has to keep (see [`entry_points`]): the
+/// modules validated here declare different ones, and a list checked against
+/// the wrong module reports every entry point in it missing.
 ///
 /// A diagnostic's line number is the CONCATENATED module's, which is no line of
 /// either file. Naga weaves those numbers through a rendered snippet, so the
@@ -516,12 +515,19 @@ fn validate_wgsl(
 /// Every entry point the compiled-in module `baked` declares: what a reload of
 /// it has to keep, since the build's pipelines were made from exactly these.
 ///
-/// Read off the module rather than listed beside it, so a renamed or added
-/// entry point is one edit, in the shader and the pipeline that names it. That
-/// a pipeline's entry point exists at all is the device tests' to catch, which
-/// build every pipeline from the baked source.
+/// The one rule for entry points, in two halves. What a RELOAD must keep is
+/// read off the baked module here, never listed beside it, so a renamed or
+/// added entry point is one edit, in the shader and the pipeline that names it.
+/// That the BAKED module has every entry point a pipeline names is the device
+/// tests' to hold, which build every pipeline from it (and which CI runs on a
+/// GPU, `HARMONIGRAPH_REQUIRE_GPU=1`). The hand lists left in the crate
+/// (`ROLL_ENTRY_POINTS`, `GLOW_ENTRY_POINTS` and their kind) do a third job and
+/// must not be derived from this: they hold the names Rust ASSEMBLES at runtime,
+/// out of a shading's name, against the shader that has to declare them.
 ///
-/// A parse of the baked module per call, which only a reload makes.
+/// A parse of the baked module per call. Only a reload calls it, once per
+/// baked module per save, beside the parse and validation of the module read
+/// off disk, so it is not cached.
 #[cfg(any(test, feature = "hot-reload"))]
 fn entry_points(baked: &str) -> Vec<String> {
     let module = naga::front::wgsl::parse_str(baked).expect("the baked module parses");

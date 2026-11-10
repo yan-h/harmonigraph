@@ -247,19 +247,13 @@ impl LatticeCallback {
                 )
             })
             .and_then(|()| {
+                // roll.wgsl itself is baked; what can break is its call into
+                // the common half just read.
                 validate_wgsl(
                     "roll.wgsl",
                     &module_source(&reloaded.common, &crate::roll_module()),
                     reloaded.seam,
-                    roll::ROLL_ENTRY_POINTS,
-                )
-            })
-            .and_then(|()| {
-                validate_wgsl(
-                    "dot_surround.wgsl",
-                    &dot_surround::source(),
-                    0,
-                    dot_surround::ENTRY_POINTS,
+                    &entry_points(&with_common(&crate::roll_module())),
                 )
             });
             match checked {

@@ -1300,11 +1300,14 @@ pub(crate) mod tests {
     const SIZE: [u32; 2] = [64, 64];
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+    /// Parse and validation only: that the module declares each entry point a
+    /// pipeline names is held by the device tests, which build them all from it
+    /// (`the_pipelines_build_against_a_headless_device` here, and every lattice
+    /// shot for the scene pass's glyph fill and shadow box).
     #[test]
     fn baked_text_shader_validates() {
         let seam = crate::common_lines(crate::COMMON_SRC);
-        let source = crate::with_common(TEXT_SRC);
-        crate::validate_wgsl("text.wgsl", &source, seam, &crate::entry_points(&source))
+        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, &[] as &[&str])
             .expect("baked text.wgsl must parse and validate");
     }
 

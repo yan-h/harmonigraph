@@ -28,7 +28,7 @@ use crate::wgpu;
 const SRC: &str = include_str!("shaders/dot_surround.wgsl");
 const INITIAL_CAPACITY: usize = 16;
 
-#[cfg(any(test, feature = "hot-reload"))]
+#[cfg(test)]
 pub(crate) const ENTRY_POINTS: &[&str] =
     &["vs_dot_cut", "fs_dot_surround_gamma", "fs_dot_surround_linear"];
 

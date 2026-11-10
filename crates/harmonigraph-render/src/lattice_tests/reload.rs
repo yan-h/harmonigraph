@@ -233,13 +233,13 @@ fn a_rejection_names_the_module_it_is_about() {
 }
 
 /// A reload that drops an entry point the build's pipelines were made from is
-/// refused, and the message names the one it dropped — the set is read off the
-/// baked module, so renaming any one of them in the file is enough to lose it.
+/// refused, and the message names the one it dropped.
 #[test]
 fn a_reload_missing_an_entry_point_is_refused_by_name() {
+    let dropped = "vs_main";
     let baked = with_common(SHADER_SRC);
     let required = entry_points(&baked);
-    let dropped = required.last().expect("the lattice declares entry points");
+    assert!(required.iter().any(|e| e == dropped), "the baked lattice has no `{dropped}`");
     let edited = baked.replace(&format!("fn {dropped}("), &format!("fn {dropped}_renamed("));
     assert_ne!(edited, baked, "`{dropped}` is not declared as `fn {dropped}(`");
 

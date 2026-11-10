@@ -54,7 +54,7 @@ pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 /// [`create_core_pipeline`] picks between. Its entry point is assembled from a
 /// shading's name, so a rename in the WGSL is a panic at pipeline creation and
 /// nothing sooner.
-#[cfg(any(test, feature = "hot-reload"))]
+#[cfg(test)]
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
     "vs_note_cut",
     "vs_note_body",
