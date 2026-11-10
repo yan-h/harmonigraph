@@ -499,7 +499,7 @@ fn render_controls(
                 ),
             ],
         );
-        ui.checkbox(&mut state.appearance.render.archive, "Archive copy").on_hover_text(
+        crate::widgets::checkbox(ui, &mut state.appearance.render.archive, "Archive copy").on_hover_text(
             "Also save a small AV1 copy beside the video as <name>-archive.mp4, to keep once the video is uploaded. \
              About a fourteenth of the size and close to the video's quality, but upload the video itself: \
              YouTube re-encodes what it gets, and the copy has already lost a little. \
@@ -722,28 +722,22 @@ fn export_queue(
     subsection(ui, "Exports", |ui| {
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"))
             .on_hover_text("One take path per line. Each video is saved beside its take; an existing video gets a numbered variant.");
-        ui.checkbox(&mut interaction.take.export_recorded, "Use each take's recorded appearance");
+        crate::widgets::checkbox(
+            ui,
+            &mut interaction.take.export_recorded,
+            "Use each take's recorded appearance",
+        );
         if !interaction.take.export_recorded {
-            let selected =
-                interaction.take.export_look.map_or("Current appearance".into(), slot_name);
-            egui::ComboBox::from_id_salt("export-look")
-                .selected_text(selected)
-                .width(ui.available_width())
-                .truncate()
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut interaction.take.export_look,
-                        None,
-                        "Current appearance",
-                    );
-                    for slot in 0..SLOT_COUNT {
-                        ui.selectable_value(
-                            &mut interaction.take.export_look,
-                            Some(slot),
-                            slot_name(slot),
-                        );
-                    }
-                });
+            let slots: Vec<String> = (0..SLOT_COUNT).map(slot_name).collect();
+            let options: Vec<(Option<usize>, &str, &str)> = std::iter::once((None, "Current", ""))
+                .chain(slots.iter().enumerate().map(|(slot, name)| (Some(slot), name.as_str(), "")))
+                .collect();
+            crate::widgets::choice_row(
+                ui,
+                "Appearance",
+                &mut interaction.take.export_look,
+                &options,
+            );
         }
         let mut paths = Vec::new();
         button_row(ui, |ui| {
