@@ -476,6 +476,7 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
+            glow_draws: lights,
             material: lattice_material::Material {
                 style: atmosphere.material_style,
                 amount: atmosphere.material_amount,
@@ -556,7 +557,7 @@ impl LatticeCallback {
                 },
                 glow: if lights {
                     GlowParams {
-                        reach: scene.view.glow_reach,
+                        padding: 0.0,
                         strength: scene.view.glow_strength,
                         span: harmonigraph_scene::glow_span(
                             scene.rings_outer,

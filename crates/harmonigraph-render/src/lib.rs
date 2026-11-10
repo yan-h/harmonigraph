@@ -882,6 +882,10 @@ struct LatticeCallback {
     /// Row owners in exactly the shipped instance order, after sorting and culling.
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
+    /// [`ViewConfig::glow_draws`](harmonigraph_scene::ViewConfig::glow_draws)
+    /// for the scene this frame was built from: the same answer that packed
+    /// the glow uniform group or zeroed it.
+    glow_draws: bool,
     glow_blend: f32,
     material: lattice_material::Material,
     /// The Pattern speed the pane's travel turns the glow's texture at.

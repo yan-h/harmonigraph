@@ -61,7 +61,7 @@ struct SpectralParams {
 };
 
 struct GlowParams {
-    @align(16) reach: f32,
+    @align(16) padding: f32,
     strength: f32,
     // The halo's footprint in node uv: the view's widest ring or mark rim
     // plus Reach, floored at 0.1 (`harmonigraph_scene::glow_span`). Settled on
