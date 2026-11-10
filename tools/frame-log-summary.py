@@ -60,6 +60,9 @@ TAIL = 5.0
 NOTE_AFTER = 1.5
 # How much of an export, and of the time before it, is compared.
 EXPORT_COMPARE = 30.0
+# A shown editor draws at least its 50 ms idle poll, so a longer gap between
+# drawn frames is a window that could not present: covered, or minimized.
+UNSHOWN_GAP = 1.0
 RATES = {1: 'Display', 2: 'Half', 3: 'Third', 4: 'Quarter'}
 CAUSES = ('dropped before it', 'late fire', 'waited for drawable', 'late CPU', 'late GPU', 'late latch')
 
@@ -245,13 +248,25 @@ def stretch(frames, start, end):
     """Refreshes, missed refreshes, stalls and drawn frames per second
     between two times."""
     inside = [fr for fr in frames if start <= fr['t'] < end]
-    ms = [m for m in map(measure, phases(inside)) if m['refreshes']]
+    runs = phases(inside)
+    ms = [m for m in map(measure, runs) if m['refreshes']]
     drawn = sum(1 for fr in inside if fr['submitted'])
+    # Visible: the time the display link paced frames, less every gap of
+    # over UNSHOWN_GAP between drawn ones. A minimized editor draws only the
+    # watchdog's frames, and a covered one keeps its link but refuses every
+    # present, so neither says how often it asks to draw while it is seen.
+    visible, paced = 0.0, 0
+    for p in runs:
+        edges = [p[0]['t']] + [fr['t'] for fr in p if fr['submitted']] + [p[-1]['t']]
+        visible += sum(b - a for a, b in zip(edges, edges[1:]) if b - a <= UNSHOWN_GAP)
+        paced += len(edges) - 2
     return {
         'refreshes': sum(m['refreshes'] for m in ms),
         'missed': sum(m['missed'] for m in ms),
         'stalls': [s for m in ms for s in m['stalls']],
         'fps': drawn / (end - start) if end > start else 0.0,
+        'visible': visible,
+        'visible_fps': paced / visible if visible else 0.0,
         'frames': [fr for fr in inside if fr['submitted']],
     }
 
@@ -309,9 +324,15 @@ def report_silence(run, evs, t0):
             last_voice = stop
         if not reasons and stop - start >= SILENCE_MIN:
             found = True
-            fps = stretch(run, start, stop)['fps']
+            s = stretch(run, start, stop)
+            if s['visible'] < 10:
+                print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s with nothing animating, '
+                      f'but the editor was hidden for nearly all of it')
+                continue
+            fps = s['visible_fps']
             print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s with nothing animating, '
-                  f'not even flowing audio: drew {fps:.0f} frames/s')
+                  f'not even flowing audio: drew {fps:.0f} frames/s '
+                  f'over {s["visible"]:.0f} s visible')
             print('    -> already idles: Q2 is moot' if fps < 30 else
                   '    -> something other than animation keeps it drawing')
         if reasons != ['flowing'] or stop - start < SILENCE_MIN:
@@ -320,22 +341,29 @@ def report_silence(run, evs, t0):
         # With no voice seen in this opening, a note may have ended just
         # before it.
         still = max(start, (last_voice if last_voice is not None else start) + span) + TAIL
+        # Flowing says samples arrive, not that they are audible: this reads
+        # as silence only if the transport was stopped.
         print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s, only flowing audio animating; '
-              f'still from {still - t0:.0f} s (Span {span:.0f} s)')
+              f'still from {still - t0:.0f} s (Span {span:.0f} s), '
+              f'if the transport was stopped rather than playing audio without notes')
         if stop - still < 10:
             print('    too short to reach a still picture: leave it stopped longer than the Span')
             continue
         s = stretch(run, still, stop)
+        if s['visible'] < 10:
+            print('    the editor was hidden for nearly all of the still part')
+            continue
         drawn = s['frames']
-        print(f"    drew {s['fps']:.0f} frames/s against {full:.0f} when animating; "
+        print(f"    drew {s['visible_fps']:.0f} frames/s over {s['visible']:.0f} s visible, "
+              f"against {full:.0f} when animating; "
               f"tick {median(fr['tick_ms'] for fr in drawn):.2f} ms, "
               f"render {median(fr['render_ms'] for fr in drawn):.2f} ms, "
               f"submit to GPU done "
               f"{median((fr['gpu_end'] - fr['submitted']) * 1000 for fr in drawn if fr['gpu_end']):.2f} ms"
               f" (medians)")
-        if s['fps'] > full / 2:
+        if s['visible_fps'] > full / 2:
             print('    -> draws at full rate with nothing moving: Q2 stands')
-        elif s['fps'] < 30:
+        elif s['visible_fps'] < 30:
             print('    -> already idles: Q2 is moot')
     if not found:
         print(f'  silence: none of {SILENCE_MIN:.0f} s or more')
@@ -370,17 +398,28 @@ def report_first_note(run, evs, t0):
 
 
 def report_exports(run, evs, t0):
-    # The time before an export is compared only back to the last one's end.
-    quiet_since = run[0]['t']
+    # One stretch per run of time with any export running, however many
+    # overlap in it, so the time before it is never inside another export.
+    busy = []
     for start, stop, words in timeline(evs, run[-1]['t'], 'exports'):
         if words[0] == '0':
-            quiet_since = start
             continue
+        if busy and busy[-1]['stop'] == start:
+            busy[-1]['stop'] = stop
+            busy[-1]['most'] = max(busy[-1]['most'], int(words[0]))
+        else:
+            busy.append({'start': start, 'stop': stop, 'most': int(words[0]), 'encoder': words[1]})
+    quiet_since = run[0]['t']
+    for b in busy:
+        start, stop = b['start'], b['stop']
         length = min(EXPORT_COMPARE, stop - start, start - quiet_since)
+        quiet_since = stop
         if length <= 0:
+            print(f'  export {start - t0:.0f}-{stop - t0:.0f} s already running when the editor '
+                  f'opened: no time before it to compare')
             continue
-        print(f'  export {start - t0:.0f}-{stop - t0:.0f} s, {words[0]} running, '
-              f'encoder {words[1]}; {length:.0f} s each side:')
+        print(f"  export {start - t0:.0f}-{stop - t0:.0f} s, up to {b['most']} running, "
+              f"encoder {b['encoder']}; {length:.0f} s each side:")
         for name, a in (('before', start - length), ('during', start)):
             s = stretch(run, a, a + length)
             print(f"    {name:6} drew {s['fps']:.0f} frames/s, missed {s['missed']} of "
