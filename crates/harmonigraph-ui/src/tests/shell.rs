@@ -164,15 +164,22 @@ fn stream(state: &mut SharedState, t: &mut f64, seconds: f64, tone: bool) -> Vec
 /// A host streams silence with its transport stopped, and drawing it at full
 /// rate cost Bitwig's main thread about 30% for a still picture (#1670 Q2).
 /// Flowing silence animates nothing; a sound does, for as long as its last
-/// audible column is still in the Span's view, and silence past that idles
-/// however long it flows. A tilt that lifts silence off the bed's colour puts
-/// it back, since the history's edges then show.
+/// audible column can still be on the heatmap — the Span, then the slab it
+/// was folded into, the blur's reach and the colour memory's fade — and
+/// silence past that idles however long it flows. A tilt that lifts silence
+/// off the bed's colour puts it back, since the history's edges then show.
 #[test]
 fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let mut state = fresh();
     let span = 20.0;
     state.picture.appearance.spectrum.roll_seconds = span as f32;
     assert!(state.picture.appearance.spectrum.show_spectrogram, "the heatmap is drawn");
+    state.picture.surfaces.spectrogram.at(0).held_bucket = Some(0.5);
+    let atmosphere = &mut state.picture.appearance.spectrum.atmosphere;
+    atmosphere.time_softness = 500.0;
+    assert!(atmosphere.effects().cloud, "the cloud and its colour memory are drawn");
+    let memory = 6.234 * f64::from(atmosphere.color_pickup.max(atmosphere.color_release));
+    let reach = span + 0.5 + 1.5 + memory;
     let mut t = 0.0;
 
     let before = stream(&mut state, &mut t, 2.0, false);
@@ -180,16 +187,14 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let playing = stream(&mut state, &mut t, 1.0, true);
     assert!(playing[20..].iter().all(|&(_, on)| on), "audible audio idled");
     let stopped = t;
-    let after = stream(&mut state, &mut t, span + 15.0, false);
+    let after = stream(&mut state, &mut t, reach + 15.0, false);
 
-    // The stamp is the curve's release, seconds after the tone and no later.
-    let heard = state.picture.runtime.spectrum.last_audible().expect("the tone was heard");
-    assert!(
-        heard > stopped && heard < stopped + 6.0,
-        "last heard at {heard}, stopped at {stopped}"
-    );
+    // The curve's release outlasts the tone by seconds; the columns do not.
+    let heard = state.picture.runtime.spectrum.last_audible();
+    let (heard, curve) = (heard.column.unwrap(), heard.curve.unwrap());
+    assert!(heard < curve && curve < stopped + 6.0, "column {heard}, curve {curve}, {stopped}");
     for (now, on) in after {
-        assert_eq!(on, now - heard <= span, "at {now}: last heard at {heard}");
+        assert_eq!(on, now - heard <= reach, "at {now}: last heard at {heard}");
     }
     assert!(!Animating::of(&state, t).any(), "something else held a still picture awake");
 
@@ -211,10 +216,28 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     let mut t = 0.0;
     stream(&mut state, &mut t, 1.0, true);
     let after = stream(&mut state, &mut t, 20.0, false);
-    let heard = state.picture.runtime.spectrum.last_audible().unwrap();
+    let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
     let last = after.iter().rev().find(|&&(_, on)| on).expect("the release idled at once").0;
     assert!(last - heard > 1.0, "idled {} s after the last sound", last - heard);
     assert!(!after.last().unwrap().1, "the ring's release outlasted 20 s");
+}
+
+/// A Clear takes the heard columns off the heatmap, and with them the Span they
+/// would have scrolled through: the editor idles once the curve has settled.
+#[test]
+fn a_cleared_heatmap_holds_no_sound_for_a_span() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.roll_seconds = 60.0;
+    let mut t = 0.0;
+    stream(&mut state, &mut t, 1.0, true);
+    // Once the analysis window has let go of the tone, or the columns after
+    // the Clear still hold it and scroll it across as they should.
+    stream(&mut state, &mut t, 1.0, false);
+    state.picture.runtime.spectrum.clear_history();
+    let after = stream(&mut state, &mut t, 10.0, false);
+    let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
+    let last = after.iter().rev().find(|&&(_, on)| on).expect("the curve settled at once").0;
+    assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);
 }
 
 /// A note arriving in an idle editor paints on the next tick, not at the idle

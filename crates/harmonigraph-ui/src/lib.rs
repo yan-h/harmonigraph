@@ -346,15 +346,7 @@ pub fn root_ui(
         // every frame that arrives a hair early, halving the rate.
         ui.ctx().request_repaint();
     } else {
-        // egui takes the frame time it predicts off any delay, so that the
-        // repaint lands before the deadline rather than after it. Nothing
-        // tells it the display's rate, so it predicts 1/60 s, and the 50 ms
-        // poll became 33 ms: every fifth refresh at 144 Hz, 29 frames a second
-        // for a still picture (#1673). Handing it back makes the poll the
-        // interval this names.
-        let predicted = ui.ctx().input(|i| i.predicted_dt);
-        let slack = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
-        ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL + slack);
+        repaint_after(ui.ctx(), IDLE_REPAINT_INTERVAL);
     }
 
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
@@ -577,30 +569,46 @@ fn departure(state: &SharedState) -> f64 {
             * (1.0 + f64::from(animation.stagger_spread))
 }
 
-/// Time constants a level on the ring's 0..1 scale takes to come within half a
-/// shader byte of where its envelope is carrying it, from as far away as it can
-/// be: `ln(255 / 0.5)`.
-const RING_SETTLE: f64 = 6.234;
+/// A repaint after the whole of `delay`.
+///
+/// egui takes the frame time it predicts off any delay, so that the repaint
+/// lands before the deadline rather than after it. Nothing tells it the
+/// display's rate, so it predicts 1/60 s: the 50 ms idle poll became 33 ms,
+/// every fifth refresh at 144 Hz (#1673), and the splash's 16 ms became none
+/// at all. Handing the prediction back makes the delay the one asked for.
+pub(crate) fn repaint_after(ctx: &egui::Context, delay: std::time::Duration) {
+    let predicted = ctx.input(|i| i.predicted_dt);
+    let slack = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
+    ctx.request_repaint_after(delay + slack);
+}
+
+/// Time constants a level on a 0..1 scale, carried toward its target by an
+/// exponential, takes to come within half a shader byte of it from as far away
+/// as it can be: `ln(255 / 0.5)`. The ring's levels and the heatmap's colour
+/// memory both settle this way.
+const SETTLE: f64 = 6.234;
 
 /// Whether audio above silence can still be moving something on screen.
 ///
 /// Samples arriving are not enough, because a host streams silence with its
 /// transport stopped and drawing that at full rate cost Bitwig's main thread
-/// about 30% for a still picture (#1670 Q2). So this asks how long ago the
-/// newest column with anything in it was
+/// about 30% for a still picture (#1670 Q2). So this asks how long ago each
+/// reading of the spectrum last held anything
 /// ([`last_audible`](AudioSpectrum::last_audible)), against how long each
-/// picture that reads the spectrum goes on moving after it:
+/// picture drawn from it goes on moving after:
 ///
 /// - The curve and the Spiral draw the smoothed display, which a column moves
 ///   once it lands, a column lag after its own time, and which they stop
 ///   drawing [`HOLD_SECONDS`](AudioSpectrum::HOLD_SECONDS) after the samples
-///   stop. The display's release is inside the stamp itself: a curve still
-///   above silence counts as audible.
+///   stop. The display's release is inside its stamp: a curve still above
+///   silence counts as heard.
 /// - The heatmap scrolls a column until it leaves the far edge, a Span after
 ///   its time plus the slab it was folded into and the three sigmas its Time
-///   softness blurs it across. Its atmosphere drifts on a clock of its own but
-///   only moves light: every texture keeps silence on the palette's floor, so
-///   it settles with the columns it lights.
+///   softness blurs it across, and its atmosphere's colour memory then fades
+///   what that edge last showed on Color pickup and release. Its textures
+///   drift on a clock of their own but only move light: every one keeps
+///   silence on the palette's floor, so they settle with the columns they
+///   light. A Clear takes the columns with it, and their tail.
 /// - The lattice ring carries the display on its own attack and release, its
 ///   gate closes on the note Fade, and a node the ring posed then leaves as a
 ///   note's would.
@@ -631,20 +639,32 @@ fn audible(state: &SharedState, now: f64) -> bool {
             return true;
         }
     }
-    let Some(heard) = spectrum.last_audible() else { return false };
+    let heard = spectrum.last_audible();
+    let within = |stamp: Option<f64>, tail: f64| stamp.is_some_and(|t| now - t <= tail);
     let landed = spectrum.column_lag() + AudioSpectrum::HOLD_SECONDS;
-    let mut tail = landed;
-    if cfg.show_spectrogram {
-        tail = tail.max(window + slab());
+    if within(heard.curve, landed) {
+        return true;
+    }
+    // Only while the heard column is still in the history: a Clear takes it.
+    let kept = |t: f64| spectrum.history().front().is_some_and(|c| c.time <= t);
+    if cfg.show_spectrogram && heard.column.is_some_and(kept) {
+        let atmosphere = cfg.atmosphere;
+        let memory = if atmosphere.effects().cloud {
+            SETTLE * f64::from(atmosphere.color_pickup.max(atmosphere.color_release))
+        } else {
+            0.0
+        };
+        if within(heard.column, window + slab() + memory) {
+            return true;
+        }
     }
     if view.spectral_ring_draws() {
         let env = view.envelope(&state.picture.runtime.frame_params);
-        let ring =
-            RING_SETTLE * f64::from(view.spectral_ring_attack.max(view.spectral_ring_release));
+        let ring = SETTLE * f64::from(view.spectral_ring_attack.max(view.spectral_ring_release));
         let gate = f64::from(env.attack_time.max(env.fade_time));
-        tail = tail.max(landed + ring + gate + departure(state));
+        return within(heard.curve, landed + ring + gate + departure(state));
     }
-    now - heard <= tail
+    false
 }
 
 /// Whether a silent cell of the heatmap draws in anything but the gradient's
