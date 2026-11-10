@@ -124,13 +124,7 @@ fn a_thin_lines_light_reaches_the_half_whatever_the_scene_to_half_ratio() {
             screen,
         );
         let mut encoder = device.create_command_encoder(&Default::default());
-        let pipelines = BloomPipelines {
-            bright: &compiled.bright_pipeline,
-            downsample: &compiled.downsample_pipeline,
-            blur_h: &compiled.blur_h_pipeline,
-            blur_v: &compiled.blur_v_pipeline,
-        };
-        chain.run(&mut encoder, pipelines, "bright_pass_line", None);
+        chain.run(&mut encoder, &compiled.bloom, "bright_pass_line", None);
         queue.submit([encoder.finish()]);
 
         // The half as it stands, in f32 so nothing clips.

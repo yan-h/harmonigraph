@@ -161,12 +161,9 @@ pub(crate) struct GlowPipelines {
     /// through by the same [`crate::BloomChain::run`], so the halo a mark grows
     /// here is the halo a node grows there: same threshold at the same
     /// resolution, same knee, same kernel, same fractions of the pane's screen
-    /// size. Only the target FORMAT is this caller's own, which is why the
-    /// pipelines are its own and the chain is not.
-    bright_pipeline: wgpu::RenderPipeline,
-    downsample_pipeline: wgpu::RenderPipeline,
-    blur_h_pipeline: wgpu::RenderPipeline,
-    blur_v_pipeline: wgpu::RenderPipeline,
+    /// size. Only the target FORMAT is this caller's own, which is why it holds
+    /// its own build of [`crate::BloomPipelines`].
+    chain_pipelines: crate::BloomPipelines,
     add_pipeline: wgpu::RenderPipeline,
     /// One sampled texture + the shared sampler (the three chain passes).
     filter_layout: wgpu::BindGroupLayout,
@@ -266,52 +263,23 @@ impl GlowPipelines {
             label: Some("glow_filter_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1)],
         });
-        // Binding 4 for the strength, matching `AddUniforms` in blit.wgsl —
-        // the lattice's own composite holds 3.
-        let add_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("glow_add_bind_group_layout"),
-            entries: &[
-                texture_entry(0),
-                sampler_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        // The chain overwrites its whole target, so those three take no blend;
-        // the one that lands in the egui pass blends the way egui blends.
+        let add_layout = crate::BloomChain::add_layout(device, "glow_add_bind_group_layout");
         let blit_shader = crate::blit_module(device);
-        let filter = |entry| {
-            crate::create_post_pipeline(
-                device,
-                &blit_shader,
-                entry,
-                target_format,
-                &filter_layout,
-                None,
-            )
-        };
         GlowPipelines {
             disc_pipeline: create_disc_pipeline(device, target_format, &locals_layout),
             locals_layout,
-            bright_pipeline: filter("fs_bright"),
-            downsample_pipeline: filter("fs_downsample"),
-            blur_h_pipeline: filter("fs_blur_h"),
-            blur_v_pipeline: filter("fs_blur_v"),
-            add_pipeline: crate::create_post_pipeline(
+            chain_pipelines: crate::BloomPipelines::new(
                 device,
                 &blit_shader,
-                "fs_bloom_add",
+                target_format,
+                &filter_layout,
+                crate::BloomSource::Picture,
+            ),
+            add_pipeline: crate::BloomChain::add_pipeline(
+                device,
+                &blit_shader,
                 target_format,
                 &add_layout,
-                Some(EGUI_BLEND),
             ),
             filter_layout,
             add_layout,
@@ -535,14 +503,7 @@ impl CallbackTrait for GlowCallback {
         // beside it are still readable.
         let GlowResources { pipelines, pane } = resources;
         let pane = pane.get_or_insert_with(|| GlowPane::new(device, pipelines, size));
-        let GlowPipelines {
-            disc_pipeline,
-            bright_pipeline,
-            downsample_pipeline,
-            blur_h_pipeline,
-            blur_v_pipeline,
-            ..
-        } = pipelines;
+        let GlowPipelines { disc_pipeline, chain_pipelines, .. } = pipelines;
         pane.chain.set_owner_size(queue, self.rect.size() * ppp);
 
         if self.dots.len() > pane.capacity {
@@ -601,17 +562,7 @@ impl CallbackTrait for GlowCallback {
             pass.set_vertex_buffer(0, pane.instances.slice(..));
             pass.draw(0..4, 0..pane.count);
         }
-        pane.chain.run(
-            egui_encoder,
-            crate::BloomPipelines {
-                bright: bright_pipeline,
-                downsample: downsample_pipeline,
-                blur_h: blur_h_pipeline,
-                blur_v: blur_v_pipeline,
-            },
-            "glow",
-            None,
-        );
+        pane.chain.run(egui_encoder, chain_pipelines, "glow", None);
         pane.ready = true;
 
         Vec::new()

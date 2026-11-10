@@ -962,12 +962,7 @@ impl LatticeCallback {
             );
 
             if let Some(bloom) = &offscreen.bloom {
-                bloom.chain.run(
-                    egui_encoder,
-                    Self::bloom_pipelines(resources),
-                    "lattice",
-                    end_stamp,
-                );
+                bloom.chain.run(egui_encoder, &resources.compiled.bloom, "lattice", end_stamp);
             }
 
             if timing {

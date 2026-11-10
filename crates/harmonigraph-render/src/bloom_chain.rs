@@ -61,19 +61,118 @@ pub(super) struct BloomChain {
     blur_v_bind_group: wgpu::BindGroup,
 }
 
+/// What the chain's threshold reads its source as.
+#[derive(Clone, Copy)]
+pub(super) enum BloomSource {
+    /// A finished picture: `fs_bright`, for the lattice's scene and the
+    /// spiral's marks.
+    Picture,
+    /// Premultiplied marks, whose straight colour decides what glows before
+    /// their coverage is spent on it: `fs_bright_coverage`, for the roll.
+    Coverage,
+}
+
 /// The four pipelines [`BloomChain::run`] steps through, in that order.
 ///
-/// Passed in rather than held: they are built per target format, and each
-/// caller has its own (the lattice writes an offscreen texture, the roll and
-/// the glow the surface egui handed them).
-pub(super) struct BloomPipelines<'a> {
-    pub(super) bright: &'a wgpu::RenderPipeline,
-    pub(super) downsample: &'a wgpu::RenderPipeline,
-    pub(super) blur_h: &'a wgpu::RenderPipeline,
-    pub(super) blur_v: &'a wgpu::RenderPipeline,
+/// Held by each caller rather than by the chain: they are built per target
+/// format (the lattice's offscreen texture, the roll's half floats, the glow's
+/// surface format), at the loading stage where each pane's own pipelines are.
+#[derive(Clone)]
+pub(super) struct BloomPipelines {
+    bright: wgpu::RenderPipeline,
+    downsample: wgpu::RenderPipeline,
+    blur_h: wgpu::RenderPipeline,
+    blur_v: wgpu::RenderPipeline,
+}
+
+impl BloomPipelines {
+    /// The chain's passes out of `blit` (`blit.wgsl`), writing `format` and
+    /// reading each source through `filter_layout`: one texture and the
+    /// shared sampler. Every pass overwrites its whole target, so none blends;
+    /// all but the downsample and the coverage threshold also read the
+    /// chain's scale at group 1.
+    pub(super) fn new(
+        device: &wgpu::Device,
+        blit: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+        filter_layout: &wgpu::BindGroupLayout,
+        source: BloomSource,
+    ) -> Self {
+        let scale_layout = BloomChain::scale_layout(device);
+        let pass = |entry, scaled: bool| {
+            let layouts = [Some(filter_layout), Some(&scale_layout)];
+            let layouts = if scaled { &layouts[..] } else { &layouts[..1] };
+            post_pipeline(device, blit, entry, format, layouts, None)
+        };
+        BloomPipelines {
+            bright: match source {
+                BloomSource::Picture => pass("fs_bright", true),
+                BloomSource::Coverage => pass("fs_bright_coverage", false),
+            },
+            downsample: pass("fs_downsample", false),
+            blur_h: pass("fs_blur_h", true),
+            blur_v: pass("fs_blur_v", true),
+        }
+    }
 }
 
 impl BloomChain {
+    /// What [`BloomChain::add_pipeline`] reads: quarter A and the shared
+    /// sampler at 0 and 1, and the strength at 4, matching `AddUniforms` in
+    /// blit.wgsl — the lattice's own composite holds 3.
+    pub(super) fn add_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(label),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    /// The pass that lays the halo over a pane drawn into the egui pass,
+    /// blending as egui blends. The lattice has none: its composite adds the
+    /// halo as it lays the scene down.
+    pub(super) fn add_pipeline(
+        device: &wgpu::Device,
+        blit: &wgpu::ShaderModule,
+        target_format: wgpu::TextureFormat,
+        add_layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
+        create_post_pipeline(
+            device,
+            blit,
+            "fs_bloom_add",
+            target_format,
+            add_layout,
+            Some(EGUI_BLEND),
+        )
+    }
+
     pub(super) fn scale_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("bloom_scale_layout"),
@@ -218,20 +317,20 @@ impl BloomChain {
     /// composites the halo samples quarter A, so the vertical blur MUST be the
     /// step that lands there.
     ///
-    /// This is the only place that ordering is written down; the pipelines
-    /// themselves are built by each caller.
+    /// This is the only place that ordering is written down, as
+    /// [`BloomPipelines::new`] is the only place the passes are built.
     pub(super) fn run(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        pipelines: BloomPipelines<'_>,
+        pipelines: &BloomPipelines,
         label: &str,
         end_stamp: Option<&wgpu::QuerySet>,
     ) {
         let steps: [BloomStep; 4] = [
-            (pipelines.bright, &self.bright_bind_group, &self.half_view),
-            (pipelines.downsample, &self.downsample_bind_group, &self.quarter_a_view),
-            (pipelines.blur_h, &self.blur_h_bind_group, &self.quarter_b_view),
-            (pipelines.blur_v, &self.blur_v_bind_group, &self.quarter_a_view),
+            (&pipelines.bright, &self.bright_bind_group, &self.half_view),
+            (&pipelines.downsample, &self.downsample_bind_group, &self.quarter_a_view),
+            (&pipelines.blur_h, &self.blur_h_bind_group, &self.quarter_b_view),
+            (&pipelines.blur_v, &self.blur_v_bind_group, &self.quarter_a_view),
         ];
         for (index, (pipeline, bind_group, target)) in steps.into_iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
