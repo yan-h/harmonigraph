@@ -10,10 +10,8 @@
 //! Two things worth pinning, and neither is `take_warnings`' own formatting
 //! (`a_take_missing_note_history_is_exported_with_a_warning` in the binary
 //! covers that): that the loop RUNS at all, and that it runs **before** the
-//! command line is judged. The second is a contract with `harmonigraph-record`'s
-//! `follow`, which takes the FIRST `warning:` line for the export job's row —
-//! so a complaint about flags reaching stderr first would take the row away
-//! from the take's missing history.
+//! command line is judged, so the export job's row, which lists every warning in
+//! the order printed, leads with the recording rather than the flags.
 
 use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record};
 
