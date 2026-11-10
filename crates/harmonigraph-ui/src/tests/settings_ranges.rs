@@ -676,64 +676,97 @@ fn a_fresh_appearance_is_a_fixed_point_of_its_own_normalize() {
     );
 }
 
-/// Every `key:value` at the top level of one serialized struct, in order. The
-/// depth count is what keeps a nested struct's own commas out of the split.
+/// The items at the top level of one serialized struct, tuple or array, in
+/// order, each with its key where it has one. The depth count is what keeps a
+/// nested value's own commas out of the split.
 ///
 /// A narrower walk than `tests::persist`'s `top_level_pairs`, which takes a
 /// whole blob apart and is that module's own.
-fn top_level(serialized: &str) -> Vec<(&str, &str)> {
-    let inner = serialized
-        .strip_prefix('(')
-        .and_then(|rest| rest.strip_suffix(')'))
-        .expect("a serialized struct is parenthesized");
-    let (mut fields, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+fn top_level(serialized: &str) -> Vec<(Option<&str>, &str)> {
+    let inner = &serialized[1..serialized.len() - 1];
+    if inner.is_empty() {
+        return Vec::new();
+    }
+    let (mut items, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
     for (at, c) in inner.char_indices() {
         match c {
             '(' | '[' => depth += 1,
             ')' | ']' => depth -= 1,
             ',' if depth == 0 => {
-                fields.push(&inner[start..at]);
+                items.push(&inner[start..at]);
                 start = at + 1;
             }
             _ => {}
         }
     }
-    fields.push(&inner[start..]);
-    fields.into_iter().map(|field| field.split_once(':').expect("a pair has a colon")).collect()
+    items.push(&inner[start..]);
+    let named = |key: &str| key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    items
+        .into_iter()
+        .map(|item| match item.split_once(':') {
+            Some((key, value)) if named(key) => (Some(key), value),
+            _ => (None, item),
+        })
+        .collect()
 }
 
-/// Compare one owner's direct float fields against its own serialized shape,
-/// so the hand-written poison inventory cannot silently leave one at default.
-/// RON decimal spelling is a heuristic, not type reflection: integers, choices,
-/// nested values and floats without a decimal point are not recognized here.
-fn assert_poisoned_float_fields<T: serde::Serialize>(label: &str, opened: &T, poisoned: &T) {
-    let opened = ron::to_string(opened).expect("settings serialize");
-    let poisoned = ron::to_string(poisoned).expect("settings serialize");
-    let (before, after) = (top_level(&opened), top_level(&poisoned));
-    assert_eq!(before.len(), after.len(), "two serializations of {label} differ in length");
-    let (mut dialled, mut missed) = (0, Vec::new());
-    for ((key, was), (again, now)) in before.into_iter().zip(after) {
-        assert_eq!(key, again, "two serializations of {label} named different fields");
-        if !was.contains('.') || was.parse::<f32>().is_err() {
-            continue;
+/// Walk one owner's serialized shape against its poisoned copy, through every
+/// nested struct, tuple, array and `Some`, collecting the path of each float
+/// the poison left as it was. RON decimal spelling is a heuristic, not type
+/// reflection: integers, choices and floats without a decimal point are not
+/// recognized here.
+fn unpoisoned_floats(
+    path: &str,
+    opened: &str,
+    poisoned: &str,
+    dialled: &mut usize,
+    missed: &mut Vec<String>,
+) {
+    fn some(s: &str) -> Option<&str> {
+        s.strip_prefix("Some(").and_then(|s| s.strip_suffix(')'))
+    }
+    if let (Some(opened), Some(poisoned)) = (some(opened), some(poisoned)) {
+        return unpoisoned_floats(path, opened, poisoned, dialled, missed);
+    }
+    let nested = |s: &str| s.starts_with('(') || s.starts_with('[');
+    if nested(opened) && nested(poisoned) {
+        let (before, after) = (top_level(opened), top_level(poisoned));
+        assert_eq!(before.len(), after.len(), "two serializations of {path} differ in length");
+        for (index, ((key, was), (again, now))) in before.into_iter().zip(after).enumerate() {
+            assert_eq!(key, again, "two serializations of {path} named different fields");
+            let path = match key {
+                Some(key) if path.is_empty() => key.to_string(),
+                Some(key) => format!("{path}.{key}"),
+                None => format!("{path}[{index}]"),
+            };
+            unpoisoned_floats(&path, was, now, dialled, missed);
         }
-        dialled += 1;
-        if was == now {
-            missed.push(key);
+        return;
+    }
+    if opened.contains('.') && opened.parse::<f32>().is_ok() {
+        *dialled += 1;
+        if opened == poisoned {
+            missed.push(path.to_string());
         }
     }
-    assert!(missed.is_empty(), "the loaded-state guard never poisons {label} {missed:?}");
-    // Detect an owner going wholly unrecognized if RON's spelling changes.
-    // This does not prove that every float spelling was recognized.
-    assert!(dialled > 0, "none of {label}'s fields read as dialled floats");
 }
 
-/// Every direct float in these owners belongs in the poison fixture. The
-/// nested owners also contain choices/booleans; only their floats are checked.
-/// Owners mixing dialled and non-dialled floats (such as gradients) need their
-/// own treatment, and future nested owners must be added explicitly. This is
-/// fixture completeness, not discovery of controls: the conditional scenarios,
-/// real bar probes and visit assertions above still establish UI coverage.
+/// The floats `poison` leaves at their fresh value on purpose, by path, each
+/// with its reason. A path names that field and everything nested in it.
+const UNPOISONED: &[(&str, &str)] = &[
+    (
+        "camera.target",
+        "where the orbit looks, set by panning and framing: no bar and no range, so \
+         its load repair only refuses a non-finite one",
+    ),
+    ("view.pitch_gradient", "gradients are outside this guard (module header)"),
+    ("spectrum.spectrogram_gradient", "gradients are outside this guard (module header)"),
+];
+
+/// Every float anywhere in the appearance belongs in the poison fixture, unless
+/// [`UNPOISONED`] names it. This is fixture completeness, not discovery of
+/// controls: the conditional scenarios, real bar probes and visit assertions
+/// above still establish UI coverage.
 #[test]
 fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     let opened = fresh();
@@ -741,42 +774,37 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     poison(&mut saved, Edge::High);
     let old = &opened.picture.appearance;
     let new = &saved.picture.appearance;
-    assert_poisoned_float_fields("view", &old.view, &new.view);
-    // The two owners still hand-listed in `poison` whose OWN completeness
-    // nothing checked. Neither is short a field today; both are where the next
-    // added float would have gone missing quietly, this range alone having
-    // removed one from `camera` and reshaped `spectrum`'s surroundings.
-    assert_poisoned_float_fields("camera", &old.camera, &new.camera);
-    assert_poisoned_float_fields("spectrum", &old.spectrum, &new.spectrum);
-    assert_poisoned_float_fields(
-        "view.note_animation",
-        &old.view.note_animation,
-        &new.view.note_animation,
-    );
-    assert_poisoned_float_fields("view.intensity", &old.view.intensity, &new.view.intensity);
+    let (mut dialled, mut missed) = (0, Vec::new());
+    unpoisoned_floats("", &old.serialize(), &new.serialize(), &mut dialled, &mut missed);
+    // Detect the appearance going wholly unrecognized if RON's spelling
+    // changes. This does not prove that every float spelling was recognized.
+    assert!(dialled > 0, "none of the appearance's fields read as dialled floats");
+    let under = |path: &str, owner: &str| {
+        path.strip_prefix(owner)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
+    };
+    let stale: Vec<_> = UNPOISONED
+        .iter()
+        .filter(|(owner, _)| !missed.iter().any(|path| under(path, owner)))
+        .map(|(owner, _)| owner)
+        .collect();
+    missed.retain(|path| !UNPOISONED.iter().any(|(owner, _)| under(path, owner)));
+    assert!(missed.is_empty(), "the loaded-state guard never poisons {missed:?}");
+    assert!(stale.is_empty(), "UNPOISONED names no float the guard leaves alone: {stale:?}");
+    // A weight fresh at `None` is no float to the walk above, so every one is
+    // checked for the poison by name.
     let sources = |i: &harmonigraph_scene::IntensitySettings| {
         [("velocity", i.velocity), ("gain", i.gain), ("pressure", i.pressure), ("timbre", i.timbre)]
     };
     for (name, source) in sources(&new.view.intensity) {
         let serialized = ron::to_string(&source).unwrap();
         for (target, value) in top_level(&serialized) {
+            let target = target.expect("a source's weights are named");
             assert_eq!(
                 ron::from_str::<Option<f32>>(value).unwrap(),
                 Some(1.0e6),
                 "the loaded-state guard never poisons {name}.{target}"
             );
         }
-    }
-    assert_poisoned_float_fields("view.glow_curve", &old.view.glow_curve, &new.view.glow_curve);
-    assert_poisoned_float_fields("view.atmosphere", &old.view.atmosphere, &new.view.atmosphere);
-    assert_poisoned_float_fields(
-        "spectrum.atmosphere",
-        &old.spectrum.atmosphere,
-        &new.spectrum.atmosphere,
-    );
-    for (index, (before, after)) in
-        old.view.shadow.groups().into_iter().zip(new.view.shadow.groups()).enumerate()
-    {
-        assert_poisoned_float_fields(&format!("view.shadow[{index}]"), &before, &after);
     }
 }
