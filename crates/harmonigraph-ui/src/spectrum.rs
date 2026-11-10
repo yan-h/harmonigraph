@@ -105,16 +105,18 @@ pub struct LentAnalysis {
 /// run starting over, a batch of audio arriving, or a column it produced.
 /// The plugin's input worker makes them off the editor's lock and applies
 /// them under it (#1559); the inline shells apply each as it is made.
-// Nearly every delivery is a column, so boxing it would only add an
-// allocation per column to keep the rare two small.
-#[allow(clippy::large_enum_variant)]
 pub enum Delivery {
     /// The retained source run restarted: forget the curve, keep the history.
     Restart,
     /// A batch arrived whose newest frame is at this shell time, which keeps
     /// the curve live even while the analyzer refills and makes no column.
     Arrival(f64),
-    Column(AnalyzedColumn),
+    /// Boxed, because a block shorter than the 8 ms between columns delivers
+    /// an arrival and seldom a column: at 64-frame blocks and 48 kHz six of
+    /// seven deliveries are arrivals, and a list whose every slot was sized
+    /// for a column (15.3 KB) kept 31 MB after one step that found the
+    /// plugin's audio ring full.
+    Column(Box<AnalyzedColumn>),
 }
 
 /// One raw spectrum the analysis produced, for the store to take.
@@ -340,7 +342,7 @@ impl SpectrumAnalysis {
                 feed(samples);
                 Ok::<_, std::convert::Infallible>(())
             },
-            |column| deliver(Delivery::Column(column)),
+            |column| deliver(Delivery::Column(Box::new(column))),
         )
         .unwrap();
     }
@@ -429,7 +431,7 @@ impl SpectrumStore {
         match delivery {
             Delivery::Restart => self.restart(),
             Delivery::Arrival(newest) => self.last_samples = Some(newest),
-            Delivery::Column(column) => self.take(column, config, keep),
+            Delivery::Column(column) => self.take(*column, config, keep),
         }
     }
 

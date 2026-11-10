@@ -453,11 +453,13 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     match options.encoder() {
         VideoEncoder::X264 => {
             // `medium`, not `slow`: the encoder, not the picture, is what an
-            // export waits on. One second of a real take at 2560x1440@60
-            // encoded in 4.6-5.2 s against 10.8-11.3 s, for a file 1% larger
-            // and SSIM 0.99771 against 0.99784. The keyframe pop below barely
-            // moves: at 720p60 a keyframe changes 0.81 grey levels against
-            // 0.78, the frames between 0.59 against 0.58, for 4.5% more bytes.
+            // export waits on. A 5,302-frame take at 2560x1440@60 exported in
+            // 50 s against 104 s, and in 699 s against 1,285 s of processor
+            // time, for a file 1.8% larger; a one-second slice of an earlier
+            // take measured SSIM 0.99771 against 0.99784. The keyframe pop
+            // below barely moves: at 720p60 a keyframe changes 0.81 grey
+            // levels against 0.78, the frames between 0.59 against 0.58, for
+            // 4.5% more bytes.
             args.extend(
                 ["-c:v", "libx264", "-preset", "medium", "-profile:v", "high"].map(String::from),
             );
