@@ -7,8 +7,8 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
-    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, GRIP_TEXT_PAD, HANDLE_INSET, HANDLE_REACH_SHARE,
-    HANDLE_W, TEXT_GAP,
+    with_gestures, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, GRIP_TEXT_PAD, HANDLE_INSET,
+    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -378,6 +378,7 @@ pub struct RangeBar<'a> {
     /// Where a double-click puts the pair (see [`RangeBar::default_value`]).
     default: Option<(f32, f32)>,
     display: fn(f32) -> String,
+    hint: Option<&'a str>,
 }
 
 impl<'a> RangeBar<'a> {
@@ -397,7 +398,17 @@ impl<'a> RangeBar<'a> {
             fade_span: false,
             default: None,
             display: |v| format!("{v:.2}"),
+            hint: None,
         }
+    }
+
+    /// What the hover says the setting is, its full label when given none;
+    /// the bar ends it with the gestures it answers to (see [`ValueBar::hint`]).
+    ///
+    /// [`ValueBar::hint`]: super::value::ValueBar::hint
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
     /// The pair a double-click puts back: the setting's fresh one, as on a
@@ -807,6 +818,8 @@ impl<'a> RangeBar<'a> {
         // difference is visible BEFORE committing to a drag: an end resizes,
         // the middle picks the whole range up and slides it. Read off the same
         // grab the thumbs are lit by, so the two never disagree.
+        let hint = self.hint.unwrap_or(self.label);
+        let response = with_gestures(response, Some(hint), self.default.is_some(), false);
         match in_hand {
             Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),

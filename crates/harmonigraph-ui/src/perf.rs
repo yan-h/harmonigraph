@@ -185,9 +185,8 @@ fn tag_line(
 }
 
 /// The headline rate's colour. Only a low rate while something is animating is
-/// flagged: `fps` counts UI passes, which run on every link tick, so an idle
-/// editor reads the link's rate, but only painting is throttled and an idle
-/// number carries no news.
+/// flagged: `fps` counts UI passes, which run on every link tick, and an idle
+/// editor's link is slowed to its poll, so an idle number carries no news.
 ///
 /// Judged against `target_fps`, the rate the link was asked for (display rate
 /// over the Editor frame rate divisor), so a divided rate running on target

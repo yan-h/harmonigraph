@@ -29,12 +29,16 @@ struct StarUniforms {
     float star_life;
     float star_size_variation;
     float star_cover;
+    float star_twinkle;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
     type_10 star_slices;
 };
 struct Settings {
     StarUniforms stars;
     float depth;
-    float star_twinkle;
+    float _pad0_;
     float _pad1_;
     float _pad2_;
 };
@@ -115,8 +119,8 @@ float star_life(
 float star_twinkle(
     constant Settings& settings
 ) {
-    float _e2 = settings.star_twinkle;
-    return _e2;
+    float _e3 = settings.stars.star_twinkle;
+    return _e3;
 }
 
 uint naga_f2u32(float value) {

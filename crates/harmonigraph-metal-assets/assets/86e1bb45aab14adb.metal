@@ -22,6 +22,19 @@ struct StarSlice {
 struct type_10 {
     StarSlice inner[5];
 };
+struct StarUniforms {
+    metal::float2 size;
+    metal::float2 star_image_size;
+    float star_randomness;
+    float star_life;
+    float star_size_variation;
+    float star_cover;
+    float star_twinkle;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
+    type_10 star_slices;
+};
 struct Cloud {
     metal::float2 origin;
     metal::float2 size;
@@ -38,13 +51,8 @@ struct Cloud {
     float wash_layers;
     uint tile_cells;
     uint pitch_vertical;
-    float star_randomness;
-    float star_life;
-    float star_size_variation;
-    float star_cover;
-    float star_twinkle;
-    metal::float4 star_image_size;
-    type_10 star_slices;
+    uint _pad;
+    StarUniforms stars;
     uint memory_enabled;
     uint memory_valid;
     float pickup_alpha;
@@ -136,8 +144,8 @@ metal::float4 star_hash(
 float star_randomness(
     constant Cloud& cloud
 ) {
-    float _e2 = cloud.star_randomness;
-    return _e2;
+    float _e3 = cloud.stars.star_randomness;
+    return _e3;
 }
 
 float star_rank(
@@ -151,15 +159,15 @@ float star_rank(
 float star_life(
     constant Cloud& cloud
 ) {
-    float _e2 = cloud.star_life;
-    return _e2;
+    float _e3 = cloud.stars.star_life;
+    return _e3;
 }
 
 float star_twinkle(
     constant Cloud& cloud
 ) {
-    float _e2 = cloud.star_twinkle;
-    return _e2;
+    float _e3 = cloud.stars.star_twinkle;
+    return _e3;
 }
 
 uint naga_f2u32(float value) {
@@ -238,8 +246,8 @@ float star_reach(
 metal::float2 star_size(
     constant Cloud& cloud
 ) {
-    metal::float2 _e2 = cloud.size;
-    return _e2;
+    metal::float2 _e3 = cloud.stars.size;
+    return _e3;
 }
 
 float star_level_at(
@@ -283,11 +291,11 @@ metal::float3 star_paint(
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> lut
 ) {
-    float randomness = cloud.star_randomness;
+    float randomness = cloud.stars.star_randomness;
     float spread = (1.0 - randomness) + (randomness * (0.35 + (0.65 * rank)));
     float lift = (0.09 * rank) * metal::smoothstep(0.0, 0.15, level_1);
-    metal::float3 _e24 = palette_color(metal::clamp((level_1 * spread) + lift, 0.0, 1.0), lut);
-    return _e24;
+    metal::float3 _e25 = palette_color(metal::clamp((level_1 * spread) + lift, 0.0, 1.0), lut);
+    return _e25;
 }
 
 metal::float4 star_source(
@@ -322,8 +330,8 @@ metal::float4 star_source(
 float star_size_variation(
     constant Cloud& cloud
 ) {
-    float _e2 = cloud.star_size_variation;
-    return _e2;
+    float _e3 = cloud.stars.star_size_variation;
+    return _e3;
 }
 
 metal::uint3 naga_f2u32(metal::float3 value) {
@@ -384,8 +392,8 @@ StarSlice star_slice(
     uint k_1,
     constant Cloud& cloud
 ) {
-    StarSlice _e4 = cloud.star_slices.inner[metal::min(unsigned(k_1), 4u)];
-    return _e4;
+    StarSlice _e5 = cloud.stars.star_slices.inner[metal::min(unsigned(k_1), 4u)];
+    return _e5;
 }
 metal::int2 naga_f2i32(metal::float2 value) {
     return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));

@@ -247,7 +247,7 @@ impl EditorShared {
     fn note_frame_at(&mut self, now: Instant, paced: bool) {
         let gap = self.last_frame.map(|t| now.duration_since(t).as_secs_f64());
         self.last_frame = paced.then_some(now);
-        if let Some(gap) = gap.filter(|g| *g > 0.1) {
+        if let Some(gap) = gap.filter(|g| *g > STALL_GAP) {
             self.ui
                 .picture
                 .runtime
@@ -256,6 +256,19 @@ impl EditorShared {
         }
     }
 }
+
+/// The gap between paced frames, in seconds, past which a frame logs a stall.
+///
+/// An idle editor's display link is slowed on purpose, to as much as the
+/// shell's [`egui_baseview::MAX_FRAME_GAP`] between passes (#1676), and those
+/// gaps land on whole refreshes with run-loop jitter on top. So a stall is
+/// only a gap at least one whole 60 Hz refresh past that cap: equal to it, half
+/// of all idle gaps logged as stalls.
+const STALL_GAP: f64 = 0.1;
+const _: () = assert!(
+    STALL_GAP > egui_baseview::MAX_FRAME_GAP + 1.0 / 60.0,
+    "the stall threshold must sit a refresh above the shell's idle frame gap",
+);
 
 /// Open `dir` in the file browser, creating it first: before the first take
 /// it does not exist yet, and it is where that take will go anyway.

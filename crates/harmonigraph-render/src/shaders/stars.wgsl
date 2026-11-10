@@ -29,8 +29,11 @@ struct StarSlice {
     gather: u32,
     _pad: u32,
 };
+// Both panes nest this one block in their own uniform and read it through
+// the getters each host defines, field by field (#1282).
 struct StarUniforms {
-    // The pane, and the star image's actual size, in device pixels.
+    // The pane in the host's own units (the lattice's device pixels, the
+    // spectrogram's points), and the star image's actual size in texels.
     size: vec2<f32>,
     star_image_size: vec2<f32>,
     star_randomness: f32,
@@ -39,6 +42,11 @@ struct StarUniforms {
     // How far a star hides those behind it whatever their brightness
     // (`star_layers`).
     star_cover: f32,
+    // `Twinkle`, which `star_draw` reads.
+    star_twinkle: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
     star_slices: array<StarSlice, 5>,
 };
 fn atlas_texel(index: i32) -> vec2<i32> {
