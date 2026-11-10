@@ -2506,13 +2506,22 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     partial.params.insert("map-fifths".into(), nice_plug::plugin::ParamValue::I32(50));
     partial.params.insert("map-thirds".into(), nice_plug::plugin::ParamValue::I32(-50));
     partial.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(1));
-    for id in ["map-fifths-extension", "map-thirds-extension", "map-sevenths-extension"] {
+    for id in [
+        "map-fifths-extension",
+        "map-thirds-extension",
+        "map-sevenths-extension",
+        "tuning-engine",
+        "lattice-map",
+    ] {
         partial.params.remove(id);
     }
     device.load(partial, false);
     device.run(192, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
+        // The instance was in Lattice Map on slot 1: neither leaks in.
+        assert_eq!(preview.playback.engine, TuningEngine::Off);
+        assert_eq!(preview.playback.selected, 0);
         assert_eq!(preview.offsets.extension, harmonigraph_core::LatticePos::ORIGIN);
         assert_eq!(preview.playback.offset, harmonigraph_core::LatticePos::new(9, -9, -9));
         assert_eq!(plugin.params.map_playback.lock().offset, preview.playback.offset);
@@ -2522,6 +2531,51 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     assert!(matches!(repaired.params["map-follow"], nice_plug::plugin::ParamValue::I32(1)));
     assert!(matches!(repaired.params["map-fifths"], nice_plug::plugin::ParamValue::I32(9)));
     assert!(matches!(repaired.params["map-thirds"], nice_plug::plugin::ParamValue::I32(-9)));
+}
+
+/// A plain restore stores an `IntParam`'s value unclamped, while the host's
+/// label clamps it. An engine or map index out of range at either end —
+/// hand-edited or foreign state, since the plugin never saves one — must load
+/// as the value the host shows, in the editor and in the audio alike, and save
+/// back as that value. On `main` before the repair, the high side's engines,
+/// map label and saved values failed and the low side's saved values failed;
+/// the selected slots and the low side's engines already agreed, and stay
+/// here as the agreement this pins.
+#[test]
+fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    for (round, (engine, map, shown, decoded, slot)) in [
+        (3, 200, "Lattice Map", TuningEngine::LatticeMap, 127),
+        (-1, -5, "Pass through", TuningEngine::Off, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut state = device.save();
+        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
+        state.params.insert("lattice-map".into(), nice_plug::plugin::ParamValue::I32(map));
+        device.load(state, false);
+        device.run(64 * round as i64, vec![], false);
+        device.wrapper().test_inspect_plugin(|plugin| {
+            let preview = crate::lattice_maps::view(&plugin.params);
+            let audio = *plugin.params.map_playback.lock();
+            assert_eq!(plugin.params.tuning_engine.to_string(), shown);
+            assert_eq!(preview.playback.engine, decoded, "the editor disagrees");
+            assert_eq!(audio.engine, decoded, "the audio disagrees");
+            let label = plugin.params.map.to_string();
+            assert!(label.starts_with(&format!("{} · ", slot + 1)), "the host shows {label}");
+            assert_eq!((preview.playback.selected, audio.selected), (slot, slot));
+        });
+        let repaired = device.save();
+        assert!(matches!(
+            (&repaired.params["tuning-engine"], &repaired.params["lattice-map"]),
+            (nice_plug::plugin::ParamValue::I32(e), nice_plug::plugin::ParamValue::I32(m))
+                if (*e, *m as usize) == (decoded.index(), slot)
+        ));
+    }
 }
 
 #[test]

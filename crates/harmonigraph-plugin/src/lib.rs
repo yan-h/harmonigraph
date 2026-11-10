@@ -6,8 +6,10 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
+use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
+use harmonigraph_ui::lattice_maps::{MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 use parking_lot::Mutex;
@@ -303,6 +305,21 @@ fn param_for_key(key: ParamKey) -> FloatParam {
     FloatParam::new(key.host_name(), key.default_value(), range)
 }
 
+/// A map offset lane: one lattice step per value, or [`EXTENSION_STEP`] on an
+/// extension lane, which reads and parses in steps.
+fn map_lane(name: &'static str, lane: MapOffsetLane) -> IntParam {
+    let param = IntParam::new(name, 0, IntRange::Linear { min: -OFFSET_LIMIT, max: OFFSET_LIMIT });
+    match lane {
+        MapOffsetLane::Fine => param,
+        MapOffsetLane::Extension => param
+            .with_value_to_string(Arc::new(|value| (value * EXTENSION_STEP).to_string()))
+            .with_string_to_value(Arc::new(|text| {
+                let steps: i32 = text.trim().parse().ok()?;
+                (steps % EXTENSION_STEP == 0).then_some(steps / EXTENSION_STEP)
+            })),
+    }
+}
+
 impl Default for HarmonigraphParams {
     fn default() -> Self {
         let maps = Arc::new(parking_lot::RwLock::new(
@@ -313,56 +330,37 @@ impl Default for HarmonigraphParams {
             maps,
             map_editor: Default::default(),
             map_playback: Default::default(),
-            map: IntParam::new("Lattice Map", 0, IntRange::Linear { min: 0, max: 127 })
-                .with_value_to_string(Arc::new(move |id| {
-                    let doc = names.read();
-                    match doc.name(id as usize) {
-                        Some(name) => format!("{} · {name}", id + 1),
-                        None => format!("{} · unavailable", id + 1),
-                    }
-                })),
-            map_fifths: IntParam::new("Map Fifths", 0, IntRange::Linear { min: -9, max: 9 }),
-            map_thirds: IntParam::new("Map Thirds", 0, IntRange::Linear { min: -9, max: 9 }),
-            map_sevenths: IntParam::new("Map Sevenths", 0, IntRange::Linear { min: -9, max: 9 }),
-            map_fifths_extension: IntParam::new(
-                "Map Fifths x10",
+            map: IntParam::new(
+                "Lattice Map",
                 0,
-                IntRange::Linear { min: -9, max: 9 },
+                IntRange::Linear { min: 0, max: lattice_maps::LAST_MAP },
             )
-            .with_value_to_string(Arc::new(|value| (value * 10).to_string()))
-            .with_string_to_value(Arc::new(|text| {
-                let steps: i32 = text.trim().parse().ok()?;
-                (steps % 10 == 0).then_some(steps / 10)
+            .with_value_to_string(Arc::new(move |id| {
+                let doc = names.read();
+                match doc.name(id as usize) {
+                    Some(name) => format!("{} · {name}", id + 1),
+                    None => format!("{} · unavailable", id + 1),
+                }
             })),
-            map_thirds_extension: IntParam::new(
-                "Map Thirds x10",
-                0,
-                IntRange::Linear { min: -9, max: 9 },
+            map_fifths: map_lane("Map Fifths", MapOffsetLane::Fine),
+            map_thirds: map_lane("Map Thirds", MapOffsetLane::Fine),
+            map_sevenths: map_lane("Map Sevenths", MapOffsetLane::Fine),
+            map_fifths_extension: map_lane("Map Fifths x10", MapOffsetLane::Extension),
+            map_thirds_extension: map_lane("Map Thirds x10", MapOffsetLane::Extension),
+            map_sevenths_extension: map_lane("Map Sevenths x10", MapOffsetLane::Extension),
+            tuning_engine: IntParam::new(
+                "Note Retuning",
+                TuningEngine::default().index(),
+                IntRange::Linear { min: 0, max: TuningEngine::HOST_MAX },
             )
-            .with_value_to_string(Arc::new(|value| (value * 10).to_string()))
-            .with_string_to_value(Arc::new(|text| {
-                let steps: i32 = text.trim().parse().ok()?;
-                (steps % 10 == 0).then_some(steps / 10)
-            })),
-            map_sevenths_extension: IntParam::new(
-                "Map Sevenths x10",
-                0,
-                IntRange::Linear { min: -9, max: 9 },
+            .with_value_to_string(Arc::new(|value| TuningEngine::from_index(value).label().into()))
+            .non_automatable(),
+            map_follow: IntParam::new(
+                "Map Follow",
+                Follow::default().index(),
+                IntRange::Linear { min: 0, max: Follow::HOST_MAX },
             )
-            .with_value_to_string(Arc::new(|value| (value * 10).to_string()))
-            .with_string_to_value(Arc::new(|text| {
-                let steps: i32 = text.trim().parse().ok()?;
-                (steps % 10 == 0).then_some(steps / 10)
-            })),
-            tuning_engine: IntParam::new("Note Retuning", 0, IntRange::Linear { min: 0, max: 2 })
-                .with_value_to_string(Arc::new(|value| {
-                    ["Pass through", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
-                }))
-                .non_automatable(),
-            map_follow: IntParam::new("Map Follow", 0, IntRange::Linear { min: 0, max: 2 })
-                .with_value_to_string(Arc::new(|value| {
-                    ["Off", "Thirds", "Thirds and fifths"][value.clamp(0, 2) as usize].into()
-                })),
+            .with_value_to_string(Arc::new(|value| Follow::from_index(value).label().into())),
             map_followed: Default::default(),
             session: std::sync::OnceLock::new(),
             configuration: std::sync::OnceLock::new(),
@@ -704,28 +702,35 @@ impl Default for Harmonigraph {
 
 impl Plugin for Harmonigraph {
     fn filter_state(state: &mut nice_plug::plugin::PluginState) {
-        // Plain restore bypasses IntParam's range normalization. Repair all six
-        // lanes and Map Follow, and default absent ones so a previous preset
-        // cannot leak in.
-        for id in [
-            "map-fifths",
-            "map-thirds",
-            "map-sevenths",
-            "map-fifths-extension",
-            "map-thirds-extension",
-            "map-sevenths-extension",
-        ] {
+        // Plain restore bypasses IntParam's range normalization, while the
+        // host's label clamps. Clamp all six lanes, Map Follow, the engine and
+        // the map index, so the value loaded is the value shown. Any of them
+        // absent takes its default so a previous preset cannot leak in: every
+        // state the plugin saves carries all of them, so only an older or
+        // hand-made one omits any.
+        use nice_plug::plugin::ParamValue;
+        for id in lattice_maps::HOST_LANE_IDS {
             let value = match state.params.get(id) {
-                Some(nice_plug::plugin::ParamValue::I32(value)) => (*value).clamp(-9, 9),
+                Some(ParamValue::I32(value)) => (*value).clamp(-OFFSET_LIMIT, OFFSET_LIMIT),
                 _ => 0,
             };
-            state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
+            state.params.insert(id.into(), ParamValue::I32(value));
         }
         let follow = match state.params.get("map-follow") {
-            Some(nice_plug::plugin::ParamValue::I32(value)) => (*value).clamp(0, 2),
+            Some(ParamValue::I32(value)) => Follow::from_index(*value),
+            _ => Follow::default(),
+        };
+        state.params.insert("map-follow".into(), ParamValue::I32(follow.index()));
+        let engine = match state.params.get("tuning-engine") {
+            Some(ParamValue::I32(value)) => TuningEngine::from_index(*value),
+            _ => TuningEngine::default(),
+        };
+        state.params.insert("tuning-engine".into(), ParamValue::I32(engine.index()));
+        let map = match state.params.get("lattice-map") {
+            Some(ParamValue::I32(value)) => (*value).clamp(0, lattice_maps::LAST_MAP),
             _ => 0,
         };
-        state.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(follow));
+        state.params.insert("lattice-map".into(), ParamValue::I32(map));
     }
 
     const NAME: &'static str = "Harmonigraph";
@@ -1646,19 +1651,12 @@ mod tests {
                 key.id(),
             );
         }
-        let operational = [
-            "analysis-input",
-            "lattice-map",
-            "tuning-engine",
-            "map-fifths",
-            "map-thirds",
-            "map-sevenths",
-            "map-fifths-extension",
-            "map-thirds-extension",
-            "map-sevenths-extension",
-            "map-follow",
-        ];
-        for id in operational {
+        let operational: Vec<&str> =
+            ["analysis-input", "lattice-map", "tuning-engine", "map-follow"]
+                .into_iter()
+                .chain(lattice_maps::HOST_LANE_IDS)
+                .collect();
+        for &id in &operational {
             assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");
         }
         assert_eq!(
@@ -1666,6 +1664,79 @@ mod tests {
             ParamKey::ALL.len() + operational.len(),
             "the plugin exposes an unnamed operational parameter: {host_ids:?}"
         );
+    }
+
+    /// Saved projects and automation hold these integers and hosts show these
+    /// words, so the map and engine parameters' names, ranges, defaults and
+    /// every label are pinned here as literals rather than read back from the
+    /// tables that build them.
+    #[test]
+    fn map_and_engine_parameters_keep_their_host_contract() {
+        let params = HarmonigraphParams::default();
+        let contract = |param: &IntParam| {
+            let range = param.preview_plain(0.0)..=param.preview_plain(1.0);
+            let labels: Vec<String> = range
+                .clone()
+                .map(|value| {
+                    param.normalized_value_to_string(param.preview_normalized(value), false)
+                })
+                .collect();
+            (param.name().to_owned(), param.default_plain_value(), range, labels)
+        };
+        let words = |labels: &[&str]| labels.iter().map(|&label| label.to_owned()).collect();
+        assert_eq!(
+            contract(&params.tuning_engine),
+            ("Note Retuning".into(), 0, 0..=2, words(&["Pass through", "Adaptive", "Lattice Map"]))
+        );
+        assert_eq!(
+            contract(&params.map_follow),
+            ("Map Follow".into(), 0, 0..=2, words(&["Off", "Thirds", "Thirds and fifths"]))
+        );
+        let (name, default, range, _) = contract(&params.map);
+        assert_eq!((name.as_str(), default, range), ("Lattice Map", 0, 0..=127));
+        let fine: Vec<String> = (-9..=9).map(|value: i32| value.to_string()).collect();
+        let extension: Vec<String> = (-9..=9).map(|value: i32| (value * 10).to_string()).collect();
+        assert_eq!(
+            lattice_maps::HOST_LANE_IDS,
+            [
+                "map-fifths",
+                "map-thirds",
+                "map-sevenths",
+                "map-fifths-extension",
+                "map-thirds-extension",
+                "map-sevenths-extension",
+            ]
+        );
+        // Each id is the parameter its lane in `LANES` names.
+        let host = params.param_map();
+        let lanes = harmonigraph_ui::lattice_maps::LANES;
+        for (id, (axis, grain)) in lattice_maps::HOST_LANE_IDS.into_iter().zip(lanes) {
+            let lane = lattice_maps::lane_param(&params, axis, grain);
+            assert!(
+                host.iter().any(|(host_id, ptr, _)| host_id == id
+                    && matches!(ptr, ParamPtr::IntParam(p) if std::ptr::eq(*p, lane))),
+                "{id} is not the {axis:?} {grain:?} lane"
+            );
+        }
+        let non_modulatable: Vec<&str> = ["lattice-map"]
+            .into_iter()
+            .chain(lattice_maps::HOST_LANE_IDS)
+            .chain(["map-follow"])
+            .collect();
+        assert_eq!(Harmonigraph::CLAP_NON_MODULATABLE_PARAMS, non_modulatable);
+        for (param, name, labels) in [
+            (&params.map_fifths, "Map Fifths", &fine),
+            (&params.map_thirds, "Map Thirds", &fine),
+            (&params.map_sevenths, "Map Sevenths", &fine),
+            (&params.map_fifths_extension, "Map Fifths x10", &extension),
+            (&params.map_thirds_extension, "Map Thirds x10", &extension),
+            (&params.map_sevenths_extension, "Map Sevenths x10", &extension),
+        ] {
+            assert_eq!(contract(param), (name.into(), 0, -9..=9, labels.clone()));
+        }
+        let parse = |text| params.map_fifths_extension.string_to_normalized_value(text);
+        assert_eq!(parse("-90"), Some(params.map_fifths_extension.preview_normalized(-9)));
+        assert_eq!(parse("95"), None, "an extension lane takes whole tens");
     }
 
     /// The source choice belongs to the host's project state and is read on the

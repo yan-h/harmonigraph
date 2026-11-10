@@ -490,16 +490,16 @@ fn follow_controls(
         "map follow",
         &mut follow,
         &[
-            (Follow::Off, "Off", "The map stays where its offsets put it."),
+            (Follow::Off, Follow::Off.label(), "The map stays where its offsets put it."),
             (
                 Follow::Thirds,
-                "Thirds",
+                Follow::Thirds.label(),
                 "Move the map a step along thirds when that spells a chord more simply, \
                  such as Ab major taking C as a major third rather than a diminished fourth.",
             ),
             (
                 Follow::ThirdsAndFifths,
-                "Thirds and fifths",
+                Follow::ThirdsAndFifths.label(),
                 "Also step along fifths when that clearly helps, such as D F A taking a \
                  10/9 D instead of a wolf fifth. Held notes keep their tuning, so the map \
                  can drift by a comma when a held note forces it.",
@@ -966,12 +966,16 @@ fn retuning_controls(
 ) -> harmonigraph_core::lattice_map::TuningEngine {
     use crate::lattice_maps::MapEdit;
     use harmonigraph_core::lattice_map::TuningEngine;
+    // A backend with no engine selector retunes no notes at all: Off as such,
+    // whatever the host parameter's default.
     let Some(view) = view else {
         return TuningEngine::Off;
     };
     let engine = view.playback.engine;
     section(ui, "Note retuning", |ui| {
         let mut mode = engine;
+        // The host's own words, in the editor's order rather than the host
+        // parameter's numbering (#1620).
         crate::widgets::choice_buttons(
             ui,
             "retuning engine",
@@ -979,17 +983,17 @@ fn retuning_controls(
             &[
                 (
                     TuningEngine::Off,
-                    "Pass through",
+                    TuningEngine::Off.label(),
                     "Leave incoming note pitches unchanged. Lattice display tuning still applies.",
                 ),
                 (
                     TuningEngine::LatticeMap,
-                    "Lattice Map",
+                    TuningEngine::LatticeMap.label(),
                     "Tune new notes using the selected saved lattice map.",
                 ),
                 (
                     TuningEngine::Adaptive,
-                    "Adaptive",
+                    TuningEngine::Adaptive.label(),
                     "Choose tuning for new notes from the musical context.",
                 ),
             ],

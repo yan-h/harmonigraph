@@ -146,6 +146,21 @@ fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_stat
     );
 }
 
+/// A host value past the engine's or Follow's top step decodes as that top
+/// step, which is what the host's label reads, rather than as Off. Read before
+/// the next callback, whose boundary reseeds from the clamped parameters.
+#[test]
+fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
+    let playback =
+        hub_wrapper(&hub).test_inspect_plugin(|plugin| *plugin.params.map_playback.lock());
+    assert_eq!(playback.engine, TuningEngine::LatticeMap);
+    assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
+}
+
 #[test]
 fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice() {
     let _scope = crate::test_scope::enter();
@@ -238,7 +253,8 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
         voice(&hub, crate::tuning::DIRECT, 64).frozen_offset_microcents,
         edited.frozen_offset_microcents
     );
-    // Map is an automatable stepped state selector, never additive modulation.
+    // Map, lanes and Follow are automatable stepped state selectors, never
+    // additive modulation.
     let params = hub.params();
     let count = unsafe { params.count.unwrap()(hub.plugin) };
     let ids = [
@@ -249,6 +265,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
         "map-fifths-extension",
         "map-thirds-extension",
         "map-sevenths-extension",
+        "map-follow",
     ];
     let mut found = 0;
     for index in 0..count {
@@ -259,7 +276,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
             assert_ne!(info.flags & CLAP_PARAM_IS_STEPPED, 0);
             assert_ne!(info.flags & CLAP_PARAM_IS_AUTOMATABLE, 0);
             assert_eq!(info.flags & CLAP_PARAM_IS_MODULATABLE, 0);
-            if *id != "lattice-map" {
+            if !matches!(*id, "lattice-map" | "map-follow") {
                 assert_eq!(info.min_value, 0.0);
                 assert_eq!(info.max_value, 18.0);
                 assert_eq!(info.default_value, 9.0);
