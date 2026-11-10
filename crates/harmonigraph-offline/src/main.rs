@@ -363,10 +363,9 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
 /// them a video with a warning on it rather than no video at all. Nothing is
 /// invented to fill the hole — no fabricated notes, no guessed durations.
 ///
-/// The incompleteness comes FIRST because only the first warning reaches the
-/// export job's row in the plugin (`harmonigraph-record`'s `follow`), and of
-/// the things that can be wrong with an export this is the one that changes
-/// the picture.
+/// The incompleteness comes FIRST because only the first warning reaches
+/// the export job's row (`harmonigraph-record`'s `follow`), and of the things
+/// that can be wrong with an export this is the one that changes the picture.
 fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String> {
     let mut warnings = Vec::new();
     if let Some(incomplete) = take.incomplete {

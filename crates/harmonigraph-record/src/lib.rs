@@ -15,13 +15,13 @@
 //! `RenderProgress`, what the Video pane reads back — live in
 //! `harmonigraph-take`. Of the Video pane's settings, a take's look reaches
 //! this crate only as the opaque appearance string the UI owns (#797), and
-//! its trigger only as the plain values `Control` is handed each frame. The
-//! one settings type it names is `VideoEncoder`, parsed from the renderer's
-//! encoder record and handed back on the job. So this crate needs no harmonigraph crate but core and the format — the
-//! rest of the list is
-//! `rtrb` and `parking_lot`, the two audio-thread primitives. That is what
-//! makes the manifest's "nothing here reaches egui or wgpu" a promise the
-//! dependency list can keep rather than only an intention.
+//! its trigger only as the plain values `Control` is handed each frame; the
+//! code names none of their types, the docs link `RenderTrigger` and the tests
+//! build a `RenderConfig`. So this crate needs no harmonigraph crate but core
+//! and the format — the rest of the list is `rtrb` and `parking_lot`, the two
+//! audio-thread primitives. That is what makes the manifest's "nothing here
+//! reaches egui or wgpu" a promise the dependency list can keep rather than
+//! only an intention.
 //!
 //! The manifest's OTHER promise — that nothing on the record path allocates
 //! or blocks — is not one a dependency list can make either way: `parking_lot`
