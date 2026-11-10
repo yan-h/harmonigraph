@@ -78,7 +78,7 @@ const GONE: f32 = 0.002;
 
 /// Half a step of the 8-bit target the glow is composited into: a change in
 /// the light smaller than this does not move a pixel, so a fade that has fallen
-/// under it has nothing left to repaint for ([`GlowFade::fading_at`]).
+/// under it has nothing left to repaint for ([`GlowFade::moving_until`]).
 ///
 /// Measured as level times the Background glow gain, which is the shader's
 /// peak without its `GLOW_BASE` of 0.8, so the window errs toward staying
@@ -292,9 +292,10 @@ impl GlowFade {
             .then(|| now + f64::from(view.glow_release) * f64::from(seen / VISIBLE_STEP).ln());
     }
 
-    /// Whether some node's light is still falling by a visible step at `now`.
-    pub(crate) fn fading_at(&self, now: f64) -> bool {
-        self.visible_until.is_some_and(|until| until > now)
+    /// When the light that is falling stops falling by a visible step, or
+    /// `None` when none is: what the editor's frame loop stays awake for.
+    pub(crate) fn moving_until(&self) -> Option<f64> {
+        self.visible_until
     }
 }
 
@@ -398,12 +399,15 @@ mod tests {
         for now in [0.0, 0.5, 1.0] {
             let mut scene = scene_at(&state, now);
             fade.step(&mut scene, &state.appearance.view, now);
-            assert!(!fade.fading_at(now), "a held light asked to be repainted at {now}");
+            assert!(fade.moving_until().is_none(), "a held light asked to be repainted at {now}");
         }
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let mut scene = scene_at(&state, 1.5);
         fade.step(&mut scene, &state.appearance.view, 1.5);
-        assert!(fade.fading_at(1.5), "a released light is falling");
+        assert!(
+            fade.moving_until().is_some_and(|until| until > 1.5),
+            "a released light is falling"
+        );
     }
 
     #[test]

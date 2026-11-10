@@ -380,6 +380,8 @@ pub(crate) fn spectral_pane(
     // off (`show_roll`) with the spectrogram on leaves the heatmap alone.
     if show_history && split < 1.0 && cfg.show_spectrogram {
         spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
+    } else {
+        spectrogram::not_drawn(state, surface);
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial

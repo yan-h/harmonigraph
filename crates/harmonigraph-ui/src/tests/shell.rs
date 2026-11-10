@@ -20,6 +20,40 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     assert!(!crate::roll_scrolling(&state, 2.2));
 }
 
+/// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
+/// draws them: what each picture says about when it stops moving is written by
+/// the draw, so a reason is only as fresh as the last frame drawn.
+///
+/// The host's Fade is the one the state already runs, so a test's Fade holds.
+fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pane]) {
+    struct Host(f32);
+    impl ParamBackend for Host {
+        fn get(&self, key: params::ParamKey) -> f32 {
+            if key == params::ParamKey::Fade {
+                self.0
+            } else {
+                0.0
+            }
+        }
+        fn set(&self, _: params::ParamKey, _: f32) {}
+    }
+    let host = Host(state.picture.runtime.frame_params.fade_time);
+    begin_frame(&mut state.picture, &host, t);
+    for &pane in panes {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 200.0),
+                )),
+                time: Some(t),
+                ..Default::default()
+            },
+            |ui| crate::draw_pane(ui, pane, &mut state.picture, t, 0),
+        );
+    }
+}
+
 /// A background glow's release outlasts the note's own departure, and with the
 /// roll hidden and no audio nothing else keeps the frame loop awake through it:
 /// the halo's tail would repaint at the idle poll. The loop stays awake while
@@ -32,6 +66,13 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     use harmonigraph_core::{NoteEvent, SourceId};
 
+    // At a Fade of nothing, so the light arrives at once and the tail is the
+    // glow's own release.
+    let fresh = || {
+        let mut state = fresh();
+        state.picture.runtime.frame_params.fade_time = 0.0;
+        state
+    };
     let mut state = fresh();
     state.picture.appearance.spectrum.show_roll = false;
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
@@ -42,21 +83,9 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     assert!(span < 2.0, "the note's own departure ({span} s) must be over 3 s after the off");
 
     let ctx = super::probe::themed();
-    let backend = RecordingBackend::default();
     // The brightest light on the last drawn frame, after the filter stepped it.
     let draw = |state: &mut SharedState, t: f64| {
-        begin_frame(&mut state.picture, &backend, t);
-        let _ = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(320.0, 200.0),
-                )),
-                time: Some(t),
-                ..Default::default()
-            },
-            |ui| crate::draw_pane(ui, Pane::Lattice, &mut state.picture, t, 0),
-        );
+        draw_panes(&ctx, state, t, &[Pane::Lattice]);
         state.picture.surfaces.spare_nodes.iter().map(|n| n.glow.level).fold(0.0_f32, f32::max)
     };
 
@@ -136,7 +165,8 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
 /// A released note keeps the loop awake for its whole departure, the
 /// fade-out delay and then the stagger's sweep, and not past it. The span is
 /// written out here as numbers, so a departure that loses either term is
-/// caught rather than agreed with.
+/// caught rather than agreed with; the lattice answers from the motion it ran,
+/// so it is drawn.
 #[test]
 fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     use harmonigraph_core::{NoteEvent, SourceId};
@@ -148,11 +178,25 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     animation.stagger_spread = 0.5;
     animation.fade_out_delay = 0.4;
     state.picture.runtime.frame_params.fade_time = 0.5;
+    let ctx = super::probe::themed();
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-    state.picture.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
-
+    let mut t = 0.0_f64;
+    while t < 1.0 + 1.0 {
+        if (t - 1.0).abs() < 1e-9 {
+            state.picture.runtime.tracker.handle_event(NoteEvent::off(
+                1.0,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
+        }
+        draw_panes(&ctx, &mut state, t, &[Pane::Lattice]);
+        t = ((t + 0.01) * 100.0).round() / 100.0;
+    }
     // 0.4 s of hold, then 0.5 s of fade for the first slice and the last
     // starting half a fade later: 1.15 s past the off.
+    draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
+    assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
     assert!(crate::releasing(&state, 1.0 + 1.1), "the departure was cut short");
     assert!(!crate::releasing(&state, 1.0 + 1.2), "the loop stayed awake past the departure");
 }
@@ -160,7 +204,16 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
 /// Feeds `seconds` of audio from `t` in 10 ms blocks, a full-scale A4 while
 /// `tone` and digital silence otherwise, as a host streams both, and answers
 /// whether the editor animated after each block.
-fn stream(state: &mut SharedState, t: &mut f64, seconds: f64, tone: bool) -> Vec<(f64, bool)> {
+///
+/// Each block draws `panes`, since every picture answers from what it drew.
+fn stream(
+    ctx: &egui::Context,
+    state: &mut SharedState,
+    t: &mut f64,
+    seconds: f64,
+    tone: bool,
+    panes: &[Pane],
+) -> Vec<(f64, bool)> {
     const RATE: f32 = 48_000.0;
     let cfg = state.picture.appearance.spectrum;
     let mut animated = Vec::new();
@@ -178,6 +231,7 @@ fn stream(state: &mut SharedState, t: &mut f64, seconds: f64, tone: bool) -> Vec
                 .collect();
         *t += 0.01;
         state.picture.runtime.spectrum.push_samples(&block, 1, RATE, *t, &cfg);
+        draw_panes(ctx, state, *t, panes);
         animated.push((*t, Animating::of(state, *t).audible));
     }
     animated
@@ -190,26 +244,35 @@ fn stream(state: &mut SharedState, t: &mut f64, seconds: f64, tone: bool) -> Vec
 /// was folded into, the blur's reach and the colour memory's fade — and
 /// silence past that idles however long it flows. A tilt that lifts silence
 /// off the bed's colour puts it back, since the history's edges then show.
+///
+/// The reach is written out as the guard summed it before the heatmap
+/// answered for itself (#1673), against the slab the draw chose, so the
+/// heatmap's own answer is held to it at every block.
 #[test]
 fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     let mut state = fresh();
+    let ctx = super::probe::themed();
     let span = 20.0;
     state.picture.appearance.spectrum.roll_seconds = span as f32;
     assert!(state.picture.appearance.spectrum.show_spectrogram, "the heatmap is drawn");
-    state.picture.surfaces.spectrogram.at(0).held_bucket = Some(0.5);
     let atmosphere = &mut state.picture.appearance.spectrum.atmosphere;
     atmosphere.time_softness = 500.0;
+    atmosphere.color_release = 0.6;
+    assert!(atmosphere.color_release > atmosphere.color_pickup, "release outlasts pickup");
     assert!(atmosphere.effects().cloud, "the cloud and its colour memory are drawn");
     let memory = 6.234 * f64::from(atmosphere.color_pickup.max(atmosphere.color_release));
-    let reach = span + 0.5 + 1.5 + memory;
     let mut t = 0.0;
+    let panes = [Pane::Spectral];
 
-    let before = stream(&mut state, &mut t, 2.0, false);
+    let before = stream(&ctx, &mut state, &mut t, 2.0, false, &panes);
     assert!(before.iter().all(|&(_, on)| !on), "silence with nothing heard animated");
-    let playing = stream(&mut state, &mut t, 1.0, true);
+    let playing = stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
     assert!(playing[20..].iter().all(|&(_, on)| on), "audible audio idled");
+    let slab = state.picture.surfaces.spectrogram.at(0).held_bucket.expect("the heatmap drew");
+    assert!(slab >= 0.1, "a slab of {slab} s is too narrow to tell from the blocks");
+    let reach = span + slab + 1.5 + memory;
     let stopped = t;
-    let after = stream(&mut state, &mut t, reach + 15.0, false);
+    let after = stream(&ctx, &mut state, &mut t, reach + 3.0, false, &panes);
 
     // The curve's release outlasts the tone by seconds; the columns do not.
     let heard = state.picture.runtime.spectrum.last_audible();
@@ -222,26 +285,53 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
 
     let cfg = &mut state.picture.appearance.spectrum;
     (cfg.tilt, cfg.volume_floor_db, cfg.high_midi) = (-6.0, -100.0, 135.0);
+    draw_panes(&ctx, &mut state, t, &panes);
     assert!(Animating::of(&state, t).audible, "silence drawn off the bed's colour idled");
+
+    // A heatmap switched off holds nothing, whatever it last said.
+    state.picture.appearance.spectrum.show_spectrogram = false;
+    draw_panes(&ctx, &mut state, t, &panes);
+    assert!(!Animating::of(&state, t).audible, "a hidden heatmap held the loop awake");
 }
 
 /// With the heatmap hidden nothing on screen holds a sound for a Span: the
 /// curve and the lattice ring settle seconds after the tone, and the editor
-/// idles then rather than a Span later.
+/// idles then rather than a Span later. The ring answers from its own levels
+/// and its wedges' fade, so the lattice is drawn, and once the editor has gone
+/// still the lattice it draws does not move.
 #[test]
 fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     let mut state = fresh();
+    let ctx = super::probe::themed();
     state.picture.appearance.spectrum.roll_seconds = 60.0;
     state.picture.appearance.spectrum.show_spectrogram = false;
     state.picture.appearance.view.spectral_ring_width = 0.1;
     assert!(state.picture.appearance.view.spectral_ring_draws(), "the ring is drawn");
+    let panes = [Pane::Lattice, Pane::Spectral];
     let mut t = 0.0;
-    stream(&mut state, &mut t, 1.0, true);
-    let after = stream(&mut state, &mut t, 20.0, false);
+    stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
+    let mut ring_outlasted_the_display = false;
+    let mut still: Option<(f64, String)> = None;
+    for _ in 0..200 {
+        stream(&ctx, &mut state, &mut t, 0.1, false, &panes);
+        let runtime = &state.picture.runtime;
+        let display = runtime.spectrum.moving_until();
+        ring_outlasted_the_display |= runtime.ring_levels.moving_until() > display
+            || runtime.ring_fade.moving_until() > display;
+        let nodes = format!("{:?}", state.picture.surfaces.spare_nodes);
+        match &still {
+            Some((at, drawn)) => assert_eq!(&nodes, drawn, "the lattice moved after {at}"),
+            None if !Animating::of(&state, t).any() => still = Some((t, nodes)),
+            None => {}
+        }
+        if still.is_some() {
+            assert!(!Animating::of(&state, t).any(), "woke at {t} with nothing heard");
+        }
+    }
+    assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
     let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
-    let last = after.iter().rev().find(|&&(_, on)| on).expect("the release idled at once").0;
-    assert!(last - heard > 1.0, "idled {} s after the last sound", last - heard);
-    assert!(!after.last().unwrap().1, "the ring's release outlasted 20 s");
+    let (idle, _) = still.expect("the ring's release outlasted 20 s");
+    assert!(idle - heard < 5.0, "idled {} s after the curve last held anything", idle - heard);
 }
 
 /// A Clear takes the heard columns off the heatmap, and with them the Span they
@@ -249,14 +339,16 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
 #[test]
 fn a_cleared_heatmap_holds_no_sound_for_a_span() {
     let mut state = fresh();
+    let ctx = super::probe::themed();
     state.picture.appearance.spectrum.roll_seconds = 60.0;
+    let panes = [Pane::Spectral];
     let mut t = 0.0;
-    stream(&mut state, &mut t, 1.0, true);
+    stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
     // Once the analysis window has let go of the tone, or the columns after
     // the Clear still hold it and scroll it across as they should.
-    stream(&mut state, &mut t, 1.0, false);
+    stream(&ctx, &mut state, &mut t, 1.0, false, &panes);
     state.picture.runtime.spectrum.clear_history();
-    let after = stream(&mut state, &mut t, 10.0, false);
+    let after = stream(&ctx, &mut state, &mut t, 10.0, false, &panes);
     let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
     let last = after.iter().rev().find(|&&(_, on)| on).expect("the curve settled at once").0;
     assert!(last - heard < 1.0, "a Clear held the full rate {} s past the sound", last - heard);

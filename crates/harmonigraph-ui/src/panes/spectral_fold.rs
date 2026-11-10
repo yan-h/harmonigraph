@@ -438,6 +438,10 @@ pub struct RingLevels {
     /// docked lattice and the Video tab's preview, off one clock — steps once:
     /// the second call's `dt` is zero and every bucket holds.
     at: Option<f64>,
+    /// When the last byte the shader gets stops changing, as of the last
+    /// fill, or `None` when none is moving: see
+    /// [`moving_until`](Self::moving_until).
+    until: Option<f64>,
 }
 
 impl Default for RingLevels {
@@ -446,6 +450,7 @@ impl Default for RingLevels {
             level: Box::new([0.0; SPECTRUM_BINS]),
             color_level: Box::new([0.0; SPECTRUM_BINS]),
             at: None,
+            until: None,
         }
     }
 }
@@ -490,6 +495,17 @@ impl RingLevels {
             ),
             None => (1.0, 1.0),
         };
+        let mut left = 0.0_f64;
+        let mut carry = |level: &mut f32, target: f32| {
+            let (alpha, seconds) = if target > *level {
+                (attack, view.spectral_ring_attack)
+            } else {
+                (release, view.spectral_ring_release)
+            };
+            *level += (target - *level) * alpha;
+            left = left.max(byte_left(seconds, *level, target));
+            (*level * 255.0).round() as u8
+        };
         for (bucket, level) in self.level.iter_mut().enumerate() {
             // The bucket's own centre pitch, because the tilt in `loudness` is
             // a function of pitch and because the shader reads this table back
@@ -497,19 +513,42 @@ impl RingLevels {
             let target = grid
                 .map_or(0.0, |grid| loudness(cfg, grid[bucket], bucket_pitch(bucket)))
                 .clamp(0.0, 1.0);
-            let alpha = if target > *level { attack } else { release };
-            *level += (target - *level) * alpha;
-            paint.levels[bucket] = (*level * 255.0).round() as u8;
+            paint.levels[bucket] = carry(level, target);
 
             let color_target = grid.map_or(0.0, |grid| {
                 spectrogram_level_db(cfg, power_db(grid[bucket]), bucket_pitch(bucket))
             });
-            let color_level = &mut self.color_level[bucket];
-            let color_alpha = if color_target > *color_level { attack } else { release };
-            *color_level += (color_target - *color_level) * color_alpha;
-            paint.color_levels[bucket] = (*color_level * 255.0).round() as u8;
+            paint.color_levels[bucket] = carry(&mut self.color_level[bucket], color_target);
         }
+        self.until = (left > 0.0).then_some(now + left);
     }
+
+    /// When every byte the ring is drawn with has stopped changing, if the
+    /// reading it follows holds still; `None` when none is moving.
+    ///
+    /// What the editor's frame loop stays awake for once the sound has gone,
+    /// off the same levels and attack and release [`fill`](Self::fill) carries
+    /// them on. The reading itself moving is the display's to answer
+    /// ([`AudioSpectrum::moving_until`](crate::AudioSpectrum::moving_until)),
+    /// and each fill reads where it has got to.
+    pub(crate) fn moving_until(&self) -> Option<f64> {
+        self.until
+    }
+}
+
+/// Seconds a level carried toward `target` by [`hop_alpha`](crate::spectrum::hop_alpha)
+/// over `seconds` goes on changing the byte it is drawn as: until it crosses
+/// the last rounding boundary between it and the target, which can be short of
+/// the target's own byte when the target sits exactly on a boundary.
+fn byte_left(seconds: f32, level: f32, target: f32) -> f64 {
+    let (from, to) = (level * 255.0, target * 255.0);
+    // The last boundary the level can still cross, on its own side of the
+    // target and strictly short of it.
+    let boundary = if from < to { (to - 0.5).ceil() - 0.5 } else { (to + 0.5).floor() + 0.5 };
+    if (from < to && from >= boundary) || (from > to && from <= boundary) || from == to {
+        return 0.0;
+    }
+    crate::spectrum::hop_left(seconds, (from - to).abs(), (boundary - to).abs())
 }
 
 #[cfg(test)]
@@ -520,6 +559,41 @@ mod tests {
     use harmonigraph_scene::{octave_layout, OctaveLayout, ViewConfig, MAX_SPAN, OCTAVE_SLOTS};
 
     const SR: f32 = 48_000.0;
+
+    /// A level the ring carries stops changing the byte it is drawn as when
+    /// `byte_left` says, walked in frames as `fill` walks it: the last change
+    /// lands on the first frame at or past the answer. Includes a target
+    /// sitting exactly on a rounding boundary, whose own byte the level never
+    /// reaches, and a release of nothing, which lands on the next frame.
+    #[test]
+    fn a_ring_level_stops_changing_its_byte_when_byte_left_says() {
+        let step = 0.004;
+        for (seconds, level, target) in [
+            (0.25, 1.0, 0.0),
+            (0.03, 0.0, 0.8),
+            (0.25, 0.7, 0.3),
+            (0.25, 0.9, 25.5 / 255.0),
+            (0.25, 0.0, 25.5 / 255.0),
+            (0.0, 0.5, 0.0),
+        ] {
+            let left = byte_left(seconds, level, target);
+            let (mut now, mut carried, mut last) = (0.0, level, None);
+            while now < left + 1.0 {
+                now += step;
+                let before = (carried * 255.0).round();
+                carried += (target - carried) * crate::spectrum::hop_alpha(seconds, step);
+                if (carried * 255.0).round() != before {
+                    last = Some(now);
+                }
+            }
+            let last = last.expect("the level never moved a byte");
+            assert!(
+                last >= left - 1e-3 && last < left + step + 1e-3,
+                "{seconds} s from {level} to {target}: last byte at {last}, said {left}"
+            );
+            assert_eq!(byte_left(seconds, carried, target), 0.0, "a settled level still moving");
+        }
+    }
 
     /// A second of audio, which is 125 analyzer hops — long enough that the
     /// display buckets are the steady spectrum and not a window still filling.

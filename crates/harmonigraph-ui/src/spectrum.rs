@@ -208,6 +208,11 @@ pub(crate) struct SpectrogramSurface {
     /// [`live_slab`](crate::spectrogram::live_slab)'s ladder its hysteresis —
     /// see [`Plan::new`](crate::spectrogram::Plan::new). `None` before the first frame.
     pub(crate) held_bucket: Option<f64>,
+    /// When the heatmap this surface last drew stops moving, if no audible
+    /// column arrives after it; `None` when nothing on it is moving or it was
+    /// not drawn. Set by the draw, from the run it drew: see
+    /// [`draw_spectrogram`](crate::panes::spectral::spectrogram::draw_spectrogram).
+    pub(crate) moving_until: Option<f64>,
 }
 
 /// One column of the spectrogram, and the age-tiered store they live in — both
@@ -519,6 +524,19 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
     1.0 - (-dt / f64::from(seconds)).exp() as f32
 }
 
+/// Seconds the filter [`hop_alpha`] steps takes to close a gap of `distance`
+/// to `within` of it: [`NEXT_STEP`](harmonigraph_core::NEXT_STEP) where it
+/// lands in one step, 0 where the gap is already that small.
+pub(crate) fn hop_left(seconds: f32, distance: f32, within: f32) -> f64 {
+    if distance.is_nan() || distance <= within {
+        return 0.0;
+    }
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return harmonigraph_core::NEXT_STEP;
+    }
+    f64::from(seconds) * (f64::from(distance) / f64::from(within)).ln()
+}
+
 impl AudioSpectrum {
     /// Seconds of AUDIO between FFTs (125 columns a second), measured in
     /// samples rather than on the shell clock — see
@@ -764,6 +782,21 @@ impl AudioSpectrum {
     /// When the spectrum last held anything above silence: see [`Heard`].
     pub(crate) fn last_audible(&self) -> Heard {
         self.store.last_audible
+    }
+
+    /// When the smoothed display stops moving, which the curve, the Spiral and
+    /// the lattice ring all draw: a column moves it once it lands, a
+    /// [`column_lag`](Self::column_lag) after its own time, and nothing draws
+    /// it [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the samples stop. The
+    /// display's release is inside the stamp it starts from
+    /// ([`Heard::curve`]), so a curve still above silence counts as heard.
+    /// `None` before anything has been.
+    ///
+    /// A bound from the stamp each landing column writes, beside the constants
+    /// it is built from, rather than a second copy of them in the frame loop.
+    pub(crate) fn moving_until(&self) -> Option<f64> {
+        let heard = self.last_audible().curve?;
+        Some(heard + self.column_lag() + Self::HOLD_SECONDS)
     }
 }
 

@@ -36,7 +36,7 @@ pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};
 pub use notes::{
     Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, SourceId, Time,
-    Voice, VoiceKey, VoiceState,
+    Voice, VoiceKey, VoiceState, NEXT_STEP,
 };
 pub use roll::{NoteRoll, RollNote};
 pub use spectrogram::{SpectrogramColumn, SpectrumHistory};

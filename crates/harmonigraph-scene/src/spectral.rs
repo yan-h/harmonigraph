@@ -577,6 +577,9 @@ pub struct RingFade {
     /// the fade once: the second call's `dt` is zero and every bucket answers
     /// where it already was.
     at: Option<f64>,
+    /// When the slowest bucket still on its way lands, as of the last step, or
+    /// `None` when none is moving: see [`moving_until`](Self::moving_until).
+    until: Option<f64>,
 }
 
 impl Default for RingFade {
@@ -585,6 +588,7 @@ impl Default for RingFade {
             open: Box::new([0.0; SPECTRUM_BINS]),
             gated: Box::new([false; SPECTRUM_BINS]),
             at: None,
+            until: None,
         }
     }
 }
@@ -626,6 +630,7 @@ impl RingFade {
     pub fn advance(&mut self, gate: &RingGate, env: &Envelope, now: f64) {
         let dt = self.at.map(|at| now - at);
         self.at = Some(now);
+        let mut left = 0.0_f64;
         for (bucket, (level, gated)) in self.open.iter_mut().zip(self.gated.iter_mut()).enumerate()
         {
             let open = gate.opens(bucket, *gated);
@@ -638,7 +643,18 @@ impl RingFade {
                 Some(dt) => env.carried(*level, dt, open),
                 None => target,
             };
+            left = left.max(env.remaining(*level, open));
         }
+        self.until = (left > 0.0).then_some(now + left);
+    }
+
+    /// When every bucket has landed where the gate last sent it, or `None` when
+    /// none is moving: what the editor's frame loop stays awake for while the
+    /// ring opens or closes, off the same envelope [`advance`](Self::advance)
+    /// carries it on. A gate that turns over later does so on a frame that the
+    /// levels it reads are already holding awake.
+    pub fn moving_until(&self) -> Option<f64> {
+        self.until
     }
 
     /// How much of its ring a node of pitch class `cents` wears, 0..=1: the
