@@ -192,36 +192,25 @@ const FADE_MAX: f32 = 1.0;
 
 /// How far back a surface replays note edges.
 ///
-/// It has to exceed the longest animation a setting can ask for, or a gap
+/// It has to exceed the longest animation `animation` can ask for, or a gap
 /// longer than it seeds a MID-FLIGHT arrival or departure as settled and the
-/// wheel pops. That is a departure at the spread's ceiling (`ValueBar` and
-/// `sanitize` both read [`STAGGER_SPREAD_RANGE`]), whose sweep spans as long
-/// as an arrival's and which waits out the fade-out delay first; the marks
-/// add their delay.
-fn horizon(duration: f32, mark_delay: f32, fade_out_delay: f32) -> f64 {
+/// wheel pops. It is bounded by that config's departure with the spread at its
+/// ceiling (`ValueBar` and `sanitize` both read [`STAGGER_SPREAD_RANGE`]),
+/// whose sweep spans as long as an arrival's. A mark waits out `mark_delay`
+/// only on arrival (`MarkMotion::target`) and leaves over one fade, so its
+/// delay is added here rather than in the departure.
+fn horizon(duration: f32, mark_delay: f32, animation: NoteAnimationConfig) -> f64 {
     let duration = duration.max(0.0);
-    let longest = NoteAnimationConfig {
-        stagger_spread: *STAGGER_SPREAD_RANGE.end(),
-        fade_out_delay,
-        ..NoteAnimationConfig::default()
-    };
+    let longest = NoteAnimationConfig { stagger_spread: *STAGGER_SPREAD_RANGE.end(), ..animation };
     longest.departure(duration)
         + f64::from(duration) * HORIZON_MARGIN_FADES
         + f64::from(mark_delay)
         + 0.001
 }
 
-/// Fades the replay horizon keeps past the longest departure: what is left of
-/// two once the spread's ceiling has had its share, about a tenth of one.
-///
-/// Two fades is what the horizon spanned when the ceiling was only named in a
-/// comment beside it, and taking the margin as the remainder keeps the two
-/// fades exact: a literal 0.1 on top of the ceiling, which is 0.9 only to
-/// within an `f32`, would fall short of two by a few parts in a hundred
-/// million, and a bound may not shrink. A ceiling raised to a whole fade
-/// leaves no margin, which the assertion turns into a build failure.
-const HORIZON_MARGIN_FADES: f64 = 1.0 - *STAGGER_SPREAD_RANGE.end() as f64;
-const _: () = assert!(HORIZON_MARGIN_FADES > 0.0, "the replay horizon needs a margin");
+/// Fades the replay horizon keeps past the longest departure, so the last
+/// slice has settled before its edges stop being replayed.
+const HORIZON_MARGIN_FADES: f64 = 0.1;
 
 fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     if level == target {
@@ -452,8 +441,7 @@ impl NodeMotion {
         env: &Envelope,
         now: f64,
     ) -> Vec<PitchClass> {
-        let floor =
-            now - horizon(env.fade_time, view.mark_delay, view.note_animation.fade_out_delay);
+        let floor = now - horizon(env.fade_time, view.mark_delay, view.note_animation);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
         for note in tracker.roll().notes().filter(|note| note.end.is_none_or(|at| at >= floor)) {
             for ((at, pitch), (end, next)) in note.segments(now) {
@@ -682,7 +670,7 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
-        let horizon = horizon(env.fade_time, view.mark_delay, view.note_animation.fade_out_delay);
+        let horizon = horizon(env.fade_time, view.mark_delay, view.note_animation);
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
         if self.at.is_some_and(|at| now < at || now - at > horizon) {
@@ -693,13 +681,16 @@ impl NodeMotion {
         // A note that ended before every horizon a host can set can never
         // count as late again, whatever the settings do next, so its cursor
         // has nothing left to guard. Skipping it bounds this scan by the last
-        // few seconds of playing rather than by the whole roll.
-        let retained = now
-            - horizon.max(self::horizon(
-                FADE_MAX,
-                crate::MARK_DELAY_MAX,
-                *crate::FADE_OUT_DELAY_RANGE.end(),
-            ));
+        // few seconds of playing rather than by the whole roll. The longest
+        // a host can set is every animation field at the top of its range,
+        // spelled out field by field so a field added to the config has to
+        // say here what its longest is.
+        let longest = NoteAnimationConfig {
+            stagger_spread: *STAGGER_SPREAD_RANGE.end(),
+            radial_start: *crate::RADIAL_START_RANGE.end(),
+            fade_out_delay: *crate::FADE_OUT_DELAY_RANGE.end(),
+        };
+        let retained = now - horizon.max(self::horizon(FADE_MAX, crate::MARK_DELAY_MAX, longest));
         let notes: Vec<_> = tracker
             .roll()
             .notes()
