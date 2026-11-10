@@ -542,10 +542,10 @@ impl std::fmt::Display for Animating {
 
 /// Whether a lattice note is still departing after its voice was pruned: a
 /// release holds its presence for the fade-out delay and the stagger, so it
-/// runs that delay and `1 + stagger_spread` fades past the off where the
-/// voice lasts one. Unguarded: with neither, the span is the voice's own, so
-/// asking costs nothing, and a setting that lengthens a departure later
-/// needs only to join the span.
+/// runs [`NoteAnimationConfig::departure`](harmonigraph_scene::NoteAnimationConfig::departure)
+/// past the off where the voice lasts one fade. Unguarded: with neither, the
+/// span is the voice's own, so asking costs nothing, and a setting that
+/// lengthens a departure later needs only to join that method.
 ///
 /// The Background glow's release is one: a halo falls on its own clock, which
 /// can outlast the slices by many seconds, and with the roll hidden and no
@@ -560,13 +560,12 @@ fn releasing(state: &SharedState, now: f64) -> bool {
         || state.picture.surfaces.glow_fade.values().any(|glow| glow.fading_at(now))
 }
 
-/// How long a lattice node takes to leave once what lit it has gone: the
-/// fade-out delay, then one Fade for each slice of the stagger's sweep.
+/// How long a lattice node takes to leave once what lit it has gone, at the
+/// Fade this frame runs: see
+/// [`NoteAnimationConfig::departure`](harmonigraph_scene::NoteAnimationConfig::departure).
 fn departure(state: &SharedState) -> f64 {
-    let animation = state.picture.appearance.view.note_animation;
-    f64::from(animation.fade_out_delay)
-        + f64::from(state.picture.runtime.frame_params.fade_time)
-            * (1.0 + f64::from(animation.stagger_spread))
+    let fade_time = state.picture.runtime.frame_params.fade_time;
+    state.picture.appearance.view.note_animation.departure(fade_time)
 }
 
 /// A repaint after the whole of `delay`.

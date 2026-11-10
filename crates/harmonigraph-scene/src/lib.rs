@@ -25,8 +25,12 @@
 //! - [`intensity`] — how loud each note is drawn, from its velocity and
 //!   expressions.
 //!
-//! Every public item is re-exported at the crate root, so downstream code
-//! keeps using `harmonigraph_scene::Camera` rather than module paths.
+//! Every public item of the modules globbed below is re-exported at the crate
+//! root, so downstream code keeps using `harmonigraph_scene::Camera` rather
+//! than module paths, and a new item needs no list edited to get there.
+//! [`framing`], [`skin`], [`star_plan`] and [`trail`] are reached by their
+//! paths instead: their names (`skin::STEP`, `framing::frame`) read as their
+//! module's rather than the crate's.
 
 pub mod atmosphere;
 pub mod camera;
@@ -43,48 +47,16 @@ pub mod style;
 pub mod trail;
 pub mod view;
 
-pub use atmosphere::{
-    AtmosphereSettings, Breathing, CloudStyle, LatticeMaterial, MaterialSettings,
-    SpectralAtmosphere, SpectralEffects, StarPane, StarSettings, BLUR_TIME_STEP_MAX,
-    BREATH_SPEED_MAX, BREATH_SPEED_MIN, CLOUD_SIZE_MAX, CLOUD_SIZE_MIN, CLOUD_SPEED_MAX,
-    CLOUD_SPEED_MIN, LATTICE_STAR_SIZE_SCALE, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN, NEBULA_SPEED_MAX,
-    NEBULA_SPEED_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SPECTRAL_STAR_SPEED_MAX,
-    STAR_LAYERS_MIN, STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_RESOLUTION_MAX,
-    STAR_RESOLUTION_MIN, STAR_RESOLUTION_STEP, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SOLID_MAX,
-    STAR_SPACING_MAX, STAR_SPACING_MIN, STAR_SPEED_MAX, STAR_SPEED_MIN, TIME_SOFTNESS_MAX,
-    TIME_SOFTNESS_MIN, WASH_POOL_MAX, WASH_POOL_MIN, WASH_POOL_WIDTH_MAX, WASH_POOL_WIDTH_MIN,
-};
-pub use camera::{Camera, Projection, Projector, VisibleSheet};
-pub use color::{
-    gradient_color, grey_of_lightness, hue_circle, pitch_glow_color, pitch_lut_color,
-    pitch_ramp_lut, LutSpacing, HUE_CIRCLE_N,
-};
-pub use derive::{derive_scene, derive_scene_with_extra};
-pub use intensity::{
-    IntensityReach, IntensityReading, IntensitySettings, IntensitySource, IntensityTarget,
-    INTENSITY_WEIGHT_MAX, THICKNESS_MAX_RANGE,
-};
-pub use motion::NodeMotion;
-pub use octaves::{
-    clamp_center, clamp_count, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
-    MAX_SPAN, MIDDLE_C_SLOT, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
-};
-pub use spectral::{
-    bucket_pitch, ring_gradient, RingFade, RingGate, SpectralLevels, SpectralPaint,
-    SpectralReading, SPECTRAL_AXIS, SPECTRAL_BALLISTICS_MAX, SPECTRAL_BUCKETS,
-    SPECTRAL_BUCKETS_PER_SEMITONE, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
-};
-pub use style::{
-    Bend, Gradient, NoteNames, SevensLabel, ShadowSettings, ShadowStyle, TEXT_SPREAD_STOPS,
-};
-pub use view::{
-    DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, RingStack, ViewConfig,
-    FADE_OUT_DELAY_RANGE, GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE,
-    HIDE_BEHIND_RANGE, LATTICE_GROUND_RANGE, LATTICE_RENDER_SCALE_RANGE, MARKER_INK_RANGE,
-    NOTE_BLOOM_RANGE, RADIAL_START_RANGE, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT, SEVENS_SIZE_RANGE,
-    SPIRAL_BLOOM_RANGE, STAGGER_SPREAD_RANGE,
-};
+pub use atmosphere::*;
+pub use camera::*;
+pub use color::*;
+pub use derive::*;
+pub use intensity::*;
+pub use motion::*;
+pub use octaves::*;
+pub use spectral::*;
+pub use style::*;
+pub use view::*;
 
 use glam::{Vec3, Vec4};
 use harmonigraph_core::LatticePos;
@@ -540,7 +512,7 @@ pub struct NodeInstance {
     /// On the home (center sevens) sheet. An idle node draws nothing
     /// wherever it sits; what marks a home position is the MARKER standing
     /// under where the node itself would draw, and off-sheet positions have
-    /// not even that (see [`derive_pluses`](derive::derive_pluses)).
+    /// not even that (see [`derive_pluses`]).
     pub on_home: bool,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
@@ -723,7 +695,7 @@ impl NodeInstance {
     /// The label pass's own question (`draw_node_labels` in
     /// `harmonigraph-ui`), answered HERE because two things turn on it and a
     /// second spelling of it is a picture that contradicts itself: the pass
-    /// draws the name, and [`derive_pluses`](derive::derive_pluses) clears the
+    /// draws the name, and [`derive_pluses`] clears the
     /// resting marker out from under it. A marker behind a name is the one
     /// place in the lattice where two marks claim the same position, and the
     /// name is the better of the two — it says WHICH position, where the
@@ -864,7 +836,7 @@ pub struct PlusInstance {
     /// they arrive and leave together, so a position handing itself over to a
     /// name never shows a cross with no shadow under it nor a shadow under no
     /// cross. The shadow a cross casts is worth exactly the cross, which is
-    /// also what lets [`derive_pluses`](derive::derive_pluses) drop a
+    /// also what lets [`derive_pluses`] drop a
     /// fully-claimed marker outright rather than ship one that still shades.
     pub strength: f32,
 }
@@ -962,7 +934,7 @@ pub struct Scene {
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
     /// The lattice's resting markers (see
-    /// [`derive_pluses`](derive::derive_pluses)): one cross per visible
+    /// [`derive_pluses`]): one cross per visible
     /// HOME-sheet position, each carrying
     /// [`ViewConfig::marker_ink`](crate::ViewConfig::marker_ink)'s grey as its
     /// colour — so a marker IS that grey rather than a brightness of it. A bar

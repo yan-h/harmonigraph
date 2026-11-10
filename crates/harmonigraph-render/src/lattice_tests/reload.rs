@@ -140,13 +140,8 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
     // Still a whole module: what a reader gets has to be something that
     // compiles, since the next `TextResources::new` builds four pipelines
     // out of it without looking.
-    validate_wgsl(
-        "text.wgsl",
-        &reload::text_source(),
-        common_lines(COMMON_SRC),
-        text::TEXT_ENTRY_POINTS,
-    )
-    .expect("a published module must still be one");
+    validate_wgsl("text.wgsl", &reload::text_source(), common_lines(COMMON_SRC), &[] as &[&str])
+        .expect("a published module must still be one");
 }
 
 /// The seam a naga diagnostic's line number has to be read against. Off by one
@@ -199,7 +194,7 @@ fn a_rejection_states_the_seam_its_own_module_was_joined_at() {
     );
 
     let source = module_source(&common, "fn broken( {");
-    let err = validate_wgsl("lattice.wgsl", &source, seam, LATTICE_ENTRY_POINTS)
+    let err = validate_wgsl("lattice.wgsl", &source, seam, &[] as &[&str])
         .expect_err("`fn broken( {` does not parse");
 
     assert!(
@@ -226,10 +221,26 @@ fn a_rejection_names_the_module_it_is_about() {
         "text.wgsl",
         &with_common(text::TEXT_SRC),
         common_lines(COMMON_SRC),
-        LATTICE_ENTRY_POINTS,
+        &entry_points(&with_common(SHADER_SRC)),
     )
     .expect_err("text.wgsl declares none of the lattice's entry points");
     assert!(err.contains("text.wgsl"), "{err}");
+}
+
+/// A reload that drops an entry point the build's pipelines were made from is
+/// refused, and the message names the one it dropped.
+#[test]
+fn a_reload_missing_an_entry_point_is_refused_by_name() {
+    let dropped = "vs_main";
+    let baked = with_common(SHADER_SRC);
+    let required = entry_points(&baked);
+    assert!(required.iter().any(|e| e == dropped), "the baked lattice has no `{dropped}`");
+    let edited = baked.replace(&format!("fn {dropped}("), &format!("fn {dropped}_renamed("));
+    assert_ne!(edited, baked, "`{dropped}` is not declared as `fn {dropped}(`");
+
+    let err = validate_wgsl("lattice.wgsl", &edited, common_lines(COMMON_SRC), &required)
+        .expect_err("a module without one of the baked entry points must be refused");
+    assert!(err.contains(&format!("missing entry point `{dropped}`")), "{err}");
 }
 
 /// Reload both attachment choices with real modules, then draw their labels,

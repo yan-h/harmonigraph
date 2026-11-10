@@ -1402,11 +1402,11 @@ impl Hub {
         observation: f64,
     ) {
         let intent = recorder.capture_recording_intent();
-        if intent & 1 != 0 {
+        if intent.is_armed() {
             return;
         }
         // Fail before any completion entry can release Stop to the writer.
-        if owner.recording.has_pass(intent >> 1) {
+        if owner.recording.has_pass(intent.epoch()) {
             if self.rows.iter().any(|row| row.state.count() != 0) {
                 recorder.fail_configuration();
             }

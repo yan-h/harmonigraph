@@ -173,7 +173,11 @@ missed refreshes and jumps (the content stepping further than the glass did), ea
 `--misses` lists every stall with what made it late.
 The method and the measured baseline are in #1551 and #1553.
 
-The editor also logs what it was doing: a row as each window opens, with the Span, and one whenever why it animates or how many exports run changes.
+The editor also logs what it was doing: a row as each window opens, with the Span, and one whenever why it animates or how many exports run changes,
+a cancelled export counting until its renderer is reaped.
+That row names no encoder:
+an export runs the pane's Encoder, or the take's recorded one for an automatic export,
+except that a Hardware frame over 4096 px a side goes through x264, which the export's row shows as a warning.
 `--events` reads those instead of asking for the times by hand, across every window and opening in the log:
 each stretch where nothing kept it animating, so nothing on screen could move, with how often it drew then;
 the frames after each opening's first note;

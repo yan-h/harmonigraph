@@ -1,17 +1,20 @@
-//! What the baked WGSL must still say: its entry points, and the constants
+//! What the baked WGSL must still say: that it validates, and the constants
 //! it has to agree with Rust about.
 
 use crate::*;
 
+/// Parse and validation only: that the module declares each entry point a
+/// pipeline names is held by the device tests, which build them all from it
+/// (see `entry_points`).
 #[test]
 fn baked_shader_validates() {
     validate_wgsl(
         "lattice.wgsl",
         &with_common(SHADER_SRC),
         common_lines(COMMON_SRC),
-        LATTICE_ENTRY_POINTS,
+        &[] as &[&str],
     )
-    .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
+    .expect("baked lattice.wgsl must parse and validate");
 }
 
 /// The `const _: () = assert!(PITCH_LUT_N == 64)` in `lib.rs` ties one Rust
@@ -89,6 +92,8 @@ fn uniform_transport_matches_nagas_resolved_layout() {
     use crate::uniforms::layout::check_binding;
     check_binding::<Uniforms>(&with_common(SHADER_SRC), 0, 0);
     check_binding::<CompositeParams>(BLIT_SRC, 0, 3);
+    // The roll's and the Spiral's bloom strength, which the lattice never binds.
+    check_binding::<AddUniforms>(BLIT_SRC, 0, 4);
     // Blit binds the first named group, with no camera/node packing dependency.
     assert_eq!(std::mem::offset_of!(Uniforms, composite), 0);
     assert_eq!(std::mem::size_of::<CompositeParams>(), 48);

@@ -363,8 +363,8 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
 /// them a video with a warning on it rather than no video at all. Nothing is
 /// invented to fill the hole — no fabricated notes, no guessed durations.
 ///
-/// The incompleteness comes FIRST because only the first warning reaches the
-/// plugin's status line (`harmonigraph-record`'s `follow`), and of the things
+/// The incompleteness comes FIRST because only the first warning reaches
+/// the export job's row (`harmonigraph-record`'s `follow`), and of the things
 /// that can be wrong with an export this is the one that changes the picture.
 fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -404,7 +404,7 @@ fn export(args: Args) -> Result<(), String> {
         .map(|path| std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")))
         .transpose()?;
     // Ahead of anything the command line can complain about, so the take's own
-    // trouble is the warning that reaches the Video pane's status line.
+    // trouble is the warning that reaches its export job's row.
     for warning in take_warnings(&take_path, &take) {
         eprintln!("{warning}");
     }
@@ -577,7 +577,7 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
     // After the video, which is the export: a copy that fails leaves it whole
-    // and says why on the line the Video pane keeps.
+    // and says why on the export job's row, by its `ARCHIVE_FAILED` line.
     if let Some(archive) = &archive {
         let began = std::time::Instant::now();
         match sink::archive(&out, archive, args.ffmpeg.as_deref(), total, |count| {
@@ -966,8 +966,8 @@ mod tests {
 
         let warnings = take_warnings("take-1.take", &take);
         assert_eq!(warnings.len(), 1, "one warning, and no refusal: {warnings:?}");
-        // `warning:` is the prefix `harmonigraph-record`'s `follow` picks the
-        // status line's warning out by, so it is a format contract between the
+        // `warning:` is the prefix `harmonigraph-record`'s `follow` picks an
+        // export job's warning out by, so it is a format contract between the
         // two binaries rather than decoration.
         assert!(warnings[0].starts_with("warning:"), "{}", warnings[0]);
         assert!(warnings[0].contains("6..=8"), "the lost range is named: {}", warnings[0]);

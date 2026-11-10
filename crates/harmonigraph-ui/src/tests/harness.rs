@@ -476,7 +476,7 @@ pub(super) fn settings_cases() -> Vec<SettingsCase> {
         LatticeMaterial::Stars,
         LatticeMaterial::VelvetScales,
     ];
-    let engines = [TuningEngine::Off, TuningEngine::Adaptive, TuningEngine::LatticeMap];
+    let engines = TuningEngine::HOST;
     for texture in textures {
         match texture {
             CloudStyle::Watercolor | CloudStyle::Stars | CloudStyle::VelvetScales => {}

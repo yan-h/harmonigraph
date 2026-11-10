@@ -329,7 +329,7 @@ impl Owner {
         self.recording.block_start = self.boundary.steady_time + i64::from(start);
         self.recording.block_frames = frames;
     }
-    pub fn recording_intent(&self) -> u64 {
+    pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {
         self.recording.captured_intent
     }
 
