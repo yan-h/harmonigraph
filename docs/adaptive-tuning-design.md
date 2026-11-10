@@ -7,8 +7,8 @@ This document records requirements and proposals, not implemented behaviour or a
 Yan explicitly asked to refine the design before implementation.
 Continue the discussion and update this document as decisions are made.
 The current implementation is described in [adaptive-tuning.md](adaptive-tuning.md).
-The [standalone tuning laboratory](../tools/adaptive-tuning-simulator/README.md) implements a first experimental model and the musical fixtures for inspection.
-Its documented scoring and reference choices remain hypotheses to refine against this design.
+A standalone JavaScript model first implemented this design and exported the musical fixtures;
+it was retired in #1677, and the Rust policy with its committed fixtures is now the reference.
 The [plugin implementation record](adaptive-tuning-plugin.md) describes the subsequent Rust port, controls, expression handling and integration limits.
 
 Yan later clarified that toy-example answers are not fixed at every parameter setting, and that different answers may implicitly assume different settings.
