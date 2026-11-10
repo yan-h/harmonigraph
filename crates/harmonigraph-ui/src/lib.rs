@@ -336,11 +336,7 @@ pub fn root_ui(
     // Flowing audio counts too: the spectrum and spectrogram advance every
     // frame off the analyzer, so with audio playing but no MIDI they'd
     // otherwise crawl at the 50 ms idle poll.
-    let animating = state.picture.runtime.tracker.voices().next().is_some()
-        || state.picture.runtime.learn_active
-        || roll_scrolling(state, now)
-        || releasing(state, now)
-        || state.picture.runtime.spectrum.is_flowing(now);
+    let animating = Animating::of(state, now).any();
     if animating {
         // As fast as the shell offers. The frame rate setting is the shell's
         // to apply, by offering fewer frames: a repaint delay cannot bound it,
@@ -490,6 +486,33 @@ pub fn draw_pane(
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Each reason the editor is drawing at full rate rather than polling, apart
+/// so the frame log can say which one held it there (#1670 Q2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Animating {
+    pub voices: bool,
+    pub learn: bool,
+    pub roll: bool,
+    pub releasing: bool,
+    pub flowing: bool,
+}
+
+impl Animating {
+    pub fn of(state: &SharedState, now: f64) -> Self {
+        Self {
+            voices: state.picture.runtime.tracker.voices().next().is_some(),
+            learn: state.picture.runtime.learn_active,
+            roll: roll_scrolling(state, now),
+            releasing: releasing(state, now),
+            flowing: state.picture.runtime.spectrum.is_flowing(now),
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.voices || self.learn || self.roll || self.releasing || self.flowing
+    }
+}
 
 /// Whether a lattice note is still departing after its voice was pruned: a
 /// release holds its presence for the fade-out delay and the stagger, so it
