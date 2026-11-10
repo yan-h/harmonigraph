@@ -340,10 +340,12 @@ fn the_performance_overlay_ships_off() {
     state.workspace.interaction.prefs.show_perf = true;
     let saved = state.save_persist();
     let old = saved.replacen("show_perf:true,", "", 1);
-    assert_ne!(old, saved, "the show_perf cut must land for this to test anything");
+    assert_eq!(saved.matches("show_perf:").count(), 1, "the blob names show_perf once");
+    assert_eq!(old.matches("show_perf:").count(), 0, "the show_perf cut must land");
 
+    // A refused load would leave the fresh default, and pass for that reason.
     let mut restored = fresh();
-    restored.load_persist(&old);
+    assert!(restored.load_persist(&old), "the blob without show_perf did not load");
     assert!(
         !restored.workspace.interaction.prefs.show_perf,
         "a blob without show_perf opens with the overlay off"

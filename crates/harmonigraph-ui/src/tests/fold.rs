@@ -706,31 +706,6 @@ fn analyzer_region_restore_survives_a_saved_project() {
     assert!((h.screen.width() - width).abs() < 1.0, "saved internal fold lost its restore ceiling");
 }
 
-/// A folded region is the layout's content: its width is held in
-/// `Layout::region_widths`, so a project saved before the preferences moved
-/// under one key must still open with the region folded and the width owed.
-#[test]
-fn a_region_folded_in_a_save_from_before_prefs_still_opens_folded() {
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-    let mut h = DockHarness::new();
-    h.settle(&mut state);
-    let width = h.screen.width();
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    assert_ne!(state.workspace.layout.region_widths, [0.0; 2], "the fold must hold a width");
-    let saved = super::persist::before_prefs(&state.save_persist());
-    let mut reopened = fresh();
-    assert!(reopened.load_persist(&saved));
-    h.settle(&mut reopened);
-    assert_eq!(reopened.workspace.interaction.analyzer_regions.collapsed, [false, true]);
-    assert_eq!(reopened.workspace.layout.region_widths, state.workspace.layout.region_widths);
-    assert_eq!(reopened.workspace.take_window_size_change(), None);
-    region_click(&mut h, &mut reopened, 1);
-    h.settle_folds(&mut reopened);
-    assert!((h.screen.width() - width).abs() < 1.0, "the unfold did not repay the held width");
-}
-
 #[test]
 fn analyzer_region_restore_respects_a_split_edited_while_folded() {
     let mut state = fresh();

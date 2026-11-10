@@ -1551,7 +1551,14 @@ fn every_editor_preference_round_trips() {
     *frame_rate = crate::FrameRate::Third;
     *ui_scale = 1.25;
     *frameless = true;
-    skin_dials.accent_hue = 120.0;
+    // Every dial, not one: the pair check below sees `skin_dials` whole.
+    *skin_dials = harmonigraph_scene::skin::SkinDials {
+        lightness: 0.10,
+        tint_hue: 40.0,
+        tint: 0.5,
+        accent_hue: 120.0,
+        accent_saturation: 0.6,
+    };
     *perf_pos = Some(egui::pos2(40.0, 60.0));
     *show_perf = true;
     *show_perf_detail = true;
@@ -1560,6 +1567,12 @@ fn every_editor_preference_round_trips() {
     let fresh_pairs = top_level_pairs(&ron::to_string(&crate::EditorPrefs::default()).unwrap());
     for pair in top_level_pairs(&dialled) {
         assert!(!fresh_pairs.contains(&pair), "{} is not dialled", pair.0);
+    }
+    let dials =
+        |d: &harmonigraph_scene::skin::SkinDials| top_level_pairs(&ron::to_string(d).unwrap());
+    let fresh_dials = dials(&Default::default());
+    for pair in dials(&state.workspace.interaction.prefs.skin_dials) {
+        assert!(!fresh_dials.contains(&pair), "skin_dials.{} is not dialled", pair.0);
     }
 
     let mut restored = fresh();
@@ -2258,7 +2271,7 @@ fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
 /// An editor save in the shape builds before #1677 wrote: every pair inside
 /// `prefs` lifted back to the top level, where each preference sat under the
 /// same key. Only where they sit changed, not how each one serializes.
-pub(super) fn before_prefs(saved: &str) -> String {
+fn before_prefs(saved: &str) -> String {
     let pairs: Vec<String> = top_level_pairs(saved)
         .into_iter()
         .flat_map(|(key, text)| match key.as_str() {
