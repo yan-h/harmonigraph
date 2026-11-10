@@ -61,11 +61,9 @@ pub(crate) fn finish_edits(
     params: &dyn ParamBackend,
     ctx: &egui::Context,
 ) {
-    // A wheel or pinch zoom holds no button and is one gesture all the same,
-    // as it is one look edit (`AppearanceEditor::end_frame`): without this the
-    // host got a whole begin/set/end for every frame the camera moved.
-    let dragging = crate::kept_focus(ctx)
-        && ctx.input(|i| i.pointer.any_down() || i.is_scrolling() || i.zoom_delta() != 1.0);
+    // Without a gesture held open, the host gets a whole begin/set/end for
+    // every frame the camera moves.
+    let dragging = crate::gesture_open(ctx);
     let mut after = appearance.camera_movement();
     let mut changed = false;
     for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {

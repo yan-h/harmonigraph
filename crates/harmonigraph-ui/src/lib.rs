@@ -208,6 +208,29 @@ fn kept_focus(ctx: &egui::Context) -> bool {
     })
 }
 
+/// Whether a pointer gesture is still under way this frame, so the edits it
+/// makes are one: one undoable look edit (`AppearanceEditor::end_frame`) and
+/// one host parameter gesture (`camera_movement::finish_edits`).
+///
+/// A drag on any button counts, as egui starts a drag on a press of any of
+/// them and the panes navigate on `dragged()`. A wheel or pinch holds no
+/// button and is one gesture all the same: egui keeps `is_scrolling` true
+/// between a trackpad's events and until ~150 ms after the last wheel event,
+/// and a picture may zero the frame's scroll delta once it has taken it, so the
+/// delta says nothing about whether the wheel is still turning. Any scroll in
+/// the window holds the gesture open, so two edits made inside one continuous
+/// scroll merge.
+///
+/// A held button alone does not: it asks for something dragged as well. A drag
+/// [`end_stranded_drag`] gives up on has lost its release, and egui believes
+/// that button held until the next one arrives; on the button alone, every edit
+/// until the user's next click would join one undo entry and one host gesture.
+pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
+    kept_focus(ctx)
+        && (ctx.dragged_id().is_some() && ctx.input(|i| i.pointer.any_down())
+            || ctx.input(|i| i.is_scrolling() || i.zoom_delta() != 1.0))
+}
+
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
 /// window (egui-baseview hands the plugin editor exactly that; eframe hands
 /// the standalone harness the same via its `App::ui` hook).
