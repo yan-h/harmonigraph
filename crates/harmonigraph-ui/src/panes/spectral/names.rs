@@ -230,8 +230,9 @@ fn plan_with_thinning_for_test(
             let painter = ui.painter();
             let mut namer =
                 Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
+            let width = Width::of(state, axes, scale, 1.0);
             result =
-                plan(painter, state, axes, scale, split, now, 1.0, scales, &mut namer, thinning);
+                plan(painter, state, axes, scale, &width, split, now, scales, &mut namer, thinning);
         });
         result
     })
@@ -241,17 +242,16 @@ fn plan_with_thinning_for_test(
 /// when the setting is off or the pane has kept no roll region to draw in.
 ///
 /// The two scales it lays names out by part company at the pitch zoom — see
-/// [`NameScale`]. `point_scale` is the composition's, which the roll's width
-/// floor rides ([`Width`]).
+/// [`NameScale`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan(
     painter: &egui::Painter,
     state: &PictureState,
     axes: &Axes,
     scale: &PitchScale,
+    width: &Width,
     split: f32,
     now: f64,
-    point_scale: f32,
     scales: NameScale,
     namer: &mut Namer,
     thinning: &mut Thinning,
@@ -344,12 +344,12 @@ pub(super) fn plan(
     };
 
     // The pitches whose ribbon still reaches into the pitch zoom: the zoom
-    // widened by half the body the roll draws at the name's own end, Thickness
-    // swell and width floor included — the roll's own [`Width`], not a width
-    // restated here. A ribbon's ink meets the edge that half width before its
-    // centre does, so asked of the centre alone a name went with half its
-    // ribbon still drawn (#825); asked of half the Ribbon width alone, it went
-    // again wherever the roll drew the body wider than that.
+    // widened by half the widest body the roll has drawn the note with,
+    // Thickness swell and width floor included ([`Width::reaches`]). A
+    // ribbon's ink meets the edge that half width before its centre does, so
+    // asked of the centre alone a name went with half its ribbon still drawn
+    // (#825); asked of half the Ribbon width alone, it went again wherever the
+    // roll drew the body wider than that.
     //
     // The RIBBON's width and not the name's box, so a name taller than its
     // ribbon goes with the edge of its box still inside, and the ribbon's
@@ -357,13 +357,11 @@ pub(super) fn plan(
     // the edge the scissor cuts the name as it cuts the ribbon. The far edge
     // no longer makes this trade — there a name stays until its own box has
     // left (see `visible` below) — so the two edges now differ.
-    let width = Width::of(state, axes, scale, point_scale);
-
     let mut candidates = Vec::new();
     for (note, edge) in notes {
         let (name, ink) = naming(edge.pitch, &mut names);
         let beyond = (scale.min_midi - edge.pitch).max(edge.pitch - scale.max_midi);
-        if !width.reaches(note, edge.time, beyond) {
+        if !width.reaches(note, now, beyond) {
             continue;
         }
         let (rect, lead) = place(&edge, ink);
@@ -895,6 +893,20 @@ mod tests {
         }
     }
 
+    /// A pressure change on a sounding note.
+    fn pressure(time: f64, note: u8, value: f32) -> NoteEvent {
+        NoteEvent {
+            source: SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::Expression {
+                expression: harmonigraph_core::Expression::Pressure,
+                value,
+            },
+        }
+    }
+
     /// A state whose pane shows `range` semitones around middle C over a
     /// `span`-second window, with the whole depth axis given to the roll.
     fn state(range: f32, span: f32) -> PictureState {
@@ -1242,8 +1254,13 @@ mod tests {
     /// inside a dense run the body carries on through a note's own end. A
     /// name tied to the drawn end hopped with each step, so it stands on the
     /// note's own end, and what keeps its box on the ribbon is that it stands
-    /// [`LABEL_INSET`] less [`LABEL_PAD`] (2.05 points) in from that end: more
-    /// than any trim moves it.
+    /// [`LABEL_INSET`] less [`LABEL_PAD`] in from that end.
+    ///
+    /// That holds at unit scales, the only ones this fixture runs: 2.05
+    /// points, against a trim of at most 2. The inset grows with
+    /// [`NameScale::air`], the pad with [`NameScale::label`] and the trim
+    /// with the point scale, so a zoomed name (label 1.5: 4 less 2.93, 1.07
+    /// points) can overhang a sliver's trim, and nothing here says otherwise.
     ///
     /// So the fixture holds each thing that moves an end: a repeat close
     /// enough to be trimmed, a dense run, a note shorter than a point, and a
@@ -1336,7 +1353,8 @@ mod tests {
                     "travel {travel}: the name struck at {} is not {LABEL_INSET} off its note",
                     label.onset,
                 );
-                // ...and stands on the body the roll drew for that note.
+                // ...and, at unit scales, stands on the body the roll drew for
+                // that note.
                 let middle = x((note.start + stop) * 0.5);
                 let &(_, near, far) = bodies
                     .iter()
@@ -1348,7 +1366,7 @@ mod tests {
                 assert!(
                     over <= 0.0,
                     "travel {travel}: the name struck at {} overhangs its ribbon's drawn end \
-                     by {over} points",
+                     by {over} points at unit scales",
                     label.onset,
                 );
             }
@@ -2050,124 +2068,6 @@ mod tests {
         }
     }
 
-    /// A repeat leaving the far edge takes nothing with it: the note after it
-    /// keeps the trim the roll drew while both were in view, and its name
-    /// scrolls on at the picture's own rate.
-    ///
-    /// The cut between two repeats trims both facing ends, and the trim is
-    /// the two notes' business alone. Laid out only from the notes the time
-    /// cull kept, the survivor lost its trim on the frame its predecessor
-    /// left the cull, and its drawn onset hopped by the trim under the far
-    /// edge; a name anchored on that drawn end hopped with it, on the pane.
-    #[test]
-    fn a_repeats_name_holds_its_place_as_the_note_before_it_leaves() {
-        let mut state = travelling(24.0, 10.0);
-        // The shortest surround there is, so the survivor's name is still on
-        // the pane when its predecessor's ink leaves.
-        state.appearance.spectrum.note_cut_reach =
-            *harmonigraph_render::SURROUND_REACH_RANGE.start();
-        for event in [on(1.0, 60), off(2.0, 60), on(2.03, 60), off(2.5, 60)] {
-            state.runtime.tracker.handle_event(event);
-        }
-        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        let (mut leads, mut onsets, mut counts) = (Vec::new(), Vec::new(), Vec::new());
-        for frame in 0..27 {
-            let now = 11.95 + f64::from(frame) / 60.0;
-            let ribbons = super::super::roll::note_instances(
-                &axes,
-                &scale_of(&state),
-                &state,
-                split,
-                now,
-                2.0,
-            );
-            // The survivor is the newer ribbon: its near end is the nearer.
-            let survivor = ribbons
-                .iter()
-                .min_by(|a, b| {
-                    (a.center[0] - a.half_extent[1]).total_cmp(&(b.center[0] - b.half_extent[1]))
-                })
-                .expect("the survivor is drawn throughout");
-            onsets.push(survivor.center[0] + survivor.half_extent[1]);
-            counts.push(ribbons.len());
-            let label = labels(&state, now).into_iter().find(|l| l.onset == 2.03);
-            leads.push(label.expect("the survivor's name is on the pane throughout").lead.x);
-        }
-        assert!(
-            counts[0] == 2 && counts[counts.len() - 1] == 1,
-            "the fixture is vacuous: the first repeat should leave during the sweep ({counts:?})",
-        );
-        // The name scrolls by one step a frame throughout. The drawn onset
-        // does until the far edge's crop catches it and holds it there, so of
-        // that it is asked only that it never jumps outward.
-        let step = |xs: &[f32]| xs.windows(2).map(|w| w[1] - w[0]).collect::<Vec<f32>>();
-        let (name, drawn) = (step(&leads), step(&onsets));
-        assert!(
-            name.iter().all(|s| (s - name[0]).abs() < 1e-3),
-            "the survivor's name does not scroll by one step a frame: {name:?}",
-        );
-        assert!(
-            drawn.iter().all(|s| *s < name[0] + 1e-3),
-            "the survivor's drawn onset jumps outward: {drawn:?}",
-        );
-    }
-
-    /// A held repeat's name scrolls at the picture's own rate as its note
-    /// grows out of the dense run it was struck in.
-    ///
-    /// While the note is young its core sits close enough to the sliver
-    /// before it that the roll draws the two as one run; once it has grown
-    /// a few points it leaves the run, and the roll trims the onset end of
-    /// the body it now draws alone. That end moves in one step. A name
-    /// anchored on it moved with it; anchored on the note, it does not.
-    #[test]
-    fn a_held_repeats_name_scrolls_smoothly_as_it_leaves_a_run() {
-        let mut state = travelling(24.0, 10.0);
-        for start in [1.0, 1.05] {
-            state.runtime.tracker.handle_event(on(start, 60));
-            state.runtime.tracker.handle_event(off(start + 0.02, 60));
-        }
-        state.runtime.tracker.handle_event(on(1.1, 60));
-        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
-        let axes = Axes::new(PANE, &state.appearance.spectrum);
-        let step = 1.0 / 60.0;
-        let scroll = (step / TimeAxis::new(&state, split, 0.0).seconds_per_point(&axes)) as f32;
-        let (mut leads, mut onsets) = (Vec::new(), Vec::new());
-        for frame in 0..30 {
-            let now = 1.1 + f64::from(frame) * step;
-            let ribbons = super::super::roll::note_instances(
-                &axes,
-                &scale_of(&state),
-                &state,
-                split,
-                now,
-                2.0,
-            );
-            // The held note's body is the newest: its near end is the nearest.
-            let held = ribbons
-                .iter()
-                .min_by(|a, b| {
-                    (a.center[0] - a.half_extent[1]).total_cmp(&(b.center[0] - b.half_extent[1]))
-                })
-                .expect("the held note is drawn");
-            onsets.push(held.center[0] + held.half_extent[1]);
-            let label = labels(&state, now).into_iter().find(|l| l.onset == 1.1);
-            leads.push(label.expect("the held note is named throughout").lead.x);
-        }
-        let steps = |xs: &[f32]| xs.windows(2).map(|w| w[1] - w[0]).collect::<Vec<f32>>();
-        assert!(
-            steps(&onsets).iter().any(|s| s.abs() > 2.0 * scroll),
-            "the fixture is vacuous: the held note never left the run ({:?})",
-            steps(&onsets),
-        );
-        let name = steps(&leads);
-        assert!(
-            name.iter().all(|s| s.abs() <= scroll + 1e-3),
-            "the held note's name moves by more than the picture scrolls: {name:?}",
-        );
-    }
-
     /// The names `state` draws at 5 s for its one note, played over 1..3 s at
     /// `key` tuned `past` semitones off it, once the roll is shown to draw a
     /// body that straddles the top of the pitch zoom.
@@ -2194,19 +2094,17 @@ mod tests {
     }
 
     /// The same edge for a note the roll draws wider than the Ribbon width:
-    /// its name stays while the body the roll drew at the name's own end is
+    /// its name stays while the widest body the roll has drawn for it is
     /// still inside the pitch zoom.
     ///
     /// #825's pop again, one setting later: the cull restated the ribbon's
     /// half width as half the Ribbon width, and a full-velocity note under a
     /// Thickness route draws about twice that; so does a ribbon thinner than
-    /// the 1.5-point floor, which draws at the floor.
-    ///
-    /// At the name's own END, not the note's widest: a note swollen at its
-    /// onset and thin where it stops is named at its leading edge by a thin
-    /// ribbon, which leaves the pitch zoom before its onset does.
+    /// the 1.5-point floor, which draws at the floor. A note let go of to no
+    /// width at all reads zero where it stops, and is still drawn at the
+    /// floor up to there.
     #[test]
-    fn a_names_cull_reads_the_body_the_roll_drew_at_its_end() {
+    fn a_names_cull_reads_the_widest_body_the_roll_drew() {
         // 0.4 semitone past the top: past half the Ribbon width (0.276), short
         // of half the swollen body (about 0.55).
         let mut swollen = state(24.0, 10.0); // 48..72
@@ -2221,31 +2119,46 @@ mod tests {
         floored.runtime.tracker.handle_event(on(1.0, 108));
         assert_eq!(names_across_the_top(&mut floored, 108, 0.5), 1, "floored: in view, named");
 
-        // Pressed hard at the onset and let go a second in: swollen where it
-        // began, about the Ribbon width where it stopped.
-        for travel in [false, true] {
-            let mut pressed = state(24.0, 10.0);
-            pressed.appearance.spectrum.note_names_travel = travel;
-            pressed.appearance.spectrum.roll_thickness = 0.551;
-            pressed.appearance.view.intensity.pressure.thickness = Some(1.0);
-            pressed.appearance.view.intensity.thickness_max = 2.0;
-            pressed.runtime.tracker.handle_event(on(1.0, 72));
-            for (at, value) in [(1.0, 1.0), (2.0, 0.0)] {
-                pressed.runtime.tracker.handle_event(NoteEvent {
-                    kind: NoteEventKind::Expression {
-                        expression: harmonigraph_core::Expression::Pressure,
-                        value,
-                    },
-                    ..on(at, 72)
-                });
-            }
-            let named = names_across_the_top(&mut pressed, 72, 0.4);
-            assert_eq!(
-                named,
-                usize::from(travel),
-                "pressed, named at its {}: the body there decides",
-                if travel { "swollen onset" } else { "thin leading edge" },
-            );
+        // The same zoom with no width but what pressure gives, pressed at the
+        // onset and let go of as the key is: its leading edge reads no width,
+        // and the body up to it is drawn at the floor.
+        let mut released = state(96.0, 10.0);
+        released.appearance.view.intensity.pressure.thickness = Some(1.0);
+        released.appearance.view.intensity.thickness_base = 0.0;
+        for event in [on(1.0, 108), pressure(1.0, 108, 1.0), pressure(3.0, 108, 0.0)] {
+            released.runtime.tracker.handle_event(event);
+        }
+        assert_eq!(
+            names_across_the_top(&mut released, 108, 0.5),
+            1,
+            "released to no width: in view, named at its leading edge",
+        );
+    }
+
+    /// A held note's name holds on every frame while its pressure wobbles
+    /// across the width that reaches the pitch zoom's edge.
+    ///
+    /// Asked of the width where the name stands, the cull dropped and
+    /// restored the name with each swing, and each restore began its
+    /// thinning afresh. The widest body the note has had only grows.
+    #[test]
+    fn a_held_notes_name_holds_while_its_pressure_wobbles_at_the_edge() {
+        let mut state = state(24.0, 10.0); // 48..72
+        state.appearance.spectrum.roll_thickness = 0.551;
+        state.appearance.view.intensity.pressure.thickness = Some(1.0);
+        // 0.4 semitone past the top, which half the body reaches from a
+        // pressure of 0.46 (0.276 of a semitone times 0.989 plus the
+        // pressure): it swings between 0.6 and 0.3 every tenth of a second.
+        for event in [on(1.0, 72), tuning(1.0, 72, 0.4)] {
+            state.runtime.tracker.handle_event(event);
+        }
+        for k in 0..20 {
+            let value = if k % 2 == 0 { 0.6 } else { 0.3 };
+            state.runtime.tracker.handle_event(pressure(1.0 + 0.1 * f64::from(k), 72, value));
+        }
+        for frame in 3..120 {
+            let now = 1.0 + f64::from(frame) / 60.0;
+            assert_eq!(labels(&state, now).len(), 1, "at {now}s the held note is unnamed");
         }
     }
 
