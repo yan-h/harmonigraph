@@ -76,11 +76,6 @@ const WASH_JITTER: f32 = 0.40;
 const WASH_RADIUS_MIN: f32 = 1.17;
 const WASH_RADIUS_MAX: f32 = 1.91;
 
-// How many cells cross one cloud unit at `Patch size` 1x — see `wash_cloud_tone`,
-// where it is chosen so a glob comes out the width the prototype's J2 drew
-// rather than so the CELLS come out at J2's count.
-const WASH_CELLS: f32 = 5.25;
-
 // The finer octave: how much smaller its cells are, and how many of them carry a
 // glob at all. It is sparse on purpose — a big wash sometimes carries a small one
 // and sometimes sits beside it, and where two washes meet the tone steps, which

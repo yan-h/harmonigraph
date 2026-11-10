@@ -262,8 +262,9 @@ struct Cloud {
     // texture out per pixel in the composite instead. The starfield reads its
     // own image out of the same binding (`star_image_at`) and never this.
     tone_baked: u32,
-    // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
-    // are the sanitized settings. The filter shader declares only the head of
+    // The material's sampling, decided on the CPU for both panes
+    // (`material_cells::drift` and `cell`): `drift` is its offset in its own
+    // cells, `cell` one cell in points. The rest are the sanitized settings. The filter shader declares only the head of
     // this struct, which is why these are appended rather than interleaved.
     drift: vec2<f32>,
     cloud_depth: f32,
@@ -271,7 +272,7 @@ struct Cloud {
     // starfield after it, 3 Scales; 0 is unused. Nothing is shared between them
     // but the blurred light, the palette, the clock and `cloud_depth`.
     cloud_style: u32,
-    wash_size: f32,
+    cell: f32,
     wash_fuzz: f32,
     wash_lobe: f32,
     wash_refract: f32,
@@ -301,7 +302,7 @@ struct Cloud {
     memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
     velvet: vec4<f32>,
-    // Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
+    // Scales' `Squareness` and `Tilt`; zw is padding.
     velvet_form: vec4<f32>,
     // The wash's `Edge pooling` (signed), its width in front-glob radii, and
     // the exponent its `Softness` makes of the fade; w is padding.
@@ -424,20 +425,9 @@ fn palette_color(level: f32) -> vec3<f32> {
     return mix(a, b, fract(x));
 }
 
-// Cloud space is the pane's, aspect-corrected and independent of DPI, and it is
-// FIXED: ten cloud units across the pane's height, which is what the shipped
-// `Cloud size` of 0.5x drew before the dial was retired.
-//
-// It was a dial, and it was a second copy of each texture's own size dial. The
-// texture's size on the pane came out as a PRODUCT — `cloud_scale * wash_size`
-// reached the glob grid and nothing read either on its own — so the two dials
-// named one number between them, and the picture could not tell which of them
-// had set it. What `Cloud size` did own was the drift, since `drift` is measured
-// in cloud units and a larger unit carries the texture further per second; but
-// that is `Drift speed` again, one multiplication later. Three dials, two
-// observables. Pinning the frame here leaves each texture one size dial that
-// means its own size, and leaves the drift to the dial named after it.
-const CLOUD_UNITS: f32 = 10.0;
+// Cloud space — ten cloud units up the pane, whatever its pixels — and each
+// material's cells to a cloud unit are the CPU's (`material_cells.rs`), which
+// ships the cell and the drift in cells that both panes sample with.
 // The tiled WASH is turned by the exact 3-4-5 rotation: cosine 4/5, sine 3/5,
 // or 36.87 degrees. Its square walk is baked in its own coordinates and this
 // rotation is applied only when it is read, so every octave still closes on
@@ -570,22 +560,13 @@ fn wash_tile_field(r: vec2<f32>) -> WashField {
 
 // Shared coordinates keep brightness and displacement on the same globs.
 fn wash_cell_at(pt: vec2<f32>) -> vec2<f32> {
-    let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
-    return q * (WASH_CELLS / cloud.wash_size);
+    return (pt - cloud.size * 0.5) / cloud.cell + cloud.drift;
 }
 
 fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
-    // `wash_size` is how big one GLOB is, so the knob reads as a size.
-    //
-    // The number is set by the picture and not by the cell count, and the two
-    // are not the same: a glob here was calibrated 1.18 cells wide where the
-    // prototype's was `rad` 0.90, so matching J2's forty cells up the pane would
-    // draw its globs 31% too big — measured against `j2.png`, a visibly blobbier
-    // field with two or three fewer harmonic lines showing through it. Matching
-    // the DIAMETER instead puts 40 * 1.18 / 0.90 ≈ 52 cells up the pane at the
-    // fresh cloud size, which is `WASH_CELLS` per cloud unit.
-    let cells = WASH_CELLS / cloud.wash_size;
-    let pane_per_cell = cloud.size.y / CLOUD_UNITS / cells;
+    // `Patch size` is how big one GLOB is, so the knob reads as a size; the
+    // cell it makes is calibrated beside `WASH_CELLS` in Rust.
+    let pane_per_cell = cloud.cell;
     let r = wash_cell_at(pt);
 
     // One or two taps into the period of the two ring walks `fs_cloud_tile`
@@ -620,19 +601,10 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
 }
 
-// Scales' cell as a fraction of the pane's height at a `Scale size` of 1: one
-// over `CLOUD_UNITS` times its cells to a cloud unit, `VELVET_CELLS` in Rust.
-const VELVET_CELL: f32 = 24.0 / 405.0;
-// Where `cloud.drift` starts, in cloud units: `MaterialSettings::DRIFT_START`.
-// Scales take their drift from there, in their own cells.
-const DRIFT_START: vec2<f32> = vec2<f32>(0.0, 0.6);
-
 @fragment
 fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
-    let cell = cloud.size.y * VELVET_CELL * cloud.velvet_form.x;
-    let drift = (cloud.drift - DRIFT_START) * cloud.size.y / (CLOUD_UNITS * cell);
     let level = velvet_material(close_light, cloud_sampler, vec2<f32>(in.slab, in.t) * cloud.size,
-        cloud.size, cell, drift, cloud.velvet, cloud.velvet_form.yz).r;
+        cloud.size, cloud.cell, cloud.drift, cloud.velvet, cloud.velvet_form.xy).r;
     return vec4<f32>(level, 0.0, 0.0, 1.0);
 }
 
@@ -932,7 +904,7 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 //
 // Every length is in STAR PIXELS, a 540th of the pane's height, because the
 // prototype's pane was 540 pixels; the stars keep their size relative to the
-// pane at any export resolution, like the other textures' `CLOUD_UNITS`.
+// pane at any export resolution, like the other textures' cloud units.
 fn star_level_at(pt: vec2<f32>) -> f32 {
     let uv = pt / cloud.size;
     return clamp(textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r, 0.0, 1.0);

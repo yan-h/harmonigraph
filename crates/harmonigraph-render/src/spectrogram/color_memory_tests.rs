@@ -179,8 +179,10 @@ fn a_drift_wrap_carries_the_colour_history() {
     let atmosphere = cb.atmosphere.unwrap();
     let settings = atmosphere.settings.sanitized();
     let pane = [cb.rect.width() as u32, cb.rect.height() as u32];
-    let tile = tile_key(pane, atmosphere, CloudSampling::default().tile_cells);
-    let reduced = |now| cloud_drift(settings, cloud_offset_at(settings, now), tile);
+    let period = tile_key(pane, atmosphere, CloudSampling::default().tile_cells)
+        .expect("the wash draws a tile")
+        .period();
+    let reduced = |now| drift_at(settings, now, period);
     let step = 1.0 / 60.0;
     let before = (0..60 * 600)
         .map(|i| atmosphere.now + f64::from(i) * step)
@@ -1123,16 +1125,10 @@ fn every_saved_dial_nudge_moves_the_texture_one_frame_at_most() {
         let base = cb.atmosphere.unwrap().settings.sanitized();
         let cells =
             |cb: &SpectrogramCallback| material_cells(cb.atmosphere.unwrap().settings.sanitized());
-        let drawn = |cb: &SpectrogramCallback, resources: &CallbackResources| {
+        // The shipped drift is in cells already.
+        let drawn = |resources: &CallbackResources| {
             let uniforms = cloud_uniforms(&device, &queue, resources);
-            let start = if style == CloudStyle::VelvetScales {
-                harmonigraph_scene::MaterialSettings::DRIFT_START
-            } else {
-                [0.0; 2]
-            };
-            let at =
-                std::array::from_fn(|a| (f64::from(uniforms.drift.0[a]) - start[a]) * cells(cb));
-            (at, f64::from(uniforms.tile_cells * 5))
+            (uniforms.drift.0.map(f64::from), f64::from(uniforms.tile_cells * 5))
         };
         let slices =
             |resources: &CallbackResources| memory(resources).frame.as_ref().unwrap().slices;
@@ -1145,7 +1141,7 @@ fn every_saved_dial_nudge_moves_the_texture_one_frame_at_most() {
             let (held, held_slices) = if style == CloudStyle::Stars {
                 (([0.0; 2], 0.0), slices(&resources))
             } else {
-                (drawn(&cb, &resources), [StarSlice::default(); STAR_SLICES])
+                (drawn(&resources), [StarSlice::default(); STAR_SLICES])
             };
             let held_cells = cells(&cb);
             let a = cb.atmosphere.as_mut().unwrap();
@@ -1178,7 +1174,7 @@ fn every_saved_dial_nudge_moves_the_texture_one_frame_at_most() {
                     );
                 }
             } else {
-                let (moved, repeat) = drawn(&cb, &resources);
+                let (moved, repeat) = drawn(&resources);
                 let [x, y] = harmonigraph_scene::MaterialSettings::drift_rate(
                     edited.cloud_speed,
                     edited.cloud_direction,
