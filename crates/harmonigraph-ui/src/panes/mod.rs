@@ -208,12 +208,12 @@ impl Viewer<'_> {
         // Before the body too — see [`SectionFolds`].
         let folds = SectionFolds {
             page: tab_title(tab),
-            folded: std::mem::take(&mut self.interaction.folded_sections),
+            folded: std::mem::take(&mut self.interaction.prefs.folded_sections),
         };
         ui.data_mut(|d| d.insert_temp(SectionFolds::id(), folds));
         self.body(ui, tab);
         if let Some(folds) = ui.data_mut(|d| d.remove_temp::<SectionFolds>(SectionFolds::id())) {
-            self.interaction.folded_sections = folds.folded;
+            self.interaction.prefs.folded_sections = folds.folded;
         }
     }
 
@@ -254,10 +254,12 @@ impl Viewer<'_> {
                     ui,
                     self.state,
                     self.now,
-                    self.interaction.frameless,
+                    self.interaction.prefs.frameless,
                 );
             }
-            Tab::Spiral => spiral_pane(ui, self.state, &mut self.interaction.spiral, self.now),
+            Tab::Spiral => {
+                spiral_pane(ui, self.state, &mut self.interaction.prefs.spiral, self.now)
+            }
             Tab::Video => render_pane(ui, self.state, self.interaction, self.now),
         }
     }

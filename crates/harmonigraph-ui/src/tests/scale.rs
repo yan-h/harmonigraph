@@ -14,7 +14,7 @@ const PANE_WIDTH: f32 = 400.0;
 /// — at a fixed width, because here it is the scale that varies.
 fn settings_pane_at_scale(case: SettingsCase, scale: f32) -> Vec<egui::epaint::ClippedShape> {
     let mut state = case.state();
-    state.workspace.interaction.ui_scale = scale;
+    state.workspace.interaction.prefs.ui_scale = scale;
     open_settings_pane(&super::probe::themed_scaled(scale), case, &mut state, PANE_WIDTH)
 }
 

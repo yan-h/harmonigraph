@@ -61,11 +61,9 @@ pub(crate) fn finish_edits(
     params: &dyn ParamBackend,
     ctx: &egui::Context,
 ) {
-    // A wheel or pinch zoom holds no button and is one gesture all the same,
-    // as it is one look edit (`AppearanceEditor::end_frame`): without this the
-    // host got a whole begin/set/end for every frame the camera moved.
-    let dragging = crate::kept_focus(ctx)
-        && ctx.input(|i| i.pointer.any_down() || i.is_scrolling() || i.zoom_delta() != 1.0);
+    // Without a gesture held open, the host gets a whole begin/set/end for
+    // every frame the camera moves.
+    let dragging = crate::gesture_open(ctx);
     let mut after = appearance.camera_movement();
     let mut changed = false;
     for (index, key) in ParamKey::CAMERA.into_iter().enumerate() {
@@ -147,6 +145,8 @@ mod tests {
         value: std::cell::Cell<f32>,
         open: std::cell::Cell<bool>,
         count: std::cell::Cell<usize>,
+        /// Gestures closed by an `end_set`, as against a bare `set`.
+        closed: std::cell::Cell<usize>,
     }
     impl ParamBackend for Gestures {
         fn get(&self, _: ParamKey) -> f32 {
@@ -168,8 +168,8 @@ mod tests {
             }
         }
         fn end_set(&self, key: ParamKey) {
-            if key == ParamKey::CameraDistance {
-                self.open.set(false);
+            if key == ParamKey::CameraDistance && self.open.replace(false) {
+                self.closed.set(self.closed.get() + 1);
             }
         }
     }
@@ -205,5 +205,85 @@ mod tests {
         assert!(zooming_frames >= 3, "the wheel must zoom over several frames: {zooming_frames}");
         assert_eq!(backend.count.get(), 1, "one zoom, one gesture");
         assert!(!backend.open.get(), "the gesture closes once the wheel settles");
+    }
+
+    /// A frame of a picture that zooms the camera while a drag holds it, the
+    /// way the lattice pane navigates on `dragged()`.
+    fn drag_frame(
+        ctx: &egui::Context,
+        appearance: &mut AppearanceDocument,
+        backend: &Gestures,
+        events: Vec<egui::Event>,
+        strand: bool,
+    ) -> bool {
+        let mut moved = false;
+        let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            if strand {
+                // What `end_stranded_drag` does to a drag whose release went
+                // missing: egui still believes the button held.
+                ui.ctx().stop_dragging();
+            }
+            let before = appearance.camera_movement();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+            let response = ui.interact(rect, egui::Id::new("camera"), egui::Sense::drag());
+            if response.dragged() && response.drag_delta().y != 0.0 {
+                appearance.camera.zoom(response.drag_delta().y);
+                moved = true;
+            }
+            finish_edits(appearance, before, backend, ui.ctx());
+        });
+        moved
+    }
+
+    fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn a_drag_of_the_camera_is_one_host_gesture() {
+        let ctx = egui::Context::default();
+        let mut appearance = AppearanceDocument::default();
+        let backend = Gestures::default();
+        backend.value.set(appearance.camera.distance);
+        let mut at = egui::pos2(200.0, 200.0);
+        drag_frame(&ctx, &mut appearance, &backend, vec![egui::Event::PointerMoved(at)], false);
+        drag_frame(&ctx, &mut appearance, &backend, vec![primary(at, true)], false);
+        let mut moving_frames = 0;
+        for _ in 0..10 {
+            at.y += 10.0;
+            let moved = vec![egui::Event::PointerMoved(at)];
+            moving_frames += usize::from(drag_frame(&ctx, &mut appearance, &backend, moved, false));
+            assert!(backend.open.get(), "the gesture closed while the drag was held");
+        }
+        drag_frame(&ctx, &mut appearance, &backend, vec![primary(at, false)], false);
+        assert!(moving_frames >= 3, "the drag must move the camera: {moving_frames}");
+        assert_eq!(backend.count.get(), 1, "one drag, one gesture");
+        assert_eq!(backend.closed.get(), 1, "the release closes it once");
+        assert!(!backend.open.get());
+    }
+
+    #[test]
+    fn a_stranded_drag_closes_its_host_gesture_with_the_button_still_down() {
+        let ctx = egui::Context::default();
+        let mut appearance = AppearanceDocument::default();
+        let backend = Gestures::default();
+        backend.value.set(appearance.camera.distance);
+        let mut at = egui::pos2(200.0, 200.0);
+        drag_frame(&ctx, &mut appearance, &backend, vec![egui::Event::PointerMoved(at)], false);
+        drag_frame(&ctx, &mut appearance, &backend, vec![primary(at, true)], false);
+        for _ in 0..3 {
+            at.y += 10.0;
+            drag_frame(&ctx, &mut appearance, &backend, vec![egui::Event::PointerMoved(at)], false);
+        }
+        assert!(backend.open.get(), "the fixture must open a gesture");
+        drag_frame(&ctx, &mut appearance, &backend, vec![], true);
+        assert!(ctx.input(|i| i.pointer.any_down()), "the button must still read as held");
+        assert!(!backend.open.get(), "a stranded drag held the host gesture open");
+        assert_eq!(backend.closed.get(), 1);
     }
 }

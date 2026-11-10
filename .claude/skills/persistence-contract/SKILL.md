@@ -29,7 +29,8 @@ grep -rn --include='*.rs' -A4 '#\[serde(default)\]' crates/ | grep 'pub struct'
 
 ### Editor workspace defaults
 
-`UiPersist`'s `Default` uses the same design-scale helper as `Interaction`, since an `f32` default of 0.0 is a scale of nothing.
+`EditorPrefs`'s `Default` is the one source of the UI scale's design size (1.0), since an `f32` default of 0.0 is a scale of nothing;
+`UiPersist` derives its `Default` from its parts'.
 A missing editor version defaults to 0 and is refused by the version floor.
 
 `panes::Tab` is persisted as the selected analyzer and settings tabs in `UiPersist::layout`, so removing one of its variants is a dropped variant (below), and its doc comment says so.

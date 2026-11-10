@@ -140,13 +140,13 @@ impl DockHarness {
     /// sweep is also a sweep over how much overflows.
     ///
     /// The STATE is where the scale really lives, which is why this takes one:
-    /// `root_ui` calls `set_ui_scale` from `state.workspace.interaction.ui_scale` on every frame, so
+    /// `root_ui` calls `set_ui_scale` from `state.workspace.interaction.prefs.ui_scale` on every frame, so
     /// a context dialled up on its own is reset by the first frame drawn on it
     /// and the sweep silently measures the design size at every step. Dialling
     /// the context as well is what puts the first frame at the scale rather
     /// than one frame behind it.
     pub(super) fn scaled(size: egui::Vec2, scale: f32, state: &mut SharedState) -> Self {
-        state.workspace.interaction.ui_scale = scale;
+        state.workspace.interaction.prefs.ui_scale = scale;
         let mut harness = DockHarness::at(size);
         harness.ctx = super::probe::themed_scaled(scale);
         harness
@@ -317,7 +317,7 @@ pub(super) fn set_optional_sections(state: &mut SharedState, on: bool) {
         a.view.atmosphere.texture_depth = 0.0;
     }
     let interaction = &mut state.workspace.interaction;
-    interaction.show_perf = on;
+    interaction.prefs.show_perf = on;
     interaction.take.supported = on;
     interaction.take.last_take = on.then(|| "music.take".into());
 }

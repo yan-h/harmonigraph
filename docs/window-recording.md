@@ -89,7 +89,7 @@ the helpers move whenever a test is added above them.
 - **`derive_scene` is a pure function** of
 `(tracker, tuning, view, params, camera, now)` (`harmonigraph_scene::derive_scene`, called from `draw_lattice` in `crates/harmonigraph-ui/src/panes/lattice.rs`).
 Step `now` by exactly 1/60 s and you get a perfect constant-frame-rate sequence with no vsync coupling at all.
-- **Frameless mode** (`Interaction::frameless`, the checkbox in
+- **Frameless mode** (`EditorPrefs::frameless`, the checkbox in
 `crates/harmonigraph-ui/src/panes/system.rs`) hides chrome for a continuous live picture; it is an editor preference and does not affect takes or offline export.
 - **The host transport is now read and used for exactly this.** `nice-plug-core` exposes
 `playing`/`pos_seconds`/`tempo`;

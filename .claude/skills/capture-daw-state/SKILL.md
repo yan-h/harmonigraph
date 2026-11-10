@@ -16,7 +16,7 @@ The exact values are recoverable:
 ./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ```
 
-The UI state (`layout` and `folded_sections`, static camera geometry, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
+The UI state (`layout`, the editor preferences under `prefs` such as `folded_sections`, static camera geometry, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
 Camera movement belongs to the five `camera-*` host parameters;
 the camera snapshot in `ui-state` can lag automation while the editor is closed, so the script overlays the saved host parameters in every output, as the live editor does.
 A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
@@ -48,7 +48,7 @@ That `impl Default` is also every field's serde fallback (the `persistence-contr
 - A saved blob MISSING a
 key therefore picks the new value up, so "restyle the fresh view" and "restyle an under-specified saved view" are the same edit.
 That is the intended trade, not an accident.
-- Camera zoom, `layout` and `folded_sections` are navigation state, deliberately not baked into
+- Camera zoom, `layout` and `prefs.folded_sections` are navigation state, deliberately not baked into
 defaults.
 - A capture moves no golden frame:
 all three sets draw from the pinned `crates/harmonigraph-golden/look.ron`, not from these defaults,
@@ -59,6 +59,6 @@ A golden that moves anyway is a fixture still reading a default, so pin that fix
 
 The script's header documents the `.bwproject` container format, for when the script itself needs fixing.
 The version-7 editor save nests camera, view, spectrum and the whole video configuration under `appearance`;
-the Spiral's framing is a top-level editor key beside it, so `--appearance` leaves it out.
+the Spiral's framing is an editor preference under `prefs` beside it, so `--appearance` leaves it out.
 `--appearance` writes that document, with the saved host camera parameters applied, for `harmonigraph-offline --appearance FILE`, and requires exactly one editor appearance in the project.
 During replay, a take's recorded camera channels override the corresponding movement in a replacement appearance.
