@@ -298,7 +298,25 @@ impl SlideAxis {
     }
 }
 
-struct TextResources {
+pub(crate) struct TextResources {
+    pipelines: TextPipelines,
+    /// The three sheets a glyph is cut from, as this callback binds them.
+    sheets: Sheets,
+    /// Every text batch this renderer has drawn, by pane id, and never swept,
+    /// like the lattice's panes. An id is one of a few flush slots on a
+    /// surface (`harmonigraph_ui::text`), so the map holds a few entries per
+    /// surface, and it goes with the `CallbackResources` it lives in when the
+    /// editor window closes or the export ends. Until then a hidden tab, a
+    /// closed preview or a pane between names keeps its glyph buffer and
+    /// shadow atlas, so the next name rebuilds neither.
+    panes: HashMap<u64, TextPane>,
+}
+
+/// The text pass's programs, layouts and sampler: keyed on the device and
+/// target format alone (and, under hot reload, the module's build), so the
+/// editor's loading stage builds them once for every window (`crate::startup`).
+#[derive(Clone)]
+pub(crate) struct TextPipelines {
     /// The shadow composite, the visible glyph fill, and the draw that fills
     /// each name's shadow cell with its glyphs.
     shadow_pipeline: wgpu::RenderPipeline,
@@ -318,16 +336,6 @@ struct TextResources {
     /// what it leaves is a count and a source.
     #[cfg(feature = "hot-reload")]
     generation: u64,
-    /// The three sheets a glyph is cut from, as this callback binds them.
-    sheets: Sheets,
-    /// Every text batch this renderer has drawn, by pane id, and never swept,
-    /// like the lattice's panes. An id is one of a few flush slots on a
-    /// surface (`harmonigraph_ui::text`), so the map holds a few entries per
-    /// surface, and it goes with the `CallbackResources` it lives in when the
-    /// editor window closes or the export ends. Until then a hidden tab, a
-    /// closed preview or a pane between names keeps its glyph buffer and
-    /// shadow atlas, so the next name rebuilds neither.
-    panes: HashMap<u64, TextPane>,
 }
 
 /// The sheets one renderer binds a glyph pipeline against — the font atlas
@@ -784,7 +792,7 @@ pub(crate) fn glyph_sampler(device: &wgpu::Device) -> wgpu::Sampler {
     })
 }
 
-impl TextResources {
+impl TextPipelines {
     /// Whether the pipelines in hand were built for something the next frame is
     /// not drawing: a different surface format, or — under hot-reload — a build
     /// of the text module older than the one last published.
@@ -803,13 +811,15 @@ impl TextResources {
     /// The spectral shadow, its cell producer, and the fill pass off one read
     /// of the module. Split out
     /// because a reload owes exactly this pair and nothing else in the struct
-    /// — see [`TextResources::rebuild_pipelines`].
+    /// — see [`TextPipelines::rebuild`].
     fn pipelines(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         shadow: &crate::spectral_shadow::Shared,
         target_format: wgpu::TextureFormat,
     ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
+        #[cfg(test)]
+        crate::startup::record_build("text");
         let shader = glyph_shader(device, &crate::text_source());
         let shadow_pipeline = create_spectral_shadow_pipeline(
             device,
@@ -840,7 +850,7 @@ impl TextResources {
     /// atlas and the marks are SAMPLED textures and a pane's bind group is
     /// built against the layout this keeps, so replacing the pair below is the
     /// whole of the debt.
-    fn rebuild_pipelines(&mut self, device: &wgpu::Device, target_format: wgpu::TextureFormat) {
+    fn rebuild(&mut self, device: &wgpu::Device, target_format: wgpu::TextureFormat) {
         // The source is read inside, and BEFORE the count below: a reload
         // committed between the two would raise a count this build has not
         // taken, and the rebuild it is owed would then never be asked for.
@@ -856,7 +866,7 @@ impl TextResources {
         self.target_format = target_format;
     }
 
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         let layout = glyph_bind_group_layout(device);
         let shadow = crate::spectral_shadow::Shared::new(device);
         // Read once for the pair, and BEFORE the count below: a reload
@@ -866,7 +876,7 @@ impl TextResources {
             Self::pipelines(device, &layout, &shadow, target_format);
         #[cfg(feature = "hot-reload")]
         let generation = crate::reload::generation();
-        TextResources {
+        TextPipelines {
             shadow_pipeline,
             fill_pipeline,
             glyph_cell_pipeline: cell,
@@ -876,8 +886,37 @@ impl TextResources {
             target_format,
             #[cfg(feature = "hot-reload")]
             generation,
-            sheets: Sheets::new(device, queue),
-            panes: HashMap::new(),
+        }
+    }
+}
+
+impl TextResources {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+        Self::from_pipelines(TextPipelines::new(device, target_format), device, queue)
+    }
+
+    /// Fresh sheets and panes around `pipelines`. The sheets' stand-in is one
+    /// texel written through the queue, which is why this half stays with
+    /// the window rather than the worker that compiles the other.
+    fn from_pipelines(
+        pipelines: TextPipelines,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Self {
+        TextResources { pipelines, sheets: Sheets::new(device, queue), panes: HashMap::new() }
+    }
+
+    /// Hand a renderer the loading stage's build, unless it holds one already;
+    /// replacing a stale one stays with the callback, which keeps its sheets.
+    #[cfg(not(feature = "hot-reload"))]
+    pub(crate) fn adopt(
+        pipelines: &TextPipelines,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut CallbackResources,
+    ) {
+        if resources.get::<TextResources>().is_none() {
+            resources.insert(Self::from_pipelines(pipelines.clone(), device, queue));
         }
     }
 
@@ -921,7 +960,7 @@ impl TextResources {
         }
         let sizes = self.sheets.sizes();
         let (view, mark_view) = self.sheets.views();
-        let (layout, sampler) = (&self.layout, &self.sampler);
+        let (layout, sampler) = (&self.pipelines.layout, &self.pipelines.sampler);
         for pane in self.panes.values_mut() {
             // The sizes alone, not the whole struct: a pane that has already
             // prepared wrote the rest of its uniforms this frame, and one that
@@ -1096,8 +1135,8 @@ impl CallbackTrait for TextCallback {
             // Stale pipelines are the whole of what a reload or a format change
             // owes; the atlas binding beside them updates independently, so
             // it survives the pipeline rebuild.
-            Some(resources) if resources.is_stale(self.target_format) => {
-                resources.rebuild_pipelines(device, self.target_format);
+            Some(resources) if resources.pipelines.is_stale(self.target_format) => {
+                resources.pipelines.rebuild(device, self.target_format);
             }
             Some(_) => {}
             None => {
@@ -1140,7 +1179,7 @@ impl CallbackTrait for TextCallback {
         // used, not beside the rest of the frame's setup.
         let pane_views = resources.panes.get(&self.pane_id).is_none_or(|p| p.bind_group.is_none());
         let pane_views = pane_views.then(|| resources.sheets.views());
-        let (layout, sampler) = (&resources.layout, &resources.sampler);
+        let (layout, sampler) = (&resources.pipelines.layout, &resources.pipelines.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             uniform_buffer: crate::gpu_memory::buffer(
                 device,
@@ -1196,7 +1235,7 @@ impl CallbackTrait for TextCallback {
                     (crate::shadow::caster_of(run, sigma, stops), run.len() as u32)
                 })
                 .unzip();
-            let shared = &resources.shadow;
+            let shared = &resources.pipelines.shadow;
             let capacity = pane.capacity;
             let cells = pane.cells.get_or_insert_with(|| {
                 create_vertex_buffer::<crate::shadow::ShadowBox>(
@@ -1217,7 +1256,7 @@ impl CallbackTrait for TextCallback {
                 &casters,
                 &names,
                 crate::spectral_shadow::Ink {
-                    pipeline: &resources.glyph_cell_pipeline,
+                    pipeline: &resources.pipelines.glyph_cell_pipeline,
                     locals: pane.bind_group.as_ref().expect("bound above"),
                     glyphs: &pane.instance_buffer,
                     cells,
@@ -1276,7 +1315,7 @@ impl CallbackTrait for TextCallback {
                 continue;
             }
             if let Some(((atlas, casters), _)) = shadow {
-                render_pass.set_pipeline(&resources.shadow_pipeline);
+                render_pass.set_pipeline(&resources.pipelines.shadow_pipeline);
                 render_pass.set_bind_group(2, atlas, &[]);
                 render_pass.set_bind_group(3, casters, &[]);
                 // One quad per name all the same: only a name's first glyph
@@ -1284,7 +1323,7 @@ impl CallbackTrait for TextCallback {
                 // fold away.
                 render_pass.draw(0..4, start..end);
             }
-            render_pass.set_pipeline(&resources.fill_pipeline);
+            render_pass.set_pipeline(&resources.pipelines.fill_pipeline);
             render_pass.draw(0..4, start..end);
             start = end;
         }
@@ -1374,8 +1413,8 @@ pub(crate) mod tests {
             return;
         };
         let resources = TextResources::new(&device, &queue, FORMAT);
-        assert!(!resources.is_stale(FORMAT));
-        assert!(resources.is_stale(wgpu::TextureFormat::Bgra8Unorm));
+        assert!(!resources.pipelines.is_stale(FORMAT));
+        assert!(resources.pipelines.is_stale(wgpu::TextureFormat::Bgra8Unorm));
     }
 
     /// And a reload published after they were built, which is #510: the
@@ -1390,7 +1429,10 @@ pub(crate) mod tests {
             return;
         };
         let resources = TextResources::new(&device, &queue, FORMAT);
-        assert!(!resources.is_stale(FORMAT), "nothing has been published since these were built");
+        assert!(
+            !resources.pipelines.is_stale(FORMAT),
+            "nothing has been published since these were built"
+        );
 
         crate::reload::publish(
             format!(
@@ -1399,12 +1441,15 @@ pub(crate) mod tests {
             ),
             crate::COMMON_SRC.to_owned(),
         );
-        assert!(resources.is_stale(FORMAT), "a reload the text pipelines never hear about");
+        assert!(
+            resources.pipelines.is_stale(FORMAT),
+            "a reload the text pipelines never hear about"
+        );
 
         // ...and a build taken after it is current again, so the rebuild
         // happens once rather than on every frame from here on.
         let after = TextResources::new(&device, &queue, FORMAT);
-        assert!(!after.is_stale(FORMAT));
+        assert!(!after.pipelines.is_stale(FORMAT));
     }
 
     /// And the rebuild it asks for keeps the atlas binding.
@@ -1442,11 +1487,17 @@ pub(crate) mod tests {
             ),
             crate::COMMON_SRC.to_owned(),
         );
-        assert!(resources.is_stale(FORMAT), "a reload the text pipelines never heard about");
+        assert!(
+            resources.pipelines.is_stale(FORMAT),
+            "a reload the text pipelines never heard about"
+        );
 
-        resources.rebuild_pipelines(&device, FORMAT);
+        resources.pipelines.rebuild(&device, FORMAT);
 
-        assert!(!resources.is_stale(FORMAT), "the rebuild did not take the published build");
+        assert!(
+            !resources.pipelines.is_stale(FORMAT),
+            "the rebuild did not take the published build"
+        );
         assert!(
             !resources.sheets.atlas.is_empty(),
             "the reload dropped the font atlas binding: nothing upstream will send \

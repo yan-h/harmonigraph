@@ -544,6 +544,7 @@ pub(super) fn watercolor_tile_probe_uniform(pitch_vertical: bool) -> Vec<u8> {
     bytemuck::bytes_of(&uniforms).to_vec()
 }
 
+#[derive(Clone)]
 pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
     pub bake: wgpu::RenderPipeline,
@@ -577,6 +578,8 @@ impl Pipelines {
         format: wgpu::TextureFormat,
         source_layout: &wgpu::BindGroupLayout,
     ) -> Self {
+        #[cfg(test)]
+        crate::startup::record_build("cloud");
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -2771,7 +2774,7 @@ mod tests {
         use super::{wgpu, Pipelines, Shape, StarShape, Targets, FORMAT};
         let Some((device, _queue)) = crate::gpu_harness::headless_device() else { return };
         let resources = super::super::SpectrogramResources::new(&device, FORMAT);
-        let pipelines = Pipelines::new(&device, FORMAT, &resources.layout);
+        let pipelines = Pipelines::new(&device, FORMAT, &resources.pipelines.layout);
         let grid = crate::gpu_memory::buffer(
             &device,
             &wgpu::BufferDescriptor {
@@ -2798,7 +2801,7 @@ mod tests {
                     &device,
                     &pipelines,
                     shape,
-                    &resources.layout,
+                    &resources.pipelines.layout,
                     &grid,
                     &lut,
                 ))

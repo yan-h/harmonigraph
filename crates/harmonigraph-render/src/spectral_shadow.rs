@@ -13,6 +13,7 @@ const INITIAL_CAPACITY: usize = 16;
 
 /// What every casting pane shares: the layouts its atlas and casters are
 /// bound through, the atlas sampler, and the blur's two pipelines.
+#[derive(Clone)]
 pub(crate) struct Shared {
     pub atlas: wgpu::BindGroupLayout,
     pub casters: wgpu::BindGroupLayout,
