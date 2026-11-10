@@ -28,8 +28,18 @@ GPU work was done by the link's target), waited for drawable (it submitted
 after the target having waited over half a refresh in acquire), late CPU (it
 submitted after the target anyway) or late GPU.
 
+`--events` reports instead on the moments the editor's own `event` rows mark
+(#1670), across every window and every time the editor was opened:
+- silence: each stretch where only flowing audio kept the editor animating,
+  and from when nothing on screen could still move (the last voice's end plus
+  the Span) how often it drew, against the rate it draws at when animating;
+- first note: the frames in the second and a half after the first note of
+  each opening, with any stall and the costliest frames;
+- exports: missed refreshes in each export's first 30 s against the 30 s
+  before it.
+
 usage: python3 -I tools/frame-log-summary.py [LOG] [--window ID]
-           [--from SECONDS] [--to SECONDS] [--misses]
+           [--from SECONDS] [--to SECONDS] [--misses] [--events]
 """
 
 import argparse
@@ -42,6 +52,14 @@ from collections import Counter
 
 # baseview's `LINK_SILENCE`: past this, the watchdog draws instead of the link.
 LINK_SILENCE = 0.1
+# A flowing-only stretch shorter than this says nothing about idling.
+SILENCE_MIN = 60.0
+# Past the Span, for a release's tail to leave the spectrogram as well.
+TAIL = 5.0
+# How long after a first note its late frames are looked for.
+NOTE_AFTER = 1.5
+# How much of an export, and of the time before it, is compared.
+EXPORT_COMPARE = 30.0
 RATES = {1: 'Display', 2: 'Half', 3: 'Third', 4: 'Quarter'}
 CAUSES = ('dropped before it', 'late fire', 'waited for drawable', 'late CPU', 'late GPU', 'late latch')
 
@@ -58,8 +76,9 @@ def newest_log():
 
 
 def read(path):
-    """Tick rows by window, and each frame's GPU end and presented time."""
-    ticks, gpu_end, presented = {}, {}, {}
+    """Tick rows by window, each frame's GPU end and presented time, and the
+    editor's events as (frame, t, text)."""
+    ticks, gpu_end, presented, events = {}, {}, {}, []
     with open(path, newline='') as file:
         reader = csv.DictReader(file)
         has_divisor = 'divisor' in (reader.fieldnames or ())
@@ -71,7 +90,9 @@ def read(path):
                 gpu_end[frame] = float(row['gpu_end'])
             elif row['kind'] == 'present':
                 presented[frame] = float(row['presented'])
-    return ticks, gpu_end, presented, has_divisor
+            elif row['kind'] == 'event':
+                events.append((frame, float(row['t']), row['event']))
+    return ticks, gpu_end, presented, events, has_divisor
 
 
 def frame(row, gpu_end, presented):
@@ -83,6 +104,8 @@ def frame(row, gpu_end, presented):
         'timestamp': float(row['timestamp']),
         'target': float(row['target']),
         'refresh': float(row['refresh']),
+        'tick_ms': float(row['tick_ms']),
+        'render_ms': float(row['render_ms']),
         'acquire_ms': float(row['acquire_ms']),
         'submitted': float(row['submitted']),
         'divisor': int(row.get('divisor') or 1),
@@ -218,6 +241,157 @@ def list_misses(stalls, t0):
               f"{(fr['presented'] - fr['target']) * 1000:17.2f}  {why}")
 
 
+def stretch(frames, start, end):
+    """Refreshes, missed refreshes, stalls and drawn frames per second
+    between two times."""
+    inside = [fr for fr in frames if start <= fr['t'] < end]
+    ms = [m for m in map(measure, phases(inside)) if m['refreshes']]
+    drawn = sum(1 for fr in inside if fr['submitted'])
+    return {
+        'refreshes': sum(m['refreshes'] for m in ms),
+        'missed': sum(m['missed'] for m in ms),
+        'stalls': [s for m in ms for s in m['stalls']],
+        'fps': drawn / (end - start) if end > start else 0.0,
+        'frames': [fr for fr in inside if fr['submitted']],
+    }
+
+
+def median(values):
+    values = list(values)
+    return statistics.median(values) if values else float('nan')
+
+
+def full_rate(frames):
+    """The rate the link offers frames at, from the frames it paced."""
+    paced = [fr for fr in frames if fr['timestamp']]
+    if not paced:
+        return float('nan')
+    return 1 / median(fr['refresh'] * fr['divisor'] for fr in paced)
+
+
+def openings(ticks, gpu_end, presented, events):
+    """Each time an editor was opened: its frames and its events, split at
+    the `open` row its first frame logs."""
+    window_of = {int(row['frame']): w for w, rows in ticks.items() for row in rows}
+    by_window = {}
+    for event in events:
+        if event[0] in window_of:
+            by_window.setdefault(window_of[event[0]], []).append(event)
+    for w, evs in by_window.items():
+        frames = sorted((frame(row, gpu_end, presented) for row in ticks[w]),
+                        key=lambda fr: fr['frame'])
+        starts = [f for f, _, text in evs if text.startswith('open')]
+        for k, first in enumerate(starts):
+            last = starts[k + 1] if k + 1 < len(starts) else float('inf')
+            run = [fr for fr in frames if first <= fr['frame'] < last]
+            if run:
+                yield w, run, [e for e in evs if first <= e[0] < last]
+
+
+def timeline(evs, end, kind):
+    """(start, end, words) for each stretch between this kind's events."""
+    marks = [(t, text.split()[1:]) for _, t, text in evs if text.split()[0] == kind]
+    return [(t, marks[i + 1][0] if i + 1 < len(marks) else end, words)
+            for i, (t, words) in enumerate(marks)]
+
+
+def report_silence(run, evs, t0):
+    span = next(float(text.split('=')[1]) for _, _, text in evs if text.startswith('open'))
+    end = run[-1]['t']
+    full = full_rate(run)
+    last_voice, found = None, False
+    for start, stop, reasons in timeline(evs, end, 'animating'):
+        if 'voices' in reasons:
+            last_voice = stop
+        if not reasons and stop - start >= SILENCE_MIN:
+            found = True
+            fps = stretch(run, start, stop)['fps']
+            print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s with nothing animating, '
+                  f'not even flowing audio: drew {fps:.0f} frames/s')
+            print('    -> already idles: Q2 is moot' if fps < 30 else
+                  '    -> something other than animation keeps it drawing')
+        if reasons != ['flowing'] or stop - start < SILENCE_MIN:
+            continue
+        found = True
+        # With no voice seen in this opening, a note may have ended just
+        # before it.
+        still = max(start, (last_voice if last_voice is not None else start) + span) + TAIL
+        print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s, only flowing audio animating; '
+              f'still from {still - t0:.0f} s (Span {span:.0f} s)')
+        if stop - still < 10:
+            print('    too short to reach a still picture: leave it stopped longer than the Span')
+            continue
+        s = stretch(run, still, stop)
+        drawn = s['frames']
+        print(f"    drew {s['fps']:.0f} frames/s against {full:.0f} when animating; "
+              f"tick {median(fr['tick_ms'] for fr in drawn):.2f} ms, "
+              f"render {median(fr['render_ms'] for fr in drawn):.2f} ms, "
+              f"submit to GPU done "
+              f"{median((fr['gpu_end'] - fr['submitted']) * 1000 for fr in drawn if fr['gpu_end']):.2f} ms"
+              f" (medians)")
+        if s['fps'] > full / 2:
+            print('    -> draws at full rate with nothing moving: Q2 stands')
+        elif s['fps'] < 30:
+            print('    -> already idles: Q2 is moot')
+    if not found:
+        print(f'  silence: none of {SILENCE_MIN:.0f} s or more')
+
+
+def report_first_note(run, evs, t0):
+    stretches = timeline(evs, run[-1]['t'], 'animating')
+    note = next((start for start, _, reasons in stretches if 'voices' in reasons), None)
+    if note is None:
+        print('  first note: none played while open')
+        return
+    at_open = stretches[0][2] if stretches else []
+    warm = [r for r in at_open if r in ('voices', 'roll', 'releasing')]
+    print(f'  first note at {note - t0:.2f} s, {note - run[0]["t"]:.1f} s after opening'
+          + (f'; opened with {" ".join(warm)} already animating, so not a cold first note'
+             if warm else ''))
+    s = stretch(run, note, note + NOTE_AFTER)
+    for fr, glass, why in s['stalls']:
+        print(f"    stall at +{(fr['t'] - note) * 1000:.0f} ms: {glass} refreshes, {why}; "
+              f"tick {fr['tick_ms']:.2f} ms, render {fr['render_ms']:.2f} ms")
+    if not s['stalls']:
+        print(f'    no stall in the {NOTE_AFTER} s after it')
+    usual = median(fr['tick_ms'] + fr['render_ms'] for fr in run if fr['submitted'])
+    worst = sorted(s['frames'], key=lambda fr: -(fr['tick_ms'] + fr['render_ms']))[:3]
+    costs = ', '.join(f"+{(fr['t'] - note) * 1000:.0f} ms: {fr['tick_ms'] + fr['render_ms']:.2f}"
+                      for fr in worst)
+    print(f'    costliest frames (tick + render ms) {costs}; this opening\'s median {usual:.2f}')
+
+
+def report_exports(run, evs, t0):
+    for start, stop, words in timeline(evs, run[-1]['t'], 'exports'):
+        if words[0] == '0':
+            continue
+        length = min(EXPORT_COMPARE, stop - start, start - run[0]['t'])
+        if length <= 0:
+            continue
+        print(f'  export {start - t0:.0f}-{stop - t0:.0f} s, {words[0]} running, '
+              f'encoder {words[1]}; {length:.0f} s each side:')
+        for name, a in (('before', start - length), ('during', start)):
+            s = stretch(run, a, a + length)
+            print(f"    {name:6} drew {s['fps']:.0f} frames/s, missed {s['missed']} of "
+                  f"{s['refreshes']} refreshes ({pct(s['missed'], s['refreshes'])}) "
+                  f"in {len(s['stalls'])} stalls")
+
+
+def report_events(ticks, gpu_end, presented, events):
+    t0 = min(float(rows[0]['t']) for rows in ticks.values())
+    found = False
+    for w, run, evs in openings(ticks, gpu_end, presented, events):
+        found = True
+        print(f"window {w} opened at {run[0]['t'] - t0:.0f} s, "
+              f"{run[-1]['t'] - run[0]['t']:.0f} s open")
+        report_silence(run, evs, t0)
+        report_first_note(run, evs, t0)
+        report_exports(run, evs, t0)
+        print()
+    if not found:
+        sys.exit('no event rows: the log predates them')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('log', nargs='?', help='frames-*.csv (default: the newest)')
@@ -226,13 +400,18 @@ def main():
                         help="seconds after the window's first frame")
     parser.add_argument('--to', dest='end', type=float, default=float('inf'))
     parser.add_argument('--misses', action='store_true', help='list every stall')
+    parser.add_argument('--events', action='store_true',
+                        help='report on silence, first notes and exports instead')
     args = parser.parse_args()
 
     path = args.log or newest_log()
-    ticks, gpu_end, presented, has_divisor = read(path)
+    ticks, gpu_end, presented, events, has_divisor = read(path)
     if not ticks:
         sys.exit(f'{path}: no tick rows')
     print(path)
+    if args.events:
+        report_events(ticks, gpu_end, presented, events)
+        return
     if len(ticks) > 1 or args.window:
         counts = ', '.join(f'{w} ({len(rows)})' for w, rows in ticks.items())
         print(f'windows: {counts}')
