@@ -116,11 +116,7 @@ impl EditorShared {
         for action in std::mem::take(&mut self.ui.workspace.interaction.take.export_actions) {
             match action {
                 harmonigraph_ui::ExportAction::Queue { take, appearance, size } => {
-                    self.take.queue_export(
-                        take,
-                        harmonigraph_record::RenderRequest::render_now(appearance),
-                        Some(size),
-                    )
+                    self.take.queue_export(take, appearance, size)
                 }
                 harmonigraph_ui::ExportAction::Cancel(id) => self.take.cancel_export(id),
                 harmonigraph_ui::ExportAction::Retry(id) => self.take.retry_export(id),

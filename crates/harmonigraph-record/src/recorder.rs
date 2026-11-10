@@ -11,13 +11,13 @@ use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
 use crate::{configuration, publication};
-use render_job::{spawn_render, Progress, RenderControl};
+use render_job::{spawn_render, Progress, RenderControl, RenderRequest};
 
 mod lifecycle;
 mod render_job;
 mod writer;
 
-pub use render_job::{default_renderer_path, RenderRequest};
+pub use render_job::default_renderer_path;
 pub use writer::channel;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
@@ -847,15 +847,12 @@ impl Control {
 
     /// Append an independent export with settings already captured by the caller.
     ///
-    /// `size` is only what the Exports list shows for the job; the renderer
-    /// derives the real size from the request's appearance.
-    pub fn queue_export(
-        &self,
-        path: std::path::PathBuf,
-        request: RenderRequest,
-        size: Option<[u32; 2]>,
-    ) {
-        spawn_render(request, path, size, self.progress.clone(), self.render.clone());
+    /// `appearance` is the document selected at queue time (current, saved or
+    /// recorded), and the renderer takes the output size from it alone: `size`
+    /// is only what the Exports list shows for the job.
+    pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
+        let request = RenderRequest { appearance: Some(appearance), notice: None };
+        spawn_render(request, path, Some(size), self.progress.clone(), self.render.clone());
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
         self.render.snapshots(&self.progress)
@@ -936,7 +933,7 @@ impl Control {
     ///
     /// The render is launched by the writer thread, after it has closed
     /// the file — the only place that knows the take is actually complete.
-    /// It is always [`RenderRequest::recorded`], with the notice only the
+    /// It renders the take's own recorded look, with the notice only the
     /// writer can know; a take that failed is never rendered.
     pub fn stop(&self) {
         if !self.is_recording() {

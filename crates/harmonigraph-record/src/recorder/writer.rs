@@ -134,7 +134,7 @@ pub fn channel() -> (Recorder, Control) {
                 #[cfg(all(test, feature = "test-support"))]
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
-                let render = RenderRequest { notice, ..RenderRequest::recorded() };
+                let render = RenderRequest { appearance: None, notice };
                 spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]

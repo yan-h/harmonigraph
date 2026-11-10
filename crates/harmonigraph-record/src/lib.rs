@@ -84,5 +84,5 @@ mod recorder;
 pub use recorder::testing;
 pub use recorder::{
     channel, default_renderer_path, header_for, interleaved_reservation, take_dir, Control, Entry,
-    Recorder, RenderRequest, TAKE_CHANNELS,
+    Recorder, TAKE_CHANNELS,
 };
