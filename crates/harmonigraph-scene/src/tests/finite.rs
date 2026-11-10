@@ -202,9 +202,8 @@ impl Floats {
 /// the assertion says the floats are real numbers, and this says which floats
 /// there are.
 ///
-/// The view the scene carries is not walked. The test compares it whole
-/// against a sanitized copy, and a NaN left anywhere in it fails that
-/// comparison on its own, being unequal to itself.
+/// The view the scene carries is not walked here: [`broken_view`] reads every
+/// float in it off its debug dump.
 fn scene_floats(scene: &Scene) -> Floats {
     let mut f = Floats::default();
     let Scene {
@@ -353,6 +352,40 @@ fn scene_floats(scene: &Scene) -> Floats {
     f
 }
 
+/// Every value in the view's `{:#?}` dump that is not a real number, by its
+/// path through the dump. Read off the debug output rather than walked by
+/// hand, so a field added to the view or anything nested in it is covered
+/// without being named here.
+fn broken_view(view: &ViewConfig) -> Vec<String> {
+    // Each open container's name and how many unnamed items it has shown.
+    let (mut path, mut broken) = (Vec::<(String, usize)>::new(), Vec::new());
+    for line in format!("{view:#?}").lines() {
+        let line = line.trim();
+        if line.starts_with(['}', ']', ')']) {
+            path.pop();
+            continue;
+        }
+        let (name, value) = match (line.split_once(": "), path.last_mut()) {
+            (Some((name, value)), _) => (name.to_string(), value),
+            (None, Some(open)) => {
+                open.1 += 1;
+                (format!("[{}]", open.1 - 1), line)
+            }
+            // The type name the dump opens with.
+            (None, None) => (String::new(), line),
+        };
+        let value = value.trim_end_matches(',');
+        if ["NaN", "inf", "-inf"].contains(&value) {
+            let at: Vec<_> = path.iter().map(|(name, _)| name.as_str()).chain([&*name]).collect();
+            broken.push(format!("{} = {value}", at.join(".").trim_matches('.')));
+        }
+        if line.ends_with(['{', '[', '(']) {
+            path.push((name, 0));
+        }
+    }
+    broken
+}
+
 /// Every float the scene ships, by name, that is not a real number.
 fn broken(scene: &Scene) -> Vec<String> {
     scene_floats(scene)
@@ -409,8 +442,11 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &RingFade::default(),
         0.0,
     );
-    // The view's half of the claim: any NaN its repair missed is unequal to
-    // itself, so this fails on it before the derived walk below runs.
+    // The view's half of the claim, by name, before the comparisons below:
+    // a NaN would also fail those, unnamed, and an infinity left on both sides
+    // would pass them.
+    let names = broken_view(&scene.view);
+    assert!(names.is_empty(), "the view's repair left: {}", names.join(", "));
     assert_eq!(scene.view, expected.view);
     assert_eq!(scene_floats(&scene).0, scene_floats(&expected).0);
     assert_eq!(off_sheet, normalized.sevens_size);
