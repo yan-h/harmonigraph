@@ -175,7 +175,7 @@ The method and the measured baseline are in #1551 and #1553.
 
 The editor also logs what it was doing: a row as each window opens, with the Span, and one whenever why it animates or how many exports run changes.
 `--events` reads those instead of asking for the times by hand, across every window and opening in the log:
-each stretch where only flowing audio kept it animating, with how often it drew once nothing on screen could still move;
+each stretch where nothing kept it animating, so nothing on screen could move, with how often it drew then;
 the frames after each opening's first note;
 and missed refreshes in each export's first 30 s against the 30 s before it.
 So the measurements #1670 owes need only a session that includes them:

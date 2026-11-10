@@ -30,9 +30,10 @@ submitted after the target anyway) or late GPU.
 
 `--events` reports instead on the moments the editor's own `event` rows mark
 (#1670), across every window and every time the editor was opened:
-- silence: each stretch where only flowing audio kept the editor animating,
-  and from when nothing on screen could still move (the last voice's end plus
-  the Span) how often it drew, against the rate it draws at when animating;
+- still: each stretch where nothing kept the editor animating, so nothing on
+  screen could move, and how often it drew, against the rate it draws at when
+  animating. A transport left stopped reaches one once the last sound has
+  scrolled out of the Span, since silence does not count as audible audio;
 - first note: the frames in the second and a half after the first note of
   each opening, with any stall and the costliest frames;
 - exports: missed refreshes in each export's first 30 s against the 30 s
@@ -52,10 +53,8 @@ from collections import Counter
 
 # baseview's `LINK_SILENCE`: past this, the watchdog draws instead of the link.
 LINK_SILENCE = 0.1
-# A flowing-only stretch shorter than this says nothing about idling.
+# A still stretch shorter than this says little about idling.
 SILENCE_MIN = 60.0
-# Past the Span, for a release's tail to leave the spectrogram as well.
-TAIL = 5.0
 # How long after a first note its late frames are looked for.
 NOTE_AFTER = 1.5
 # How much of an export, and of the time before it, is compared.
@@ -315,43 +314,17 @@ def timeline(evs, end, kind):
 
 
 def report_silence(run, evs, t0):
-    span = next(float(text.split('=')[1]) for _, _, text in evs if text.startswith('open'))
     end = run[-1]['t']
     full = full_rate(run)
-    last_voice, found = None, False
+    found = False
     for start, stop, reasons in timeline(evs, end, 'animating'):
-        if 'voices' in reasons:
-            last_voice = stop
-        if not reasons and stop - start >= SILENCE_MIN:
-            found = True
-            s = stretch(run, start, stop)
-            if s['visible'] < 10:
-                print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s with nothing animating, '
-                      f'but the editor was hidden for nearly all of it')
-                continue
-            fps = s['visible_fps']
-            print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s with nothing animating, '
-                  f'not even flowing audio: drew {fps:.0f} frames/s '
-                  f'over {s["visible"]:.0f} s visible')
-            print('    -> already idles: Q2 is moot' if fps < 30 else
-                  '    -> something other than animation keeps it drawing')
-        if reasons != ['flowing'] or stop - start < SILENCE_MIN:
+        if reasons or stop - start < SILENCE_MIN:
             continue
         found = True
-        # With no voice seen in this opening, a note may have ended just
-        # before it.
-        still = max(start, (last_voice if last_voice is not None else start) + span) + TAIL
-        # Flowing says samples arrive, not that they are audible: this reads
-        # as silence only if the transport was stopped.
-        print(f'  silence {start - t0:.0f}-{stop - t0:.0f} s, only flowing audio animating; '
-              f'still from {still - t0:.0f} s (Span {span:.0f} s), '
-              f'if the transport was stopped rather than playing audio without notes')
-        if stop - still < 10:
-            print('    too short to reach a still picture: leave it stopped longer than the Span')
-            continue
-        s = stretch(run, still, stop)
+        s = stretch(run, start, stop)
+        print(f'  still {start - t0:.0f}-{stop - t0:.0f} s, nothing animating')
         if s['visible'] < 10:
-            print('    the editor was hidden for nearly all of the still part')
+            print('    the editor was hidden for nearly all of it')
             continue
         drawn = s['frames']
         print(f"    drew {s['visible_fps']:.0f} frames/s over {s['visible']:.0f} s visible, "
@@ -362,11 +335,11 @@ def report_silence(run, evs, t0):
               f"{median((fr['gpu_end'] - fr['submitted']) * 1000 for fr in drawn if fr['gpu_end']):.2f} ms"
               f" (medians)")
         if s['visible_fps'] > full / 2:
-            print('    -> draws at full rate with nothing moving: Q2 stands')
+            print('    -> draws at full rate with nothing animating: something else asks for frames')
         elif s['visible_fps'] < 30:
-            print('    -> already idles: Q2 is moot')
+            print('    -> idles at the 20 Hz poll')
     if not found:
-        print(f'  silence: none of {SILENCE_MIN:.0f} s or more')
+        print(f'  still: no stretch of {SILENCE_MIN:.0f} s or more with nothing animating')
 
 
 def report_first_note(run, evs, t0):

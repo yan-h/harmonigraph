@@ -30,7 +30,12 @@ pub const DB_STEP: f32 = 0.5;
 
 /// Power at or below [`DB_FLOOR`] — the many empty buckets of a typical
 /// spectrum, which [`quantize_exact`] answers without reaching for a `log10`.
-const POWER_FLOOR: f32 = 1e-12;
+///
+/// Also what silence MEANS to every picture of the spectrum: the display's
+/// mapping clamps here too, so two buckets at or below it draw the same at any
+/// setting, and a spectrum with nothing above it is one nothing on screen can
+/// tell from another.
+pub const POWER_FLOOR: f32 = 1e-12;
 
 /// Store a bucket's absolute power (as `harmonigraph-analysis::SpectrumAnalyzer`
 /// reports it) on the dB grid.
