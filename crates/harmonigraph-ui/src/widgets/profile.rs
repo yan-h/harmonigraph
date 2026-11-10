@@ -359,7 +359,7 @@ fn shadow_preview(
                 );
                 // The renderer's gain, lifted by text's Spread, and its law.
                 let coverage = (gain * xs[x as usize] * ys[y as usize]).min(1.0);
-                let darkness = harmonigraph_render::shadow_darkness(style.depth, coverage, lattice);
+                let darkness = harmonigraph_render::shadow_darkness(coverage, style.depth, lattice);
                 mesh.colored_vertex(
                     p,
                     egui::Color32::from_black_alpha((255.0 * darkness).round() as u8),

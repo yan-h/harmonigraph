@@ -64,13 +64,13 @@ pub const SHADOW_KEEP_FLOOR: f32 = 1.0 / 1024.0;
 /// How much of the frame a caster at full level takes away, 0..=1, where its
 /// coverage `full` has already been spent through [`GAUSSIAN_GAIN`]: linear in
 /// the depth for the lattice, and in stops down to [`SHADOW_KEEP_FLOOR`] for
-/// the spectral panes.
+/// the spectral panes. Arguments in the shader's order.
 ///
 /// The Rust twin of `local_shadow_transmittance` and `shadow_transmittance` in
 /// common.wgsl at a level of 1, which no needle test can pin as it pins the
 /// constants: an edit to either law owes this one the same edit. The shader
 /// draws with those; the Shadow preview draws with this.
-pub fn shadow_darkness(depth: f32, full: f32, lattice: bool) -> f32 {
+pub fn shadow_darkness(full: f32, depth: f32, lattice: bool) -> f32 {
     let (depth, full) = (depth.clamp(0.0, 1.0), full.clamp(0.0, 1.0));
     if lattice {
         full * depth
@@ -1083,10 +1083,15 @@ pub(crate) mod tests {
 
     #[test]
     fn spectral_darkness_keeps_the_stronger_tails_and_finite_full_darkness() {
-        assert!((shadow_darkness(0.91, 0.3, true) - 0.273).abs() < 1e-5);
-        assert!((shadow_darkness(0.91, 0.3, false) - 0.5144066).abs() < 1e-5);
-        assert_eq!(shadow_darkness(1.0, 0.0, false), 0.0);
+        assert!((shadow_darkness(0.3, 0.91, true) - 0.273).abs() < 1e-5);
+        assert!((shadow_darkness(0.3, 0.91, false) - 0.5144066).abs() < 1e-5);
+        assert_eq!(shadow_darkness(0.0, 1.0, false), 0.0);
         assert_eq!(shadow_darkness(1.0, 1.0, false), 1.0 - SHADOW_KEEP_FLOOR);
+        // Out of range on either input reads as its nearest end, as in the shader.
+        assert_eq!(shadow_darkness(0.5, -0.2, true), 0.0);
+        assert_eq!(shadow_darkness(1.5, 0.5, true), 0.5);
+        assert_eq!(shadow_darkness(-1.0, 0.5, false), 0.0);
+        assert_eq!(shadow_darkness(0.5, 1.5, false), shadow_darkness(0.5, 1.0, false));
     }
 
     /// A shader's `const NAME: T = value;`, as text.
