@@ -1,5 +1,6 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
-use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RenderTrigger, WavWriter, Writer};
+use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, WavWriter, Writer};
+use harmonigraph_ui::RenderTrigger;
 use std::path::Path;
 use std::process::Command;
 

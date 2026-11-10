@@ -41,7 +41,7 @@ An output showing only Tune instances means the scan stopped short, not that the
 - The fresh look is the `Default` of every group in `AppearanceDocument` (`crates/harmonigraph-ui/src/appearance.rs`):
 `ViewConfig` (`crates/harmonigraph-scene/src/view/mod.rs`),
 `SpectrumConfig` (`crates/harmonigraph-ui/src/config.rs`),
-and the video block's `RenderConfig` and `RenderFrame` (`crates/harmonigraph-take/src/render.rs`).
+and the video block's `RenderConfig` and `RenderFrame` (`crates/harmonigraph-ui/src/video.rs`).
 A capture edits each group's `impl Default`, not only `ViewConfig`'s —
 `--rust` prints the view fields alone, so read the other groups off `--appearance`.
 That `impl Default` is also every field's serde fallback (the `persistence-contract` skill), so there is no `default_*` block to keep in step.

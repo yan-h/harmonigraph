@@ -52,7 +52,7 @@ fn interval_bar(
         ParamKey::Seven => current.seven_cents(),
         _ => unreachable!(),
     };
-    let linked = comma_deriving(key, &state.appearance.view);
+    let linked = comma_deriving(key, state.runtime.tempered);
     let hint = match linked {
         Some(comma) => format!(
             "{}: the {} follows {}. Enter an independent value to change the relationship.",
@@ -78,11 +78,7 @@ fn interval_bar(
     }
     if response.changed() {
         let index = ParamKey::TUNING.iter().position(|&k| k == key).unwrap();
-        state.runtime.edit_tuning(
-            &mut state.appearance,
-            params,
-            ConfigEdit::axis(index, tuning::microcents(value)),
-        );
+        state.runtime.edit_tuning(params, ConfigEdit::axis(index, tuning::microcents(value)));
     }
     if response.drag_stopped() {
         params.end_set(key);
@@ -95,14 +91,14 @@ fn temperament_switch(
     params: &dyn ParamBackend,
     comma: tuning::Comma,
 ) {
-    let mut on = state.appearance.view.tempers(comma);
+    let mut on = state.runtime.tempered.has(comma);
     let response = crate::widgets::toggle_switch(ui, &mut on, comma.temperament()).on_hover_text(format!(
         "Link the {} to {} and give equivalent notes the same name. Switching off keeps the current interval. New tuning entries and Learn recognize this relationship automatically.",
         comma.derived_axis_name(), comma.derived_from(),
     ));
     if response.changed() {
         let edit = ConfigEdit::temper(comma, on, live_tuning(state, params));
-        state.runtime.edit_tuning(&mut state.appearance, params, edit);
+        state.runtime.edit_tuning(params, edit);
     }
 }
 
@@ -152,7 +148,7 @@ fn live_tuning(state: &PictureState, params: &dyn ParamBackend) -> harmonigraph_
     }
     let mut tuning = crate::params::tuning_from_params(params);
     for comma in tuning::Comma::ALL {
-        if state.appearance.view.tempers(comma) {
+        if state.runtime.tempered.has(comma) {
             tuning.temper(comma);
         }
     }
@@ -206,8 +202,8 @@ fn tuning_hint(key: ParamKey) -> &'static str {
 
 /// The comma currently deriving this axis, if any. At most one: each comma
 /// derives a different axis.
-fn comma_deriving(key: ParamKey, view: &harmonigraph_scene::ViewConfig) -> Option<tuning::Comma> {
-    tuning::Comma::ALL.into_iter().find(|&c| derived_key(c) == key && view.tempers(c))
+fn comma_deriving(key: ParamKey, tempered: harmonigraph_core::Tempered) -> Option<tuning::Comma> {
+    tuning::Comma::ALL.into_iter().find(|&c| derived_key(c) == key && tempered.has(c))
 }
 
 pub(super) fn tuning_pane(
@@ -233,7 +229,6 @@ pub(super) fn tuning_pane(
                 .clicked()
             {
                 state.runtime.edit_tuning(
-                    &mut state.appearance,
                     params,
                     ConfigEdit {
                         axes: [
@@ -256,7 +251,6 @@ pub(super) fn tuning_pane(
                 .clicked()
             {
                 state.runtime.edit_tuning(
-                    &mut state.appearance,
                     params,
                     ConfigEdit {
                         axes: [
@@ -280,7 +274,6 @@ pub(super) fn tuning_pane(
                 );
             if learn.changed() {
                 state.runtime.edit_tuning(
-                    &mut state.appearance,
                     params,
                     ConfigEdit { learning: Some(learn_active), ..Default::default() },
                 );
@@ -412,11 +405,9 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         policy = policy.derive_keyboard();
     }
     if !policy.is_empty() {
-        state.runtime.edit_tuning(
-            &mut state.appearance,
-            params,
-            ConfigEdit { policy: Some(policy), ..Default::default() },
-        );
+        state
+            .runtime
+            .edit_tuning(params, ConfigEdit { policy: Some(policy), ..Default::default() });
     }
 }
 
@@ -467,7 +458,6 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             );
         if p != before {
             state.runtime.edit_tuning(
-                &mut state.appearance,
                 params,
                 ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
             );
@@ -526,7 +516,6 @@ fn follow_controls(
     context_controls(ui, &mut p, &PolicyConfig::default(), false);
     if p != before {
         state.runtime.edit_tuning(
-            &mut state.appearance,
             params,
             ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
         );

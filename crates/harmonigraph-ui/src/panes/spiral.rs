@@ -934,6 +934,7 @@ fn names(
         &state.appearance.view,
         state.shown(),
         &state.runtime.tuning,
+        state.runtime.tempered,
     );
     // `raster` is the rung of the size ladder the type is cut at and `magnify`
     // the rest of what the band asks for, exactly as the roll's names split

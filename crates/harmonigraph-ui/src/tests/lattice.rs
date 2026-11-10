@@ -167,7 +167,7 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
         ));
     }
 
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    state.picture.runtime.learn_step(&backend);
     let first = backend.sets.borrow().clone();
     assert!(
         first.iter().any(|(k, v)| *k == params::ParamKey::Three && *v == 700.0),
@@ -175,14 +175,14 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
     );
 
     // Same chord again: change detection must suppress further writes.
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    state.picture.runtime.learn_step(&backend);
     assert_eq!(backend.sets.borrow().len(), first.len());
 
     // Disarming clears the memory so re-arming re-learns.
     state.picture.runtime.learn_active = false;
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    state.picture.runtime.learn_step(&backend);
     state.picture.runtime.learn_active = true;
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    state.picture.runtime.learn_step(&backend);
     assert_eq!(backend.sets.borrow().len(), first.len() * 2);
 }
 
@@ -217,8 +217,8 @@ fn learn_enables_meantone_from_a_12tet_triad() {
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
     // 400 = 4·700 − 2400 this triad IS a meantone.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0)]);
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
-    assert!(state.picture.appearance.view.meantone, "a 12-TET triad should engage meantone");
+    state.picture.runtime.learn_step(&backend);
+    assert!(state.picture.runtime.tempered.syntonic, "a 12-TET triad should engage meantone");
 }
 
 #[test]
@@ -226,14 +226,14 @@ fn learn_disables_meantone_from_a_just_triad() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
-    state.picture.appearance.view.meantone = true; // start engaged
+    state.picture.runtime.tempered.syntonic = true; // start engaged
 
     // C + a JUST major third (386.31¢) + G. The just third sits a full
     // syntonic comma below four fifths, so this is not a meantone.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
-    assert!(!state.picture.appearance.view.meantone, "a just third should release meantone");
+    state.picture.runtime.learn_step(&backend);
+    assert!(!state.picture.runtime.tempered.syntonic, "a just third should release meantone");
 }
 
 #[test]
@@ -241,18 +241,18 @@ fn learn_leaves_meantone_unchanged_without_a_third() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
-    state.picture.appearance.view.meantone = true;
+    state.picture.runtime.tempered.syntonic = true;
     // A bare fifth fixes no third, so the meantone flag is left alone.
     hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
-    assert!(state.picture.appearance.view.meantone, "a bare fifth shouldn't change the flag");
+    state.picture.runtime.learn_step(&backend);
+    assert!(state.picture.runtime.tempered.syntonic, "a bare fifth shouldn't change the flag");
 }
 
 /// An unlinked starting point makes each recognition assertion exercise Learn.
 fn unlocked() -> SharedState {
     let mut state = fresh();
-    state.picture.appearance.view.meantone = false;
-    state.picture.appearance.view.marvel = false;
+    state.picture.runtime.tempered.syntonic = false;
+    state.picture.runtime.tempered.septimal_kleisma = false;
     state
 }
 
@@ -287,40 +287,37 @@ fn standalone_edits_recognize_links_and_release_without_a_readout_jump() {
     let mut state = fresh();
     let backend = TuningBackend::default();
     begin_frame(&mut state.picture, &backend, 0.0);
-    state.picture.runtime.edit_tuning(
-        &mut state.picture.appearance,
-        &backend,
-        ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(696.58)),
-    );
+    state
+        .picture
+        .runtime
+        .edit_tuning(&backend, ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(696.58)));
     let linked = state.picture.runtime.tuning;
     for comma in Comma::ALL.into_iter().rev() {
         let edit = ConfigEdit::temper(comma, false, state.picture.runtime.tuning);
-        state.picture.runtime.edit_tuning(&mut state.picture.appearance, &backend, edit);
+        state.picture.runtime.edit_tuning(&backend, edit);
     }
     for frame in 1..4 {
         begin_frame(&mut state.picture, &backend, frame as f64);
-        assert!(!state.picture.appearance.view.meantone);
-        assert!(!state.picture.appearance.view.marvel);
+        assert!(!state.picture.runtime.tempered.syntonic);
+        assert!(!state.picture.runtime.tempered.septimal_kleisma);
         assert!((state.picture.runtime.tuning.five_cents() - linked.five_cents()).abs() < 0.001);
         assert!((state.picture.runtime.tuning.seven_cents() - linked.seven_cents()).abs() < 0.001);
     }
     // A typed same-value entry is new input even though polling cannot see it.
     state.picture.runtime.edit_tuning(
-        &mut state.picture.appearance,
         &backend,
         ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(linked.five_cents())),
     );
-    assert!(state.picture.appearance.view.meantone);
-    assert!(state.picture.appearance.view.marvel);
-    state.picture.runtime.edit_tuning(
-        &mut state.picture.appearance,
-        &backend,
-        ConfigEdit::axis(2, 390_000_000),
-    );
+    assert!(state.picture.runtime.tempered.syntonic);
+    assert!(state.picture.runtime.tempered.septimal_kleisma);
+    state.picture.runtime.edit_tuning(&backend, ConfigEdit::axis(2, 390_000_000));
     begin_frame(&mut state.picture, &backend, 4.0);
-    assert!(!state.picture.appearance.view.meantone);
+    assert!(!state.picture.runtime.tempered.syntonic);
     assert_eq!(state.picture.runtime.tuning.five_cents(), 390.0);
-    assert!(state.picture.appearance.view.marvel, "the seventh follows the edited third");
+    assert!(
+        state.picture.runtime.tempered.septimal_kleisma,
+        "the seventh follows the edited third"
+    );
 }
 
 #[test]
@@ -331,15 +328,15 @@ fn external_parameter_changes_only_recognize_related_intervals() {
     let backend = TuningBackend::default();
     begin_frame(&mut state.picture, &backend, 0.0);
     let edit = ConfigEdit::temper(Comma::Syntonic, false, state.picture.runtime.tuning);
-    state.picture.runtime.edit_tuning(&mut state.picture.appearance, &backend, edit);
+    state.picture.runtime.edit_tuning(&backend, edit);
     backend.set(params::ParamKey::Seven, 980.0);
     begin_frame(&mut state.picture, &backend, 1.0);
-    assert!(!state.picture.appearance.view.meantone);
-    assert!(!state.picture.appearance.view.marvel);
+    assert!(!state.picture.runtime.tempered.syntonic);
+    assert!(!state.picture.runtime.tempered.septimal_kleisma);
     backend.set(params::ParamKey::Three, 696.58);
     backend.set(params::ParamKey::Five, 386.32);
     begin_frame(&mut state.picture, &backend, 2.0);
-    assert!(state.picture.appearance.view.meantone);
+    assert!(state.picture.runtime.tempered.syntonic);
 }
 
 #[test]
@@ -350,9 +347,12 @@ fn learn_enables_marvel_from_a_12tet_seventh() {
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
     // seventh, which is 2·700 + 2·400 − 1200 exactly.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0), (70, 0.0)]);
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
-    assert!(state.picture.appearance.view.marvel, "a 12-TET seventh chord tempers out 225/224");
-    assert!(state.picture.appearance.view.meantone, "and 81/80 with it");
+    state.picture.runtime.learn_step(&backend);
+    assert!(
+        state.picture.runtime.tempered.septimal_kleisma,
+        "a 12-TET seventh chord tempers out 225/224"
+    );
+    assert!(state.picture.runtime.tempered.syntonic, "and 81/80 with it");
 }
 
 #[test]
@@ -360,12 +360,15 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
     let mut state = fresh();
     let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
-    state.picture.appearance.view.marvel = true;
+    state.picture.runtime.tempered.septimal_kleisma = true;
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
-    assert!(state.picture.appearance.view.marvel, "a triad shouldn't change the septimal flag");
-    assert!(!state.picture.appearance.view.meantone, "the just third still releases meantone");
+    state.picture.runtime.learn_step(&backend);
+    assert!(
+        state.picture.runtime.tempered.septimal_kleisma,
+        "a triad shouldn't change the septimal flag"
+    );
+    assert!(!state.picture.runtime.tempered.syntonic, "the just third still releases meantone");
 }
 
 #[test]
@@ -377,13 +380,13 @@ fn learn_measures_the_septimal_comma_against_the_derived_third() {
     // inside the meantone tolerance, so the lattice's third becomes 400.0 and
     // the marvel seventh 1000.0 — which the played 1000.6 misses by 0.6¢.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.4), (67, 0.0), (70, 0.6)]);
-    state.picture.runtime.learn_step(&mut state.picture.appearance, &backend);
+    state.picture.runtime.learn_step(&backend);
     assert!(
-        state.picture.appearance.view.meantone,
+        state.picture.runtime.tempered.syntonic,
         "a third 0.4¢ off four fifths is still a meantone"
     );
     assert!(
-        !state.picture.appearance.view.marvel,
+        !state.picture.runtime.tempered.septimal_kleisma,
         "the seventh is 0.6¢ off the derived third's marvel seventh, not 0.2¢ off the played one",
     );
 }

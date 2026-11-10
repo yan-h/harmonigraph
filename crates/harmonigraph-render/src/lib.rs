@@ -1143,7 +1143,8 @@ struct LatticeResources {
     watcher: ShaderWatcher,
 }
 
-/// Compiled lattice pipelines retained by one UI state across editor windows.
+/// Compiled lattice pipelines, and the other panes' (`startup::PanePipelines`),
+/// retained by one UI state across editor windows.
 /// Only instance, device and target format key this slot: camera, pane dimensions,
 /// elapsed hidden time and drawing history do not affect compilation. The
 /// cached value contains no pane targets, ink history, font atlas or timer.
@@ -1154,38 +1155,47 @@ pub struct LatticePipelineCache {
     // existing rebuild-on-open behavior rather than caching its baked source.
     #[cfg(not(feature = "hot-reload"))]
     // wgpu compares native devices by ID, and those IDs restart per instance.
-    compiled: std::sync::Mutex<Option<(wgpu::Instance, wgpu::Device, CompiledLatticeResources)>>,
+    compiled: std::sync::Mutex<Option<(wgpu::Instance, wgpu::Device, startup::Compiled)>>,
     #[cfg(not(feature = "hot-reload"))]
     startup: std::sync::Mutex<startup::Initialization>,
 }
 
 impl LatticePipelineCache {
-    fn resources(
+    /// Put this window's lattice resources into `resources`, replacing any
+    /// there, and every other pane's programs wherever that pane has none yet,
+    /// so the first frame to draw a note, a halo or a name builds no pipeline.
+    /// Each pane's own buffers and targets still start empty per window.
+    fn install(
         &self,
         instance: &wgpu::Instance,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-    ) -> LatticeResources {
+        resources: &mut CallbackResources,
+    ) {
         #[cfg(feature = "hot-reload")]
         {
+            // Every pane keeps building its own on first use, against the
+            // shader build it can see.
             let _ = instance;
-            LatticeResources::new(device, queue, format)
+            resources.insert(LatticeResources::new(device, queue, format));
         }
         #[cfg(not(feature = "hot-reload"))]
         {
             let mut cached = self.compiled.lock().expect("lattice pipeline cache poisoned");
             if cached.as_ref().is_none_or(|(owner_instance, owner, r)| {
-                owner_instance != instance || owner != device || r.target_format != format
+                owner_instance != instance || owner != device || r.lattice.target_format != format
             }) {
-                let compiled = CompiledLatticeResources::new(device, format);
+                let compiled = startup::Compiled::new(device, format);
                 *cached = Some((instance.clone(), device.clone(), compiled));
             }
-            LatticeResources::from_compiled(
-                cached.as_ref().expect("initialized above").2.clone(),
+            let compiled = &cached.as_ref().expect("initialized above").2;
+            compiled.panes.adopt(device, queue, resources);
+            resources.insert(LatticeResources::from_compiled(
+                compiled.lattice.clone(),
                 device,
                 queue,
-            )
+            ));
         }
     }
 }

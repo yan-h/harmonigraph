@@ -43,10 +43,7 @@ pub use configuration::ConfigurationRecord;
 pub mod render;
 
 pub use params::{ParamKey, MAX_TUNING_OFFSET};
-pub use render::{
-    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, SpectrogramRender,
-    VideoEncoder, STOP_BAR_RANGE, TAIL_RANGE,
-};
+pub use render::RenderProgress;
 
 use std::io::{BufRead, Write};
 

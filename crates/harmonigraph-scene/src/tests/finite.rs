@@ -99,8 +99,6 @@ fn poisoned_view() -> ViewConfig {
         mark_delay: nan,
         plus_arm: nan,
         plus_taper: nan,
-        meantone: base.meantone,
-        marvel: base.marvel,
         render_scale: nan,
         spiral_bloom: nan,
         glow_reach: nan,

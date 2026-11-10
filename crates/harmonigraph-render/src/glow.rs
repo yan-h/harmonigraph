@@ -138,8 +138,21 @@ uniform_group! {
     }
 }
 
-/// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
-struct GlowResources {
+/// GPU objects cached across frames in egui-wgpu's `CallbackResources`: the
+/// programs, which the editor's loading stage builds (`crate::startup`), and
+/// the one copy's chain.
+pub(crate) struct GlowResources {
+    pipelines: GlowPipelines,
+    /// The one copy's chain. Built on the first frame that asks for a halo — a
+    /// strength of 0 pays for none of it — and rebuilt when the rect's device
+    /// size changes.
+    pane: Option<GlowPane>,
+}
+
+/// The halo's programs, layouts and sampler: keyed on the device and target
+/// format alone, so one build serves every window the editor opens.
+#[derive(Clone)]
+pub(crate) struct GlowPipelines {
     /// The marks again, offscreen — the only geometry this callback owns.
     disc_pipeline: wgpu::RenderPipeline,
     locals_layout: wgpu::BindGroupLayout,
@@ -161,10 +174,6 @@ struct GlowResources {
     add_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
-    /// The one copy's chain. Built on the first frame that asks for a halo — a
-    /// strength of 0 pays for none of it — and rebuilt when the rect's device
-    /// size changes.
-    pane: Option<GlowPane>,
 }
 
 /// The picture to bloom and the lattice's own [`crate::BloomChain`] over it:
@@ -207,6 +216,23 @@ const INITIAL_DOT_CAPACITY: usize = 64;
 
 impl GlowResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        GlowResources { pipelines: GlowPipelines::new(device, target_format), pane: None }
+    }
+
+    /// Hand a renderer the loading stage's build, unless it holds one already;
+    /// replacing a stale one stays with the callback.
+    #[cfg(not(feature = "hot-reload"))]
+    pub(crate) fn adopt(pipelines: &GlowPipelines, resources: &mut CallbackResources) {
+        if resources.get::<GlowResources>().is_none() {
+            resources.insert(GlowResources { pipelines: pipelines.clone(), pane: None });
+        }
+    }
+}
+
+impl GlowPipelines {
+    pub(crate) fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        #[cfg(test)]
+        crate::startup::record_build("glow");
         let locals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("glow_locals_bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -272,7 +298,7 @@ impl GlowResources {
                 None,
             )
         };
-        GlowResources {
+        GlowPipelines {
             disc_pipeline: create_disc_pipeline(device, target_format, &locals_layout),
             locals_layout,
             bright_pipeline: filter("fs_bright"),
@@ -301,7 +327,6 @@ impl GlowResources {
                 ..Default::default()
             }),
             target_format,
-            pane: None,
         }
     }
 }
@@ -311,7 +336,7 @@ impl GlowPane {
     /// and quarter of THAT, so the halo is a constant share of the pane's own
     /// screen size — the rule the lattice's chain follows, which is what makes
     /// one bloom strength mean the same thing in every picture that grows one.
-    fn new(device: &wgpu::Device, resources: &GlowResources, size: [u32; 2]) -> Self {
+    fn new(device: &wgpu::Device, resources: &GlowPipelines, size: [u32; 2]) -> Self {
         let ([hw, hh], _) = crate::bloom_sizes(size);
         let discs_view = crate::gpu_memory::texture(
             device,
@@ -476,14 +501,15 @@ impl CallbackTrait for GlowCallback {
         let wants = self.strength > 0.0 && !self.dots.is_empty() && size.iter().all(|&d| d > 0);
 
         // Nothing to light and nothing built: the pipelines are not built
-        // either, so a reader who never turns the bloom on never pays for its
-        // five pipelines.
+        // either. The editor's loading stage has built them already, off this
+        // thread (`crate::startup`); this spares a renderer it did not prepare,
+        // such as an export's, five pipelines it may never draw with.
         if !wants && callback_resources.get::<GlowResources>().is_none() {
             return Vec::new();
         }
         let recreate = callback_resources
             .get::<GlowResources>()
-            .is_none_or(|r| r.target_format != self.target_format);
+            .is_none_or(|r| r.pipelines.target_format != self.target_format);
         if recreate {
             callback_resources.insert(GlowResources::new(device, self.target_format));
         }
@@ -505,26 +531,18 @@ impl CallbackTrait for GlowCallback {
             }
             return Vec::new();
         }
-        if resources.pane.is_none() {
-            // Built and then stored, rather than assigned in one expression:
-            // the constructor reads the layouts and the sampler beside the
-            // field it lands in.
-            let pane = GlowPane::new(device, resources, size);
-            resources.pane = Some(pane);
-        }
-
         // Split apart so the pane can be borrowed mutably while the pipelines
         // beside it are still readable.
-        let GlowResources {
+        let GlowResources { pipelines, pane } = resources;
+        let pane = pane.get_or_insert_with(|| GlowPane::new(device, pipelines, size));
+        let GlowPipelines {
             disc_pipeline,
             bright_pipeline,
             downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
-            pane,
             ..
-        } = resources;
-        let pane = pane.as_mut().expect("built above when missing");
+        } = pipelines;
         pane.chain.set_owner_size(queue, self.rect.size() * ppp);
 
         if self.dots.len() > pane.capacity {
@@ -624,7 +642,7 @@ impl CallbackTrait for GlowCallback {
             0.0,
             1.0,
         );
-        render_pass.set_pipeline(&resources.add_pipeline);
+        render_pass.set_pipeline(&resources.pipelines.add_pipeline);
         render_pass.set_bind_group(0, &pane.add_bind_group, &[]);
         render_pass.draw(0..4, 0..1);
     }

@@ -53,13 +53,19 @@ impl CallbackTrait for LatticeCallback {
         if recreate {
             // The plugin publishes the instance that owns this device. Other
             // shells keep their existing window-owned resource lifetime.
-            let cached =
-                self.pipeline_cache.as_ref().zip(callback_resources.get::<wgpu::Instance>());
-            let resources = cached.map_or_else(
-                || LatticeResources::new(device, queue, self.target_format),
-                |(cache, instance)| cache.resources(instance, device, queue, self.target_format),
-            );
-            callback_resources.insert(resources);
+            let instance = callback_resources.get::<wgpu::Instance>().cloned();
+            match self.pipeline_cache.as_ref().zip(instance) {
+                Some((cache, instance)) => {
+                    cache.install(&instance, device, queue, self.target_format, callback_resources)
+                }
+                None => {
+                    callback_resources.insert(LatticeResources::new(
+                        device,
+                        queue,
+                        self.target_format,
+                    ));
+                }
+            }
         }
         let resources: &mut LatticeResources =
             callback_resources.get_mut().expect("inserted above when missing");

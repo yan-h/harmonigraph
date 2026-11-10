@@ -387,8 +387,26 @@ fn bloom_notes_size(size: [u32; 2]) -> [u32; 2] {
     crate::bloom_sizes(size).0
 }
 
-/// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
-struct RollResources {
+/// GPU objects cached across frames in egui-wgpu's `CallbackResources`: the
+/// programs, which the editor's loading stage builds ahead of the first note
+/// (`crate::startup`), and every pane's own buffers and targets.
+pub(crate) struct RollResources {
+    pipelines: RollPipelines,
+    /// Every roll this renderer has drawn, by pane id, and never swept, like
+    /// the lattice's panes. An id is a surface — the docked pane, the
+    /// Render preview, one placement of an export — so the map holds as many
+    /// entries as there are surfaces, and it goes with the `CallbackResources`
+    /// it lives in when the editor window closes or the export ends. Until
+    /// then a hidden tab or a closed preview keeps its buffers, bloom chain
+    /// and cut targets, so switching back to it rebuilds nothing, and a rest
+    /// that adds no callback loses nothing either.
+    panes: HashMap<u64, RollPane>,
+}
+
+/// The roll's programs, layouts and sampler: keyed on the device and target
+/// format alone, so one build serves every window the editor opens.
+#[derive(Clone)]
+pub(crate) struct RollPipelines {
     /// The note layers, in the order they are drawn: every surround, then
     /// every body over them — see the head of roll.wgsl for why the order is
     /// the whole point, and what the second draw costs. The surrounds go into a
@@ -427,15 +445,6 @@ struct RollResources {
     target_format: wgpu::TextureFormat,
     #[cfg(feature = "hot-reload")]
     generation: u64,
-    /// Every roll this renderer has drawn, by pane id, and never swept, like
-    /// the lattice's panes. An id is a surface — the docked pane, the
-    /// Render preview, one placement of an export — so the map holds as many
-    /// entries as there are surfaces, and it goes with the `CallbackResources`
-    /// it lives in when the editor window closes or the export ends. Until
-    /// then a hidden tab or a closed preview keeps its buffers, bloom chain
-    /// and cut targets, so switching back to it rebuilds nothing, and a rest
-    /// that adds no callback loses nothing either.
-    panes: HashMap<u64, RollPane>,
 }
 
 struct RollPane {
@@ -562,6 +571,25 @@ pub(super) fn timing_pipeline_startup(
 }
 
 impl RollResources {
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        Self::from_pipelines(RollPipelines::new(device, target_format))
+    }
+
+    fn from_pipelines(pipelines: RollPipelines) -> Self {
+        RollResources { pipelines, panes: HashMap::new() }
+    }
+
+    /// Hand a renderer the loading stage's build, unless it holds one already;
+    /// replacing a stale one stays with the callback.
+    #[cfg(not(feature = "hot-reload"))]
+    pub(crate) fn adopt(pipelines: &RollPipelines, resources: &mut CallbackResources) {
+        if resources.get::<RollResources>().is_none() {
+            resources.insert(Self::from_pipelines(pipelines.clone()));
+        }
+    }
+}
+
+impl RollPipelines {
     fn is_stale(&self, target_format: wgpu::TextureFormat) -> bool {
         #[cfg(feature = "hot-reload")]
         if self.generation != crate::reload::generation() {
@@ -570,7 +598,9 @@ impl RollResources {
         self.target_format != target_format
     }
 
-    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        #[cfg(test)]
+        crate::startup::record_build("roll");
         let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -657,7 +687,7 @@ impl RollResources {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        RollResources {
+        RollPipelines {
             // The surround reaches past its note by the cut's reach, and reads
             // the holdout.
             surround: crate::surround::surround_pipeline(
@@ -698,7 +728,6 @@ impl RollResources {
             target_format,
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
-            panes: HashMap::new(),
         }
     }
 }
@@ -1011,7 +1040,7 @@ impl CallbackTrait for RollCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let recreate = callback_resources
             .get::<RollResources>()
-            .is_none_or(|r| r.is_stale(self.target_format));
+            .is_none_or(|r| r.pipelines.is_stale(self.target_format));
         if recreate {
             callback_resources.insert(RollResources::new(device, self.target_format));
         }
@@ -1084,21 +1113,24 @@ impl CallbackTrait for RollCallback {
         // Split apart so the pane can be borrowed mutably while the pipelines
         // and layouts beside it are still readable.
         let RollResources {
-            light_pipeline,
-            layout,
-            surround: surround_pipeline,
-            surround_composite,
-            holdout_pipeline,
-            holdout_layout,
-            bright_pipeline,
-            downsample_pipeline,
-            blur_h_pipeline,
-            blur_v_pipeline,
-            filter_layout,
-            bloom_layout,
-            sampler,
+            pipelines:
+                RollPipelines {
+                    light_pipeline,
+                    layout,
+                    surround: surround_pipeline,
+                    surround_composite,
+                    holdout_pipeline,
+                    holdout_layout,
+                    bright_pipeline,
+                    downsample_pipeline,
+                    blur_h_pipeline,
+                    blur_v_pipeline,
+                    filter_layout,
+                    bloom_layout,
+                    sampler,
+                    ..
+                },
             panes,
-            ..
         } = resources;
         let shared = RollBloomShared { notes_layout: layout, filter_layout, bloom_layout, sampler };
         let pane = RollPane::get(panes, device, layout, self.pane_id);
@@ -1266,7 +1298,7 @@ impl CallbackTrait for RollCallback {
                 0.0,
                 1.0,
             );
-            holdout.surround.paint(render_pass, &resources.surround_composite);
+            holdout.surround.paint(render_pass, &resources.pipelines.surround_composite);
         }
 
         // Draw against the WHOLE surface rather than the viewport egui-wgpu
@@ -1306,7 +1338,7 @@ impl CallbackTrait for RollCallback {
                 false
             }
         };
-        render_pass.set_pipeline(&resources.core_pipeline);
+        render_pass.set_pipeline(&resources.pipelines.core_pipeline);
         let (start, tail_rect) = self.clipped_tail;
         let start = start.min(pane.count);
         if start > 0 && set_clip(render_pass, info.clip_rect) {
@@ -1345,7 +1377,7 @@ impl CallbackTrait for RollCallback {
                 0.0,
                 1.0,
             );
-            render_pass.set_pipeline(&resources.bloom_pipeline);
+            render_pass.set_pipeline(&resources.pipelines.bloom_pipeline);
             render_pass.set_bind_group(0, &bloom.add_bind_group, &[]);
             render_pass.draw(0..4, 0..1);
         }
@@ -1353,7 +1385,7 @@ impl CallbackTrait for RollCallback {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
 pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {

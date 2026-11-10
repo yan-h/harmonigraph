@@ -3,8 +3,7 @@
 //! — [`SpectrumConfig`] carries a container-level `default`, so a key missing
 //! from a blob comes back at the fresh-install value and costs only itself.
 //!
-//! The video render settings persist alongside these but live in
-//! `harmonigraph-take`, because a take carries the frame it was composed at.
+//! The video render settings persist alongside these, in `video`.
 
 use harmonigraph_scene::Gradient;
 pub use harmonigraph_scene::SCALE_BAR_RANGE;

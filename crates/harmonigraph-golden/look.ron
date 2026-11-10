@@ -87,8 +87,6 @@
         mark_delay: 0.1297724,
         plus_arm: 0.31286633,
         plus_taper: 0.20286632,
-        meantone: true,
-        marvel: true,
         render_scale: 1.0818691,
         spiral_bloom: 0.6339277,
         glow_reach: 6.513377,

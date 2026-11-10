@@ -441,7 +441,12 @@ pub(crate) fn spectral_pane(
     // for it, instead of recoloring the note and costing you the one thing the
     // ribbon's color is for. See `PictureState::shown` (crate::state) for why
     // this reads `shown` rather than the reach.
-    let mut namer = names::Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
+    let mut namer = names::Namer::new(
+        &state.appearance.view,
+        state.shown(),
+        &state.runtime.tuning,
+        state.runtime.tempered,
+    );
     if show_spectrum && split > 0.0 {
         let mut voices: Vec<&harmonigraph_core::Voice> =
             state.runtime.tracker.voices().filter(|v| !namer.shows_node(v.pitch_class)).collect();
