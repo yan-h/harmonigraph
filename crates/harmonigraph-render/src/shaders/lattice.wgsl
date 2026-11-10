@@ -489,7 +489,7 @@ struct Instance {
     @location(10) scale: f32,
     // How much of the audio ring this node wears, 0..1: the gate the view sets
     // answered against this node's own wedges, carried on the note Fade and
-    // floored by the node's envelope. The CPU decides it
+    // floored by the node's presence with Opacity. The CPU decides it
     // (harmonigraph_scene's RingGate and RingFade, against the analyzer's own
     // Level window — a reading this shader never gets, u.spectrum_color being
     // the colour one), so the ring's annulus is the layer's own off switch

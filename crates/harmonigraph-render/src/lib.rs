@@ -607,8 +607,8 @@ struct GpuInstance {
     /// it (`NodeInstance::scale`).
     scale: f32,
     /// How much of the audio ring this node wears, 0..=1: the gate's answer for
-    /// its wedges carried on the note Fade, floored by the node's own envelope
-    /// (`NodeInstance::audio_ring`).
+    /// its wedges carried on the note Fade, floored by the node's own presence
+    /// with Opacity (`NodeInstance::audio_ring`).
     ///
     /// A DECISION already taken and not the node's own peak level with the gate
     /// beside it in the uniforms, though there is a free slot there for one:

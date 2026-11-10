@@ -619,7 +619,7 @@ pub struct NodeInstance {
     /// is, which row of the frame's ink strip is this node's, and how much of
     /// this frame's reading the pair of them take (see [`GlowStep`]).
     ///
-    /// [`NodeMotion::step`] seeds the current presence on the snapshot row
+    /// [`NodeMotion::step`] seeds the current glow target on the snapshot row
     /// assigned by [`derive_scene`]. The shell's pass
     /// (`panes::glow_fade` in harmonigraph-ui) is what replaces it with a
     /// level carried on the Glow attack and release, a row that holds still

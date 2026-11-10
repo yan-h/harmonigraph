@@ -1751,7 +1751,7 @@ mod tests {
     /// through brightnesses neither endpoint names — close enough to look
     /// right, and a third answer the setting does not give.
     ///
-    /// The level arrives as a node's presence, which is a float out of a
+    /// The level arrives as a node's drawn level, which is a float out of a
     /// derive, so the ends of the range and a value off it are held here too: a
     /// NaN in a mix is every label on the pane rather than the one node it came
     /// from.
@@ -1796,7 +1796,7 @@ mod tests {
     /// two ranks of grey `label_ink` exists to refuse.
     ///
     /// Sampled through the derive rather than off a hand-built node, because
-    /// which clock the crossing runs on is the whole claim: `presence_with_opacity` is
+    /// which clock the crossing runs on is the whole claim: `drawn_level` is
     /// the ramp the node's own light rides, so there is no second time constant to
     /// set and none that can drift from the Fade.
     ///
