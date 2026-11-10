@@ -43,7 +43,8 @@ fn stacked_name(
     (batch, reach, out)
 }
 
-/// Every label the lattice pane draws for `scene`, in one batch, at `ppp`.
+/// Every label the lattice pane draws for `scene`, in one batch, at `ppp`,
+/// spelled under the links a fresh runtime opens with.
 fn pane_labels(
     scene: &harmonigraph_scene::Scene,
     view: &harmonigraph_scene::ViewConfig,
@@ -51,7 +52,8 @@ fn pane_labels(
 ) -> crate::text::TextBatch {
     let mut batch = crate::text::TextBatch::default();
     let _ = probe::frame_full(&probe::themed_at(ppp), PANE.size(), |ui| {
-        panes::lattice::draw_node_labels(ui, PANE, scene, view, &[], &mut batch);
+        let linked = harmonigraph_core::configuration::TuningModes::default().tempered;
+        panes::lattice::draw_node_labels(ui, PANE, scene, view, linked, &[], &mut batch);
     });
     batch
 }
@@ -79,6 +81,7 @@ fn lattice_labels_in(
             rect,
             scene,
             &state.picture.appearance.view,
+            state.picture.runtime.tempered,
             &[],
             &mut batch,
         );

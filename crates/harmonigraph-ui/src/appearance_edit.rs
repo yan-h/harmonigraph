@@ -19,6 +19,10 @@ pub(crate) const APPEARANCE_SHORTCUTS: &[egui::KeyboardShortcut] = &[
     egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y),
 ];
 
+/// The appearance as undo and the slots hold it: the document's camera, view
+/// and spectrum, with the fields the host owns
+/// ([`AppearanceDocument::copy_host_owned`]) reset on capture and the live
+/// document's kept on apply. Output settings are not part of a look.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Look {
@@ -29,35 +33,27 @@ pub(crate) struct Look {
 
 impl Look {
     pub(crate) fn capture(appearance: &AppearanceDocument) -> Self {
-        let mut view = appearance.view.clone();
-        Self::preserve_external(&mut view, &ViewConfig::default());
-        Self {
-            camera: Camera {
-                projection: appearance.camera.projection,
-                cabinet_angle: appearance.camera.cabinet_angle,
-                cabinet_scale: appearance.camera.cabinet_scale,
-                ..Default::default()
-            },
-            view,
+        let mut look = Self {
+            camera: appearance.camera,
+            view: appearance.view.clone(),
             spectrum: appearance.spectrum,
-        }
-    }
-
-    fn preserve_external(to: &mut ViewConfig, from: &ViewConfig) {
-        to.center_fives = from.center_fives;
-        to.center_threes = from.center_threes;
-        to.meantone = from.meantone;
-        to.marvel = from.marvel;
+        };
+        AppearanceDocument::copy_host_owned(
+            (&mut look.camera, &mut look.view),
+            (&Camera::default(), &ViewConfig::default()),
+        );
+        look
     }
 
     pub(crate) fn apply(&self, appearance: &mut AppearanceDocument) {
-        let mut view = self.view.clone();
-        Self::preserve_external(&mut view, &appearance.view);
-        appearance.camera.projection = self.camera.projection;
-        appearance.camera.cabinet_angle = self.camera.cabinet_angle;
-        appearance.camera.cabinet_scale = self.camera.cabinet_scale;
-        appearance.view = view;
-        appearance.spectrum = self.spectrum;
+        let mut look = self.clone();
+        AppearanceDocument::copy_host_owned(
+            (&mut look.camera, &mut look.view),
+            (&appearance.camera, &appearance.view),
+        );
+        appearance.camera = look.camera;
+        appearance.view = look.view;
+        appearance.spectrum = look.spectrum;
     }
 }
 
@@ -695,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_preserves_incoming_camera_tuning_and_output() {
+    fn undo_preserves_incoming_camera_and_output() {
         let mut appearance = AppearanceDocument::default();
         let mut history = History::default();
         let before = Look::capture(&appearance);
@@ -704,18 +700,43 @@ mod tests {
         history.observe(before, &appearance, true);
         appearance.camera.distance = 7.0;
         appearance.view.center_fives = 12;
-        let tuning = (appearance.view.meantone, appearance.view.marvel);
-        appearance.view.meantone = !tuning.0;
-        appearance.view.marvel = !tuning.1;
         appearance.render.short_edge = 1920;
         history.finish(&appearance);
         history.undo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, original);
         assert_eq!(appearance.camera.distance, 7.0);
         assert_eq!(appearance.view.center_fives, 12);
-        assert_eq!((appearance.view.meantone, appearance.view.marvel,), (!tuning.0, !tuning.1));
         assert_eq!(appearance.render.short_edge, 1920);
     }
+    /// A look leaves out exactly what the host's camera movement writes:
+    /// capture cannot see anything `set_camera_movement` sets, and apply hands
+    /// all of it back untouched, while every other camera field rides along.
+    /// A field added to the host's movement and not to `copy_host_owned` makes
+    /// the first assertion fail.
+    #[test]
+    fn a_look_resets_and_keeps_exactly_the_host_owned_fields() {
+        let mut still = AppearanceDocument::default();
+        still.camera.projection = harmonigraph_scene::Projection::Cabinet;
+        still.camera.cabinet_scale = 0.6;
+        still.spectrum.attack = 0.2;
+        let mut moved = still.clone();
+        moved.set_camera_movement([1.1, -0.3, 9.0, 12.25, -3.75]);
+        assert_ne!(moved.camera_movement(), still.camera_movement());
+        assert_eq!(Look::capture(&moved), Look::capture(&still), "capture saw the host camera");
+
+        let mut other = still.clone();
+        other.camera.cabinet_scale = 0.3;
+        assert_ne!(Look::capture(&other), Look::capture(&still), "the rest of the camera rides");
+        let movement = moved.camera_movement();
+        let (target, centers) =
+            (moved.camera.target, (moved.view.center_fives, moved.view.center_threes));
+        Look::capture(&other).apply(&mut moved);
+        assert_eq!(moved.camera_movement(), movement);
+        assert_eq!(moved.camera.target, target);
+        assert_eq!((moved.view.center_fives, moved.view.center_threes), centers);
+        assert_eq!(Look::capture(&moved), Look::capture(&other));
+    }
+
     #[test]
     fn queued_slot_survives_undo_slot_edits_and_incoming_camera() {
         use crate::params::{ParamBackend, ParamKey};

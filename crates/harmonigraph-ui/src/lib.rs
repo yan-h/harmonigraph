@@ -413,7 +413,7 @@ pub fn root_ui(
 /// last frame's tuning against never-pruned voices.
 pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64) {
     state.appearance.sync_camera(params);
-    state.runtime.advance(&mut state.appearance, params, now);
+    state.runtime.advance(&state.appearance, params, now);
 
     // Rotated here so the window belongs to a whole frame rather than to a
     // point in the dock's draw order: the lattice publishes as it builds, and

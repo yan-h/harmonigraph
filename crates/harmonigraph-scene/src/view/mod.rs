@@ -28,7 +28,7 @@ use crate::{
     GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
     NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
 };
-use harmonigraph_core::{coords, Comma, Envelope, LatticePos, Tempered};
+use harmonigraph_core::{coords, Envelope, LatticePos};
 
 /// What every text-size bar offers, and so what a persisted scale is fit to.
 /// One range for the three of them: they are the same control over three kinds
@@ -720,13 +720,6 @@ pub struct ViewConfig {
     ///
     /// A cross's shadow follows the coverage this fades.
     pub plus_taper: f32,
-    /// Link the major third to four fifths and spell syntonic-comma equivalents
-    /// identically. New tuning entries and fully evidenced Learn results
-    /// recognize this relationship; switching off keeps the displayed interval.
-    pub meantone: bool,
-    /// Link the harmonic seventh to two fifths plus two thirds. Its name matches
-    /// the augmented sixth: A♯-2 from C, or plain A♯ with Meantone linked too.
-    pub marvel: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -1056,22 +1049,6 @@ impl ViewConfig {
     /// origin, and what the reach is centered on.
     pub fn center(&self) -> LatticePos {
         LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
-    }
-
-    /// The commas being tempered out, as the set a name is spelled against
-    /// ([`LatticePos::respell`]). The flags are stored one per comma so a
-    /// saved project keeps reading, and this is where they become the one
-    /// value every naming path takes.
-    pub fn tempered(&self) -> Tempered {
-        Tempered { syntonic: self.meantone, septimal_kleisma: self.marvel }
-    }
-
-    /// Whether one comma is being tempered out.
-    pub fn tempers(&self, comma: Comma) -> bool {
-        match comma {
-            Comma::Syntonic => self.meantone,
-            Comma::SeptimalKleisma => self.marvel,
-        }
     }
 
     /// Fit a deserialized view to what its controls can actually produce.
@@ -1513,11 +1490,6 @@ impl Default for ViewConfig {
             // About two thirds of each arm is taper, so the marker arrives at
             // a fine point rather than carrying its width to the tip.
             plus_taper: 0.202_866_32,
-            // The fresh 12-TET tuning satisfies both comma identities, so the
-            // spelling locks open on the tuning's own equivalences rather than
-            // showing duplicate comma spellings.
-            meantone: true,
-            marvel: true,
             // A slight supersample, as captured from the DAW on 2026-10-07.
             render_scale: 1.081_869_1,
             // The lattice's bloom strength (`bloom_strength`, retired into

@@ -779,7 +779,8 @@ impl PictureState {
     /// Install an already normalized appearance at a load boundary.
     pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
         self.appearance = appearance;
-        // Restore saved links verbatim alongside the next parameter snapshot.
+        // A load boundary: adopt the next parameter snapshot verbatim rather
+        // than as an edit, so it cannot rejudge the runtime's links.
         self.runtime.restore_configuration = true;
     }
     /// Drop everything that belongs to a particular egui context. Shells MUST
