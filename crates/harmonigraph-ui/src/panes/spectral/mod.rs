@@ -476,14 +476,20 @@ pub(crate) fn spectral_pane(
     //
     // Laid out once for this frame and read again by the note names below, so
     // a name is written on the ribbon drawn here rather than on one worked
-    // out again beside it. Taken out first: the layout borrows the picture
+    // out again beside it — laid out as far past the far edge as a name can
+    // still reach back from. Taken out first: the layout borrows the picture
     // for as long as the names need it.
     let thinning = state.surfaces.note_names.remove(&surface);
+    let lookback =
+        show_history.then(|| names::lookback(&painter, &cfg, &axes, text.names)).flatten();
     let ribbons = show_history
-        .then(|| roll::layout(&painter, &axes, &scale, state, split, now, point_scale))
+        .then(|| {
+            let lookback = lookback.unwrap_or(0.0);
+            roll::layout(&painter, axes, scale, state, split, now, point_scale, lookback)
+        })
         .flatten();
     if let Some(ribbons) = &ribbons {
-        roll::draw_roll(&painter, &axes, &scale, state, ribbons, surface);
+        roll::draw_roll(&painter, state, ribbons, surface);
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn after
@@ -589,20 +595,10 @@ pub(crate) fn spectral_pane(
     // Each note's own name, over the ribbon it belongs to. In the same batch
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
-    if show_history {
+    if let (Some(ribbons), Some(_)) = (&ribbons, lookback) {
         let mut thinning = thinning.unwrap_or_default();
-        let note_names = names::plan(
-            &painter,
-            state,
-            &axes,
-            &scale,
-            split,
-            now,
-            text.names,
-            ribbons.as_ref(),
-            &mut namer,
-            &mut thinning,
-        );
+        let note_names =
+            names::plan(&painter, state, ribbons, text.names, &mut namer, &mut thinning);
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
     }

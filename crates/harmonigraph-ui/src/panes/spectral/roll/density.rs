@@ -10,7 +10,7 @@ use std::collections::HashMap;
 pub(super) const GAP_PT: f64 = 2.0;
 type Segment = ((f64, f32), (f64, f32));
 
-pub(super) struct Ribbon<'a> {
+pub(crate) struct Ribbon<'a> {
     pub notes: Vec<&'a RollNote>,
     pub start: f64,
     pub stop: f64,
@@ -97,13 +97,6 @@ impl<'a> Ribbon<'a> {
     }
 }
 
-/// A note's ribbon with no repeat beside it, `(start, stop)`: its own times,
-/// the start floored to `minimum` before the stop.
-pub(super) fn alone(note: &RollNote, now: f64, minimum: f64) -> (f64, f64) {
-    let stop = note.stop(now);
-    (note.start.min(stop - minimum), stop)
-}
-
 /// Input is in onset order; paint runs retain that order across voices.
 /// The protected cores make both cuts around a middle note compatible.
 pub(super) fn layout<'a>(
@@ -115,7 +108,8 @@ pub(super) fn layout<'a>(
     let mut out: Vec<Ribbon<'a>> = Vec::with_capacity(notes.len());
     let mut previous: HashMap<VoiceKey, usize> = HashMap::new();
     for (order, &note) in notes.iter().enumerate() {
-        let (start, stop) = alone(note, now, minimum);
+        let stop = note.stop(now);
+        let start = note.start.min(stop - minimum);
         let center = (start + stop) * 0.5;
         let mut ribbon = Ribbon {
             notes: vec![note],
