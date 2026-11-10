@@ -57,19 +57,19 @@ pub const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
 pub const GAUSSIAN_GAIN: f32 = 2.5;
 
 /// What the spectral Shadow depth bottoms out at: the share of the frame left
-/// under a caster's solid middle at the top of the bar, ten stops down.
-/// `SHADOW_KEEP_FLOOR` in common.wgsl, pinned beside [`GAUSSIAN_GAIN`].
-pub const SHADOW_KEEP_FLOOR: f32 = 1.0 / 1024.0;
+/// under a caster's solid middle at the top of the bar, ten stops down. The
+/// shader's `SHADOW_KEEP_FLOOR`, held to it through [`shadow_darkness`].
+const SHADOW_KEEP_FLOOR: f32 = 1.0 / 1024.0;
 
 /// How much of the frame a caster at full level takes away, 0..=1, where its
 /// coverage `full` has already been spent through [`GAUSSIAN_GAIN`]: linear in
 /// the depth for the lattice, and in stops down to [`SHADOW_KEEP_FLOOR`] for
 /// the spectral panes. Arguments in the shader's order.
 ///
-/// The Rust twin of `local_shadow_transmittance` and `shadow_transmittance` in
-/// common.wgsl at a level of 1, which no needle test can pin as it pins the
-/// constants: an edit to either law owes this one the same edit. The shader
-/// draws with those; the Shadow preview draws with this.
+/// `local_shadow_transmittance` and `shadow_transmittance` in common.wgsl at a
+/// level of 1, for the Shadow preview to draw with on the CPU;
+/// `shadow_darkness_is_the_shaders_law` runs both on the GPU and holds this to
+/// them.
 pub fn shadow_darkness(full: f32, depth: f32, lattice: bool) -> f32 {
     let (depth, full) = (depth.clamp(0.0, 1.0), full.clamp(0.0, 1.0));
     if lattice {
@@ -1070,15 +1070,11 @@ pub(crate) mod tests {
         assert_eq!(occluders_of(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
     }
 
-    /// The two numbers of the shadow law the Shadow preview spends on the CPU
-    /// are the shader's own.
+    /// The gain the Shadow preview spends on the CPU is the shader's own.
     #[test]
-    fn the_shadow_laws_gain_and_floor_are_the_shaders_own() {
+    fn the_shadow_gain_is_the_shaders_own() {
         let gain: f32 = shader_const(crate::COMMON_SRC, "GAUSSIAN_GAIN").parse().expect("a number");
         assert_eq!(gain, GAUSSIAN_GAIN);
-        let floor: f32 =
-            shader_const(crate::COMMON_SRC, "SHADOW_KEEP_FLOOR").parse().expect("a number");
-        assert_eq!(floor, SHADOW_KEEP_FLOOR);
     }
 
     #[test]
@@ -1092,6 +1088,91 @@ pub(crate) mod tests {
         assert_eq!(shadow_darkness(1.5, 0.5, true), 0.5);
         assert_eq!(shadow_darkness(-1.0, 0.5, false), 0.0);
         assert_eq!(shadow_darkness(0.5, 1.5, false), shadow_darkness(0.5, 1.0, false));
+    }
+
+    /// `shadow_darkness` is the shader's law: `local_shadow_transmittance` and
+    /// `shadow_transmittance` from common.wgsl, run on the GPU at full level
+    /// over a grid of coverage and depth that reaches past both ends of each.
+    #[test]
+    fn shadow_darkness_is_the_shaders_law() {
+        const SAMPLES: [f32; 6] = [-0.5, 0.0, 0.3, 0.91, 1.0, 1.5];
+        const N: usize = SAMPLES.len();
+        let Some((device, queue)) = crate::gpu_harness::headless_device() else {
+            return;
+        };
+        let samples = SAMPLES.map(|v| format!("{v:?}")).join(", ");
+        let source = crate::with_common(&format!(
+            "@group(0) @binding(0) var<storage, read_write> law: array<vec2<f32>, {}>;
+@compute @workgroup_size(1)
+fn cs_shadow_law() {{
+    var samples = array<f32, {N}>({samples});
+    for (var i = 0u; i < {N}u; i++) {{
+        for (var j = 0u; j < {N}u; j++) {{
+            law[i * {N}u + j] = vec2<f32>(
+                local_shadow_transmittance(samples[i], samples[j], 1.0),
+                shadow_transmittance(samples[i], samples[j], 1.0),
+            );
+        }}
+    }}
+}}",
+            N * N
+        ));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow_law_probe"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("shadow_law_probe"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("cs_shadow_law"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let bytes = (N * N * size_of::<[f32; 2]>()) as u64;
+        let buffer = |usage| {
+            crate::gpu_memory::buffer(
+                &device,
+                &wgpu::BufferDescriptor {
+                    label: Some("shadow_law_probe"),
+                    size: bytes,
+                    usage,
+                    mapped_at_creation: false,
+                },
+            )
+        };
+        let output = buffer(wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC);
+        let readback = buffer(wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST);
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow_law_probe"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: output.as_entire_binding() }],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, bytes);
+        queue.submit([encoder.finish()]);
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |result| result.expect("map the shadow law probe"));
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll the shadow law probe");
+        let law: Vec<[f32; 2]> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+        for (k, [local, spectral]) in law.into_iter().enumerate() {
+            let (full, depth) = (SAMPLES[k / N], SAMPLES[k % N]);
+            for (lattice, through) in [(true, local), (false, spectral)] {
+                let ours = shadow_darkness(full, depth, lattice);
+                assert!(
+                    (ours - (1.0 - through)).abs() < 1e-5,
+                    "full {full}, depth {depth}, lattice {lattice}: the shader takes {} away and \
+                     shadow_darkness {ours}",
+                    1.0 - through,
+                );
+            }
+        }
     }
 
     /// A shader's `const NAME: T = value;`, as text.
