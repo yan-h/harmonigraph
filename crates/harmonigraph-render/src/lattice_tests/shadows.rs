@@ -895,54 +895,65 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         let flat = shooter.shot(&flat_scene);
         let deep = shooter.shot(&deep_scene);
         let centre = on_screen(&deep_scene, SIZE, glam::Vec3::ZERO);
-        let row = centre.y.round() as u32;
-        // From two points past the ink, which is clear of its antialiased
-        // edge, out to the pane.
-        let start = (centre.x + edge).round() as u32 + 2;
-        let mut profile = Vec::new();
-        for x in start..SIZE[0] {
-            let ground = bright_at(&flat, x, row);
-            assert!(ground > 500, "{what} leaves {ground} of ground at column {x}");
-            profile.push(1.0 - bright_at(&deep, x, row) as f64 / ground as f64);
-        }
-        let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
-        // `profile[0]` starts two points past the ink, so its index alone is
-        // two points short of the physical reach being tested.
-        let reach = last as f32 + 2.0;
-        // A substantial shadow, so that `last` is the end of a descent
-        // rather than the one column a faint caster
-        // wrote. Not a fixed half of the ground: the two casters here are
-        // deliberately different thicknesses against σ, and at the top of the
-        // bar a cross an arm wide is thin enough that the gain leaves its
-        // shadow at a quarter of the ground where a ring stack's is at three
-        // quarters. The threshold must admit both caster thicknesses.
-        // Linear notation transmittance also
-        // reaches the 8-bit floor sooner than the old power-law tail; the
-        // final-step assertion below still rejects a visibly clipped quad.
+        let ink = (centre.x + edge).round() as u32;
+        assert_whole_tail(what, &flat, &deep, centre.y.round() as u32, ink, sigma(&deep_scene));
+    }
+}
+
+/// The shadow along `row` of `deep`, as a share of the ground `flat` leaves
+/// there, from two points past `ink` — the column the caster's ink ends at,
+/// and two points clear of its antialiased edge — out to the pane, asserted to
+/// be the whole tail of a blur of σ `sigma`: substantial at the ink, reaching
+/// most of the kernel, never rising, and down to the output's last step where
+/// it stops rather than cut off above it.
+fn assert_whole_tail(what: &str, flat: &[u8], deep: &[u8], row: u32, ink: u32, sigma: f32) {
+    let start = ink + 2;
+    let mut profile = Vec::new();
+    for x in start..SIZE[0] {
+        let ground = bright_at(flat, x, row);
+        assert!(ground > 500, "{what} leaves {ground} of ground at column {x}");
+        profile.push(1.0 - bright_at(deep, x, row) as f64 / ground as f64);
+    }
+    let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
+    assert!(
+        last + 1 < profile.len(),
+        "{what}'s shadow runs off the pane, so its end is unmeasured"
+    );
+    // `profile[0]` starts two points past the ink, so its index alone is
+    // two points short of the physical reach being tested.
+    let reach = last as f32 + 2.0;
+    // A substantial shadow, so that `last` is the end of a descent
+    // rather than the one column a faint caster
+    // wrote. Not a fixed half of the ground: the casters here are
+    // deliberately different thicknesses against σ, and at the top of the
+    // bar a cross an arm wide is thin enough that the gain leaves its
+    // shadow at a quarter of the ground where a ring stack's is at three
+    // quarters. The threshold must admit every caster's thickness.
+    // Linear notation transmittance also
+    // reaches the 8-bit floor sooner than the old power-law tail; the
+    // final-step assertion below still rejects a visibly clipped quad.
+    assert!(
+        profile[0] > 0.1 && reach > 0.65 * crate::shadow::REACH_SIGMAS * sigma,
+        "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {sigma}",
+        profile[0],
+    );
+    for (i, pair) in profile.windows(2).enumerate() {
         assert!(
-            profile[0] > 0.1 && reach > 0.65 * crate::shadow::REACH_SIGMAS * sigma(&deep_scene),
-            "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",
-            profile[0],
-            sigma(&deep_scene),
-        );
-        for (i, pair) in profile.windows(2).enumerate() {
-            assert!(
-                pair[1] <= pair[0] + 1e-9,
-                "{what}'s shadow rises from {:.4} to {:.4} at {i} px out from its ink",
-                pair[0],
-                pair[1],
-            );
-        }
-        // Reach the final output's smallest step before disappearing. The old
-        // one-percent cutoff stopped at several codes and the old two-percent
-        // tolerance accepted exactly the contour this reading should catch.
-        assert!(
-            profile[last] <= 1.0 / (GROUND * 255.0) + 1e-9,
-            "{what}'s shadow stops at {:.4} of the ground {last} px out: the quad ended inside \
-             the blur",
-            profile[last],
+            pair[1] <= pair[0] + 1e-9,
+            "{what}'s shadow rises from {:.4} to {:.4} at {i} px out from its ink",
+            pair[0],
+            pair[1],
         );
     }
+    // Reach the final output's smallest step before disappearing. The old
+    // one-percent cutoff stopped at several codes and the old two-percent
+    // tolerance accepted exactly the contour this reading should catch.
+    assert!(
+        profile[last] <= 1.0 / (GROUND * 255.0) + 1e-9,
+        "{what}'s shadow stops at {:.4} of the ground {last} px out: its quad or its cell \
+         ended inside the blur",
+        profile[last],
+    );
 }
 
 /// A node swelled past its band, marked, and still arriving from outside its
@@ -959,22 +970,25 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
 /// node with neither term, so this one dials both: every slice at the widest
 /// thickness, every slot marked, and the arrival starting at twice the settled
 /// size, part of the way in. A narrow Shadow keeps the cell's own padding from
-/// covering a short box.
+/// covering a short box, and a camera close enough for its σ to span a few
+/// pixels keeps the tail's last step down at one output code (at σ 1.4 pixels
+/// an unclipped Gaussian falls from two codes to none in one).
 ///
 /// Dropping either term from `node_caster` fails this, with the shadow held
 /// flat out to the cell's edge and cut there.
 #[test]
 fn a_swelled_node_arriving_from_outside_casts_its_whole_shadow() {
     const SHADOW: f32 = 0.3;
-    const PULL_BACK: f32 = 3.0;
-    // Under a third of the way home: the slices stand well outside where they
-    // settle, at that share of their ink.
-    const PROGRESS: f32 = 0.3;
+    const PULL_BACK: f32 = 1.5;
+    const SWELL: f32 = *harmonigraph_scene::THICKNESS_MAX_RANGE.end();
+    // Under halfway home: the slices stand well outside where they settle, at
+    // that share of their ink.
+    const PROGRESS: f32 = 0.4;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
     shooter.clear = over_ground();
-    let staged = |depth: f32| -> Scene {
+    let staged = |depth: f32, thickness: f32, progress: f32| -> Scene {
         let mut scene = on_ground(SHADOW, depth);
         scene.camera.distance *= PULL_BACK;
         scene.view.note_bloom = 0.0;
@@ -988,67 +1002,45 @@ fn a_swelled_node_arriving_from_outside_casts_its_whole_shadow() {
         };
         let node = &mut scene.nodes[0];
         node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
-        node.thickness =
-            [*harmonigraph_scene::THICKNESS_MAX_RANGE.end(); harmonigraph_scene::OCTAVE_SLOTS];
+        node.thickness = [thickness; harmonigraph_scene::OCTAVE_SLOTS];
         node.melody_slots = (1 << harmonigraph_scene::OCTAVE_SLOTS) - 1;
         node.melody_level = 1.0;
-        node.slice_progress = [PROGRESS; harmonigraph_scene::OCTAVE_SLOTS];
+        node.slice_progress = [progress; harmonigraph_scene::OCTAVE_SLOTS];
         scene
     };
-    let (deep_scene, flat_scene) = (staged(1.0), staged(0.0));
 
-    // Both of the caster box's terms are in play: the slices swell past the
-    // band, and the arrival's reach widens what that swell left.
-    let swell = swelled_past_band(&deep_scene, &pack_thickness(&deep_scene.nodes[0].thickness));
-    let swelled = deep_scene.outer_outer + swell;
-    let reach = deep_scene.view.note_animation.reach(swelled);
-    eprintln!(
-        "swell {swell} uv past the band at {}; arrival reach {reach} uv",
-        deep_scene.outer_outer
-    );
-    assert!(swell > 0.0, "no slice swells past the band");
-    assert!(reach > swelled, "the arrival starts no further out than the rim");
+    // The farthest column a node's ink reaches on any row, read against the
+    // same pane with no node in it rather than against an exact ground value
+    // an adapter may read a code or two off. Past it, every column the
+    // profile walks is further from all of the ink than the one before.
+    let mut empty = staged(0.0, 1.0, 1.0);
+    empty.nodes.clear();
+    empty.glow_rows = 0;
+    let bare = shooter.shot(&empty);
+    let mut ink_edge = |scene: &Scene| -> (Vec<u8>, u32) {
+        let shot = shooter.shot(scene);
+        let edge = (0..SIZE[1])
+            .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+            .filter(|&(x, y)| (bright_at(&shot, x, y) - bright_at(&bare, x, y)).abs() > 3)
+            .map(|(x, _)| x)
+            .max()
+            .expect("the node drew no ink");
+        (shot, edge)
+    };
+    // Both of the caster box's terms are reached, as ink on screen: swelling
+    // the slices carries it out past the settled band, and the arrival carries
+    // it out past where the swelled node settles.
+    let (_, band) = ink_edge(&staged(0.0, 1.0, 1.0));
+    let (_, settled) = ink_edge(&staged(0.0, SWELL, 1.0));
+    let (flat, ink) = ink_edge(&staged(0.0, SWELL, PROGRESS));
+    eprintln!("ink out to column {band} unswelled, {settled} swelled, {ink} arriving");
+    assert!(settled > band + 2, "the swell moved the ink from column {band} to {settled}");
+    assert!(ink > settled + 2, "the arrival moved the ink from column {settled} to {ink}");
 
-    let flat = shooter.shot(&flat_scene);
+    let deep_scene = staged(1.0, SWELL, PROGRESS);
     let deep = shooter.shot(&deep_scene);
-    let ground = (GROUND * 255.0).round() as i64;
-    // Past the farthest column any ink reaches, on any row, so every point the
-    // profile reads is further from all of it than the one before.
-    let inked = (0..SIZE[1])
-        .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
-        .filter(|&(x, y)| (bright_at(&flat, x, y) - 3 * ground).abs() > 3)
-        .map(|(x, _)| x)
-        .max()
-        .expect("the node drew no ink");
-    let centre = on_screen(&deep_scene, SIZE, glam::Vec3::ZERO);
-    let row = centre.y.round() as u32;
-    let start = inked + 2;
-    let mut profile = Vec::new();
-    for x in start..SIZE[0] {
-        let ground = bright_at(&flat, x, row);
-        assert!(ground > 500, "the node leaves {ground} of ground at column {x}");
-        profile.push(1.0 - bright_at(&deep, x, row) as f64 / ground as f64);
-    }
-    let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
-    assert!(
-        last + 1 < profile.len(),
-        "the shadow runs off the pane, so where it ends is not measured",
-    );
-    assert!(profile[0] > 0.02, "the node cast {:.3} past its ink", profile[0]);
-    for (i, pair) in profile.windows(2).enumerate() {
-        assert!(
-            pair[1] <= pair[0] + 1e-9,
-            "the shadow rises from {:.4} to {:.4} at {i} px out from the ink",
-            pair[0],
-            pair[1],
-        );
-    }
-    assert!(
-        profile[last] <= 1.0 / (GROUND * 255.0) + 1e-9,
-        "the shadow stops at {:.4} of the ground {last} px out from the ink: the caster's \
-         cell ended inside the blur",
-        profile[last],
-    );
+    let row = on_screen(&deep_scene, SIZE, glam::Vec3::ZERO).y.round() as u32;
+    assert_whole_tail("the arriving node", &flat, &deep, row, ink, sigma(&deep_scene));
 }
 
 /// A node the camera all but stands on packs a cell the atlas can hold, and
