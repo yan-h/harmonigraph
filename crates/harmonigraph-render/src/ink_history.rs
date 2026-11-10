@@ -56,13 +56,11 @@ impl InkHistory {
                 continue;
             }
             let row = &mut self.rows[instance.glow[1] as usize];
-            // The shipped ink after Opacity -- the colour and the marks, not
-            // the presence in `params.x`, which holds through a release --
-            // which is exactly the glow target `NodeMotion::step` hands
-            // `GlowFade`; against the carried level that is the test the CPU
-            // makes, so colour and brightness take the same attack or release.
-            let [_, melody, bass, ink] = instance.params;
-            let target = ink.max(melody).max(bass).clamp(0.0, 1.0);
+            // The node's glow target (`NodeInstance::glow_target`), not the
+            // presence in `params.x`, which holds through a release: against
+            // the carried level that is the test `GlowFade` makes, so colour
+            // and brightness take the same attack or release.
+            let target = instance.params[3];
             self.mixes.push(if row.owner != owner || row.seen + 1 != self.frame || row.seen == 0 {
                 1.0
             } else if target > row.level {

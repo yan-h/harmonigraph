@@ -200,8 +200,9 @@ impl GlowTarget {
 }
 
 impl LatticeCallback {
+    /// Whether this frame draws the node glow at all (see the field).
     pub(super) fn glow_draws(&self) -> bool {
-        self.uniforms.glow.reach > 0.0
+        self.glow_draws
     }
 }
 

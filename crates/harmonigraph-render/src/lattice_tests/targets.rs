@@ -1,6 +1,7 @@
 //! Optional bloom is a resource decision; release history is independent.
 
 use super::fixtures::*;
+use crate::lattice_targets::GLOW_DIVISOR;
 use crate::*;
 
 fn target(shooter: &Shooter) -> &Offscreen {
@@ -210,8 +211,12 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         let creations = super::INK_STRIP_CREATIONS.get();
         let resized = shooter.shot_again(&scene);
         let offscreen = target(&shooter);
-        let expected = offscreen.size.map(|n| n.div_ceil(4));
-        assert_ne!(expected, offscreen.size.map(|n| n.div_ceil(2)), "fixture tells 1/4 from 1/2");
+        let expected = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
+        assert_ne!(
+            expected,
+            offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR / 2)),
+            "fixture tells the divisor from half of it"
+        );
         let glow = offscreen.glow.as_ref().unwrap();
         for view in std::iter::once(&glow.view).chain(&glow.statistics) {
             assert_eq!([view.texture().width(), view.texture().height()], expected);
@@ -257,7 +262,7 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
     scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
     let offscreen = target(&shooter);
-    let quarter = offscreen.size.map(|n| n.div_ceil(4));
+    let quarter = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
     let glow = offscreen.glow.as_ref().unwrap();
     let source = glow.material_source.as_ref().expect("fixture reaches a material source");
     assert_eq!([source.view.texture().width(), source.view.texture().height()], quarter);
@@ -351,6 +356,52 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     let returned = shooter.shot_again(&scene);
     assert!(returned.as_chunks::<4>().0.iter().map(|p| u64::from(p[2])).sum::<u64>() > 64);
     eprintln!("history growth fixture: 64 -> 128, 2 GPU instances including row 64, 1 strip creation, 0 viewport recreations; release red lost, held green present, reuse byte-exact");
+}
+
+/// The colour takes the rate the node's glow target says, through the instance
+/// `to_gpu` packs: a release under a held presence at the release rate, then a
+/// re-strike while the light is still falling at the attack rate, then a mark
+/// alone at the attack rate. The readings a slot could carry instead each fail
+/// one frame: the presence (`activation`) the release, the stepped
+/// `glow.level` the re-strike, and the drawn colour (`drawn_level`) the mark.
+#[test]
+fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = history_scene();
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.1, release: 1.0 });
+    let mix = |shooter: &mut Shooter, scene: &Scene| {
+        shooter.shot_again(scene);
+        let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane];
+        pane.ink_history.as_ref().unwrap().history.mixes()[0]
+    };
+    // Every step below is 0.1 s on from the last.
+    let (up, down) = harmonigraph_scene::GlowTiming { now: 0.1, attack: 0.1, release: 1.0 }
+        .coefficients(Some(0.0));
+    assert!((up - down).abs() > 0.5, "the fixture tells the two rates apart: {up}, {down}");
+    scene.nodes[0].glow.level = 0.8;
+    mix(&mut shooter, &scene);
+    // Released: the colour has gone and the presence holds above the light.
+    scene.nodes[0].octaves.fill(0.0);
+    scene.nodes[0].activation = 1.0;
+    scene.nodes[0].glow.level = 0.7;
+    scene.glow_timing.as_mut().unwrap().now = 0.1;
+    let released = mix(&mut shooter, &scene);
+    assert!((released - down).abs() < 1e-6, "a release under a held presence: {released}");
+    // Struck again with the light still falling: the target is back at 1.
+    scene.nodes[0].octaves.fill(1.0);
+    scene.nodes[0].glow.level = 0.65;
+    scene.glow_timing.as_mut().unwrap().now = 0.2;
+    let restruck = mix(&mut shooter, &scene);
+    assert!((restruck - up).abs() < 1e-6, "a re-strike during the release: {restruck}");
+    // Lit by a mark alone: the target counts the marks, which the drawn
+    // colour (`drawn_level`) in the slot would leave out.
+    scene.nodes[0].octaves.fill(0.0);
+    scene.nodes[0].melody_level = 1.0;
+    scene.nodes[0].glow.level = 0.6;
+    scene.glow_timing.as_mut().unwrap().now = 0.3;
+    let marked = mix(&mut shooter, &scene);
+    assert!((marked - up).abs() < 1e-6, "a mark lighting a node with no colour: {marked}");
 }
 
 #[test]

@@ -7,6 +7,7 @@ mod bend;
 mod camera;
 mod finite;
 mod glow_curve;
+mod glow_footprint;
 mod gradient_cache;
 mod harness;
 mod hue_space;

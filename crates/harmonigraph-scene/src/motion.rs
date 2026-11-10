@@ -942,12 +942,10 @@ impl NodeMotion {
             }
             // The node glow is the drawn colour: the most opaque slot or mark,
             // each after its Opacity, as the bloom reads it, rather than the
-            // presence that waits on the slices. Stateless
-            // snapshots draw it as it stands; the shell's glow pass carries it
-            // as its target. The ink strip's history (`ink_history` in
-            // harmonigraph-render) compares this same max of what it ships, so
-            // the colour picks attack or release by the test the level does.
-            node.glow.level = node.drawn_level().max(node.melody_level).max(node.bass_level);
+            // presence that waits on the slices (`NodeInstance::glow_target`).
+            // Stateless snapshots draw it as it stands; the shell's glow pass
+            // steps the level toward it.
+            node.glow.level = node.glow_target();
         }
         scene.pluses = crate::derive::derive_pluses(
             view,

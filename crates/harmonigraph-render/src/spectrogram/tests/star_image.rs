@@ -51,10 +51,6 @@ fn frame_at_ppp(
     readback(device, queue, &texture, size)
 }
 
-fn target(resources: &CallbackResources) -> &atmosphere::Targets {
-    resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap().cloud.as_ref().unwrap()
-}
-
 /// The source this thread's spectrogram pipelines are built from:
 /// production's, or a reference written here.
 #[derive(Clone, Copy, PartialEq)]
@@ -196,10 +192,10 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
                 let b = frame_at_ppp(&device, &queue, &mut partial, &cb, PPP);
                 let settings = cb.atmosphere.unwrap().settings;
                 assert_eq!(
-                    target(&partial).shape().stars.map(|stars| stars.image),
+                    cloud(&partial).shape().stars.map(|stars| stars.image),
                     Some(atmosphere::star_image_size([161, 121], settings.stars))
                 );
-                assert_eq!(target(&partial).shape().memory.is_some(), memory);
+                assert_eq!(cloud(&partial).shape().memory.is_some(), memory);
                 let width = (cb.rect.max.x * PPP).ceil() as usize + 1;
                 let mut checked = 0;
                 let mut lit = 0;
