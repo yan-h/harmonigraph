@@ -3,6 +3,7 @@
 
 use crate::params::ParamKey;
 use crate::{AppearanceDocument, ParamBackend};
+use harmonigraph_scene::{Camera, ViewConfig};
 
 impl AppearanceDocument {
     pub fn camera_movement(&self) -> [f32; 5] {
@@ -24,6 +25,29 @@ impl AppearanceDocument {
         self.camera.target.x = values[3] - self.view.center_fives as f32;
         self.camera.target.y = values[4] - self.view.center_threes as f32;
         self.camera.target.z = 0.0;
+    }
+
+    /// Copy every appearance field another owner writes from `from` into `to`:
+    /// the host's camera movement, which [`set_camera_movement`] lays out as
+    /// yaw, pitch, distance and the pan split between the camera's target and
+    /// the view's lattice center.
+    ///
+    /// The one list of them. A look (`appearance_edit::Look`) resets these on
+    /// capture and keeps the live document's on apply, so undo and the slots
+    /// never carry the host's camera; `read-plugin-state.py` keeps a copy,
+    /// joined to this body by its test.
+    ///
+    /// [`set_camera_movement`]: Self::set_camera_movement
+    pub(crate) fn copy_host_owned(
+        (camera, view): (&mut Camera, &mut ViewConfig),
+        (from_camera, from_view): (&Camera, &ViewConfig),
+    ) {
+        camera.yaw = from_camera.yaw;
+        camera.pitch = from_camera.pitch;
+        camera.distance = from_camera.distance;
+        camera.target = from_camera.target;
+        view.center_fives = from_view.center_fives;
+        view.center_threes = from_view.center_threes;
     }
 
     /// Called before drawing and recording snapshots. Missing channels retain
