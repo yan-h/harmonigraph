@@ -108,7 +108,7 @@ pub(crate) struct SpectrumStore {
 /// columns look heard for as long as the curve was still falling.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Heard {
-    /// The newest raw column: what the heatmap scrolls.
+    /// The newest raw column the history kept: what the heatmap scrolls.
     pub(crate) column: Option<f64>,
     /// The newest column after which the smoothed curve still stood above
     /// silence: what the curve, the Spiral and the lattice ring draw.
@@ -409,7 +409,9 @@ impl SpectrumStore {
             column_heard |= new > floor;
             curve_heard |= *shown > floor;
         }
-        if column_heard {
+        // Only a column the history keeps: then the stamp always dates one
+        // still there, and a Clear can forget it with the columns.
+        if column_heard && keep {
             self.last_audible.column = Some(column.time);
         }
         if curve_heard {
@@ -737,6 +739,7 @@ impl AudioSpectrum {
     /// Forget the spectrogram history (paired with clearing the roll).
     pub fn clear_history(&mut self) {
         self.store.history.clear();
+        self.store.last_audible.column = None;
     }
 
     /// Which clear of the history this is, so the heatmap's colour memory can

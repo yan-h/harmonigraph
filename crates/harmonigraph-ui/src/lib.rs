@@ -645,9 +645,7 @@ fn audible(state: &SharedState, now: f64) -> bool {
     if within(heard.curve, landed) {
         return true;
     }
-    // Only while the heard column is still in the history: a Clear takes it.
-    let kept = |t: f64| spectrum.history().front().is_some_and(|c| c.time <= t);
-    if cfg.show_spectrogram && heard.column.is_some_and(kept) {
+    if cfg.show_spectrogram {
         let atmosphere = cfg.atmosphere;
         let memory = if atmosphere.effects().cloud {
             SETTLE * f64::from(atmosphere.color_pickup.max(atmosphere.color_release))
