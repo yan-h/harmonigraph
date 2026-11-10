@@ -766,7 +766,7 @@ fn the_plan_decides_the_layout_without_a_frame() {
         scale,
         cfg: SpectrumConfig::default(),
     };
-    let columns = Columns { first: 3, len: 400, newest: 12.0 };
+    let columns = Columns { first: 3, newest: 12.0 };
     let plan = |v: &PaneView| Plan::new(v, &columns, None);
 
     // Rows are PIXELS, not points: on a 2x screen the picture is read at
@@ -824,19 +824,19 @@ fn the_plan_decides_the_layout_without_a_frame() {
     let wide = plan(&view(1.0, 300.0, 900.0, 30.0));
     assert!(wide.bucket < narrow.bucket, "a wider pane should resolve time more finely");
 
-    // The key travels with the plan, and names the FOLD: a density change
+    // The slab width is the plan's one input to the FOLD: a density change
     // that moves no slab boundary re-reads the run it already has, while one
     // that crosses a ladder rung does not.
-    let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0)).key;
-    assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0)).key);
+    let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0)).bucket;
+    assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0)).bucket);
     assert_eq!(
         at_1x,
-        plan(&view(1.0, 900.0, 800.0, 12.0)).key,
+        plan(&view(1.0, 900.0, 800.0, 12.0)).bucket,
         "a taller pane reads the same slabs and must not refold",
     );
     assert_ne!(
         at_1x,
-        plan(&view(1.0, 300.0, 200.0, 12.0)).key,
+        plan(&view(1.0, 300.0, 200.0, 12.0)).bucket,
         "a quarter of the depth pixels crosses a rung, which is a different fold",
     );
 }
@@ -1144,9 +1144,8 @@ fn a_span_drag_refolds_once_per_rung_crossed() {
 /// This is the other regime, and it is not a corner: the bare ladder
 /// re-decides the rung from the window alone on every frame, and one
 /// drag-point is 0.6% of the Span — which a resting finger clears on tremor
-/// alone. Both caches then miss together, which is what makes it expensive
-/// rather than merely frequent: `bucket` is the aggregator's one layout
-/// input AND a [`RunKey`] field, so every frame pays a full refold and
+/// alone. That is expensive rather than merely frequent: `bucket` is the
+/// aggregator's one layout input, so every frame pays a full refold and
 /// rewrites every slab it folded.
 ///
 /// [`held_slab`] is what settles it, and the claim is the one the hysteresis
@@ -1311,7 +1310,6 @@ fn the_held_width_survives_a_frame_through_the_surface() {
         let hist = spectrum.history();
         let columns = Columns {
             first: hist.partition_point(|c| c.time < clock - window).saturating_sub(1),
-            len: hist.len(),
             newest: hist.back().map_or(clock, |c| c.time),
         };
         let held = surfaces.at(0).held_bucket;
@@ -1342,14 +1340,14 @@ fn unchanged_columns_reuse_the_folded_snapshot() {
         scale: SWEEP_SCALE,
         cfg: SpectrumConfig::default(),
     };
-    let cols = Columns { first: 0, len: 200, newest: 91.99 };
+    let cols = Columns { first: 0, newest: 91.99 };
     let plan = Plan::new(&view, &cols, None);
     let layout = run_for(spectrum.history(), &mut surfaces, 0, &plan).unwrap();
     let original = surfaces.at(0).folded.grid().unwrap();
     assert_eq!(Some(layout), run_for(spectrum.history(), &mut surfaces, 0, &plan));
     assert!(Arc::ptr_eq(&original.run, &surfaces.at(0).folded.grid().unwrap().run));
     spectrum.push_history(92.0, &bins);
-    let plan = Plan::new(&view, &Columns { first: 0, len: 201, newest: 92.0 }, None);
+    let plan = Plan::new(&view, &Columns { first: 0, newest: 92.0 }, None);
     run_for(spectrum.history(), &mut surfaces, 0, &plan).unwrap();
     assert!(!Arc::ptr_eq(&original.run, &surfaces.at(0).folded.grid().unwrap().run));
     assert_eq!(surfaces.at(0).folded.full_uploads(), 0, "folding is not an upload");
@@ -1416,7 +1414,7 @@ fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
         history.push(col(t * bucket, &[(1000, p)]));
     }
     let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-    let columns = Columns { first: 0, len: history.len(), newest: history.back().unwrap().time };
+    let columns = Columns { first: 0, newest: history.back().unwrap().time };
     let initial = Plan::new(&view, &columns, None);
     let layout = run_for(&history, &mut surfaces, 0, &initial).unwrap();
     let snapshot = surfaces.at(0).folded.grid().unwrap();
@@ -1447,7 +1445,7 @@ fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
         let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
         spectrum.store.history.push(col(0.0, &[(1000, 1.0)]));
         spectrum.store.history.push(col(newest, &[(1000, 0.5)]));
-        let columns = Columns { first: 0, len: 2, newest };
+        let columns = Columns { first: 0, newest };
         let mut view = PaneView {
             ppp: 1.0,
             pitch_len: 300.0,
@@ -1469,7 +1467,7 @@ fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
             view.window = span;
             let held = surfaces.at(surface).held_bucket;
             let resize = Plan::new(&view, &columns, held);
-            assert_eq!(resize.key, initial.key);
+            assert_eq!(resize.bucket, initial.bucket, "the held rung, and no new column");
             assert_eq!(resize.capacity, 520);
             if bucket == 0.032 {
                 assert!(
@@ -1499,7 +1497,7 @@ fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
                 view.window = window;
                 let held = surfaces.at(surface).held_bucket;
                 let plan = Plan::new(&view, &columns, held);
-                assert_eq!(plan.key, initial.key);
+                assert_eq!(plan.bucket, initial.bucket, "the held rung, and no new column");
                 let layout = run_for(spectrum.history(), &mut surfaces, surface, &plan).unwrap();
                 let state = surfaces.at(surface);
                 let mut fresh = SpectrogramAgg::new();
@@ -1533,7 +1531,7 @@ fn retention_changes_reuse_a_run_that_already_covers_its_columns() {
     for i in 0..=250 {
         spectrum.store.history.push(col(i as f64 * 0.008, &[(1000, 0.5)]));
     }
-    let columns = Columns { first: 0, len: spectrum.store.history.len(), newest: 2.0 };
+    let columns = Columns { first: 0, newest: 2.0 };
     let mut view = PaneView {
         ppp: 1.0,
         pitch_len: 300.0,
@@ -1560,7 +1558,7 @@ fn retention_changes_reuse_a_run_that_already_covers_its_columns() {
             view.cfg.spectrogram_gradient.hue_start += 10.0;
             let held = surfaces.at(surface).held_bucket;
             let plan = Plan::new(&view, &columns, held);
-            assert_eq!(plan.key, initial.key);
+            assert_eq!(plan.bucket, initial.bucket, "the held rung, and no new column");
             assert_eq!(run_for(spectrum.history(), &mut surfaces, surface, &plan), Some(layout));
             let state = surfaces.at(surface);
             assert!(Arc::ptr_eq(&run, &state.folded.run.as_ref().unwrap().run));
@@ -1857,17 +1855,18 @@ fn the_shade_table_matches_the_mapping_it_replaces() {
     );
 }
 
-/// The run key names WHICH COLUMNS were folded, and nothing about how they
-/// are read.
+/// The surface's snapshot changes with WHICH COLUMNS were folded, and with
+/// nothing about how they are read.
 ///
-/// Both directions again. A field that decides the run and is missing here
-/// draws a stale run — the picture stops at a column that has already
-/// scrolled past. A field that decides nothing about the run re-folds the
-/// store on every frame of the drag that moves it, and every one of those
-/// is now a drag that moves a uniform: the zoom, the row count and the
-/// palette all read the same bytes a different way.
+/// Both directions again. An input that decides the run and does not reach
+/// the aggregator's memo draws a stale run — the picture stops at a column
+/// that has already scrolled past. One that decides nothing about the run
+/// re-folds the store on every frame of the drag that moves it, and every one
+/// of those is now a drag that moves a uniform: the zoom, the row count and
+/// the palette all read the same bytes a different way.
 #[test]
-fn the_run_key_names_the_fold_and_not_the_read() {
+fn the_snapshot_follows_the_fold_and_not_the_read() {
+    let interval = crate::AudioSpectrum::FFT_INTERVAL;
     let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
     let base_view = PaneView {
         ppp: 2.0,
@@ -1877,26 +1876,37 @@ fn the_run_key_names_the_fold_and_not_the_read() {
         scale,
         cfg: SpectrumConfig::default(),
     };
-    let columns = Columns { first: 3, len: 200, newest: 5.0 };
-    let key = |v: &PaneView, c: &Columns| Plan::new(v, c, None).key;
-    let base = key(&base_view, &columns);
-    assert_eq!(base, key(&base_view, &columns), "the same fold must hit");
-
-    // The oldest slab is checked against the snapshot separately: a raw
-    // column index does not decide completed averages.
-    assert_eq!(base, key(&base_view, &Columns { first: 4, ..columns }));
-    for moved in [Columns { len: 201, ..columns }, Columns { newest: 6.0, ..columns }] {
-        assert_ne!(base, key(&base_view, &moved), "a scrolled window reuses the old run");
+    // Off the slab grid by a quarter interval, so columns 4 and 5 share a
+    // slab at the two-interval rung this view settles on.
+    let at = |i: usize| (i as f64 + 0.25) * interval;
+    let mut history = crate::SpectrumHistory::default();
+    for i in 0..599 {
+        history.push(col(at(i), &[(1000, 0.5)]));
     }
-    // The slab width, through the ladder, and the build path.
-    assert_ne!(base, key(&PaneView { depth_len: 200.0, ..base_view }, &columns));
+    let columns = Columns { first: 4, newest: history.back().unwrap().time };
+    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let base_plan = Plan::new(&base_view, &columns, None);
+    assert_eq!(base_plan.bucket, 2.0 * interval, "the fixture's slab width");
+    let mut draw = |history: &crate::SpectrumHistory, v: &PaneView, c: &Columns| {
+        run_for(history, &mut surfaces, 0, &Plan::new(v, c, None)).expect("a run to draw");
+        let state = surfaces.at(0);
+        (state.folded.grid().unwrap().run, state.agg.as_ref().unwrap().rebuilds())
+    };
+    let (base, _) = draw(&history, &base_view, &columns);
+    let same = |(run, rebuilds): (Arc<[SpectrogramSlab]>, u32), what: &str| {
+        assert!(Arc::ptr_eq(&base, &run), "{what} handed out a new run");
+        assert_eq!(rebuilds, 1, "{what} refolded the store");
+    };
+    same(draw(&history, &base_view, &columns), "the same frame");
+
+    // A raw column index inside the same first slab does not decide
+    // completed averages.
+    same(draw(&history, &base_view, &Columns { first: 5, ..columns }), "a column inside a slab");
 
     // And everything that is a UNIFORM: the rows, the pitch range and every
     // colour input read the run rather than deciding it, so none of them may
     // refold a thing.
-    let read_only = |v: PaneView| {
-        assert_eq!(base, key(&v, &columns), "a uniform change refolded the store");
-    };
+    let mut read_only = |v: PaneView| same(draw(&history, &v, &columns), "a uniform change");
     read_only(PaneView { pitch_len: 900.0, ..base_view });
     read_only(PaneView { ppp: 1.0, pitch_len: 600.0, ..base_view });
     read_only(PaneView {
@@ -1914,6 +1924,28 @@ fn the_run_key_names_the_fold_and_not_the_read() {
         edit(&mut cfg);
         read_only(PaneView { cfg, ..base_view });
     }
+
+    // What decides the run reaches the one memo of it. A fresh column, into
+    // the slab still open, so the run keeps its length:
+    history.push(col(at(599), &[(1000, 0.25)]));
+    let (fresh, rebuilds) = draw(&history, &base_view, &columns);
+    assert_eq!(fresh.len(), base.len(), "the fresh column opened a slab");
+    assert!(!Arc::ptr_eq(&base, &fresh), "a new column reused the old run");
+    assert_ne!(fresh.last(), base.last(), "the open slab kept its old average");
+    assert_eq!(rebuilds, 1, "a new column is folded in, not refolded");
+    // A Clear followed by a history of the same length and newest time, which
+    // only the aggregator's clear count can tell from the one before it.
+    history.clear();
+    for i in 0..600 {
+        history.push(col(at(i), &[(1000, 0.125)]));
+    }
+    let (cleared, _) = draw(&history, &base_view, &columns);
+    assert_eq!(cleared[100][1000], q(0.125), "a Clear served the run from before it");
+    // And the slab width, through the ladder.
+    let coarse_view = PaneView { depth_len: 200.0, ..base_view };
+    assert_ne!(Plan::new(&coarse_view, &columns, None).bucket, base_plan.bucket);
+    let (coarser, _) = draw(&history, &coarse_view, &columns);
+    assert!(!Arc::ptr_eq(&cleared, &coarser), "a new rung reused the old run");
 }
 
 /// The strip is drawn out to the now-line, but the newest column is always
@@ -2277,15 +2309,15 @@ mod gpu {
             let hist = spectrum.history();
             let columns = Columns {
                 first: hist.partition_point(|c| c.time < t.clock - view.window).saturating_sub(1),
-                len: hist.len(),
                 newest: hist.back().map_or(t.clock, |c| c.time),
             };
             let plan = Plan::new(view, &columns, None);
             let uploads = surfaces.at(0).folded.full_uploads();
             let refolds = surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
-            let hit = surfaces.at(0).folded.hit(&plan, &spectrum.store.history).is_some();
+            let held = surfaces.at(0).folded.grid().map(|grid| grid.run);
             run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
-            t.folds += u32::from(!hit);
+            let run = surfaces.at(0).folded.grid().expect("a run to draw").run;
+            t.folds += u32::from(held.is_none_or(|held| !Arc::ptr_eq(&held, &run)));
             t.backwards += u32::from(
                 refolds > 0 && surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds()) > refolds,
             );
@@ -2433,7 +2465,6 @@ mod gpu {
             let hist = spectrum.history();
             let columns = Columns {
                 first: hist.partition_point(|c| c.time < now - view.window).saturating_sub(1),
-                len: hist.len(),
                 newest: hist.back().map_or(now, |c| c.time),
             };
             let plan = Plan::new(&view, &columns, None);
@@ -3011,7 +3042,6 @@ mod gpu {
             let hist = spectrum.history();
             let columns = Columns {
                 first: hist.partition_point(|c| c.time < *clock - window).saturating_sub(1),
-                len: hist.len(),
                 newest: hist.back().map_or(*clock, |c| c.time),
             };
             let plan = Plan::new(&view, &columns, None);

@@ -253,13 +253,12 @@ pub(crate) fn draw_spectrogram(
     let hist = spectrum.history();
     let columns = Columns {
         first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
-        len: hist.len(),
         newest: hist.back().map_or(now, |c| c.time),
     };
     let plan = Plan::new(&view, &columns, surfaces.at(surface).held_bucket);
 
-    // The run on the GPU when the plan's key still names it, and a fresh fold
-    // otherwise. The pitch axis, the rows and the colours are uniforms, so a
+    // The run already on the surface when the aggregator folded nothing new
+    // into it, and a fresh one otherwise. The pitch axis, the rows and the colours are uniforms, so a
     // zoom, a resize or a palette drag reaches neither.
     let Some(layout) = run_for(spectrum.history(), surfaces, surface, &plan) else {
         return;
@@ -383,7 +382,6 @@ mod gap_tests {
                 let hist = state.runtime.spectrum.history();
                 let columns = Columns {
                     first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
-                    len: hist.len(),
                     newest: hist.back().unwrap().time,
                 };
                 let view = PaneView {
