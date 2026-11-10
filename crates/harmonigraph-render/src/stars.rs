@@ -380,32 +380,47 @@ pub(crate) fn star_image_scissor(
 }
 
 uniform_group! {
+    /// The star block both panes nest in their own uniform, `StarUniforms` in
+    /// `stars.wgsl`: a star dial is a field here and a getter in each host's
+    /// shader, and nothing else.
     struct StarUniforms {
+        /// The pane, in whatever unit the host's shader counts its points in:
+        /// the lattice's device pixels, the spectrogram's points.
         size: Float2,
         star_image_size: Float2,
         star_randomness: f32,
         star_life: f32,
         star_size_variation: f32,
         star_cover: f32,
+        star_twinkle: f32,
+        _pad0: f32,
+        _pad1: f32,
+        _pad2: f32,
         star_slices: [StarSlice; STAR_SLICES],
     }
 }
 impl StarUniforms {
+    /// `slices` are [`star_slices`]' for this frame, which the spectrogram's
+    /// colour history also reads, or zeroed where no stars are laid out.
     pub(crate) fn new(
         settings: harmonigraph_scene::StarSettings,
         motion: Motion,
-        pixels: [u32; 2],
-        layout: &StarLayout,
+        size: [f32; 2],
         image: [u32; 2],
+        slices: [StarSlice; STAR_SLICES],
     ) -> Self {
         Self {
-            size: Float2(pixels.map(|n| n as f32)),
+            size: Float2(size),
             star_image_size: Float2(image.map(|n| n as f32)),
             star_randomness: settings.star_randomness,
             star_life: star_life(motion.life),
             star_size_variation: settings.star_size_variation,
             star_cover: settings.star_cover,
-            star_slices: star_slices(settings, motion.stars, layout, image),
+            star_twinkle: settings.star_twinkle_dip,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            star_slices: slices,
         }
     }
 }

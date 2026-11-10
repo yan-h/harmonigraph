@@ -20,9 +20,10 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_take::{RenderProgress, VideoEncoder};
+use harmonigraph_take::RenderProgress;
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::Layout;
+use harmonigraph_ui::VideoEncoder;
 use render::Settings;
 use replay::Replay;
 use sink::{Sink, VideoOptions};

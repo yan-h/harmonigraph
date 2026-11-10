@@ -13,7 +13,7 @@
 //! - a **raw stream** (`.rgba` or `.raw`) — the escape hatch when ffmpeg
 //!   isn't there; pipe it in later with the geometry printed at the end.
 
-use harmonigraph_take::VideoEncoder;
+use harmonigraph_ui::VideoEncoder;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 

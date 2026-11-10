@@ -19,8 +19,7 @@ pub mod widgets;
 mod workspace;
 
 /// What the UI persists of the analyzer's display settings, and the serde
-/// defaults behind them. The render settings persist too but live in
-/// `harmonigraph-take` — see the re-export below.
+/// defaults behind them.
 mod config;
 mod runtime;
 /// The spectrogram heatmap's texture-ring/cache machinery. The pane that
@@ -31,6 +30,8 @@ mod spectrogram;
 mod spectrum;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
+/// The Video pane's settings, which the appearance document carries.
+mod video;
 pub use runtime::VisualRuntime;
 
 pub use layout::{Layout, Placement};
@@ -50,23 +51,14 @@ pub use config::{
     SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
     TILT_STEPS,
 };
-// The render settings live in `harmonigraph-take` because they are take
-// payload: a take carries the frame it was composed at, so a re-render
-// reproduces that framing rather than whatever the editor is set to now.
-// `RenderProgress` travels with them for a different reason — it is what the
-// recorder reports back while a render runs, and it lives beside the settings
-// so `harmonigraph-record` needs no editor to hand it over.
-//
-// Re-exported here because every pane, shell and test already reaches them
-// through this crate, and where a type is defined is not their business.
 pub(crate) use config::{
     COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
     ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
-pub use harmonigraph_take::{
-    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, SpectrogramRender,
-    VideoEncoder, STOP_BAR_RANGE, TAIL_RANGE,
-};
+// The Video settings sit at the crate root like the analyzer's above, which is
+// where the panes, both shells and the offline renderer name them. They are
+// declared in `video` beside the appearance document that carries them, so a
+// new one is one declaration and one name here, in this crate alone.
 pub use spectrum::{
     AnalyzedColumn, AudioSpectrum, Delivery, LentAnalysis, SpectrogramColumn, SpectrumAnalysis,
     SpectrumHistory,
@@ -76,6 +68,10 @@ pub use state::{
     SharedState, SurfaceState, TakeState,
 };
 pub use text::use_renderer_font_texture;
+pub use video::{
+    LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender, VideoEncoder,
+    STOP_BAR_RANGE, TAIL_RANGE,
+};
 
 // The overlay's model. `ShellTimings` — the one piece of it a windowed shell
 // writes — is deliberately not re-exported from here: the contract runs from
