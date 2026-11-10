@@ -476,12 +476,12 @@ fn render_controls(
             .eased(true)
             .unit(1.0, " s")
             .default_value(crate::RenderConfig::default().tail as f32)
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "How long the video runs past the last recorded note or automation, so releases finish fading. \
                  The video always runs to the end of the recorded audio, so 0 ends an audio export at its \
                  range end. A take recorded under Loop end ends with its loop and ignores this.",
             )
+            .show(ui)
             .changed()
         {
             state.appearance.render.tail = f64::from(tail);

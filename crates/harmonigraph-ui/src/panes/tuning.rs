@@ -53,16 +53,7 @@ fn interval_bar(
         _ => unreachable!(),
     };
     let linked = comma_deriving(key, &state.appearance.view);
-    // The host's own reset, which under a temperament releases the derived
-    // axis the way an entered value does.
-    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
-        .decimals(2)
-        .unit(1.0, "¢")
-        .default_value(key.default_value());
-    if linked.is_some() {
-        bar = bar.badge("↔");
-    }
-    let response = bar.show(ui).on_hover_text(match linked {
+    let hint = match linked {
         Some(comma) => format!(
             "{}: the {} follows {}. Enter an independent value to change the relationship.",
             comma.temperament(),
@@ -70,7 +61,18 @@ fn interval_bar(
             comma.derived_from()
         ),
         None => tuning_hint(key).to_owned(),
-    });
+    };
+    // The host's own reset, which under a temperament releases the derived
+    // axis the way an entered value does.
+    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
+        .decimals(2)
+        .unit(1.0, "¢")
+        .default_value(key.default_value())
+        .hint(&hint);
+    if linked.is_some() {
+        bar = bar.badge("↔");
+    }
+    let response = bar.show(ui);
     if response.drag_started() {
         params.begin_set(key);
     }
@@ -215,7 +217,7 @@ pub(super) fn tuning_pane(
     now: f64,
 ) {
     section(ui, "Tuning", |ui| {
-        param_bar(ui, params, ParamKey::COffset).on_hover_text(tuning_hint(ParamKey::COffset));
+        param_bar(ui, params, ParamKey::COffset, tuning_hint(ParamKey::COffset));
         interval_bar(ui, state, params, ParamKey::Three);
         for comma in tuning::Comma::ALL {
             interval_row(ui, state, params, comma);
@@ -334,7 +336,7 @@ pub(super) fn tuning_pane(
     };
 
     section(ui, "Note matching", |ui| {
-        param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
+        param_bar(ui, params, ParamKey::Tolerance, tuning_hint(ParamKey::Tolerance));
     });
 
     use harmonigraph_core::lattice_map::TuningEngine;
@@ -953,8 +955,10 @@ fn adaptive_value(
     .unit(1.0, unit)
     .default_value(fresh as f32 / scale);
     bar = if scale == 1.0 { bar.integer() } else { bar.decimals(2) };
+    if !hint.is_empty() {
+        bar = bar.hint(hint);
+    }
     let response = bar.show(ui);
-    let response = if hint.is_empty() { response } else { response.on_hover_text(hint) };
     if response.changed() {
         (value * scale).round() as u32
     } else {

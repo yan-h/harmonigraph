@@ -124,8 +124,10 @@ fn group(
         ValueBar::new(&mut settings.thickness_max, THICKNESS_MAX_RANGE, "Thickness max")
             .unit(1.0, "×")
             .default_value(fresh.thickness_max)
-            .show(ui)
-            .on_hover_text("The thickness ceiling, in multiples of each pane's reference width. Lowering it also limits Thickness base.");
+            .hint(
+                "The thickness ceiling, in multiples of each pane's reference width. Lowering it also limits Thickness base.",
+            )
+            .show(ui);
         settings.thickness_base = settings.thickness_base.min(settings.thickness_max);
     }
     let sources: Vec<_> = Source::ALL
@@ -135,9 +137,17 @@ fn group(
     let mut overlay = None;
     let base = match target {
         IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, 0.0..=1.0, "Opacity base")
-            .overlay_slot(&mut overlay).default_value(fresh.opacity_rest).show(ui).on_hover_text("Starting opacity, even with no mappings. Each mapping adds its weighted contribution, and the sum is limited to 1; only timbre can reduce it, and a base of 1 leaves no room for the others to add. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost."),
+            .overlay_slot(&mut overlay).default_value(fresh.opacity_rest)
+            .hint(
+                "Starting opacity, even with no mappings. Each mapping adds its weighted contribution, and the sum is limited to 1; only timbre can reduce it, and a base of 1 leaves no room for the others to add. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost.",
+            )
+            .show(ui),
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
-            .overlay_slot(&mut overlay).default_value(fresh.thickness_base).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. Each mapping adds its weighted contribution in those same widths, and the sum is limited to Thickness max; a hidden layer remains hidden. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost."),
+            .overlay_slot(&mut overlay).default_value(fresh.thickness_base).unit(1.0, "×")
+            .hint(
+                "Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. Each mapping adds its weighted contribution in those same widths, and the sum is limited to Thickness max; a hidden layer remains hidden. The bands show each mapping's possible reach: stripes mark clipping, dashes a gain boost.",
+            )
+            .show(ui),
     };
     for &source in &sources {
         let fresh_weight = source.setting(&mut { *fresh }).weight(target).unwrap_or(1.0);
@@ -163,7 +173,7 @@ fn group(
                         if source == Source::Timbre {
                             bar = bar.display(|v| format!("±{v:.2}"));
                         }
-                        bar.show(ui).on_hover_text(source.hint())
+                        bar.hint(source.hint()).show(ui)
                     },
                 );
                 if ui
