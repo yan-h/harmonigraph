@@ -296,8 +296,6 @@ fn persist_round_trips_camera_and_view() {
     // other mode is a value a project has to keep, and the one a fresh view
     // would overwrite if it did not.
     state.picture.appearance.view.note_names = NoteNames::All;
-    state.picture.appearance.view.meantone = true;
-    state.picture.appearance.view.marvel = false;
     state.workspace.interaction.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
@@ -333,8 +331,6 @@ fn persist_round_trips_camera_and_view() {
         NoteNames::All,
         "a non-default note-name mode round-trips",
     );
-    assert!(restored.picture.appearance.view.meantone);
-    assert!(!restored.picture.appearance.view.marvel, "each comma keeps its own mode");
     assert_eq!(restored.workspace.interaction.camera_presets.len(), 1);
     assert_eq!(restored.workspace.interaction.camera_presets[0].name, "reading");
     assert_eq!(restored.workspace.interaction.camera_presets[0].yaw, 0.7);
@@ -1755,22 +1751,28 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     assert_eq!(current.picture.appearance.camera.yaw, 1.23);
     assert_eq!(current.picture.appearance.view.max_sevens, 3);
 }
-/// Saved releases are restored verbatim, even when the intervals already
-/// satisfy the relationship. Loading is not a new independent tuning entry.
+/// The tempered links belong to the configuration, not the look (#1677): an
+/// editor save carries none, and loading one leaves the session's links as
+/// they were — even a save written while the appearance still held its own
+/// `meantone` and `marvel`, which this build ignores.
 #[test]
-fn loading_a_project_preserves_released_temperaments() {
+fn loading_a_project_leaves_the_links_with_the_configuration() {
     let mut state = fresh();
-    state.picture.appearance.view.meantone = false;
-    state.picture.appearance.view.marvel = false;
     let saved = state.save_persist();
-    assert!(!saved.contains("meantone_auto"));
-    assert!(!saved.contains("marvel_auto"));
-    let mut restored = fresh();
-    assert!(restored.load_persist(&saved));
-    for frame in 0..3 {
-        begin_frame(&mut restored.picture, &Defaults, frame as f64);
-        assert!(!restored.picture.appearance.view.meantone);
-        assert!(!restored.picture.appearance.view.marvel);
+    assert!(!saved.contains("meantone") && !saved.contains("marvel"), "{saved}");
+    let unlinked = harmonigraph_core::Tempered { syntonic: false, septimal_kleisma: false };
+    assert_ne!(state.picture.runtime.tempered, unlinked, "the fixture must change the links");
+    state.picture.runtime.tempered = unlinked;
+    begin_frame(&mut state.picture, &Defaults, 0.0);
+    assert_eq!(state.picture.runtime.tempered, unlinked);
+
+    let anchor = pair_starts(&saved, "render_scale");
+    assert_eq!(anchor.len(), 1);
+    let old = format!("{}meantone:true,marvel:true,{}", &saved[..anchor[0]], &saved[anchor[0]..]);
+    assert!(state.load_persist(&old), "an old save holding the links must still load");
+    for frame in 1..3 {
+        begin_frame(&mut state.picture, &Defaults, f64::from(frame));
+        assert_eq!(state.picture.runtime.tempered, unlinked, "the save reached the links");
     }
 }
 

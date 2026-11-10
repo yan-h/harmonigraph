@@ -46,8 +46,6 @@ impl Look {
     fn preserve_external(to: &mut ViewConfig, from: &ViewConfig) {
         to.center_fives = from.center_fives;
         to.center_threes = from.center_threes;
-        to.meantone = from.meantone;
-        to.marvel = from.marvel;
     }
 
     pub(crate) fn apply(&self, appearance: &mut AppearanceDocument) {
@@ -695,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_preserves_incoming_camera_tuning_and_output() {
+    fn undo_preserves_incoming_camera_and_output() {
         let mut appearance = AppearanceDocument::default();
         let mut history = History::default();
         let before = Look::capture(&appearance);
@@ -704,16 +702,12 @@ mod tests {
         history.observe(before, &appearance, true);
         appearance.camera.distance = 7.0;
         appearance.view.center_fives = 12;
-        let tuning = (appearance.view.meantone, appearance.view.marvel);
-        appearance.view.meantone = !tuning.0;
-        appearance.view.marvel = !tuning.1;
         appearance.render.short_edge = 1920;
         history.finish(&appearance);
         history.undo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, original);
         assert_eq!(appearance.camera.distance, 7.0);
         assert_eq!(appearance.view.center_fives, 12);
-        assert_eq!((appearance.view.meantone, appearance.view.marvel,), (!tuning.0, !tuning.1));
         assert_eq!(appearance.render.short_edge, 1920);
     }
     #[test]

@@ -312,7 +312,15 @@ pub(crate) fn draw_lattice(
     // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
     let assignments = map_assignments(state, &scene, &window, response.is_some());
-    draw_node_labels(ui, rect, &scene, &state.appearance.view, &assignments, &mut batch);
+    draw_node_labels(
+        ui,
+        rect,
+        &scene,
+        &state.appearance.view,
+        state.runtime.tempered,
+        &assignments,
+        &mut batch,
+    );
     // The badge is laid out here, before the names are handed over, though it
     // is DRAWN after them. Laying text out is what rasterizes glyphs into
     // egui's font atlas, and an atlas that changes size between the two
@@ -630,6 +638,7 @@ pub(crate) fn draw_node_labels(
     rect: egui::Rect,
     scene: &harmonigraph_scene::Scene,
     view: &harmonigraph_scene::ViewConfig,
+    tempered: harmonigraph_core::Tempered,
     assignments: &[usize],
     batch: &mut crate::text::TextBatch,
 ) {
@@ -745,7 +754,7 @@ pub(crate) fn draw_node_labels(
                     size,
                 ),
                 SevensLabel::Name => {
-                    let name = display_note_name(node.lattice_pos, view.tempered());
+                    let name = display_note_name(node.lattice_pos, tempered);
                     draw_stacked_name(
                         batch,
                         ui.painter(),
@@ -880,6 +889,7 @@ mod tests {
                     rect,
                     &scene,
                     &state.appearance.view,
+                    state.runtime.tempered,
                     &assignments,
                     &mut batch,
                 );
@@ -1159,10 +1169,11 @@ mod tests {
             .position(|n| n.lattice_pos == harmonigraph_core::LatticePos::ORIGIN)
             .unwrap();
         let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(600.0, 600.0));
+        let tempered = state.runtime.tempered;
         let draw = |scene: &harmonigraph_scene::Scene, view: &harmonigraph_scene::ViewConfig| {
             let mut batch = crate::text::TextBatch::default();
             let _ = painted_full(egui::vec2(700.0, 700.0), |ui| {
-                draw_node_labels(ui, rect, scene, view, &[index], &mut batch);
+                draw_node_labels(ui, rect, scene, view, tempered, &[index], &mut batch);
             });
             batch
         };
@@ -1238,7 +1249,15 @@ mod tests {
         };
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
-            draw_node_labels(ui, rect, &scene, &state.appearance.view, &[], &mut batch);
+            draw_node_labels(
+                ui,
+                rect,
+                &scene,
+                &state.appearance.view,
+                state.runtime.tempered,
+                &[],
+                &mut batch,
+            );
         });
         (batch.pieces().to_vec(), scene)
     }
@@ -1916,7 +1935,15 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
-            draw_node_labels(ui, rect, &scene, &state.appearance.view, &[], &mut batch);
+            draw_node_labels(
+                ui,
+                rect,
+                &scene,
+                &state.appearance.view,
+                state.runtime.tempered,
+                &[],
+                &mut batch,
+            );
         });
         let pieces = batch.pieces().to_vec();
         let ink = pieces.first().expect("the visited node is named").fill;

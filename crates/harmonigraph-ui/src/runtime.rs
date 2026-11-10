@@ -25,7 +25,16 @@ pub struct VisualRuntime {
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
-    /// A load/start boundary adopts saved links with the next parameter snapshot.
+    /// The commas being tempered out: the links every naming path spells
+    /// against and the tuning panes show. Resolved each frame from whichever
+    /// owner holds the configuration (the plugin's audio owner, a take's
+    /// recorded boundaries, or this runtime's own reducer), and never
+    /// persisted by the editor: the plugin saves them in its musical settings,
+    /// and a shell without a configuration owner starts from the reducer's
+    /// fresh value.
+    pub tempered: harmonigraph_core::Tempered,
+    /// A load/start boundary adopts the next parameter snapshot verbatim,
+    /// without rejudging the links against it.
     pub(crate) restore_configuration: bool,
     pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
@@ -62,6 +71,7 @@ impl Default for VisualRuntime {
             tuning: Tuning::default(),
             frame_params: FrameParams::default(),
             learn_active: false,
+            tempered: harmonigraph_core::configuration::TuningModes::default().tempered,
             config_reducer: Default::default(),
             restore_configuration: true,
             replayed_configuration: None,
@@ -96,11 +106,11 @@ impl VisualRuntime {
     /// call `advance_time` directly; observing is independent of drawing too.
     pub fn advance(
         &mut self,
-        appearance: &mut crate::AppearanceDocument,
+        appearance: &crate::AppearanceDocument,
         params: &dyn ParamBackend,
         now: f64,
     ) {
-        self.observe_configuration(appearance, params);
+        self.observe_configuration(params);
         self.frame_params = FrameParams {
             fade_time: params.get(params::ParamKey::Fade),
             darkest_pitch: params.get(params::ParamKey::DarkestPitch),
@@ -111,24 +121,20 @@ impl VisualRuntime {
 
     /// Resolve current musical values without advancing drawing or envelope state.
     /// Synchronous shells also call this after edits, before capturing their frame.
-    pub fn observe_configuration(
-        &mut self,
-        appearance: &mut crate::AppearanceDocument,
-        params: &dyn ParamBackend,
-    ) {
+    pub fn observe_configuration(&mut self, params: &dyn ParamBackend) {
         let owned = params.configuration();
         if owned.is_none() && self.replayed_configuration.is_none() {
-            self.learn_step(appearance, params);
+            self.learn_step(params);
         }
 
         if let Some(owned) = owned {
-            self.apply_resolved(appearance, owned.resolved);
+            self.apply_resolved(owned.resolved);
             self.configuration_status = owned.status;
             self.configuration_pending = owned.pending;
         } else if let Some(recorded) = self.replayed_configuration {
-            self.apply_resolved(appearance, recorded);
+            self.apply_resolved(recorded);
         } else {
-            let modes = self.tuning_modes(appearance);
+            let modes = self.tuning_modes();
             let raw = params::tuning_from_params(params);
             if std::mem::take(&mut self.restore_configuration) {
                 self.config_reducer.apply(
@@ -141,32 +147,21 @@ impl VisualRuntime {
             } else {
                 self.config_reducer.sync_display(raw, modes, self.adaptive_policy);
             }
-            self.apply_resolved(appearance, self.config_reducer.resolved());
+            self.apply_resolved(self.config_reducer.resolved());
         }
     }
 
-    fn tuning_modes(
-        &self,
-        appearance: &crate::AppearanceDocument,
-    ) -> harmonigraph_core::configuration::TuningModes {
+    fn tuning_modes(&self) -> harmonigraph_core::configuration::TuningModes {
         harmonigraph_core::configuration::TuningModes {
-            tempered: harmonigraph_core::Tempered {
-                syntonic: appearance.view.meantone,
-                septimal_kleisma: appearance.view.marvel,
-            },
+            tempered: self.tempered,
             learning: self.learn_active,
         }
     }
 
-    fn apply_resolved(
-        &mut self,
-        appearance: &mut crate::AppearanceDocument,
-        config: harmonigraph_core::configuration::ResolvedConfig,
-    ) {
+    fn apply_resolved(&mut self, config: harmonigraph_core::configuration::ResolvedConfig) {
         self.tuning = config.tuning;
         self.adaptive_policy = config.policy;
-        appearance.view.meantone = config.modes.tempered.syntonic;
-        appearance.view.marvel = config.modes.tempered.septimal_kleisma;
+        self.tempered = config.modes.tempered;
         self.learn_active = config.modes.learning;
     }
 
@@ -174,7 +169,6 @@ impl VisualRuntime {
     /// reducer as the audio owner; observation only adapts external param changes.
     pub(crate) fn edit_tuning(
         &mut self,
-        appearance: &mut crate::AppearanceDocument,
         params: &dyn ParamBackend,
         edit: harmonigraph_core::configuration::ConfigEdit,
     ) {
@@ -187,7 +181,7 @@ impl VisualRuntime {
         }
         self.config_reducer.sync_display(
             params::tuning_from_params(params),
-            self.tuning_modes(appearance),
+            self.tuning_modes(),
             self.adaptive_policy,
         );
         self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(edit));
@@ -196,7 +190,7 @@ impl VisualRuntime {
                 params.set(key, value as f32 / 1_000_000.0);
             }
         }
-        self.apply_resolved(appearance, self.config_reducer.resolved());
+        self.apply_resolved(self.config_reducer.resolved());
     }
 
     /// One tick of learn mode (v1 semantics): while armed, whenever the set of
@@ -204,11 +198,7 @@ impl VisualRuntime {
     /// param backend. Change-detected so the host only sees parameter sets when
     /// something actually changed. No egui types — testable with a stub
     /// backend.
-    pub(crate) fn learn_step(
-        &mut self,
-        appearance: &mut crate::AppearanceDocument,
-        params: &dyn ParamBackend,
-    ) {
+    pub(crate) fn learn_step(&mut self, params: &dyn ParamBackend) {
         if !self.learn_active {
             self.last_learned_classes = None;
             return;
@@ -227,7 +217,7 @@ impl VisualRuntime {
         if !classes.is_empty() {
             self.config_reducer.sync_display(
                 self.config_reducer.raw(),
-                self.tuning_modes(appearance),
+                self.tuning_modes(),
                 self.adaptive_policy,
             );
             let learned = harmonigraph_core::learn_tuning(&classes);
@@ -250,7 +240,7 @@ impl VisualRuntime {
                     raw: params::tuning_from_params(params),
                 },
             );
-            self.apply_resolved(appearance, self.config_reducer.resolved());
+            self.apply_resolved(self.config_reducer.resolved());
             self.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
         }
         self.last_learned_classes = Some(classes);

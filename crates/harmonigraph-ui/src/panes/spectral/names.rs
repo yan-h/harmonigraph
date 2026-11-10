@@ -228,8 +228,12 @@ fn plan_with_thinning_for_test(
         let mut result = Vec::new();
         let _ = crate::tests::probe::frame_full(ctx, egui::vec2(1920.0, 1080.0), |ui| {
             let painter = ui.painter();
-            let mut namer =
-                Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
+            let mut namer = Namer::new(
+                &state.appearance.view,
+                state.shown(),
+                &state.runtime.tuning,
+                state.runtime.tempered,
+            );
             let width = Width::of(state, axes, scale, 1.0);
             result =
                 plan(painter, state, axes, scale, &width, split, now, scales, &mut namer, thinning);
@@ -615,12 +619,17 @@ pub(crate) struct Namer {
 }
 
 impl Namer {
-    pub(crate) fn new(view: &ViewConfig, shown: DrawnWindow, tuning: &Tuning) -> Self {
+    pub(crate) fn new(
+        view: &ViewConfig,
+        shown: DrawnWindow,
+        tuning: &Tuning,
+        tempered: Tempered,
+    ) -> Self {
         Self {
             reach: view.reach(),
             shown,
             tuning: *tuning,
-            tempered: view.tempered(),
+            tempered,
             reach_nodes: None,
             shown_nodes: None,
             visible: HashMap::new(),
@@ -677,8 +686,14 @@ impl Namer {
 }
 
 #[cfg(test)]
-fn note_name(view: &ViewConfig, shown: &DrawnWindow, tuning: &Tuning, midi: f32) -> NoteName {
-    Namer::new(view, *shown, tuning).name(midi)
+fn note_name(
+    view: &ViewConfig,
+    shown: &DrawnWindow,
+    tuning: &Tuning,
+    tempered: Tempered,
+    midi: f32,
+) -> NoteName {
+    Namer::new(view, *shown, tuning, tempered).name(midi)
 }
 
 /// The node in `window` to name a pitch by: the closest match, and among
@@ -829,6 +844,15 @@ mod tests {
     use crate::{SpectralOrientation, SpectrumConfig};
     use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
+    /// The links a fresh runtime opens with: both commas tempered out.
+    fn linked() -> Tempered {
+        harmonigraph_core::configuration::TuningModes::default().tempered
+    }
+
+    /// Neither comma tempered out, for fixtures that measure the lattice's own
+    /// spellings.
+    const UNLINKED: Tempered = Tempered { syntonic: false, septimal_kleisma: false };
+
     /// The window a batch of names is drawn on. Larger than [`PANE`] on both
     /// axes, so a name placed off the pane still lands in the shapes rather
     /// than being clipped away before a test can find it.
@@ -927,8 +951,8 @@ mod tests {
         // These fixtures measure lattice spellings themselves. The shipped
         // comma locks are a view choice that would respell the same positions
         // before the naming rule under test sees them.
-        state.appearance.view.meantone = false;
-        state.appearance.view.marvel = false;
+        state.runtime.tempered.syntonic = false;
+        state.runtime.tempered.septimal_kleisma = false;
         state.appearance.spectrum = SpectrumConfig {
             orientation,
             low_midi: 60.0 - range * 0.5,
@@ -2456,7 +2480,7 @@ mod tests {
                 center_threes: centre,
                 ..harmonigraph_scene::ViewConfig::default()
             };
-            note_name(&view, &view.reach(), &equal, 60.0).to_string()
+            note_name(&view, &view.reach(), &equal, linked(), 60.0).to_string()
         };
         assert_eq!(named(0), "C");
         for centre in [-2, -1, 1, 2] {
@@ -2480,7 +2504,7 @@ mod tests {
         assert!(!view.reach().contains(far));
         let midi = 60.0 + just.pitch_class(far).to_cents() / 100.0;
 
-        let equal_tempered = note_name(&view, &view.reach(), &just, midi).to_string();
+        let equal_tempered = note_name(&view, &view.reach(), &just, linked(), midi).to_string();
         assert_eq!(
             equal_tempered,
             equal_tempered_name(midi).to_string(),
@@ -2492,14 +2516,14 @@ mod tests {
             max: harmonigraph_core::LatticePos::new(2, 30, 0),
         };
         assert_eq!(
-            note_name(&view, &window, &just, midi).to_string(),
-            crate::panes::display_note_name(far, view.tempered()).to_string(),
+            note_name(&view, &window, &just, linked(), midi).to_string(),
+            crate::panes::display_note_name(far, linked()).to_string(),
             "the picture is drawing this node and the name ignored it",
         );
         // The red-band and name queries use this same frame-local lookup.
         // A matching band query stops early; a miss prepares the shown list,
         // which the subsequent fallback name then reads without rebuilding.
-        let mut namer = Namer::new(&view, window, &just);
+        let mut namer = Namer::new(&view, window, &just, linked());
         let far_class = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
         assert!(namer.shows_node(far_class));
         assert!(namer.shown_nodes.is_none());
@@ -2509,12 +2533,13 @@ mod tests {
         assert!(namer.shows_node(just.pitch_class(LatticePos::ORIGIN)));
         assert_eq!(
             namer.name(midi).to_string(),
-            crate::panes::display_note_name(far, view.tempered()).to_string(),
+            crate::panes::display_note_name(far, linked()).to_string(),
         );
         // Exercise the roll's prepared lookup too: it must populate the
         // distinct shown window when the naming reach has no match.
         let mut state = state(24.0, 10.0);
         state.appearance.view = view;
+        state.runtime.tempered = linked();
         state.runtime.tuning = just;
         state.surfaces.drawn = Some(window);
         state.runtime.tracker.handle_event(on(1.0, 60));
@@ -2522,8 +2547,28 @@ mod tests {
         state.runtime.tracker.handle_event(off(2.0, 60));
         assert_eq!(
             said(&labels_in(&state, 5.0, BIG)),
-            [crate::panes::display_note_name(far, state.appearance.view.tempered()).to_string()],
+            [crate::panes::display_note_name(far, state.runtime.tempered).to_string()],
         );
+    }
+
+    /// The roll spells against the runtime's links, which the configuration's
+    /// owner resolves every frame; the appearance holds no copy (#1677). One
+    /// just major third, named once with Meantone linked and once without.
+    #[test]
+    fn the_roll_spells_against_the_runtimes_links() {
+        let just = Tuning::just();
+        let midi = 60.0 + just.five_cents() / 100.0;
+        let named = |tempered| {
+            let mut state = state(24.0, 10.0);
+            state.runtime.tuning = just;
+            state.runtime.tempered = tempered;
+            state.runtime.tracker.handle_event(on(1.0, 64));
+            state.runtime.tracker.handle_event(tuning(1.01, 64, midi - 64.0));
+            state.runtime.tracker.handle_event(off(2.0, 64));
+            said(&labels_in(&state, 5.0, BIG))
+        };
+        assert_eq!(named(UNLINKED), ["E-"]);
+        assert_eq!(named(linked()), ["E"], "Meantone spells the 5/4 third as plain E");
     }
 
     /// The tritone is a genuine tie — six fifths up spells F♯, six down spells
@@ -2536,7 +2581,10 @@ mod tests {
     fn a_tie_between_two_spellings_is_broken_by_a_rule_not_by_iteration_order() {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
-        assert_eq!(note_name(&view, &view.reach(), &equal, 66.0).to_string(), "F\u{266F}");
+        assert_eq!(
+            note_name(&view, &view.reach(), &equal, linked(), 66.0).to_string(),
+            "F\u{266F}"
+        );
     }
 
     #[test]
@@ -2717,7 +2765,7 @@ mod tests {
         let view = harmonigraph_scene::ViewConfig::default();
         let equal = harmonigraph_core::Tuning::default();
         let name = |midi| {
-            let name = note_name(&view, &view.reach(), &equal, midi).to_string();
+            let name = note_name(&view, &view.reach(), &equal, linked(), midi).to_string();
             let mut state = state(24.0, 10.0);
             state.appearance.view = view.clone();
             state.runtime.tuning = equal;
@@ -2773,15 +2821,10 @@ mod tests {
     #[test]
     fn a_plain_spelling_beats_an_off_sheet_one_at_the_same_pitch() {
         // A view with depth, so off-sheet nodes are candidates at all.
-        let view = harmonigraph_scene::ViewConfig {
-            min_sevens: -1,
-            max_sevens: 1,
-            meantone: false,
-            marvel: false,
-            ..Default::default()
-        };
+        let view =
+            harmonigraph_scene::ViewConfig { min_sevens: -1, max_sevens: 1, ..Default::default() };
         let equal = harmonigraph_core::Tuning::default();
-        let name = |midi| note_name(&view, &view.reach(), &equal, midi).to_string();
+        let name = |midi| note_name(&view, &view.reach(), &equal, UNLINKED, midi).to_string();
 
         // Every one of these has an equal-tempered twin one sevens step off,
         // nearer the origin, that would win on distance alone.
@@ -2790,7 +2833,7 @@ mod tests {
         assert_eq!(name(60.0), "C");
         // And the cost is symmetric: the mark counts whichever way it points.
         for pos in [LatticePos::new(2, 0, -1), LatticePos::new(-2, 0, 1)] {
-            let spelled = crate::panes::display_note_name(pos, view.tempered());
+            let spelled = crate::panes::display_note_name(pos, UNLINKED);
             assert!(
                 spelling_cost(spelled, pos).0 > 0,
                 "a septimal mark should cost like a comma, {spelled} did not"
@@ -2811,25 +2854,23 @@ mod tests {
         let just = Tuning::just();
         let midi = 60.0 + just.five_cents() / 100.0;
         let pitch = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
-        let mut view = ViewConfig { meantone: false, marvel: false, ..Default::default() };
-        let mut before = Namer::new(&view, view.reach(), &just);
+        let view = ViewConfig::default();
+        let mut before = Namer::new(&view, view.reach(), &just, UNLINKED);
         assert!(before.shows_node(pitch));
         assert_eq!(before.name(midi).to_string(), "E-");
 
         // The held acoustic pitch stays fixed as the current tuning changes.
         // Prove neither naming window contains a match before testing fallback.
-        view.meantone = true;
-        view.marvel = true;
         let equal = Tuning::default();
         let shown = view.reach();
         assert!(naming_node_from(
             shown.positions().map(|pos| (pos, equal.pitch_class(pos))),
-            view.tempered(),
+            linked(),
             &equal,
             pitch,
         )
         .is_none());
-        let mut after = Namer::new(&view, shown, &equal);
+        let mut after = Namer::new(&view, shown, &equal, linked());
         assert!(!after.shows_node(pitch));
         assert_eq!(after.name(midi).to_string(), "E");
     }

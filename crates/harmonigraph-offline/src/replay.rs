@@ -529,7 +529,7 @@ mod tests {
                 };
                 let config = *config;
                 assert_eq!(state.runtime.tuning, config.tuning);
-                assert_eq!(state.appearance.view.meantone, config.modes.tempered.syntonic);
+                assert_eq!(state.runtime.tempered, config.modes.tempered);
                 assert_eq!(state.runtime.learn_active, config.modes.learning);
                 assert_eq!(state.runtime.replayed_configuration, Some(config));
             }

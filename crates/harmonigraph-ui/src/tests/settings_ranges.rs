@@ -548,9 +548,9 @@ fn check(edge: Edge) {
     for scenario in scenarios() {
         let mut state = loaded(edge);
         let backend = backend(edge, scenario.meantone, scenario.marvel);
-        state.picture.runtime.observe_configuration(&mut state.picture.appearance, &backend);
-        assert_eq!(state.picture.appearance.view.meantone, scenario.meantone);
-        assert_eq!(state.picture.appearance.view.marvel, scenario.marvel);
+        state.picture.runtime.observe_configuration(&backend);
+        assert_eq!(state.picture.runtime.tempered.syntonic, scenario.meantone);
+        assert_eq!(state.picture.runtime.tempered.septimal_kleisma, scenario.marvel);
         set_optional_sections(&mut state, scenario.enabled);
         let a = &mut state.picture.appearance;
         a.camera.projection = scenario.projection;
