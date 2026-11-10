@@ -19,7 +19,7 @@ struct StarSlice {
     uint gather;
     uint _pad;
 };
-struct type_7 {
+struct type_8 {
     StarSlice inner[5];
 };
 struct StarUniforms {
@@ -29,22 +29,61 @@ struct StarUniforms {
     float star_life;
     float star_size_variation;
     float star_cover;
-    type_7 star_slices;
-};
-struct Settings {
-    StarUniforms stars;
-    float depth;
     float star_twinkle;
+    float _pad0_;
     float _pad1_;
     float _pad2_;
+    type_8 star_slices;
+};
+struct Cloud {
+    metal::float2 origin;
+    metal::float2 size;
+    metal::float2 step;
+    float ppp;
+    uint tone_baked;
+    metal::float2 drift;
+    float cloud_depth;
+    uint cloud_style;
+    float wash_size;
+    float wash_fuzz;
+    float wash_lobe;
+    float wash_refract;
+    float wash_layers;
+    uint tile_cells;
+    uint pitch_vertical;
+    uint _pad;
+    StarUniforms stars;
+    uint memory_enabled;
+    uint memory_valid;
+    float pickup_alpha;
+    float release_alpha;
+    metal::int2 memory_shift;
+    metal::float2 memory_fraction;
+    float previous_life;
+    float wash_randomness;
+    metal::float2 memory_extent;
+    type_8 previous_slices;
+    metal::float4 velvet;
+    metal::float4 velvet_form;
+    metal::float4 wash_pigment;
 };
 struct TileVertex {
     metal::float4 position;
+    metal::float2 fraction;
+    char _pad2[8];
 };
-constant uint OCCLUDER_HEADER = 5u;
-constant float GAUSSIAN_GAIN = 2.5;
-constant float SHADOW_KEEP_FLOOR = 0.0009765625;
-constant float GLOW_BASE = 0.8;
+constant float CLOUD_TILE_ROT_SIN = 0.6;
+constant float CLOUD_TILE_ROT_COS = 0.8;
+constant int WASH_RING = 2;
+constant float WASH_JITTER = 0.4;
+constant float WASH_RADIUS_MIN = 1.17;
+constant float WASH_RADIUS_MAX = 1.91;
+constant float WASH_CELLS = 5.25;
+constant float WASH_LACUNARITY = 2.1;
+constant float WASH_FINE_OCCUPANCY = 0.2;
+constant float WASH_WARP = 0.45;
+constant float WASH_WARP_SCALE = 0.9;
+constant float WASH_FBM_FINE = 2.0;
 constant int STAR_ATLAS_WIDTH = 2048;
 constant uint STAR_ATLAS_SHIFT = 11u;
 constant uint STAR_SLICES = 5u;
@@ -53,6 +92,12 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
+constant float CLOUD_UNITS = 10.0;
+constant float WASH_POOL = 0.44;
+constant float WASH_PIG_DEPTH = 0.35;
+constant float WASH_BLOOM = 2.7;
+constant float VELVET_CELL = 0.05925926;
+constant metal::float2 DRIFT_START = metal::float2(0.0, 0.6);
 
 metal::int2 atlas_texel(
     int index
@@ -61,17 +106,37 @@ metal::int2 atlas_texel(
 }
 
 metal::float2 star_size(
-    constant Settings& settings
+    constant Cloud& cloud
 ) {
-    metal::float2 _e3 = settings.stars.size;
+    metal::float2 _e3 = cloud.stars.size;
     return _e3;
+}
+
+uint naga_f2u32(float value) {
+    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
+}
+
+metal::float3 palette_color(
+    float level,
+    metal::texture2d<float, metal::access::sample> lut
+) {
+    uint levels = metal::uint2(lut.get_width(), lut.get_height()).x;
+    float x = metal::max((metal::clamp(level, 0.0, 1.0) * static_cast<float>(levels)) - 0.5, 0.0);
+    uint i = naga_f2u32(metal::clamp(metal::floor(x), 0.0, static_cast<float>(levels - 1u)));
+    uint clamped_lod_e24 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 _e24 = lut.read(metal::min(metal::uint2(metal::uint2(i, 0u)), metal::uint2(lut.get_width(clamped_lod_e24), lut.get_height(clamped_lod_e24)) - 1), clamped_lod_e24);
+    metal::float3 a = _e24.xyz;
+    uint clamped_lod_e35 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
+    metal::float4 _e35 = lut.read(metal::min(metal::uint2(metal::uint2(metal::min(i + 1u, levels - 1u), 0u)), metal::uint2(lut.get_width(clamped_lod_e35), lut.get_height(clamped_lod_e35)) - 1), clamped_lod_e35);
+    metal::float3 b = _e35.xyz;
+    return metal::mix(a, b, metal::fract(x));
 }
 
 StarSlice star_slice(
     uint k,
-    constant Settings& settings
+    constant Cloud& cloud
 ) {
-    StarSlice _e5 = settings.stars.star_slices.inner[metal::min(unsigned(k), 4u)];
+    StarSlice _e5 = cloud.stars.star_slices.inner[metal::min(unsigned(k), 4u)];
     return _e5;
 }
 
@@ -83,8 +148,8 @@ float star_profile(
         return 0.0;
     }
     float u = metal::saturate((t - s.solid) * s.ramp);
-    float x = (u * u) * (3.0 - (2.0 * u));
-    return (1.0 - x) / (1.0 + (s.bend * x));
+    float x_1 = (u * u) * (3.0 - (2.0 * u));
+    return (1.0 - x_1) / (1.0 + (s.bend * x_1));
 }
 
 metal::float4 star_texel(
@@ -184,27 +249,30 @@ metal::float4 star_gather3_(
 }
 
 float star_cover(
-    constant Settings& settings
+    constant Cloud& cloud
 ) {
-    float _e3 = settings.stars.star_cover;
+    float _e3 = cloud.stars.star_cover;
     return _e3;
 }
 
 metal::float4 star_floor(
+    metal::texture2d<float, metal::access::sample> lut
 ) {
-    return metal::float4(0.0);
+    metal::float3 _e1 = palette_color(0.0, lut);
+    return metal::float4(_e1, 1.0);
 }
 
 metal::float4 star_layers(
     metal::float2 pt,
-    constant Settings& settings,
+    constant Cloud& cloud,
+    metal::texture2d<float, metal::access::sample> lut,
     metal::texture2d<uint, metal::access::sample> star_atlas
 ) {
     metal::float4 stars = metal::float4(0.0);
     uint k_1 = 0u;
     metal::float4 slice = {};
-    metal::float2 _e4 = star_size(settings);
-    metal::float2 _e9 = star_size(settings);
+    metal::float2 _e4 = star_size(cloud);
+    metal::float2 _e9 = star_size(cloud);
     metal::float2 sp = (pt - (_e4 * 0.5)) * (STAR_PANE / _e9.y);
     uint2 loop_bound_1 = uint2(4294967295u);
     bool loop_init_1 = true;
@@ -223,7 +291,7 @@ metal::float4 star_layers(
         }
         {
             uint _e18 = k_1;
-            StarSlice _e19 = star_slice(_e18, settings);
+            StarSlice _e19 = star_slice(_e18, cloud);
             metal::float2 r_1 = (sp / metal::float2(_e19.cell)) - metal::fract(_e19.offset);
             metal::float2 o_1 = metal::floor(r_1);
             metal::float2 f_3 = r_1 - o_1;
@@ -259,7 +327,7 @@ metal::float4 star_layers(
                 float _e88 = stars.w;
                 float own = (metal::dot(colour_1 * colour_1, luminance) * _e85) * _e88;
                 float ratio = (behind > 0.0) ? metal::saturate(own / behind) : 1.0;
-                float _e97 = star_cover(settings);
+                float _e97 = star_cover(cloud);
                 float hold = cover_1 * metal::mix(ratio * ratio, 1.0, _e97);
                 metal::float4 _e101 = stars;
                 float _e107 = stars.w;
@@ -270,7 +338,7 @@ metal::float4 star_layers(
             }
         }
     }
-    metal::float4 _e129 = star_floor();
+    metal::float4 _e129 = star_floor(lut);
     float _e132 = stars.w;
     metal::float4 _e136 = stars;
     float _e144 = stars.w;
@@ -278,25 +346,28 @@ metal::float4 star_layers(
 }
 
 metal::float2 star_image_size(
-    constant Settings& settings
+    constant Cloud& cloud
 ) {
-    metal::float2 _e3 = settings.stars.star_image_size;
+    metal::float2 _e3 = cloud.stars.star_image_size;
     return _e3;
 }
 
 struct fs_starsInput {
+    metal::float2 fraction [[user(loc0), center_perspective]];
 };
 struct fs_starsOutput {
     metal::float4 member [[color(0)]];
 };
 fragment fs_starsOutput fs_stars(
-  metal::float4 position [[position]]
-, constant Settings& settings [[buffer(0)]]
-, metal::texture2d<uint, metal::access::sample> star_atlas [[texture(1)]]
+  fs_starsInput varyings [[stage_in]]
+, metal::float4 position [[position]]
+, constant Cloud& cloud [[buffer(2)]]
+, metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
+, metal::texture2d<uint, metal::access::sample> star_atlas [[texture(5)]]
 ) {
-    const TileVertex in = { position };
-    metal::float2 _e3 = star_image_size(settings);
-    metal::float2 _e5 = star_size(settings);
-    metal::float4 _e7 = star_layers((in.position.xy / _e3) * _e5, settings, star_atlas);
+    const TileVertex in = { position, varyings.fraction };
+    metal::float2 _e3 = star_image_size(cloud);
+    metal::float2 _e5 = star_size(cloud);
+    metal::float4 _e7 = star_layers((in.position.xy / _e3) * _e5, cloud, lut, star_atlas);
     return fs_starsOutput { _e7 };
 }

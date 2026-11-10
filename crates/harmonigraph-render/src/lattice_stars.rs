@@ -13,8 +13,7 @@ uniform_group! {
     struct Settings {
         stars: StarUniforms,
         depth: f32,
-        /// `Twinkle`, which the shared stars read through `star_twinkle`.
-        star_twinkle: f32,
+        _pad0: f32,
         _pad1: f32,
         _pad2: f32,
     }
@@ -261,9 +260,15 @@ impl Targets {
         let held = held.as_mut().unwrap();
         held.atlas_scissor = layout.scissor();
         let settings = Settings {
-            stars: StarUniforms::new(stars, motion, size, &layout, held.allocation.image),
+            stars: StarUniforms::new(
+                stars,
+                motion,
+                size.map(|n| n as f32),
+                held.allocation.image,
+                stars::star_slices(stars, motion.stars, &layout, held.allocation.image),
+            ),
             depth: amount,
-            star_twinkle: stars.star_twinkle_dip,
+            _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
         };

@@ -80,11 +80,21 @@ impl Harness {
         }
     }
 }
+/// Replays `fixtures.txt`, the committed record of every onset in the musical
+/// examples. `HARMONIGRAPH_BLESS_POLICY_FIXTURES=1` rewrites each `on` line's
+/// node and output with what the policy assigns now, for a deliberate change
+/// whose diff the PR then states.
 #[test]
-fn simulator_fixture_parity_includes_register_memory_and_precision() {
+fn policy_fixtures_record_register_memory_and_precision() {
+    let bless = std::env::var_os("HARMONIGRAPH_BLESS_POLICY_FIXTURES").is_some();
+    let mut blessed = String::new();
     let mut h = Harness::new();
     let mut case = "";
-    for line in include_str!("fixtures.txt").lines().filter(|l| !l.starts_with('#')) {
+    for line in include_str!("fixtures.txt").lines() {
+        if line.starts_with('#') {
+            blessed += &format!("{line}\n");
+            continue;
+        }
         let w: Vec<_> = line.split_whitespace().collect();
         let num = |i: usize| w[i].parse::<i64>().unwrap();
         match w[0] {
@@ -115,8 +125,8 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
                         other => panic!("{case}: unhandled fixture setting {other}"),
                     }
                 }
-                // The simulator's bounds are not the plugin's: a profile the
-                // plugin would clamp is numbers the plugin never runs.
+                // A profile the plugin would clamp is numbers the plugin never
+                // runs, so the record holds sanitized settings only.
                 assert_eq!(h.config.policy, h.config.policy.sanitize(), "{case}");
             }
             "seed" => h.held.push((
@@ -132,11 +142,21 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
                 let v = h.on(w[1], num(2));
                 let node = (w[3] != "none")
                     .then(|| LatticePos::new(num(3) as i32, num(4) as i32, num(5) as i32));
-                assert_eq!(v.node, node, "{case}: {line}");
                 let output = num(if node.is_some() { 6 } else { 4 });
-                // Production axes are fixed microcents, whereas the simulator
-                // uses log2 doubles. Accumulated axis rounding is below .001c.
-                assert!(v.pitch.abs_diff(output) < 1000, "{case}: {line}: {}", v.pitch);
+                // The outputs first recorded came from the retired JavaScript
+                // model's log2 doubles; production axes are fixed microcents,
+                // and accumulated axis rounding is below .001c. A bless keeps
+                // a line that still agrees, so its diff is only what moved.
+                let agrees = v.node == node && v.pitch.abs_diff(output) < 1000;
+                if bless && !agrees {
+                    let node = v.node.map_or("none".into(), |n| {
+                        format!("{} {} {}", n.threes, n.fives, n.sevens)
+                    });
+                    blessed += &format!("on {} {} {node} {}\n", w[1], w[2], v.pitch);
+                    continue;
+                }
+                assert_eq!(v.node, node, "{case}: {line}");
+                assert!(agrees, "{case}: {line}: {}", v.pitch);
             }
             "off" => h.off(w[1]),
             // Waiting advances the clock context decays on; bending never
@@ -145,6 +165,11 @@ fn simulator_fixture_parity_includes_register_memory_and_precision() {
             "bend" => {}
             other => panic!("unhandled fixture event {other}"),
         }
+        blessed += &format!("{line}\n");
+    }
+    if bless {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/policy/fixtures.txt");
+        std::fs::write(path, blessed).unwrap();
     }
 }
 #[test]
@@ -183,7 +208,7 @@ fn meantone() -> [i32; 3] {
 }
 /// With the seventh axis on, the B♭ key over a held C major triad is the
 /// harmonic seventh 7/4, not the Pythagorean 16/9 its fifths would spell. No
-/// simulator fixture runs three axes, so this is what reaches prime 7.
+/// policy fixture runs three axes, so this is what reaches prime 7.
 #[test]
 fn the_seventh_axis_spells_a_dominant_seventh_harmonically() {
     let mut h = Harness::new();

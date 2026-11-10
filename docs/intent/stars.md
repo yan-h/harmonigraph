@@ -20,3 +20,7 @@ Every resolution draws stars in their own pass into one image, so Uniform's larg
 ## 2026-11-02 (drift audit, #1635)
 
 - Star layers n draws stored layers 1..n in order, so fewer layers drop the front-most and more bring it back. The even spacing over five stored layers lost both its reasons (per-depth images and halo tiers, #1442; depth curves, #1454). #1635 Stars Q1, #1632
+
+## 2026-11-10 (maintainability audit, #1677)
+
+- No further background texture is expected to be added or dropped, so the lattice and the spectrogram keep their own texture enums (`LatticeMaterial`, `CloudStyle`) and their own control stacks; one shared enum and control function (R5) is declined. #1677 area 7 Q1

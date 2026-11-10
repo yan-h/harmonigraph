@@ -33,6 +33,19 @@ struct StarSlice {
 struct type_10 {
     StarSlice inner[5];
 };
+struct StarUniforms {
+    metal::float2 size;
+    metal::float2 star_image_size;
+    float star_randomness;
+    float star_life;
+    float star_size_variation;
+    float star_cover;
+    float star_twinkle;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
+    type_10 star_slices;
+};
 struct Cloud {
     metal::float2 origin;
     metal::float2 size;
@@ -49,13 +62,8 @@ struct Cloud {
     float wash_layers;
     uint tile_cells;
     uint pitch_vertical;
-    float star_randomness;
-    float star_life;
-    float star_size_variation;
-    float star_cover;
-    float star_twinkle;
-    metal::float4 star_image_size;
-    type_10 star_slices;
+    uint _pad;
+    StarUniforms stars;
     uint memory_enabled;
     uint memory_valid;
     float pickup_alpha;
@@ -135,8 +143,8 @@ metal::float3 wash_vary_brightness(
 metal::float2 star_size(
     constant Cloud& cloud
 ) {
-    metal::float2 _e2 = cloud.size;
-    return _e2;
+    metal::float2 _e3 = cloud.stars.size;
+    return _e3;
 }
 
 metal::float3 gamma_from_linear_rgb(
@@ -576,15 +584,15 @@ metal::float4 backdrop_color(
     return _e9;
 }
 
-struct fs_cloud_backdrop_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
-  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
 , metal::float4 position_4 [[position]]
 , constant Cloud& cloud [[buffer(2)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -599,5 +607,6 @@ fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
 ) {
     const VertexOut in = { position_4, varyings.slab, varyings.t };
     metal::float4 _e3 = backdrop_color(in.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
-    return fs_cloud_backdrop_gammaOutput { _e3 };
+    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

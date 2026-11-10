@@ -29,12 +29,16 @@ struct StarUniforms {
     float star_life;
     float star_size_variation;
     float star_cover;
+    float star_twinkle;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
     type_8 star_slices;
 };
 struct Settings {
     StarUniforms stars;
     float depth;
-    float star_twinkle;
+    float _pad0_;
     float _pad1_;
     float _pad2_;
 };

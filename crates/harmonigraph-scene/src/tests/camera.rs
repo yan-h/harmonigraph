@@ -195,6 +195,42 @@ fn idle_off_sheet_nodes_are_not_pickable() {
     );
 }
 
+/// A note held where Opacity draws it at nothing is still a note held there:
+/// an off-sheet node it sounds on is named and hoverable, as a home one is
+/// (#1677 area 6 Q1). Opacity base 0 with no routes is the fixture that
+/// splits the two presences, and the asserts below check it does.
+#[test]
+fn a_held_note_off_the_sheet_is_visible_at_zero_opacity() {
+    let intensity = IntensitySettings { opacity_rest: 0.0, ..IntensitySettings::unrouted() };
+    let view = ViewConfig {
+        min_sevens: -1,
+        max_sevens: 1,
+        note_names: NoteNames::Played,
+        intensity,
+        ..plain_view()
+    };
+    let tuning = Tuning::default();
+    let viewport = Vec2::new(800.0, 600.0);
+    let idle = scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
+    let off = *idle.nodes.iter().find(|n| !n.on_home).expect("the view spans past the home sheet");
+    let pc = tuning.pitch_class(off.lattice_pos);
+    let note = (60u8..72)
+        .find(|&n| tuning.matches(pc, PitchClass::from_midi_note(n)))
+        .expect("some MIDI note lands on this node under 12-TET");
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+    let held = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
+    let node = held.nodes.iter().find(|n| n.lattice_pos == off.lattice_pos).unwrap();
+    assert!(!node.on_home && node.trail == 0.0, "the fixture must be an untrailed off-sheet node");
+    assert_eq!(node.presence_with_opacity, 0.0, "Opacity base 0 must draw the note at nothing");
+    assert_eq!(node.presence_without_opacity, 1.0, "the note must be held");
+
+    assert!(node.is_visible());
+    assert_eq!(node.name_level(&view), 1.0, "the held note is named");
+    let px = held.project(viewport, node.world_pos).unwrap();
+    assert_eq!(held.pick(viewport, px, 24.0), Some(node.lattice_pos), "and hoverable");
+}
+
 #[test]
 fn camera_right_up_is_orthonormal_to_the_view() {
     let camera = Camera::default();

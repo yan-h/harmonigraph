@@ -31,3 +31,9 @@
 ## 2026-11-09 (performance audit, #1670)
 
 - The Archive copy stays a second pass after the video: time to the video matters more than time to both files. With the Hardware encoder, encoding the two side by side in one ffmpeg finished both in 55 s against 79.5 s (5,302 frames at 2560x1440@60), but held the video back from 32 s to 55 s, and the video is the file used first. #1670 Q1
+
+## 2026-11-10 (maintainability audit, #1677)
+
+- An export row lists each distinct warning the renderer printed, one per line, so a take's note-history gap no longer hides that the export ran through x264. A failed archive copy is one of those warnings rather than its own channel. #1677 area 4 Q1
+- An export row does not name the encoder the renderer opened: with every warning shown, the note that a Hardware export ran through x264 already reaches it, and naming it would make a line on the renderer's stderr a production contract. #1677 area 4 Q2
+- A take recorded to a loop's end honours the Tail like any other take. Its exemption dated from #1147, when the tail was a fixed 4 s; since #1465 Tail is a setting, 0 fresh, so the exemption only overrode a Tail you chose. #1677 area 9 Q1

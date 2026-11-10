@@ -31,14 +31,13 @@ pub(super) fn color_pane(
             (ParamKey::DarkestPitch, ParamKey::BrightestPitch),
             0.0..=120.0,
             crate::COLOR_RANGE_MIN_SPAN,
-            "Pitch color range",
+            (
+                "Pitch color range",
+                "Pitches assigned the first and last gradient colors. \
+                 Pitches outside this range keep the nearest end color. \
+                 Drag an end to resize, or the middle to shift both.",
+            ),
             super::pitch_readout,
-        )
-        .on_hover_text(
-            "Pitches assigned the first and last gradient colors. \
-                     Pitches outside this range keep the nearest end color. \
-                     Drag an end to resize, or the middle to shift both. \
-                     Double-click resets.",
         );
     });
     super::hinted_section(ui, "Audio level colors", LEVEL_COLORS_HINT, |ui| {
@@ -78,20 +77,23 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // stands, the picture would spend every frame of every drag below it one
     // frame behind the bar being dragged.
     let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut view.pitch_gradient, home).show(ui).on_hover_text(
-        "Hue range for MIDI notes. \
-                 Drag the handle to change its span, the track to rotate it, or the end button to reverse it. \
-                 Double-click resets.",
-    );
-    SpreadBar::brightness(&mut view.pitch_gradient, home).show(ui).on_hover_text(
-        "Brightness at the low and high pitches: 0% is black, 100% is white. \
-                 Drag either end; crossing them reverses the brightness ramp. \
-                 Double-click resets.",
-    );
-    SpreadBar::chroma(&mut view.pitch_gradient, home).show(ui).on_hover_text(
-        "Saturation at the low and high pitches: 0% is gray, 100% is the most vivid available color. \
-                 Double-click resets.",
-    );
+    SpectrumBar::new(&mut view.pitch_gradient, home)
+        .hint(
+            "Hue range for MIDI notes. \
+             Drag the handle to change its span, the track to rotate it, or the end button to reverse it.",
+        )
+        .show(ui);
+    SpreadBar::brightness(&mut view.pitch_gradient, home)
+        .hint(
+            "Brightness at the low and high pitches: 0% is black, 100% is white. \
+                 Drag either end; crossing them reverses the brightness ramp.",
+        )
+        .show(ui);
+    SpreadBar::chroma(&mut view.pitch_gradient, home)
+        .hint(
+            "Saturation at the low and high pitches: 0% is gray, 100% is the most vivid available color.",
+        )
+        .show(ui);
     BendPlot::new(&mut view.pitch_gradient, home).show(ui).on_hover_text(BEND_HINT);
     preview
         .show(ui, &view.pitch_gradient)
@@ -142,21 +144,24 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     });
     // The row first, the colors last — see [`GradientPreview`].
     let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
-        "Hue range for audio levels. \
-                 Drag the handle to change its span, the track to rotate it, or the end button to reverse it. \
-                 Double-click resets.",
-    );
-    SpreadBar::brightness(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
-        "Brightness at the low and high audio levels: 0% is black, 100% is white. \
+    SpectrumBar::new(&mut cfg.spectrogram_gradient, home)
+        .hint(
+            "Hue range for audio levels. \
+             Drag the handle to change its span, the track to rotate it, or the end button to reverse it.",
+        )
+        .show(ui);
+    SpreadBar::brightness(&mut cfg.spectrogram_gradient, home)
+        .hint(
+            "Brightness at the low and high audio levels: 0% is black, 100% is white. \
                  The low end is also the spectrogram's background; \
-                 lattice rings start from gray at Silent slice brightness instead. \
-                 Double-click resets.",
-    );
-    SpreadBar::chroma(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
-        "Saturation at the low and high audio levels: 0% is gray, 100% is the most vivid available color. \
-                 Double-click resets.",
-    );
+                 lattice rings start from gray at Silent slice brightness instead.",
+        )
+        .show(ui);
+    SpreadBar::chroma(&mut cfg.spectrogram_gradient, home)
+        .hint(
+            "Saturation at the low and high audio levels: 0% is gray, 100% is the most vivid available color.",
+        )
+        .show(ui);
     BendPlot::new(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(BEND_HINT);
     RangeBar::new(
         &mut cfg.volume_floor_db,
@@ -170,12 +175,11 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         (fresh.volume_floor_db, fresh.volume_ceiling_db)
     })
     .display(|db| format!("{db:.0} dB"))
-    .show(ui)
-    .on_hover_text(
+    .hint(
         "Audio levels assigned the first and last colors. \
-                 Independent of Spectrum level range on Analyzer, which sets curve height and ring levels. \
-                 Double-click resets.",
-    );
+         Independent of Spectrum level range on Analyzer, which sets curve height and ring levels.",
+    )
+    .show(ui);
     preview.show(ui, &cfg.spectrogram_gradient).on_hover_text(
         "Audio colors from the low level on the left to the high level on the right.",
     );
