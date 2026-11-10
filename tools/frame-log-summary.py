@@ -44,6 +44,7 @@ usage: python3 -I tools/frame-log-summary.py [LOG] [--window ID]
 """
 
 import argparse
+import bisect
 import csv
 import glob
 import os
@@ -275,9 +276,18 @@ def median(values):
     return statistics.median(values) if values else float('nan')
 
 
-def full_rate(frames):
-    """The rate the link offers frames at, from the frames it paced."""
-    paced = [fr for fr in frames if fr['timestamp']]
+def full_rate(frames, evs):
+    """The rate the link offers frames at while something animates, from the
+    frames it paced then: a still editor's link is slowed to its poll (#1676),
+    so its frames would read as the poll's rate."""
+    busy = [(a, b) for a, b, reasons in timeline(evs, frames[-1]['t'], 'animating') if reasons]
+    starts = [a for a, _ in busy]
+
+    def animating(t):
+        i = bisect.bisect_right(starts, t) - 1
+        return i >= 0 and t < busy[i][1]
+
+    paced = [fr for fr in frames if fr['timestamp'] and animating(fr['t'])]
     if not paced:
         return float('nan')
     return 1 / median(fr['refresh'] * fr['divisor'] for fr in paced)
@@ -315,7 +325,7 @@ def timeline(evs, end, kind):
 
 def report_silence(run, evs, t0):
     end = run[-1]['t']
-    full = full_rate(run)
+    full = full_rate(run, evs)
     found = False
     for start, stop, reasons in timeline(evs, end, 'animating'):
         if reasons or stop - start < SILENCE_MIN:
