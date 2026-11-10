@@ -239,11 +239,9 @@ fn a_voice_in_an_idle_editor_asks_for_the_next_tick() {
     for _ in 0..4 {
         idle = harness.frame(&mut state, vec![]);
     }
-    assert!(
-        delay(&idle) > std::time::Duration::ZERO,
-        "an idle editor waits for the next poll: {:?}",
-        delay(&idle),
-    );
+    // The whole poll: egui takes its predicted frame time off a delay, which
+    // left 33 ms and drew every fifth refresh at 144 Hz (#1673).
+    assert_eq!(delay(&idle), crate::IDLE_REPAINT_INTERVAL, "an idle editor waits one poll");
 
     let at = harness.next_time();
     state.picture.runtime.tracker.handle_event(NoteEvent::on(at, SourceId::DIRECT, 0, 60, 1.0));

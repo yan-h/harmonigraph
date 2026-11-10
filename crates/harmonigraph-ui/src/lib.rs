@@ -346,7 +346,15 @@ pub fn root_ui(
         // every frame that arrives a hair early, halving the rate.
         ui.ctx().request_repaint();
     } else {
-        ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
+        // egui takes the frame time it predicts off any delay, so that the
+        // repaint lands before the deadline rather than after it. Nothing
+        // tells it the display's rate, so it predicts 1/60 s, and the 50 ms
+        // poll became 33 ms: every fifth refresh at 144 Hz, 29 frames a second
+        // for a still picture (#1673). Handing it back makes the poll the
+        // interval this names.
+        let predicted = ui.ctx().input(|i| i.predicted_dt);
+        let slack = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
+        ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL + slack);
     }
 
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
