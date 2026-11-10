@@ -550,9 +550,15 @@ fn byte_left(seconds: f32, level: f32, target: f32) -> f64 {
     let (from, to) = (level * 255.0, target * 255.0);
     // The last boundary the level can still cross, on its own side of the
     // target and strictly short of it.
+    // A level ON a boundary rounds half away from zero, as `fill` rounds it, so
+    // one rising has its target's byte there and one falling does not yet.
     let boundary = if from < to { (to - 0.5).ceil() - 0.5 } else { (to + 0.5).floor() + 0.5 };
-    if (from < to && from >= boundary) || (from > to && from <= boundary) || from == to {
+    if (from < to && from >= boundary) || (from > to && from < boundary) || from == to {
         return 0.0;
+    }
+    // Falling and on it: the next step takes it below.
+    if from == boundary {
+        return harmonigraph_core::NEXT_STEP;
     }
     crate::spectrum::hop_left(seconds, (from - to).abs(), (boundary - to).abs())
 }
@@ -570,7 +576,9 @@ mod tests {
     /// `byte_left` says, walked in frames as `fill` walks it: the last change
     /// lands on the first frame at or past the answer. Includes a target
     /// sitting exactly on a rounding boundary, whose own byte the level never
-    /// reaches, and a release of nothing, which lands on the next frame.
+    /// reaches, a falling level sitting exactly on one, whose byte rounds up and
+    /// so still owes the change down, and a release of nothing, which lands on
+    /// the next frame.
     #[test]
     fn a_ring_level_stops_changing_its_byte_when_byte_left_says() {
         let step = 0.004;
@@ -580,9 +588,11 @@ mod tests {
             (0.25, 0.7, 0.3),
             (0.25, 0.9, 25.5 / 255.0),
             (0.25, 0.0, 25.5 / 255.0),
+            (0.25, 0.5, 0.498),
             (0.0, 0.5, 0.0),
         ] {
             let left = byte_left(seconds, level, target);
+            assert!(left > 0.0, "{seconds} s from {level} to {target}: said nothing is owed");
             let (mut now, mut carried, mut last) = (0.0, level, None);
             while now < left + 1.0 {
                 now += step;
