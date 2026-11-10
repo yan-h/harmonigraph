@@ -31,6 +31,19 @@ impl<'a> Ribbon<'a> {
         self.notes.len() > 1
     }
 
+    /// Each member and the stretch of this ribbon's body it is drawn over,
+    /// `(note, start, stop)`: the ribbon's own ends at its first and last
+    /// member, and a member's own times between them, where a dense run's
+    /// body carries on through.
+    pub fn spans(&self, now: f64) -> impl Iterator<Item = (&'a RollNote, f64, f64)> + '_ {
+        let last = self.notes.len() - 1;
+        self.notes.iter().enumerate().map(move |(i, &note)| {
+            let start = if i == 0 { self.start } else { note.start };
+            let stop = if i == last { self.stop } else { note.stop(now) };
+            (note, start, stop)
+        })
+    }
+
     pub fn note_at(&self, at: f64) -> &'a RollNote {
         let i = self.notes.partition_point(|n| n.start <= at).saturating_sub(1);
         self.notes[i]
@@ -84,6 +97,13 @@ impl<'a> Ribbon<'a> {
     }
 }
 
+/// A note's ribbon with no repeat beside it, `(start, stop)`: its own times,
+/// the start floored to `minimum` before the stop.
+pub(super) fn alone(note: &RollNote, now: f64, minimum: f64) -> (f64, f64) {
+    let stop = note.stop(now);
+    (note.start.min(stop - minimum), stop)
+}
+
 /// Input is in onset order; paint runs retain that order across voices.
 /// The protected cores make both cuts around a middle note compatible.
 pub(super) fn layout<'a>(
@@ -95,8 +115,7 @@ pub(super) fn layout<'a>(
     let mut out: Vec<Ribbon<'a>> = Vec::with_capacity(notes.len());
     let mut previous: HashMap<VoiceKey, usize> = HashMap::new();
     for (order, &note) in notes.iter().enumerate() {
-        let stop = note.stop(now);
-        let start = note.start.min(stop - minimum);
+        let (start, stop) = alone(note, now, minimum);
         let center = (start + stop) * 0.5;
         let mut ribbon = Ribbon {
             notes: vec![note],

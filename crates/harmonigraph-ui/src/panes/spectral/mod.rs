@@ -473,14 +473,17 @@ pub(crate) fn spectral_pane(
     // happens AT the line: a sounding note's ribbon reaches it and carries its
     // lead a little way past, into the spectrum peak it is making (see
     // `roll::lead`, and the divider below for what still draws over it).
-    if show_history && split < 1.0 && cfg.show_roll {
-        roll::draw_roll(
-            &painter,
-            &axes,
-            &scale,
-            state,
-            roll::RollDrawOptions { split, now, surface, point_scale },
-        );
+    //
+    // Laid out once for this frame and read again by the note names below, so
+    // a name is written on the ribbon drawn here rather than on one worked
+    // out again beside it. Taken out first: the layout borrows the picture
+    // for as long as the names need it.
+    let thinning = state.surfaces.note_names.remove(&surface);
+    let ribbons = show_history
+        .then(|| roll::layout(&painter, &axes, &scale, state, split, now, point_scale))
+        .flatten();
+    if let Some(ribbons) = &ribbons {
+        roll::draw_roll(&painter, &axes, &scale, state, ribbons, surface);
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn after
@@ -587,7 +590,7 @@ pub(crate) fn spectral_pane(
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
     if show_history {
-        let mut thinning = state.surfaces.note_names.remove(&surface).unwrap_or_default();
+        let mut thinning = thinning.unwrap_or_default();
         let note_names = names::plan(
             &painter,
             state,
@@ -596,13 +599,12 @@ pub(crate) fn spectral_pane(
             split,
             now,
             text.names,
+            ribbons.as_ref(),
             &mut namer,
             &mut thinning,
         );
         state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
-    } else {
-        state.surfaces.note_names.remove(&surface);
     }
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
