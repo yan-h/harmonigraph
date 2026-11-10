@@ -1800,6 +1800,26 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     assert_eq!(restored.view.atmosphere.material_speed, 0.0);
 }
 
+/// Stars follow the same rule in either pane: a value that is no number
+/// loads as a missing key would, while the ranges it is clamped to stay the
+/// pane's own. Both panes' fresh stars jitter at 1, so a pane's fresh value
+/// would fail here.
+#[test]
+fn a_non_finite_star_setting_loads_as_its_missing_key_would() {
+    let missing: harmonigraph_scene::StarSettings = ron::from_str("()").unwrap();
+    let mut state = fresh();
+    state.picture.appearance.view.atmosphere.stars.star_jitter = f32::NAN;
+    state.picture.appearance.spectrum.atmosphere.stars.star_jitter = f32::NAN;
+    state.picture.appearance.spectrum.atmosphere.stars.star_speed[0] = 3.0;
+    let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
+    let lattice_fresh = harmonigraph_scene::AtmosphereSettings::default().stars;
+    assert_ne!(missing.star_jitter, lattice_fresh.star_jitter);
+    assert_eq!(restored.view.atmosphere.stars.star_jitter, missing.star_jitter);
+    assert_eq!(restored.spectrum.atmosphere.stars.star_jitter, missing.star_jitter);
+    // The spectrogram's speed range is wider than the lattice's.
+    assert_eq!(restored.spectrum.atmosphere.stars.star_speed[0], 3.0);
+}
+
 /// A save from before `Stars resolution` still loads, its dropped profile
 /// and halo resolution ignored, and the resolution round-trips on both
 /// textures and through the offline document, an off-grid one snapped to the
