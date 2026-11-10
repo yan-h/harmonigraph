@@ -751,10 +751,17 @@ fn wants_render(
     }
 }
 
-/// The furthest apart [`paced_divisor`] spaces the link's frames, whatever the
-/// UI waits for: a UI that asks for no repaint at all still runs a pass this
-/// often, and so still sees what changed outside it.
-const MAX_FRAME_GAP: f64 = 0.1;
+/// The furthest apart, in seconds, [`paced_divisor`] spaces the link's frames
+/// beyond the app's chosen rate, whatever the UI waits for: a UI that asks for
+/// no repaint at all still runs a pass this often, and so still sees what
+/// changed outside it. It bounds the gap between UI passes while the editor
+/// idles, and so how late a change from another thread is seen; a chosen rate
+/// slower than this is kept as it is, never sped up.
+///
+/// Public so the app's own check for a stalled loop can sit clear above it:
+/// paced gaps land on whole refreshes and run-loop jitter on top, so a cap
+/// equal to a stall threshold reads half its idle gaps as stalls.
+pub const MAX_FRAME_GAP: f64 = 0.08;
 
 /// The divisor to pace the display link at until the next frame: `chosen`, or
 /// a whole multiple of it that skips the frames which could draw nothing
@@ -763,14 +770,18 @@ const MAX_FRAME_GAP: f64 = 0.1;
 ///
 /// The UI pass runs on every frame the link paces, drawn or not, and an idle
 /// editor waiting out its 50 ms poll ran it on every refresh for nothing
-/// (#1676). So the link skips to the first of the chosen rate's frames at or
-/// past the deadline, which is the frame `wants_render` would draw on anyway:
-/// the drawn cadence is the one the chosen rate gives, and only the undrawn
-/// passes go. A deadline of now (the UI asked for a frame at once, as an
-/// animating editor does every frame) is the chosen rate itself, so the first
-/// animating frame restores it. A frame that lands a hair before its deadline
-/// is no loss: it reads the deadline as moments away and paces the next
-/// refresh. What the UI does not schedule waits for the next of these frames:
+/// (#1676). So the link skips to the first of the chosen rate's frames
+/// strictly past the deadline, which is the frame `wants_render` would draw
+/// on anyway: the drawn cadence is the one the chosen rate gives, and only the
+/// undrawn passes go. One that lands exactly on the deadline is skipped,
+/// because it need not draw: the deadline is `now` after this frame's UI pass,
+/// and that frame compares it with `now` after its own, so it draws only if
+/// its pass ran no faster than this one. A deadline of now (the UI asked for
+/// a frame at once, as an animating editor does every frame) is the chosen
+/// rate itself, so the first animating frame restores it. A frame that still
+/// lands a hair before its deadline is no loss: it reads the deadline as
+/// moments away and paces the next of the chosen rate's frames. What the UI
+/// does not schedule waits for the next of these frames:
 /// an event restores the chosen rate at once (see `on_event`), but a change
 /// from another thread (a note, audio, a host parameter) is seen when the
 /// deadline comes.
@@ -1005,13 +1016,14 @@ mod wants_render_tests {
     }
 
     /// Waiting out the 50 ms idle poll, the link skips to the first of the
-    /// chosen rate's frames at or past it, at any display rate, and never
-    /// paces faster than the chosen rate; a frame asked for at once (an
-    /// animating editor) puts the chosen rate back.
+    /// chosen rate's frames past it, at any display rate, never further apart
+    /// than the cap unless the chosen rate is, and never faster than the
+    /// chosen rate; a frame asked for at once (an animating editor) puts the
+    /// chosen rate back.
     #[test]
     fn an_idle_poll_slows_the_link_to_the_frame_it_draws_on() {
         let poll = Some(Duration::from_millis(50));
-        for hz in [60.0, 120.0, 144.0] {
+        for hz in [60.0, 100.0, 120.0, 144.0] {
             let refresh = 1.0 / hz;
             for chosen in 1..=4 {
                 let idle = paced_divisor(chosen, refresh, poll);
@@ -1020,15 +1032,20 @@ mod wants_render_tests {
                 assert_eq!(idle % chosen, 0, "{hz} Hz, divisor {chosen}: off the chosen grid");
                 assert!(gap > 0.05 - 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
                 assert!(gap < 0.05 + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap <= MAX_FRAME_GAP + 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
                 assert_eq!(paced_divisor(chosen, refresh, Some(Duration::ZERO)), chosen);
             }
         }
         // #1673's still picture in Bitwig drew every 8th refresh at 144 Hz.
         assert_eq!(paced_divisor(1, 1.0 / 144.0, poll), 8);
+        // Third at 60 Hz is the poll's own period: doubling it to the next
+        // frame past the poll would space passes 100 ms apart, which the
+        // plugin's stall check reads as a stall. The cap keeps it at Third.
+        assert_eq!(paced_divisor(3, 1.0 / 60.0, poll), 3);
         // Quarter at 60 Hz is already slower than the poll.
         assert_eq!(paced_divisor(4, 1.0 / 60.0, poll), 4);
-        // Nothing asked for at all: still a pass every tenth of a second.
-        assert_eq!(paced_divisor(1, 1.0 / 144.0, None), 14);
+        // Nothing asked for at all: still a pass every 0.08 s or sooner.
+        assert_eq!(paced_divisor(1, 1.0 / 144.0, None), 11);
     }
 }
 
