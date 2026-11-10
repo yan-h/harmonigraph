@@ -285,20 +285,11 @@ struct Cloud {
     // rotation is defined in (time, pitch), so its basis follows this
     // orientation.
     pitch_vertical: u32,
-    // The starfield's `Brightness variation`, and its life clock in lives, already
-    // reduced by `STAR_LIFE_PERIOD` (`star_life` in atmosphere.rs). Read by
-    // none of the textures above.
-    star_randomness: f32,
-    star_life: f32,
-    // The starfield's `Size variation`, `Cover` and `Twinkle`.
-    star_size_variation: f32,
-    star_cover: f32,
-    star_twinkle: f32,
-    // The star image's actual size in texels; zw are padding.
-    star_image_size: vec4<f32>,
-    // One entry per depth, worked out on the CPU from the dials and the clock
-    // (`star_slices` in atmosphere.rs, which says what each field is).
-    star_slices: array<StarSlice, 5>,
+    _pad: u32,
+    // The starfield's block, the lattice's too, read by none of the textures
+    // above. Read a field at a time through the getters below, never copied
+    // whole (#1282).
+    stars: StarUniforms,
     memory_enabled: u32,
     memory_valid: u32,
     pickup_alpha: f32,
@@ -709,7 +700,7 @@ fn remembered(current: vec4<f32>, previous: vec4<f32>) -> vec4<f32> {
 }
 
 fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
-    let s = cloud.star_slices[k];
+    let s = cloud.stars.star_slices[k];
     let salt = 1000u + 3u * k;
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
     let d = star_draw(s, hashed, salt);
@@ -737,7 +728,7 @@ fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
     if cloud.cloud_style == 2u {
         let index = texel.y * STAR_ATLAS_WIDTH + texel.x;
         for (var k = 0u; k < STAR_SLICES; k += 1u) {
-            let s = cloud.star_slices[k];
+            let s = cloud.stars.star_slices[k];
             let at = index - s.base;
             if at >= 0 && at < s.grid.x * s.grid.y {
                 return star_memory(k, s.origin + vec2<i32>(at % s.grid.x, at / s.grid.x));
@@ -959,19 +950,19 @@ fn star_level_at(pt: vec2<f32>) -> f32 {
 // lift fades in with the level, so a star over near-silence cannot climb the
 // palette on its rank alone. The mean rank, 1, paints the mean star.
 fn star_paint(level: f32, rank: f32) -> vec3<f32> {
-    let randomness = cloud.star_randomness;
+    let randomness = cloud.stars.star_randomness;
     let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
     let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
     return palette_color(clamp(level * spread + lift, 0.0, 1.0));
 }
-fn star_size() -> vec2<f32> { return cloud.size; }
-fn star_randomness() -> f32 { return cloud.star_randomness; }
-fn star_life() -> f32 { return cloud.star_life; }
-fn star_size_variation() -> f32 { return cloud.star_size_variation; }
-fn star_cover() -> f32 { return cloud.star_cover; }
-fn star_twinkle() -> f32 { return cloud.star_twinkle; }
-fn star_image_size() -> vec2<f32> { return cloud.star_image_size.xy; }
-fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
+fn star_size() -> vec2<f32> { return cloud.stars.size; }
+fn star_randomness() -> f32 { return cloud.stars.star_randomness; }
+fn star_life() -> f32 { return cloud.stars.star_life; }
+fn star_size_variation() -> f32 { return cloud.stars.star_size_variation; }
+fn star_cover() -> f32 { return cloud.stars.star_cover; }
+fn star_twinkle() -> f32 { return cloud.stars.star_twinkle; }
+fn star_image_size() -> vec2<f32> { return cloud.stars.star_image_size; }
+fn star_slice(k: u32) -> StarSlice { return cloud.stars.star_slices[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }
 fn star_image_at(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(cloud_image, cloud_sampler, uv, 0.0);
