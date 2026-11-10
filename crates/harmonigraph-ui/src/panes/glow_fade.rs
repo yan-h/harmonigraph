@@ -163,9 +163,9 @@ struct Lit {
 /// With the light off nothing is stepped and nothing is allocated — the state
 /// is dropped instead, so the frame Background glow reach comes back off 0 starts a fresh attack.
 pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize, now: f64) {
-    // The renderer's own test for whether the light draws at all, asked of the
-    // scene's normalized view so the two cannot disagree about the boundary.
-    if scene.view.glow_reach <= 0.0 || scene.view.glow_strength <= 0.0 {
+    // Whether the light draws at all, by the test the renderer asks too
+    // (`ViewConfig::glow_draws`), of the scene's normalized view.
+    if !scene.view.glow_draws() {
         state.surfaces.glow_fade.remove(&surface);
         return;
     }

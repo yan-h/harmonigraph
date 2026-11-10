@@ -6,7 +6,7 @@ use harmonigraph_scene::{
 };
 
 pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewConfig) {
-    let glow_enabled = view.glow_reach > 0.0 && view.glow_strength > 0.0;
+    let glow_enabled = view.glow_draws();
     let settings = &mut view.atmosphere;
     use crate::widgets::{choice_row, ValueBar};
 

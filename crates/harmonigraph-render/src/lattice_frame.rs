@@ -197,7 +197,7 @@ impl LatticeCallback {
         // are all exactly nothing: the walk below gives it none of the three.
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
-        let lights = scene.view.glow_reach > 0.0 && scene.view.glow_strength > 0.0;
+        let lights = scene.view.glow_draws();
         let inked = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
@@ -421,10 +421,7 @@ impl LatticeCallback {
             });
         }
         let mut draws = emptied(draws, order.len());
-        let breathes = scene.glow_timing.is_some()
-            && scene.view.glow_reach > 0.0
-            && scene.view.glow_strength > 0.0
-            && atmosphere.breath_amount > 0.0;
+        let breathes = scene.glow_timing.is_some() && lights && atmosphere.breath_amount > 0.0;
         let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
         for &(_, _, i, ships, inked) in &order {
             let instance = to_gpu(&scene.nodes[i]);

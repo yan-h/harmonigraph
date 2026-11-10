@@ -200,6 +200,11 @@ impl GlowTarget {
 }
 
 impl LatticeCallback {
+    /// [`ViewConfig::glow_draws`](harmonigraph_scene::ViewConfig::glow_draws),
+    /// asked of the uniform the frame packed. Reach alone is the same answer
+    /// by construction: `from_scene` packs the glow group only when the view's
+    /// own test passes and zeroes it otherwise, so a Reach above 0 here is a
+    /// gain above 0 as well.
     pub(super) fn glow_draws(&self) -> bool {
         self.uniforms.glow.reach > 0.0
     }

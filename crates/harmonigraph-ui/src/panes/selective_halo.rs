@@ -13,7 +13,7 @@ pub(super) fn owners(
 ) -> Vec<LatticePos> {
     let spare = MAX_DRAWN_NODES.saturating_sub(window.count());
     let view = &state.appearance.view;
-    if spare == 0 || !now.is_finite() || view.glow_reach <= 0.0 || view.glow_strength <= 0.0 {
+    if spare == 0 || !now.is_finite() || !view.glow_draws() {
         return Vec::new();
     }
     let camera = &state.appearance.camera;
