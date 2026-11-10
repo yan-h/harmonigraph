@@ -327,17 +327,33 @@ impl MapOffsets {
         )
     }
 
+    /// Where one lane's value is held: the one place an axis and a lane name
+    /// a field.
+    pub fn lane_mut(&mut self, axis: MapAxis, lane: MapOffsetLane) -> &mut i32 {
+        let grain = match lane {
+            MapOffsetLane::Fine => &mut self.fine,
+            MapOffsetLane::Extension => &mut self.extension,
+        };
+        match axis {
+            MapAxis::Fifths => &mut grain.threes,
+            MapAxis::Thirds => &mut grain.fives,
+            MapAxis::Sevenths => &mut grain.sevens,
+        }
+    }
+
     /// Every lane with the value it holds, in one fixed order.
-    pub fn lanes(self) -> [(MapAxis, MapOffsetLane, i32); 6] {
-        let (f, e) = (self.fine, self.extension);
+    pub fn lanes(mut self) -> [(MapAxis, MapOffsetLane, i32); 6] {
+        use MapAxis::{Fifths, Sevenths, Thirds};
+        use MapOffsetLane::{Extension, Fine};
         [
-            (MapAxis::Fifths, MapOffsetLane::Fine, f.threes),
-            (MapAxis::Thirds, MapOffsetLane::Fine, f.fives),
-            (MapAxis::Sevenths, MapOffsetLane::Fine, f.sevens),
-            (MapAxis::Fifths, MapOffsetLane::Extension, e.threes),
-            (MapAxis::Thirds, MapOffsetLane::Extension, e.fives),
-            (MapAxis::Sevenths, MapOffsetLane::Extension, e.sevens),
+            (Fifths, Fine),
+            (Thirds, Fine),
+            (Sevenths, Fine),
+            (Fifths, Extension),
+            (Thirds, Extension),
+            (Sevenths, Extension),
         ]
+        .map(|(axis, lane)| (axis, lane, *self.lane_mut(axis, lane)))
     }
 
     /// The lanes after `step` units of `lane` on each axis, or `None` when any

@@ -77,19 +77,26 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
     }
 }
 
-pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
-    MapOffsets {
-        fine: LatticePos::new(
-            params.map_fifths.unmodulated_plain_value(),
-            params.map_thirds.unmodulated_plain_value(),
-            params.map_sevenths.unmodulated_plain_value(),
-        ),
-        extension: LatticePos::new(
-            params.map_fifths_extension.unmodulated_plain_value(),
-            params.map_thirds_extension.unmodulated_plain_value(),
-            params.map_sevenths_extension.unmodulated_plain_value(),
-        ),
+/// The host parameter behind one lane: the plugin's one place an axis and a
+/// lane name a field.
+fn lane_param(params: &crate::HarmonigraphParams, axis: MapAxis, lane: MapOffsetLane) -> &IntParam {
+    match (axis, lane) {
+        (MapAxis::Fifths, MapOffsetLane::Fine) => &params.map_fifths,
+        (MapAxis::Thirds, MapOffsetLane::Fine) => &params.map_thirds,
+        (MapAxis::Sevenths, MapOffsetLane::Fine) => &params.map_sevenths,
+        (MapAxis::Fifths, MapOffsetLane::Extension) => &params.map_fifths_extension,
+        (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
+        (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
     }
+}
+
+pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
+    let mut offsets = MapOffsets::default();
+    for lane in &HOST_LANES {
+        *offsets.lane_mut(lane.axis, lane.lane) =
+            lane_param(params, lane.axis, lane.lane).unmodulated_plain_value();
+    }
+    offsets
 }
 
 pub fn offset(params: &crate::HarmonigraphParams) -> LatticePos {
@@ -150,14 +157,6 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         setter.set_parameter(param, value);
         setter.end_set_parameter(param);
     };
-    let axis_param = |axis, lane| match (axis, lane) {
-        (MapAxis::Fifths, MapOffsetLane::Fine) => &params.map_fifths,
-        (MapAxis::Thirds, MapOffsetLane::Fine) => &params.map_thirds,
-        (MapAxis::Sevenths, MapOffsetLane::Fine) => &params.map_sevenths,
-        (MapAxis::Fifths, MapOffsetLane::Extension) => &params.map_fifths_extension,
-        (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
-        (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
-    };
     let selected = map_slot(params.map.value());
     // Whether the saved document changed, decided by each arm from what it
     // did rather than by its variant: a no-op edit must not mark the host
@@ -185,15 +184,15 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             undone.is_some_and(|map| document.reshape(selected, map))
         }
         MapEdit::BeginOffset(axis, lane) => {
-            setter.begin_set_parameter(axis_param(axis, lane));
+            setter.begin_set_parameter(lane_param(params, axis, lane));
             false
         }
         MapEdit::Offset(axis, lane, value) => {
-            setter.set_parameter(axis_param(axis, lane), value);
+            setter.set_parameter(lane_param(params, axis, lane), value);
             false
         }
         MapEdit::EndOffset(axis, lane) => {
-            setter.end_set_parameter(axis_param(axis, lane));
+            setter.end_set_parameter(lane_param(params, axis, lane));
             false
         }
         MapEdit::Translate(step, lane) => {
@@ -207,7 +206,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
                     from.lanes().into_iter().zip(to.lanes())
                 {
                     if before != after {
-                        set(axis_param(axis, lane), after);
+                        set(lane_param(params, axis, lane), after);
                     }
                 }
                 params.map_editor.lock().translated = Some((seen, to));
@@ -428,15 +427,7 @@ impl AudioMaps {
                 let lane =
                     HOST_LANES.iter().find(|lane| id == nice_plug::wrapper::hash_param_id(lane.id));
                 let Some(lane) = lane else { return };
-                let grain = match lane.lane {
-                    MapOffsetLane::Fine => &mut self.offsets.fine,
-                    MapOffsetLane::Extension => &mut self.offsets.extension,
-                };
-                *match lane.axis {
-                    MapAxis::Fifths => &mut grain.threes,
-                    MapAxis::Thirds => &mut grain.fives,
-                    MapAxis::Sevenths => &mut grain.sevens,
-                } = step;
+                *self.offsets.lane_mut(lane.axis, lane.lane) = step;
                 self.playback.offset = self.offsets.total();
             }
             self.resolve();
