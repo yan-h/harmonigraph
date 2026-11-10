@@ -1315,19 +1315,26 @@ where
                     // so we detect these things manually:
                     //
                     // TODO: See if this is an issue in baseview as well.
-                    if is_cut_command(self.egui_input.modifiers, event.code) {
-                        if cut_is_eguis(
+                    let modifiers = self.egui_input.modifiers;
+                    let cut = is_cut_command(modifiers, event.code);
+                    let copy = is_copy_command(modifiers, event.code);
+                    if cut || copy || is_paste_command(modifiers, event.code) {
+                        // A clipboard chord reaches egui only when egui claims
+                        // the key, on the same verdict that decides below
+                        // whether the host sees it. A label selection claims
+                        // the copy chord alone, so a cut there is the host's:
+                        // egui would copy the read-only label on it (#1674).
+                        let claims = egui_claims_key(
                             &self.egui_ctx,
-                            self.egui_input.modifiers,
+                            modifiers,
                             event,
                             self.focus_takes_only_arrows,
-                        ) {
+                        );
+                        if claims && cut {
                             self.egui_input.events.push(egui::Event::Cut);
-                        }
-                    } else if is_copy_command(self.egui_input.modifiers, event.code) {
-                        self.egui_input.events.push(egui::Event::Copy);
-                    } else if is_paste_command(self.egui_input.modifiers, event.code) {
-                        if let Some(clipboard_ctx) = &mut self.clipboard_ctx {
+                        } else if claims && copy {
+                            self.egui_input.events.push(egui::Event::Copy);
+                        } else if claims && let Some(clipboard_ctx) = &mut self.clipboard_ctx {
                             match clipboard_ctx.get_contents() {
                                 Ok(contents) => {
                                     self.egui_input.events.push(egui::Event::Text(contents))
@@ -1456,9 +1463,9 @@ where
 /// also move a label selection, stay the host's: claiming them would take
 /// the arrows from the DAW after any stray click on a label.
 ///
-/// The chord is the one `on_event` turns into `Event::Copy`, so a key is
-/// either egui's copy or the host's, never both. A cut is held to the same
-/// rule by [`cut_is_eguis`].
+/// `on_event` sends egui a cut, copy or paste only on this verdict, so under
+/// the capture modes that honour it alone (`CaptureAll`, `CaptureShortcuts`) a
+/// clipboard chord is either egui's or the host's, never both.
 fn egui_claims_key(
     ctx: &egui::Context,
     modifiers: egui::Modifiers,
@@ -1480,20 +1487,6 @@ fn egui_claims_key(
         // memory here: this runs between egui passes, before Escape closes it.
         || matches!(event.key, Key::Escape) && (egui::Popup::is_any_open(ctx) || label_selected())
         || is_copy_command(modifiers, event.code) && label_selected()
-}
-
-/// Whether a cut chord becomes egui's `Event::Cut`: only when egui claims the
-/// key, so a cut is either egui's or the host's, never both. A label
-/// selection does not claim it. egui would copy a read-only label on a cut,
-/// overwriting the pasteboard while the DAW cut as well (#1674), so there the
-/// DAW cuts alone.
-fn cut_is_eguis(
-    ctx: &egui::Context,
-    modifiers: egui::Modifiers,
-    event: &keyboard_types::KeyboardEvent,
-    arrows_only: bool,
-) -> bool {
-    is_cut_command(modifiers, event.code) && egui_claims_key(ctx, modifiers, event, arrows_only)
 }
 
 fn is_cut_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
@@ -1622,9 +1615,10 @@ mod key_capture_tests {
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| ui.button("button").request_focus());
         assert!(ctx.egui_wants_keyboard_input());
         let cut = KeyboardEvent { code: keyboard_types::Code::KeyX, ..Default::default() };
-        assert!(cut_is_eguis(&ctx, egui::Modifiers::COMMAND, &cut, false), "focus takes a cut");
-        assert!(!cut_is_eguis(&ctx, egui::Modifiers::COMMAND, &cut, true));
-        assert!(!cut_is_eguis(&egui::Context::default(), egui::Modifiers::COMMAND, &cut, false));
+        let cuts = |ctx, arrows_only| egui_claims_key(ctx, egui::Modifiers::COMMAND, &cut, arrows_only);
+        assert!(cuts(&ctx, false), "focus takes a cut");
+        assert!(!cuts(&ctx, true));
+        assert!(!cuts(&egui::Context::default(), false), "unfocused, a cut is the host's");
 
         assert!(claims(&ctx, space(), false), "Space clicks a focused button");
         assert!(!claims(&ctx, space(), true), "a plot handle leaves it to the host");
@@ -1717,7 +1711,7 @@ mod key_capture_tests {
             ..Default::default()
         };
         assert!(
-            !cut_is_eguis(&ctx, egui::Modifiers::COMMAND, &cut, false),
+            !egui_claims_key(&ctx, egui::Modifiers::COMMAND, &cut, false),
             "a cut means nothing on a label: the host cuts alone"
         );
         assert!(!claims(&ctx, Key::ArrowLeft), "the arrows stay the host's");
