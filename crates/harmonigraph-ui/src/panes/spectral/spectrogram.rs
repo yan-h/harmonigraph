@@ -219,11 +219,10 @@ pub(super) fn strip_depths(
 /// on one palette. With every effect off, the plain path keeps the original
 /// per-pixel level read.
 ///
-/// Records on the surface when what it drew stops moving
-/// ([`moving_until`](crate::spectrum::SpectrogramSurface::moving_until)), off
-/// the run and the slab it drew: what the editor's frame loop stays awake for.
-/// A frame that draws no run records nothing, and so does a frame that does not
-/// draw the heatmap at all ([`not_drawn`]).
+/// Reports when what it drew stops moving, off the run and the slab it drew
+/// ([`MovingUntil`](crate::MovingUntil)): what the editor's frame loop stays
+/// awake for. A frame that draws no run reports nothing, and so does a frame
+/// that does not draw the heatmap at all.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -243,8 +242,6 @@ pub(crate) fn draw_spectrogram(
     let time = TimeAxis::new(state, split, now);
     let spectrum = &state.runtime.spectrum;
     let surfaces = &mut state.surfaces.spectrogram;
-    // Until this frame draws a run, nothing on it moves.
-    surfaces.at(surface).moving_until = None;
     let enough = spectrum.history().len() >= 2;
     if !enough {
         return;
@@ -297,7 +294,7 @@ pub(crate) fn draw_spectrogram(
     } else {
         spectrum.last_audible().column
     };
-    surfaces.at(surface).moving_until = moving.map(|t| t + reach);
+    state.surfaces.moving_this_frame.audible(moving.map(|t| t + reach));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
     // surface and leaves the scissor egui set from this rect alone.
@@ -324,12 +321,6 @@ pub(crate) fn draw_spectrogram(
             light_hold,
         }),
     ));
-}
-
-/// A frame of this surface that leaves the heatmap out: nothing on it moves,
-/// so nothing holds the frame loop for it.
-pub(crate) fn not_drawn(state: &mut PictureState, surface: usize) {
-    state.surfaces.spectrogram.at(surface).moving_until = None;
 }
 
 /// Whether a silent cell of the heatmap draws in anything but the gradient's

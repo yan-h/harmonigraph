@@ -174,7 +174,9 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
         state.surfaces.glow_fade.remove(&surface);
         return;
     }
-    state.surfaces.glow_fade.entry(surface).or_default().step(scene, &state.appearance.view, now);
+    let glow = state.surfaces.glow_fade.entry(surface).or_default();
+    glow.step(scene, &state.appearance.view, now);
+    state.surfaces.moving_this_frame.releasing(glow.moving_until());
 }
 
 impl GlowFade {

@@ -409,6 +409,12 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     // is the one place the Fade param and the Fade curve are put back together.
     let env = state.appearance.view.envelope(&state.runtime.frame_params);
     state.runtime.ring_fade.advance(&harmonigraph_scene::RingGate::new(&scene.spectral), &env, now);
+    // What the drawn ring is still moving on: the display it reads, its own
+    // levels and its wedges' fade.
+    let moving = &mut state.surfaces.moving_this_frame;
+    moving.audible(state.runtime.spectrum.moving_until());
+    moving.audible(state.runtime.ring_levels.moving_until());
+    moving.audible(state.runtime.ring_fade.moving_until());
 }
 
 /// What the ring's wedges READ, carried across frames on the ring's own attack

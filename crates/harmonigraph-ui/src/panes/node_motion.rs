@@ -9,7 +9,8 @@ pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface:
     // wrong other — the Fade bar's preview is the one exception the doc there
     // names, and this was a second, undeclared one.
     let env = state.appearance.view.envelope(&state.runtime.frame_params);
-    state.surfaces.node_motion.entry(surface).or_default().step(
+    let motion = state.surfaces.node_motion.entry(surface).or_default();
+    motion.step(
         scene,
         &state.runtime.tracker,
         &state.runtime.tuning,
@@ -18,4 +19,5 @@ pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface:
         &state.runtime.ring_fade,
         now,
     );
+    state.surfaces.moving_this_frame.releasing(motion.moving_until());
 }

@@ -208,11 +208,6 @@ pub(crate) struct SpectrogramSurface {
     /// [`live_slab`](crate::spectrogram::live_slab)'s ladder its hysteresis —
     /// see [`Plan::new`](crate::spectrogram::Plan::new). `None` before the first frame.
     pub(crate) held_bucket: Option<f64>,
-    /// When the heatmap this surface last drew stops moving, if no audible
-    /// column arrives after it; `None` when nothing on it is moving or it was
-    /// not drawn. Set by the draw, from the run it drew: see
-    /// [`draw_spectrogram`](crate::panes::spectral::spectrogram::draw_spectrogram).
-    pub(crate) moving_until: Option<f64>,
 }
 
 /// One column of the spectrogram, and the age-tiered store they live in — both

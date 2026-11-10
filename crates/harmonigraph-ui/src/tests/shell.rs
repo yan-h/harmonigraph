@@ -294,6 +294,31 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     assert!(!Animating::of(&state, t).audible, "a hidden heatmap held the loop awake");
 }
 
+/// A heatmap whose pane stops being drawn — folded, hidden, the Video tab
+/// closed — moves nothing, so it holds nothing, though its last draw said the
+/// sound would scroll for a Span yet; drawn again mid-tail it holds again.
+#[test]
+fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
+    let mut state = fresh();
+    let ctx = super::probe::themed();
+    state.picture.appearance.spectrum.roll_seconds = 60.0;
+    let panes = [Pane::Spectral];
+    let mut t = 0.0;
+    stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
+    let stopped = t;
+    let drawn = stream(&ctx, &mut state, &mut t, 0.5, false, &panes);
+    assert!(drawn.iter().all(|&(_, on)| on), "the heatmap never held the sound");
+
+    let hidden = stream(&ctx, &mut state, &mut t, 15.0, false, &[]);
+    assert!(hidden.iter().all(|&(_, on)| !on), "a hidden heatmap held the loop awake");
+
+    // Long past the curve, well inside the Span: only the heatmap moves.
+    let curve = state.picture.runtime.spectrum.moving_until().expect("a tone was heard");
+    assert!(curve < t && t < stopped + 30.0, "the curve holds until {curve}, now {t}");
+    let revealed = stream(&ctx, &mut state, &mut t, 0.1, false, &panes);
+    assert!(revealed.iter().all(|&(_, on)| on), "a heatmap drawn again mid-tail idled");
+}
+
 /// With the heatmap hidden nothing on screen holds a sound for a Span: the
 /// curve and the lattice ring settle seconds after the tone, and the editor
 /// idles then rather than a Span later. The ring answers from its own levels

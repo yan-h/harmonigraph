@@ -159,6 +159,10 @@ pub struct SurfaceState {
     /// drawn and a diagnostic holding its last good reading is the one that
     /// misleads.
     pub drawn_this_frame: Option<DrawnWindow>,
+    /// When what the pictures drawn so far THIS frame stop moving, cleared by
+    /// `begin_frame` and read by the repaint guard once every pane has drawn
+    /// ([`MovingUntil`](crate::MovingUntil)). Runtime-only.
+    pub(crate) moving_this_frame: crate::MovingUntil,
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
@@ -743,6 +747,7 @@ impl SurfaceState {
             hovered: None,
             drawn: None,
             drawn_this_frame: None,
+            moving_this_frame: Default::default(),
             target_format,
             lattice_pipelines: Default::default(),
             lattice_frames: Default::default(),

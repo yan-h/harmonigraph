@@ -380,14 +380,14 @@ pub(crate) fn spectral_pane(
     // off (`show_roll`) with the spectrogram on leaves the heatmap alone.
     if show_history && split < 1.0 && cfg.show_spectrogram {
         spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
-    } else {
-        spectrogram::not_drawn(state, surface);
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
     // at its actual pitch. Fundamentals line up with their notes' ribbons;
     // the harmonic series marches up the axis from each note.
     if show_spectrum && split > 0.0 {
+        let moving = state.runtime.spectrum.moving_until();
+        state.surfaces.moving_this_frame.audible(moving);
         if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each reading the whole run of buckets
