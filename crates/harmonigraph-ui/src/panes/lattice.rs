@@ -67,7 +67,6 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
             ui.memory_mut(|m| m.set_focus_lock_filter(response.id, arrows));
         }
         state.runtime.map_translation = arrow_translation(ui, &state.appearance.camera, rect);
-        state.runtime.map_arrows = true;
     }
     if response.double_clicked()
         && !state.runtime.lattice_maps.as_ref().is_some_and(|m| m.editing())
@@ -128,7 +127,7 @@ fn arrow_translation(
     rect: egui::Rect,
 ) -> Option<(harmonigraph_core::LatticePos, crate::lattice_maps::MapOffsetLane)> {
     use crate::lattice_maps::MapOffsetLane;
-    use egui::{Key, Modifiers};
+    use egui::{Key, KeyboardShortcut, Modifiers};
     use harmonigraph_core::LatticePos;
     let arrows = [
         (Key::ArrowRight, glam::Vec2::X),
@@ -136,26 +135,13 @@ fn arrow_translation(
         (Key::ArrowUp, glam::Vec2::Y),
         (Key::ArrowDown, glam::Vec2::NEG_Y),
     ];
-    // Exactly bare or with Shift, the `MAP_ARROW_SHORTCUTS` the shell claims
-    // from the host: egui's own key matching lets Alt through as well, and the
-    // host would act on that press too. Both kinds inside one frame is not a
-    // gesture anyone makes; Shift's takes it.
-    let count = |i: &mut egui::InputState, modifiers: Modifiers| {
-        arrows.map(|(key, _)| {
-            let mut presses = 0;
-            i.events.retain(|event| {
-                let hit = matches!(
-                    event,
-                    egui::Event::Key { key: pressed, modifiers: held, pressed: true, .. }
-                        if *pressed == key && held.matches_exact(modifiers)
-                );
-                presses += usize::from(hit);
-                !hit
-            });
-            presses
-        })
+    // Bare and with Shift, taken (and so claimed from the host) on every frame
+    // the map takes arrows, pressed or not. Both kinds inside one frame is not
+    // a gesture anyone makes; Shift's takes it.
+    let count = |modifiers: Modifiers| {
+        arrows.map(|(key, _)| crate::keys::take(ui.ctx(), KeyboardShortcut::new(modifiers, key)))
     };
-    let (fine, shifted) = ui.input_mut(|i| (count(i, Modifiers::NONE), count(i, Modifiers::SHIFT)));
+    let (fine, shifted) = (count(Modifiers::NONE), count(Modifiers::SHIFT));
     let (presses, lane) = if shifted != [0; 4] {
         (shifted, MapOffsetLane::Extension)
     } else if fine != [0; 4] {
@@ -933,10 +919,16 @@ mod tests {
             repeat: false,
             modifiers,
         };
+        // How many shortcuts the frame claimed from the host: the map's eight
+        // arrows, bare and with Shift, or none.
+        let claimed = std::cell::Cell::new(0);
         let press = |state: &mut PictureState, at: egui::Pos2, keys: Vec<egui::Event>| {
             let mut events = vec![egui::Event::PointerMoved(at)];
             events.extend(keys);
-            events_into(&ctx, screen, rect, events, |ui| lattice_pane(ui, state, 0.0, 0));
+            events_into(&ctx, screen, rect, events, |ui| {
+                lattice_pane(ui, state, 0.0, 0);
+                claimed.set(crate::keys::claimed(ui.ctx()).len());
+            });
             state.runtime.map_translation.take()
         };
         let (none, shift) = (egui::Modifiers::NONE, egui::Modifiers::SHIFT);
@@ -959,7 +951,7 @@ mod tests {
             press(&mut state, at, vec![key(egui::Key::ArrowRight, none)]),
             Some((LatticePos::new(0, -1, 0), MapOffsetLane::Fine))
         );
-        assert!(state.runtime.map_arrows, "the shell claims the arrows the map takes");
+        assert_eq!(claimed.get(), 8, "the shell claims the arrows the map takes");
         let alt = egui::Modifiers::ALT;
         assert_eq!(
             press(&mut state, at, vec![key(egui::Key::ArrowRight, alt)]),
@@ -967,14 +959,13 @@ mod tests {
             "Option-arrow is the host's, which the shell does not claim"
         );
         let outside = egui::pos2(-10.0, -10.0);
-        state.runtime.map_arrows = false;
         press(&mut state, outside, vec![]);
         assert_eq!(press(&mut state, outside, vec![key(egui::Key::ArrowUp, none)]), None);
-        assert!(!state.runtime.map_arrows, "off the lattice the arrows are the host's");
+        assert_eq!(claimed.get(), 0, "off the lattice the arrows are the host's");
         state.runtime.lattice_maps.as_mut().unwrap().playback.engine = TuningEngine::Adaptive;
         press(&mut state, at, vec![]);
         assert_eq!(press(&mut state, at, vec![key(egui::Key::ArrowUp, none)]), None);
-        assert!(!state.runtime.map_arrows, "and without a map to move");
+        assert_eq!(claimed.get(), 0, "and without a map to move");
     }
 
     #[test]

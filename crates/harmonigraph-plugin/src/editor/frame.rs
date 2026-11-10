@@ -152,19 +152,11 @@ pub(super) fn frame(
     // next refresh rather than the one after it.
     queue.set_frame_divisor(shared.ui.workspace.interaction.prefs.frame_rate.divisor());
     queue.set_focus_takes_only_arrows(harmonigraph_ui::plot_handle_focused(ui.ctx()));
-    queue.set_key_capture(key_capture(shared.ui.picture.runtime.map_arrows));
-}
-
-/// The keys the editor keeps from the host even with nothing focused: the
-/// appearance undo and redo, the chrome toggle, and while the lattice moves a
-/// map under the pointer, the arrows it takes.
-pub(super) fn key_capture(map_arrows: bool) -> egui_baseview::KeyCapture {
-    let mut shortcuts = harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec();
-    shortcuts.push(harmonigraph_ui::FRAMELESS_SHORTCUT);
-    if map_arrows {
-        shortcuts.extend(harmonigraph_ui::MAP_ARROW_SHORTCUTS);
-    }
-    egui_baseview::KeyCapture::CaptureShortcuts(shortcuts)
+    // What this frame took, kept from the host until the next frame says
+    // otherwise: a key arrives between frames (see `harmonigraph_ui::keys`).
+    queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
+        harmonigraph_ui::keys::claimed(ui.ctx()),
+    ));
 }
 
 /// State handed to egui-baseview's run loop.
