@@ -50,6 +50,35 @@ pub(crate) fn reach_sigmas(style: harmonigraph_scene::ShadowStyle) -> f32 {
 /// Changing pane size or pitch zoom does not change it.
 pub const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
 
+/// What a caster's Gaussian is multiplied up by before it is spent, which is
+/// what a caster thin against σ is worth against a solid one. `GAUSSIAN_GAIN`
+/// in common.wgsl, pinned by `the_shadow_laws_gain_and_floor_are_the_shaders_own`,
+/// and here so the Shadow preview spends the renderer's number.
+pub const GAUSSIAN_GAIN: f32 = 2.5;
+
+/// What the spectral Shadow depth bottoms out at: the share of the frame left
+/// under a caster's solid middle at the top of the bar, ten stops down.
+/// `SHADOW_KEEP_FLOOR` in common.wgsl, pinned beside [`GAUSSIAN_GAIN`].
+pub const SHADOW_KEEP_FLOOR: f32 = 1.0 / 1024.0;
+
+/// How much of the frame a caster at full level takes away, 0..=1, where its
+/// coverage `full` has already been spent through [`GAUSSIAN_GAIN`]: linear in
+/// the depth for the lattice, and in stops down to [`SHADOW_KEEP_FLOOR`] for
+/// the spectral panes.
+///
+/// The Rust twin of `local_shadow_transmittance` and `shadow_transmittance` in
+/// common.wgsl at a level of 1, which no needle test can pin as it pins the
+/// constants: an edit to either law owes this one the same edit. The shader
+/// draws with those; the Shadow preview draws with this.
+pub fn shadow_darkness(depth: f32, full: f32, lattice: bool) -> f32 {
+    let (depth, full) = (depth.clamp(0.0, 1.0), full.clamp(0.0, 1.0));
+    if lattice {
+        full * depth
+    } else {
+        1.0 - (1.0 - depth).max(SHADOW_KEEP_FLOOR).powf(full)
+    }
+}
+
 /// A spectral style's σ in screen points.
 pub(crate) fn spectral_sigma_points(
     style: harmonigraph_scene::ShadowStyle,
@@ -1039,6 +1068,25 @@ pub(crate) mod tests {
         assert!(near.contains(&3) && near.contains(&4) && !near.contains(&5));
         assert!(near.iter().all(|&j| j < 7), "the far row reached the label: {near:?}");
         assert_eq!(occluders_of(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
+    }
+
+    /// The two numbers of the shadow law the Shadow preview spends on the CPU
+    /// are the shader's own.
+    #[test]
+    fn the_shadow_laws_gain_and_floor_are_the_shaders_own() {
+        let gain: f32 = shader_const(crate::COMMON_SRC, "GAUSSIAN_GAIN").parse().expect("a number");
+        assert_eq!(gain, GAUSSIAN_GAIN);
+        let floor: f32 =
+            shader_const(crate::COMMON_SRC, "SHADOW_KEEP_FLOOR").parse().expect("a number");
+        assert_eq!(floor, SHADOW_KEEP_FLOOR);
+    }
+
+    #[test]
+    fn spectral_darkness_keeps_the_stronger_tails_and_finite_full_darkness() {
+        assert!((shadow_darkness(0.91, 0.3, true) - 0.273).abs() < 1e-5);
+        assert!((shadow_darkness(0.91, 0.3, false) - 0.5144066).abs() < 1e-5);
+        assert_eq!(shadow_darkness(1.0, 0.0, false), 0.0);
+        assert_eq!(shadow_darkness(1.0, 1.0, false), 1.0 - SHADOW_KEEP_FLOOR);
     }
 
     /// A shader's `const NAME: T = value;`, as text.

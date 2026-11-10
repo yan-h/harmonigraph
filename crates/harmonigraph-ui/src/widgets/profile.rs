@@ -264,15 +264,6 @@ fn star(ui: &Ui, centre: egui::Pos2, radius: f32, coverage: impl Fn(f32) -> f32)
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
-/// Match the renderer's two compositing curves, including its ten-stop floor.
-fn shadow_darkness(depth: f32, coverage: f32, lattice: bool) -> f32 {
-    if lattice {
-        depth * coverage
-    } else {
-        1.0 - (1.0 - depth).max(1.0 / 1024.0).powf(coverage)
-    }
-}
-
 /// `text` is a group whose casters are type, whose Spread deepens the blur
 /// rather than growing the ink (`ShadowStyle::text_spread_stops`).
 pub(crate) fn shadow(
@@ -349,7 +340,7 @@ fn shadow_preview(
         } else {
             (style.gaussian_spread_points(sigma), 0.0)
         };
-        let gain = 2.5 * stops.exp2();
+        let gain = harmonigraph_render::GAUSSIAN_GAIN * stops.exp2();
         let blurred = caster.expand(spread);
         let xs: [f32; COLUMNS as usize + 1] = std::array::from_fn(|x| {
             let p = egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32);
@@ -366,10 +357,9 @@ fn shadow_preview(
                     egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32),
                     egui::lerp(rect.y_range(), y as f32 / ROWS as f32),
                 );
-                // The renderer's GAUSSIAN_GAIN in common.wgsl, lifted by
-                // text's Spread.
+                // The renderer's gain, lifted by text's Spread, and its law.
                 let coverage = (gain * xs[x as usize] * ys[y as usize]).min(1.0);
-                let darkness = shadow_darkness(style.depth, coverage, lattice);
+                let darkness = harmonigraph_render::shadow_darkness(style.depth, coverage, lattice);
                 mesh.colored_vertex(
                     p,
                     egui::Color32::from_black_alpha((255.0 * darkness).round() as u8),
@@ -395,16 +385,4 @@ fn gaussian_interval(p: f32, low: f32, high: f32, sigma: f32) -> f32 {
         0.5 + 0.5 * (0.797_884_6 * (x + 0.044_715 * x * x * x)).tanh()
     };
     (cdf(high) - cdf(low)).clamp(0.0, 1.0)
-}
-
-#[cfg(test)]
-mod shadow_tests {
-    use super::shadow_darkness;
-    #[test]
-    fn spectral_preview_keeps_the_stronger_tails_and_finite_full_darkness() {
-        assert!((shadow_darkness(0.91, 0.3, true) - 0.273).abs() < 1e-5);
-        assert!((shadow_darkness(0.91, 0.3, false) - 0.5144066).abs() < 1e-5);
-        assert_eq!(shadow_darkness(1.0, 0.0, false), 0.0);
-        assert_eq!(shadow_darkness(1.0, 1.0, false), 1.0 - 1.0 / 1024.0);
-    }
 }
