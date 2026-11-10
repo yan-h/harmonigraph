@@ -582,9 +582,9 @@ struct GpuInstance {
     /// x: activation, the node's presence, y: melody mark level, z: bass
     /// mark level (see lattice.wgsl). The first three are levels the same
     /// node draws at, read together by the layers that draw it. w is the
-    /// most colour any slot wears, which the shader never reads: with the
-    /// marks it is the glow's target, which the presence outlasts after a
-    /// release, for [`ink_history`].
+    /// glow's target ([`harmonigraph_scene::GlowStep::target`]), which the
+    /// presence outlasts after a release, for [`ink_history`]; the shader
+    /// never reads it.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).

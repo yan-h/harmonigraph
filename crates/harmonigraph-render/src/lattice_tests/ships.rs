@@ -770,7 +770,8 @@ fn a_released_node_ships_for_its_light_alone() {
             node.glow.level = 0.0;
         }
         let node = &mut scene.nodes[0];
-        node.glow = harmonigraph_scene::GlowStep { incarnation: 1, level: 0.5, row: 0 };
+        node.glow =
+            harmonigraph_scene::GlowStep { incarnation: 1, level: 0.5, target: 0.5, row: 0 };
         if inked {
             node.activation = 1.0;
             node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;

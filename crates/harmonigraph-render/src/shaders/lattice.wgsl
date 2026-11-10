@@ -446,8 +446,8 @@ struct Instance {
     // own levels, which follow the marked voice rather than this node's
     // activation — each ring eases in over the scene layer's attack when its
     // note takes that end, and falls from the frame the key comes up. w is
-    // the CPU's (the glow target's colour half, for the ink history) and is
-    // dropped on the way in.
+    // the CPU's (the glow's target, for the ink history) and is dropped on
+    // the way in.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here

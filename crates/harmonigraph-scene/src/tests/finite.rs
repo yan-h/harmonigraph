@@ -276,8 +276,9 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.vec4(&format!("nodes[{i}].melody_color"), *melody_color);
         f.vec4(&format!("nodes[{i}].bass_color"), *bass_color);
         f.one(format!("nodes[{i}].audio_ring"), *audio_ring);
-        let GlowStep { incarnation: _, level, row: _ } = glow;
+        let GlowStep { incarnation: _, level, target, row: _ } = glow;
         f.one(format!("nodes[{i}].glow.level"), *level);
+        f.one(format!("nodes[{i}].glow.target"), *target);
         f.one(format!("nodes[{i}].trail"), *trail);
     }
 

@@ -164,6 +164,7 @@ fn release(scene: &mut Scene) {
     for node in &mut scene.nodes {
         node.activation = 0.0;
         node.octaves.fill(0.0);
+        node.glow.target = 0.0;
     }
 }
 
