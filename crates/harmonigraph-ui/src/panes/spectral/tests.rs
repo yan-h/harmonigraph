@@ -2860,7 +2860,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             let near = split - lead * split;
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             let output = painted_into(SCREEN, WIDE, |ui| {
-                let layout = roll::layout(ui.painter(), a, scale, &state, split, 100.0, 1.0, 0.0);
+                let layout = roll::layout(ui.painter(), a, scale, &state, split, 100.0, 1.0);
                 roll::draw_roll(ui.painter(), &state, &layout.unwrap(), 0);
             });
 

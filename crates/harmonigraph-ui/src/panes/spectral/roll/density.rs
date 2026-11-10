@@ -10,7 +10,7 @@ use std::collections::HashMap;
 pub(super) const GAP_PT: f64 = 2.0;
 type Segment = ((f64, f32), (f64, f32));
 
-pub(crate) struct Ribbon<'a> {
+pub(super) struct Ribbon<'a> {
     pub notes: Vec<&'a RollNote>,
     pub start: f64,
     pub stop: f64,
@@ -29,19 +29,6 @@ impl<'a> Ribbon<'a> {
 
     pub fn dense(&self) -> bool {
         self.notes.len() > 1
-    }
-
-    /// Each member and the stretch of this ribbon's body it is drawn over,
-    /// `(note, start, stop)`: the ribbon's own ends at its first and last
-    /// member, and a member's own times between them, where a dense run's
-    /// body carries on through.
-    pub fn spans(&self, now: f64) -> impl Iterator<Item = (&'a RollNote, f64, f64)> + '_ {
-        let last = self.notes.len() - 1;
-        self.notes.iter().enumerate().map(move |(i, &note)| {
-            let start = if i == 0 { self.start } else { note.start };
-            let stop = if i == last { self.stop } else { note.stop(now) };
-            (note, start, stop)
-        })
     }
 
     pub fn note_at(&self, at: f64) -> &'a RollNote {

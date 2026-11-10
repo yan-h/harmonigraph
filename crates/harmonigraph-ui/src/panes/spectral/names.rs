@@ -50,10 +50,8 @@ use std::collections::{HashMap, HashSet};
 use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tempered, Tuning};
 use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
-use super::axes::Axes;
-#[cfg(test)]
-use super::axes::{PitchScale, TimeAxis};
-use super::roll::RollLayout;
+use super::axes::{Axes, PitchScale, TimeAxis};
+use super::roll::Width;
 use crate::marks;
 use crate::{theme, PictureState};
 
@@ -232,101 +230,59 @@ fn plan_with_thinning_for_test(
             let painter = ui.painter();
             let mut namer =
                 Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
-            // As `spectral_pane` asks for them.
-            let cfg = &state.appearance.spectrum;
-            let lookback = lookback(painter, cfg, axes, scales);
-            let roll = super::roll::layout(
-                painter,
-                *axes,
-                *scale,
-                state,
-                split,
-                now,
-                1.0,
-                lookback.unwrap_or(0.0),
-            );
-            match (roll, lookback) {
-                (Some(roll), Some(_)) => {
-                    result = plan(painter, state, &roll, scales, &mut namer, thinning);
-                }
-                _ => *thinning = Thinning::default(),
-            }
+            result =
+                plan(painter, state, axes, scale, split, now, 1.0, scales, &mut namer, thinning);
         });
         result
     })
 }
 
-/// How far past the far edge, in points, a name can still reach back onto the
-/// pane: the widest name's box along the time axis, its pads and its inset.
-/// What the roll is asked to lay notes out to ([`layout`]), so that every note
-/// [`plan`] might name has its ribbon there to be read.
-///
-/// `None` where no name is drawn: the setting is off. The roll being hidden
-/// or shut is [`layout`]'s to say, and the names need both. Names label
-/// RIBBONS, so they need ribbons: with the roll hidden there is nothing under
-/// them to name, and they would be text floating over the heatmap at whatever
-/// pitches notes happened to have — which is not the same picture at all, and
-/// would come from a checkbox in the roll's own section that appeared not to
-/// turn them off.
-///
-/// [`layout`]: super::roll::layout
-pub(super) fn lookback(
-    painter: &egui::Painter,
-    cfg: &crate::SpectrumConfig,
-    axes: &Axes,
-    scales: NameScale,
-) -> Option<f32> {
-    if !cfg.note_names {
-        return None;
-    }
-    let mut widest = crate::text::TextBatch::default();
-    draw_name(&mut widest, painter, egui::Pos2::ZERO, WIDEST_NAME, scales.label, grow(cfg, axes));
-    Some(
-        widest.bounds().size().dot(axes.dir_depth().abs())
-            + 2.0 * LABEL_PAD * scales.label
-            + LABEL_INSET * scales.air,
-    )
-}
-
-/// Direction along a ribbon from the end its name is anchored on.
-fn grow(cfg: &crate::SpectrumConfig, axes: &Axes) -> egui::Vec2 {
-    if Anchor::of(cfg) == Anchor::Onset {
-        -axes.dir_depth()
-    } else {
-        axes.dir_depth()
-    }
-}
-
-/// Every name this frame draws on `roll`, already thinned to the ones that
-/// fit. `roll` was laid out with this frame's [`lookback`], which is what
-/// keeps every note a name can still be read off in it.
+/// Every name this frame draws, already thinned to the ones that fit — empty
+/// when the setting is off or the pane has kept no roll region to draw in.
 ///
 /// The two scales it lays names out by part company at the pitch zoom — see
-/// [`NameScale`].
+/// [`NameScale`]. `point_scale` is the composition's, which the roll's width
+/// floor rides ([`Width`]).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn plan(
     painter: &egui::Painter,
     state: &PictureState,
-    roll: &RollLayout<'_>,
+    axes: &Axes,
+    scale: &PitchScale,
+    split: f32,
+    now: f64,
+    point_scale: f32,
     scales: NameScale,
     namer: &mut Namer,
     thinning: &mut Thinning,
 ) -> Vec<NoteLabel> {
-    let (axes, scale, time) = (&roll.axes, &roll.scale, roll.time);
-    let (split, now) = (time.split, time.now);
     if thinning.now.is_some_and(|last| now < last) {
         thinning.visible.clear();
         thinning.suppressed.clear();
     }
     thinning.now = Some(now);
     let cfg = &state.appearance.spectrum;
+    // Names label RIBBONS, so they need ribbons. With the roll hidden there is
+    // nothing under them to name and they would be text floating over the
+    // heatmap at whatever pitches notes happened to have — which is not the
+    // same picture at all, and would come from a checkbox in the roll's own
+    // section that appeared not to turn them off.
+    if !cfg.note_names || !cfg.show_roll || split >= 1.0 {
+        thinning.visible.clear();
+        thinning.suppressed.clear();
+        return Vec::new();
+    }
+    let time = TimeAxis::new(state, split, now);
     let anchor = Anchor::of(cfg);
+    let roll = state.roll();
 
     // One point of the depth axis, in seconds of take. A name's reach is a
     // length on the screen and the thinning measures in TIME, so this is the
     // rate between them — one number, the time axis being linear across the
     // region.
     let seconds_per_point = time.seconds_per_point(axes);
-    let grow = grow(cfg, axes);
+    // Direction along the ribbon from its chosen anchor.
+    let grow = if anchor == Anchor::Onset { -axes.dir_depth() } else { axes.dir_depth() };
     let layout = ThinningLayout {
         size: axes.rect.size(),
         pitch: [scale.min_midi, scale.max_midi],
@@ -345,17 +301,17 @@ pub(super) fn plan(
 
     // Include names whose anchor just left the frame but whose ink still
     // reaches it. Each candidate is culled again with its own spelling below.
-    // The roll laid out every note this reaches ([`lookback`]), each on the
-    // ribbon it drew: where along time, from [`Ribbon::spans`], and how wide
-    // at the name's own end, from [`RollLayout::reaches`].
-    //
-    // [`Ribbon::spans`]: super::roll::Ribbon::spans
-    let sweep_from = time.oldest() - f64::from(roll.lookback_px) * seconds_per_point;
-    let notes = roll.ribbons().iter().flat_map(|ribbon| {
-        ribbon.spans(now).filter(move |&(note, _, _)| note.stop(now) >= sweep_from).map(
-            move |(note, start, stop)| (ribbon, note, anchor_edge(note, (start, stop), anchor)),
-        )
-    });
+    let oldest = time.oldest();
+    let mut widest = crate::text::TextBatch::default();
+    draw_name(&mut widest, painter, egui::Pos2::ZERO, WIDEST_NAME, scales.label, grow);
+    let reach = widest.bounds().size().dot(axes.dir_depth().abs())
+        + 2.0 * LABEL_PAD * scales.label
+        + LABEL_INSET * scales.air;
+    let sweep_from = oldest - f64::from(reach) * seconds_per_point;
+    let notes = roll
+        .notes()
+        .filter(|note| note.stop(now) >= sweep_from)
+        .map(|note| (note, anchor_edge(note, now, anchor)));
 
     // Measure each pitch class once per frame. Font, scale and direction are
     // common to this pass; musical expression does not invalidate a cache.
@@ -387,24 +343,27 @@ pub(super) fn plan(
         (rect.translate(-grow * over), lead - grow * over)
     };
 
+    // The pitches whose ribbon still reaches into the pitch zoom: the zoom
+    // widened by half the body the roll draws at the name's own end, Thickness
+    // swell and width floor included — the roll's own [`Width`], not a width
+    // restated here. A ribbon's ink meets the edge that half width before its
+    // centre does, so asked of the centre alone a name went with half its
+    // ribbon still drawn (#825); asked of half the Ribbon width alone, it went
+    // again wherever the roll drew the body wider than that.
+    //
+    // The RIBBON's width and not the name's box, so a name taller than its
+    // ribbon goes with the edge of its box still inside, and the ribbon's
+    // outline, which the roll adds in points, is not waited for either. Past
+    // the edge the scissor cuts the name as it cuts the ribbon. The far edge
+    // no longer makes this trade — there a name stays until its own box has
+    // left (see `visible` below) — so the two edges now differ.
+    let width = Width::of(state, axes, scale, point_scale);
+
     let mut candidates = Vec::new();
-    for (ribbon, note, edge) in notes {
+    for (note, edge) in notes {
         let (name, ink) = naming(edge.pitch, &mut names);
-        // Kept while its ribbon still reaches into the pitch zoom: the zoom
-        // widened by half the body the roll draws at the name's own end,
-        // swell and floor included. A ribbon's ink meets the edge that half
-        // width before its centre does, so asked of the centre alone a name
-        // went with half its ribbon still drawn (#825), and asked of half the
-        // Ribbon width it did again for every note Thickness had swollen.
-        //
-        // The RIBBON's width and not the name's box, so a name taller than its
-        // ribbon goes with the edge of its box still inside, and the ribbon's
-        // outline, which the roll adds in points, is not waited for either.
-        // Past the edge the scissor cuts the name as it cuts the ribbon. The
-        // far edge does not make this trade — there a name stays until its own
-        // box has left (see `visible` below) — so the two edges differ.
         let beyond = (scale.min_midi - edge.pitch).max(edge.pitch - scale.max_midi);
-        if !roll.reaches(ribbon, edge.time, beyond) {
+        if !width.reaches(note, edge.time, beyond) {
             continue;
         }
         let (rect, lead) = place(&edge, ink);
@@ -595,16 +554,9 @@ impl Anchor {
 /// leading edge: the name stands at the now-line while the ribbon head slides
 /// out from under it. Held notes have first priority when labels collide.
 ///
-/// The TIME is the end of the ribbon the roll drew, `drawn`
-/// ([`Ribbon::spans`]), not the note's own: the roll trims a repeat's facing
-/// ends to open the cut between them and floors a short note's length, and a
-/// name anchored on the raw time stands that much off the end it names.
-///
 /// Neither end is bounded here, and the pair is the true one however far off
 /// the picture it lies. [`plan`] lets a name leave with the end it names.
-///
-/// [`Ribbon::spans`]: super::roll::Ribbon::spans
-fn anchor_edge(note: &RollNote, drawn: (f64, f64), anchor: Anchor) -> Edge {
+fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
     match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
         // it was pressed at — a retuned note reaches its real pitch a moment
@@ -612,10 +564,10 @@ fn anchor_edge(note: &RollNote, drawn: (f64, f64), anchor: Anchor) -> Edge {
         // one pitch on a bent note that stops moving, which is what lets a name
         // anchored here hold both its place and its spelling while the note
         // glides under it.
-        Anchor::Onset => Edge { time: drawn.0, pitch: note.settled_pitch() },
+        Anchor::Onset => Edge { time: note.start, pitch: note.settled_pitch() },
         // Live, time runs from the now-line outward, so the ribbon's leading
         // edge is where it most recently sounded.
-        Anchor::Leading => Edge { time: drawn.1, pitch: note.end_pitch() },
+        Anchor::Leading => Edge { time: note.stop(now), pitch: note.end_pitch() },
     }
 }
 
@@ -1135,17 +1087,6 @@ mod tests {
         labels.iter().map(|l| l.name.to_string()).collect()
     }
 
-    /// The far end of the one ribbon the roll draws for `state` at `now`, on
-    /// its centre line: the onset end, as the roll drew it. Read off the
-    /// roll's own instances rather than worked out from the note, which is
-    /// what `a_name_sits_on_the_ribbon_the_roll_drew` is about.
-    fn drawn_onset(state: &PictureState, axes: &Axes, split: f32, now: f64) -> egui::Pos2 {
-        let ribbons =
-            super::super::roll::note_instances(axes, &scale_of(state), state, split, now, 2.0);
-        let [r] = ribbons.as_slice() else { panic!("{} ribbons, not one", ribbons.len()) };
-        egui::pos2(r.center[0], r.center[1]) + axes.dir_depth() * r.half_extent[1]
-    }
-
     fn scale_of(state: &PictureState) -> PitchScale {
         let cfg = &state.appearance.spectrum;
         let min_midi = cfg.low_midi;
@@ -1287,23 +1228,27 @@ mod tests {
         state.appearance.view.intensity.thickness_max = 2.0;
     }
 
-    /// A name sits on the ribbon the ROLL DREW, read from the roll's own
+    /// A name stands on the ribbon the ROLL DREW: its box never overhangs the
+    /// end of the body the roll drew for its note, read off the roll's own
     /// geometry rather than recomputed here.
     ///
-    /// Hand-computing the expected edge is how this went wrong, more than
-    /// once: the test's arithmetic agreed with `names`' and both disagreed
-    /// with the roll. The roll moves a ribbon off its note's own times — a fast
-    /// repeat has the facing ends of both notes trimmed to open a cut between
-    /// them (`density::layout`), and a note shorter than a point is floored to
-    /// one — and swells it across pitch by Thickness, and `names` once
-    /// recomputed the ribbon from the raw note and followed none of it.
+    /// The name anchors on the NOTE, not on that end, and the two are not the
+    /// same time. The roll moves a ribbon's ends off its note's in steps, as
+    /// notes group, trim and leave (`density::layout`): a repeat's facing
+    /// ends are trimmed back to open a cut, by at most a point each between
+    /// two notes longer than a couple of points and by up to `GAP_PT` (2
+    /// points) on the side facing a one-point sliver; a note shorter than
+    /// `MIN_LENGTH_PT` (a point) has its onset moved OUT by up to that point;
+    /// inside a dense run the body carries on through a note's own end. A
+    /// name tied to the drawn end hopped with each step, so it stands on the
+    /// note's own end, and what keeps its box on the ribbon is that it stands
+    /// [`LABEL_INSET`] less [`LABEL_PAD`] (2.05 points) in from that end: more
+    /// than any trim moves it.
     ///
-    /// So the fixture holds what moves a ribbon: a repeat close enough to be
-    /// trimmed, a swollen note whose centre line is past the pitch edge while
-    /// its body is not, and a fast run the roll draws as one continuous body.
-    /// Every name has to stand exactly [`LABEL_INSET`] off the end of the
-    /// ribbon the roll drew, at either anchor; inside the run, where the body
-    /// carries on through a note's own end, off that note's own time.
+    /// So the fixture holds each thing that moves an end: a repeat close
+    /// enough to be trimmed, a dense run, a note shorter than a point, and a
+    /// swollen note whose centre line is past the pitch edge while its body is
+    /// not. Each name is found by its note, at either anchor.
     #[test]
     fn a_name_sits_on_the_ribbon_the_roll_drew() {
         // Twelve 1.5-point notes 2.7 points apart at E: their cores come
@@ -1323,6 +1268,9 @@ mod tests {
                 full(5.0, 72),
                 tuning(5.0, 72, 0.4),
                 off(7.0, 72),
+                // A sixth of a point long: floored to one.
+                on(1.0, 67),
+                off(1.005, 67),
             ] {
                 state.runtime.tracker.handle_event(event);
             }
@@ -1341,69 +1289,69 @@ mod tests {
                 10.0,
                 2.0,
             );
-            // The run's pieces all share its one box.
-            let mut boxes: Vec<_> = ribbons.iter().map(|r| (r.center, r.half_extent)).collect();
-            boxes.dedup();
-            assert_eq!(boxes.len(), 4, "two repeats, a swollen note and a run, a body each");
             assert!(
                 ribbons.iter().any(|r| r.tremolo[1] > 0.0),
                 "travel {travel}: the fixture is vacuous, the run is not drawn as one",
             );
-            // Horizontal pane, now at the left: a ribbon's head is its near
-            // end and its onset the far one. Leading names grow from the head
-            // into the note, travelling ones from the onset.
-            let end = |(center, half): ([f32; 2], [f32; 2])| {
-                let sign = if travel { 1.0 } else { -1.0 };
-                (center[1], center[0] + sign * half[1])
-            };
-            let inset = if travel { -LABEL_INSET } else { LABEL_INSET };
-            // The trim is in play: the first repeat's drawn head is short of
-            // the moment it stopped, and the second's onset after its own.
-            let raw = |t: f64| axes.at(0.5, ((10.0 - t) / 10.0) as f32).x;
-            let unmoved = if travel { raw(4.03) } else { raw(4.0) };
-            assert!(
-                boxes.iter().all(|&b| (end(b).1 - unmoved).abs() > 0.3),
-                "travel {travel}: the fixture is vacuous, no ribbon end moved off its note",
-            );
-            // Where a name may stand off inside the run: a member's own end.
-            let run_y = axes.at(scale_of(&state).t_of(64.0), 0.5).y;
-            let inside: Vec<(f32, f32)> = run
+            // Horizontal pane, now at the left: x grows with age. Each body's
+            // pitch row and its near and far ends.
+            let bodies: Vec<(f32, f32, f32)> = ribbons
                 .iter()
-                .map(|&start| (run_y, raw(if travel { start } else { start + 0.05 })))
+                .map(|r| {
+                    (r.center[1], r.center[0] - r.half_extent[1], r.center[0] + r.half_extent[1])
+                })
                 .collect();
+            let x = |t: f64| axes.at(0.5, ((10.0 - t) / 10.0) as f32).x;
+            // The trim and the floor are in play: the first repeat's drawn head
+            // is short of its stop, the second's onset after its own, and the
+            // short note's onset out past its own.
+            let head_moved = |raw: f32| bodies.iter().all(|&(_, near, _)| (near - raw).abs() > 0.3);
+            let onset_moved = |raw: f32| bodies.iter().all(|&(_, _, far)| (far - raw).abs() > 0.3);
+            assert!(
+                head_moved(x(4.0)) && onset_moved(x(4.03)) && onset_moved(x(1.0)),
+                "travel {travel}: the fixture is vacuous, no drawn end moved off its note",
+            );
 
             let placed = labels(&state, 10.0);
-            let mut within = 0;
+            for onset in [2.0, 4.03, 5.0, 1.0, run[0]] {
+                assert!(
+                    placed.iter().any(|l| l.onset == onset),
+                    "travel {travel}: the note struck at {onset} is unnamed",
+                );
+            }
             for label in &placed {
-                let off = |(y, x): (f32, f32)| {
-                    ((y - label.lead.y).abs() < 0.01).then_some(label.lead.x - (x + inset))
-                };
-                let at_end = boxes.iter().filter_map(|&b| off(end(b)));
-                let nearest = |offs: &mut dyn Iterator<Item = f32>| {
-                    offs.map(f32::abs).fold(f32::INFINITY, f32::min)
-                };
-                let to_end = nearest(&mut at_end.clone());
-                let to_member = nearest(&mut inside.iter().filter_map(|&m| off(m)));
+                let note = state
+                    .runtime
+                    .tracker
+                    .roll()
+                    .notes()
+                    .find(|n| n.start == label.onset && (n.end_pitch() - label.pitch).abs() < 0.01)
+                    .expect("every name belongs to a note");
+                let stop = note.stop(10.0);
+                // It anchors on the note's own end...
+                let anchor = x(if travel { note.start } else { stop });
+                let inset = if travel { -LABEL_INSET } else { LABEL_INSET };
                 assert!(
-                    to_end.min(to_member) < 0.01,
-                    "travel {travel}: {} stands {} points off where its ribbon ends",
-                    label.name,
-                    to_end.min(to_member),
+                    (label.lead.x - (anchor + inset)).abs() < 0.01,
+                    "travel {travel}: the name struck at {} is not {LABEL_INSET} off its note",
+                    label.onset,
                 );
-                if to_end > 0.01 {
-                    within += 1;
-                }
-            }
-            for (y, _) in boxes.iter().map(|&b| end(b)) {
+                // ...and stands on the body the roll drew for that note.
+                let middle = x((note.start + stop) * 0.5);
+                let &(_, near, far) = bodies
+                    .iter()
+                    .find(|&&(y, near, far)| {
+                        (y - label.lead.y).abs() < 0.01 && near <= middle && middle <= far
+                    })
+                    .expect("every named note has a body drawn");
+                let over = if travel { label.rect.max.x - far } else { near - label.rect.min.x };
                 assert!(
-                    placed.iter().any(|l| (l.lead.y - y).abs() < 0.01),
-                    "travel {travel}: the body on {y} is drawn and unnamed",
+                    over <= 0.0,
+                    "travel {travel}: the name struck at {} overhangs its ribbon's drawn end \
+                     by {over} points",
+                    label.onset,
                 );
             }
-            assert!(
-                within > 0,
-                "travel {travel}: the fixture is vacuous, no name stands inside the run",
-            );
         }
     }
 
@@ -1653,15 +1601,13 @@ mod tests {
              at {divider} onto the spectrum",
             struck[0].rect.min.x,
         );
-        // ...and it holds its gap from the onset end of its ribbon from that
-        // first frame, which is the whole reason it is allowed to cross. The
-        // end the roll DREW: for its first point of length a note is floored
-        // to one, so that end stands a point off the line until the onset
-        // has scrolled that far.
+        // ...and it holds its gap from the onset from that first frame, which
+        // is the whole reason it is allowed to cross.
         for now in [5.0, 5.05, 5.1, 5.2] {
             let placed = labels(&state, now);
             assert_eq!(placed.len(), 1, "at {now}s");
-            let onset = drawn_onset(&state, &axes, split, now);
+            let time = TimeAxis::new(&state, split, now);
+            let onset = axes.at(scale_of(&state).t_of(60.0), time.depth_of(5.0));
             let gap = (placed[0].lead - onset).dot(placed[0].grow);
             assert!(
                 (gap - LABEL_INSET).abs() < 0.01,
@@ -1714,8 +1660,8 @@ mod tests {
     }
 
     /// With the spectrum on the RIGHT, a name keeps its gap from the note's
-    /// LEFT end — the onset there, as the roll draws it — from the note's very
-    /// first frame, and travels with it from that frame on.
+    /// LEFT end — the onset there — from the note's very first frame, and
+    /// travels with it from that frame on.
     ///
     /// This is the mirror of what the Left orientation does with the leading
     /// edge, and it is the point of choosing the anchor by reading order: the
@@ -1749,7 +1695,8 @@ mod tests {
         for now in [5.0, 5.1, 5.4, 6.0, 8.0] {
             let placed = labels(&state, now);
             assert_eq!(placed.len(), 1, "at {now}s");
-            let onset = drawn_onset(&state, &axes, split, now);
+            let time = TimeAxis::new(&state, split, now);
+            let onset = axes.at(t, time.depth_of(5.0));
             let gap = (placed[0].lead - onset).dot(placed[0].grow);
             assert!(
                 (gap - LABEL_INSET).abs() < 0.01,
@@ -2104,14 +2051,14 @@ mod tests {
     }
 
     /// A repeat leaving the far edge takes nothing with it: the note after it
-    /// keeps the end the roll drew while both were in view, and so does its
-    /// name.
+    /// keeps the trim the roll drew while both were in view, and its name
+    /// scrolls on at the picture's own rate.
     ///
     /// The cut between two repeats trims both facing ends, and the trim is
     /// the two notes' business alone. Laid out only from the notes the time
     /// cull kept, the survivor lost its trim on the frame its predecessor
-    /// left the cull: its drawn onset, under the far edge, and its travelling
-    /// name, standing on the pane, both hopped by the trim in one frame.
+    /// left the cull, and its drawn onset hopped by the trim under the far
+    /// edge; a name anchored on that drawn end hopped with it, on the pane.
     #[test]
     fn a_repeats_name_holds_its_place_as_the_note_before_it_leaves() {
         let mut state = travelling(24.0, 10.0);
@@ -2163,6 +2110,61 @@ mod tests {
         assert!(
             drawn.iter().all(|s| *s < name[0] + 1e-3),
             "the survivor's drawn onset jumps outward: {drawn:?}",
+        );
+    }
+
+    /// A held repeat's name scrolls at the picture's own rate as its note
+    /// grows out of the dense run it was struck in.
+    ///
+    /// While the note is young its core sits close enough to the sliver
+    /// before it that the roll draws the two as one run; once it has grown
+    /// a few points it leaves the run, and the roll trims the onset end of
+    /// the body it now draws alone. That end moves in one step. A name
+    /// anchored on it moved with it; anchored on the note, it does not.
+    #[test]
+    fn a_held_repeats_name_scrolls_smoothly_as_it_leaves_a_run() {
+        let mut state = travelling(24.0, 10.0);
+        for start in [1.0, 1.05] {
+            state.runtime.tracker.handle_event(on(start, 60));
+            state.runtime.tracker.handle_event(off(start + 0.02, 60));
+        }
+        state.runtime.tracker.handle_event(on(1.1, 60));
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let step = 1.0 / 60.0;
+        let scroll = (step / TimeAxis::new(&state, split, 0.0).seconds_per_point(&axes)) as f32;
+        let (mut leads, mut onsets) = (Vec::new(), Vec::new());
+        for frame in 0..30 {
+            let now = 1.1 + f64::from(frame) * step;
+            let ribbons = super::super::roll::note_instances(
+                &axes,
+                &scale_of(&state),
+                &state,
+                split,
+                now,
+                2.0,
+            );
+            // The held note's body is the newest: its near end is the nearest.
+            let held = ribbons
+                .iter()
+                .min_by(|a, b| {
+                    (a.center[0] - a.half_extent[1]).total_cmp(&(b.center[0] - b.half_extent[1]))
+                })
+                .expect("the held note is drawn");
+            onsets.push(held.center[0] + held.half_extent[1]);
+            let label = labels(&state, now).into_iter().find(|l| l.onset == 1.1);
+            leads.push(label.expect("the held note is named throughout").lead.x);
+        }
+        let steps = |xs: &[f32]| xs.windows(2).map(|w| w[1] - w[0]).collect::<Vec<f32>>();
+        assert!(
+            steps(&onsets).iter().any(|s| s.abs() > 2.0 * scroll),
+            "the fixture is vacuous: the held note never left the run ({:?})",
+            steps(&onsets),
+        );
+        let name = steps(&leads);
+        assert!(
+            name.iter().all(|s| s.abs() <= scroll + 1e-3),
+            "the held note's name moves by more than the picture scrolls: {name:?}",
         );
     }
 

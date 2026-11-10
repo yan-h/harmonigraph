@@ -30,7 +30,7 @@ use crate::panes::scene_color;
 use crate::PictureState;
 
 mod density;
-pub(super) use density::Ribbon;
+use density::Ribbon;
 
 /// Narrowest a note may draw across PITCH, in points. Note width is in
 /// SEMITONES of the pitch axis, so a wide zoom takes a ribbon under a pixel
@@ -211,49 +211,105 @@ impl Quad {
     }
 }
 
+/// How wide the roll draws a note's body across pitch, decided once a frame:
+/// the Ribbon width at this pitch zoom, the Thickness mapping on top of it and
+/// the [`MIN_RIBBON_PT`] floor under the result.
+///
+/// The roll draws by it, and the note names cull by it ([`reaches`]), so a
+/// name leaves the pitch zoom with the body under it rather than with a width
+/// restated beside it: the names once culled at half the Ribbon width, and
+/// went while a Thickness-swollen or floored ribbon was still in view.
+///
+/// [`reaches`]: Self::reaches
+#[derive(Clone, Copy)]
+pub(super) struct Width {
+    intensity: IntensitySettings,
+    /// Half the Ribbon width, in points across pitch.
+    half_pitch: f32,
+    /// [`MIN_RIBBON_PT`] as a multiple of the Ribbon width.
+    floor: f32,
+    /// The widest any note can swell to, as a multiple of `half_pitch`.
+    widest: f32,
+    /// Half the Ribbon width, in semitones.
+    half_semitones: f32,
+}
+
+impl Width {
+    /// The width for this pane and pitch zoom. The base width follows pitch
+    /// zoom; readability floors follow the composition's logical scale and
+    /// apply AFTER the Thickness mapping.
+    pub(super) fn of(
+        state: &PictureState,
+        axes: &Axes,
+        scale: &PitchScale,
+        point_scale: f32,
+    ) -> Width {
+        let cfg = &state.appearance.spectrum;
+        let half_pitch =
+            ((cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len()).max(1e-6);
+        let floor = MIN_RIBBON_PT * point_scale.max(0.0) * 0.5 / half_pitch;
+        // How each note's playing reads on every display, shared with the
+        // lattice, and what that comes to on this roll.
+        let intensity = state.appearance.view.intensity.sanitized();
+        // The widest any note can swell to: what the pitch culls reach by, so
+        // a swelled note is kept while any of it can be on screen. Each
+        // segment's box grows to its own widest point alone (see
+        // [`push_pieces`]).
+        let widest = if intensity.routes_to(IntensityTarget::Thickness) {
+            intensity.thickness_max.max(1.0)
+        } else {
+            intensity.thickness_base.max(1.0)
+        }
+        .max(floor);
+        let half_semitones = half_pitch * scale.span / axes.pitch_len().max(1e-6);
+        Width { intensity, half_pitch, floor, widest, half_semitones }
+    }
+
+    /// Whether `note`'s body at `at` still reaches `beyond` semitones from
+    /// its centre line: half the width the roll draws there, its Thickness
+    /// reading ([`look`], which [`intensity_points`] reads a ribbon by) under
+    /// the [`MIN_RIBBON_PT`] floor.
+    ///
+    /// The body and not its ink: the surround the shader adds past it is in
+    /// points, and nothing that asks this waits for it.
+    pub(super) fn reaches(&self, note: &RollNote, at: f64, beyond: f32) -> bool {
+        if beyond <= 0.0 {
+            return true;
+        }
+        // The widest any note may swell to bounds this one, so a note well
+        // clear of the edge is settled without reading its expressions.
+        if beyond > self.widest * self.half_semitones {
+            return false;
+        }
+        beyond <= look(&self.intensity, note, at).floored(self.floor).width * self.half_semitones
+    }
+}
+
 /// One frame of the roll, laid out once: the pane, pitch range and moment it
 /// was laid out for, every number its geometry is derived from, and the
 /// ribbons [`density::layout`] made of the notes in its window. [`draw_roll`]
-/// draws from it and the note names read their ribbons off it
-/// ([`ribbons`](Self::ribbons), [`reaches`](Self::reaches)), so a name cannot
-/// be written on a ribbon the roll did not draw.
-///
-/// That is what it is FOR. The names once worked the ribbon out again from the
-/// raw note, and the roll moved its ribbons four times without them: a
-/// repeat's trimmed ends, a short note's floored length, the 1.5 pt width
-/// floor and the Thickness swell.
+/// draws from it, and the geometry is read back from it in tests.
 pub(super) struct RollLayout<'a> {
-    pub(super) axes: Axes,
-    pub(super) scale: PitchScale,
-    pub(super) time: TimeAxis,
+    axes: Axes,
+    scale: PitchScale,
+    time: TimeAxis,
     /// The composition's logical scale, which the point-sized floors ride.
     point_scale: f32,
     /// Physical pixels per point of the display it was laid out for.
     ppp: f32,
-    /// Half the Ribbon width, in points across pitch.
-    half_pitch: f32,
-    /// [`MIN_RIBBON_PT`] as a multiple of the Ribbon width.
-    width_floor: f32,
+    width: Width,
     /// The note surround's reach ([`surround`]), in points.
     outline_px: f32,
     /// [`lead`]'s reach and fade, in points.
     lead_px: f32,
     lead_fade_px: f32,
-    intensity: IntensitySettings,
-    /// The widest any note can swell to, as a multiple of `half_pitch`.
-    widest: f32,
     /// The oldest take time whose ink can still reach the window: what the
     /// roll draws from.
     edge: f64,
-    /// How far past the window's far edge, in points, a reader asked for the
-    /// notes to be laid out: the note names' reach ([`names::lookback`]).
-    ///
-    /// [`names::lookback`]: super::names::lookback
-    pub(super) lookback_px: f32,
     ribbons: Vec<Ribbon<'a>>,
 }
 
-impl<'a> RollLayout<'a> {
+impl RollLayout<'_> {
     /// The antialiasing ramp the shader feathers every edge with: one physical
     /// pixel, in points at this display's density, the same figure it takes as
     /// `feather`. Ink reaches half of it past whatever it edges.
@@ -265,35 +321,6 @@ impl<'a> RollLayout<'a> {
     fn quad(&self) -> Quad {
         Quad::new(self.outline_px, self.feather_px())
     }
-
-    /// Every ribbon laid out this frame, each member with the stretch of the
-    /// body it is drawn over ([`Ribbon::spans`]): the notes the time cull kept,
-    /// the notes past it a reader's [`lookback_px`](Self::lookback_px) reaches,
-    /// and each one's predecessor where that still decides its ends.
-    pub(super) fn ribbons(&self) -> &[Ribbon<'a>] {
-        &self.ribbons
-    }
-
-    /// Whether `ribbon`'s body at `at` still reaches `beyond` semitones from
-    /// its centre line: half the width the roll draws there, its Thickness
-    /// reading ([`look_at`], which [`intensity_points`] reads the same moment
-    /// by) under the [`MIN_RIBBON_PT`] floor.
-    ///
-    /// The body and not its ink: the surround the shader adds past it is in
-    /// points, and nothing that asks this waits for it.
-    pub(super) fn reaches(&self, ribbon: &Ribbon<'_>, at: f64, beyond: f32) -> bool {
-        if beyond <= 0.0 {
-            return true;
-        }
-        // Points per Ribbon width's half, in semitones.
-        let unit = self.half_pitch * self.scale.span / self.axes.pitch_len().max(1e-6);
-        // The widest any note may swell to bounds this one, so a note well
-        // clear of the edge is settled without reading its expressions.
-        if beyond > self.widest * unit {
-            return false;
-        }
-        beyond <= look_at(ribbon, &self.intensity, at).floored(self.width_floor).width * unit
-    }
 }
 
 /// Lay the roll out for one frame, or `None` where it draws nothing: hidden,
@@ -302,9 +329,7 @@ impl<'a> RollLayout<'a> {
 /// `split` is the depth fraction the roll starts at; `now` is the shell clock,
 /// the same one the tracker's events are stamped with. The display density is
 /// the painter's own, so an export at a small one antialiases at its real
-/// pixel size. `lookback_px` is how far past the far edge a reader needs the
-/// notes laid out, in points, beyond what the roll's own ink needs.
-#[allow(clippy::too_many_arguments)]
+/// pixel size.
 pub(super) fn layout<'a>(
     painter: &egui::Painter,
     axes: Axes,
@@ -313,14 +338,13 @@ pub(super) fn layout<'a>(
     split: f32,
     now: f64,
     point_scale: f32,
-    lookback_px: f32,
 ) -> Option<RollLayout<'a>> {
     let cfg = &state.appearance.spectrum;
     if !cfg.show_roll || split >= 1.0 {
         return None;
     }
     let ppp = painter.ctx().pixels_per_point().max(1e-3);
-    Some(layout_at(axes, scale, state, split, now, ppp, point_scale, lookback_px))
+    Some(layout_at(axes, scale, state, split, now, ppp, point_scale))
 }
 
 #[cfg(test)]
@@ -454,9 +478,8 @@ pub(super) fn note_instances(
     notes
 }
 
-/// [`roll_instances`] of a fresh [`layout_at`] with no reader's lookback, for
-/// tests that ask for the geometry at a chosen display density and point
-/// scale without a painter.
+/// [`roll_instances`] of a fresh [`layout_at`], for tests that ask for the
+/// geometry at a chosen display density and point scale without a painter.
 #[cfg(test)]
 fn instances_at(
     axes: &Axes,
@@ -467,7 +490,7 @@ fn instances_at(
     ppp: f32,
     point_scale: f32,
 ) -> (Vec<RollInstance>, Vec<RollInstance>) {
-    roll_instances(state, &layout_at(*axes, *scale, state, split, now, ppp, point_scale, 0.0))
+    roll_instances(state, &layout_at(*axes, *scale, state, split, now, ppp, point_scale))
 }
 
 /// [`layout`] at a given display density, with the point-sized pitch floor
@@ -475,7 +498,6 @@ fn instances_at(
 /// already follows the preview's pitch axis; only the fallback for hairline
 /// notes needs this extra scale to keep its relative size matched to the
 /// export.
-#[allow(clippy::too_many_arguments)]
 fn layout_at<'a>(
     axes: Axes,
     scale: PitchScale,
@@ -484,7 +506,6 @@ fn layout_at<'a>(
     now: f64,
     ppp: f32,
     point_scale: f32,
-    lookback_px: f32,
 ) -> RollLayout<'a> {
     let (axes, scale) = (&axes, &scale);
     let cfg = &state.appearance.spectrum;
@@ -492,12 +513,7 @@ fn layout_at<'a>(
     let time = TimeAxis::new(state, split, now);
     let oldest = time.oldest();
 
-    // The base width follows pitch zoom; readability floors follow the
-    // composition's logical scale and apply AFTER the Thickness mapping.
-    let half_pitch =
-        ((cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len()).max(1e-6);
-    let min_half_pitch = MIN_RIBBON_PT * point_scale.max(0.0) * 0.5;
-    let width_floor = min_half_pitch / half_pitch;
+    let width = Width::of(state, axes, scale, point_scale);
     let min_half_depth = 0.5 * MIN_LENGTH_PT * point_scale.max(0.0);
 
     // Build in START order. The tracker hands notes back finished-first and
@@ -520,19 +536,6 @@ fn layout_at<'a>(
     // The antialiasing ramp ([`RollLayout::feather_px`]).
     let ppp = ppp.max(1e-3);
     let feather_px = 1.0 / ppp;
-    // How each note's playing reads on every display, shared with the lattice,
-    // and what that comes to on this roll.
-    let intensity = state.appearance.view.intensity.sanitized();
-    // The widest any note can swell to, as a multiple of `half_pitch`: what the
-    // pitch culls below reach by, so a swelled note is kept while any of it can
-    // be on screen. Each segment's box grows to its own widest point alone (see
-    // [`push_pieces`]).
-    let widest = if intensity.routes_to(IntensityTarget::Thickness) {
-        intensity.thickness_max.max(1.0)
-    } else {
-        intensity.thickness_base.max(1.0)
-    }
-    .max(width_floor);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -582,15 +585,8 @@ fn layout_at<'a>(
     //
     // What that costs is sorting the notes that are inside the WINDOW but off
     // the octave zoom — a comparison each.
-    //
-    // The window laid out reaches further than the one drawn when a reader
-    // asks: a note name is kept until its own box has left, and its note's
-    // ribbon has to be laid out for as long as the name is read off it. Past
-    // `edge` a ribbon draws nothing (its segments are dropped below), so this
-    // costs the picture nothing.
-    let laid_from = edge.min(oldest - f64::from(lookback_px.max(0.0)) * per_point);
     let kept = |note: &RollNote| {
-        note.stop(now) >= laid_from || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
+        note.stop(now) >= edge || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
     };
     let mut notes: Vec<&RollNote> = roll.notes().filter(|&note| kept(note)).collect();
 
@@ -638,15 +634,11 @@ fn layout_at<'a>(
         time,
         point_scale,
         ppp,
-        half_pitch,
-        width_floor,
+        width,
         outline_px,
         lead_px,
         lead_fade_px,
-        intensity,
-        widest,
         edge,
-        lookback_px,
         ribbons,
     }
 }
@@ -672,13 +664,10 @@ fn roll_instances(
         ref scale,
         time,
         point_scale,
-        half_pitch,
-        width_floor,
+        width: Width { intensity, half_pitch, floor: width_floor, widest, .. },
         outline_px,
         lead_px,
         lead_fade_px,
-        intensity,
-        widest,
         edge,
         ref ribbons,
         ..
@@ -1055,7 +1044,7 @@ fn intensity_points(
     t1: f64,
     width_floor: f32,
 ) -> Vec<(f64, Look)> {
-    let look = |at| look_at(ribbon, intensity, at);
+    let look = |at| look(intensity, ribbon.note_at(at), at);
     let mut points = vec![(t0, look(t0))];
     let first = ribbon.notes.partition_point(|n| n.start <= t0).saturating_sub(1);
     let end = ribbon.notes.partition_point(|n| n.start <= t1).max(first + 1);
@@ -1103,12 +1092,11 @@ fn intensity_points(
     points.into_iter().zip(keep).filter_map(|(point, kept)| kept.then_some(point)).collect()
 }
 
-/// How `ribbon` reads at `at`, before the width floor: the note sounding there
-/// in its run, read through the intensity mapping. What [`intensity_points`]
-/// breaks a segment at, and what the names read a ribbon's width at their
-/// anchor by ([`RollLayout::reaches`]).
-fn look_at(ribbon: &Ribbon<'_>, intensity: &IntensitySettings, at: f64) -> Look {
-    let note = ribbon.note_at(at);
+/// How `note` reads at `at`, before the width floor: its expressions there,
+/// read through the intensity mapping. What [`intensity_points`] reads a
+/// ribbon by at the ends of each segment, and what the names read a note's
+/// width at their own end by ([`Width::reaches`]).
+fn look(intensity: &IntensitySettings, note: &RollNote, at: f64) -> Look {
     Look::of(intensity, note.velocity, note.expressions_at(at))
 }
 
@@ -1419,7 +1407,7 @@ mod tests {
         let axes = Axes::new(PANE, &state.appearance.spectrum);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
         crate::tests::probe::frame_full(&ctx, egui::vec2(640.0, 360.0), |ui| {
-            let ribbons = layout(ui.painter(), axes, scale, &state, 0.5, 1.0, 1.0, 0.0).unwrap();
+            let ribbons = layout(ui.painter(), axes, scale, &state, 0.5, 1.0, 1.0).unwrap();
             draw_roll(ui.painter(), &state, &ribbons, 0);
         });
         assert_eq!(take_roll_draw_probe().unwrap().pixels_per_point, 0.5);
@@ -1642,7 +1630,7 @@ mod tests {
                 "at {now}s the run's last note is drawn without its hatching",
             );
             // The run's other notes have all left the cull.
-            let edge = layout_at(axes, scale, &state, split, now, PPP, 1.0, 0.0).edge;
+            let edge = layout_at(axes, scale, &state, split, now, PPP, 1.0).edge;
             if !notes.is_empty() && edge > 1.12 {
                 alone += 1;
             }
@@ -2497,7 +2485,7 @@ mod tests {
         // Put the note's stop exactly on the live ink boundary, read off the
         // cull itself: solving for `now` from the stop instead lands it an ulp
         // either side depending on the pane's proportions.
-        let stop = layout_at(axes, scale, &state, split, now, PPP, 1.0, 0.0).edge;
+        let stop = layout_at(axes, scale, &state, split, now, PPP, 1.0).edge;
         state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(stop, SourceId::DIRECT, 0, 60));
         let ins = instances(&state, now);
