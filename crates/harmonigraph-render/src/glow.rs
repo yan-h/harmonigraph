@@ -39,7 +39,7 @@
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::uniforms::{uniform_group, Float4};
+use crate::uniforms::{uniform_group, AddUniforms, Float4};
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const GLOW_SRC: &str = include_str!("shaders/glow.wgsl");
@@ -136,14 +136,6 @@ uniform_group! {
         /// takes.
         feather: Float4,
     }
-}
-
-/// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct StrengthUniforms {
-    /// Strength in x; the rest is the 16 bytes a uniform block takes.
-    strength: [f32; 4],
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -358,7 +350,7 @@ impl GlowPane {
             device,
             &wgpu::BufferDescriptor {
                 label: Some("glow_strength"),
-                size: std::mem::size_of::<StrengthUniforms>() as u64,
+                size: std::mem::size_of::<AddUniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             },
@@ -564,7 +556,7 @@ impl CallbackTrait for GlowCallback {
         queue.write_buffer(
             &pane.strength_buffer,
             0,
-            bytemuck::bytes_of(&StrengthUniforms { strength: [self.strength, 0.0, 0.0, 0.0] }),
+            bytemuck::bytes_of(&AddUniforms { strength: Float4([self.strength, 0.0, 0.0, 0.0]) }),
         );
 
         // The marks again at half size, and then the lattice's own chain over

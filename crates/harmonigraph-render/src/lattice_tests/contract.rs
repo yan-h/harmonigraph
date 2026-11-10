@@ -85,6 +85,8 @@ fn uniform_transport_matches_nagas_resolved_layout() {
     use crate::uniforms::layout::check_binding;
     check_binding::<Uniforms>(&with_common(SHADER_SRC), 0, 0);
     check_binding::<CompositeParams>(BLIT_SRC, 0, 3);
+    // The roll's and the Spiral's bloom strength, which the lattice never binds.
+    check_binding::<AddUniforms>(BLIT_SRC, 0, 4);
     // Blit binds the first named group, with no camera/node packing dependency.
     assert_eq!(std::mem::offset_of!(Uniforms, composite), 0);
     assert_eq!(std::mem::size_of::<CompositeParams>(), 48);

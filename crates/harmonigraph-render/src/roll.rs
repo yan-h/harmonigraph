@@ -32,7 +32,7 @@
 //! Rebuilding per frame keeps the geometry a pure function of `now` — which
 //! is also what keeps the offline render deterministic.
 
-use crate::uniforms::{uniform_group, Float2};
+use crate::uniforms::{uniform_group, AddUniforms, Float2, Float4};
 
 use std::collections::HashMap;
 
@@ -385,14 +385,6 @@ impl RollUniforms {
 /// chain's own half (`crate::bloom_sizes`), which it is read into 1:1.
 fn bloom_notes_size(size: [u32; 2]) -> [u32; 2] {
     crate::bloom_sizes(size).0
-}
-
-/// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BloomUniforms {
-    /// Strength in x; the rest is the 16 bytes a uniform block takes.
-    strength: [f32; 4],
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -866,7 +858,7 @@ impl RollBloom {
             device,
             &wgpu::BufferDescriptor {
                 label: Some("roll_bloom_strength"),
-                size: std::mem::size_of::<BloomUniforms>() as u64,
+                size: std::mem::size_of::<AddUniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             },
@@ -1136,7 +1128,7 @@ impl CallbackTrait for RollCallback {
             queue.write_buffer(
                 &bloom.strength_buffer,
                 0,
-                bytemuck::bytes_of(&BloomUniforms { strength: [self.bloom, 0.0, 0.0, 0.0] }),
+                bytemuck::bytes_of(&AddUniforms { strength: Float4([self.bloom, 0.0, 0.0, 0.0]) }),
             );
 
             // The notes again at half size, and then the lattice's own chain
