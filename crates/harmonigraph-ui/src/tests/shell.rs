@@ -36,7 +36,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     state.picture.appearance.spectrum.show_roll = false;
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     let view = state.picture.appearance.view.clone();
-    assert!(view.glow_reach > 0.0 && view.glow_strength > 0.0, "the fresh glow draws");
+    assert!(view.glow_draws(), "the fresh glow draws");
     let gain = view.glow_strength;
     let span = view.note_animation.departure(state.picture.runtime.frame_params.fade_time);
     assert!(span < 2.0, "the note's own departure ({span} s) must be over 3 s after the off");

@@ -187,7 +187,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
     // Everything below shapes a light that draws only at a Reach and a gain
     // both above 0, so either at 0 greys it, as it does the breathing.
-    ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
+    ui.add_enabled_ui(view.glow_draws(), |ui| {
             ValueBar::new(&mut view.glow_accumulation, GLOW_ACCUMULATION_RANGE, "Overlap buildup")
                 .default_value(super::fresh_view().glow_accumulation)
                 .percent()
@@ -231,7 +231,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Audio-ring colors do not feed the glow.",
                 );
         });
-    ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
+    ui.add_enabled_ui(view.glow_draws(), |ui| {
         // The INK's own share of the light, where a Shadow depth says the
         // ground's: one question asked twice, and the answers are free of each
         // other on purpose — a dark pool with a tinted ring in it is a picture
@@ -260,7 +260,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             );
         });
     });
-    ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
+    ui.add_enabled_ui(view.glow_draws(), |ui| {
         ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
             .default_value(super::fresh_view().atmosphere.breath_amount)
             .percent().show(ui).on_hover_text("Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.");

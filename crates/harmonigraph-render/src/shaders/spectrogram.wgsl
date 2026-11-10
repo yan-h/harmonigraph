@@ -629,10 +629,17 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
 }
 
+// Scales' cell as a fraction of the pane's height at a `Scale size` of 1: one
+// over `CLOUD_UNITS` times its cells to a cloud unit, `VELVET_CELLS` in Rust.
+const VELVET_CELL: f32 = 24.0 / 405.0;
+// Where `cloud.drift` starts, in cloud units: `MaterialSettings::DRIFT_START`.
+// Scales take their drift from there, in their own cells.
+const DRIFT_START: vec2<f32> = vec2<f32>(0.0, 0.6);
+
 @fragment
 fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
-    let cell = cloud.size.y * (24.0 / 405.0) * cloud.velvet_form.x;
-    let drift = (cloud.drift - vec2<f32>(0.0, 0.6)) * cloud.size.y / (10.0 * cell);
+    let cell = cloud.size.y * VELVET_CELL * cloud.velvet_form.x;
+    let drift = (cloud.drift - DRIFT_START) * cloud.size.y / (CLOUD_UNITS * cell);
     let level = velvet_material(close_light, cloud_sampler, vec2<f32>(in.slab, in.t) * cloud.size,
         cloud.size, cell, drift, cloud.velvet, cloud.velvet_form.yz).r;
     return vec4<f32>(level, 0.0, 0.0, 1.0);

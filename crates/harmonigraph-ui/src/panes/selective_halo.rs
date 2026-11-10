@@ -2,7 +2,7 @@
 
 use glam::{Vec2, Vec3};
 use harmonigraph_core::LatticePos;
-use harmonigraph_scene::{DrawnWindow, NodeMotion, MAX_DRAWN_NODES};
+use harmonigraph_scene::{DrawnWindow, NodeMotion, MAX_DRAWN_NODES, MIN_NODE_SCALE};
 
 pub(super) fn owners(
     state: &crate::PictureState,
@@ -13,7 +13,7 @@ pub(super) fn owners(
 ) -> Vec<LatticePos> {
     let spare = MAX_DRAWN_NODES.saturating_sub(window.count());
     let view = &state.appearance.view;
-    if spare == 0 || !now.is_finite() || view.glow_reach <= 0.0 || view.glow_strength <= 0.0 {
+    if spare == 0 || !now.is_finite() || !view.glow_draws() {
         return Vec::new();
     }
     let camera = &state.appearance.camera;
@@ -63,7 +63,7 @@ pub(super) fn owners(
             let centered = pos - center;
             let world =
                 Vec3::new(centered.fives as f32, centered.threes as f32, centered.sevens as f32);
-            let scale = view.sevens_size.powi(centered.sevens.abs()).max(0.05);
+            let scale = view.sevens_size.powi(centered.sevens.abs()).max(MIN_NODE_SCALE);
             let r = radius * scale;
             let mut lo = Vec2::splat(f32::INFINITY);
             let mut hi = Vec2::splat(f32::NEG_INFINITY);

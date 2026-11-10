@@ -154,6 +154,21 @@ fn the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into() {
     );
 }
 
+/// The uv-to-world factor and the per-sheet scale floor size every node quad
+/// in the shader and every CPU bound on one (caster boxes, off-pane light
+/// owners, the marker unit), so the two spellings must be one number.
+#[test]
+fn the_shader_sizes_node_quads_on_the_scenes_constants() {
+    for (name, rust) in [
+        ("RADII_PER_UV", harmonigraph_scene::RADII_PER_UV),
+        ("MIN_NODE_SCALE", harmonigraph_scene::MIN_NODE_SCALE),
+    ] {
+        let shader: f32 =
+            crate::shadow::tests::shader_const(SHADER_SRC, name).parse().expect("a number");
+        assert_eq!(shader, rust, "lattice.wgsl's {name}");
+    }
+}
+
 #[test]
 fn octave_packing_matches_the_documented_layout() {
     let mut levels = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
