@@ -333,9 +333,10 @@ pub fn root_ui(
     // it gets its own say here. Without this the roll would advance in
     // 50 ms jerks once the voices died.
     //
-    // Flowing audio counts too: the spectrum and spectrogram advance every
+    // Audible audio counts too: the spectrum and spectrogram advance every
     // frame off the analyzer, so with audio playing but no MIDI they'd
-    // otherwise crawl at the 50 ms idle poll.
+    // otherwise crawl at the 50 ms idle poll. Audio that merely arrives does
+    // not: a host streams silence with its transport stopped (#1670 Q2).
     let animating = Animating::of(state, now).any();
     if animating {
         // As fast as the shell offers. The frame rate setting is the shell's
@@ -495,7 +496,7 @@ pub struct Animating {
     pub learn: bool,
     pub roll: bool,
     pub releasing: bool,
-    pub flowing: bool,
+    pub audible: bool,
 }
 
 impl Animating {
@@ -505,7 +506,7 @@ impl Animating {
             learn: state.picture.runtime.learn_active,
             roll: roll_scrolling(state, now),
             releasing: releasing(state, now),
-            flowing: state.picture.runtime.spectrum.is_flowing(now),
+            audible: audible(state, now),
         }
     }
 
@@ -521,7 +522,7 @@ impl Animating {
             (self.learn, "learn"),
             (self.roll, "roll"),
             (self.releasing, "releasing"),
-            (self.flowing, "flowing"),
+            (self.audible, "audible"),
         ]
         .into_iter()
     }
@@ -554,12 +555,98 @@ impl std::fmt::Display for Animating {
 /// own state, so a glow that is off keeps no state to ask and one that stops
 /// being drawn lapses at its deadline.
 fn releasing(state: &SharedState, now: f64) -> bool {
-    let animation = state.picture.appearance.view.note_animation;
-    let span = f64::from(animation.fade_out_delay)
-        + f64::from(state.picture.runtime.frame_params.fade_time)
-            * (1.0 + f64::from(animation.stagger_spread));
+    let span = departure(state);
     state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| now - last <= span)
         || state.picture.surfaces.glow_fade.values().any(|glow| glow.fading_at(now))
+}
+
+/// How long a lattice node takes to leave once what lit it has gone: the
+/// fade-out delay, then one Fade for each slice of the stagger's sweep.
+fn departure(state: &SharedState) -> f64 {
+    let animation = state.picture.appearance.view.note_animation;
+    f64::from(animation.fade_out_delay)
+        + f64::from(state.picture.runtime.frame_params.fade_time)
+            * (1.0 + f64::from(animation.stagger_spread))
+}
+
+/// Time constants a level on the ring's 0..1 scale takes to come within half a
+/// shader byte of where its envelope is carrying it, from as far away as it can
+/// be: `ln(255 / 0.5)`.
+const RING_SETTLE: f64 = 6.234;
+
+/// Whether audio above silence can still be moving something on screen.
+///
+/// Samples arriving are not enough, because a host streams silence with its
+/// transport stopped and drawing that at full rate cost Bitwig's main thread
+/// about 30% for a still picture (#1670 Q2). So this asks how long ago the
+/// newest column with anything in it was
+/// ([`last_audible`](AudioSpectrum::last_audible)), against how long each
+/// picture that reads the spectrum goes on moving after it:
+///
+/// - The curve and the Spiral draw the smoothed display, which a column moves
+///   once it lands, a column lag after its own time, and which they stop
+///   drawing [`HOLD_SECONDS`](AudioSpectrum::HOLD_SECONDS) after the samples
+///   stop. The display's release is inside the stamp itself: a curve still
+///   above silence counts as audible.
+/// - The heatmap scrolls a column until it leaves the far edge, a Span after
+///   its time plus the slab it was folded into and the three sigmas its Time
+///   softness blurs it across. Its atmosphere drifts on a clock of its own but
+///   only moves light: every texture keeps silence on the palette's floor, so
+///   it settles with the columns it lights.
+/// - The lattice ring carries the display on its own attack and release, its
+///   gate closes on the note Fade, and a node the ring posed then leaves as a
+///   note's would.
+///
+/// Each is a bound in time rather than a reading of the state it bounds, so a
+/// surface that stops being drawn cannot hold the loop awake, and so is the
+/// one thing that can go stale: a delay added downstream of the display has to
+/// join its picture's tail here, or that picture finishes its move at the
+/// idle poll.
+fn audible(state: &SharedState, now: f64) -> bool {
+    let spectrum = &state.picture.runtime.spectrum;
+    let cfg = &state.picture.appearance.spectrum;
+    let view = &state.picture.appearance.view;
+    let window = f64::from(cfg.roll_seconds);
+    // How much further than its own time a column can reach: the widest slab
+    // any surface last folded at, and the blur's reach.
+    let slab = || {
+        let blur = 3.0 * f64::from(cfg.atmosphere.time_softness.max(0.0)) / 1000.0;
+        let held = state.picture.surfaces.spectrogram.all().filter_map(|s| s.held_bucket);
+        held.fold(0.0, f64::max) + blur
+    };
+    // Silence is drawn in the bed's colour unless a tilt lifts it above the
+    // volume floor somewhere in range. Where it does, the heatmap's edges show
+    // against the bed, so any column in view can be moving one.
+    if cfg.show_spectrogram && silence_shows(cfg) {
+        let newest = spectrum.history().back().map(|c| c.time);
+        if newest.is_some_and(|t| now - t <= window + slab()) {
+            return true;
+        }
+    }
+    let Some(heard) = spectrum.last_audible() else { return false };
+    let landed = spectrum.column_lag() + AudioSpectrum::HOLD_SECONDS;
+    let mut tail = landed;
+    if cfg.show_spectrogram {
+        tail = tail.max(window + slab());
+    }
+    if view.spectral_ring_draws() {
+        let env = view.envelope(&state.picture.runtime.frame_params);
+        let ring =
+            RING_SETTLE * f64::from(view.spectral_ring_attack.max(view.spectral_ring_release));
+        let gate = f64::from(env.attack_time.max(env.fade_time));
+        tail = tail.max(landed + ring + gate + departure(state));
+    }
+    now - heard <= tail
+}
+
+/// Whether a silent cell of the heatmap draws in anything but the gradient's
+/// floor, which is the bed's colour. The level is affine in pitch, so the
+/// range's two ends decide it.
+fn silence_shows(cfg: &SpectrumConfig) -> bool {
+    use harmonigraph_core::spectrogram::DB_FLOOR;
+    [cfg.low_midi, cfg.high_midi]
+        .into_iter()
+        .any(|midi| panes::spectral::axes::spectrogram_level_raw(cfg, DB_FLOOR, midi) > 0.0)
 }
 
 /// Whether the piano roll still has something moving across it: its window

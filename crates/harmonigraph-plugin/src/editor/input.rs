@@ -107,7 +107,8 @@ impl LiveInput {
     /// Always drains AND (in [`Self::analyze`]) always feeds. There is no
     /// display state that makes the samples unwanted: the curve and the
     /// spectrogram read this one analyzer, the curve is always drawn, and
-    /// feeding it is also what drives smooth repaint (via `is_flowing`).
+    /// feeding it is also what drives smooth repaint while anything it heard
+    /// is still on screen (`harmonigraph_ui::Animating::audible`).
     fn take_audio(
         &mut self,
         runtime: &mut harmonigraph_ui::VisualRuntime,

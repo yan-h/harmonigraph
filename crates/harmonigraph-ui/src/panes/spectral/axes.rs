@@ -207,7 +207,7 @@ pub(crate) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f3
 /// A bucket's power as dB — the form the spectrogram's history already stores,
 /// before [`loudness_db`] maps it to a position.
 pub(crate) fn power_db(power: f32) -> f32 {
-    10.0 * power.max(1e-12).log10()
+    10.0 * power.max(harmonigraph_core::spectrogram::POWER_FLOOR).log10()
 }
 
 /// How loud a dB value reads at pitch `midi`, on a 0..1 height scale: the

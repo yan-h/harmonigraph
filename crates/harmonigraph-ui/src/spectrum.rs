@@ -84,6 +84,16 @@ pub(crate) struct SpectrumStore {
     /// When samples last arrived; the curve hides once the source stops
     /// (silent/unrouted input, switched-off synth) rather than freezing.
     pub(crate) last_samples: Option<f64>,
+    /// The time of the newest column that left anything above silence
+    /// ([`POWER_FLOOR`](harmonigraph_core::spectrogram::POWER_FLOOR)) in the
+    /// raw spectrum or in the curve it advanced: how long ago anything on
+    /// screen last had something to show. `None` until audio has been heard.
+    ///
+    /// Samples arriving say nothing about this, because a host streams
+    /// silence with its transport stopped. What reads it is
+    /// [`Animating`](crate::Animating), which keeps drawing at full rate only
+    /// while a column this new can still be in view or still settling.
+    pub(crate) last_audible: Option<f64>,
     /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
     /// Bounded by age and, by construction, by memory: see
@@ -219,6 +229,7 @@ impl Default for AudioSpectrum {
                 fold_measurements: 0,
                 display: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
                 last_samples: None,
+                last_audible: None,
                 history: SpectrumHistory::default(),
             },
         }
@@ -372,6 +383,8 @@ impl SpectrumStore {
         self.display_revision = self.display_revision.wrapping_add(1);
         let attack = hop_alpha(config.attack, column.step);
         let release = hop_alpha(config.release, column.step);
+        let floor = harmonigraph_core::spectrogram::POWER_FLOOR;
+        let mut audible = false;
         for (shown, new) in self.display.iter_mut().zip(&column.power) {
             // Invalid input must not poison the carried smoothing state
             // after clean audio has replaced the analyzer's window.
@@ -380,6 +393,13 @@ impl SpectrumStore {
             // are mapped through `loudness` well downstream of here.
             let alpha = if new > *shown { attack } else { release };
             *shown += (new - *shown) * alpha;
+            // Both, because each can hold something the other has not: the
+            // curve's release outlasts the sound, and the attack can leave a
+            // faint column's curve under the floor while its cell still draws.
+            audible |= new > floor || *shown > floor;
+        }
+        if audible {
+            self.last_audible = Some(column.time);
         }
         // Keep the RAW spectrum for the spectrogram (the smoothed
         // `display` would smear one column into the next). Retention is
@@ -436,7 +456,8 @@ impl SpectrumStore {
     }
 
     /// Forget the curve along with the run it was measured from; the history
-    /// stays. See [`Delivery::Restart`].
+    /// stays, and so does [`last_audible`](Self::last_audible), which may
+    /// date a column still in it. See [`Delivery::Restart`].
     pub(crate) fn restart(&mut self) {
         self.last_samples = None;
         self.display.fill(0.0);
@@ -723,13 +744,10 @@ impl AudioSpectrum {
         self.analysis.as_ref().map_or(self.lent_lag, SpectrumAnalysis::lag)
     }
 
-    /// Whether audio has arrived within the hold window — i.e. the spectrum is
-    /// still live. Drives continuous repaint so the curve and spectrogram stay
-    /// smooth even when no MIDI is animating the frame. Reads true only while
-    /// samples are actually arriving (the input worker feeds them whether or not
-    /// the spectrum is shown), so it idles cleanly once audio stops.
-    pub fn is_flowing(&self, now: f64) -> bool {
-        self.store.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS)
+    /// The time of the newest column anything on screen could still show:
+    /// see [`SpectrumStore::last_audible`].
+    pub(crate) fn last_audible(&self) -> Option<f64> {
+        self.store.last_audible
     }
 }
 

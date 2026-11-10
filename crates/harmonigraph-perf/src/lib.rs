@@ -240,13 +240,11 @@ pub struct Workload {
     /// rather than idling. The FPS number means different things in each: idle
     /// caps at the ~20 Hz poll by design, so a low idle rate is not a problem.
     ///
-    /// Expect "live" almost always in a host, though, and do not read a high
-    /// rate as "something must be animating". This is true whenever
-    /// `spectrum.is_flowing` is, i.e. whenever samples arrived recently — and
-    /// a DAW streams buffers continuously, silence included. With the Analyzer
-    /// on screen the editor therefore reads "live" at the full refresh rate
-    /// with nothing playing, which is correct: the spectrogram scrolls in real
-    /// time, so every frame does have a new column to draw.
+    /// Audio keeps this true only while it can still be moving something on
+    /// screen: a DAW streams silence with its transport stopped, and once the
+    /// last audible column has scrolled out of the spectrogram's Span the
+    /// editor reads "idle" though samples still arrive (#1670 Q2). See
+    /// `harmonigraph_ui::Animating` for each reason.
     pub animating: bool,
 }
 
