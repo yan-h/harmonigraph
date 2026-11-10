@@ -11,15 +11,12 @@ The shader's explicit group alignment matches Rust's `repr(C, align(16))`;
 the Pod derive also rejects implicit Rust padding.
 
 Lattice binding 0 starts with `CompositeParams`.
-Blit binding 3 reads that 32-byte group,
-with bloom at byte 12 and the pane background at byte 16 for local shadow composition.
+Blit binding 3 reads that 48-byte group,
+with bloom at byte 12, the pane background at byte 16 for local shadow composition, and the edge softness at byte 32.
 Both bound types are checked against the same Rust declaration,
-and the prefix's zero offset and bloom offset are asserted explicitly.
-Roll/spiral bloom still uses the separate `AddUniforms` buffer at binding 4;
-its shader declaration and transport remain unchanged.
+and the prefix's zero offset, its size and its bloom offset are asserted explicitly.
+The roll's and the Spiral's bloom pass their strength in a separate `AddUniforms` buffer at binding 4.
 
-The shader equations and public scene inputs are unchanged.
-Unused clock/style/background lanes and the unread marker-cell sigma leave the upload.
-Glow settings and row capacity still zero together when glow is disabled.
-Marker world units and both shadow styles remain available without glow.
-No saved-state shape, cache key, instance input, CPU row allocation or history ownership changes.
+`GlowParams`, row capacity included, is zeroed together when reach or strength disables glow.
+Marker world units (`MarkerParams::world_unit`) and the shadow groups sit outside it,
+so marker shadows still draw with glow off.

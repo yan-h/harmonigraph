@@ -39,6 +39,7 @@
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::uniforms::{uniform_group, Float4};
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const GLOW_SRC: &str = include_str!("shaders/glow.wgsl");
@@ -126,15 +127,15 @@ struct GlowCallback {
     target_format: wgpu::TextureFormat,
 }
 
-/// The disc pass's own uniforms (`Locals` in glow.wgsl).
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct GlowUniforms {
-    /// Where the target starts in points (xy) and how big it is (zw).
-    viewport: [f32; 4],
-    /// The antialiasing ramp in x; the rest is the 16 bytes a uniform block
-    /// takes.
-    feather: [f32; 4],
+uniform_group! {
+    /// The disc pass's own uniforms (`Locals` in glow.wgsl).
+    struct GlowUniforms {
+        /// Where the target starts in points (xy) and how big it is (zw).
+        viewport: Float4,
+        /// The antialiasing ramp in x; the rest is the 16 bytes a uniform block
+        /// takes.
+        feather: Float4,
+    }
 }
 
 /// The bloom's strength, alone in its own buffer (`AddUniforms` in blit.wgsl).
@@ -547,17 +548,17 @@ impl CallbackTrait for GlowCallback {
                 // The viewport's own edges, back in points: the texture covers
                 // exactly the pixels `paint` will lay it over, so the marks in
                 // it stand where the marks under it do.
-                viewport: [
+                viewport: Float4([
                     viewport.left_px as f32 / ppp,
                     viewport.top_px as f32 / ppp,
                     size[0] as f32 / ppp,
                     size[1] as f32 / ppp,
-                ],
+                ]),
                 // Half the pane's size for the copy, so this is what one pixel
                 // of THAT target measures in points — twice the display's, and
                 // the ramp has to follow it or a small mark comes out at the
                 // wrong weight in the halo.
-                feather: [2.0 / ppp, 0.0, 0.0, 0.0],
+                feather: Float4([2.0 / ppp, 0.0, 0.0, 0.0]),
             }),
         );
         queue.write_buffer(
@@ -729,6 +730,11 @@ mod tests {
                 "missing entry point `{required}`"
             );
         }
+    }
+
+    #[test]
+    fn uniforms_match_the_bound_shader_layout() {
+        crate::uniforms::layout::check_binding::<GlowUniforms>(GLOW_SRC, 0, 0);
     }
 
     /// The vertex-layout <-> shader-input contract (attribute locations,

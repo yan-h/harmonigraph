@@ -36,6 +36,7 @@ use std::collections::HashMap;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
+use crate::uniforms::{uniform_group, Float2};
 use crate::{create_vertex_buffer, wgpu};
 
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
@@ -223,42 +224,43 @@ struct TextCallback {
     pane_id: u64,
 }
 
-/// What a glyph pipeline is told about the surface it is drawing on.
-///
-/// `screen_points` is whatever space the glyph rects are quoted in: egui's
-/// whole surface for the callback below, one pane for the lattice's own pass
-/// (see `crate::LatticeLabels`). `pixels_per_point` is not that space — it is
-/// the DEVICE scale the visible atlas was rasterized at, and stays the
-/// device's whatever the target's pixels are.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct TextUniforms {
-    pub(crate) screen_points: [f32; 2],
-    /// The two sheets' sizes in texels, ADJACENT so one partial write covers
-    /// the pair — see [`ATLAS_SIZES_OFFSET`], which is the whole reason they
-    /// sit together rather than each beside what it belongs to.
-    pub(crate) atlas_size: [f32; 2],
-    pub(crate) mark_atlas_size: [f32; 2],
-    /// The axes this surface's labels slide along — see [`SlideAxis`], and
-    /// `FILTER_TAP` in the shader for what is done with them.
-    pub(crate) filter_axis: [f32; 2],
-    pub(crate) pixels_per_point: f32,
-    /// This text group's Shadow depth, 0..=1 — what a name's shadow takes of
-    /// whatever stands under it. Lattice text spends it in `fs_shadow_box`;
-    /// spectral text spends it in `fs_spectral_shadow`.
-    pub(crate) shadow_depth: f32,
-    /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
-    /// a name's cell into. 0 everywhere else, where nothing draws into one.
+uniform_group! {
+    /// What a glyph pipeline is told about the surface it is drawing on.
     ///
-    /// Here rather than beside the two sheets above because a `vec2` is aligned
-    /// to eight bytes and the scalar before it is the pair that reaches it: the
-    /// depth and this size sit together so the struct needs no pad of its own.
-    pub(crate) shadow_atlas_size: [f32; 2],
-    /// Foreground lattice nodes fade label coverage by this strength: the
-    /// Hide behind bar (`ViewConfig::hide_behind`), whatever the geometry
-    /// group's Darkness.
-    pub(crate) node_occlusion: f32,
-    pub(crate) _pad: [f32; 3],
+    /// `screen_points` is whatever space the glyph rects are quoted in: egui's
+    /// whole surface for the callback below, one pane for the lattice's own pass
+    /// (see `crate::LatticeLabels`). `pixels_per_point` is not that space — it is
+    /// the DEVICE scale the visible atlas was rasterized at, and stays the
+    /// device's whatever the target's pixels are.
+    struct TextUniforms {
+        screen_points: Float2,
+        /// The two sheets' sizes in texels, ADJACENT so one partial write covers
+        /// the pair — see [`ATLAS_SIZES_OFFSET`], which is the whole reason they
+        /// sit together rather than each beside what it belongs to.
+        atlas_size: Float2,
+        mark_atlas_size: Float2,
+        /// The axes this surface's labels slide along — see [`SlideAxis`], and
+        /// `FILTER_TAP` in the shader for what is done with them.
+        filter_axis: Float2,
+        pixels_per_point: f32,
+        /// This text group's Shadow depth, 0..=1 — what a name's shadow takes of
+        /// whatever stands under it. Lattice text spends it in `fs_shadow_box`;
+        /// spectral text spends it in `fs_spectral_shadow`.
+        shadow_depth: f32,
+        /// The lattice's shadow atlas, in texels — the target `vs_glyph_cell` maps
+        /// a name's cell into. 0 everywhere else, where nothing draws into one.
+        ///
+        /// Here rather than beside the two sheets above because a `vec2` is aligned
+        /// to eight bytes and the scalar before it is the pair that reaches it: the
+        /// depth and this size sit together so the struct needs no pad of its own.
+        shadow_atlas_size: Float2,
+        /// Foreground lattice nodes fade label coverage by this strength: the
+        /// Hide behind bar (`ViewConfig::hide_behind`), whatever the geometry
+        /// group's Darkness.
+        node_occlusion: f32,
+        _pad0: f32,
+        _pad1: Float2,
+    }
 }
 
 /// Which screen axes a surface's labels TRAVEL along, for the taps `coverage`
@@ -952,11 +954,15 @@ impl TextResources {
 }
 
 /// Where [`TextUniforms::atlas_size`] sits, for the partial write above —
-/// which covers the mark atlas's size too, the two being adjacent. Taken from
-/// the type rather than counted, so reordering the struct cannot leave this
-/// pointing at `screen_points`.
+/// which covers the mark atlas's size too, the two being adjacent (asserted
+/// below). Taken from the type rather than counted, so reordering the struct
+/// cannot leave this pointing at `screen_points`.
 const ATLAS_SIZES_OFFSET: wgpu::BufferAddress =
     std::mem::offset_of!(TextUniforms, atlas_size) as wgpu::BufferAddress;
+const _: () = assert!(
+    std::mem::offset_of!(TextUniforms, mark_atlas_size)
+        == std::mem::offset_of!(TextUniforms, atlas_size) + size_of::<Float2>()
+);
 
 /// One surface's bind group: its own uniforms, the two shared sheets, and the
 /// sampler they share.
@@ -1127,19 +1133,20 @@ impl CallbackTrait for TextCallback {
         let style = self.shadow.map(|style| style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX));
         let sizes = resources.sheets.sizes();
         let mut uniforms = TextUniforms {
-            screen_points: [
+            screen_points: Float2([
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
                 screen_descriptor.size_in_pixels[1] as f32 / ppp,
-            ],
-            atlas_size: [sizes[0], sizes[1]],
-            mark_atlas_size: [sizes[2], sizes[3]],
-            filter_axis: self.slide.unit(),
+            ]),
+            atlas_size: Float2([sizes[0], sizes[1]]),
+            mark_atlas_size: Float2([sizes[2], sizes[3]]),
+            filter_axis: Float2(self.slide.unit()),
             pixels_per_point: ppp,
             shadow_depth: style.map_or(0.0, |s| s.depth),
             // The pane's own atlas, once its names have packed below.
-            shadow_atlas_size: [1.0; 2],
+            shadow_atlas_size: Float2([1.0; 2]),
             node_occlusion: 0.0,
-            _pad: [0.0; 3],
+            _pad0: 0.0,
+            _pad1: Float2::default(),
         };
 
         // Every one of these mints a wgpu `TextureView`, and the only thing
@@ -1217,7 +1224,7 @@ impl CallbackTrait for TextCallback {
             let shadow = pane
                 .shadow
                 .get_or_insert_with(|| crate::spectral_shadow::PaneShadow::new(device, shared));
-            uniforms.shadow_atlas_size = shadow.prepare(
+            uniforms.shadow_atlas_size = Float2(shadow.prepare(
                 device,
                 queue,
                 egui_encoder,
@@ -1231,7 +1238,7 @@ impl CallbackTrait for TextCallback {
                     glyphs: &pane.instance_buffer,
                     cells,
                 },
-            );
+            ));
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -1314,6 +1321,11 @@ pub(crate) mod tests {
         let seam = crate::common_lines(crate::COMMON_SRC);
         crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, TEXT_ENTRY_POINTS)
             .expect("baked text.wgsl must parse, validate, and keep its entry points");
+    }
+
+    #[test]
+    fn uniforms_match_the_bound_shader_layout() {
+        crate::uniforms::layout::check_binding::<TextUniforms>(&crate::with_common(TEXT_SRC), 0, 0);
     }
 
     /// The one place a plugin build's text pipelines could break is the source

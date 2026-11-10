@@ -465,10 +465,10 @@ impl LatticeCallback {
                     &pane.glyph_uniform_buffer,
                     0,
                     bytemuck::bytes_of(&text::TextUniforms {
-                        screen_points: self.size_points,
-                        atlas_size: [sheet_sizes[0], sheet_sizes[1]],
-                        mark_atlas_size: [sheet_sizes[2], sheet_sizes[3]],
-                        filter_axis: self.slide.unit(),
+                        screen_points: Float2(self.size_points),
+                        atlas_size: Float2([sheet_sizes[0], sheet_sizes[1]]),
+                        mark_atlas_size: Float2([sheet_sizes[2], sheet_sizes[3]]),
+                        filter_axis: Float2(self.slide.unit()),
                         pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
                         // The TEXT group's own depth, where `geometry_shadow` carries
                         // the geometry group's: a name's box is drawn by this
@@ -481,12 +481,13 @@ impl LatticeCallback {
                         shadow_depth: self.shadow.lattice_text.depth,
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
-                        shadow_atlas_size: atlas_size,
+                        shadow_atlas_size: Float2(atlas_size),
                         // The lattice's own `node_occlusion`: the Hide behind
                         // bar, which a name takes from the node in front of it
                         // exactly as a ring does.
                         node_occlusion: self.uniforms.geometry_shadow.occlusion.clamp(0.0, 1.0),
-                        _pad: [0.0; 3],
+                        _pad0: 0.0,
+                        _pad1: Float2::default(),
                     }),
                 );
             }
