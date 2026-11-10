@@ -112,6 +112,31 @@ fn lattice_to_world(pos: LatticePos) -> Vec3 {
 /// Node radius in world units; adjacent lattice positions are one unit apart.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
+/// The floor lattice.wgsl puts under a node's per-sheet scale
+/// ([`NodeInstance::scale`]) wherever it sizes that node's quads
+/// (`max(inst.scale, 0.05)`), so a CPU bound on one of those quads applies the
+/// same.
+pub const MIN_NODE_SCALE: f32 = 0.05;
+
+/// How far a node's halo reaches, in the node's quad uv: the view's widest rim
+/// — the rings' outer edge, or the mark strip's where marks draw at all — plus
+/// the Background glow reach, floored at 0.1 so a node drawn down to almost
+/// nothing still has a footprint to fall off over.
+///
+/// One rim for every halo, whether or not the node wears a mark now, so a mark
+/// arriving or leaving does not resize the light. The one spelling of the
+/// footprint: the renderer ships it to the glow splat (`GlowParams::span` in
+/// harmonigraph-render), and [`ViewConfig::light_owner_radius`] bounds the
+/// off-pane light owners on it. #1252 widened a second spelling and missed
+/// the first.
+pub fn glow_span(rings_outer: f32, mark_inner: f32, mark_thickness: f32, reach: f32) -> f32 {
+    let mut rim = rings_outer.max(0.0);
+    if mark_thickness > 0.0 {
+        rim = rim.max(mark_inner + mark_thickness);
+    }
+    (rim + reach.max(0.0)).max(0.1)
+}
+
 /// The most nodes one drawn window may hold, and the backstop on a lattice
 /// with no size of its own: the window is derived from the viewport
 /// ([`ViewConfig::scrolled`]), so what decides how much work a frame is is the

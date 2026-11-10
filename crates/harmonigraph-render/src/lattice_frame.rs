@@ -561,7 +561,12 @@ impl LatticeCallback {
                     GlowParams {
                         reach: scene.view.glow_reach,
                         strength: scene.view.glow_strength,
-                        padding: 0.0,
+                        span: harmonigraph_scene::glow_span(
+                            scene.rings_outer,
+                            scene.mark_inner,
+                            scene.view.mark_thickness,
+                            scene.view.glow_reach,
+                        ),
                         curve: scene.view.glow_curve.shape(),
                         wash: scene.view.glow_wash,
                         row_capacity: scene.glow_rows.max(1) as f32,

@@ -132,7 +132,10 @@ uniform_group! {
     struct GlowParams {
         reach: f32,
         strength: f32,
-        padding: f32,
+        /// The halo's footprint in node uv, [`harmonigraph_scene::glow_span`]:
+        /// worked out once on the CPU, where the selector of off-pane light
+        /// owners bounds the same halo.
+        span: f32,
         curve: f32,
         wash: f32,
         /// Allocated row capacity, independent of this frame's instance count.

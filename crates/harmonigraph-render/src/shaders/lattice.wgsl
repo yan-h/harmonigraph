@@ -63,7 +63,10 @@ struct SpectralParams {
 struct GlowParams {
     @align(16) reach: f32,
     strength: f32,
-    padding: f32,
+    // The halo's footprint in node uv: the view's widest ring or mark rim
+    // plus Reach, floored at 0.1 (`harmonigraph_scene::glow_span`). Settled on
+    // the CPU, which bounds the off-pane light owners on the same number.
+    span: f32,
     curve: f32,
     wash: f32,
     row_capacity: f32,
@@ -334,12 +337,6 @@ fn node_rim(marked: bool) -> f32 {
         rim = max(rim, u.node.mark_inner + u.node.mark_thickness);
     }
     return rim;
-}
-
-// Every halo uses the view's maximum ring/mark rim. Marks contribute color
-// without resizing the light when they arrive or leave.
-fn glow_rim() -> f32 {
-    return node_rim(true);
 }
 
 // How far the billboard has to reach, in uv, for a shape reaching `g` past a
@@ -3223,18 +3220,16 @@ fn glow_curve_at(d: f32, span: f32) -> f32 {
 /// decoding, preserving the original lone-glow falloff and color.
 fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     let level = glow_level(light.x);
-    let reach = max(u.glow.reach, 0.0);
     let strength = max(u.glow.strength, 0.0);
-    // One view-level rim sizes every halo, independent of active marks.
-    let lit_rim = glow_rim();
     let d = length(uv);
-    // The halo spans the configured maximum rim plus Reach. This is the falloff's domain,
+    // The halo spans the view's maximum rim plus Reach (`u.glow.span`), one
+    // footprint for every halo, independent of active marks. This is the falloff's domain,
     // so the halo is a field the node sits inside rather than a rim light on
     // its edge, and it is where the curve reaches zero, so the Reach bar says
     // how far the close component goes.
     // The raster quad encloses this circular domain exactly; the node's own
     // billboard margin does not determine the halo's reach.
-    let span = max(lit_rim + reach, 0.1);
+    let span = u.glow.span;
     if d >= span {
         return vec4<f32>(0.0);
     }
@@ -3306,8 +3301,7 @@ fn vs_glow_splat(@builtin(vertex_index) vertex: u32, inst: Instance) -> GlowSpla
         return out;
     }
     let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u)) * 2.0 - 1.0;
-    let span = max(glow_rim() + max(u.glow.reach, 0.0), 0.1);
-    out.uv = corner * span;
+    out.uv = corner * u.glow.span;
     let radius = u.node.radius * 1.8 * max(inst.scale, 0.05);
     let world = inst.world_pos
         + (u.camera.right.xyz * out.uv.x + u.camera.up.xyz * out.uv.y) * radius;
