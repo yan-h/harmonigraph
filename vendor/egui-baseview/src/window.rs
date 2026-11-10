@@ -317,7 +317,7 @@ impl<'a> Queue<'a> {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum KeyCapture {
     #[default]
-    /// All keys will be captured from the host.
+    /// Every key egui claims ([`egui_claims_key`]) is captured from the host.
     CaptureAll,
     /// No keys will be captured from the host.
     IgnoreAll,
@@ -1441,10 +1441,13 @@ where
 /// things. `arrows_only` is the app's word that this one uses just the arrows
 /// ([`Queue::set_focus_takes_only_arrows`]), and it keeps those and Escape.
 ///
-/// A selection in a label claims only the copy chord: unclaimed, the same
-/// Cmd-C also goes up to the DAW (#1433), and its own Copy competes with the
-/// label's for the pasteboard. A click without a drag counts, because egui
-/// copies the whole label from a bare cursor.
+/// A selection in a label claims the copy chord and Escape: unclaimed, the
+/// same Cmd-C also goes up to the DAW (#1433), and its own Copy competes with
+/// the label's for the pasteboard; Escape clears the selection, and would
+/// clear the DAW's too (#1674). A click without a drag counts, because egui
+/// copies the whole label from a bare cursor. The arrows and Cmd-A, which
+/// also move a label selection, stay the host's: claiming them would take
+/// the arrows from the DAW after any stray click on a label.
 ///
 /// The chord is the one `on_event` turns into `Event::Copy`, so a key is
 /// either egui's copy or the host's, never both.
@@ -1461,12 +1464,14 @@ fn egui_claims_key(
         event.key,
         Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Escape
     );
+    let label_selected = || {
+        ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
+    };
     ctx.egui_wants_keyboard_input() && (kept || !arrows_only)
         // Popup Escape works without widget focus. Read persistent popup
         // memory here: this runs between egui passes, before Escape closes it.
-        || matches!(event.key, Key::Escape) && egui::Popup::is_any_open(ctx)
-        || is_copy_command(modifiers, event.code)
-            && ctx.with_plugin(|labels: &mut LabelSelectionState| labels.has_selection()) == Some(true)
+        || matches!(event.key, Key::Escape) && (egui::Popup::is_any_open(ctx) || label_selected())
+        || is_copy_command(modifiers, event.code) && label_selected()
 }
 
 fn is_cut_command(modifiers: egui::Modifiers, keycode: keyboard_types::Code) -> bool {
@@ -1643,5 +1648,53 @@ mod key_capture_tests {
         assert!(claims(&ctx, copy), "a selected label claims Cmd-C");
         assert!(!claims(&ctx, (egui::Modifiers::NONE, Code::KeyC)));
         assert!(!claims(&ctx, (egui::Modifiers::COMMAND, Code::KeyV)));
+    }
+
+    #[test]
+    fn a_label_selection_takes_escape_from_the_host() {
+        use keyboard_types::{Key, KeyboardEvent};
+        let claims = |ctx: &egui::Context, key: Key| {
+            let event = KeyboardEvent { key, ..Default::default() };
+            egui_claims_key(ctx, egui::Modifiers::NONE, &event, false)
+        };
+
+        let ctx = egui::Context::default();
+        let frame = |events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))),
+                events,
+                ..Default::default()
+            };
+            let mut label = Rect::NOTHING;
+            let _ = ctx.run_ui(raw, |ui| label = ui.label("frame stall 41 ms").rect);
+            label
+        };
+        let label = frame(vec![]);
+        assert!(!claims(&ctx, Key::Escape), "nothing selected: the host keeps Escape");
+
+        // A bare click arms it: egui holds a cursor in the label as a selection.
+        let at = label.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(at), press(true)]);
+        frame(vec![press(false)]);
+        frame(vec![]);
+
+        assert!(claims(&ctx, Key::Escape), "Escape clears the selection, so it is egui's");
+        assert!(!claims(&ctx, Key::ArrowLeft), "the arrows stay the host's");
+
+        frame(vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        frame(vec![]);
+        assert!(!claims(&ctx, Key::Escape), "cleared: the next Escape is the host's");
     }
 }
