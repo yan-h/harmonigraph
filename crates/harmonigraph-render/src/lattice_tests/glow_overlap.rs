@@ -680,10 +680,10 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     for (gain, level) in [(0.15, 1.0), (1.0, 0.25), (2.0, 1.0)] {
         let mut scene = scene(&[level], gain, false);
-        // Read a 256-square glow directly: the scene renders at four times
-        // that resolution, the quarter-size target's divisor. This checks the
-        // analytic profile before reconstruction.
-        scene.view.render_scale = 4.0;
+        // Read a 256-square glow directly: the scene renders at the glow
+        // target's divisor times that resolution. This checks the analytic
+        // profile before reconstruction.
+        scene.view.render_scale = crate::lattice_targets::GLOW_DIVISOR as f32;
         let colour = [0.8, 0.4, 0.1];
         scene.pitch_lut = [glam::Vec4::new(colour[0], colour[1], colour[2], 1.0);
             harmonigraph_scene::PITCH_LUT_N];

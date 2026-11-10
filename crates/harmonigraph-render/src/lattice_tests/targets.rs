@@ -1,6 +1,7 @@
 //! Optional bloom is a resource decision; release history is independent.
 
 use super::fixtures::*;
+use crate::lattice_targets::GLOW_DIVISOR;
 use crate::*;
 
 fn target(shooter: &Shooter) -> &Offscreen {
@@ -211,8 +212,12 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         let creations = super::INK_STRIP_CREATIONS.get();
         let resized = shooter.shot_again(&scene);
         let offscreen = target(&shooter);
-        let expected = offscreen.size.map(|n| n.div_ceil(4));
-        assert_ne!(expected, offscreen.size.map(|n| n.div_ceil(2)), "fixture tells 1/4 from 1/2");
+        let expected = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
+        assert_ne!(
+            expected,
+            offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR / 2)),
+            "fixture tells the divisor from half of it"
+        );
         let glow = offscreen.glow.as_ref().unwrap();
         for view in std::iter::once(&glow.view).chain(&glow.statistics) {
             assert_eq!([view.texture().width(), view.texture().height()], expected);
@@ -258,7 +263,7 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
     scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
     let offscreen = target(&shooter);
-    let quarter = offscreen.size.map(|n| n.div_ceil(4));
+    let quarter = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
     let glow = offscreen.glow.as_ref().unwrap();
     let source = glow.material_source.as_ref().expect("fixture reaches a material source");
     assert_eq!([source.view.texture().width(), source.view.texture().height()], quarter);
