@@ -678,9 +678,10 @@ fn a_fresh_appearance_is_a_fixed_point_of_its_own_normalize() {
 
 /// Walk the fresh appearance against its poisoned copy as RON values, through
 /// every struct, sequence, `Some` and enum payload, collecting the path of each
-/// float the poison left as it was. A float is what the fresh value holds: an
-/// `Option<f32>` fresh at `None` holds none to find, so such a field is checked
-/// by name instead.
+/// float the poison left as it was. An option still empty after the poison
+/// counts as left as it was, since what it would hold is unclassified; a value
+/// whose shape the poison changed fails, naming its path, rather than being
+/// skipped with everything under it.
 fn unpoisoned_floats(
     path: &str,
     opened: &ron::Value,
@@ -712,13 +713,21 @@ fn unpoisoned_floats(
         (Value::Option(Some(value)), Value::Option(Some(again))) => {
             unpoisoned_floats(path, value, again, dialled, missed);
         }
-        (Value::Number(Number::F32(_) | Number::F64(_)), _) => {
+        // An option the poison filled is dialled; one it left empty holds a
+        // float nobody classified, unless it is listed.
+        (Value::Option(None), Value::Option(Some(_))) => *dialled += 1,
+        (Value::Option(None), Value::Option(None)) => missed.push(path.to_string()),
+        (Value::Number(Number::F32(_) | Number::F64(_)), Value::Number(_)) => {
             *dialled += 1;
             if opened == poisoned {
                 missed.push(path.to_string());
             }
         }
-        _ => {}
+        (Value::Option(Some(_)), Value::Option(None)) => {
+            panic!("the poison emptied {path}, so nothing under it is checked")
+        }
+        _ if std::mem::discriminant(opened) == std::mem::discriminant(poisoned) => {}
+        _ => panic!("{path} changed shape under the poison: {opened:?} became {poisoned:?}"),
     }
 }
 
@@ -781,18 +790,4 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
         stale.is_empty(),
         "UNPOISONED names floats the guard poisons or that are gone: {stale:?}"
     );
-    // A weight fresh at `None` holds no float for the walk above to find, so
-    // every one is checked for the poison by name.
-    let sources = |i: &harmonigraph_scene::IntensitySettings| {
-        [("velocity", i.velocity), ("gain", i.gain), ("pressure", i.pressure), ("timbre", i.timbre)]
-    };
-    for (name, source) in sources(&new.view.intensity) {
-        for target in harmonigraph_scene::IntensityTarget::ALL {
-            assert_eq!(
-                source.weight(target),
-                Some(1.0e6),
-                "the loaded-state guard never poisons {name}.{target:?}"
-            );
-        }
-    }
 }
