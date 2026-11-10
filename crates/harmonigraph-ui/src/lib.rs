@@ -489,7 +489,7 @@ const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 
 /// Each reason the editor is drawing at full rate rather than polling, apart
 /// so the frame log can say which one held it there (#1670 Q2).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Animating {
     pub voices: bool,
     pub learn: bool,
@@ -510,7 +510,32 @@ impl Animating {
     }
 
     pub fn any(self) -> bool {
-        self.voices || self.learn || self.roll || self.releasing || self.flowing
+        self.reasons().any(|(on, _)| on)
+    }
+
+    /// Each reason with the name the frame log gives it, so one that is added
+    /// or renamed is changed here alone.
+    fn reasons(self) -> impl Iterator<Item = (bool, &'static str)> {
+        [
+            (self.voices, "voices"),
+            (self.learn, "learn"),
+            (self.roll, "roll"),
+            (self.releasing, "releasing"),
+            (self.flowing, "flowing"),
+        ]
+        .into_iter()
+    }
+}
+
+/// The names of the reasons that hold, space-separated: what the frame log's
+/// `animating` row carries.
+impl std::fmt::Display for Animating {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut names = self.reasons().filter(|(on, _)| *on).map(|(_, name)| name);
+        if let Some(first) = names.next() {
+            f.write_str(first)?;
+        }
+        names.try_for_each(|name| write!(f, " {name}"))
     }
 }
 

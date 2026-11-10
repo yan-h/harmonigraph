@@ -215,19 +215,7 @@ impl Logged {
         let animating = harmonigraph_ui::Animating::of(ui, now);
         if self.animating != Some(animating) {
             self.animating = Some(animating);
-            let reasons = [
-                (animating.voices, "voices"),
-                (animating.learn, "learn"),
-                (animating.roll, "roll"),
-                (animating.releasing, "releasing"),
-                (animating.flowing, "flowing"),
-            ];
-            let mut text = String::from("animating");
-            for (_, name) in reasons.iter().filter(|(on, _)| *on) {
-                text.push(' ');
-                text.push_str(name);
-            }
-            egui_baseview::frame_log::event(&text);
+            egui_baseview::frame_log::event(&format!("animating {animating}"));
         }
         let exports = ui.workspace.interaction.take.exports.iter();
         let running = exports
