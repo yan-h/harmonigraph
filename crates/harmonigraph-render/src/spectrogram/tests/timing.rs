@@ -278,9 +278,7 @@ fn cloud_costs_by_style_and_dial() {
                     settings.time_softness = time_softness;
                 }
                 SpectrogramAtmosphere {
-                    settings,
                     region: rect,
-                    pitch_vertical: true,
                     points_per_cent: points.y / (span * 100.0),
                     points_per_ms: points.x / (*history_seconds * 1000.0),
                     // What `quad` lays out: every slab inside the filled
@@ -288,8 +286,7 @@ fn cloud_costs_by_style_and_dial() {
                     // over the slab count.
                     points_per_slab: points.x * *fill / slabs as f32,
                     now: 1.0 + frame as f64 / 144.0,
-                    history_epoch: 0,
-                    light_hold: None,
+                    ..SpectrogramAtmosphere::fixture(settings)
                 }
             });
             let cb = &*cb;

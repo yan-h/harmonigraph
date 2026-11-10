@@ -80,6 +80,26 @@ pub struct SpectrogramAtmosphere {
     pub light_hold: Option<[SpectrogramVertex; 6]>,
 }
 
+#[cfg(test)]
+impl SpectrogramAtmosphere {
+    /// A test's atmosphere over `settings`: a vertical-pitch pane at time 0
+    /// with no region, slab bound, cleared history or held light. A test sets
+    /// what it measures over this, so a new field costs this one line.
+    pub(super) fn fixture(settings: harmonigraph_scene::SpectralAtmosphere) -> Self {
+        Self {
+            settings,
+            region: egui::Rect::ZERO,
+            pitch_vertical: true,
+            points_per_cent: 0.03,
+            points_per_ms: 0.01,
+            points_per_slab: 0.0,
+            now: 0.0,
+            history_epoch: 0,
+            light_hold: None,
+        }
+    }
+}
+
 /// The drawn material's cells to a cloud unit, which its drift is counted in
 /// ([`Motion::drift`]): what `wash_cell_at` multiplies the offset by, or for
 /// Scales what `fs_velvet_tone` does, its cell `VELVET_CELL` of the pane's
@@ -2463,24 +2483,14 @@ mod tests {
 
     #[test]
     fn velvet_tone_density_tracks_size_and_softness_without_a_geometry_tile() {
-        let mut a = SpectrogramAtmosphere {
-            settings: harmonigraph_scene::SpectralAtmosphere {
-                cloud_style: harmonigraph_scene::CloudStyle::VelvetScales,
-                cloud_depth: 1.0,
-                // The type's 1x cells: the captured look's are small enough
-                // to draw native, where no dial step would reduce them.
-                material_settings: harmonigraph_scene::MaterialSettings::default(),
-                ..Default::default()
-            },
-            region: egui::Rect::ZERO,
-            pitch_vertical: true,
-            points_per_cent: 0.03,
-            points_per_ms: 0.01,
-            points_per_slab: 0.0,
-            now: 0.0,
-            history_epoch: 0,
-            light_hold: None,
-        };
+        let mut a = SpectrogramAtmosphere::fixture(harmonigraph_scene::SpectralAtmosphere {
+            cloud_style: harmonigraph_scene::CloudStyle::VelvetScales,
+            cloud_depth: 1.0,
+            // The type's 1x cells: the captured look's are small enough
+            // to draw native, where no dial step would reduce them.
+            material_settings: harmonigraph_scene::MaterialSettings::default(),
+            ..Default::default()
+        });
         let size = [1920, 1080];
         let density = |a| tone_size(size, 2.0, a, 0.5);
         assert_eq!(density(a), Some([960, 540]));
@@ -2555,17 +2565,7 @@ mod tests {
             cloud_direction: 37.0,
             ..Default::default()
         };
-        let atmosphere = SpectrogramAtmosphere {
-            settings,
-            region: egui::Rect::ZERO,
-            pitch_vertical: true,
-            points_per_cent: 0.03,
-            points_per_ms: 0.01,
-            points_per_slab: 0.0,
-            now: 0.0,
-            history_epoch: 0,
-            light_hold: None,
-        };
+        let atmosphere = SpectrogramAtmosphere::fixture(settings);
         let tile = tile_key([1920, 1080], atmosphere, period);
         assert!(tile.is_some(), "the wash drew no tile");
         let short = cloud_offset_at(settings, 2.0);
@@ -2627,24 +2627,14 @@ mod tests {
         let at = |cloud_tile, wash_size, height| {
             tile_key(
                 [1920, height],
-                SpectrogramAtmosphere {
-                    settings: harmonigraph_scene::SpectralAtmosphere {
-                        material_settings: harmonigraph_scene::MaterialSettings {
-                            wash_size,
-                            ..Default::default()
-                        },
-                        cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                SpectrogramAtmosphere::fixture(harmonigraph_scene::SpectralAtmosphere {
+                    material_settings: harmonigraph_scene::MaterialSettings {
+                        wash_size,
                         ..Default::default()
                     },
-                    region: egui::Rect::ZERO,
-                    pitch_vertical: true,
-                    points_per_cent: 0.03,
-                    points_per_ms: 0.01,
-                    points_per_slab: 0.0,
-                    now: 0.0,
-                    history_epoch: 0,
-                    light_hold: None,
-                },
+                    cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                    ..Default::default()
+                }),
                 cloud_tile,
             )
             .map(|key| key.texels())
@@ -2672,22 +2662,12 @@ mod tests {
             tone_size(
                 [1920, 1081],
                 ppp,
-                SpectrogramAtmosphere {
-                    // A cloud that reduces at all: the starfield never does.
-                    settings: harmonigraph_scene::SpectralAtmosphere {
-                        cloud_depth,
-                        cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
-                        ..Default::default()
-                    },
-                    region: egui::Rect::ZERO,
-                    pitch_vertical: true,
-                    points_per_cent: 0.03,
-                    points_per_ms: 0.01,
-                    points_per_slab: 0.0,
-                    now: 0.0,
-                    history_epoch: 0,
-                    light_hold: None,
-                },
+                // A cloud that reduces at all: the starfield never does.
+                SpectrogramAtmosphere::fixture(harmonigraph_scene::SpectralAtmosphere {
+                    cloud_depth,
+                    cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+                    ..Default::default()
+                }),
                 cloud_pixel,
             )
         };
@@ -2733,20 +2713,15 @@ mod tests {
                 pixels,
                 2.0,
                 SpectrogramAtmosphere {
-                    settings: harmonigraph_scene::SpectralAtmosphere {
+                    points_per_cent: points[1] / (119.59 * 100.0),
+                    points_per_ms: points[0] / (600.0 * 1000.0),
+                    points_per_slab,
+                    ..SpectrogramAtmosphere::fixture(harmonigraph_scene::SpectralAtmosphere {
                         blur_time_step,
                         pitch_softness: 35.0,
                         time_softness: 57.23,
                         ..Default::default()
-                    },
-                    region: egui::Rect::ZERO,
-                    pitch_vertical: true,
-                    points_per_cent: points[1] / (119.59 * 100.0),
-                    points_per_ms: points[0] / (600.0 * 1000.0),
-                    points_per_slab,
-                    now: 0.0,
-                    history_epoch: 0,
-                    light_hold: None,
+                    })
                 },
             )
         };
