@@ -305,7 +305,7 @@ Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
 The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,
 then **Show map dots**, **Edit shape on lattice**, **Undo shape edit** and **Duplicate as new map**,
-then the **Position** offsets and **Follow harmony**.
+then the **Position** offsets, a Fine and a Coarse bar per axis with the totals beneath, and **Follow harmony**.
 With Follow harmony on,
 its block shows the same settings as Adaptive's **Context**, except Weight per octave.
 Pending map and tuning changes are reported at the end of the pane,
@@ -370,7 +370,8 @@ and double-click to reset.
 - MIDI note numbers set pitch centers and color endpoints;
   **px** sets video size, **fps** labels the frame-rate limit, **dB/oct** sets spectrum tilt, and adaptive delay is measured in host buffers.
 - Layer, octave and buffer counts remain whole numbers;
-  **Stop at bar** accepts fractional bars.
+  **Stop at bar** accepts fractional bars,
+  and is the one number typed and dragged as a plain field rather than a bar, since a bar's travel cannot resolve a range of 100,000.
 - The background glow falloff curve keeps its signed shape value and a preview:
   zero is linear, positive fades early, and negative fades late.
 
@@ -414,3 +415,5 @@ Multi-handle bars have no typed entry and also reset to their defaults on double
 except the star layers' bar (Star size and the other per-layer properties):
 its ends are read off the layers and have no default of their own, so a double-click leaves it alone;
 hover text describes what each handle moves.
+Every bar's hover ends with a line naming the gestures that bar answers to,
+so a bar with no reset or no typed entry does not offer one.
