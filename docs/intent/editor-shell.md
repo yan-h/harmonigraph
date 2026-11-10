@@ -14,6 +14,8 @@ The display link and frame pacing decisions (#1551) are in `host-window-and-paci
 
 ## 2026-11-10 (maintainability audit, #1677)
 
+- A nested settings group repairs a non-finite value from its pane's or group's fresh value where it has one (Stars, Shadow), while a missing key loads the type default. Making them one rule was built and reverted in #1679, because a stored star speed means something different in each pane. #1677 area 5 Q2
+- A retired setting adds no row to the `RETIRED_KEYS` test ledger: it keeps one row per shape of value a retired key can leave (a number, a flag, an enum token, a string, a struct), and a retirement edits no test. #1677 area 5 Q1
 - The tempered links (Meantone, Marvel) are tuning, not appearance: the runtime holds them, resolved from the configuration's owner, and the plugin saves them in its musical settings. The standalone app, with no such settings, no longer keeps its links across a restart and opens with both linked. #1677 area 2 Q1
 - One list of the appearance fields the host owns, `AppearanceDocument::copy_host_owned` beside `set_camera_movement`: a look resets them on capture and keeps the live document's on apply, and the state extractor's overlay is tested against it. #1677 R3
 - One call both takes an app shortcut and claims it from the host, so a shortcut is registered in one place each frame. #1675 Q2, built in #1690
