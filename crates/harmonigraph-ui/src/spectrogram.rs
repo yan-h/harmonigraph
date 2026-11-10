@@ -299,18 +299,11 @@ impl FoldedGrid {
     /// Reuse the folded bytes only when their source and retained extent still fit.
     fn hit(&self, plan: &Plan, history: &crate::SpectrumHistory) -> Option<TexLayout> {
         let held = self.run.as_ref().filter(|held| held.key == plan.key)?;
-        if history.get(plan.first).zip(history.back()).is_some_and(|(first, newest)| {
-            let target = (first.time / plan.bucket).floor() as i64;
-            let min_key = ((newest.time / plan.bucket).floor() as i64)
-                .saturating_sub(plan.capacity.max(1) as i64 - 1);
-            // The same admitted first slab as SpectrogramAgg::window.
-            // Sampling clamps to this edge, so reusing a longer run would
-            // change interpolation even if it contains every requested slab.
-            target.max(min_key) != held.first_key
-        }) {
-            return None;
-        }
-        Some(held.layout)
+        // Sampling clamps to this edge, so reusing a longer run would change
+        // interpolation even if it contains every requested slab.
+        admitted_first_slab(history, plan.first, plan.bucket, plan.capacity)
+            .is_none_or(|first| first == held.first_key)
+            .then_some(held.layout)
     }
 
     fn accept(
@@ -570,6 +563,9 @@ pub(crate) fn build(
     if tex_span < 1e-9 {
         return None;
     }
+    // The slab `window` cut at, `admitted_first_slab`, read back off the slab
+    // itself: the renderer places the run by this key, so it must name the
+    // slab that is really first.
     let first_key = (centers[0] / bucket).floor() as i64;
     let capacity = ring_capacity(plan.capacity, w);
     let layout = TexLayout { bucket, t_origin, tex_span };
@@ -958,6 +954,33 @@ fn refold_columns(
     history.iter_from(start).collect()
 }
 
+/// The oldest slab the live aggregator retains: `keep` slabs, at least one,
+/// ending at the newest column's. `None` while the history is empty.
+fn retained_from(history: &crate::SpectrumHistory, bucket: f64, keep: usize) -> Option<i64> {
+    let newest = (history.back()?.time / bucket).floor() as i64;
+    Some(newest.saturating_sub(keep.max(1) as i64 - 1))
+}
+
+/// The first slab the live aggregator serves for a window whose oldest column
+/// is `first`: that column's slab, raised to the retention bound. `None` while
+/// the history is empty or `first` is past its end.
+///
+/// The one statement of the rule, because three readers must agree on it.
+/// [`SpectrogramAgg::window`] refolds when its kept grid starts after this slab
+/// and slices the grid here, and [`FoldedGrid::hit`] reuses a snapshot only when
+/// it starts here. A `hit` that disagreed went on reusing a run the aggregator
+/// would have cut elsewhere: a resize followed by Span growth drew the old,
+/// shorter extent (#714).
+fn admitted_first_slab(
+    history: &crate::SpectrumHistory,
+    first: usize,
+    bucket: f64,
+    keep: usize,
+) -> Option<i64> {
+    let target = (history.get(first)?.time / bucket).floor() as i64;
+    Some(target.max(retained_from(history, bucket, keep)?))
+}
+
 /// Most threads a full refold splits across. The add is memory-bound: on an
 /// M1 Pro one thread streamed a full-cap history (7,168 columns, 110 MB in
 /// f32) in about 7 ms, four in about 3, and more bought little. Measured
@@ -1020,11 +1043,9 @@ impl SpectrogramAgg {
         bucket: f64,
         keep: usize,
     ) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
-        let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
+        let admitted = admitted_first_slab(history, first, bucket, keep);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
-        let min_key = history
-            .back()
-            .map(|c| ((c.time / bucket).floor() as i64).saturating_sub(keep.max(1) as i64 - 1));
+        let min_key = retained_from(history, bucket, keep);
         let layout_same = self.bucket_bits == bucket.to_bits();
         // The fast path is valid only when: the layout is unchanged, we have a
         // prior grid of this history (not one cleared since), time hasn't gone
@@ -1038,9 +1059,8 @@ impl SpectrogramAgg {
             && self.grid.cur_key.is_some()
             && self.clears == history.clears()
             && newest >= self.last_time
-            && target.zip(self.grid.centers.first()).is_some_and(|(t, &front_center)| {
-                let front = (front_center / bucket).floor() as i64;
-                t.max(min_key.unwrap_or(t)) >= front
+            && admitted.zip(self.grid.centers.first()).is_some_and(|(admitted, &front_center)| {
+                admitted >= (front_center / bucket).floor() as i64
             });
 
         if !can_increment {
@@ -1067,22 +1087,29 @@ impl SpectrogramAgg {
             }
         }
         self.grid.finish();
-        self.view(bucket, target)
+        self.view(bucket, admitted)
     }
 
-    /// Slice the complete slabs at the admitted oldest boundary. Completed
+    /// Slice the complete slabs at [`admitted_first_slab`]. Completed
     /// averages and jitter copies stay unchanged as individual source columns
     /// scroll out. Keeping the preceding slabs internally lets a widening Span
     /// or a history-tier merge reach back without refolding the retained grid.
     ///
     /// The slabs come out shared, not copied — see [`SlabGrid`].
-    fn view(&self, bucket: f64, target: Option<i64>) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
-        let (Some(t), Some(&front_center)) = (target, self.grid.centers.first()) else {
+    ///
+    /// The clamp never binds on an ordered history. The fold has just trimmed
+    /// the grid to start at or after [`retained_from`], it ends at the newest
+    /// column's slab, and it starts no later than the admitted slab: the fast
+    /// path is taken only then, and a refold folds every column from the
+    /// retention bound on, filling from the bound itself when an older column
+    /// seeds it.
+    fn view(&self, bucket: f64, admitted: Option<i64>) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
+        let (Some(admitted), Some(&front_center)) = (admitted, self.grid.centers.first()) else {
             return (self.grid.centers.clone(), self.grid.power.as_slice().into());
         };
         let front = (front_center / bucket).floor() as i64;
         let kept = self.grid.centers.len().saturating_sub(1) as i64;
-        let start = (t - front).clamp(0, kept) as usize;
+        let start = (admitted - front).clamp(0, kept) as usize;
         (self.grid.centers[start..].to_vec(), self.grid.power[start..].into())
     }
 }
