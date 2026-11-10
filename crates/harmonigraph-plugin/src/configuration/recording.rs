@@ -4,7 +4,7 @@
 use harmonigraph_core::canonical::ClockId;
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_record::{
-    configuration::{RecordAddress, RECORD_PASSES},
+    configuration::{RecordAddress, RecordIntent, RECORD_PASSES},
     Recorder,
 };
 
@@ -42,7 +42,7 @@ pub(crate) struct Recording {
     segments: [Option<Segment>; SEGMENTS],
     passes: [Option<Pass>; RECORD_PASSES],
     current: Option<RecordAddress>,
-    pub captured_intent: u64,
+    pub captured_intent: RecordIntent,
     pub prefix: i64,
     pub block_start: i64,
     pub block_frames: u32,
@@ -61,7 +61,7 @@ impl Default for Recording {
             segments: [None; SEGMENTS],
             passes: [None; RECORD_PASSES],
             current: None,
-            captured_intent: 0,
+            captured_intent: RecordIntent::default(),
             prefix: 0,
             block_start: 0,
             block_frames: 0,
@@ -80,7 +80,7 @@ impl Recording {
     /// both existing frontiers to prove it whole.
     pub fn observe_joined_disarm(&mut self, recorder: &mut Recorder) {
         let intent = recorder.capture_recording_intent();
-        if intent & 1 != 0 {
+        if intent.is_armed() {
             return;
         }
         self.captured_intent = intent;
@@ -229,7 +229,7 @@ impl Recording {
         // Include explicit non-recording provenance. A later arm can never claim
         // input first observed while disarmed, even when that work drains late.
         let recorded_address = address
-            .filter(|a| a.epoch == self.captured_intent >> 1 && self.captured_intent & 1 != 0);
+            .filter(|a| a.epoch == self.captured_intent.epoch() && self.captured_intent.is_armed());
         let segment = Segment {
             clock: self.clock,
             start,
@@ -304,8 +304,8 @@ impl Recording {
         }
         // A concurrent GUI stop cannot close an epoch whose armed callback
         // may still begin another recording segment later in this same block.
-        let epoch = self.captured_intent >> 1;
-        if self.captured_intent & 1 == 0
+        let epoch = self.captured_intent.epoch();
+        if !self.captured_intent.is_armed()
             && self.current.is_none()
             && !self.passes.iter().flatten().any(|p| p.address.epoch == epoch)
         {
@@ -332,7 +332,7 @@ mod tests {
         let clock = ClockId { runtime_session: 7, epoch: 3 };
         let mut recording = Recording {
             clock,
-            captured_intent: 3,
+            captured_intent: RecordIntent::armed(1),
             prefix: 1040,
             block_start: 1000,
             block_frames: 40,
@@ -357,7 +357,7 @@ mod tests {
         // Explicit disarmed span stays distinct from a later recording segment.
         capture.stop();
         recorder.is_armed();
-        recording.captured_intent = 2;
+        recording.captured_intent = RecordIntent::disarmed(1);
         recording.block_start = 1040;
         recording.block_frames = 40;
         recording.segment(&mut recorder, None, 48000.0, config);

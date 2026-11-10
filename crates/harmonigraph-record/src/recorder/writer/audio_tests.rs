@@ -27,9 +27,8 @@ impl Worker {
     fn queued(name: &str) -> Self {
         let directory = std::env::temp_dir()
             .join(format!("harmonigraph-boundary-{}-{name}", std::process::id()));
-        let (recorder, control) = channel();
+        let (recorder, control) = worker_in(&directory);
         let fence = control.fence.clone();
-        *fence.test_directory.lock() = Some(directory.clone());
         let worker = Self { recorder: Some(recorder), control: Some(control), fence, directory };
         worker.control.as_ref().unwrap().start(48_000.0, String::new());
         wait_for("Start", || worker.find_wav().is_some());
@@ -43,9 +42,8 @@ impl Worker {
     fn start(name: &str, fail_finish: bool, pending_start: bool) -> Self {
         let directory = std::env::temp_dir()
             .join(format!("harmonigraph-audio-{}-{name}-{pending_start}", std::process::id()));
-        let (recorder, control) = channel();
+        let (recorder, control) = worker_in(&directory);
         let fence = control.fence.clone();
-        *fence.test_directory.lock() = Some(directory.clone());
         *fence.test_wav_limit.lock() = Some(2);
         fence.test_wav_finish_failure.store(fail_finish, Ordering::Release);
         let mut worker =
@@ -82,14 +80,12 @@ impl Worker {
         let program = self.directory.join("renderer");
         std::fs::write(&program, "#!/bin/sh\ntouch \"$0.invoked\"\n").unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        self.control.as_ref().unwrap().stop(RenderRequest {
-            program,
-            appearance: None,
-            notice: None,
-        });
+        let control = self.control.as_ref().unwrap();
+        testing::set_renderer_program(control, program);
+        control.stop();
         assert_no_alloc(|| self.close(1));
         // A failure may already be accounted before Stop. Wait for this
-        // command's worker iteration too, so its render request is exercised.
+        // command's worker iteration too, so a render it could launch would have.
         wait_for("Stop processed", || self.fence.worker_stop_processed.load(Ordering::Acquire));
     }
 
@@ -184,7 +180,7 @@ fn queued_stop_preserves_the_audio_prefix() {
         recorder.mark_audio_start(0.25);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
     });
-    worker.control.as_ref().unwrap().stop(unlaunchable_render(&worker.directory));
+    worker.control.as_ref().unwrap().stop();
     worker.close(1);
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
     wait_for("queued Stop", || worker.control.as_ref().unwrap().last_take().is_some());
@@ -210,7 +206,7 @@ fn queued_rollover_keeps_each_pass_audio() {
     let second =
         first.with_file_name(format!("{}-2.wav", first.file_stem().unwrap().to_str().unwrap()));
     wait_for("loop audio written", || std::fs::metadata(&second).is_ok_and(|m| m.len() >= 52));
-    worker.control.as_ref().unwrap().stop(unlaunchable_render(&worker.directory));
+    worker.control.as_ref().unwrap().stop();
     worker.close(2);
     wait_for("rollover Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!((wav_samples(&first), wav_samples(&second)), (PREFIX.to_vec(), vec![0.75, -0.75]));
@@ -265,7 +261,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let request = || RenderRequest { program: program.clone(), appearance: None, notice: None };
+        testing::set_renderer_program(control, program);
         let recorder = worker.recorder.as_mut().unwrap();
         let duration = 64.0 / 48_000.0;
         assert_no_alloc(|| {
@@ -284,7 +280,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         });
         if stop_before_seek {
             assert!(!control.has_ended(), "Stop has no completion reason to snapshot yet");
-            control.stop(request());
+            control.stop();
         }
         assert_no_alloc(|| {
             assert!(!recorder.observe_transport(10.0, true, duration));
@@ -293,7 +289,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         assert!(control.has_ended());
         assert_eq!(control.latches.end(), Some(End::ForwardSeek));
         if !stop_before_seek {
-            control.stop(request());
+            control.stop();
         }
         assert_no_alloc(|| worker.close(1));
         worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
@@ -322,7 +318,8 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         let recorder = worker.recorder.as_mut().unwrap();
         assert!(recorder.is_armed());
         let next = recorder.configuration_address().unwrap();
-        control.stop(unlaunchable_render(&worker.directory));
+        testing::set_renderer_program(control, worker.directory.join("no-such-renderer"));
+        control.stop();
         assert_no_alloc(|| {
             assert!(!recorder.is_armed());
             recorder.configuration_pass_complete(next);

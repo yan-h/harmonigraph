@@ -369,16 +369,7 @@ impl CanonicalRecord {
     }
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
         match self {
-            Self::Note(n)
-                if n.t.is_finite()
-                    && n.channel < 16
-                    && n.note < 128
-                    && !matches!(n.kind, crate::NoteKind::On { velocity } if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity))
-                    && !matches!(n.kind, crate::NoteKind::Tuning { semitones } if !semitones.is_finite())
-                    && !matches!(n.kind, crate::NoteKind::Expression { expression, value } if !harmonigraph_core::Expression::from(expression).range().contains(&value)) =>
-            {
-                Ok(())
-            }
+            Self::Note(n) if harmonigraph_core::NoteEvent::from(*n).has_valid_payload() => Ok(()),
             Self::Note(_) => Err(InvalidCanonical),
             Self::Delta(d) => NoteDelta::from(*d).validate(),
             Self::Baseline(b) => b.baseline().map(|_| ()),
