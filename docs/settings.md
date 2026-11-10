@@ -305,7 +305,7 @@ Adaptive tuning's **Keyboard** and **Context** are blocks,
 open like the rest of the section.
 The **Lattice Map** section starts with the saved map's number, its name field and a menu of rarer actions,
 then **Show map dots**, **Edit shape on lattice**, **Undo shape edit** and **Duplicate as new map**,
-then the **Position** offsets, a Fine and a Coarse bar per axis with the totals beneath, and **Follow harmony**.
+then the **Position** offsets, one row per axis holding its Fine and Coarse bars side by side with the totals beneath, and **Follow harmony**.
 With Follow harmony on,
 its block shows the same settings as Adaptive's **Context**, except Weight per octave.
 Pending map and tuning changes are reported at the end of the pane,

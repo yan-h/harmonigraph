@@ -355,7 +355,7 @@ fn a_double_click_resets_an_offset_lane_in_one_gesture() {
         })
     };
     frame(vec![]);
-    let at = text_at(&frame(vec![]), "Fifths coarse").expect("the Coarse lane is drawn");
+    let at = text_at(&frame(vec![]), "Coarse").expect("the Coarse lane is drawn");
     frame(vec![egui::Event::PointerMoved(at)]);
     for _ in 0..2 {
         frame(vec![press(at, true)]);

@@ -1224,40 +1224,25 @@ fn map_name_field(
     }
 }
 
-/// The offset lanes, Fine and Coarse per axis, and the total they place the
-/// shape at. Each drag is one host gesture per lane.
+/// The offset lanes, one row per axis with its Fine bar and its Coarse bar
+/// side by side, and the total they place the shape at. Each drag is one host
+/// gesture per lane.
+///
+/// Half a column each, so a bar's name is short: the axis on Fine, "Coarse"
+/// on its partner, and the full name in each hover. The census still reads
+/// the full name, as a caption is for.
 fn map_offsets(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn ParamBackend) {
-    use crate::lattice_maps::{MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
-    let offsets = view.offsets;
+    use crate::lattice_maps::{MapAxis, MapOffsetLane};
     let axes =
         [("Fifths", MapAxis::Fifths), ("Thirds", MapAxis::Thirds), ("Sevenths", MapAxis::Sevenths)];
     for (name, axis) in axes {
-        for (lane, scale, lane_name) in
-            [(MapOffsetLane::Fine, 1, "fine"), (MapOffsetLane::Extension, EXTENSION_STEP, "coarse")]
-        {
-            let label = format!("{name} {lane_name}");
-            let mut value = offsets.lane(axis, lane) as f32;
-            // Read out and typed in lattice steps, so Coarse reads 20 for two
-            // of its steps, and a typed 25 lands on 30.
-            let response =
-                ValueBar::new(&mut value, -OFFSET_LIMIT as f32..=OFFSET_LIMIT as f32, &label)
-                    .integer()
-                    .unit(scale as f32, "")
-                    .default_value(0.0)
-                    .show(ui);
-            let one_shot = response.changed() && !response.dragged() && !response.drag_stopped();
-            if response.drag_started() || one_shot {
-                params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
-            }
-            if response.changed() {
-                params.edit_lattice_map(MapEdit::Offset(axis, lane, value.round() as i32));
-            }
-            if response.drag_stopped() || one_shot {
-                params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
-            }
-        }
+        ui.columns(2, |halves| {
+            let [fine, coarse] = halves else { unreachable!("asked for two columns") };
+            offset_lane(fine, view, params, axis, name, MapOffsetLane::Fine);
+            offset_lane(coarse, view, params, axis, name, MapOffsetLane::Extension);
+        });
     }
-    let total = offsets.total();
+    let total = view.offsets.total();
     crate::widgets::label(
         ui,
         format!(
@@ -1265,4 +1250,43 @@ fn map_offsets(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &
             total.threes, total.fives, total.sevens
         ),
     );
+}
+
+/// One offset lane's bar, its edits sent to the host as one gesture: Fine
+/// captioned with its axis, Coarse with its own name.
+fn offset_lane(
+    ui: &mut egui::Ui,
+    view: &crate::lattice_maps::MapView,
+    params: &dyn ParamBackend,
+    axis: crate::lattice_maps::MapAxis,
+    name: &str,
+    lane: crate::lattice_maps::MapOffsetLane,
+) {
+    use crate::lattice_maps::{MapEdit, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
+    let (scale, caption, lane_name, steps) = match lane {
+        MapOffsetLane::Fine => (1, name, "fine", "single lattice steps"),
+        MapOffsetLane::Extension => (EXTENSION_STEP, "Coarse", "coarse", "steps of 10"),
+    };
+    let label = format!("{name} {lane_name}");
+    let hint = format!("{name}, {lane_name}: {steps}.");
+    let mut value = view.offsets.lane(axis, lane) as f32;
+    // Read out and typed in lattice steps, so Coarse reads 20 for two of its
+    // steps, and a typed 25 lands on 30.
+    let response = ValueBar::new(&mut value, -OFFSET_LIMIT as f32..=OFFSET_LIMIT as f32, &label)
+        .caption(caption)
+        .hint(&hint)
+        .integer()
+        .unit(scale as f32, "")
+        .default_value(0.0)
+        .show(ui);
+    let one_shot = response.changed() && !response.dragged() && !response.drag_stopped();
+    if response.drag_started() || one_shot {
+        params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
+    }
+    if response.changed() {
+        params.edit_lattice_map(MapEdit::Offset(axis, lane, value.round() as i32));
+    }
+    if response.drag_stopped() || one_shot {
+        params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
+    }
 }
