@@ -16,12 +16,9 @@
 //! and fades in place while the note continues into history — see [`lead`] and
 //! [`lead_alpha`].
 
-use std::collections::HashMap;
-
 use egui::Color32;
 use harmonigraph_core::Expressions;
 use harmonigraph_core::RollNote;
-use harmonigraph_core::VoiceKey;
 use harmonigraph_render::{RollAxes, RollInstance};
 use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget};
 
@@ -585,49 +582,35 @@ fn layout_at<'a>(
     //
     // What that costs is sorting the notes that are inside the WINDOW but off
     // the octave zoom — a comparison each.
-    let kept = |note: &RollNote| {
-        note.stop(now) >= edge || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
-    };
-    let mut notes: Vec<&RollNote> = roll.notes().filter(|&note| kept(note)).collect();
-
-    // ...and with each key's earliest kept note goes the note before it, where
-    // that note is close enough to still decide its ends. A ribbon's trim and
-    // whether it joins a dense run are decided by its neighbours of the same
-    // key alone (see `density::layout`), and the neighbour BEFORE it leaves
-    // the cull first. Laid out only from the notes the cull kept, the
-    // survivor lost its trim and its run on that frame: its drawn onset and
-    // the name standing on it hopped by up to the trim, and the note closing
-    // a run lost its hatching while it was still on the pane.
     //
-    // One note back, not the whole key: the one before decides the kept
-    // note's ends from its own times alone, and draws nothing itself. A
-    // later note of a key always stops later, so a key's kept notes are its
-    // newest and only the earliest of them has a predecessor outside.
+    // The cull reaches a band further back than the ink for the notes BEFORE
+    // the ones it keeps. A ribbon's trim, and whether it joins a dense run,
+    // are decided by the note of its key before it (`density::layout`), and
+    // that note leaves the cull first: laid out only from the notes whose ink
+    // is still in, the note closing a fast run dropped its hatching on the
+    // frame the run before it left, while it was still on the pane, and a
+    // repeat's drawn onset jumped back by its trim.
+    //
+    // How far back a note can still decide anything drawn: it trims the next
+    // note's onset to no later than a cut past its own stop, which is hidden
+    // past `edge` unless its stop is within a cut of it; and it joins the next
+    // note into a run only while their one-point cores are within a cut,
+    // which for a next note reaching `edge` puts its stop within a floored
+    // length and two cuts of it. A note in the band draws nothing itself —
+    // every segment of it ends before `edge` — and counts for no paint order
+    // (`density::layout`'s `drawn_from`).
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
-    let mut earliest: HashMap<VoiceKey, f64> = HashMap::with_capacity(notes.len());
-    for note in &notes {
-        let first = earliest.entry(note.key()).or_insert(note.start);
-        *first = first.min(note.start);
-    }
-    // A predecessor decides nothing once its stop is a cut and a floored
-    // length short of the next onset.
-    let reach = minimum + gap;
-    let from = earliest.values().fold(f64::INFINITY, |a, &b| a.min(b)) - reach;
-    let mut before: HashMap<VoiceKey, &RollNote> = HashMap::new();
-    for note in roll.notes().filter(|note| note.stop(now) >= from && !kept(note)) {
-        let Some(&first) = earliest.get(&note.key()) else { continue };
-        if note.start < first && note.stop(now) >= first - reach {
-            let latest = before.entry(note.key()).or_insert(note);
-            if note.start > latest.start {
-                *latest = note;
-            }
-        }
-    }
-    notes.extend(before.into_values());
+    let band = minimum + 2.0 * gap;
+    let mut notes: Vec<&RollNote> = roll
+        .notes()
+        .filter(|note| {
+            note.stop(now) >= edge - band || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
+        })
+        .collect();
     notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
 
-    let ribbons = density::layout(&notes, now, minimum, gap);
+    let ribbons = density::layout(&notes, now, minimum, gap, edge);
     RollLayout {
         axes: *axes,
         scale: *scale,
