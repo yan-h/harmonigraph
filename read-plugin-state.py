@@ -160,7 +160,7 @@ def split_ron(body: str) -> "list[tuple[str, str]]":
 
 
 def block(ui: str, name: str) -> "str | None":
-    """The body of a top-level `name:(...)` block in the persist RON."""
+    """The body of a `name:(...)` block among a RON struct's top-level fields."""
     body = ui.strip().removeprefix("(").removesuffix(")")
     value = dict(split_ron(body)).get(name)
     if value and value.startswith("(") and value.endswith(")"):
@@ -285,10 +285,12 @@ def main() -> None:
             print(f"\n--- {name} ---")
             for field, value in split_ron(body):
                 print(f"  {field}: {value}")
-        # The Spiral's framing is editor state, a top-level key beside the
-        # appearance rather than in it, since takes never draw the Spiral.
-        # Left out, a capture would silently drop the framing of one picture.
-        spiral = block(ui, "spiral")
+        # The Spiral's framing is an editor preference, saved under `prefs`
+        # beside the appearance rather than in it, since takes never draw the
+        # Spiral. Left out, a capture would silently drop the framing of one
+        # picture.
+        prefs = block(ui, "prefs")
+        spiral = block(f"({prefs})", "spiral") if prefs is not None else None
         if spiral is not None:
             print("\n--- spiral (editor framing) ---")
             for field, value in split_ron(spiral):

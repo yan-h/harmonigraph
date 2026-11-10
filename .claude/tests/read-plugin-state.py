@@ -60,6 +60,20 @@ class StateExtraction(unittest.TestCase):
             project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
             self.assertEqual(capture("--appearance").strip(), appearance)
 
+    def test_the_spiral_framing_is_read_from_the_preferences(self):
+        ui = ('(version:7,appearance:(spectrum:(enabled:true)),'
+              'prefs:(ui_scale:1.0,spiral:(zoom:2.75,look:(0.4,-0.6)),show_perf:false))')
+        saved = {"version": "0.6.0", "params": {}, "fields": {"ui-state": json.dumps(ui)}}
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "spiral.bwproject"
+            project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
+            out = subprocess.check_output(
+                [sys.executable, extractor.__file__, str(project)], text=True
+            )
+        self.assertIn("--- spiral (editor framing) ---", out)
+        self.assertIn("  zoom: 2.75", out)
+        self.assertIn("  look: (0.4,-0.6)", out)
+
     def test_distinct_compressed_instances_share_a_prefix(self):
         states = [state("first"), state("second")]
         encoded = [json.dumps(s, separators=(",", ":")).encode() for s in states]
