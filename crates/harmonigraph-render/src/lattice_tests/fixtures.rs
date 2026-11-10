@@ -129,7 +129,7 @@ pub(super) fn parity_scene() -> Scene {
             // own clock is the shell's pass and no shell has run here, so this
             // fixture is the picture with nothing carried — which is exactly
             // what a still image of the draw paths wants.
-            glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, target: 1.0, row: i },
+            glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: i },
             // Cluster tightly so painter order and scaled off-sheet nodes
             // both contribute to the fixture.
             ..harmonigraph_scene::NodeInstance::at(
@@ -517,7 +517,7 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         // Lit and settled on the strip's first row: one node, nothing carried.
-        glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, target: 1.0, row: 0 },
+        glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 },
         ..harmonigraph_scene::NodeInstance::at(
             LatticePos::ORIGIN,
             Vec3::ZERO,

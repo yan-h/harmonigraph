@@ -120,8 +120,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
             let n = &mut scene.nodes[112];
             n.activation = 1.0;
             n.octaves.fill(1.0);
-            n.glow =
-                harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, target: 1.0, row: 0 };
+            n.glow = harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 };
         }
         scene.node_radius = 0.34;
         scene.glow_rows = 1;
@@ -233,7 +232,6 @@ fn atmosphere_costs_by_polyphony() {
                             node.bass_slots = 0;
                             node.audio_ring = 0.0;
                             node.glow.level = 0.5;
-                            node.glow.target = 0.0;
                         }
                     }
                 }

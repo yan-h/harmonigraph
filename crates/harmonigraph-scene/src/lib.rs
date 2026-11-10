@@ -423,22 +423,13 @@ pub struct GlowStep {
     /// it with the owner whose ink it actually encoded, across discarded UI passes.
     pub incarnation: u64,
     /// How lit this node's light is drawn. Out of [`NodeMotion::step`] it is
-    /// the [`target`](Self::target) itself, which is what a stateless snapshot
-    /// draws. The shell's glow pass (`GlowFade` in harmonigraph-ui) then
-    /// replaces it with where that target has got to on the Glow attack and
-    /// release, so it can be above zero on a node whose every layer has gone
-    /// silent — which is the whole of what makes a halo linger.
+    /// the node's [`glow_target`](NodeInstance::glow_target) itself, which is
+    /// what a stateless snapshot draws. The shell's glow pass (`GlowFade` in
+    /// harmonigraph-ui) then replaces it with where that target has got to on
+    /// the Glow attack and release, so it can be above zero on a node whose
+    /// every layer has gone silent — which is the whole of what makes a halo
+    /// linger.
     pub level: f32,
-    /// Where the light is heading: the most opaque octave slot or mark level
-    /// as drawn, after the Opacity mapping, in 0..=1, so a soft note's halo is
-    /// as faint as its ink and one faded to nothing has none.
-    ///
-    /// Decided once, by [`NodeMotion::step`], and carried rather than worked
-    /// out again downstream: the level steps toward it, and the ink strip's
-    /// colour takes the attack or the release by the same test against it
-    /// (`ink_history` in harmonigraph-render), so brightness and colour cannot
-    /// come to disagree about which way the light is going.
-    pub target: f32,
     /// Which row of this frame's ink strip holds this node's colour.
     ///
     /// It has to hold STILL while the node keeps glowing: the row is where last
@@ -685,7 +676,7 @@ impl NodeInstance {
             bass_color: Vec4::ZERO,
             // No audio has been measured, so nothing can be held back yet.
             audio_ring: 1.0,
-            glow: GlowStep { incarnation: 0, level: 0.0, target: 0.0, row },
+            glow: GlowStep { incarnation: 0, level: 0.0, row },
             trail: 0.0,
         }
     }
@@ -807,12 +798,28 @@ impl NodeInstance {
     /// delay as [`activation`](Self::activation) does.
     ///
     /// The one spelling of "the drawn colour" for everything that follows it:
-    /// the glow's [`target`](GlowStep::target) (which adds the marks, and
-    /// which the ink strip's attack or release test reads) and the name's ink,
-    /// so a name, a halo and the colour they follow cannot disagree about
-    /// whether the node is going dark.
+    /// the [`glow_target`](Self::glow_target) (which adds the marks) and the
+    /// name's ink, so a name, a halo and the colour they follow cannot
+    /// disagree about whether the node is going dark.
     pub fn drawn_level(&self) -> f32 {
         self.octaves.iter().copied().fold(0.0, f32::max)
+    }
+
+    /// Where this node's light is heading: its most opaque octave slot or mark
+    /// as drawn, each after the Opacity mapping, in 0..=1 — so a soft note's
+    /// halo is as faint as its ink and one faded to nothing has none. Not
+    /// [`activation`](Self::activation), the presence that holds through a
+    /// release.
+    ///
+    /// Asked of the node rather than stored beside its light, so it cannot go
+    /// stale against the layers it reads: the stateless level
+    /// [`NodeMotion::step`] writes, the step `GlowFade` takes in
+    /// harmonigraph-ui and the ink strip's attack-or-release test
+    /// (`ink_history` in harmonigraph-render, shipped in the instance's
+    /// `params.w`) all ask this one, so brightness and colour cannot come to
+    /// disagree about which way a light is going (#1304, #1339).
+    pub fn glow_target(&self) -> f32 {
+        self.drawn_level().max(self.melody_level).max(self.bass_level).clamp(0.0, 1.0)
     }
 }
 

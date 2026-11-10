@@ -56,10 +56,10 @@ impl InkHistory {
                 continue;
             }
             let row = &mut self.rows[instance.glow[1] as usize];
-            // The glow's own target (`GlowStep::target`), not the presence in
-            // `params.x`, which holds through a release: against the carried
-            // level that is the test `GlowFade` makes, so colour and
-            // brightness take the same attack or release.
+            // The node's glow target (`NodeInstance::glow_target`), not the
+            // presence in `params.x`, which holds through a release: against
+            // the carried level that is the test `GlowFade` makes, so colour
+            // and brightness take the same attack or release.
             let target = instance.params[3];
             self.mixes.push(if row.owner != owner || row.seen + 1 != self.frame || row.seen == 0 {
                 1.0

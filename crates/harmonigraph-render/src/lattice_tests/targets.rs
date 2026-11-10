@@ -165,7 +165,6 @@ fn release(scene: &mut Scene) {
     for node in &mut scene.nodes {
         node.activation = 0.0;
         node.octaves.fill(0.0);
-        node.glow.target = 0.0;
     }
 }
 
@@ -357,6 +356,43 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     let returned = shooter.shot_again(&scene);
     assert!(returned.as_chunks::<4>().0.iter().map(|p| u64::from(p[2])).sum::<u64>() > 64);
     eprintln!("history growth fixture: 64 -> 128, 2 GPU instances including row 64, 1 strip creation, 0 viewport recreations; release red lost, held green present, reuse byte-exact");
+}
+
+/// The colour takes the rate the node's glow target says, through the instance
+/// `to_gpu` packs: a release under a held presence at the release rate, then a
+/// re-strike while the light is still falling at the attack rate. The three
+/// readings a slot could carry instead each fail one frame: the presence
+/// (`activation`) the release, and the stepped `glow.level` the re-strike.
+#[test]
+fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
+    let mut scene = history_scene();
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.1, release: 1.0 });
+    let mix = |shooter: &mut Shooter, scene: &Scene| {
+        shooter.shot_again(scene);
+        let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane];
+        pane.ink_history.as_ref().unwrap().history.mixes()[0]
+    };
+    // Every step below is 0.1 s on from the last.
+    let (up, down) = harmonigraph_scene::GlowTiming { now: 0.1, attack: 0.1, release: 1.0 }
+        .coefficients(Some(0.0));
+    assert!((up - down).abs() > 0.5, "the fixture tells the two rates apart: {up}, {down}");
+    scene.nodes[0].glow.level = 0.8;
+    mix(&mut shooter, &scene);
+    // Released: the colour has gone and the presence holds above the light.
+    scene.nodes[0].octaves.fill(0.0);
+    scene.nodes[0].activation = 1.0;
+    scene.nodes[0].glow.level = 0.7;
+    scene.glow_timing.as_mut().unwrap().now = 0.1;
+    let released = mix(&mut shooter, &scene);
+    assert!((released - down).abs() < 1e-6, "a release under a held presence: {released}");
+    // Struck again with the light still falling: the target is back at 1.
+    scene.nodes[0].octaves.fill(1.0);
+    scene.nodes[0].glow.level = 0.65;
+    scene.glow_timing.as_mut().unwrap().now = 0.2;
+    let restruck = mix(&mut shooter, &scene);
+    assert!((restruck - up).abs() < 1e-6, "a re-strike during the release: {restruck}");
 }
 
 #[test]

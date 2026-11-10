@@ -582,7 +582,7 @@ struct GpuInstance {
     /// x: activation, the node's presence, y: melody mark level, z: bass
     /// mark level (see lattice.wgsl). The first three are levels the same
     /// node draws at, read together by the layers that draw it. w is the
-    /// glow's target ([`harmonigraph_scene::GlowStep::target`]), which the
+    /// glow's target ([`harmonigraph_scene::NodeInstance::glow_target`]), which the
     /// presence outlasts after a release, for [`ink_history`]; the shader
     /// never reads it.
     params: [f32; 4],

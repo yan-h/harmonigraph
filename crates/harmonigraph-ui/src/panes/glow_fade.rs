@@ -145,6 +145,11 @@ pub struct GlowFade {
 struct Lit {
     incarnation: u64,
     level: f32,
+    /// The node's [`glow_target`](harmonigraph_scene::NodeInstance::glow_target)
+    /// as of this step, for the two passes after the walk over the nodes (which
+    /// lights to keep, and how long the falling ones stay visible). Written on
+    /// every step that sees the node, and a light not seen is dropped, so it
+    /// never outlives the step it was read on.
     target: f32,
     row: u32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
@@ -212,11 +217,11 @@ impl GlowFade {
             // which leaves the ring's annulus out of the walk), so the two
             // halves of one light cannot come to disagree about what lit it.
             //
-            // `NodeMotion::step` has already answered that into `glow.target`,
+            // The node answers that itself (`NodeInstance::glow_target`),
             // marks included, each layer read after the Opacity mapping, as
             // the slots' colours (`octaves`) and the mark levels carry it --
             // not `activation`, the presence that holds through a release.
-            let target = node.glow.target;
+            let target = node.glow_target();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
                     lit.seen = self.frame;
@@ -232,12 +237,7 @@ impl GlowFade {
                     if lit.level < GONE && target <= 0.0 {
                         lit.level = 0.0;
                     }
-                    GlowStep {
-                        incarnation: lit.incarnation,
-                        level: lit.level,
-                        target,
-                        row: lit.row,
-                    }
+                    GlowStep { incarnation: lit.incarnation, level: lit.level, row: lit.row }
                 }
                 // A node with no light yet and none arriving is left alone: a
                 // row handed to a target of 0 would be handed straight back.
@@ -261,7 +261,7 @@ impl GlowFade {
                             },
                         );
                         // New notes attack from darkness; color is seeded independently.
-                        GlowStep { incarnation, level: target * seed, target, row }
+                        GlowStep { incarnation, level: target * seed, row }
                     }
                     // Every row is spoken for, so this node has no light at
                     // all — see `MAX_ROWS`.
@@ -426,30 +426,6 @@ mod tests {
             assert_eq!(next.incarnation, first.incarnation);
             assert!((next.level - expected).abs() < 0.001, "attack at {time}: {}", next.level);
         }
-    }
-
-    /// The step a light carries names its target beside its level, on the way
-    /// up and on the way down: the ink strip picks the colour's attack or
-    /// release by that target against the level it carried, and has no other
-    /// copy of it.
-    #[test]
-    fn a_stepped_light_carries_its_target_beside_its_level() {
-        let mut state = lit(1.0, 1.0);
-        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-        let mut fade = GlowFade::default();
-        let mut step = |state: &PictureState, now: f64| {
-            let mut scene = scene_at(state, now);
-            fade.step(&mut scene, &state.appearance.view, now);
-            node_at(&scene, LatticePos::ORIGIN).glow
-        };
-        step(&state, 0.0);
-        let rising = step(&state, 0.5);
-        assert!(rising.level > 0.0 && rising.level < 1.0, "mid-attack: {}", rising.level);
-        assert_eq!(rising.target, 1.0, "the attack's target");
-        state.runtime.tracker.handle_event(NoteEvent::off(0.5, SourceId::DIRECT, 0, 60));
-        let falling = step(&state, 1.0);
-        assert!(falling.level > 0.0, "mid-release: {}", falling.level);
-        assert_eq!(falling.target, 0.0, "the release's target");
     }
 
     /// A node's row holds still while its neighbour comes and goes.
