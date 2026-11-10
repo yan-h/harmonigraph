@@ -142,8 +142,9 @@ struct VertexOut {
 };
 
 /// The surround's quad ([`fs_note_surround`]): the note's box grown by the
-/// cut's reach, past every edge and every corner, and half a feather past
-/// that.
+/// cut's reach, past every edge and every corner, and a whole feather past
+/// that. The ink stops half a feather out, so the quad's outer half-feather
+/// holds none. The roll's culls in the UI ask `Quad` for this same reach.
 @vertex
 fn vs_note_cut(
     @builtin(vertex_index) vertex: u32,

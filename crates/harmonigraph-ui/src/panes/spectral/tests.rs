@@ -2864,6 +2864,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
                     ui.painter(),
                     &a,
                     &scale,
+                    &roll::Width::of(&state, &a, &scale, 1.0),
                     &state,
                     roll::RollDrawOptions { split, now: 100.0, surface: 0, point_scale: 1.0 },
                 );

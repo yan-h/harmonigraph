@@ -528,12 +528,11 @@ pub(crate) fn spiral_pane(
     seam(&painter, &spiral);
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
-    let marks = dots(&spiral, state, &lit);
+    let (marks, cut) = dots(&spiral, state, &lit);
     // The roll's own backdrop cut, round every dot, before the discs land on
     // it. Whenever there are dots, as for the halo below: its buffers stand
     // through a silent stretch, so a silent frame has nothing to ask of it,
     // and a cut that is off is the callback's to decline.
-    let cut = surround(&spiral, state, &lit);
     if !cut.is_empty() {
         painter.add(harmonigraph_render::dot_surround_paint_callback(
             rect,
@@ -849,52 +848,41 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
 /// the node it lit up.
 ///
 /// Hands back the coloured discs it painted, for the halo the caller lays over
-/// them ([`harmonigraph_render::glow_paint_callback`]). Returned from HERE
-/// rather than derived a second time beside it, so the halo cannot grow from a
-/// dot the picture does not have: one loop decides where a mark is, how big,
-/// and what colour, and the light follows it by construction.
+/// them ([`harmonigraph_render::glow_paint_callback`]), and the backdrop cut
+/// each disc wears: the roll's ribbons' own, filled with the note's hue at the
+/// cut's fill lightness, and as strong as the dot is opaque, so a fading dot's
+/// surround fades with it.
+///
+/// Both from HERE rather than derived a second time beside it, so neither the
+/// halo nor the cut can grow from a dot the picture does not have: one loop
+/// decides which notes get a mark, where, how big and how strong, and the
+/// light and the cut follow it by construction. The cut was once a second
+/// loop restating this one, held to it by a test (#1538) and then by a fix
+/// (#1606).
 fn dots(
     spiral: &Spiral,
     state: &PictureState,
     sounding: &[Sounding],
-) -> Vec<harmonigraph_render::GlowDot> {
-    let fill = spiral.dot();
-    sounding
-        .iter()
-        .filter(|voice| voice.opacity > 0.0)
-        .map(|voice| {
-            let at = spiral.at(voice.pitch, 0.0);
-            let color = note_color(state, voice.pitch, voice.strength * voice.opacity);
-            harmonigraph_render::GlowDot {
-                center: [at.x, at.y],
-                radius: fill,
-                color: color.to_array(),
-            }
-        })
-        .collect()
-}
-
-/// The backdrop cut each sounding note's dot wears: the roll's ribbons' own,
-/// filled with the note's hue at the cut's fill lightness, and as strong as
-/// the dot is opaque, so a fading dot's surround fades with it.
-fn surround(
-    spiral: &Spiral,
-    state: &PictureState,
-    sounding: &[Sounding],
-) -> Vec<harmonigraph_render::SurroundDot> {
+) -> (Vec<harmonigraph_render::GlowDot>, Vec<harmonigraph_render::SurroundDot>) {
     let radius = spiral.dot();
     sounding
         .iter()
         .filter(|voice| voice.opacity > 0.0)
         .map(|voice| {
-            let at = spiral.at(voice.pitch, 0.0);
-            harmonigraph_render::SurroundDot {
-                center: [at.x, at.y],
-                radius,
-                aura: note_fill(state, voice.pitch, voice.strength * voice.opacity),
-            }
+            let center = spiral.at(voice.pitch, 0.0);
+            let center = [center.x, center.y];
+            let strength = voice.strength * voice.opacity;
+            let color = note_color(state, voice.pitch, strength);
+            (
+                harmonigraph_render::GlowDot { center, radius, color: color.to_array() },
+                harmonigraph_render::SurroundDot {
+                    center,
+                    radius,
+                    aura: note_fill(state, voice.pitch, strength),
+                },
+            )
         })
-        .collect()
+        .unzip()
 }
 
 /// What each sounding note is CALLED, written on the rim beyond its own ray.
@@ -1484,15 +1472,19 @@ mod tests {
         }
         let spiral = Spiral::new(PANE, &state.appearance.spectrum);
         let lit = sounding(&spiral, &state, 0.1);
-        let marks = dots(&spiral, &state, &lit);
+        let (marks, _) = dots(&spiral, &state, &lit);
         assert_eq!(marks.len(), 4, "the fixture's four notes are four coloured discs");
         assert!(marks.iter().all(|mark| mark.radius == spiral.dot()));
         assert!(marks.iter().all(|mark| mark.color[3] > 0));
     }
 
-    /// Each dot's surround stands on the disc that was painted, cuts as
-    /// strongly as the dot is opaque, and fills with its note's own hue at the
-    /// fill's lightness rather than with the disc's color.
+    /// Each dot's surround cuts as strongly as the dot is opaque, and fills
+    /// with its note's own hue at the fill's lightness rather than with the
+    /// disc's color.
+    ///
+    /// One strength feeds both, but the two are not one number: the disc's
+    /// alpha goes through `scene_color` and the cut's through `note_fill`'s own
+    /// byte, so their agreement is asked here rather than assumed.
     #[test]
     fn each_dot_wears_the_notes_surround_round_its_own_disc() {
         let mut state = fresh();
@@ -1503,11 +1495,9 @@ mod tests {
         intensity.velocity.opacity = Some(1.0);
         let spiral = Spiral::new(PANE, &state.appearance.spectrum);
         let lit = sounding(&spiral, &state, 0.1);
-        let marks = dots(&spiral, &state, &lit);
-        let cuts = surround(&spiral, &state, &lit);
+        let (marks, cuts) = dots(&spiral, &state, &lit);
         assert_eq!(cuts.len(), 2, "the fixture's two notes are two surrounds");
         for ((cut, mark), voice) in cuts.iter().zip(&marks).zip(&lit) {
-            assert_eq!((cut.center, cut.radius), (mark.center, mark.radius));
             assert_eq!(cut.aura[3], mark.color[3], "the cut is not as strong as its dot is opaque");
             let fill = super::super::spectral::roll::note_fill(&state, voice.pitch, 1.0);
             assert_eq!(cut.aura[..3], fill[..3], "the cut does not fill with its note's hue");
@@ -1527,18 +1517,18 @@ mod tests {
         intensity.velocity.opacity = Some(1.0);
         intensity.gain.opacity = None;
         let mapped = sounding(&spiral, &state, 1.0);
-        let dim = dots(&spiral, &state, &mapped);
+        let (dim, _) = dots(&spiral, &state, &mapped);
         assert_eq!(dim.len(), 1);
         state.appearance.view.intensity.opacity_rest = 1.0;
         let full = sounding(&spiral, &state, 1.0);
-        let bright = dots(&spiral, &state, &full);
+        let (bright, _) = dots(&spiral, &state, &full);
         assert_eq!(mapped[0].strength, full[0].strength, "rim-name envelope is independent");
         assert!(dim[0].color[3] > 0 && dim[0].color[3] < bright[0].color[3]);
         state.appearance.view.intensity.opacity_rest = 0.0;
         state.appearance.view.intensity.velocity.opacity = None;
         let hidden = sounding(&spiral, &state, 1.0);
         assert_eq!(hidden[0].strength, full[0].strength);
-        assert!(dots(&spiral, &state, &hidden).is_empty(), "no invisible dot or halo remains");
+        assert!(dots(&spiral, &state, &hidden).0.is_empty(), "no invisible dot or halo remains");
     }
 
     /// The halo's callback and the dots' surround go in on every frame with a

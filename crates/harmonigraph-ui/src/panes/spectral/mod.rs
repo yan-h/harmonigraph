@@ -473,11 +473,15 @@ pub(crate) fn spectral_pane(
     // happens AT the line: a sounding note's ribbon reaches it and carries its
     // lead a little way past, into the spectrum peak it is making (see
     // `roll::lead`, and the divider below for what still draws over it).
+    // The width it draws a body at is also where the names leave the pitch
+    // zoom, so both take this one.
+    let width = roll::Width::of(state, &axes, &scale, point_scale);
     if show_history && split < 1.0 && cfg.show_roll {
         roll::draw_roll(
             &painter,
             &axes,
             &scale,
+            &width,
             state,
             roll::RollDrawOptions { split, now, surface, point_scale },
         );
@@ -593,6 +597,7 @@ pub(crate) fn spectral_pane(
             state,
             &axes,
             &scale,
+            &width,
             split,
             now,
             text.names,
