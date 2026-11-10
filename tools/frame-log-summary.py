@@ -371,22 +371,34 @@ def report_first_note(run, evs, t0):
 
 
 def report_exports(run, evs, t0):
-    # One stretch per run of time with any export running, however many
-    # overlap in it, so the time before it is never inside another export.
+    # One stretch per run of time with an export running under one encoder,
+    # so the time before it is never inside another export. A renderer names
+    # its encoder a moment after it starts, so a stretch still `starting`
+    # takes the next name it hears; a different encoder opens a stretch of
+    # its own, which follows the last with no quiet time between.
     busy = []
     for start, stop, words in timeline(evs, run[-1]['t'], 'exports'):
         if words[0] == '0':
             continue
-        if busy and busy[-1]['stop'] == start:
-            busy[-1]['stop'] = stop
-            busy[-1]['most'] = max(busy[-1]['most'], int(words[0]))
+        encoder = words[1]
+        last = busy[-1] if busy and busy[-1]['stop'] == start else None
+        if last and last['encoder'] == 'starting':
+            last['encoder'] = encoder
+        if last and encoder in (last['encoder'], 'starting'):
+            last['stop'] = stop
+            last['most'] = max(last['most'], int(words[0]))
         else:
-            busy.append({'start': start, 'stop': stop, 'most': int(words[0]), 'encoder': words[1]})
+            busy.append({'start': start, 'stop': stop, 'most': int(words[0]),
+                         'encoder': encoder, 'follows': last is not None})
     quiet_since = run[0]['t']
     for b in busy:
         start, stop = b['start'], b['stop']
         length = min(EXPORT_COMPARE, stop - start, start - quiet_since)
         quiet_since = stop
+        if b['follows']:
+            print(f"  export {start - t0:.0f}-{stop - t0:.0f} s, encoder {b['encoder']}, "
+                  f"straight after another: no quiet time before it to compare")
+            continue
         if length <= 0:
             print(f'  export {start - t0:.0f}-{stop - t0:.0f} s already running when the editor '
                   f'opened: no time before it to compare')
