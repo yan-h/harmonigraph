@@ -1009,22 +1009,21 @@ fn a_swelled_node_arriving_from_outside_casts_its_whole_shadow() {
         scene
     };
 
-    // The farthest column a node's ink reaches on any row, read against the
-    // same pane with no node in it rather than against an exact ground value
-    // an adapter may read a code or two off. Past it, every column the
-    // profile walks is further from all of the ink than the one before.
+    // The farthest column a node's ink reaches on the row the profile is read
+    // along, read against the same pane with no node in it rather than against
+    // an exact ground value an adapter may read a code or two off.
     let mut empty = staged(0.0, 1.0, 1.0);
     empty.nodes.clear();
     empty.glow_rows = 0;
+    let row = on_screen(&empty, SIZE, glam::Vec3::ZERO).y.round() as u32;
     let bare = shooter.shot(&empty);
     let mut ink_edge = |scene: &Scene| -> (Vec<u8>, u32) {
         let shot = shooter.shot(scene);
-        let edge = (0..SIZE[1])
-            .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
-            .filter(|&(x, y)| (bright_at(&shot, x, y) - bright_at(&bare, x, y)).abs() > 3)
-            .map(|(x, _)| x)
+        let inked = |x: u32, y: u32| (bright_at(&shot, x, y) - bright_at(&bare, x, y)).abs() > 3;
+        let edge = (0..SIZE[0])
+            .filter(|&x| inked(x, row))
             .max()
-            .expect("the node drew no ink");
+            .expect("the node drew no ink on its centre row");
         (shot, edge)
     };
     // Both of the caster box's terms are reached, as ink on screen: swelling
@@ -1033,13 +1032,11 @@ fn a_swelled_node_arriving_from_outside_casts_its_whole_shadow() {
     let (_, band) = ink_edge(&staged(0.0, 1.0, 1.0));
     let (_, settled) = ink_edge(&staged(0.0, SWELL, 1.0));
     let (flat, ink) = ink_edge(&staged(0.0, SWELL, PROGRESS));
-    eprintln!("ink out to column {band} unswelled, {settled} swelled, {ink} arriving");
     assert!(settled > band + 2, "the swell moved the ink from column {band} to {settled}");
     assert!(ink > settled + 2, "the arrival moved the ink from column {settled} to {ink}");
 
     let deep_scene = staged(1.0, SWELL, PROGRESS);
     let deep = shooter.shot(&deep_scene);
-    let row = on_screen(&deep_scene, SIZE, glam::Vec3::ZERO).y.round() as u32;
     assert_whole_tail("the arriving node", &flat, &deep, row, ink, sigma(&deep_scene));
 }
 
