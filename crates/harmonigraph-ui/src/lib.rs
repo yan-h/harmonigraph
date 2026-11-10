@@ -542,10 +542,10 @@ impl std::fmt::Display for Animating {
 
 /// Whether a lattice note is still departing after its voice was pruned: a
 /// release holds its presence for the fade-out delay and the stagger, so it
-/// runs that delay and `1 + stagger_spread` fades past the off where the
-/// voice lasts one. Unguarded: with neither, the span is the voice's own, so
-/// asking costs nothing, and a setting that lengthens a departure later
-/// needs only to join the span.
+/// runs [`NoteAnimationConfig::departure`](harmonigraph_scene::NoteAnimationConfig::departure)
+/// past the off where the voice lasts one fade. Unguarded: with neither, the
+/// span is the voice's own, so asking costs nothing, and a setting that
+/// lengthens a departure later needs only to join that method.
 ///
 /// The Background glow's release is one: a halo falls on its own clock, which
 /// can outlast the slices by many seconds, and with the roll hidden and no
