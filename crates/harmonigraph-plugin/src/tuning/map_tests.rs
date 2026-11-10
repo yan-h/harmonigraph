@@ -121,7 +121,9 @@ fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_stat
     let mut hub = Device::new(false);
     hub.activate();
     let (first, second) = install(&hub);
-    hub.run(0, vec![note(1, 0, 64, 0, true), parameter("tuning-engine", 2.0, 0)], None);
+    // Past the top step, which decodes as the top step, Lattice Map, as the
+    // host's label reads it; the attack on the same sample shows the decode.
+    hub.run(0, vec![note(1, 0, 64, 0, true), parameter("tuning-engine", 5.0, 0)], None);
     hub.run(512, vec![parameter("lattice-map", 1.0, 0)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 64).frozen_offset_microcents,
@@ -238,7 +240,8 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
         voice(&hub, crate::tuning::DIRECT, 64).frozen_offset_microcents,
         edited.frozen_offset_microcents
     );
-    // Map is an automatable stepped state selector, never additive modulation.
+    // Map, lanes and Follow are automatable stepped state selectors, never
+    // additive modulation.
     let params = hub.params();
     let count = unsafe { params.count.unwrap()(hub.plugin) };
     let ids = [
@@ -249,6 +252,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
         "map-fifths-extension",
         "map-thirds-extension",
         "map-sevenths-extension",
+        "map-follow",
     ];
     let mut found = 0;
     for index in 0..count {
@@ -259,7 +263,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
             assert_ne!(info.flags & CLAP_PARAM_IS_STEPPED, 0);
             assert_ne!(info.flags & CLAP_PARAM_IS_AUTOMATABLE, 0);
             assert_eq!(info.flags & CLAP_PARAM_IS_MODULATABLE, 0);
-            if *id != "lattice-map" {
+            if !matches!(*id, "lattice-map" | "map-follow") {
                 assert_eq!(info.min_value, 0.0);
                 assert_eq!(info.max_value, 18.0);
                 assert_eq!(info.default_value, 9.0);
@@ -401,7 +405,9 @@ fn lattice_map_follow_moves_the_map_for_a_chord_and_drifts_with_what_it_heard() 
     hub_wrapper(&hub).test_inspect_plugin(|plugin| {
         assert_eq!(crate::lattice_maps::view(&plugin.params).followed, LatticePos::ORIGIN);
     });
-    hub.run(4608, vec![on(9, 62), on(10, 65), on(11, 69)], None);
+    // Automation past the top step reads as Thirds and fifths, the mode
+    // already on, so the chord on the same sample still follows.
+    hub.run(4608, vec![parameter("map-follow", 4.0, 0), on(9, 62), on(10, 65), on(11, 69)], None);
     for key in [62, 65, 69] {
         assert_eq!(node(&hub, key), Some(at(down, key)));
     }
