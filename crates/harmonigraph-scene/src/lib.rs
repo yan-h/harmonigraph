@@ -135,6 +135,14 @@ pub const MIN_NODE_SCALE: f32 = 0.05;
 /// harmonigraph-render), and [`ViewConfig::light_owner_radius`] bounds the
 /// off-pane light owners on it. #1252 widened a second spelling and missed
 /// the first.
+///
+/// It takes the rim's inputs rather than a [`ViewConfig`] because the renderer
+/// has to size the halo on the rings it packs for the node's own geometry,
+/// which are the [`Scene`]'s stored `rings_outer` and `mark_inner`. Out of
+/// [`derive_scene`] those are `view.rings()` of the scene's own view, but a
+/// scene built by hand need not agree (the lattice tests set rings from a
+/// probe view, or move `mark_inner` alone), and a halo sized off the view
+/// there would no longer fit the node it is drawn around.
 pub fn glow_span(rings_outer: f32, mark_inner: f32, mark_thickness: f32, reach: f32) -> f32 {
     let mut rim = rings_outer.max(0.0);
     if mark_thickness > 0.0 {

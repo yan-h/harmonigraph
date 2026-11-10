@@ -157,14 +157,17 @@ impl ViewConfig {
     }
 
     /// Maximum world radius of a light owner's halo on a sheet at scale 1:
-    /// [`glow_span`](crate::glow_span) in world units, 1.8 node radii to the
-    /// uv as `vs_glow_splat` in lattice.wgsl draws it. Per-sheet scale (floored
-    /// at [`MIN_NODE_SCALE`](crate::MIN_NODE_SCALE)) is applied by the selector.
+    /// [`glow_span`](crate::glow_span) in world units, as `vs_glow_splat` in
+    /// lattice.wgsl draws it. Per-sheet scale (floored at
+    /// [`MIN_NODE_SCALE`](crate::MIN_NODE_SCALE)) is applied by the selector.
     pub fn light_owner_radius(&self) -> f32 {
         let rings = self.rings();
-        crate::glow_span(rings.outer, rings.mark_inner, rings.mark_thickness, self.glow_reach)
-            * NODE_RADIUS_FACTOR
-            * 1.8
+        crate::derive::marker_world(crate::glow_span(
+            rings.outer,
+            rings.mark_inner,
+            rings.mark_thickness,
+            self.glow_reach,
+        ))
     }
 
     /// Bounded candidate region, not a replacement for the pane's drawn window.
