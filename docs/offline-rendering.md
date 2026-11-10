@@ -231,7 +231,7 @@ arm Record take, export, and both files land together.
 **Tail**, under Render, is how long the video runs past the last recorded note or automation so releases finish fading — 0 s fresh (#1472).
 The video never ends before the recorded audio does,
 so a Tail of 0 ends an export's video at its range end rather than a few silent seconds past it.
-A take recorded under *Loop end* ignores it: that video ends with its loop.
+A take recorded under *Loop end* honours it like any other (#1677).
 The renderer reads the Tail from the look it draws with —
 the recorded one, or the current one on a queued export —
 and `--tail` overrides it.
@@ -305,7 +305,7 @@ The flags worth knowing (`--help` lists them all):
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
-| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — the appearance's **Tail**, or none for a *Loop end* take, which ends with its loop |
+| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note, the appearance's **Tail** by default |
 | `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, Hardware fresh; `--crf` applies to x264 only |
 | `--appearance` | use a different look than the one in the take |
 

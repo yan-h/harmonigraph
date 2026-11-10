@@ -234,10 +234,9 @@ pub struct RenderConfig {
     /// Seconds the video runs past the take's last event, so releases finish
     /// fading and the roll clears. The Video pane's Tail.
     ///
-    /// Ignored for a take RECORDED under [`AtLoopEnd`](RenderTrigger::AtLoopEnd),
-    /// whose video ends with its loop (#1125), and never cuts the soundtrack
-    /// short: the render still runs to the end of the take's audio. So 0 ends an
-    /// audio export at its range end rather than a few silent seconds past it.
+    /// Never cuts the soundtrack short: the render still runs to the end of the
+    /// take's audio. So 0 ends an audio export at its range end rather than a
+    /// few silent seconds past it.
     ///
     /// A render choice like [`short_edge`](Self::short_edge): a queued export's
     /// appearance supplies it, and the offline renderer's `--tail` overrides it.

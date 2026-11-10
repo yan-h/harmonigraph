@@ -20,7 +20,7 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_take::{RenderProgress, RenderTrigger, VideoEncoder};
+use harmonigraph_take::{RenderProgress, VideoEncoder};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::Layout;
 use render::Settings;
@@ -62,9 +62,7 @@ OPTIONS:
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear; short audio pads with silence.
-                           [default: the appearance's Tail (0 s fresh); 0
-                           for a take recorded under the Loop end trigger,
-                           which ends with its loop]
+                           [default: the appearance's Tail (0 s fresh)]
         --encoder <E>      x264 or hardware. hardware is the machine's
                            H.264 encoder (VideoToolbox) at a constant
                            quality: about a third faster at 1440p on far
@@ -118,9 +116,9 @@ struct Args {
     /// was captured.
     lead: Option<f64>,
     end: Option<f64>,
-    /// `None` means "the Tail of the look this render draws with" — see
-    /// `tail_of_render`. An explicit `--tail 4` on a loop-end take is NOT the
-    /// same thing.
+    /// `None` means "the Tail of the look this render draws with" — the
+    /// replacement's on a queued export, so a run-out chosen after recording
+    /// reaches the video like Output size does.
     tail: Option<f64>,
     /// `None` means "the Encoder of the look this render draws with", as for
     /// the tail.
@@ -280,45 +278,9 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
     }
 }
 
-/// How long the picture runs past the last event when `--tail` does not say.
-///
-/// The Video pane's Tail, from the appearance this render draws with — the
-/// replacement's on a queued export, so a run-out chosen after recording reaches
-/// the video like Output size does — except for a take recorded
-/// [`AtLoopEnd`](RenderTrigger::AtLoopEnd), which ends exactly where its loop
-/// does (#1125). That take is one pass of a loop meant to be seen as a loop,
-/// so a fade past its end is not the performance; its recording runs to the
-/// wrap, and [`end_of_render`] still waits for it, so the file ends at the
-/// loop's end rather than at the last note. An explicit `--tail` still applies
-/// to every kind of take.
-///
-/// `trigger` is the one the take was RECORDED under, not the one a queued export's
-/// `--appearance` carries: how the take ended is fixed when it was captured,
-/// and a trigger changed since then says nothing about this file.
-fn tail_of_render(explicit: Option<f64>, trigger: RenderTrigger, tail: f64) -> f64 {
-    explicit.unwrap_or(match trigger {
-        RenderTrigger::AtLoopEnd => 0.0,
-        RenderTrigger::OnDisarm | RenderTrigger::OnTransportStop | RenderTrigger::AtBar => tail,
-    })
-}
-
-/// The trigger a take was recorded under, read from its own appearance.
-///
-/// A malformed recorded look is only reachable with a valid replacement:
-/// [`render::appearance_for`] refuses it otherwise. Such a take cannot say
-/// how it ended, so an explicit replacement keeps the ordinary tail.
-fn recorded_trigger(take: &harmonigraph_take::Take) -> RenderTrigger {
-    take.header
-        .appearance
-        .as_deref()
-        .and_then(|blob| harmonigraph_ui::AppearanceDocument::parse(blob).ok())
-        .map(|appearance| appearance.render.trigger)
-        .unwrap_or_default()
-}
-
 /// Where the render stops when `--end` does not say.
 ///
-/// The last event plus the tail ([`tail_of_render`]), so releases finish
+/// The last event plus the tail (`--tail`, else the look's Tail), so releases finish
 /// fading and the roll clears instead of the video cutting mid-decay — and
 /// never before the soundtrack runs out, because a video that stops while the
 /// music is still playing is a bug, where one that holds a second of settled
@@ -458,7 +420,7 @@ fn export(args: Args) -> Result<(), String> {
     let end = end_of_render(
         args.end,
         take.duration(),
-        tail_of_render(args.tail, recorded_trigger(&take), render_config.tail),
+        args.tail.unwrap_or(render_config.tail),
         audio.as_ref().map(|a| audio_start + a.seconds()),
     );
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
@@ -832,20 +794,6 @@ mod tests {
         // ...and including 0, which `frame_count() == 0` then refuses by name
         // rather than quietly falling back to the whole take.
         assert_eq!(end_of_render(Some(0.0), 30.0, 2.0, None), 0.0);
-    }
-
-    /// An unasked tail is the Tail the render draws with, and none for a take
-    /// recorded at its loop's end (#1125); a typed `--tail` wins over both.
-    #[test]
-    fn an_unasked_tail_is_the_appearance_tail_except_at_loop_end() {
-        for trigger in
-            [RenderTrigger::OnDisarm, RenderTrigger::OnTransportStop, RenderTrigger::AtBar]
-        {
-            assert_eq!(tail_of_render(None, trigger, 1.5), 1.5, "{trigger:?}");
-            assert_eq!(tail_of_render(Some(0.5), trigger, 1.5), 0.5, "{trigger:?}");
-        }
-        assert_eq!(tail_of_render(None, RenderTrigger::AtLoopEnd, 1.5), 0.0);
-        assert_eq!(tail_of_render(Some(4.0), RenderTrigger::AtLoopEnd, 1.5), 4.0);
     }
 
     /// A tail that is not a length of time is refused at the flag rather than
