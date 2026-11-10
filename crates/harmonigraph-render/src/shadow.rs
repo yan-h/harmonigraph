@@ -52,13 +52,15 @@ pub const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
 
 /// What a caster's Gaussian is multiplied up by before it is spent, which is
 /// what a caster thin against σ is worth against a solid one. `GAUSSIAN_GAIN`
-/// in common.wgsl, pinned by `the_shadow_laws_gain_and_floor_are_the_shaders_own`,
-/// and here so the Shadow preview spends the renderer's number.
+/// in common.wgsl, pinned by `the_shadow_gain_is_the_shaders_own`, and here so
+/// the Shadow preview spends the renderer's number.
 pub const GAUSSIAN_GAIN: f32 = 2.5;
 
 /// What the spectral Shadow depth bottoms out at: the share of the frame left
 /// under a caster's solid middle at the top of the bar, ten stops down. The
-/// shader's `SHADOW_KEEP_FLOOR`, held to it through [`shadow_darkness`].
+/// shader's `SHADOW_KEEP_FLOOR`, pinned by no needle: the GPU probe
+/// `shadow_darkness_is_the_shaders_law` holds [`shadow_darkness`], and so this,
+/// to the shader's law.
 const SHADOW_KEEP_FLOOR: f32 = 1.0 / 1024.0;
 
 /// How much of the frame a caster at full level takes away, 0..=1, where its
@@ -1166,7 +1168,10 @@ fn cs_shadow_law() {{
             for (lattice, through) in [(true, local), (false, spectral)] {
                 let ours = shadow_darkness(full, depth, lattice);
                 assert!(
-                    (ours - (1.0 - through)).abs() < 1e-5,
+                    // Room for a driver's approximate `pow`, and still far
+                    // inside what a changed law moves a sample by: a floor of
+                    // 1/512 against the shader's 1/1024 is 0.03 off.
+                    (ours - (1.0 - through)).abs() < 1e-4,
                     "full {full}, depth {depth}, lattice {lattice}: the shader takes {} away and \
                      shadow_darkness {ours}",
                     1.0 - through,

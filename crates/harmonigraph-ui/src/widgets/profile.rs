@@ -386,3 +386,36 @@ fn gaussian_interval(p: f32, low: f32, high: f32, sigma: f32) -> f32 {
     };
     (cdf(high) - cdf(low)).clamp(0.0, 1.0)
 }
+
+#[cfg(test)]
+mod shadow_tests {
+    /// The spectral preview spends the renderer's law with coverage and depth
+    /// each where the law takes it. Under the sample's middle the coverage
+    /// saturates at 1, where the law's darkness is the depth (0.9) and the
+    /// arguments swapped come to 1 less the floor (0.999): a swap at the call
+    /// leaves the symmetric lattice preview as it was and moves this one.
+    #[test]
+    fn the_spectral_preview_spends_the_renderers_law() {
+        const DEPTH: f32 = 0.9;
+        let max = harmonigraph_scene::SPECTRAL_SHADOW_MAX;
+        let style = harmonigraph_scene::ShadowStyle { width: 0.5 * max, spread: 0.0, depth: DEPTH };
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let rect = egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(200.0, 120.0));
+            super::shadow_preview(ui, rect, style, max, false, false);
+        });
+        let darkest = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.vertices.iter().map(|v| v.color.a())),
+                _ => None,
+            })
+            .flatten()
+            .max()
+            .expect("the preview drew no shadow mesh");
+        let law = harmonigraph_render::shadow_darkness(1.0, DEPTH, false);
+        assert_ne!(law, harmonigraph_render::shadow_darkness(DEPTH, 1.0, false));
+        assert_eq!(darkest, (255.0 * law).round() as u8, "the preview's darkest vertex");
+    }
+}
