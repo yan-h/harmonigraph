@@ -948,9 +948,9 @@ mod tests {
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> PictureState {
         let mut state = fresh();
-        // These fixtures measure lattice spellings themselves. The shipped
-        // comma locks are a view choice that would respell the same positions
-        // before the naming rule under test sees them.
+        // These fixtures measure lattice spellings themselves. A fresh
+        // runtime's comma links would respell the same positions before the
+        // naming rule under test sees them.
         state.runtime.tempered.syntonic = false;
         state.runtime.tempered.septimal_kleisma = false;
         state.appearance.spectrum = SpectrumConfig {
