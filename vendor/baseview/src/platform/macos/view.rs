@@ -294,8 +294,15 @@ impl BaseviewView {
     }
 
     /// Draw on every `divisor`th refresh from here on; 0 and 1 are every one.
+    ///
+    /// Takes effect at once rather than after the frame the old divisor
+    /// already scheduled: see `due_after_divisor`.
     pub(crate) fn set_frame_divisor(this: ViewRef<Self>, divisor: u32) {
-        this.frame_divisor.set(divisor.max(1));
+        let divisor = divisor.max(1);
+        let was = this.frame_divisor.replace(divisor);
+        let running = this.frame_timing.get().map(|t| (t.target_timestamp, t.refresh));
+        let due = due_after_divisor(divisor, was, this.next_frame_due.get(), running);
+        this.next_frame_due.set(due);
     }
 
     /// When the display asked for the frame now running, if the link did.
@@ -567,6 +574,26 @@ fn link_paces_frame(
         return None;
     }
     Some(Some(target + (f64::from(divisor) - 0.5) * refresh))
+}
+
+/// When the next frame is due once `divisor` replaces `was`, given the due time
+/// the link last scheduled and, inside a link frame, that frame's target and
+/// refresh.
+///
+/// The link schedules the next frame before it runs this one, so without this
+/// a divisor set from a frame would pace only the interval after the next
+/// frame, and one set between frames would wait out the old divisor's whole
+/// interval: an editor slowed to its idle poll would answer an input event a
+/// poll late. So a divisor set inside a link frame re-paces from that frame's
+/// target, and a changed one set outside a frame lets the next refresh draw.
+fn due_after_divisor(
+    divisor: u32, was: u32, due: Option<f64>, running: Option<(f64, f64)>,
+) -> Option<f64> {
+    match running {
+        Some((target, refresh)) => link_paces_frame(divisor, None, target, refresh).flatten(),
+        None if divisor != was => None,
+        None => due,
+    }
 }
 
 impl Drop for BaseviewView {
@@ -1050,7 +1077,7 @@ fn buttons_owed_release(reported_down: u8, os_pressed: usize) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{button_bit, buttons_owed_release, link_paces_frame};
+    use super::{button_bit, buttons_owed_release, due_after_divisor, link_paces_frame};
     use crate::MouseButton;
 
     /// The refreshes a divided link draws on, out of `callbacks` at 144 Hz
@@ -1100,6 +1127,25 @@ mod tests {
             }
         }
         assert_eq!(drew, [0, 3, 5]);
+    }
+
+    /// A divisor set inside a frame paces the very next interval, whatever the
+    /// link scheduled before running that frame; one changed between frames (an
+    /// input event waking a slowed editor) lets the next refresh draw; one
+    /// set again unchanged between frames moves nothing.
+    #[test]
+    fn a_new_divisor_takes_effect_at_once() {
+        let refresh = 1.0 / 144.0;
+        let at = |i: u32| f64::from(i) * refresh;
+        let next = |divisor, due| {
+            (1..).find(|&i| link_paces_frame(divisor, due, at(i), refresh).is_some()).unwrap()
+        };
+        let scheduled = |divisor| link_paces_frame(divisor, None, at(0), refresh).unwrap();
+        let in_frame = Some((at(0), refresh));
+        assert_eq!(next(8, due_after_divisor(8, 1, scheduled(1), in_frame)), 8, "raised");
+        assert_eq!(next(2, due_after_divisor(2, 8, scheduled(8), in_frame)), 2, "lowered");
+        assert_eq!(next(2, due_after_divisor(2, 8, scheduled(8), None)), 1, "woken");
+        assert_eq!(next(8, due_after_divisor(8, 8, scheduled(8), None)), 8, "unchanged");
     }
 
     /// A move to a slower display leaves the due time on the old grid, and the
