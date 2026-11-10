@@ -13,9 +13,16 @@
 //! The output size stays outside `RenderFrame` — see
 //! [`RenderConfig::short_edge`].
 //!
+//! Nothing in the format needs them here. The UI re-exports them beside its
+//! other settings, and the plugin and the offline renderer reach them mostly
+//! through it; the offline renderer also names [`RenderTrigger`] and
+//! [`VideoEncoder`] here directly, and `harmonigraph-record` names
+//! `VideoEncoder` for the encoder a render reports. Moving them beside the
+//! UI's other settings is rework candidate R9 in #1677, undecided.
+//!
 //! The export queue's vocabulary — [`RenderProgress`], [`ExportJob`],
-//! [`ExportStatus`] and the archive copy's name — is the part that is not
-//! settings: no serde, and it never enters a take. Progress is counted off the
+//! [`ExportStatus`], the renderer's encoder record and the archive copy's
+//! name — is the part that is not settings: no serde, and it never enters a take. Progress is counted off the
 //! renderer subprocess's stderr and lives only as long as that process. It
 //! sits here because `harmonigraph-record` drives that subprocess and reports
 //! back through it, and must not link the editor to do so. Moving it to the UI
