@@ -729,9 +729,15 @@ fn export_queue(
         );
         if !interaction.take.export_recorded {
             let slots: Vec<String> = (0..SLOT_COUNT).map(slot_name).collect();
-            let options: Vec<(Option<usize>, &str, &str)> = std::iter::once((None, "Current", ""))
-                .chain(slots.iter().enumerate().map(|(slot, name)| (Some(slot), name.as_str(), "")))
-                .collect();
+            let options: Vec<(Option<usize>, &str, &str)> =
+                std::iter::once((None, "Current appearance", ""))
+                    .chain(
+                        slots
+                            .iter()
+                            .enumerate()
+                            .map(|(slot, name)| (Some(slot), name.as_str(), "")),
+                    )
+                    .collect();
             crate::widgets::choice_row(
                 ui,
                 "Appearance",

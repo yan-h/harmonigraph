@@ -1,9 +1,9 @@
 # Settings controls go through the widget set, which sizes them to the rows
 # around them (see widgets/rows.rs); these are the egui calls it wraps.
 disallowed-methods = [
-    { path = "egui::Ui::checkbox", reason = "use widgets::checkbox, whose box fits the row (egui's leaves a 9.5 pt joint)" },
-    { path = "egui::Checkbox::new", reason = "use widgets::checkbox, whose box fits the row (egui's leaves a 9.5 pt joint)" },
-    { path = "egui::Checkbox::without_text", reason = "use widgets::checkbox_box" },
-    { path = "egui::ComboBox::show_ui", reason = "use widgets::choice_row; a dropdown it cannot express goes through selected_combo in widgets/rows.rs" },
-    { path = "egui::ComboBox::show_index", reason = "use widgets::choice_row; a dropdown it cannot express goes through selected_combo in widgets/rows.rs" },
+    { path = "egui::Ui::checkbox", reason = "use crate::widgets::checkbox, whose box fits the row (egui's leaves a 9.5 pt joint)" },
+    { path = "egui::Checkbox::new", reason = "use crate::widgets::checkbox, whose box fits the row (egui's leaves a 9.5 pt joint)" },
+    { path = "egui::Checkbox::without_text", reason = "use crate::widgets::checkbox_box" },
+    { path = "egui::ComboBox::show_ui", reason = "use crate::widgets::choice_row, or pass the ComboBox to crate::widgets::selected_combo" },
+    { path = "egui::ComboBox::show_index", reason = "use crate::widgets::choice_row, or pass the ComboBox to crate::widgets::selected_combo" },
 ]

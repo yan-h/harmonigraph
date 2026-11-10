@@ -438,18 +438,25 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
         ) as u16;
         p.radius =
             adaptive_value(ui, (p.radius.into(), fresh.radius.into()), 1..=5, 1.0, "Search radius", " steps", "Candidates may lie at most this many lattice steps away in total: |fifths| + |thirds| + |sevenths|, over the enabled axes. Larger radii consider more tuning alternatives and cost more processing.").max(1) as u8;
-        const AXES_HINT: &str =
-            "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.";
-        crate::widgets::choice_row(
-            ui,
-            "Search axes",
-            &mut p.axes,
-            &[
-                (1, "Fifths", AXES_HINT),
-                (2, "Fifths + thirds", AXES_HINT),
-                (3, "Fifths + thirds + sevenths", AXES_HINT),
-            ],
+        crate::widgets::label(ui, "Search axes").on_hover_text(
+            "Lattice axes the adaptive tuner may use when looking for a note's candidate pitches.",
         );
+        theme::reserve_scroll_gutter(ui);
+        egui::ScrollArea::horizontal().id_salt("adaptive-axes-scroll").show(ui, |ui| {
+            crate::widgets::selected_combo(
+                ui,
+                egui::ComboBox::from_id_salt("adaptive-axes").selected_text(match p.axes {
+                    1 => "Fifths",
+                    2 => "Fifths + thirds",
+                    _ => "Fifths + thirds + sevenths",
+                }),
+                |ui| {
+                    ui.selectable_value(&mut p.axes, 1, "Fifths");
+                    ui.selectable_value(&mut p.axes, 2, "Fifths + thirds");
+                    ui.selectable_value(&mut p.axes, 3, "Fifths + thirds + sevenths");
+                },
+            );
+        });
         keyboard_controls(ui, state, params);
         super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
             .response

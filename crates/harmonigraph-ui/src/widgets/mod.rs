@@ -45,7 +45,7 @@ pub use range::RangeBar;
 pub use rows::{button_row, checkbox, choice_row, record_button, row_field, toggle_switch};
 pub(crate) use rows::{
     checkbox_box, checkbox_indeterminate, choice_buttons, option_button, preset_row,
-    toggle_switch_width, CHECKBOX_BOX,
+    selected_combo, toggle_switch_width, CHECKBOX_BOX,
 };
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
