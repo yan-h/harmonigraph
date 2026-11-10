@@ -463,9 +463,7 @@ fn render_controls(
             ],
         );
         // Here rather than beside Finish recording: a render choice like Output
-        // size, which a queued export takes from the current look. Always shown,
-        // because whether it applies turns on the trigger a take was RECORDED
-        // under, not the one selected now.
+        // size, which a queued export takes from the current look.
         //
         // Stored in f64 seconds, which the export's frame count reads; the bar
         // edits an f32 copy and writes back only on an edit, so an untouched
@@ -479,7 +477,7 @@ fn render_controls(
             .hint(
                 "How long the video runs past the last recorded note or automation, so releases finish fading. \
                  The video always runs to the end of the recorded audio, so 0 ends an audio export at its \
-                 range end. A take recorded under Loop end ends with its loop and ignores this.",
+                 range end.",
             )
             .show(ui)
             .changed()

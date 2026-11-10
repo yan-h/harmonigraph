@@ -360,7 +360,7 @@ fn quad_margin(rim: f32, g: f32) -> f32 {
 }
 
 // Whether the fragment shader may stop early where it can prove it would
-// paint nothing (see `paint_reach` and the idle branch in `fs_main`). Only
+// paint nothing (see `paint_reach` and the idle branch in `node_geom`). Only
 // ever false in the parity test, which compiles a second pipeline with this
 // flipped and requires the two to render the same pixels — the early-outs
 // are an optimization, and the test is what keeps them one.
