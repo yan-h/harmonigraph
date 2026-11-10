@@ -682,13 +682,11 @@ impl NodeMotion {
         // count as late again, whatever the settings do next, so its cursor
         // has nothing left to guard. Skipping it bounds this scan by the last
         // few seconds of playing rather than by the whole roll. The longest
-        // a host can set is every animation field at the top of its range,
-        // spelled out field by field so a field added to the config has to
-        // say here what its longest is.
+        // a host can set has every field `departure` reads at the top of its
+        // range; `horizon` raises the spread itself.
         let longest = NoteAnimationConfig {
-            stagger_spread: *STAGGER_SPREAD_RANGE.end(),
-            radial_start: *crate::RADIAL_START_RANGE.end(),
             fade_out_delay: *crate::FADE_OUT_DELAY_RANGE.end(),
+            ..NoteAnimationConfig::default()
         };
         let retained = now - horizon.max(self::horizon(FADE_MAX, crate::MARK_DELAY_MAX, longest));
         let notes: Vec<_> = tracker
