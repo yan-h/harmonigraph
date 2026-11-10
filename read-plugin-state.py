@@ -35,6 +35,9 @@ JSON-quoted a second time (a persisted field is stored serialized), so it
 arrives as `"(version:..)"` and is decoded once more before parsing as RON.
 Its `appearance` member holds camera, view, spectrum and video settings;
 --appearance prints that complete document for the offline renderer.
+The Spiral's framing is read from `prefs:(spiral:..)`, where current builds
+save it, or else from a top-level `spiral:(..)`, where earlier builds did, so
+a project saved by either still shows it.
 This tries raw DEFLATE, zlib-wrapped DEFLATE and plaintext before giving up;
 nice-plug's optional zstd compression is not enabled in this build.
 """
@@ -285,12 +288,15 @@ def main() -> None:
             print(f"\n--- {name} ---")
             for field, value in split_ron(body):
                 print(f"  {field}: {value}")
-        # The Spiral's framing is an editor preference, saved under `prefs`
-        # beside the appearance rather than in it, since takes never draw the
-        # Spiral. Left out, a capture would silently drop the framing of one
-        # picture.
+        # The Spiral's framing is an editor preference, saved beside the
+        # appearance rather than in it, since takes never draw the Spiral.
+        # Current builds save it under `prefs`; earlier ones saved a top-level
+        # `spiral`, the shape existing projects still hold, so both are read.
+        # Left out, a capture would silently drop the framing of one picture.
         prefs = block(ui, "prefs")
         spiral = block(f"({prefs})", "spiral") if prefs is not None else None
+        if spiral is None:
+            spiral = block(ui, "spiral")
         if spiral is not None:
             print("\n--- spiral (editor framing) ---")
             for field, value in split_ron(spiral):
