@@ -389,6 +389,7 @@ The UI pass runs on every frame the link paces, drawn or not, so an idle editor 
 After the render decision, `paced_divisor` sets the link to the first of the app's chosen frames (`Queue::set_frame_divisor`) strictly past the next repaint deadline, which is the frame that would draw anyway (one exactly on it draws only if its UI pass runs no faster, so it is skipped), never more than `MAX_FRAME_GAP` (0.08 s) apart unless the chosen rate is.
 `MAX_FRAME_GAP` is public so the plugin can assert its 0.1 s stall threshold sits a refresh above it.
 A frame asked for at once (an animating editor, input, an egui animation) puts the chosen divisor back, and so does any event, before egui sees it (`on_event`), so input draws on the next refresh.
+A size change holds the chosen divisor for `RESIZE_HOLD` (0.2 s): on macOS a host resize is no event, only a size polled at the top of a frame, so an idling link stepped a border drag at the poll.
 What changes on another thread, a note, audio or a host parameter, is seen at the next deadline, up to one poll later than on a link that ran every refresh.
 Needs baseview Patch 7.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
