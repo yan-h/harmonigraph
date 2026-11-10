@@ -10,21 +10,26 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-fn engine(value: i32) -> TuningEngine {
-    match value {
-        1 => TuningEngine::Adaptive,
-        2 => TuningEngine::LatticeMap,
-        _ => TuningEngine::Off,
-    }
+/// The highest `lattice-map` value: the host numbers the document's slots.
+pub const LAST_MAP: i32 = MAP_CAPACITY as i32 - 1;
+
+/// The slot a `lattice-map` value selects, clamped as the host's label is.
+fn map_slot(value: i32) -> usize {
+    value.clamp(0, LAST_MAP) as usize
 }
 
-fn follow(value: i32) -> Follow {
-    match value {
-        1 => Follow::Thirds,
-        2 => Follow::ThirdsAndFifths,
-        _ => Follow::Off,
-    }
-}
+/// Each offset lane's host id, in [`LANES`] order. The ids are spelled again
+/// in the `#[id]` attributes on `HarmonigraphParams`, which take only a
+/// literal; `map_and_engine_parameters_keep_their_host_contract` holds each id
+/// to the parameter its lane names.
+pub const HOST_LANE_IDS: [&str; LANES.len()] = [
+    "map-fifths",
+    "map-thirds",
+    "map-sevenths",
+    "map-fifths-extension",
+    "map-thirds-extension",
+    "map-sevenths-extension",
+];
 
 /// The follow offset as one atomic word: it only ever moves fifths and thirds.
 pub fn pack(offset: LatticePos) -> u64 {
@@ -39,8 +44,9 @@ pub fn unpack(word: u64) -> LatticePos {
 /// reach an attack; the parameters mask it as well, because with no process
 /// callbacks running the Hub publishes nothing at all.
 fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
-    let following = engine(params.tuning_engine.value()) == TuningEngine::LatticeMap
-        && follow(params.map_follow.value()) != Follow::Off;
+    let following = TuningEngine::from_index(params.tuning_engine.value())
+        == TuningEngine::LatticeMap
+        && Follow::from_index(params.map_follow.value()) != Follow::Off;
     if following {
         unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
     } else {
@@ -48,19 +54,29 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
     }
 }
 
-pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
-    MapOffsets {
-        fine: LatticePos::new(
-            params.map_fifths.unmodulated_plain_value(),
-            params.map_thirds.unmodulated_plain_value(),
-            params.map_sevenths.unmodulated_plain_value(),
-        ),
-        extension: LatticePos::new(
-            params.map_fifths_extension.unmodulated_plain_value(),
-            params.map_thirds_extension.unmodulated_plain_value(),
-            params.map_sevenths_extension.unmodulated_plain_value(),
-        ),
+/// The host parameter behind one lane: the plugin's one place an axis and a
+/// grain name a field.
+pub(crate) fn lane_param(
+    params: &crate::HarmonigraphParams,
+    axis: MapAxis,
+    grain: MapOffsetLane,
+) -> &IntParam {
+    match (axis, grain) {
+        (MapAxis::Fifths, MapOffsetLane::Fine) => &params.map_fifths,
+        (MapAxis::Thirds, MapOffsetLane::Fine) => &params.map_thirds,
+        (MapAxis::Sevenths, MapOffsetLane::Fine) => &params.map_sevenths,
+        (MapAxis::Fifths, MapOffsetLane::Extension) => &params.map_fifths_extension,
+        (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
+        (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
     }
+}
+
+pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
+    let mut offsets = MapOffsets::default();
+    for (axis, grain) in LANES {
+        *offsets.lane_mut(axis, grain) = lane_param(params, axis, grain).unmodulated_plain_value();
+    }
+    offsets
 }
 
 pub fn offset(params: &crate::HarmonigraphParams) -> LatticePos {
@@ -85,15 +101,15 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     if editor.translated.is_some_and(|(read, _)| read != lanes) {
         editor.translated = None;
     }
-    let selected = params.map.value().clamp(0, 127) as usize;
+    let selected = map_slot(params.map.value());
     let offsets = offsets(params);
     let offset = offsets.total();
     let playback = MapPlayback {
-        engine: engine(params.tuning_engine.value()),
+        engine: TuningEngine::from_index(params.tuning_engine.value()),
         selected,
         offset,
         map: document.map(selected).map(|shape| translated(shape, offset)),
-        follow: follow(params.map_follow.value()),
+        follow: Follow::from_index(params.map_follow.value()),
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
@@ -121,26 +137,13 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         setter.set_parameter(param, value);
         setter.end_set_parameter(param);
     };
-    let axis_param = |axis, lane| match (axis, lane) {
-        (MapAxis::Fifths, MapOffsetLane::Fine) => &params.map_fifths,
-        (MapAxis::Thirds, MapOffsetLane::Fine) => &params.map_thirds,
-        (MapAxis::Sevenths, MapOffsetLane::Fine) => &params.map_sevenths,
-        (MapAxis::Fifths, MapOffsetLane::Extension) => &params.map_fifths_extension,
-        (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
-        (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
-    };
-    let selected = params.map.value().clamp(0, 127) as usize;
+    let selected = map_slot(params.map.value());
     // Whether the saved document changed, decided by each arm from what it
     // did rather than by its variant: a no-op edit must not mark the host
     // project modified.
     let document_changed = match edit {
         MapEdit::Engine(mode) => {
-            let value = match mode {
-                TuningEngine::Off => 0,
-                TuningEngine::Adaptive => 1,
-                TuningEngine::LatticeMap => 2,
-            };
-            set(&params.tuning_engine, value);
+            set(&params.tuning_engine, mode.index());
             false
         }
         MapEdit::Select(id) => {
@@ -161,15 +164,15 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             undone.is_some_and(|map| document.reshape(selected, map))
         }
         MapEdit::BeginOffset(axis, lane) => {
-            setter.begin_set_parameter(axis_param(axis, lane));
+            setter.begin_set_parameter(lane_param(params, axis, lane));
             false
         }
         MapEdit::Offset(axis, lane, value) => {
-            setter.set_parameter(axis_param(axis, lane), value);
+            setter.set_parameter(lane_param(params, axis, lane), value);
             false
         }
         MapEdit::EndOffset(axis, lane) => {
-            setter.end_set_parameter(axis_param(axis, lane));
+            setter.end_set_parameter(lane_param(params, axis, lane));
             false
         }
         MapEdit::Translate(step, lane) => {
@@ -183,7 +186,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
                     from.lanes().into_iter().zip(to.lanes())
                 {
                     if before != after {
-                        set(axis_param(axis, lane), after);
+                        set(lane_param(params, axis, lane), after);
                     }
                 }
                 params.map_editor.lock().translated = Some((seen, to));
@@ -191,12 +194,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             false
         }
         MapEdit::Follow(mode) => {
-            let value = match mode {
-                Follow::Off => 0,
-                Follow::Thirds => 1,
-                Follow::ThirdsAndFifths => 2,
-            };
-            set(&params.map_follow, value);
+            set(&params.map_follow, mode.index());
             false
         }
         MapEdit::Replace(destination) => {
@@ -353,11 +351,11 @@ impl AudioMaps {
                 self.bank_revision = Some(revision);
             }
         }
-        self.set_engine(engine(self.seed_mode));
-        self.playback.selected = self.seed_map.clamp(0, 127) as usize;
+        self.set_engine(TuningEngine::from_index(self.seed_mode));
+        self.playback.selected = map_slot(self.seed_map);
         self.offsets = self.seed_offset;
         self.playback.offset = self.offsets.total();
-        self.set_follow(follow(self.seed_follow));
+        self.set_follow(Follow::from_index(self.seed_follow));
         self.resolve();
         self.adopted = true;
         self.push(self.boundary.steady_time, config);
@@ -398,26 +396,20 @@ impl AudioMaps {
                 return;
             }
             if id == nice_plug::wrapper::hash_param_id("lattice-map") {
-                self.playback.selected = (value.round() as i32).clamp(0, 127) as usize;
+                self.playback.selected = map_slot(value.round() as i32);
             } else if id == nice_plug::wrapper::hash_param_id("tuning-engine") {
-                self.set_engine(engine(value.round() as i32));
+                self.set_engine(TuningEngine::from_index(value.round() as i32));
             } else if id == nice_plug::wrapper::hash_param_id("map-follow") {
-                self.set_follow(follow(value.round() as i32));
+                self.set_follow(Follow::from_index(value.round() as i32));
             } else {
                 // CLAP stepped values are indices from zero, unlike saved/plain params.
                 let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;
-                let component = [
-                    ("map-fifths", &mut self.offsets.fine.threes),
-                    ("map-thirds", &mut self.offsets.fine.fives),
-                    ("map-sevenths", &mut self.offsets.fine.sevens),
-                    ("map-fifths-extension", &mut self.offsets.extension.threes),
-                    ("map-thirds-extension", &mut self.offsets.extension.fives),
-                    ("map-sevenths-extension", &mut self.offsets.extension.sevens),
-                ]
-                .into_iter()
-                .find(|(name, _)| id == nice_plug::wrapper::hash_param_id(name));
-                let Some((_, component)) = component else { return };
-                *component = step;
+                let lane = HOST_LANE_IDS
+                    .into_iter()
+                    .zip(LANES)
+                    .find(|(name, _)| id == nice_plug::wrapper::hash_param_id(name));
+                let Some((_, (axis, grain))) = lane else { return };
+                *self.offsets.lane_mut(axis, grain) = step;
                 self.playback.offset = self.offsets.total();
             }
             self.resolve();

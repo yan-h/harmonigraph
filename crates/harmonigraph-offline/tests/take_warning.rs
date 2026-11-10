@@ -11,9 +11,9 @@
 //! (`a_take_missing_note_history_is_exported_with_a_warning` in the binary
 //! covers that): that the loop RUNS at all, and that it runs **before** the
 //! command line is judged. The second is a contract with `harmonigraph-record`'s
-//! `follow`, which takes the FIRST `warning:` line for the Video pane's status
-//! line — so a complaint about flags reaching stderr first would take the
-//! status line away from the take's missing history.
+//! `follow`, which takes the FIRST `warning:` line for the export job's row —
+//! so a complaint about flags reaching stderr first would take the row away
+//! from the take's missing history.
 
 use harmonigraph_take::{CanonicalRecord, Header, NoteKind, NoteRecord, Record};
 

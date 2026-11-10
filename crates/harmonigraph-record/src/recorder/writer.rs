@@ -13,12 +13,15 @@ mod canonical_tests;
 #[cfg(test)]
 mod tests;
 
-/// The render request a fixture's Stop has to carry, aimed at a program that
-/// does not exist: a take that finishes launches nothing, and its render
-/// leaves only "could not run" on its export job's detail.
-#[cfg(test)]
-fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
-    RenderRequest { program: directory.join("no-such-renderer"), appearance: None, notice: None }
+/// A real writer whose takes land in `directory` and whose renders are aimed at
+/// a program that does not exist there: a take that finishes launches nothing,
+/// and its render leaves only "could not run" on its export job's detail.
+#[cfg(all(test, feature = "test-support"))]
+fn worker_in(directory: &std::path::Path) -> (Recorder, Control) {
+    let (recorder, control) = channel();
+    *control.fence.test_directory.lock() = Some(directory.to_path_buf());
+    testing::set_renderer_program(&control, directory.join("no-such-renderer"));
+    (recorder, control)
 }
 
 /// The WAV every fixture's take opens: [`TAKE_CHANNELS`], as `Control::start`
@@ -38,19 +41,16 @@ pub fn channel() -> (Recorder, Control) {
     let (display, display_consumer) = publication::channel();
     let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
     let (commands, orders) = mpsc::channel::<Command>();
-    let dropped = Arc::new(AtomicU64::new(0));
+    let recorder =
+        Recorder::new(producer, audio_producer, publication, display, Some(commands.clone()));
     let recording = Arc::new(AtomicBool::new(false));
-    let rolling = Arc::new(AtomicBool::new(false));
-    let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let latches = Arc::new(TakeLatches::default());
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
     let progress = Arc::new(Progress::default());
     let render = Arc::new(RenderControl::default());
 
-    let fence = Arc::new(RecordFence::default());
-    let thread_fence = fence.clone();
-    let thread_latches = latches.clone();
+    let thread_fence = recorder.fence.clone();
+    let thread_latches = recorder.latches.clone();
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
@@ -95,10 +95,10 @@ pub fn channel() -> (Recorder, Control) {
                         }
                     }
                 }
-                Ok(Command::Stop(epoch, render)) => {
+                Ok(Command::Stop(epoch)) => {
                     #[cfg(all(test, feature = "test-support"))]
                     { processed_stop = true; }
-                    pump.pending_stop = Some((epoch, render));
+                    pump.pending_stop = Some(epoch);
                     if !pump.failure.contains(epoch) {
                         *thread_status.lock() = FINISHING.into();
                     }
@@ -130,11 +130,12 @@ pub fn channel() -> (Recorder, Control) {
             // Before the shutdown check below, so a take sealed by the same
             // pass that observed the disconnect is published and rendered
             // rather than going with the thread.
-            if let Some((path, render)) = pumped.finished {
+            if let Some((path, notice)) = pumped.finished {
                 #[cfg(all(test, feature = "test-support"))]
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
-                spawn_render(*render, path, None, thread_progress.clone(), thread_render.clone());
+                let render = RenderRequest { appearance: None, notice };
+                spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {
@@ -151,45 +152,22 @@ pub fn channel() -> (Recorder, Control) {
         }
     });
 
-    (
-        Recorder {
-            _writer_lifetime: Some(commands.clone()),
-            publication,
-            display,
-            outage: publication::Lanes::default(),
-            fence: fence.clone(),
-            record_epoch: 0,
-            record_pass: 1,
-            closed_epoch: 0,
-            producer,
-            dropped: dropped.clone(),
-            last_params: [f32::NAN; ParamKey::ALL.len()],
-            lifecycle: State::Disarmed,
-            history: History::default(),
-            rolling: rolling.clone(),
-            audio_started: false,
-            run: 0,
-            run_live: false,
-            audio: audio_producer,
-            end_at_rewind: end_at_rewind.clone(),
-            latches: latches.clone(),
-        },
-        Control {
-            stop_wakeup: None,
-            display: Arc::new(Mutex::new(Some(display_consumer))),
-            fence,
-            commands,
-            dropped,
-            status,
-            last_take,
-            recording,
-            rolling,
-            end_at_rewind,
-            latches,
-            progress,
-            render,
-        },
-    )
+    let control = Control {
+        stop_wakeup: None,
+        display: Arc::new(Mutex::new(Some(display_consumer))),
+        fence: recorder.fence.clone(),
+        commands,
+        dropped: recorder.dropped.clone(),
+        status,
+        last_take,
+        recording,
+        rolling: recorder.rolling.clone(),
+        end_at_rewind: recorder.end_at_rewind.clone(),
+        latches: recorder.latches.clone(),
+        progress,
+        render,
+    };
+    (recorder, control)
 }
 
 /// Everything one writer carries between passes of the pump: the file it is
@@ -210,8 +188,8 @@ struct Pump {
     open: Option<Recording>,
     fanout: CanonicalFanout,
     failure: FailureAccount,
-    /// The Stop whose prefix is not closed yet, and the render it asked for.
-    pending_stop: Option<(u64, Box<RenderRequest>)>,
+    /// The epoch of the Stop whose prefix is not closed yet.
+    pending_stop: Option<u64>,
     /// No further command can arrive, so unresolved ownership is lost.
     disconnected: bool,
 }
@@ -221,8 +199,9 @@ struct Pump {
 struct Pumped {
     /// Either lane had something, so the writer must not sleep yet.
     worked: bool,
-    /// A take sealed this pass: where it landed, and the render Stop carried.
-    finished: Option<(std::path::PathBuf, Box<RenderRequest>)>,
+    /// A take sealed this pass: where it landed, and the notice its render
+    /// carries — why the take ended early, which only this pass knows.
+    finished: Option<(std::path::PathBuf, Option<&'static str>)>,
     /// Both lanes are drained and no command can arrive: the thread returns.
     shutdown: bool,
 }
@@ -299,8 +278,8 @@ impl Pump {
             }
             if self.failure.contains(fence.epoch()) {
                 // Stop may arrive after the files were already accounted.
-                // Its render request is disposed here on the worker, and
-                // the failure status remains visible without another callback.
+                // It is disposed here on the worker, unrendered, and the
+                // failure status remains visible without another callback.
                 self.pending_stop = None;
                 fence.finishing.store(false, Ordering::Release);
                 #[cfg(all(test, feature = "test-support"))]
@@ -308,17 +287,15 @@ impl Pump {
             }
         } else if self
             .pending_stop
-            .as_ref()
-            .is_some_and(|(epoch, _)| self.open.as_ref().is_some_and(|o| o.ready(*epoch)))
+            .is_some_and(|epoch| self.open.as_ref().is_some_and(|o| o.ready(epoch)))
         {
-            let (_, mut render) = self.pending_stop.take().unwrap();
+            self.pending_stop = None;
             if let Some(path) = finish_ready(&mut self.open, fence.epoch(), fence) {
                 // All admitted callbacks have retired. Capture their final
                 // reason before releasing finishing: the next Start clears
                 // these shared latches, but this render must retain its own.
-                if self.latches.end() == Some(End::ForwardSeek) {
-                    render.notice = Some("take ended before a forward transport seek");
-                }
+                let notice = (self.latches.end() == Some(End::ForwardSeek))
+                    .then_some("take ended before a forward transport seek");
                 // Publish before Start is permitted again. An error may
                 // already own the line; completion only retires its own
                 // finishing message, under the same lock as a refused Start.
@@ -329,7 +306,7 @@ impl Pump {
                     status.clear();
                 }
                 fence.finishing.store(false, Ordering::Release);
-                pumped.finished = Some((path, render));
+                pumped.finished = Some((path, notice));
             }
         }
         // Shutdown uses the same cross-lane pump and honors a now-ready

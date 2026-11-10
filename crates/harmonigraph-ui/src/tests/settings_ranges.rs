@@ -676,64 +676,97 @@ fn a_fresh_appearance_is_a_fixed_point_of_its_own_normalize() {
     );
 }
 
-/// Every `key:value` at the top level of one serialized struct, in order. The
-/// depth count is what keeps a nested struct's own commas out of the split.
-///
-/// A narrower walk than `tests::persist`'s `top_level_pairs`, which takes a
-/// whole blob apart and is that module's own.
-fn top_level(serialized: &str) -> Vec<(&str, &str)> {
-    let inner = serialized
-        .strip_prefix('(')
-        .and_then(|rest| rest.strip_suffix(')'))
-        .expect("a serialized struct is parenthesized");
-    let (mut fields, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
-    for (at, c) in inner.char_indices() {
-        match c {
-            '(' | '[' => depth += 1,
-            ')' | ']' => depth -= 1,
-            ',' if depth == 0 => {
-                fields.push(&inner[start..at]);
-                start = at + 1;
+/// Walk the fresh appearance against its poisoned copy as RON values, through
+/// every struct, sequence, `Some` and enum payload, collecting the path of each
+/// float the poison left as it was. An option still empty after the poison
+/// counts as left as it was, since what it would hold is unclassified; a value
+/// whose shape the poison changed fails, naming its path, rather than being
+/// skipped with everything under it.
+fn unpoisoned_floats(
+    path: &str,
+    opened: &ron::Value,
+    poisoned: &ron::Value,
+    dialled: &mut usize,
+    missed: &mut Vec<String>,
+) {
+    use ron::{value::Number, Value};
+    match (opened, poisoned) {
+        (Value::Map(opened), Value::Map(poisoned)) => {
+            for (key, value) in opened.iter() {
+                let Value::String(name) = key else { panic!("{path} has an unnamed key") };
+                let path = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
+                let again =
+                    poisoned.get(key).unwrap_or_else(|| panic!("{path} left the poisoned copy"));
+                unpoisoned_floats(&path, value, again, dialled, missed);
             }
-            _ => {}
         }
+        (Value::Seq(opened), Value::Seq(poisoned)) => {
+            assert_eq!(
+                opened.len(),
+                poisoned.len(),
+                "two serializations of {path} differ in length"
+            );
+            for (index, (value, again)) in opened.iter().zip(poisoned).enumerate() {
+                unpoisoned_floats(&format!("{path}[{index}]"), value, again, dialled, missed);
+            }
+        }
+        (Value::Option(Some(value)), Value::Option(Some(again))) => {
+            unpoisoned_floats(path, value, again, dialled, missed);
+        }
+        // An option the poison filled is dialled; one it left empty holds a
+        // float nobody classified, unless it is listed.
+        (Value::Option(None), Value::Option(Some(_))) => *dialled += 1,
+        (Value::Option(None), Value::Option(None)) => missed.push(path.to_string()),
+        (Value::Number(Number::F32(_) | Number::F64(_)), Value::Number(_)) => {
+            *dialled += 1;
+            if opened == poisoned {
+                missed.push(path.to_string());
+            }
+        }
+        (Value::Option(Some(_)), Value::Option(None)) => {
+            panic!("the poison emptied {path}, so nothing under it is checked")
+        }
+        _ if std::mem::discriminant(opened) == std::mem::discriminant(poisoned) => {}
+        _ => panic!("{path} changed shape under the poison: {opened:?} became {poisoned:?}"),
     }
-    fields.push(&inner[start..]);
-    fields.into_iter().map(|field| field.split_once(':').expect("a pair has a colon")).collect()
 }
 
-/// Compare one owner's direct float fields against its own serialized shape,
-/// so the hand-written poison inventory cannot silently leave one at default.
-/// RON decimal spelling is a heuristic, not type reflection: integers, choices,
-/// nested values and floats without a decimal point are not recognized here.
-fn assert_poisoned_float_fields<T: serde::Serialize>(label: &str, opened: &T, poisoned: &T) {
-    let opened = ron::to_string(opened).expect("settings serialize");
-    let poisoned = ron::to_string(poisoned).expect("settings serialize");
-    let (before, after) = (top_level(&opened), top_level(&poisoned));
-    assert_eq!(before.len(), after.len(), "two serializations of {label} differ in length");
-    let (mut dialled, mut missed) = (0, Vec::new());
-    for ((key, was), (again, now)) in before.into_iter().zip(after) {
-        assert_eq!(key, again, "two serializations of {label} named different fields");
-        if !was.contains('.') || was.parse::<f32>().is_err() {
-            continue;
-        }
-        dialled += 1;
-        if was == now {
-            missed.push(key);
-        }
-    }
-    assert!(missed.is_empty(), "the loaded-state guard never poisons {label} {missed:?}");
-    // Detect an owner going wholly unrecognized if RON's spelling changes.
-    // This does not prove that every float spelling was recognized.
-    assert!(dialled > 0, "none of {label}'s fields read as dialled floats");
-}
+/// The floats `poison` leaves at their fresh value on purpose, as exact paths
+/// grouped under one reason each. A new float beside them is not covered by
+/// its neighbours: it fails until it is poisoned or listed.
+const UNPOISONED: &[(&[&str], &str)] = &[
+    (
+        &["camera.target[0]", "camera.target[1]", "camera.target[2]"],
+        "where the orbit looks, set by panning and framing: no bar and no range, so \
+         its load repair only refuses a non-finite one",
+    ),
+    (
+        &[
+            "view.pitch_gradient.hue_start",
+            "view.pitch_gradient.hue_span",
+            "view.pitch_gradient.lightness",
+            "view.pitch_gradient.lightness_ramp",
+            "view.pitch_gradient.chroma",
+            "view.pitch_gradient.chroma_ramp",
+            "view.pitch_gradient.bend.at",
+            "view.pitch_gradient.bend.share",
+            "spectrum.spectrogram_gradient.hue_start",
+            "spectrum.spectrogram_gradient.hue_span",
+            "spectrum.spectrogram_gradient.lightness",
+            "spectrum.spectrogram_gradient.lightness_ramp",
+            "spectrum.spectrogram_gradient.chroma",
+            "spectrum.spectrogram_gradient.chroma_ramp",
+            "spectrum.spectrogram_gradient.bend.at",
+            "spectrum.spectrogram_gradient.bend.share",
+        ],
+        "gradients are outside this guard (module header)",
+    ),
+];
 
-/// Every direct float in these owners belongs in the poison fixture. The
-/// nested owners also contain choices/booleans; only their floats are checked.
-/// Owners mixing dialled and non-dialled floats (such as gradients) need their
-/// own treatment, and future nested owners must be added explicitly. This is
-/// fixture completeness, not discovery of controls: the conditional scenarios,
-/// real bar probes and visit assertions above still establish UI coverage.
+/// Every float the fresh appearance holds belongs in the poison fixture,
+/// unless [`UNPOISONED`] names it. This is fixture completeness, not discovery
+/// of controls: the conditional scenarios, real bar probes and visit
+/// assertions above still establish UI coverage.
 #[test]
 fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     let opened = fresh();
@@ -741,42 +774,20 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     poison(&mut saved, Edge::High);
     let old = &opened.picture.appearance;
     let new = &saved.picture.appearance;
-    assert_poisoned_float_fields("view", &old.view, &new.view);
-    // The two owners still hand-listed in `poison` whose OWN completeness
-    // nothing checked. Neither is short a field today; both are where the next
-    // added float would have gone missing quietly, this range alone having
-    // removed one from `camera` and reshaped `spectrum`'s surroundings.
-    assert_poisoned_float_fields("camera", &old.camera, &new.camera);
-    assert_poisoned_float_fields("spectrum", &old.spectrum, &new.spectrum);
-    assert_poisoned_float_fields(
-        "view.note_animation",
-        &old.view.note_animation,
-        &new.view.note_animation,
+    let value = |text: String| ron::from_str::<ron::Value>(&text).expect("an appearance is RON");
+    let (mut dialled, mut missed) = (0, Vec::new());
+    let (before, after) = (value(old.serialize()), value(new.serialize()));
+    unpoisoned_floats("", &before, &after, &mut dialled, &mut missed);
+    // Detect the appearance going wholly unrecognized if RON's value model
+    // changes.
+    assert!(dialled > 0, "none of the appearance's fields read as floats");
+    let exempt: Vec<&str> =
+        UNPOISONED.iter().flat_map(|(paths, _)| paths.iter().copied()).collect();
+    let stale: Vec<_> = exempt.iter().filter(|path| !missed.iter().any(|m| m == *path)).collect();
+    missed.retain(|path| !exempt.contains(&path.as_str()));
+    assert!(missed.is_empty(), "the loaded-state guard never poisons {missed:?}");
+    assert!(
+        stale.is_empty(),
+        "UNPOISONED names floats the guard poisons or that are gone: {stale:?}"
     );
-    assert_poisoned_float_fields("view.intensity", &old.view.intensity, &new.view.intensity);
-    let sources = |i: &harmonigraph_scene::IntensitySettings| {
-        [("velocity", i.velocity), ("gain", i.gain), ("pressure", i.pressure), ("timbre", i.timbre)]
-    };
-    for (name, source) in sources(&new.view.intensity) {
-        let serialized = ron::to_string(&source).unwrap();
-        for (target, value) in top_level(&serialized) {
-            assert_eq!(
-                ron::from_str::<Option<f32>>(value).unwrap(),
-                Some(1.0e6),
-                "the loaded-state guard never poisons {name}.{target}"
-            );
-        }
-    }
-    assert_poisoned_float_fields("view.glow_curve", &old.view.glow_curve, &new.view.glow_curve);
-    assert_poisoned_float_fields("view.atmosphere", &old.view.atmosphere, &new.view.atmosphere);
-    assert_poisoned_float_fields(
-        "spectrum.atmosphere",
-        &old.spectrum.atmosphere,
-        &new.spectrum.atmosphere,
-    );
-    for (index, (before, after)) in
-        old.view.shadow.groups().into_iter().zip(new.view.shadow.groups()).enumerate()
-    {
-        assert_poisoned_float_fields(&format!("view.shadow[{index}]"), &before, &after);
-    }
 }

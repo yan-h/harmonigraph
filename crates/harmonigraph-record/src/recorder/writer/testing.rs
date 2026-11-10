@@ -87,10 +87,10 @@ impl Capture {
         self.fence.producer_close_pause.entered.load(Ordering::Acquire)
     }
     pub fn arm(&self) {
-        self.fence.intent.store((self.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+        self.fence.arm(self.fence.epoch() + 1);
     }
     pub fn stop(&self) {
-        self.fence.intent.fetch_and(!1, Ordering::AcqRel);
+        self.fence.disarm();
         self.fence.finishing.store(true, Ordering::Release);
     }
     pub fn drain_entries(&mut self) -> Vec<Entry> {
@@ -155,15 +155,13 @@ impl FileWriter {
             finished: None,
         }
     }
-    /// The Stop the GUI sends. Its render request is never launched: there is
-    /// no worker loop here to hand the finished take to `spawn_render`, which
-    /// has its own tests, so the request is dropped with it in [`drain`].
+    /// The Stop the GUI sends. Nothing is rendered: there is no worker loop
+    /// here to hand the finished take to `spawn_render`, which has its own
+    /// tests, so [`drain`] keeps only where the take landed.
     ///
     /// [`drain`]: Self::drain
     pub fn stop(&mut self) {
-        let unlaunched =
-            RenderRequest { program: std::path::PathBuf::new(), appearance: None, notice: None };
-        self.pump.pending_stop = Some((self.fence.epoch(), Box::new(unlaunched)));
+        self.pump.pending_stop = Some(self.fence.epoch());
     }
     pub fn drain(&mut self, capture: &mut Capture) {
         let pumped = self.pump.pass(
@@ -188,36 +186,10 @@ pub fn channel() -> (Recorder, Capture) {
     let (publication, publications) = publication::channel();
     let (display, displayed) = publication::channel();
     let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-    let dropped = Arc::new(AtomicU64::new(0));
-    let rolling = Arc::new(AtomicBool::new(false));
-    let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let fence = Arc::new(RecordFence::default());
-    let latches = Arc::new(TakeLatches::default());
-    let recorder = Recorder {
-        _writer_lifetime: None,
-        publication,
-        display,
-        outage: publication::Lanes::default(),
-        fence: fence.clone(),
-        record_epoch: 0,
-        record_pass: 1,
-        closed_epoch: 0,
-        producer,
-        audio,
-        dropped,
-        last_params: [f32::NAN; ParamKey::ALL.len()],
-        lifecycle: State::Disarmed,
-        history: History::default(),
-        rolling,
-        audio_started: false,
-        run: 0,
-        run_live: false,
-        end_at_rewind,
-        latches: latches.clone(),
-    };
+    let recorder = Recorder::new(producer, audio, publication, display, None);
     let capture = Capture {
-        fence,
-        latches,
+        fence: recorder.fence.clone(),
+        latches: recorder.latches.clone(),
         publications,
         displayed,
         _records: records,

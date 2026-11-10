@@ -109,6 +109,8 @@ so the directory sorts chronologically by name.
 A second take inside the same second gets `_1`, `_2`.
 (`LATTICE_TAKE_DIR` overrides the directory).
 The status line under the toggle says whether the take is waiting for playback, recording or paused, and how many events have landed.
+Once you stop it says `finishing…` until the take is sealed, then clears:
+the video's progress and outcome are on its export row under Render.
 
 The plugin also writes a WAV beside the take —
 always, with nothing to tick —
@@ -188,7 +190,7 @@ The latest recorded pass renders,
 including a pass containing audio without MIDI;
 earlier passes remain on disk.
 Under *Transport stop* or *Loop end*,
-the take finishes before the jump and the automatic render's status says “take ended before a forward transport seek”.
+the take finishes before the jump and the automatic render's export row says “take ended before a forward transport seek”.
 You can immediately record another take.
 That notice belongs to the automatic render;
 an explicit later re-render from disk does not repeat it.

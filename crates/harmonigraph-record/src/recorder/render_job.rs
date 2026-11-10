@@ -15,42 +15,23 @@ use std::{
 #[cfg(test)]
 mod tests;
 
-/// What to run once a take is complete.
+/// What one export asks of the renderer.
 ///
 /// The plugin does not render video; `harmonigraph-offline` does, with a
 /// headless GPU device and an ffmpeg pipe, neither of which belongs in a
 /// real-time audio plugin. This just launches it, off the audio thread
 /// and off the GUI thread, so a long render never touches the DAW.
 #[derive(Clone)]
-pub struct RenderRequest {
-    pub program: std::path::PathBuf,
-    /// A appearance document passed as `--appearance`, overriding the take's record-time
-    /// look — set for an Exports queue job so post-record settings reach the video;
-    /// `None` for auto-render (which uses the take's own recorded look).
-    pub appearance: Option<String>,
+pub(super) struct RenderRequest {
+    /// The appearance document passed as `--appearance`. An Exports queue job
+    /// sets it at queue time, so post-record settings reach the video; an
+    /// automatic render starts with `None`, and `spawn_render` fills it from
+    /// the take's header before queueing, so the job keeps the look the take
+    /// carried then. It stays `None` only for a take whose header has none.
+    pub(super) appearance: Option<String>,
     /// A session-local completion notice, owned by this request so a new
     /// recording cannot erase the reason an earlier render was cut short.
-    pub notice: Option<&'static str>,
-}
-
-impl RenderRequest {
-    /// The render that runs when a take finishes: its own recorded audio as the
-    /// spectrogram, laid out as the take's own spectrogram choice says, in the
-    /// take's own recorded look.
-    pub fn recorded() -> RenderRequest {
-        RenderRequest { program: default_renderer_path(), appearance: None, notice: None }
-    }
-
-    /// Build an explicit queued export with the appearance selected at queue
-    /// time (current, saved or recorded). The renderer takes the output size
-    /// from that appearance alone.
-    pub fn render_now(appearance: String) -> RenderRequest {
-        RenderRequest {
-            program: default_renderer_path(),
-            appearance: Some(appearance),
-            notice: None,
-        }
-    }
+    pub(super) notice: Option<&'static str>,
 }
 
 /// Where `load-plugin.sh` installs the renderer, and where the plugin
@@ -98,7 +79,8 @@ struct Queue {
 }
 #[derive(Default)]
 pub(super) struct RenderControl {
-    #[cfg(feature = "test-support")]
+    /// What a fixture launches instead of [`default_renderer_path`].
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) test_program: Mutex<Option<PathBuf>>,
     queue: Mutex<Queue>,
     child: Mutex<Option<InFlight>>,
@@ -114,6 +96,15 @@ struct InFlight {
 }
 
 impl RenderControl {
+    /// The renderer a job launches: the paired one, unless a fixture has
+    /// aimed this queue elsewhere.
+    fn program(&self) -> PathBuf {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(program) = self.test_program.lock().clone() {
+            return program;
+        }
+        default_renderer_path()
+    }
     pub(super) fn snapshots(&self, progress: &Progress) -> Vec<ExportJob> {
         self.queue
             .lock()
@@ -224,12 +215,8 @@ pub(super) fn spawn_render(
     }
     queue.next_id += 1;
     let id = queue.next_id;
-    // A name is taken by its archive copy's file too, so publishing one never
-    // has to overwrite a copy an earlier export left.
     let output = available_output(&take, |candidate| {
-        candidate.symlink_metadata().is_ok()
-            || archive_path(candidate).symlink_metadata().is_ok()
-            || queue.jobs.iter().any(|job| job.snapshot.output == candidate)
+        candidate.symlink_metadata().is_ok() || held(&queue.jobs, id, candidate)
     });
     queue.jobs.push(Job {
         capture_failed: error.is_some(),
@@ -315,6 +302,15 @@ fn available_output(take: &Path, mut occupied: impl FnMut(&Path) -> bool) -> Pat
     unreachable!()
 }
 
+/// Whether a video name is taken by something other than its own file: the
+/// archive copy an earlier export left there, which publishing must never
+/// overwrite, or another job's name. Enqueue also checks the video file;
+/// publishing leaves that to `hard_link`, which refuses it without a race.
+fn held(jobs: &[Job], id: u64, candidate: &Path) -> bool {
+    archive_path(candidate).symlink_metadata().is_ok()
+        || jobs.iter().any(|job| job.snapshot.id != id && job.snapshot.output == candidate)
+}
+
 fn output_candidate(take: &Path, suffix: u64) -> PathBuf {
     if suffix == 0 {
         take.with_extension("mp4")
@@ -362,11 +358,7 @@ fn run_job(
         std::fs::write(&appearance, blob)
             .map_err(|e| format!("could not save queued appearance: {e}"))?;
     }
-    #[cfg(feature = "test-support")]
-    let program = control.test_program.lock().clone().unwrap_or_else(|| request.program.clone());
-    #[cfg(not(feature = "test-support"))]
-    let program = &request.program;
-    let mut command = std::process::Command::new(program);
+    let mut command = std::process::Command::new(control.program());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -431,8 +423,7 @@ fn run_job(
     let mut output = job.output.clone();
     let mut suffix = 0;
     loop {
-        // The rule enqueue picks a name by: taken by either file.
-        let linked = if archive_path(&output).symlink_metadata().is_ok() {
+        let linked = if held(&queue.jobs, job.id, &output) {
             Err(std::io::ErrorKind::AlreadyExists.into())
         } else {
             std::fs::hard_link(&partial, &output)
@@ -442,14 +433,6 @@ fn run_job(
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 output = output_candidate(&job.take, suffix);
                 suffix += 1;
-                while queue
-                    .jobs
-                    .iter()
-                    .any(|j| j.snapshot.id != job.id && j.snapshot.output == output)
-                {
-                    output = output_candidate(&job.take, suffix);
-                    suffix += 1;
-                }
             }
             Err(e) => return Err(format!("could not publish video without overwriting: {e}")),
         }

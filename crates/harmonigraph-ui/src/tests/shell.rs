@@ -38,9 +38,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     let view = state.picture.appearance.view.clone();
     assert!(view.glow_reach > 0.0 && view.glow_strength > 0.0, "the fresh glow draws");
     let gain = view.glow_strength;
-    let span = f64::from(view.note_animation.fade_out_delay)
-        + f64::from(state.picture.runtime.frame_params.fade_time)
-            * (1.0 + f64::from(view.note_animation.stagger_spread));
+    let span = view.note_animation.departure(state.picture.runtime.frame_params.fade_time);
     assert!(span < 2.0, "the note's own departure ({span} s) must be over 3 s after the off");
 
     let ctx = super::probe::themed();
@@ -133,6 +131,30 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
     assert!(!crate::releasing(&state, 60.0), "a glow that does not draw held the loop awake");
+}
+
+/// A released note keeps the loop awake for its whole departure, the
+/// fade-out delay and then the stagger's sweep, and not past it. The span is
+/// written out here as numbers, so a departure that loses either term is
+/// caught rather than agreed with.
+#[test]
+fn a_released_note_keeps_repainting_through_its_staggered_departure() {
+    use harmonigraph_core::{NoteEvent, SourceId};
+
+    let mut state = fresh();
+    state.picture.appearance.spectrum.show_roll = false;
+    state.picture.appearance.view.glow_strength = 0.0;
+    let animation = &mut state.picture.appearance.view.note_animation;
+    animation.stagger_spread = 0.5;
+    animation.fade_out_delay = 0.4;
+    state.picture.runtime.frame_params.fade_time = 0.5;
+    state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+    state.picture.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
+
+    // 0.4 s of hold, then 0.5 s of fade for the first slice and the last
+    // starting half a fade later: 1.15 s past the off.
+    assert!(crate::releasing(&state, 1.0 + 1.1), "the departure was cut short");
+    assert!(!crate::releasing(&state, 1.0 + 1.2), "the loop stayed awake past the departure");
 }
 
 /// Feeds `seconds` of audio from `t` in 10 ms blocks, a full-scale A4 while
