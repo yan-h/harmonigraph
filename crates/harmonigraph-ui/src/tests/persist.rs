@@ -426,6 +426,7 @@ fn a_double_click_on_a_soft_edge_restores_the_fresh_pair() {
                     "Arm length",
                     (fresh.plus_arm, fresh.plus_taper),
                     |v| format!("{v:.2}"),
+                    "",
                 );
             },
         );

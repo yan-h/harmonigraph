@@ -16,41 +16,43 @@ pub(super) fn watercolor(
         .default_value(fresh.wash_size)
         .eased(true)
         .unit(1.0, "\u{d7}")
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Size of watercolor patches relative to the pane. 1× is about one twentieth of the pane's height; smaller values make finer grain and larger values make broader patches. The size follows the pane height.",
-        );
-    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Edge feathering").default_value(fresh.wash_fuzz).percent().show(ui).on_hover_text(
-        "Blend between neighboring watercolor patches. 0% makes hard-edged patches; 100% dissolves their edges. Does not change where each patch samples the picture.",
-    );
+        )
+        .show(ui);
+    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Edge feathering").default_value(fresh.wash_fuzz).percent()
+        .hint(
+            "Blend between neighboring watercolor patches. 0% makes hard-edged patches; 100% dissolves their edges. Does not change where each patch samples the picture.",
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Shape warp")
         .default_value(fresh.wash_lobe)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Distort round watercolor patches into lobes and streaks. 0% keeps them round; higher values stretch and bend their shapes.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.wash_refract, 0.0..=1.0, "Refraction")
         .default_value(fresh.wash_refract)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Pull the sampled picture toward each patch's center. 0% keeps the original picture; 100% gives each patch the level at its center.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.wash_randomness, 0.0..=1.0, "Random brightness")
         .default_value(fresh.wash_randomness)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Vary brightness between watercolor patches with balanced brightening and dimming, preserving the average color. Highlights vary less to avoid clipping. 0% keeps the original brightness.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Fine layer mix")
         .default_value(fresh.wash_layers)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
-        );
+        )
+        .show(ui);
 }
 
 /// Watercolor's tide line, which only the spectrogram draws.
@@ -63,25 +65,25 @@ pub(super) fn edge_pooling(
     ValueBar::new(&mut atmosphere.wash_pool, pool, "Edge pooling")
         .default_value(fresh.wash_pool)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Shade a patch along the edge of the patch painted over it, like pigment pooling at a dried edge. Above 0% it darkens; below 0% it lightens instead, like a bloom. Silence stays on the gradient's floor either way. Softer edges take less of it. 50% is the strength Watercolor first shipped with, and 400% can pool to black at hard edges.",
-        );
+        )
+        .show(ui);
     let width = harmonigraph_scene::WASH_POOL_WIDTH_MIN..=harmonigraph_scene::WASH_POOL_WIDTH_MAX;
     ValueBar::new(&mut atmosphere.wash_pool_width, width, "Pooling width")
         .default_value(fresh.wash_pool_width)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How far the edge shading reaches out from the edge, as a share of a patch's radius. Low values draw a thin line; high values a broad shadow. Does nothing while Edge pooling is 0%.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.wash_pool_softness, 0.0..=1.0, "Pooling softness")
         .default_value(fresh.wash_pool_softness)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How the edge shading fades. 0% is a nearly even band with a hard outer edge; 100% is strongest at the edge with a long soft tail. 75% is the original crescent. Does nothing while Edge pooling is 0%.",
-        );
+        )
+        .show(ui);
 }
 
 /// The starfield: pinpoints in depth drifting with parallax, and the one texture
@@ -106,10 +108,10 @@ pub(super) fn stars(
     ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
         .integer()
         .default_value(fresh.star_layers as f32)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and fewer layers drop the front-most. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed and solid share, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
-        );
+        )
+        .show(ui);
     // Solo is held per depth, and a solo left on a layer the count takes away
     // would come back on, unseen, when the count brings it back.
     if layers as u32 != atmosphere.star_layers {
@@ -131,31 +133,31 @@ pub(super) fn stars(
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .default_value(fresh.star_randomness)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How much stars vary in brightness, keeping their average. Low values follow the underlying light evenly; high values make a few bright stars among many faint ones.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.star_cover, 0.0..=1.0, "Cover")
         .default_value(fresh.star_cover)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How far a star hides the stars behind it. At 0% it hides them only where it is brighter, so a dim star never blacks out a bright one behind it, but overlaps favour the brighter star and the stars read a little brighter than the colour under them, more so with more Brightness variation. At 100% a star hides what is behind it by its own shape, dim or not, which keeps their average colour.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.star_size_variation, 0.0..=1.0, "Size variation")
         .default_value(fresh.star_size_variation)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How much stars shrink below their depth's Star size, each at random. 0% makes every star at a depth the same size; 100% ranges down to about a tenth. Stars never grow past Star size.",
-        );
+        )
+        .show(ui);
     ValueBar::new(&mut atmosphere.star_jitter, 0.0..=1.0, "Position variation")
         .default_value(fresh.star_jitter)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Brightness and size have their own bars, Brightness variation and Size variation.",
-        );
+        )
+        .show(ui);
 }
 
 /// One toggle per drawn layer, numbered back to front as `Star layers` counts
@@ -194,10 +196,10 @@ pub(super) fn stars_resolution(
     .default_value(fresh.star_resolution)
     .percent()
     .step(harmonigraph_scene::STAR_RESOLUTION_STEP)
-    .show(ui)
-    .on_hover_text(
+    .hint(
         "Resolution the stars are drawn at, relative to the pane, in quarters. 100% is the sharpest; 50% draws a quarter of the pixels, softer and faster. Star positions stay the same; a star smaller than a pixel of the image is drawn a pixel wide and dimmed to keep its light, so at lower resolutions small stars look bigger and fainter.",
-    );
+    )
+    .show(ui);
 }
 
 /// The stars' motion controls of their own beside `Drift direction`: how long
@@ -217,17 +219,17 @@ pub(super) fn stars_motion(
     .default_value(fresh.star_lifetime)
     .eased(true)
     .unit(1.0, " s")
-    .show(ui)
-    .on_hover_text(
+    .hint(
         "How long each star lives before a new one takes its place, alike at every layer. Twinkle says how it gives way.",
-    );
+    )
+    .show(ui);
     ValueBar::new(&mut atmosphere.star_twinkle_dip, 0.0..=1.0, "Twinkle")
         .default_value(fresh.star_twinkle_dip)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How far every star fades out when its lifetime ends, alike at every layer. At 100% each star fades to nothing and a new one appears somewhere else nearby. Below 100% each star stays in its place, dims only this far and changes into its next life's brightness and size. At 0% it never dims, so a layer packed tight enough to cover the sky never shows a gap.",
-        );
+        )
+        .show(ui);
 }
 
 /// The S1 body-light material; every body contributes its own sampled light.
@@ -240,36 +242,40 @@ pub(super) fn velvet(
         .default_value(fresh.velvet_size)
         .eased(true)
         .unit(1.0, "×")
-        .show(ui)
-        .on_hover_text("Size of each velvet scale. 1× is about six percent of the pane height.");
+        .hint("Size of each velvet scale. 1× is about six percent of the pane height.")
+        .show(ui);
     ValueBar::new(&mut s.velvet_variety, 0.0..=1.0, "Size variation")
         .default_value(fresh.velvet_variety)
         .percent()
-        .show(ui)
-        .on_hover_text(
-            "Variation in scale radius. 0% makes equal sizes; 50% is the Scales reference.",
-        );
+        .hint("Variation in scale radius. 0% makes equal sizes; 50% is the Scales reference.")
+        .show(ui);
     ValueBar::new(&mut s.velvet_edge, 0.01..=1.0, "Edge softness")
         .default_value(fresh.velvet_edge)
         .percent()
-        .show(ui)
-        .on_hover_text("Width of the transitions between overlapping scales.");
-    ValueBar::new(&mut s.velvet_irregularity, 0.0..=1.0, "Irregularity").default_value(fresh.velvet_irregularity).percent().show(ui).on_hover_text("Move scale centers off their grid and smoothly warp their placement. Drift moves this fixed field in one direction.");
+        .hint("Width of the transitions between overlapping scales.")
+        .show(ui);
+    ValueBar::new(&mut s.velvet_irregularity, 0.0..=1.0, "Irregularity").default_value(fresh.velvet_irregularity).percent()
+        .hint(
+            "Move scale centers off their grid and smoothly warp their placement. Drift moves this fixed field in one direction.",
+        )
+        .show(ui);
     ValueBar::new(&mut s.velvet_shape, 0.0..=1.0, "Scale shape")
         .default_value(fresh.velvet_shape)
         .percent()
-        .show(ui)
-        .on_hover_text("Round bodies at 0%; tapered overlapping scallops at 100%.");
+        .hint("Round bodies at 0%; tapered overlapping scallops at 100%.")
+        .show(ui);
     ValueBar::new(&mut s.velvet_square, 0.0..=1.0, "Squareness")
         .default_value(fresh.velvet_square)
         .percent()
-        .show(ui)
-        .on_hover_text("Round scales at 0%; squares at 100%. For a tiled grid, also set Tilt, Irregularity and Scale shape to 0%.");
+        .hint(
+            "Round scales at 0%; squares at 100%. For a tiled grid, also set Tilt, Irregularity and Scale shape to 0%.",
+        )
+        .show(ui);
     ValueBar::new(&mut s.velvet_tilt, 0.0..=1.0, "Tilt")
         .default_value(fresh.velvet_tilt)
         .percent()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "How far each scale turns off the pane's axes. 0% lines every scale up with the grid.",
-        );
+        )
+        .show(ui);
 }

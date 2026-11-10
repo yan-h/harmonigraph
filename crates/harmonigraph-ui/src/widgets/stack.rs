@@ -9,8 +9,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    bar_radius, bar_width, drag, grip_radius, paint_thumbs, poised, track_fill, BAR_TEXT_PAD,
-    HANDLE_INSET, HANDLE_W,
+    bar_radius, bar_width, drag, grip_radius, paint_thumbs, poised, track_fill, with_gestures,
+    BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use super::text_at;
 use crate::theme;
@@ -422,11 +422,21 @@ const NAMES: [&str; 4] = ["Inner", "Audio", "MIDI", "Marks"];
 /// [`RangeBar`]: super::range::RangeBar
 pub struct StackBar<'a> {
     view: &'a mut ViewConfig,
+    hint: Option<&'a str>,
 }
 
 impl<'a> StackBar<'a> {
     pub fn new(view: &'a mut ViewConfig) -> Self {
-        StackBar { view }
+        StackBar { view, hint: None }
+    }
+
+    /// What the hover says the setting is; the bar ends it with the
+    /// gestures it answers to (see [`ValueBar::hint`]).
+    ///
+    /// [`ValueBar::hint`]: super::value::ValueBar::hint
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -657,7 +667,9 @@ impl<'a> StackBar<'a> {
             &runs,
         );
 
-        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        // A double-click puts every layer back on a fresh view's.
+        with_gestures(response, self.hint, true, false)
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
 

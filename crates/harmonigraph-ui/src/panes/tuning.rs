@@ -52,6 +52,7 @@ fn interval_bar(
         ParamKey::Seven => current.seven_cents(),
         _ => unreachable!(),
     };
+<<<<<<< HEAD
     let linked = comma_deriving(key, state.runtime.tempered);
     // The host's own reset, which under a temperament releases the derived
     // axis the way an entered value does.
@@ -63,6 +64,10 @@ fn interval_bar(
         bar = bar.badge("↔");
     }
     let response = bar.show(ui).on_hover_text(match linked {
+=======
+    let linked = comma_deriving(key, &state.appearance.view);
+    let hint = match linked {
+>>>>>>> origin/main
         Some(comma) => format!(
             "{}: the {} follows {}. Enter an independent value to change the relationship.",
             comma.temperament(),
@@ -70,7 +75,18 @@ fn interval_bar(
             comma.derived_from()
         ),
         None => tuning_hint(key).to_owned(),
-    });
+    };
+    // The host's own reset, which under a temperament releases the derived
+    // axis the way an entered value does.
+    let mut bar = ValueBar::new(&mut value, key.range(), key.label())
+        .decimals(2)
+        .unit(1.0, "¢")
+        .default_value(key.default_value())
+        .hint(&hint);
+    if linked.is_some() {
+        bar = bar.badge("↔");
+    }
+    let response = bar.show(ui);
     if response.drag_started() {
         params.begin_set(key);
     }
@@ -211,7 +227,7 @@ pub(super) fn tuning_pane(
     now: f64,
 ) {
     section(ui, "Tuning", |ui| {
-        param_bar(ui, params, ParamKey::COffset).on_hover_text(tuning_hint(ParamKey::COffset));
+        param_bar(ui, params, ParamKey::COffset, tuning_hint(ParamKey::COffset));
         interval_bar(ui, state, params, ParamKey::Three);
         for comma in tuning::Comma::ALL {
             interval_row(ui, state, params, comma);
@@ -327,7 +343,7 @@ pub(super) fn tuning_pane(
     };
 
     section(ui, "Note matching", |ui| {
-        param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
+        param_bar(ui, params, ParamKey::Tolerance, tuning_hint(ParamKey::Tolerance));
     });
 
     use harmonigraph_core::lattice_map::TuningEngine;
@@ -838,27 +854,23 @@ fn instance_controls(
                 if row.max_delay > 1 {
                     let id = ui.id().with("delay-draft");
                     let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
-                    ui.horizontal_wrapped(|ui| {
-                        crate::widgets::label(ui, "Buffers of delay");
-                        let response =
-                            ui.add(egui::DragValue::new(&mut delay).range(1..=row.max_delay));
-                        // Commit one completed drag, preserving the draft between frames.
-                        let draft = ui.data(|data| data.get_temp::<u32>(id));
-                        if response.changed() {
-                            ui.data_mut(|data| data.insert_temp(id, delay));
-                        }
-                        if response.drag_stopped() || response.changed() && !response.dragged() {
-                            params.edit_tuning_instance(
-                                row.id,
-                                InstanceEdit::Delay(if response.changed() {
-                                    delay
-                                } else {
-                                    draft.unwrap_or(delay)
-                                }),
-                            );
-                            ui.data_mut(|data| data.remove::<u32>(id));
-                        }
-                    });
+                    let response = delay_bar(ui, &mut delay, row.max_delay, "Buffers of delay");
+                    // Commit one completed drag, preserving the draft between frames.
+                    let draft = ui.data(|data| data.get_temp::<u32>(id));
+                    if response.changed() {
+                        ui.data_mut(|data| data.insert_temp(id, delay));
+                    }
+                    if response.drag_stopped() || response.changed() && !response.dragged() {
+                        params.edit_tuning_instance(
+                            row.id,
+                            InstanceEdit::Delay(if response.changed() {
+                                delay
+                            } else {
+                                draft.unwrap_or(delay)
+                            }),
+                        );
+                        ui.data_mut(|data| data.remove::<u32>(id));
+                    }
                 } else {
                     delay_text.on_hover_text("Harmonigraph's own input needs one buffer.");
                 }
@@ -877,24 +889,21 @@ fn instance_controls(
                 .data(|data| data.get_temp::<((u64, u32), u32)>(id))
                 .filter(|&(from, _)| from == seed)
                 .map_or(tuner.delay, |(_, draft)| draft);
-            ui.horizontal_wrapped(|ui| {
-                crate::widgets::label(ui, "Buffers");
-                ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
-                if ui
-                    .button("Apply to all tuners")
-                    .on_hover_text(
-                        "Each tuner reports its own latency; Source details overrides one. \
-                         Harmonigraph's own input stays at one buffer.",
-                    )
-                    .clicked()
-                {
-                    for row in instances {
-                        if !row.is_hub {
-                            params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
-                        }
+            delay_bar(ui, &mut delay, tuner.max_delay, "Buffers");
+            if ui
+                .button("Apply to all tuners")
+                .on_hover_text(
+                    "Each tuner reports its own latency; Source details overrides one. \
+                     Harmonigraph's own input stays at one buffer.",
+                )
+                .clicked()
+            {
+                for row in instances {
+                    if !row.is_hub {
+                        params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
                     }
                 }
-            });
+            }
             ui.data_mut(|data| data.insert_temp(id, (seed, delay)));
         });
     }
@@ -905,6 +914,21 @@ fn instance_controls(
     {
         params.edit_tuning_instance(instances[0].id, InstanceEdit::Reset);
     }
+}
+
+/// A tuner's delay in whole buffers, from one to `max`. A double-click puts
+/// it back on one buffer, the fresh value of every tuner's `Tuning Delay`
+/// param (`harmonigraph-plugin`'s `TuneParams`). The caller commits the edit:
+/// the delay is the tuner's configuration, not the look, so nothing here
+/// reaches the appearance's undo.
+fn delay_bar(ui: &mut egui::Ui, delay: &mut u32, max: u32, label: &str) -> egui::Response {
+    let mut value = *delay as f32;
+    let response =
+        ValueBar::new(&mut value, 1.0..=max as f32, label).integer().default_value(1.0).show(ui);
+    if response.changed() {
+        *delay = value.round() as u32;
+    }
+    response
 }
 
 fn monitor_pitch(cents: f64) -> String {
@@ -934,8 +958,10 @@ fn adaptive_value(
     .unit(1.0, unit)
     .default_value(fresh as f32 / scale);
     bar = if scale == 1.0 { bar.integer() } else { bar.decimals(2) };
+    if !hint.is_empty() {
+        bar = bar.hint(hint);
+    }
     let response = bar.show(ui);
-    let response = if hint.is_empty() { response } else { response.on_hover_text(hint) };
     if response.changed() {
         (value * scale).round() as u32
     } else {
@@ -1201,58 +1227,69 @@ fn map_name_field(
     }
 }
 
-/// The offset lanes, Fine and Coarse per axis, and the total they place the
-/// shape at. Each drag is one host gesture per lane.
+/// The offset lanes, one row per axis with its Fine bar and its Coarse bar
+/// side by side, and the total they place the shape at. Each drag is one host
+/// gesture per lane.
+///
+/// Half a column each, so a bar's name is short: the axis on Fine, "Coarse"
+/// on its partner, and the full name in each hover. The census still reads
+/// the full name, as a caption is for.
 fn map_offsets(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn ParamBackend) {
-    use crate::lattice_maps::{MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
-    let mut fine = view.offsets.fine;
-    let mut extension = view.offsets.extension;
-    // A grid does not wrap, so under the narrowest column the dock can
-    // still draw it scrolls on its own rather than running off the pane.
-    theme::reserve_scroll_gutter(ui);
-    egui::ScrollArea::horizontal().id_salt("map-offsets-scroll").show(ui, |ui| {
-        egui::Grid::new("map-offsets").show(ui, |ui| {
-            for heading in ["Axis", "Fine", "Coarse", "Total"] {
-                crate::widgets::label(ui, heading);
-            }
-            ui.end_row();
-            for (label, fine, extension, axis) in [
-                ("Fifths", &mut fine.threes, &mut extension.threes, MapAxis::Fifths),
-                ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
-                ("Sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
-            ] {
-                crate::widgets::label(ui, label);
-                for (lane, value, scale) in [
-                    (MapOffsetLane::Fine, &mut *fine, 1),
-                    (MapOffsetLane::Extension, &mut *extension, EXTENSION_STEP),
-                ] {
-                    let response = ui.add(
-                        egui::DragValue::new(value)
-                            .range(-OFFSET_LIMIT..=OFFSET_LIMIT)
-                            .speed(0.1)
-                            .custom_formatter(move |value, _| {
-                                format!("{:.0}", value * f64::from(scale))
-                            })
-                            .custom_parser(move |text| {
-                                let value: i32 = text.trim().parse().ok()?;
-                                (value % scale == 0).then_some(f64::from(value / scale))
-                            }),
-                    );
-                    let one_shot =
-                        response.changed() && !response.dragged() && !response.drag_stopped();
-                    if response.drag_started() || one_shot {
-                        params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
-                    }
-                    if response.changed() {
-                        params.edit_lattice_map(MapEdit::Offset(axis, lane, *value));
-                    }
-                    if response.drag_stopped() || one_shot {
-                        params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
-                    }
-                }
-                crate::widgets::label(ui, (*fine + EXTENSION_STEP * *extension).to_string());
-                ui.end_row();
-            }
+    use crate::lattice_maps::{MapAxis, MapOffsetLane};
+    let axes =
+        [("Fifths", MapAxis::Fifths), ("Thirds", MapAxis::Thirds), ("Sevenths", MapAxis::Sevenths)];
+    for (name, axis) in axes {
+        ui.columns(2, |halves| {
+            let [fine, coarse] = halves else { unreachable!("asked for two columns") };
+            offset_lane(fine, view, params, axis, name, MapOffsetLane::Fine);
+            offset_lane(coarse, view, params, axis, name, MapOffsetLane::Extension);
         });
-    });
+    }
+    let total = view.offsets.total();
+    crate::widgets::label(
+        ui,
+        format!(
+            "Total: {} fifths, {} thirds, {} sevenths",
+            total.threes, total.fives, total.sevens
+        ),
+    );
+}
+
+/// One offset lane's bar, its edits sent to the host as one gesture: Fine
+/// captioned with its axis, Coarse with its own name.
+fn offset_lane(
+    ui: &mut egui::Ui,
+    view: &crate::lattice_maps::MapView,
+    params: &dyn ParamBackend,
+    axis: crate::lattice_maps::MapAxis,
+    name: &str,
+    lane: crate::lattice_maps::MapOffsetLane,
+) {
+    use crate::lattice_maps::{MapEdit, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
+    let (scale, caption, lane_name, steps) = match lane {
+        MapOffsetLane::Fine => (1, name, "fine", "single lattice steps"),
+        MapOffsetLane::Extension => (EXTENSION_STEP, "Coarse", "coarse", "steps of 10"),
+    };
+    let label = format!("{name} {lane_name}");
+    let hint = format!("{name}, {lane_name}: {steps}.");
+    let mut value = view.offsets.lane(axis, lane) as f32;
+    // Read out and typed in lattice steps, so Coarse reads 20 for two of its
+    // steps, and a typed 25 lands on 30.
+    let response = ValueBar::new(&mut value, -OFFSET_LIMIT as f32..=OFFSET_LIMIT as f32, &label)
+        .caption(caption)
+        .hint(&hint)
+        .integer()
+        .unit(scale as f32, "")
+        .default_value(0.0)
+        .show(ui);
+    let one_shot = response.changed() && !response.dragged() && !response.drag_stopped();
+    if response.drag_started() || one_shot {
+        params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
+    }
+    if response.changed() {
+        params.edit_lattice_map(MapEdit::Offset(axis, lane, value.round() as i32));
+    }
+    if response.drag_stopped() || one_shot {
+        params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
+    }
 }

@@ -49,7 +49,6 @@ pub(crate) use rows::{
 };
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
-pub(crate) use value::type_gesture;
 pub use value::{progress_bar, ValueBar};
 
 // The rest of the crate's own surface, and all of it is reached for from the

@@ -121,9 +121,10 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     }
     saved.workspace.interaction.prefs.ui_scale = v;
     poison!(saved.workspace.interaction.prefs.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
-    // These owners have NO ValueBar/RangeBar today. Still pass through their
-    // real load boundary; zero Video visits below explicitly records that its
-    // text/choice/divider controls are not range-guard coverage.
+    // These owners have NO ValueBar/RangeBar today, bar the Tail. Still pass
+    // through their real load boundary; the Video page's one visit below is
+    // the Tail, and its text/choice/divider controls are not range-guard
+    // coverage.
     saved.workspace.interaction.prefs.spiral.zoom = v;
     saved.workspace.interaction.prefs.spiral.look = glam::Vec2::splat(v);
     a.render.stop_bar = v as f64;
@@ -144,8 +145,8 @@ fn loaded(edge: Edge) -> SharedState {
     let mut normalized = state.picture.appearance.view.clone();
     normalized.sanitize();
     assert_eq!(state.picture.appearance.view, normalized);
-    // Spiral and take-render settings share the load boundary but currently
-    // have no recorded bar. Check their own normalization directly so adding
+    // Spiral and take-render settings share the load boundary but, bar the
+    // Tail, have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
     assert!((1.0..=8.0).contains(&state.workspace.interaction.prefs.spiral.zoom));
     assert!(state.workspace.interaction.prefs.spiral.look.length() <= 1.0);
@@ -503,7 +504,10 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
             "Accent hue",
             "Accent saturation",
         ]),
-        Tab::Video | Tab::Console => (),
+        // Stop at bar stays a drag value (its range runs to 100,000), and
+        // draws only under its trigger.
+        Tab::Video => labels.push("Tail"),
+        Tab::Console => (),
         _ => panic!("add the new settings page's bar inventory"),
     }
     if scenario.pane == Tab::LatticeSettings {
