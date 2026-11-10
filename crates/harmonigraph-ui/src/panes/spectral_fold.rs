@@ -510,7 +510,7 @@ impl RingLevels {
             };
             *level += (target - *level) * alpha;
             left = left.max(byte_left(seconds, *level, target));
-            (*level * 255.0).round() as u8
+            byte(*level)
         };
         for (bucket, level) in self.level.iter_mut().enumerate() {
             // The bucket's own centre pitch, because the tilt in `loudness` is
@@ -540,6 +540,17 @@ impl RingLevels {
     pub(crate) fn moving_until(&self) -> Option<f64> {
         self.until
     }
+
+    /// Every byte the last fill handed the shader, levels then colour levels.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        self.level.iter().chain(self.color_level.iter()).map(|&level| byte(level)).collect()
+    }
+}
+
+/// The byte the shader gets for a carried level.
+fn byte(level: f32) -> u8 {
+    (level * 255.0).round() as u8
 }
 
 /// Seconds a level carried toward `target` by [`hop_alpha`](crate::spectrum::hop_alpha)
@@ -550,7 +561,7 @@ fn byte_left(seconds: f32, level: f32, target: f32) -> f64 {
     let (from, to) = (level * 255.0, target * 255.0);
     // The last boundary the level can still cross, on its own side of the
     // target and strictly short of it.
-    // A level ON a boundary rounds half away from zero, as `fill` rounds it, so
+    // A level ON a boundary rounds half away from zero, as [`byte`] rounds it, so
     // one rising has its target's byte there and one falling does not yet.
     let boundary = if from < to { (to - 0.5).ceil() - 0.5 } else { (to + 0.5).floor() + 0.5 };
     if (from < to && from >= boundary) || (from > to && from < boundary) || from == to {

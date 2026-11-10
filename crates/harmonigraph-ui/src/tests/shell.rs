@@ -323,7 +323,7 @@ fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
 /// curve and the lattice ring settle seconds after the tone, and the editor
 /// idles then rather than a Span later. The ring answers from its own levels
 /// and its wedges' fade, so the lattice is drawn, and once the editor has gone
-/// still the lattice it draws does not move.
+/// still neither the lattice it draws nor the ring's bytes move.
 #[test]
 fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     let mut state = fresh();
@@ -331,21 +331,29 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     state.picture.appearance.spectrum.roll_seconds = 60.0;
     state.picture.appearance.spectrum.show_spectrogram = false;
     state.picture.appearance.view.spectral_ring_width = 0.1;
+    // Slow enough that the ring's levels settle last, after the curve and the
+    // wedges' fade, so the bytes compared below are what the loop waits on.
+    state.picture.appearance.view.spectral_ring_release = 0.6;
     assert!(state.picture.appearance.view.spectral_ring_draws(), "the ring is drawn");
     let panes = [Pane::Lattice, Pane::Spectral];
     let mut t = 0.0;
     stream(&ctx, &mut state, &mut t, 1.0, true, &panes);
     let mut ring_outlasted_the_display = false;
-    let mut still: Option<(f64, String)> = None;
+    let mut wedges_faded = false;
+    let mut still: Option<(f64, (String, Vec<u8>))> = None;
     for _ in 0..200 {
         stream(&ctx, &mut state, &mut t, 0.1, false, &panes);
         let runtime = &state.picture.runtime;
         let display = runtime.spectrum.moving_until();
         ring_outlasted_the_display |= runtime.ring_levels.moving_until() > display
             || runtime.ring_fade.moving_until() > display;
-        let nodes = format!("{:?}", state.picture.surfaces.spare_nodes);
+        wedges_faded |= runtime.ring_fade.moving_until().is_some();
+        let nodes =
+            (format!("{:?}", state.picture.surfaces.spare_nodes), runtime.ring_levels.bytes());
         match &still {
-            Some((at, drawn)) => assert_eq!(&nodes, drawn, "the lattice moved after {at}"),
+            Some((at, drawn)) => {
+                assert_eq!(&nodes, drawn, "the lattice or its ring moved after {at}")
+            }
             None if !Animating::of(&state, t).any() => still = Some((t, nodes)),
             None => {}
         }
@@ -354,6 +362,7 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
         }
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");
+    assert!(wedges_faded, "the ring's gate never opened, so its fade was never measured");
     let heard = state.picture.runtime.spectrum.last_audible().curve.unwrap();
     let (idle, _) = still.expect("the ring's release outlasted 20 s");
     assert!(idle - heard < 5.0, "idled {} s after the curve last held anything", idle - heard);

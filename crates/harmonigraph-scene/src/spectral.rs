@@ -1635,6 +1635,47 @@ mod tests {
         assert_eq!(twice, once, "a pane drawn twice ran the fade twice");
     }
 
+    /// [`RingFade::moving_until`] is what the frame loop stays awake for once
+    /// the gate turns over, so it has to be when the ring stops moving: a frame
+    /// drawn a hair before it still differs from the one before that, and one
+    /// drawn a hair after it is the ring for good. Both ways, on a straight and
+    /// a curved Fade, asked of the deadline the frame of the turn reports and
+    /// of one part way through.
+    #[test]
+    fn moving_until_is_when_the_ring_stops_changing() {
+        let wheel = wheel();
+        let view = gated(0.5, SpectralReading::Fold);
+        let sounding = gate_of(&view, partial(60.0, 10.0));
+        let silent = gate_of(&view, empty());
+        for shape in [0.0, 0.6] {
+            let env = Envelope { attack_time: 0.4, fade_time: 1.0, shape };
+            for (before, after) in [(&sounding, &silent), (&silent, &sounding)] {
+                // The ring drawn at each of `times`, the gate turning at 0.1 s,
+                // and what the fade said after.
+                let run = |times: &[f64]| {
+                    let mut fade = RingFade::default();
+                    let mut frame = |&now: &f64| {
+                        fade.advance(if now < 0.1 { before } else { after }, &env, now);
+                        (fade.level(&wheel, 0.0), fade.moving_until())
+                    };
+                    times.iter().map(&mut frame).collect::<Vec<_>>()
+                };
+                let times: Vec<f64> = (0..=200).map(|k| f64::from(k) * 0.01).collect();
+                let frames = run(&times);
+                for k in [10, 30] {
+                    let what = format!("shape {shape}, said at {}", times[k]);
+                    let until = frames[k].1.expect("the ring is on its way");
+                    let mut probe = times[..=k].to_vec();
+                    probe.extend([until - 0.01, until - 0.005, until + 0.005, until + 0.5]);
+                    let drawn = run(&probe);
+                    let [.., early, late, past, long] = &drawn[..] else { unreachable!() };
+                    assert_ne!(early.0, late.0, "{what}: still before {until}");
+                    assert_eq!(past.0, long.0, "{what}: moved after {until}");
+                }
+            }
+        }
+    }
+
     /// A ramp running DOWNWARD is pinned at `t` = 0 like any other, and there
     /// `t` = 0 is the ramp's BRIGHT end.
     ///
