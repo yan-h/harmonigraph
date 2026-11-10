@@ -308,6 +308,32 @@ impl Default for MapPlayback {
 pub const OFFSET_LIMIT: i32 = 9;
 pub const EXTENSION_STEP: i32 = 10;
 
+/// Every offset lane, in one fixed order: each axis at its fine grain, then
+/// each at its extension grain. The plugin's host lane ids follow this order.
+pub const LANES: [(MapAxis, MapOffsetLane); 6] = [
+    (MapAxis::Fifths, MapOffsetLane::Fine),
+    (MapAxis::Thirds, MapOffsetLane::Fine),
+    (MapAxis::Sevenths, MapOffsetLane::Fine),
+    (MapAxis::Fifths, MapOffsetLane::Extension),
+    (MapAxis::Thirds, MapOffsetLane::Extension),
+    (MapAxis::Sevenths, MapOffsetLane::Extension),
+];
+
+/// The one place an axis and a grain name a lane, over the lanes held as
+/// `[fine, extension]` of `[threes, fives, sevens]`, for reading and writing
+/// alike.
+fn pick<T>(axis: MapAxis, grain: MapOffsetLane, [fine, extension]: [[T; 3]; 2]) -> T {
+    let [threes, fives, sevens] = match grain {
+        MapOffsetLane::Fine => fine,
+        MapOffsetLane::Extension => extension,
+    };
+    match axis {
+        MapAxis::Fifths => threes,
+        MapAxis::Thirds => fives,
+        MapAxis::Sevenths => sevens,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapOffsets {
     pub fine: LatticePos,
@@ -327,33 +353,28 @@ impl MapOffsets {
         )
     }
 
-    /// Where one lane's value is held: the one place an axis and a lane name
-    /// a field.
-    pub fn lane_mut(&mut self, axis: MapAxis, lane: MapOffsetLane) -> &mut i32 {
-        let grain = match lane {
-            MapOffsetLane::Fine => &mut self.fine,
-            MapOffsetLane::Extension => &mut self.extension,
-        };
-        match axis {
-            MapAxis::Fifths => &mut grain.threes,
-            MapAxis::Thirds => &mut grain.fives,
-            MapAxis::Sevenths => &mut grain.sevens,
-        }
+    /// One lane's value.
+    pub fn lane(&self, axis: MapAxis, grain: MapOffsetLane) -> i32 {
+        let (f, e) = (self.fine, self.extension);
+        pick(axis, grain, [[f.threes, f.fives, f.sevens], [e.threes, e.fives, e.sevens]])
     }
 
-    /// Every lane with the value it holds, in one fixed order.
-    pub fn lanes(mut self) -> [(MapAxis, MapOffsetLane, i32); 6] {
-        use MapAxis::{Fifths, Sevenths, Thirds};
-        use MapOffsetLane::{Extension, Fine};
-        [
-            (Fifths, Fine),
-            (Thirds, Fine),
-            (Sevenths, Fine),
-            (Fifths, Extension),
-            (Thirds, Extension),
-            (Sevenths, Extension),
-        ]
-        .map(|(axis, lane)| (axis, lane, *self.lane_mut(axis, lane)))
+    /// Where one lane's value is held.
+    pub fn lane_mut(&mut self, axis: MapAxis, grain: MapOffsetLane) -> &mut i32 {
+        let (f, e) = (&mut self.fine, &mut self.extension);
+        pick(
+            axis,
+            grain,
+            [
+                [&mut f.threes, &mut f.fives, &mut f.sevens],
+                [&mut e.threes, &mut e.fives, &mut e.sevens],
+            ],
+        )
+    }
+
+    /// Every lane with the value it holds, in [`LANES`] order.
+    pub fn lanes(self) -> [(MapAxis, MapOffsetLane, i32); 6] {
+        LANES.map(|(axis, grain)| (axis, grain, self.lane(axis, grain)))
     }
 
     /// The lanes after `step` units of `lane` on each axis, or `None` when any
@@ -628,5 +649,19 @@ mod tests {
         assert_eq!(at(-3, 0).translated(up, MapOffsetLane::Extension), Some(at(-3, 1)));
         assert_eq!(at(9, 9).translated(up, MapOffsetLane::Fine), None, "+99 is the end");
         assert_eq!(at(0, -9).translated(down, MapOffsetLane::Extension), None);
+    }
+
+    /// `lane` and `lane_mut` each list the fields: a value written to one lane
+    /// reads back from that lane and lands in the field it names.
+    #[test]
+    fn each_lane_reads_back_what_was_written_to_it() {
+        let mut offsets = MapOffsets::default();
+        for (value, (axis, grain)) in (1..).zip(LANES) {
+            *offsets.lane_mut(axis, grain) = value;
+        }
+        let read: Vec<i32> = offsets.lanes().iter().map(|&(_, _, value)| value).collect();
+        assert_eq!(read, [1, 2, 3, 4, 5, 6]);
+        assert_eq!(offsets.fine, LatticePos::new(1, 2, 3));
+        assert_eq!(offsets.extension, LatticePos::new(4, 5, 6));
     }
 }

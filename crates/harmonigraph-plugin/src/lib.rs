@@ -709,12 +709,12 @@ impl Plugin for Harmonigraph {
         // state the plugin saves carries all of them, so only an older or
         // hand-made one omits any.
         use nice_plug::plugin::ParamValue;
-        for lane in &lattice_maps::HOST_LANES {
-            let value = match state.params.get(lane.id) {
+        for id in lattice_maps::HOST_LANE_IDS {
+            let value = match state.params.get(id) {
                 Some(ParamValue::I32(value)) => (*value).clamp(-OFFSET_LIMIT, OFFSET_LIMIT),
                 _ => 0,
             };
-            state.params.insert(lane.id.into(), ParamValue::I32(value));
+            state.params.insert(id.into(), ParamValue::I32(value));
         }
         let follow = match state.params.get("map-follow") {
             Some(ParamValue::I32(value)) => Follow::from_index(*value),
@@ -1039,7 +1039,16 @@ impl ClapPlugin for Harmonigraph {
         }
     }
     const CLAP_CONFIGURATION: bool = true;
-    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &lattice_maps::NON_MODULATABLE;
+    const CLAP_NON_MODULATABLE_PARAMS: &'static [&'static str] = &[
+        "lattice-map",
+        "map-fifths",
+        "map-thirds",
+        "map-sevenths",
+        "map-fifths-extension",
+        "map-thirds-extension",
+        "map-sevenths-extension",
+        "map-follow",
+    ];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
         &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
     const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
@@ -1645,7 +1654,7 @@ mod tests {
         let operational: Vec<&str> =
             ["analysis-input", "lattice-map", "tuning-engine", "map-follow"]
                 .into_iter()
-                .chain(lattice_maps::HOST_LANES.iter().map(|lane| lane.id))
+                .chain(lattice_maps::HOST_LANE_IDS)
                 .collect();
         for &id in &operational {
             assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");
@@ -1688,7 +1697,7 @@ mod tests {
         let fine: Vec<String> = (-9..=9).map(|value: i32| value.to_string()).collect();
         let extension: Vec<String> = (-9..=9).map(|value: i32| (value * 10).to_string()).collect();
         assert_eq!(
-            lattice_maps::HOST_LANES.map(|lane| lane.id),
+            lattice_maps::HOST_LANE_IDS,
             [
                 "map-fifths",
                 "map-thirds",
@@ -1698,6 +1707,23 @@ mod tests {
                 "map-sevenths-extension",
             ]
         );
+        // Each id is the parameter its lane in `LANES` names.
+        let host = params.param_map();
+        let lanes = harmonigraph_ui::lattice_maps::LANES;
+        for (id, (axis, grain)) in lattice_maps::HOST_LANE_IDS.into_iter().zip(lanes) {
+            let lane = lattice_maps::lane_param(&params, axis, grain);
+            assert!(
+                host.iter().any(|(host_id, ptr, _)| host_id == id
+                    && matches!(ptr, ParamPtr::IntParam(p) if std::ptr::eq(*p, lane))),
+                "{id} is not the {axis:?} {grain:?} lane"
+            );
+        }
+        let non_modulatable: Vec<&str> = ["lattice-map"]
+            .into_iter()
+            .chain(lattice_maps::HOST_LANE_IDS)
+            .chain(["map-follow"])
+            .collect();
+        assert_eq!(Harmonigraph::CLAP_NON_MODULATABLE_PARAMS, non_modulatable);
         for (param, name, labels) in [
             (&params.map_fifths, "Map Fifths", &fine),
             (&params.map_thirds, "Map Thirds", &fine),

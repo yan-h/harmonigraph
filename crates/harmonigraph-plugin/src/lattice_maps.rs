@@ -18,41 +18,18 @@ fn map_slot(value: i32) -> usize {
     value.clamp(0, LAST_MAP) as usize
 }
 
-/// One host offset lane: an axis, moved one step per value or, as an
-/// extension lane, [`EXTENSION_STEP`]. The ids are spelled again in the
-/// `#[id]` attributes on `HarmonigraphParams`, which take only a literal;
-/// `every_param_key_id_matches_the_host_facing_id` holds the two together.
-pub struct HostLane {
-    pub id: &'static str,
-    pub axis: MapAxis,
-    pub lane: MapOffsetLane,
-}
-
-pub const HOST_LANES: [HostLane; 6] = [
-    HostLane { id: "map-fifths", axis: MapAxis::Fifths, lane: MapOffsetLane::Fine },
-    HostLane { id: "map-thirds", axis: MapAxis::Thirds, lane: MapOffsetLane::Fine },
-    HostLane { id: "map-sevenths", axis: MapAxis::Sevenths, lane: MapOffsetLane::Fine },
-    HostLane { id: "map-fifths-extension", axis: MapAxis::Fifths, lane: MapOffsetLane::Extension },
-    HostLane { id: "map-thirds-extension", axis: MapAxis::Thirds, lane: MapOffsetLane::Extension },
-    HostLane {
-        id: "map-sevenths-extension",
-        axis: MapAxis::Sevenths,
-        lane: MapOffsetLane::Extension,
-    },
+/// Each offset lane's host id, in [`LANES`] order. The ids are spelled again
+/// in the `#[id]` attributes on `HarmonigraphParams`, which take only a
+/// literal; `map_and_engine_parameters_keep_their_host_contract` holds each id
+/// to the parameter its lane names.
+pub const HOST_LANE_IDS: [&str; LANES.len()] = [
+    "map-fifths",
+    "map-thirds",
+    "map-sevenths",
+    "map-fifths-extension",
+    "map-thirds-extension",
+    "map-sevenths-extension",
 ];
-
-/// The stepped selectors a host may automate but not modulate: the map, its
-/// lanes and Follow.
-pub const NON_MODULATABLE: [&str; HOST_LANES.len() + 2] = {
-    let mut ids = ["lattice-map"; HOST_LANES.len() + 2];
-    let mut lane = 0;
-    while lane < HOST_LANES.len() {
-        ids[lane + 1] = HOST_LANES[lane].id;
-        lane += 1;
-    }
-    ids[HOST_LANES.len() + 1] = "map-follow";
-    ids
-};
 
 /// The follow offset as one atomic word: it only ever moves fifths and thirds.
 pub fn pack(offset: LatticePos) -> u64 {
@@ -78,9 +55,13 @@ fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
 }
 
 /// The host parameter behind one lane: the plugin's one place an axis and a
-/// lane name a field.
-fn lane_param(params: &crate::HarmonigraphParams, axis: MapAxis, lane: MapOffsetLane) -> &IntParam {
-    match (axis, lane) {
+/// grain name a field.
+pub(crate) fn lane_param(
+    params: &crate::HarmonigraphParams,
+    axis: MapAxis,
+    grain: MapOffsetLane,
+) -> &IntParam {
+    match (axis, grain) {
         (MapAxis::Fifths, MapOffsetLane::Fine) => &params.map_fifths,
         (MapAxis::Thirds, MapOffsetLane::Fine) => &params.map_thirds,
         (MapAxis::Sevenths, MapOffsetLane::Fine) => &params.map_sevenths,
@@ -92,9 +73,8 @@ fn lane_param(params: &crate::HarmonigraphParams, axis: MapAxis, lane: MapOffset
 
 pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
     let mut offsets = MapOffsets::default();
-    for lane in &HOST_LANES {
-        *offsets.lane_mut(lane.axis, lane.lane) =
-            lane_param(params, lane.axis, lane.lane).unmodulated_plain_value();
+    for (axis, grain) in LANES {
+        *offsets.lane_mut(axis, grain) = lane_param(params, axis, grain).unmodulated_plain_value();
     }
     offsets
 }
@@ -424,10 +404,12 @@ impl AudioMaps {
             } else {
                 // CLAP stepped values are indices from zero, unlike saved/plain params.
                 let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;
-                let lane =
-                    HOST_LANES.iter().find(|lane| id == nice_plug::wrapper::hash_param_id(lane.id));
-                let Some(lane) = lane else { return };
-                *self.offsets.lane_mut(lane.axis, lane.lane) = step;
+                let lane = HOST_LANE_IDS
+                    .into_iter()
+                    .zip(LANES)
+                    .find(|(name, _)| id == nice_plug::wrapper::hash_param_id(name));
+                let Some((_, (axis, grain))) = lane else { return };
+                *self.offsets.lane_mut(axis, grain) = step;
                 self.playback.offset = self.offsets.total();
             }
             self.resolve();
