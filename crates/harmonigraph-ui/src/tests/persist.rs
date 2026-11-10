@@ -924,37 +924,92 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     assert!(!restored.picture.appearance.spectrum.show_spectrogram);
 }
 
-/// A key missing from a saved blob costs that key alone, at every depth: the
-/// rest of the document loads at the values it holds.
+/// The nested groups whose owner's `Default` deliberately builds them off their
+/// own bare default, as path prefixes with the reason each: a key missing
+/// INSIDE one comes back at the group's bare default, which is not the value a
+/// fresh save holds there. Any other key must come back at the fresh save's
+/// value. An entry no dropped key needs any more fails the sweep.
+const NESTED_DEFAULTS: &[(&str, &str)] = &[
+    (
+        "layout.below",
+        "the dock below the lattice has its own sizes; `Sizes` defaults to the right's",
+    ),
+    (
+        "appearance.view.pitch_gradient",
+        "the lattice's pitch gradient is a tuned look, not `Gradient`'s",
+    ),
+    (
+        "appearance.spectrum.spectrogram_gradient",
+        "the heatmap's gradient and its bend are tuned, not `Gradient`'s",
+    ),
+    ("appearance.view.atmosphere.material_settings", "the lattice glow's captured Watercolor"),
+    ("appearance.view.atmosphere.stars", "the lattice's captured stars, four layers of five"),
+    ("appearance.spectrum.atmosphere.material_settings", "the spectrogram's captured texture"),
+    ("appearance.spectrum.atmosphere.stars", "the spectrogram's captured stars"),
+    (
+        "appearance.view.shadow.lattice_geometry",
+        "each Shadow group is tuned apart from the bare `ShadowStyle` (see its `impl Default`)",
+    ),
+    ("appearance.view.shadow.lattice_text", "as `lattice_geometry`"),
+    ("appearance.view.shadow.spectral_text", "as `lattice_geometry`"),
+];
+
+/// A key missing from a saved blob costs that key alone, at every depth, and
+/// comes back at its fresh value.
 ///
 /// What makes it worth pinning is what the alternative COSTS. Nothing at a
 /// declaration says whether a struct carries its container-level
 /// `#[serde(default)]`, and without it a blob missing any one of its keys fails
 /// to parse — and a parse that fails loses the WHOLE editor state rather than
-/// that key: the camera, the dock and the view go with it. So the property is
-/// probed from the outside, over every key of every nested struct in turn,
-/// which is the shape a hand-edited RON or a `--appearance` file arrives in.
-/// A struct added without the attribute fails here rather than the day a blob
-/// is short of it.
+/// that key: the camera, the dock and the view go with it. A field-level
+/// default instead parses, but loads the key at the field type's own default
+/// (0, `false`) rather than at `impl Default`'s. So the property is probed from
+/// the outside, by dropping each key of every struct the save holds in turn —
+/// through `Some`, tuples and lists as well — which is the shape a hand-edited
+/// RON or a `--appearance` file arrives in.
 ///
-/// Asked of the parse `load_persist` runs, ahead of the version floor and of
-/// normalization: the floor refuses a blob without `version` on purpose
-/// (`a_blob_older_than_the_version_floor_is_refused_whole`), and normalization
-/// may rightly move a sibling of the dropped key, a gradient's ramp being
-/// clamped to fit the lightness it falls back to.
+/// Each drop asks three things:
+/// - the parse `load_persist` runs accepts the rest, and reserializes it with
+///   every other key at the value saved;
+/// - the dropped key comes back at the value a fresh save holds there, save
+///   inside [`NESTED_DEFAULTS`], inside a list a fresh save leaves empty, and
+///   for the editor's `version`, which reads as 0;
+/// - the real doors accept the blob: `load_persist` for every key but the
+///   top-level `version` (which the floor refuses on purpose,
+///   `a_blob_older_than_the_version_floor_is_refused_whole`), and
+///   `AppearanceDocument::parse` for every group of the appearance but its
+///   `version`. Values are not compared through the doors: normalization may
+///   rightly move a sibling of the dropped key, a gradient's ramp being clamped
+///   to fit the lightness it falls back to.
 ///
-/// The document is dialled off its defaults, so a section that sank and fell
-/// back to fresh shows up beside the key that was dropped. What the dropped key
-/// itself comes back as is its owner's `impl Default`, which for a nested
-/// struct is the struct's own bare default rather than its owner's copy; tests
-/// that pin a particular fallback stay beside this one. The structs inside a
-/// list never appear here, a dialled state's lists being empty:
-/// [`a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest`] is the
-/// layer in.
+/// The fixture is `dialled`, which moves a few values in the camera, view,
+/// spectrum, render and workspace off fresh, plus a camera preset and a stored
+/// look, so the walk reaches the structs inside a list, a tuple and a `Some`.
+/// Specific fallbacks (a preset's fields, the shadow groups' two sources) stay
+/// pinned by their own tests beside this one.
 #[test]
 fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
-    let saved = dialled().save_persist();
+    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
+
+    let mut state = dialled();
+    state.workspace.interaction.camera_presets.push(CameraPreset {
+        name: "reading".into(),
+        yaw: 0.7,
+        pitch: 0.2,
+    });
+    let mut stored = AppearanceDocument::default();
+    stored.spectrum.attack = 0.2;
+    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
+    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
+        .expect("a slot holding a look parses");
+    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
+    let saved = state.save_persist();
     let pairs = nested_pairs(&saved);
+    let fresh_save = fresh().save_persist();
+    let fresh_pairs: std::collections::HashMap<_, _> = nested_pairs(&fresh_save)
+        .into_iter()
+        .map(|(path, range)| (path, fresh_save[range].to_string()))
+        .collect();
     // The fixture has to reach the nested structs, or the sweep passes over
     // the top level alone and reads as coverage.
     for deep in [
@@ -966,11 +1021,20 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         "appearance.render.frame.split",
         "skin_dials.tint",
         "spiral.zoom",
+        "camera_presets[0].yaw",
+        "look_slots.stored[1].view.shadow.lattice_text.width",
     ] {
         assert!(pairs.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
     }
 
+    let under = |path: &str, owner: &str| {
+        path.strip_prefix(owner).is_some_and(|rest| rest.starts_with('.'))
+    };
+    let (mut needed, mut stale_values) = (std::collections::HashSet::new(), Vec::new());
     for (path, range) in &pairs {
+        // A blob without the editor's `version` reads as 0 and is refused
+        // whole on purpose, so neither its value nor the door applies.
+        let refused = path == "version";
         // The pair and the comma that separates it from a neighbour.
         let cut = if saved[range.end..].starts_with(',') {
             range.start..range.end + 1
@@ -983,17 +1047,49 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         let parsed = ron::from_str::<crate::state::UiPersist>(&without).unwrap_or_else(|e| {
             panic!("dropping {path} sank the whole document instead of costing itself: {e}")
         });
-        // Everything but the dropped key's own value must come back as saved:
-        // put the saved value back where the reparsed one stands and compare.
         let again = ron::to_string(&parsed).expect("a persist serializes");
         let (_, back) = nested_pairs(&again)
             .into_iter()
             .find(|(p, _)| p == path)
             .unwrap_or_else(|| panic!("dropping {path} lost the key from the next save"));
+        // The dropped key's own value.
+        let came_back = &again[back.clone()];
+        match fresh_pairs.get(path) {
+            Some(fresh) if !refused && came_back != fresh => {
+                match NESTED_DEFAULTS.iter().find(|(owner, _)| under(path, owner)) {
+                    Some((owner, _)) => drop(needed.insert(*owner)),
+                    None => {
+                        stale_values.push(format!("{path}: {came_back} where fresh is {fresh}"))
+                    }
+                }
+            }
+            _ => {}
+        }
+        // Everything else: put the saved value back where the reparsed one
+        // stands and compare.
         let masked =
             format!("{}{}{}", &again[..back.start], &saved[range.clone()], &again[back.end..]);
         assert_eq!(masked, saved, "dropping {path} changed more than {path}");
+
+        if !refused {
+            assert!(fresh().load_persist(&without), "load_persist refused a blob without {path}");
+        }
+        let group = path.strip_prefix("appearance.");
+        if group.is_some_and(|group| !group.contains('.') && group != "version") {
+            let (_, whole) = nested_pairs(&without)
+                .into_iter()
+                .find(|(p, _)| p == "appearance")
+                .expect("the appearance is still in the blob");
+            let document = &without[whole.start + "appearance:".len()..whole.end];
+            if let Err(e) = AppearanceDocument::parse(document) {
+                panic!("AppearanceDocument::parse refused an appearance without {path}: {e}");
+            }
+        }
     }
+    assert!(stale_values.is_empty(), "a dropped key did not load fresh: {stale_values:#?}");
+    let stale: Vec<_> =
+        NESTED_DEFAULTS.iter().filter(|(owner, _)| !needed.contains(owner)).collect();
+    assert!(stale.is_empty(), "NESTED_DEFAULTS names groups that load fresh: {stale:?}");
 }
 
 /// Workspace settings stay alongside one nested appearance document.
@@ -1022,9 +1118,10 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
     assert_eq!(keys, KEYS, "the persist blob's top-level keys have moved");
 }
-/// One layer in from [`a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest`]:
-/// the structs that live inside a list, `CameraPreset` and a stored slot's
-/// `Look`, which a fresh state never holds and so never sweeps.
+/// What a key dropped from a struct inside a list comes back as: `CameraPreset`
+/// and a stored slot's `Look`. [`a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest`]
+/// drops these keys too, but a fresh save holds no preset or look to compare
+/// the dropped value with.
 ///
 /// One preset and one stored look, each off its defaults, are written, and each
 /// key in turn is dropped from them. A struct added to a list without its own
@@ -1789,6 +1886,20 @@ fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
 
 /// [`top_level_pairs`], with each whole pair as its byte range in `blob`.
 fn pair_ranges(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    item_ranges(blob)
+        .into_iter()
+        .map(|range| {
+            let text = &blob[range.clone()];
+            (text[..text.find(':').expect("a pair has a colon")].to_string(), range)
+        })
+        .collect()
+}
+
+/// The top-level items of a serialized struct, tuple or list, as byte ranges
+/// in `blob`. Depth-aware, and string-aware only so far as to refuse a quoted
+/// string holding a character the depth count reads, which would mis-split
+/// silently.
+fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
     let lead = blob.len() - blob.trim_start().len();
     let trimmed = blob.trim();
     // Exactly ONE enclosing paren off each end. Trimming every one of them takes
@@ -1796,54 +1907,74 @@ fn pair_ranges(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
     // is itself a struct — `(zoom:2.75,look:(0.4,-0.6))` comes back with `look`
     // one paren short, which reads as a pair and rebuilds into a blob that will
     // not parse.
-    let (inner, base) = match trimmed.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        Some(inner) => (inner, lead + 1),
-        None => (trimmed, lead),
-    };
+    let (inner, base) =
+        match trimmed.strip_prefix(['(', '[']).and_then(|s| s.strip_suffix([')', ']'])) {
+            Some(inner) => (inner, lead + 1),
+            None => (trimmed, lead),
+        };
+    if inner.is_empty() {
+        return Vec::new();
+    }
     let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+    let (mut quoted, mut escaped) = (false, false);
     for (i, c) in inner.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                ',' | '(' | ')' | '[' | ']' => {
+                    panic!("a quoted string holding {c:?} would mis-split this walk: {blob}")
+                }
+                _ => {}
+            }
+            continue;
+        }
         match c {
+            '"' => quoted = true,
             '(' | '[' => depth += 1,
             ')' | ']' => depth -= 1,
             ',' if depth == 0 => {
-                out.push(start..i);
+                out.push(base + start..base + i);
                 start = i + 1;
             }
             _ => {}
         }
     }
-    out.push(start..inner.len());
-    out.into_iter()
-        .map(|range| {
-            let text = &inner[range.clone()];
-            let key = text[..text.find(':').expect("a pair has a colon")].to_string();
-            (key, base + range.start..base + range.end)
-        })
-        .collect()
+    out.push(base + start..base + inner.len());
+    out
 }
 
-/// Every `key:value` pair at every depth of a serialized struct, as its dotted
-/// path and its byte range in `blob`. A value is walked into only where it is
-/// itself a struct of named fields, not a tuple, a list or an enum's payload.
+/// Every `key:value` pair of every struct a serialized blob holds, at any
+/// depth, as its path and its byte range in `blob`: through nested structs,
+/// `Some`, tuples and lists, whose items are numbered (`stored[1]`). An enum
+/// variant's own payload is not walked.
 fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
-    fn named_struct(text: &str) -> bool {
-        let Some(inner) = text.strip_prefix('(') else { return false };
-        let key = inner.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
-        key > 0 && inner[key..].starts_with(':')
-    }
     fn walk(
         blob: &str,
-        at: std::ops::Range<usize>,
+        value: std::ops::Range<usize>,
         path: &str,
         out: &mut Vec<(String, std::ops::Range<usize>)>,
     ) {
-        for (key, range) in pair_ranges(&blob[at.clone()]) {
-            let range = at.start + range.start..at.start + range.end;
-            let value = range.start + key.len() + 1..range.end;
-            let path = if path.is_empty() { key } else { format!("{path}.{key}") };
-            out.push((path.clone(), range));
-            if named_struct(&blob[value.clone()]) {
-                walk(blob, value, &path, out);
+        let text = &blob[value.clone()];
+        if let Some(inner) = text.strip_prefix("Some(").and_then(|t| t.strip_suffix(')')) {
+            let start = value.start + "Some(".len();
+            return walk(blob, start..start + inner.len(), path, out);
+        }
+        let key = text[1.min(text.len())..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(0);
+        if text.starts_with('(') && key > 0 && text[1 + key..].starts_with(':') {
+            for (name, range) in pair_ranges(text) {
+                let range = value.start + range.start..value.start + range.end;
+                let path = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
+                out.push((path.clone(), range.clone()));
+                walk(blob, range.start + name.len() + 1..range.end, &path, out);
+            }
+        } else if text.starts_with(['(', '[']) {
+            for (index, range) in item_ranges(text).into_iter().enumerate() {
+                let range = value.start + range.start..value.start + range.end;
+                walk(blob, range, &format!("{path}[{index}]"), out);
             }
         }
     }
