@@ -92,7 +92,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
         ));
     }
     if status != Status::Failed {
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(16));
     }
     ui.ctx().data_mut(|data| data.insert_temp(id(), loading));
     true
@@ -190,6 +190,10 @@ mod tests {
                 crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");
             });
             assert!(loading_text(&output), "first reveal enters asynchronous preparation");
+            // The splash's own pace, which egui's predicted 1/60 s used to take
+            // whole, repainting the splash on every refresh.
+            let delay = output.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
+            assert_eq!(delay, std::time::Duration::from_millis(16), "the splash's poll");
             assert!(output
                 .shapes
                 .iter()
