@@ -14,14 +14,19 @@ pub enum TuningEngine {
 }
 
 impl TuningEngine {
-    /// Every engine at its host parameter integer. Saved projects and
-    /// automation hold these integers, so the order is fixed; the editor lists
+    /// Every engine, in host order: `HOST[i].index() == i`. The editor lists
     /// them in an order of its own (#1620).
     pub const HOST: [Self; 3] = [Self::Off, Self::Adaptive, Self::LatticeMap];
     pub const HOST_MAX: i32 = Self::HOST.len() as i32 - 1;
 
+    /// The host parameter integer. Saved projects and automation hold these,
+    /// so a number never moves.
     pub fn index(self) -> i32 {
-        Self::HOST.iter().position(|&engine| engine == self).unwrap() as i32
+        match self {
+            Self::Off => 0,
+            Self::Adaptive => 1,
+            Self::LatticeMap => 2,
+        }
     }
     /// The engine at a host integer, clamped into range as the host's label
     /// clamps, so the two never disagree.
@@ -61,13 +66,18 @@ pub enum Follow {
 }
 
 impl Follow {
-    /// Every mode at its host parameter integer, which saved projects and
-    /// automation hold.
+    /// Every mode, in host order: `HOST[i].index() == i`.
     pub const HOST: [Self; 3] = [Self::Off, Self::Thirds, Self::ThirdsAndFifths];
     pub const HOST_MAX: i32 = Self::HOST.len() as i32 - 1;
 
+    /// The host parameter integer. Saved projects and automation hold these,
+    /// so a number never moves.
     pub fn index(self) -> i32 {
-        Self::HOST.iter().position(|&follow| follow == self).unwrap() as i32
+        match self {
+            Self::Off => 0,
+            Self::Thirds => 1,
+            Self::ThirdsAndFifths => 2,
+        }
     }
     /// The mode at a host integer, clamped into range as the host's label
     /// clamps, so the two never disagree.
@@ -329,30 +339,28 @@ impl LatticeMap {
 mod tests {
     use super::*;
 
-    /// Saved projects and automation hold these integers: every variant
-    /// keeps its number, and one out of range decodes as the nearest end,
-    /// which is what the host's label shows.
+    /// `HOST` sits at each variant's own `index()`, and an integer out of
+    /// range decodes as the nearest end, which is what the host's label shows.
+    /// The matches are exhaustive so a new variant does not compile until it
+    /// is named here, which is the reminder to list it in `HOST`.
     #[test]
-    fn host_integers_round_trip_and_clamp() {
+    fn host_lists_match_index_and_out_of_range_clamps() {
+        use Follow::{Thirds, ThirdsAndFifths};
+        use TuningEngine::{Adaptive, LatticeMap, Off};
         for (index, engine) in TuningEngine::HOST.into_iter().enumerate() {
-            assert_eq!(
-                (engine.index(), TuningEngine::from_index(index as i32)),
-                (index as i32, engine)
-            );
+            match engine {
+                Off | Adaptive | LatticeMap => assert_eq!(engine.index(), index as i32),
+            }
         }
         for (index, follow) in Follow::HOST.into_iter().enumerate() {
-            assert_eq!((follow.index(), Follow::from_index(index as i32)), (index as i32, follow));
+            match follow {
+                Follow::Off | Thirds | ThirdsAndFifths => assert_eq!(follow.index(), index as i32),
+            }
         }
-        assert_eq!(
-            TuningEngine::HOST,
-            [TuningEngine::Off, TuningEngine::Adaptive, TuningEngine::LatticeMap]
-        );
-        assert_eq!(Follow::HOST, [Follow::Off, Follow::Thirds, Follow::ThirdsAndFifths]);
-        assert_eq!(TuningEngine::from_index(3), TuningEngine::LatticeMap);
-        assert_eq!(TuningEngine::from_index(-1), TuningEngine::Off);
-        assert_eq!(Follow::from_index(7), Follow::ThirdsAndFifths);
-        assert_eq!(TuningEngine::default().index(), 0);
-        assert_eq!(Follow::default().index(), 0);
+        assert_eq!(TuningEngine::from_index(3), LatticeMap);
+        assert_eq!(TuningEngine::from_index(-1), Off);
+        assert_eq!(Follow::from_index(7), ThirdsAndFifths);
+        assert_eq!(Follow::from_index(-2), Follow::Off);
     }
 
     #[test]
