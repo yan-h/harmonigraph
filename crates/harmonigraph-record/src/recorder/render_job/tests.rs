@@ -1,17 +1,5 @@
 use super::*;
 
-/// Only manual requests override the recorded appearance.
-#[test]
-fn only_manual_requests_override_the_recorded_appearance() {
-    let automatic = RenderRequest::recorded();
-    let manual = RenderRequest::render_now("current appearance".into());
-    for request in [&automatic, &manual] {
-        assert_eq!(request.program, default_renderer_path());
-    }
-    assert_eq!(automatic.appearance, None);
-    assert_eq!(manual.appearance.as_deref(), Some("current appearance"));
-}
-
 /// A renderer stream with CR-delimited progress, followed by diagnostics.
 const RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30 fps, \
          320x180 @ 1.00x -> probe.rgba\n\
@@ -250,18 +238,16 @@ echo 'progress: 10/10 frames (100%)' >&2
 "#).unwrap();
         std::fs::set_permissions(dir.join("renderer"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
-        Self {
-            dir,
-            control: Arc::new(RenderControl::default()),
-            progress: Arc::new(Progress::default()),
-        }
+        Self { control: Self::queue(&dir), dir, progress: Arc::new(Progress::default()) }
+    }
+    /// A queue that launches this fixture's renderer.
+    fn queue(dir: &std::path::Path) -> Arc<RenderControl> {
+        let control = RenderControl::default();
+        *control.test_program.lock() = Some(dir.join("renderer"));
+        Arc::new(control)
     }
     fn request(&self, look: &str) -> RenderRequest {
-        RenderRequest {
-            program: self.dir.join("renderer"),
-            appearance: Some(look.into()),
-            notice: None,
-        }
+        RenderRequest { appearance: Some(look.into()), notice: None }
     }
     fn enqueue(&self, request: RenderRequest) {
         self.enqueue_sized(request, None);
@@ -465,7 +451,7 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     .unwrap()
     .flush()
     .unwrap();
-    let other = Arc::new(RenderControl::default());
+    let other = Fixture::queue(&f.dir);
     let other_progress = Arc::new(Progress::default());
     spawn_render(f.request("other instance"), take, None, other_progress.clone(), other.clone());
     drop(gate);

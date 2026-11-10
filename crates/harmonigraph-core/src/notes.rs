@@ -207,6 +207,33 @@ impl NoteEvent {
         }
     }
 
+    /// Whether the payload is one replay can carry: a finite time, a MIDI
+    /// channel and note, a velocity in 0..=1, a finite tuning, an expression
+    /// inside its [`range`](Expression::range).
+    ///
+    /// The one statement of it, shared by [`NoteDelta::validate`] and a take's
+    /// plain note record, so the two cannot drift (#1128 added the expression
+    /// range to each by hand).
+    ///
+    /// [`NoteDelta::validate`]: crate::canonical::NoteDelta::validate
+    pub fn has_valid_payload(&self) -> bool {
+        self.time.is_finite()
+            && self.channel < 16
+            && self.note < 128
+            && match self.kind {
+                NoteEventKind::On { velocity } => {
+                    velocity.is_finite() && (0.0..=1.0).contains(&velocity)
+                }
+                NoteEventKind::Tuning { semitones } => semitones.is_finite(),
+                NoteEventKind::Expression { expression, value } => {
+                    expression.range().contains(&value)
+                }
+                NoteEventKind::Off | NoteEventKind::SourceReset | NoteEventKind::SessionReset => {
+                    true
+                }
+            }
+    }
+
     pub fn key(&self) -> VoiceKey {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
     }

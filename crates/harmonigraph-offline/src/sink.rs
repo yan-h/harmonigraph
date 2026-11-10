@@ -282,9 +282,8 @@ impl Sink {
                 "note: video duration is at or below AAC priming (21.333 ms); exporting video only"
             );
         }
-        // `warning:`, not `note:`: the Video pane's status line keeps the first
-        // warning of a render that succeeds, and the Encoder row still reads
-        // Hardware.
+        // `warning:`, not `note:`: an export job's row keeps the first warning
+        // of a render that succeeds, and the Encoder row still reads Hardware.
         if options.encoder() != options.encoder {
             eprintln!(
                 "warning: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
@@ -581,8 +580,8 @@ fn archive_args(video: &std::path::Path, archive: &std::path::Path) -> Vec<Strin
     // The video says its chroma sits centred between luma columns, which an
     // AV1 stream cannot state and MP4 has no other place for: libsvtav1 warns
     // on every export and writes it unspecified anyway. Saying so up front
-    // keeps the warning off the Video pane's status line. A player that
-    // assumes "left" draws thin lines' colour up to half a pixel off.
+    // keeps the warning off the stderr an export job's row is read from.
+    // A player that assumes "left" draws thin lines' colour up to half a pixel off.
     args.extend(["-vf", "setparams=chroma_location=unspecified"].map(String::from));
     args.extend(["-c:v", "libsvtav1"].map(String::from));
     args.extend(["-preset".to_string(), ARCHIVE_PRESET.to_string()]);
@@ -613,7 +612,7 @@ pub fn archive(
         let mut child = Command::new(&ffmpeg)
             .args(archive_args(video, archive))
             // SVT-AV1 prints its configuration banner at info level, onto the
-            // stderr the Video pane keeps the last line of.
+            // stderr an export job's row is read from.
             .env("SVT_LOG", "2")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -622,9 +621,10 @@ pub fn archive(
             .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
         let mut encoded = Encoded::spawn(child.stdout.take().ok_or("ffmpeg stdout closed")?);
         // Passed through as the video's ffmpeg does, its first and last lines
-        // kept: the failure is reported after the video, where only the line
-        // the Video pane keeps says why. ffmpeg names the cause first ("Unknown
-        // encoder 'libsvtav1'") and ends on a summary ("Encoder not found").
+        // kept: the failure is reported after the video, where only the
+        // `ARCHIVE_FAILED` line on the export job's row says why. ffmpeg names
+        // the cause first ("Unknown encoder 'libsvtav1'") and ends on a summary
+        // ("Encoder not found").
         // Read to the end whatever the bytes, as `follow` does: a reader that
         // stopped early would close the pipe and kill ffmpeg on its next write.
         let said = child.stderr.take().map(|stderr| {

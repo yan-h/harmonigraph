@@ -75,12 +75,7 @@ impl From<NoteEvent> for NoteDelta {
 
 impl NoteDelta {
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
-        if !self.event.time.is_finite()
-            || self.event.channel >= 16
-            || self.event.note >= 128
-            || matches!(self.event.kind, NoteEventKind::On { velocity } if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity))
-            || matches!(self.event.kind, NoteEventKind::Tuning { semitones } if !semitones.is_finite())
-            || matches!(self.event.kind, NoteEventKind::Expression { expression, value } if !expression.range().contains(&value))
+        if !self.event.has_valid_payload()
             || (self.provenance == PitchProvenance::ObservedDirect
                 && self.event.source != SourceId::DIRECT)
             || (self.provenance == PitchProvenance::AcceptedOutput
