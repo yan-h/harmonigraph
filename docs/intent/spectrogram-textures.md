@@ -12,3 +12,7 @@ Yan’s decisions recorded for future drift audits.
 - The lattice glow's Pattern speed and Breathing speed accumulate the same way, so neither jumps the light on a drag. #1647's review, #1651
 - Breathing speed 0 freezes the breathing where it is; depth 0 turns it off. Saved speed-zero looks with nonzero depth now show a frozen per-node pattern. #1658, 2026-11-04
 - Editing the Audio level colours, or switching a preset, eases the held colour over Color release like a Level or Tilt drag (#1578) rather than resetting colour memory. Edge pooling, its width and its softness still reset it: they move what sits under each texel, #1579's reason. #1635 Textures Q2, #1639
+
+## 2026-11-10 (maintainability audit, #1677)
+
+- No capability record per spectrogram style: the separate style tests stay, since no further style is expected (#1677 area 7 Q1). Reopen only when a style is added. #1677 R7
