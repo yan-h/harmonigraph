@@ -7,9 +7,9 @@
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
-use crate::material_cells::CLOUD_UNITS;
+use crate::material_cells::{CLOUD_UNITS, WASH_REPEAT_PERIODS};
 #[cfg(test)]
-use crate::material_cells::WASH_CELLS;
+use crate::material_cells::{VELVET_CELLS, WASH_CELLS};
 pub(super) use crate::stars::*;
 use crate::travel::{Motion, Travel};
 use crate::{create_vertex_buffer, wgpu};
@@ -40,7 +40,7 @@ pub(super) struct CloudSampling {
 
 impl Default for CloudSampling {
     fn default() -> Self {
-        Self { tile_cells: 40, pixel_points: 0.5 }
+        Self { tile_cells: crate::material_cells::WASH_PERIOD as u32, pixel_points: 0.5 }
     }
 }
 
@@ -82,8 +82,8 @@ pub struct SpectrogramAtmosphere {
 
 /// The drawn material's cells to a cloud unit, which its drift is counted in
 /// ([`Motion::drift`]): what `wash_cell_at` multiplies the offset by, or for
-/// Scales what `fs_velvet_tone` does, its cell `24/405` of the pane's height
-/// at a `Scale size` of 1. Stars draw no material, and take the wash's.
+/// Scales what `fs_velvet_tone` does, its cell `VELVET_CELL` of the pane's
+/// height at a `Scale size` of 1. Stars draw no material, and take the wash's.
 fn material_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
     crate::material_cells::cells_per_unit(
         settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales,
@@ -132,8 +132,8 @@ pub(super) fn star_pace(points_per_ms: f32, height: f32) -> f64 {
 /// the offset is reduced by whole repeats before it narrows to f32,
 /// as Stars and the lattice reduce theirs: unreduced, a long clock leaves the
 /// f32 fewer and fewer bits of the cell it lands in. A screen-axis repeat of
-/// the Watercolor tile is five periods, because its basis is the 3-4-5
-/// rotation. Reduced about zero rather than onto `[0, repeat)`, so an offset
+/// the Watercolor tile is [`WASH_REPEAT_PERIODS`] periods, because its basis
+/// is the 3-4-5 rotation. Reduced about zero rather than onto `[0, repeat)`, so an offset
 /// already inside half a repeat passes bit for bit: at the fresh speed and
 /// size that holds for a render's first 24 seconds or so, where it wraps first.
 ///
@@ -146,7 +146,7 @@ fn cloud_drift(
 ) -> [f32; 2] {
     let repeat = tile.map(|tile| {
         let periods = match settings.cloud_style {
-            harmonigraph_scene::CloudStyle::Watercolor => 5,
+            harmonigraph_scene::CloudStyle::Watercolor => WASH_REPEAT_PERIODS,
             harmonigraph_scene::CloudStyle::Stars
             | harmonigraph_scene::CloudStyle::VelvetScales => {
                 unreachable!("only Watercolor draws out of a tile")
@@ -2019,7 +2019,7 @@ mod tests {
         cloud_drift, cloud_offset_at, retained_size, source_size, star_layout, star_slices,
         tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH,
         STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
-        WASH_CELLS,
+        VELVET_CELLS, WASH_CELLS,
     };
 
     /// Each depth's value off a far-to-near curve, `far · (near / far)^(d^curve)`
@@ -2612,6 +2612,17 @@ mod tests {
         };
         assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
         assert_eq!(WASH_CELLS, number("WASH_CELLS"));
+        assert_eq!(1.0 / (CLOUD_UNITS * VELVET_CELLS), number("VELVET_CELL"));
+        let start =
+            crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, "DRIFT_START");
+        let start: Vec<f32> = start
+            .strip_prefix("vec2<f32>(")
+            .and_then(|s| s.strip_suffix(')'))
+            .expect("a vec2<f32> constant")
+            .split(',')
+            .map(|part| part.trim().parse().expect("a number"))
+            .collect();
+        assert_eq!(harmonigraph_scene::MaterialSettings::DRIFT_START.map(|v| v as f32)[..], start);
 
         let at = |cloud_tile, wash_size, height| {
             tile_key(
