@@ -491,15 +491,22 @@ pub(super) fn create_post_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
-    let bloom_layout = matches!(entry_point, "fs_bright" | "fs_blur_h" | "fs_blur_v")
-        .then(|| BloomChain::scale_layout(device));
-    let mut layouts = vec![Some(bind_group_layout)];
-    if let Some(layout) = &bloom_layout {
-        layouts.push(Some(layout));
-    }
+    post_pipeline(device, shader, entry_point, target_format, &[Some(bind_group_layout)], blend)
+}
+
+/// [`create_post_pipeline`] over more than one bind group, for the bloom
+/// chain's passes that also read its scale at group 1.
+pub(super) fn post_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    entry_point: &str,
+    target_format: wgpu::TextureFormat,
+    bind_group_layouts: &[Option<&wgpu::BindGroupLayout>],
+    blend: Option<wgpu::BlendState>,
+) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("post_pipeline_layout"),
-        bind_group_layouts: &layouts,
+        bind_group_layouts,
         ..Default::default()
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
