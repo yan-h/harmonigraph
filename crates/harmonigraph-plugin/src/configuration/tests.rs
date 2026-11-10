@@ -1259,12 +1259,11 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
         (seconds * clap_sys::fixedpoint::CLAP_SECTIME_FACTOR as f64) as i64;
     transport
 }
-/// The Stop the editor sends, with the request the Video pane builds. Each
-/// fixture first aims the recorder at a renderer that does not exist, so a
-/// finished take's render launches nothing.
+/// The Stop the editor sends. Each fixture first aims the recorder at a
+/// renderer that does not exist, so a finished take launches no render.
 fn stop(shared: &std::sync::Arc<parking_lot::Mutex<crate::editor::EditorShared>>) {
     let shared = shared.lock();
-    shared.take.stop(harmonigraph_record::RenderRequest::recorded());
+    shared.take.stop();
 }
 
 #[test]

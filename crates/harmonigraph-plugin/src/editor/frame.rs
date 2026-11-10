@@ -217,17 +217,15 @@ impl Logged {
             self.animating = Some(animating);
             egui_baseview::frame_log::event(&format!("animating {animating}"));
         }
+        // A cancelled job's renderer runs until it is reaped, so it counts.
+        // No encoder: the pane's says nothing about what an automatic export
+        // or an over-size frame ran through.
+        use harmonigraph_take::render::ExportStatus::{Cancelling, Running};
         let exports = ui.workspace.interaction.take.exports.iter();
-        let running = exports
-            .filter(|job| job.state == harmonigraph_take::render::ExportStatus::Running)
-            .count();
+        let running = exports.filter(|job| matches!(job.state, Running | Cancelling)).count();
         if self.exports != Some(running) {
             self.exports = Some(running);
-            let encoder = match ui.picture.appearance.render.encoder {
-                harmonigraph_ui::VideoEncoder::X264 => "x264",
-                harmonigraph_ui::VideoEncoder::Hardware => "hardware",
-            };
-            egui_baseview::frame_log::event(&format!("exports {running} {encoder}"));
+            egui_baseview::frame_log::event(&format!("exports {running}"));
         }
     }
 }

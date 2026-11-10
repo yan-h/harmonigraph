@@ -1,26 +1,33 @@
 //! How a take becomes a video: what the render is composed and triggered by,
 //! and how far one has got.
 //!
-//! The SETTINGS live here rather than in the UI that edits them because they
-//! are take PAYLOAD. `RenderFrame` is the composition a take was framed at,
-//! and the offline renderer reads it out of the take so a re-render reproduces
-//! the framing it was dialed in at rather than whatever the editor happens to
-//! be set to now. `spectrogram` is read the same way.
+//! The SETTINGS ([`RenderConfig`] and its parts) are the Video pane's, and no
+//! take record holds them as types: since #797 a take carries its look as the
+//! opaque `appearance` document in its header, which the UI serializes and
+//! parses. The offline renderer reads `RenderFrame` and `spectrogram` back out
+//! of that document, through the UI, so a re-render reproduces the framing a
+//! take was dialed in at rather than whatever the editor is set to now. They
+//! are serde-facing: each round-trips through a saved project's UI blob and
+//! through that document.
 //!
 //! The output size stays outside `RenderFrame` — see
 //! [`RenderConfig::short_edge`].
 //!
-//! They are serde-facing: each round-trips through a saved project's UI blob
-//! and through the `appearance` a take carries.
+//! Nothing in the format needs them here. The UI re-exports them beside its
+//! other settings, and the plugin and the offline renderer reach them mostly
+//! through it. The offline renderer also names [`RenderTrigger`] and
+//! [`VideoEncoder`] here directly, and `harmonigraph-record` names
+//! `RenderTrigger` in its docs and `RenderConfig` in its tests. Moving them
+//! beside the UI's other settings is rework candidate R9 in #1677, undecided.
 //!
-//! [`RenderProgress`] is the one member that is NEITHER — no serde, and it
-//! never enters a take. It is counted off the renderer subprocess's stderr and
-//! lives only as long as that process. It sits beside the settings because
-//! `harmonigraph-record` drives that subprocess and reports it back, and must
-//! not link the editor to do so: settings in, progress out is the whole of
-//! what the recorder needs from the Video pane. Moving it back to the UI on
-//! the grounds that it is not payload would put the GUI stack back on the
-//! record path, which is what #176 removed.
+//! The export queue's vocabulary — [`RenderProgress`], [`ExportJob`],
+//! [`ExportStatus`] and the archive copy's name — is the part that is not
+//! settings: no serde, and it never enters a take. Progress is counted off
+//! the renderer subprocess's stderr and lives only as long as that process.
+//! It sits here because `harmonigraph-record` drives that subprocess and
+//! reports back through it, and must not link the editor to do so. Moving it
+//! to the UI would put the GUI stack back on the record path, which is what
+//! #176 removed.
 
 /// What counts as "the take is done", and so when a video gets rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

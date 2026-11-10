@@ -11,19 +11,19 @@ use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
 use crate::{configuration, publication};
-use render_job::{spawn_render, Progress, RenderControl};
+use render_job::{spawn_render, Progress, RenderControl, RenderRequest};
 
 mod lifecycle;
 mod render_job;
 mod writer;
 
-pub use render_job::{default_renderer_path, RenderRequest};
+pub use render_job::default_renderer_path;
 pub use writer::channel;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub use writer::testing;
 
-use configuration::{RecordAddress, RecordFence};
+use configuration::{RecordAddress, RecordFence, RecordIntent};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
 /// Record-ring capacity. Expressive voices can produce several records per
@@ -131,7 +131,7 @@ pub struct AudioSpec {
 enum Command {
     Start(u64, Box<harmonigraph_take::Header>, std::path::PathBuf, AudioSpec),
     /// Close the file and render it to video.
-    Stop(u64, Box<RenderRequest>),
+    Stop(u64),
 }
 
 /// The user's home directory, or `.` when `HOME` is unset — the base for the
@@ -279,6 +279,44 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// The audio-thread half over these rings and lanes, with fresh shared
+    /// state for the [`Control`] or fixture beside it to clone out, and every
+    /// per-take field at the value a new instance starts from.
+    ///
+    /// The one place the struct is spelled: the writer's `channel` and both
+    /// test fixtures used to write it out whole, so each new field was three
+    /// edits (#1129, #901, #850, #849).
+    fn new(
+        producer: rtrb::Producer<Entry>,
+        audio: rtrb::Producer<f32>,
+        publication: publication::Publisher,
+        display: publication::Publisher,
+        writer_lifetime: Option<mpsc::Sender<Command>>,
+    ) -> Recorder {
+        Recorder {
+            _writer_lifetime: writer_lifetime,
+            fence: Arc::default(),
+            publication,
+            display,
+            outage: publication::Lanes::default(),
+            record_epoch: 0,
+            record_pass: 1,
+            closed_epoch: 0,
+            producer,
+            audio,
+            dropped: Arc::default(),
+            last_params: [f32::NAN; ParamKey::ALL.len()],
+            lifecycle: State::Disarmed,
+            history: History::default(),
+            rolling: Arc::default(),
+            audio_started: false,
+            run: 0,
+            run_live: false,
+            end_at_rewind: Arc::default(),
+            latches: Arc::default(),
+        }
+    }
+
     /// What EACH lane can still take. There is deliberately no combined
     /// number: a full display ring must not gate a snapshot an otherwise
     /// healthy writer is waiting for, and the minimum of the two did exactly
@@ -410,9 +448,9 @@ impl Recorder {
 
     /// Use the arm/disarm intent captured at the enclosing callback boundary,
     /// so a concurrent stop cannot cut off that callback's remaining audio.
-    pub fn is_armed_at(&mut self, intent: u64) -> bool {
-        let armed = intent & 1 != 0;
-        let epoch = intent >> 1;
+    pub fn is_armed_at(&mut self, intent: RecordIntent) -> bool {
+        let armed = intent.is_armed();
+        let epoch = intent.epoch();
         if armed && epoch != self.record_epoch {
             self.record_epoch = epoch;
             self.record_pass = 1;
@@ -628,8 +666,8 @@ impl Recorder {
     /// Capture a callback boundary's arm/disarm intent. A Stop after it cannot
     /// cut off that callback's audio: the producer closes the epoch only when
     /// a later boundary observes the disarm.
-    pub fn capture_recording_intent(&self) -> u64 {
-        let intent = self.fence.intent.load(Ordering::Acquire);
+    pub fn capture_recording_intent(&self) -> RecordIntent {
+        let intent = self.fence.intent();
         #[cfg(feature = "test-support")]
         self.fence.boundary_pause.reach();
         intent
@@ -809,15 +847,12 @@ impl Control {
 
     /// Append an independent export with settings already captured by the caller.
     ///
-    /// `size` is only what the Exports list shows for the job; the renderer
-    /// derives the real size from the request's appearance.
-    pub fn queue_export(
-        &self,
-        path: std::path::PathBuf,
-        request: RenderRequest,
-        size: Option<[u32; 2]>,
-    ) {
-        spawn_render(request, path, size, self.progress.clone(), self.render.clone());
+    /// `appearance` is the document selected at queue time (current, saved or
+    /// recorded), and the renderer takes the output size from it alone: `size`
+    /// is only what the Exports list shows for the job.
+    pub fn queue_export(&self, path: std::path::PathBuf, appearance: String, size: [u32; 2]) {
+        let request = RenderRequest { appearance: Some(appearance), notice: None };
+        spawn_render(request, path, Some(size), self.progress.clone(), self.render.clone());
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
         self.render.snapshots(&self.progress)
@@ -874,7 +909,8 @@ impl Control {
 
         self.dropped.store(0, Ordering::Relaxed);
         let spec = AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 };
-        let Some(epoch) = self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= u64::MAX >> 1)
+        let Some(epoch) =
+            self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= RecordIntent::MAX_EPOCH)
         else {
             *self.status.lock() = "recording epoch exhausted".into();
             return;
@@ -889,7 +925,7 @@ impl Control {
         // [`TakeLatches`] for why both ends do it.
         self.latches.clear();
         // Finishing barred Start until every old armed callback retired.
-        self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
+        self.fence.arm(epoch);
         *self.status.lock() = "waiting for playback".into();
     }
 
@@ -897,8 +933,9 @@ impl Control {
     ///
     /// The render is launched by the writer thread, after it has closed
     /// the file — the only place that knows the take is actually complete.
-    /// A take that failed is never rendered; its request is dropped there.
-    pub fn stop(&self, render: RenderRequest) {
+    /// It renders the take's own recorded look, with the notice only the
+    /// writer can know; a take that failed is never rendered.
+    pub fn stop(&self) {
         if !self.is_recording() {
             return;
         }
@@ -906,8 +943,8 @@ impl Control {
         // armed still finishes its block, audio included.
         let epoch = self.fence.epoch();
         self.fence.finishing.store(true, Ordering::Release);
-        self.fence.intent.fetch_and(!1, Ordering::AcqRel);
-        let _ = self.commands.send(Command::Stop(epoch, Box::new(render)));
+        self.fence.disarm();
+        let _ = self.commands.send(Command::Stop(epoch));
         self.recording.store(false, Ordering::Relaxed);
         if let Some(wake) = &self.stop_wakeup {
             wake();

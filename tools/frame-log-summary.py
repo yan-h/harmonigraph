@@ -381,7 +381,9 @@ def report_exports(run, evs, t0):
             busy[-1]['stop'] = stop
             busy[-1]['most'] = max(busy[-1]['most'], int(words[0]))
         else:
-            busy.append({'start': start, 'stop': stop, 'most': int(words[0]), 'encoder': words[1]})
+            # A log from a build that named the pane's Encoder after the count
+            # still reads: the word is ignored, as it was not what ran.
+            busy.append({'start': start, 'stop': stop, 'most': int(words[0])})
     quiet_since = run[0]['t']
     for b in busy:
         start, stop = b['start'], b['stop']
@@ -391,8 +393,8 @@ def report_exports(run, evs, t0):
             print(f'  export {start - t0:.0f}-{stop - t0:.0f} s already running when the editor '
                   f'opened: no time before it to compare')
             continue
-        print(f"  export {start - t0:.0f}-{stop - t0:.0f} s, up to {b['most']} running, "
-              f"encoder {b['encoder']}; {length:.0f} s each side:")
+        print(f"  export {start - t0:.0f}-{stop - t0:.0f} s, up to {b['most']} running; "
+              f"{length:.0f} s each side:")
         for name, a in (('before', start - length), ('during', start)):
             s = stretch(run, a, a + length)
             print(f"    {name:6} drew {s['fps']:.0f} frames/s, missed {s['missed']} of "

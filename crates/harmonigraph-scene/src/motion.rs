@@ -1,7 +1,9 @@
 //! Lattice-only event-time animation. Core envelopes and the other panes keep
 //! their own timing. A checkpoint survives voice pruning and roll retention.
 use crate::derive::lattice_order;
-use crate::{IntensityReading, RingFade, Scene, ViewConfig};
+use crate::{
+    IntensityReading, NoteAnimationConfig, RingFade, Scene, ViewConfig, STAGGER_SPREAD_RANGE,
+};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
@@ -190,18 +192,25 @@ const FADE_MAX: f32 = 1.0;
 
 /// How far back a surface replays note edges.
 ///
-/// The 2.0 is not a round number: one animation now spans
-/// `duration * (1 + stagger_spread)`, so the horizon has to exceed that
-/// or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
-/// wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
-/// puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
-/// that ceiling means raising this too, and 1.0 would leave none.
-///
-/// A departure waits out `fade_out_delay` before its sweep starts, so the
-/// horizon carries that too.
-fn horizon(duration: f32, mark_delay: f32, fade_out_delay: f32) -> f64 {
-    f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay) + f64::from(fade_out_delay) + 0.001
+/// It has to exceed the longest animation `animation` can ask for, or a gap
+/// longer than it seeds a MID-FLIGHT arrival or departure as settled and the
+/// wheel pops. It is bounded by that config's departure with the spread at its
+/// ceiling (`ValueBar` and `sanitize` both read [`STAGGER_SPREAD_RANGE`]),
+/// whose sweep spans as long as an arrival's. A mark waits out `mark_delay`
+/// only on arrival (`MarkMotion::target`) and leaves over one fade, so its
+/// delay is added here rather than in the departure.
+fn horizon(duration: f32, mark_delay: f32, animation: NoteAnimationConfig) -> f64 {
+    let duration = duration.max(0.0);
+    let longest = NoteAnimationConfig { stagger_spread: *STAGGER_SPREAD_RANGE.end(), ..animation };
+    longest.departure(duration)
+        + f64::from(duration) * HORIZON_MARGIN_FADES
+        + f64::from(mark_delay)
+        + 0.001
 }
+
+/// Fades the replay horizon keeps past the longest departure, so the last
+/// slice has settled before its edges stop being replayed.
+const HORIZON_MARGIN_FADES: f64 = 0.1;
 
 fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     if level == target {
@@ -432,8 +441,7 @@ impl NodeMotion {
         env: &Envelope,
         now: f64,
     ) -> Vec<PitchClass> {
-        let floor =
-            now - horizon(env.fade_time, view.mark_delay, view.note_animation.fade_out_delay);
+        let floor = now - horizon(env.fade_time, view.mark_delay, view.note_animation);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
         for note in tracker.roll().notes().filter(|note| note.end.is_none_or(|at| at >= floor)) {
             for ((at, pitch), (end, next)) in note.segments(now) {
@@ -662,7 +670,7 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
-        let horizon = horizon(env.fade_time, view.mark_delay, view.note_animation.fade_out_delay);
+        let horizon = horizon(env.fade_time, view.mark_delay, view.note_animation);
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
         if self.at.is_some_and(|at| now < at || now - at > horizon) {
@@ -673,13 +681,14 @@ impl NodeMotion {
         // A note that ended before every horizon a host can set can never
         // count as late again, whatever the settings do next, so its cursor
         // has nothing left to guard. Skipping it bounds this scan by the last
-        // few seconds of playing rather than by the whole roll.
-        let retained = now
-            - horizon.max(self::horizon(
-                FADE_MAX,
-                crate::MARK_DELAY_MAX,
-                *crate::FADE_OUT_DELAY_RANGE.end(),
-            ));
+        // few seconds of playing rather than by the whole roll. The longest
+        // a host can set has every field `departure` reads at the top of its
+        // range; `horizon` raises the spread itself.
+        let longest = NoteAnimationConfig {
+            fade_out_delay: *crate::FADE_OUT_DELAY_RANGE.end(),
+            ..NoteAnimationConfig::default()
+        };
+        let retained = now - horizon.max(self::horizon(FADE_MAX, crate::MARK_DELAY_MAX, longest));
         let notes: Vec<_> = tracker
             .roll()
             .notes()
@@ -951,7 +960,6 @@ impl NodeMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoteAnimationConfig;
 
     impl NodeMotion {
         /// A position's motion, absent read as the rest it stands for.
@@ -1284,6 +1292,38 @@ mod tests {
             assert_eq!(node.activation, 1.0, "the presence fell under a re-press");
             assert_eq!(node.slice_progress[..span], [1.0; 11][..span], "a slice retracted");
         }
+    }
+    /// [`NoteAnimationConfig::departure`] is the span the repaint guard and the
+    /// replay horizon take for a departure, so it has to be the one the
+    /// schedule here actually runs: a node is still leaving just before it
+    /// ends and has left just after. A departure lengthened here or shortened
+    /// there would otherwise leave slices moving while the loop sleeps.
+    #[test]
+    fn a_released_node_leaves_over_exactly_its_departure_span() {
+        let fade = 0.8;
+        let mut view = view();
+        view.note_animation.stagger_spread = 0.6;
+        view.note_animation.fade_out_delay = 0.3;
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        let off_at = 1.5;
+        tracker.handle_event(on(0.0, 60));
+        let end = off_at + view.note_animation.departure(fade);
+        let mut frames = Vec::new();
+        for k in 0..=500 {
+            let now = f64::from(k) * 0.01;
+            if (now - off_at).abs() < 1e-9 {
+                tracker.handle_event(off(off_at, 60));
+            }
+            frames.push((now, draw_duration(&mut motion, &mut tracker, &view, now, false, fade)));
+        }
+        let span = frames[0].1.octave_layout.span as usize;
+        assert!(span > 2, "the fixture's wheel is not staggered");
+        let leaving = |t: f64| {
+            let node = origin(&frames.iter().find(|(now, _)| *now >= t - 1e-9).unwrap().1);
+            node.activation > 0.0 || node.slice_progress[..span].iter().any(|&p| p > 0.0)
+        };
+        assert!(leaving(end - 0.03), "the node had left before its departure span ended");
+        assert!(!leaving(end + 0.02), "the node was still leaving after its departure span");
     }
     /// A surface hidden through most of a wait far longer than the fade comes
     /// back to the wheel still standing: the replay horizon carries the delay,
