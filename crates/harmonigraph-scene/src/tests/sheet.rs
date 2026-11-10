@@ -54,7 +54,7 @@ fn the_marker_field_is_the_home_sheet_and_only_it() {
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
     let played = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     assert!(
-        played.nodes.iter().any(|n| !n.on_home && n.activation > 0.0),
+        played.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
         "the off-sheet note has to be lit for this to mean anything",
     );
     assert_eq!(played.pluses.len(), scene.pluses.len(), "a note off the sheet changed the field");

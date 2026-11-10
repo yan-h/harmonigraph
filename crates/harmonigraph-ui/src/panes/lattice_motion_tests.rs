@@ -66,16 +66,16 @@ fn markers_and_midi_ring_floor_follow_the_reversed_note_and_existing_history() {
         event(&mut state, 0.15, true);
         frame(&mut state, 0.18, 0, false);
         event(&mut state, 0.20, false);
-        for (now, activation) in [(0.22, 0.03), (0.30, 0.0), (2.20, 0.0)] {
+        for (now, presence) in [(0.22, 0.03), (0.30, 0.0), (2.20, 0.0)] {
             let scene = frame(&mut state, now, 0, false);
             let node = origin(&scene);
-            assert!((node.activation - activation).abs() < 1e-5);
-            assert_eq!(node.audio_ring, node.activation);
+            assert!((node.presence_with_opacity - presence).abs() < 1e-5);
+            assert_eq!(node.audio_ring, node.presence_with_opacity);
             assert_eq!(state.runtime.tracker.voices().count() > 0, now < 2.0);
             let expected_name = match names {
                 NoteNames::All => 1.0,
                 NoteNames::Past if !(0.25..=2.0).contains(&now) => 1.0,
-                _ => activation,
+                _ => presence,
             };
             assert!((node.name_level(&state.appearance.view) - expected_name).abs() < 1e-5);
             let index =
@@ -136,7 +136,7 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
     frame(&mut audio, 0.2, 0, true);
     let settled = frame(&mut audio, 2.0, 0, true);
     assert_eq!(audio.runtime.tracker.voices().count(), 0);
-    assert_eq!(origin(&settled).activation, 0.0);
+    assert_eq!(origin(&settled).presence_with_opacity, 0.0);
     assert!(origin(&settled).audio_ring > 0.0);
     assert_eq!(origin(&settled).slice_progress, [1.0; 11]);
     event(&mut audio, 2.1, true);
@@ -150,7 +150,7 @@ fn exact_onset_and_audio_first_keep_surface_local_stable_poses() {
         if audio_first {
             for surface in [0, 1] {
                 let scene = frame(&mut state, 0.0, surface, true);
-                assert_eq!(origin(&scene).activation, 0.0);
+                assert_eq!(origin(&scene).presence_with_opacity, 0.0);
                 assert!(origin(&scene).audio_ring > 0.0);
             }
         }

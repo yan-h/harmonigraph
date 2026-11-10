@@ -1041,7 +1041,7 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
             .nodes
             .get(label.node as usize)
             .unwrap_or_else(|| panic!("label {label:?} names no node of the scene"));
-        assert!(node.activation > 0.0, "an unlit node has no name to draw: {label:?}");
+        assert!(node.presence_with_opacity > 0.0, "an unlit node has no name to draw: {label:?}");
         let ink = labels.glyphs[cursor..cursor + label.glyphs as usize]
             .iter()
             .map(|g| {

@@ -220,7 +220,8 @@ impl GlowFade {
             // The node answers that itself (`NodeInstance::glow_target`),
             // marks included, each layer read after the Opacity mapping, as
             // the slots' colours (`octaves`) and the mark levels carry it --
-            // not `activation`, the presence that holds through a release.
+            // not `presence_with_opacity`, the presence that holds through a
+            // release.
             let target = node.glow_target();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
@@ -369,7 +370,7 @@ mod tests {
             let mut scene = scene_at(state, now);
             fade.step(&mut scene, &state.appearance.view, now);
             let node = node_at(&scene, LatticePos::ORIGIN);
-            assert_eq!(node.activation, 0.0, "the note itself must be gone by {now}s");
+            assert_eq!(node.presence_with_opacity, 0.0, "the note itself must be gone by {now}s");
             node.glow.level
         };
         let just_after = level(&mut fade, &state, 0.05);
@@ -505,7 +506,7 @@ mod tests {
         scene.spectral.outer = 0.4;
         scene.spectral.levels.fill(u8::MAX);
         let node = scene.nodes.first_mut().expect("the window holds a node");
-        assert_eq!(node.activation, 0.0, "the fixture must hold no key");
+        assert_eq!(node.presence_with_opacity, 0.0, "the fixture must hold no key");
         node.audio_ring = 1.0;
         let pos = node.lattice_pos;
 

@@ -165,7 +165,10 @@ mod tests {
                     assert_eq!(node.octaves, other.octaves);
                     assert_eq!(node.glow.level, other.glow.level);
                     if now == 2.0 {
-                        assert_eq!(node.activation, 0.0, "the fixture must outlive MIDI ink");
+                        assert_eq!(
+                            node.presence_with_opacity, 0.0,
+                            "the fixture must outlive MIDI ink"
+                        );
                         assert!(node.glow.level > 0.0);
                     }
                 }

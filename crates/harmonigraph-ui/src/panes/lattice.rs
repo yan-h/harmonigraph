@@ -690,11 +690,11 @@ pub(crate) fn draw_node_labels(
         // Opacity included), which is what puts the crossing between the two
         // ends on the Fade: it is the same ramp the node's ink rides, so a name
         // brightens and dims with the thing it names rather than on a clock of
-        // its own. Not `activation`, the node's presence: that waits through a
-        // Fade-out delay while the colour is already leaving, and a name held
-        // white over a node going dark reads as a note still sounding. The
-        // name's strength above reads the unfaded envelope, so a soft note is
-        // named whole in a greyer ink.
+        // its own. Not `presence_with_opacity`, the node's presence: that
+        // waits through a Fade-out delay while the colour is already leaving,
+        // and a name held white over a node going dark reads as a note still
+        // sounding. The name's strength above reads the presence without
+        // Opacity, so a soft note is named whole in a greyer ink.
         let ink = label_ink(view, node.drawn_level());
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
@@ -805,7 +805,7 @@ pub(crate) fn draw_node_labels(
 /// A period from the name's own face supplies both the visible dot and its
 /// existing distance-field shadow. Keep it in the SAME attached glyph run as
 /// the name: the renderer accepts one run per node. Its ink and shadow never
-/// spend activation, trail strength or the name's visibility.
+/// spend presence, trail strength or the name's visibility.
 fn draw_assignment_dot(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
@@ -1189,8 +1189,8 @@ mod tests {
             .project(scene.nodes[index].world_pos)
             .unwrap();
         assert!((dot.ink.center().x - (rect.min.x + center.x)).abs() < 0.01);
-        scene.nodes[index].activation = 1.0;
-        scene.nodes[index].envelope = 1.0;
+        scene.nodes[index].presence_with_opacity = 1.0;
+        scene.nodes[index].presence_without_opacity = 1.0;
         let sounding = draw(&scene, &state.appearance.view);
         let lit_dot = sounding.pieces().iter().find(|p| p.text == ".").unwrap();
         assert_eq!(lit_dot.ink, dot.ink, "activity must not move or resize the dot");
@@ -1233,7 +1233,7 @@ mod tests {
         let mut state = fresh();
         state.appearance.camera.distance = distance;
         // No arrival ramp: the scene below is derived 50ms in, a fraction of
-        // any real Fade, and a label's alpha rides its node's activation.
+        // any real Fade, and a label's alpha rides its node's presence.
         // This suite is about where a label is DRAWN, not how lit it is.
         state.runtime.frame_params.fade_time = 0.0;
         // A chord spread across the lattice, so nodes land all over the pane
@@ -1309,7 +1309,9 @@ mod tests {
                 // picks out: an off-sheet node draws its name smaller, so
                 // counting those on one side and not the other would compare
                 // two different things.
-                .filter(|node| node.on_home && node.activation > 0.0 && node.is_visible())
+                .filter(|node| {
+                    node.on_home && node.presence_with_opacity > 0.0 && node.is_visible()
+                })
                 .filter_map(|node| projector.project(node.world_pos))
                 .filter(|p| rect.contains(egui::pos2(rect.min.x + p.x, rect.min.y + p.y)))
                 .count();
@@ -1418,16 +1420,16 @@ mod tests {
         );
     }
 
-    /// A node with `activation`, on the home sheet or off it, and nothing
+    /// A node at `presence`, on the home sheet or off it, and nothing
     /// else going on — the two inputs the reserve turns on.
     ///
     /// Departing, as the name says: every level below is a note on its way
     /// out, which is the only end the reserve is for. The arrival is
     /// `a_name_arriving_is_no_brighter_than_the_note_it_names`.
-    fn fading(activation: f32, on_home: bool) -> harmonigraph_scene::NodeInstance {
+    fn fading(presence: f32, on_home: bool) -> harmonigraph_scene::NodeInstance {
         harmonigraph_scene::NodeInstance {
-            activation,
-            envelope: activation,
+            presence_with_opacity: presence,
+            presence_without_opacity: presence,
             departing: true,
             melody_color: glam::Vec4::ONE,
             bass_color: glam::Vec4::ONE,
@@ -1460,7 +1462,7 @@ mod tests {
     #[test]
     fn only_a_name_that_will_be_kept_stops_short_of_zero() {
         // Off the home sheet: nothing will ever be recorded there, so the
-        // label rides the envelope all the way out.
+        // label rides the presence all the way out.
         for names in [NoteNames::Played, NoteNames::Past] {
             assert_eq!(level(&fading(0.2, false), names), 0.2);
             assert_eq!(level(&fading(0.02, false), names), 0.02);
@@ -1505,9 +1507,9 @@ mod tests {
     #[test]
     fn naming_everything_puts_every_visible_node_at_the_kept_level() {
         for on_home in [false, true] {
-            for activation in [0.0, 0.8] {
-                let want = if on_home || activation > 0.0 { 1.0 } else { 0.0 };
-                assert_eq!(level(&fading(activation, on_home), NoteNames::All), want);
+            for presence in [0.0, 0.8] {
+                let want = if on_home || presence > 0.0 { 1.0 } else { 0.0 };
+                assert_eq!(level(&fading(presence, on_home), NoteNames::All), want);
             }
         }
     }
@@ -1522,7 +1524,7 @@ mod tests {
     /// steady and then switching" the reserve exists to remove, at the other
     /// end of the note.
     ///
-    /// The band `0 < activation < 1` is the whole of a
+    /// The band `0 < presence_with_opacity < 1` is the whole of a
     /// note's climb, and it is climbed on every note-on: at the fresh view —
     /// the trail's kept names on — that is every lit node.
     #[test]
@@ -1542,16 +1544,20 @@ mod tests {
             NoteNames::Past,
             "the fresh view keeps the past; without that this proves nothing",
         );
-        let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
+        let node = scene
+            .nodes
+            .iter()
+            .find(|n| n.presence_with_opacity > 0.0)
+            .expect("the note lit a node");
         assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");
         assert!(
-            node.envelope < 1.0,
+            node.presence_without_opacity < 1.0,
             "sampled past the reserve's band at {}, so this cannot see the plateau",
-            node.activation,
+            node.presence_with_opacity,
         );
         assert_eq!(
             node.name_level(view),
-            node.envelope,
+            node.presence_without_opacity,
             "an arriving name was drawn at the trail reserve, not at its note's own level",
         );
 
@@ -1565,12 +1571,16 @@ mod tests {
             let window = state.appearance.view.reach();
             compose_scene(&mut state, &window, 1.0, None, 0, 1.9)
         };
-        let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
+        let node = scene
+            .nodes
+            .iter()
+            .find(|n| n.presence_with_opacity > 0.0)
+            .expect("the note still lights");
         assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
         assert!(
-            node.envelope < 1.0,
+            node.presence_without_opacity < 1.0,
             "sampled at {}, above the reserve, so this cannot see it hold",
-            node.activation,
+            node.presence_with_opacity,
         );
         assert_eq!(
             node.name_level(&state.appearance.view),
@@ -1600,7 +1610,11 @@ mod tests {
         };
         let view = &state.appearance.view;
         assert_eq!(view.note_names, NoteNames::Past, "the reserve is Past's alone");
-        let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
+        let node = scene
+            .nodes
+            .iter()
+            .find(|n| n.presence_with_opacity > 0.0)
+            .expect("the note still lights");
         assert!(node.departing && node.on_home, "the reserve wants a departure on the home sheet");
         assert_eq!(node.trail, 0.0, "the record is not written until the release ends");
         assert_eq!(node.name_level(view), 1.0, "the reserve did not hold the name whole");
@@ -1737,7 +1751,7 @@ mod tests {
     /// through brightnesses neither endpoint names — close enough to look
     /// right, and a third answer the setting does not give.
     ///
-    /// The level arrives as a node's activation, which is a float out of a
+    /// The level arrives as a node's drawn level, which is a float out of a
     /// derive, so the ends of the range and a value off it are held here too: a
     /// NaN in a mix is every label on the pane rather than the one node it came
     /// from.
@@ -1782,8 +1796,8 @@ mod tests {
     /// two ranks of grey `label_ink` exists to refuse.
     ///
     /// Sampled through the derive rather than off a hand-built node, because
-    /// which clock the crossing runs on is the whole claim: `activation` is the
-    /// ramp the node's own light rides, so there is no second time constant to
+    /// which clock the crossing runs on is the whole claim: `drawn_level` is
+    /// the ramp the node's own light rides, so there is no second time constant to
     /// set and none that can drift from the Fade.
     ///
     /// The release is where a brightness and an opacity part company, and that
@@ -1857,9 +1871,10 @@ mod tests {
     }
 
     /// A released note's name dims with its colour from the key-up, through a
-    /// Fade-out delay that holds the node's presence (and so its `activation`)
-    /// where it was. The ink reads the drawn colour, which leaves at the
-    /// release; the name itself stays drawn at full strength under `Past`.
+    /// Fade-out delay that holds the node's presence (and so its
+    /// `presence_with_opacity`) where it was. The ink reads the drawn colour,
+    /// which leaves at the release; the name itself stays drawn at full
+    /// strength under `Past`.
     #[test]
     fn a_released_names_ink_dims_through_the_fade_out_delay() {
         let mut state = fresh();

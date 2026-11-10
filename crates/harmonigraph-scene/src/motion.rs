@@ -905,8 +905,8 @@ impl NodeMotion {
             let motion = self.nodes.get(pos).unwrap_or(resting);
             node.slice_progress = motion.progress;
             // Opacity fades each slot's colour, and the node's presence with
-            // it, while the envelope under it runs untouched. Thickness reshapes a
-            // LIT slot only: a slot keeps its last reading once released, and
+            // it, while the presence without Opacity runs untouched. Thickness
+            // reshapes a LIT slot only: a slot keeps its last reading once released, and
             // an unlit one draws the ghost at full width whatever it read, so
             // it goes as 1 and the shader keeps its full-slice path there —
             // and its mark goes back to standing off the band.
@@ -921,8 +921,9 @@ impl NodeMotion {
             });
             // Never below the colour: the two ramp together and only the
             // presence ever waits.
-            node.activation = (0..11).map(|i| motion.levels[i] * fades[i]).fold(0.0, f32::max);
-            node.envelope = motion.levels.iter().copied().fold(0.0, f32::max);
+            node.presence_with_opacity =
+                (0..11).map(|i| motion.levels[i] * fades[i]).fold(0.0, f32::max);
+            node.presence_without_opacity = motion.levels.iter().copied().fold(0.0, f32::max);
             node.departing = !motion.gate;
             let (melody_slots, melody_level, melody_slot) = motion.melody.strongest();
             let (bass_slots, bass_level, bass_slot) = motion.bass.strongest();
@@ -938,7 +939,8 @@ impl NodeMotion {
             node.melody_color = color(melody_slot);
             node.bass_color = color(bass_slot);
             if scene.spectral.ring_draws() {
-                node.audio_ring = fade.level(&scene.octave_layout, node.cents).max(node.activation);
+                node.audio_ring =
+                    fade.level(&scene.octave_layout, node.cents).max(node.presence_with_opacity);
             }
             // The node glow is the drawn colour: the most opaque slot or mark,
             // each after its Opacity, as the bloom reads it, rather than the
@@ -1044,7 +1046,7 @@ mod tests {
     }
     /// The view with intensity pinned unrouted, so every note is drawn in full,
     /// and every slice moving at once, so a test about timing reads one
-    /// slice's progress and one node's activation without routes or stagger in
+    /// slice's progress and one node's presence without routes or stagger in
     /// them. The tests about the stagger or intensity set their own.
     fn view() -> ViewConfig {
         let mut view =
@@ -1121,10 +1123,10 @@ mod tests {
             let (_, lit) = lit_by(&first, 60);
             tracker.handle_event(off(0.3, 60));
             let fading = draw(&mut motion, &mut tracker, &view, 1.45, false);
-            assert!(origin(&fading).activation > 0.0, "the ink ran out early");
+            assert!(origin(&fading).presence_with_opacity > 0.0, "the ink ran out early");
             assert!(origin(&fading).slice_progress[lit] > 0.5, "the lit slice left in time");
             let dark = draw(&mut motion, &mut tracker, &view, 1.55, false);
-            assert_eq!(origin(&dark).activation, 0.0, "past the departure's span");
+            assert_eq!(origin(&dark).presence_with_opacity, 0.0, "past the departure's span");
             assert_eq!(
                 origin(&dark).slice_progress,
                 [0.0; 11],
@@ -1204,7 +1206,7 @@ mod tests {
         ] {
             assert!((low - 0.84).abs() < 0.03, "the lit slot's {what} held at {low}");
         }
-        assert_eq!(lowest(&|n| n.activation), 1.0, "the presence left with the colour");
+        assert_eq!(lowest(&|n| n.presence_with_opacity), 1.0, "the presence left with the colour");
         assert_eq!(origin(&frames.last().unwrap().1).slice_progress, [1.0; 11]);
     }
     /// A note released before its arrival finished plays the same short rise
@@ -1229,7 +1231,10 @@ mod tests {
         let (_, later) = frames.iter().find(|(now, _)| *now >= 0.5).unwrap();
         let colour = origin(later).octaves[slot];
         assert!((colour - 0.1).abs() < 0.03, "the lit slot's colour waited at {colour}");
-        assert!(origin(later).activation >= 0.3 - 1e-6, "the presence left with the colour");
+        assert!(
+            origin(later).presence_with_opacity >= 0.3 - 1e-6,
+            "the presence left with the colour"
+        );
     }
     /// The fade-out delay holds the whole departure -- the sweep and the
     /// presence -- and not the colour, so the released wheel stands uncoloured
@@ -1265,7 +1270,7 @@ mod tests {
         // nothing else has moved.
         let waiting = at(off_at + 0.4);
         assert!((waiting.octaves[slot] - 0.6).abs() < 0.02, "the colour waited");
-        assert_eq!(waiting.activation, 1.0, "the presence did not wait");
+        assert_eq!(waiting.presence_with_opacity, 1.0, "the presence did not wait");
         assert_eq!(waiting.slice_progress[..span], [1.0; 11][..span], "a slice did not wait");
         for (i, &delay) in order.iter().enumerate().take(span) {
             let leaves = frames
@@ -1281,13 +1286,16 @@ mod tests {
         }
         let last = order.iter().copied().fold(0.0, f32::max);
         let end = off_at + f64::from(hold + last) + 1.0;
-        assert!(at(end - 0.05).activation > 0.0, "the presence left before the last slice");
-        assert_eq!(at(end + 0.02).activation, 0.0, "the departure outlasted its span");
+        assert!(
+            at(end - 0.05).presence_with_opacity > 0.0,
+            "the presence left before the last slice"
+        );
+        assert_eq!(at(end + 0.02).presence_with_opacity, 0.0, "the departure outlasted its span");
         // Pressed again inside the wait, nothing has left to come back.
         let frames = run(&[on(0.0, 60), off(off_at, 60), on(off_at + 0.3, 60)]);
         let after = frames.iter().filter(|(now, _)| *now >= off_at).map(|(_, s)| origin(s));
         for node in after {
-            assert_eq!(node.activation, 1.0, "the presence fell under a re-press");
+            assert_eq!(node.presence_with_opacity, 1.0, "the presence fell under a re-press");
             assert_eq!(node.slice_progress[..span], [1.0; 11][..span], "a slice retracted");
         }
     }
@@ -1318,7 +1326,7 @@ mod tests {
         assert!(span > 2, "the fixture's wheel is not staggered");
         let leaving = |t: f64| {
             let node = origin(&frames.iter().find(|(now, _)| *now >= t - 1e-9).unwrap().1);
-            node.activation > 0.0 || node.slice_progress[..span].iter().any(|&p| p > 0.0)
+            node.presence_with_opacity > 0.0 || node.slice_progress[..span].iter().any(|&p| p > 0.0)
         };
         assert!(leaving(end - 0.03), "the node had left before its departure span ended");
         assert!(!leaving(end + 0.02), "the node was still leaving after its departure span");
@@ -1337,7 +1345,7 @@ mod tests {
         draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.1);
         // Hidden for well past twice the fade, which alone resets the surface.
         let back = draw_duration(&mut motion, &mut tracker, &view, 2.0, false, 0.1);
-        assert_eq!(origin(&back).activation, 1.0, "the wheel left inside its wait");
+        assert_eq!(origin(&back).presence_with_opacity, 1.0, "the wheel left inside its wait");
         assert_eq!(origin(&back).octaves, [0.0; 11], "the colour waited");
     }
     #[test]
@@ -1349,7 +1357,7 @@ mod tests {
         tracker.handle_event(on(0.15, 60));
         tracker.handle_event(off(0.20, 60));
         let late = draw(&mut motion, &mut tracker, &view, 0.22, false);
-        assert!((origin(&late).activation - 0.03).abs() < 1e-5);
+        assert!((origin(&late).presence_with_opacity - 0.03).abs() < 1e-5);
         let mut timely_tracker = NoteTracker::new();
         let mut timely = NodeMotion::default();
         timely_tracker.handle_event(on(0.15, 60));
@@ -1367,11 +1375,15 @@ mod tests {
         tracker.handle_event(off(0.20, 60));
         let late_off = draw(&mut motion, &mut tracker, &view, 0.22, false);
         assert_eq!(origin(&late_off).slice_progress, origin(&reference).slice_progress);
-        assert!((origin(&late_off).activation - 0.03).abs() < 1e-5);
+        assert!((origin(&late_off).presence_with_opacity - 0.03).abs() < 1e-5);
         draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.05);
         let longer = draw_duration(&mut motion, &mut tracker, &view, 0.6, false, 1.0);
-        assert_eq!(origin(&longer).activation, 0.0, "a longer horizon replayed an old note");
-        // The activation alone cannot tell: this note's replay also ends dark.
+        assert_eq!(
+            origin(&longer).presence_with_opacity,
+            0.0,
+            "a longer horizon replayed an old note"
+        );
+        // The presence alone cannot tell: this note's replay also ends dark.
         assert_eq!(motion.replayed_edges, 0, "a longer horizon forgot an old note's cursor");
 
         // Every note above has ENDED by the frame it arrives at, so its late
@@ -1396,7 +1408,7 @@ mod tests {
                 draw(&mut motion, &mut tracker, &view, 0.15, false);
             }
             tracker.handle_event(bend(0.215, 2.0));
-            origin(&draw(&mut motion, &mut tracker, &view, 0.22, false)).activation
+            origin(&draw(&mut motion, &mut tracker, &view, 0.22, false)).presence_with_opacity
         };
         let (late, timely) = (held_late(true), held_late(false));
         assert!(timely > 0.03, "the onset's fixture must have lit the old node: {timely}");
@@ -1411,7 +1423,7 @@ mod tests {
             if !deliver_after {
                 draw(&mut motion, &mut tracker, &view, 1.15, false);
             }
-            origin(&draw(&mut motion, &mut tracker, &view, 1.22, false)).activation
+            origin(&draw(&mut motion, &mut tracker, &view, 1.22, false)).presence_with_opacity
         };
         let (late, timely) = (bent_late(true), bent_late(false));
         assert!(timely < 0.95, "the bend's fixture must be fading the old node: {timely}");
@@ -1455,7 +1467,7 @@ mod tests {
         assert!(!motion.nodes.contains_key(&LatticePos::ORIGIN));
         let returned = draw(&mut motion, &mut tracker, &view, 1.3, false);
         assert_eq!(origin(&returned).slice_progress, [1.0; 11]);
-        assert_eq!(origin(&returned).activation, 1.0);
+        assert_eq!(origin(&returned).presence_with_opacity, 1.0);
     }
     /// A node whose note has faded all the way keeps no entry, so a frame's
     /// motion costs the notes in play rather than every node they ever lit.
@@ -1500,8 +1512,12 @@ mod tests {
             let node = origin(&scene);
             // The presence holds at the off's 0.2 while the off travels the
             // sweep, then the re-press raises it from there at event time.
-            assert!((node.activation - 0.25).abs() < 1e-5, "{}", node.activation);
-            snapshots.push((node.activation, node.slice_progress));
+            assert!(
+                (node.presence_with_opacity - 0.25).abs() < 1e-5,
+                "{}",
+                node.presence_with_opacity
+            );
+            snapshots.push((node.presence_with_opacity, node.slice_progress));
             let repeated = draw(&mut motion, &mut tracker, &view, 0.3, false);
             assert_eq!(node.slice_progress, origin(&repeated).slice_progress);
         }
@@ -1527,7 +1543,12 @@ mod tests {
         let slot = |scene: &Scene| {
             let node = origin(scene);
             let lit = node.octaves.iter().position(|&l| l > 0.0);
-            (node.activation, lit.map(|i| node.octaves[i]), node.departing, node.glow.level)
+            (
+                node.presence_with_opacity,
+                lit.map(|i| node.octaves[i]),
+                node.departing,
+                node.glow.level,
+            )
         };
         tracker.handle_event(on(0.0, 60));
         let silent = draw(&mut motion, &mut tracker, &view, 1.1, false);
@@ -1547,10 +1568,10 @@ mod tests {
         assert_eq!(slot(&pressed), (0.5, Some(0.5), false, 0.5), "ink and glow follow at once");
 
         tracker.handle_event(off(1.2, 60));
-        let (activation, _, departing, glow) =
+        let (presence, _, departing, glow) =
             slot(&draw(&mut motion, &mut tracker, &view, 1.7, false));
         assert!(departing, "released");
-        assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
+        assert!((presence - 0.25).abs() < 1e-5, "half the release left, at half: {presence}");
         assert!((glow - 0.25).abs() < 1e-5, "the glow departs with the ink: {glow}");
     }
     /// With velocity and gain routed to Opacity over a rest of about a third
@@ -1575,7 +1596,7 @@ mod tests {
         };
         let (soft, loud) = (held(0.0), held(1.0));
         assert!(soft.melody_level > 0.0, "the fixture lights a mark as well as a slot");
-        assert!((soft.activation - 0.81).abs() < 0.01, "{}", soft.activation);
+        assert!((soft.presence_with_opacity - 0.81).abs() < 0.01, "{}", soft.presence_with_opacity);
         assert_eq!(soft.glow.level, soft.drawn_level().max(soft.melody_level));
         assert!(soft.glow.level < 0.82, "a soft note's halo dims: {}", soft.glow.level);
         assert_eq!(loud.glow.level, 1.0, "a loud note's halo is full");
@@ -1614,7 +1635,7 @@ mod tests {
                 draw(&mut motion, &mut tracker, &view, 1.0, false);
             }
             tracker.handle_event(off(0.95, 60));
-            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).activation
+            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).presence_with_opacity
         };
         let (on_time, late) = (release(false), release(true));
         assert!(on_time > 0.5, "the on-time release is still fading: {on_time}");
@@ -1655,7 +1676,7 @@ mod tests {
                 kind: harmonigraph_core::NoteEventKind::Tuning { semitones: 2.0 },
                 ..onset
             });
-            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).activation
+            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).presence_with_opacity
         };
         let (sparse, dense) = (run(false), run(true));
         assert!(dense > 0.8, "the old slot is visibly fading: {dense}");
@@ -1711,7 +1732,7 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         draw(&mut motion, &mut tracker, &view, 0.0, false);
         let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
-        assert_eq!(origin(&held).activation, 1.0, "velocity must not dim occupancy");
+        assert_eq!(origin(&held).presence_with_opacity, 1.0, "velocity must not dim occupancy");
         tracker.handle_event(on(1.2, 72));
         tracker.handle_event(off(1.3, 60));
         assert_eq!(
@@ -1873,7 +1894,7 @@ mod tests {
             // whole wheel wait on whichever slot the note happened to take:
             // measured on a late one, that collapsed seven starts spanning
             // 0.9 into all of them landing within 0.08.
-            assert!(node.activation > 0.0, "presence waited on a slice");
+            assert!(node.presence_with_opacity > 0.0, "presence waited on a slice");
             for i in 0..span {
                 started[i] = started[i].or((node.slice_progress[i] > 0.0).then_some(now));
                 done[i] = done[i].or((node.slice_progress[i] >= 1.0).then_some(now));
@@ -2162,14 +2183,14 @@ mod tests {
             tracker.handle_event(on(0.0, 60));
             tracker.handle_event(tune(at));
             let scene = draw(&mut motion, &mut tracker, &view, now, false);
-            assert_eq!(origin(&scene).activation, 0.0, "old ET pitch lit at {now}");
-            assert!(scene.nodes.iter().any(|n| n.activation > 0.0));
+            assert_eq!(origin(&scene).presence_with_opacity, 0.0, "old ET pitch lit at {now}");
+            assert!(scene.nodes.iter().any(|n| n.presence_with_opacity > 0.0));
         }
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.0, 60));
         let scene = draw_duration(&mut motion, &mut tracker, &view, 0.2, false, 0.05);
-        assert_eq!(origin(&scene).activation, 1.0);
+        assert_eq!(origin(&scene).presence_with_opacity, 1.0);
         assert_eq!(origin(&scene).melody_level, 0.0, "late first observation skipped mark delay");
         tracker = NoteTracker::new();
         motion = NodeMotion::default();
@@ -2179,7 +2200,7 @@ mod tests {
         tracker.handle_event(off(0.2, 60));
         let scene = draw(&mut motion, &mut tracker, &view, 0.35, false);
         assert!(
-            scene.nodes.iter().all(|n| n.activation < 0.11),
+            scene.nodes.iter().all(|n| n.presence_with_opacity < 0.11),
             "release-time bend resurrected a lifetime"
         );
     }

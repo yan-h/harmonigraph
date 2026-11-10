@@ -490,7 +490,7 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
         node.octaves[releasing] = level;
         // The instance still down. This is what holds the whole backdrop up
         // while the other one fades, and the reason the handoff is legible.
-        node.activation = 1.0;
+        node.presence_with_opacity = 1.0;
         scene
     };
 
@@ -586,7 +586,7 @@ fn a_lone_notes_octave_fades_in_a_straight_line() {
         node.octaves[slot] = envelope;
         // ONE envelope for both: nothing else on this node is sounding, so
         // its presence is this octave's own.
-        node.activation = envelope;
+        node.presence_with_opacity = envelope;
         scene
     };
 
@@ -642,7 +642,7 @@ fn a_thin_slice_lights_from_the_inner_edge_and_leaves_a_notch_beyond() {
         node.octaves[slot] = level;
         node.thickness[slot] = thickness;
         // Present in full, so the ghost is the ground undiluted.
-        node.activation = 1.0;
+        node.presence_with_opacity = 1.0;
         scene
     };
     let (mid, wedge) = wedge_of(layout, slot, 0.0);
@@ -707,7 +707,7 @@ fn a_thick_slice_swells_past_the_band() {
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[slot] = 1.0;
         node.thickness[slot] = thickness;
-        node.activation = 1.0;
+        node.presence_with_opacity = 1.0;
         scene
     };
     let (mid, wedge) = wedge_of(layout, slot, 0.0);
@@ -788,7 +788,7 @@ fn a_silent_slice_wears_the_ground_the_scene_names() {
         node.octaves[lit] = 1.0;
         // The note fully down, so every silent slice on the ring is opaque and
         // the wedge below reads the ground rather than a share of it.
-        node.activation = 1.0;
+        node.presence_with_opacity = 1.0;
         scene
     };
 

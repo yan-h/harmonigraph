@@ -107,10 +107,10 @@ pub(super) fn parity_scene() -> Scene {
         let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
         octaves[slot(i as usize)] = 1.0 - f * 0.1;
         octaves[slot(i as usize + 5)] = 0.4;
-        let activation = if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 };
+        let presence = if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 };
         nodes.push(harmonigraph_scene::NodeInstance {
-            activation,
-            envelope: activation,
+            presence_with_opacity: presence,
+            presence_without_opacity: presence,
             octaves,
             // Exercise the mark paths: one node marked melody, one bass, and
             // one wearing both — on its two lit slots, so the pair is drawn as
@@ -502,8 +502,8 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
     let mut scene = parity_scene();
     scene.nodes = vec![harmonigraph_scene::NodeInstance {
-        activation: 1.0,
-        envelope: 1.0,
+        presence_with_opacity: 1.0,
+        presence_without_opacity: 1.0,
         octaves,
         melody_slots,
         bass_slots,
@@ -659,7 +659,7 @@ pub(super) fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f3
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
     // Fully present whatever is lit, so the band's ghost ring is the same in
     // every shot and drops out of the differences below.
-    node.activation = 1.0;
+    node.presence_with_opacity = 1.0;
     if let Some(slot) = held {
         node.octaves[slot] = 1.0;
     }
@@ -869,7 +869,7 @@ pub(super) fn layered_node(melody: u32, ring: f32, band: bool, shadow: f32) -> S
 pub(super) fn idle_scene() -> Scene {
     let mut scene = parity_scene();
     for (i, node) in scene.nodes.iter_mut().enumerate() {
-        node.activation = 0.0;
+        node.presence_with_opacity = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.melody_slots = 0;
         node.bass_slots = 0;

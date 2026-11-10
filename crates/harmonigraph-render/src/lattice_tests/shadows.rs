@@ -625,7 +625,7 @@ fn ringing_only(ring: f32, shadow: f32, depth: f32) -> Scene {
     scene.octave_gap = PROBE_GAP;
     let node = &mut scene.nodes[0];
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-    node.activation = 0.0;
+    node.presence_with_opacity = 0.0;
     node.melody_level = 0.0;
     node.bass_level = 0.0;
     node.glow.level = 0.0;
@@ -1514,7 +1514,7 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
         scene.nodes[0].bass_level = 0.0;
         scene.nodes[0].octaves.fill(0.0);
         scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
-        scene.nodes[0].activation = 1.0;
+        scene.nodes[0].presence_with_opacity = 1.0;
         let full = shooter.shot(&scene);
         scene.view.shadow.lattice_geometry.depth = 0.0;
         let bare = shooter.shot(&scene);
@@ -1533,7 +1533,7 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
         scene.view.shadow.lattice_geometry.depth = 1.0;
         for level in [0.75, 0.5, 0.25, 0.05, 0.0] {
             scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
-            scene.nodes[0].activation = level;
+            scene.nodes[0].presence_with_opacity = level;
             let faded = shooter.shot(&scene);
             let worst = exterior
                 .iter()

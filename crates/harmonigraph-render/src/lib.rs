@@ -574,8 +574,9 @@ const _: () = assert!(SPECTRUM_WORDS == 240);
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuInstance {
     world_pos: [f32; 3],
-    /// x: activation, the node's presence, y: melody mark level, z: bass
-    /// mark level (see lattice.wgsl). The first three are levels the same
+    /// x: the node's presence with Opacity
+    /// ([`harmonigraph_scene::NodeInstance::presence_with_opacity`]), y: melody
+    /// mark level, z: bass mark level (see lattice.wgsl). The first three are levels the same
     /// node draws at, read together by the layers that draw it. w is the
     /// glow's target ([`harmonigraph_scene::NodeInstance::glow_target`]), which the
     /// presence outlasts after a release, for [`ink_history`]; the shader
@@ -606,8 +607,8 @@ struct GpuInstance {
     /// it (`NodeInstance::scale`).
     scale: f32,
     /// How much of the audio ring this node wears, 0..=1: the gate's answer for
-    /// its wedges carried on the note Fade, floored by the node's own envelope
-    /// (`NodeInstance::audio_ring`).
+    /// its wedges carried on the note Fade, floored by the node's own presence
+    /// with Opacity (`NodeInstance::audio_ring`).
     ///
     /// A DECISION already taken and not the node's own peak level with the gate
     /// beside it in the uniforms, though there is a free slot there for one:

@@ -397,7 +397,7 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     scene.spectral = paint;
     // Which nodes the ring is worth drawing on, now that there is something to
     // ask it of. The following motion pass reads this measured presence for
-    // audio-only poses, then adds its final MIDI activation as a draw floor.
+    // audio-only poses, then adds its final MIDI presence as a draw floor.
     // With no audio flowing the grid is
     // zeros and every node is held back at any gate above its floor, which is
     // the point: an analyzer with nothing to say draws no rings rather than a
@@ -986,7 +986,7 @@ mod tests {
         assert!(!midi.spectral.ring_draws(), "the ring drew with no width to draw in");
         state.appearance.view.spectral_ring_width = ring_width;
         assert!(
-            midi.nodes.iter().any(|n| n.activation > 0.0),
+            midi.nodes.iter().any(|n| n.presence_with_opacity > 0.0),
             "the keys lit nothing, so there is no MIDI picture to leave alone",
         );
 
@@ -1001,7 +1001,10 @@ mod tests {
             let both = scene_of(&mut state);
             for (was, now) in midi.nodes.iter().zip(&both.nodes) {
                 let at = was.lattice_pos;
-                assert_eq!(now.activation, was.activation, "{reading:?}: {at:?} changed how lit");
+                assert_eq!(
+                    now.presence_with_opacity, was.presence_with_opacity,
+                    "{reading:?}: {at:?} changed how lit"
+                );
                 assert_eq!(now.octaves, was.octaves, "{reading:?}: {at:?} lost its held octaves");
                 assert_eq!(now.melody_slots, was.melody_slots, "{reading:?}: {at:?} lost its mark");
             }
@@ -1641,7 +1644,7 @@ mod tests {
                     .min_by(|a, b| (a.cents - 900.0).abs().total_cmp(&(b.cents - 900.0).abs()))
                     .expect("the lattice contains an A node");
                 assert!((node.cents - 900.0).abs() < 0.01);
-                assert_eq!(node.activation, 0.0, "MIDI must not hold the ring open");
+                assert_eq!(node.presence_with_opacity, 0.0, "MIDI must not hold the ring open");
                 levels.push(node.audio_ring);
             }
             assert_eq!(levels[1], 0.0, "below the strict threshold: {levels:?}");

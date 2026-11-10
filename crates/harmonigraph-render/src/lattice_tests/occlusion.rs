@@ -360,7 +360,7 @@ fn a_ring_in_front_hides_a_cross_behind_it() {
         let top = band_top(&scene, 0);
         a_cross_on(&mut scene, place, top);
         if !ring {
-            scene.nodes[0].activation = 0.0;
+            scene.nodes[0].presence_with_opacity = 0.0;
             scene.nodes[0].octaves.fill(0.0);
         }
         scene.view.shadow = one_shadow(1.0, 0.0);

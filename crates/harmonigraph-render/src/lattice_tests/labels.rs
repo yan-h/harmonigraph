@@ -38,7 +38,7 @@ fn one_node_behind_another() -> Scene {
     scene.node_radius = 0.5;
     let mut near = scene.nodes[0];
     near.world_pos = STACK_AT.extend(0.0);
-    near.activation = 1.0;
+    near.presence_with_opacity = 1.0;
     near.scale = 1.0;
     near.hovered = false;
     near.on_home = true;
@@ -234,10 +234,10 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         ..Default::default()
     };
     scene.pluses.clear();
-    let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
+    let node = |z: f32, presence: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
-        activation,
-        envelope: activation,
+        presence_with_opacity: presence,
+        presence_without_opacity: presence,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,
@@ -342,10 +342,10 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
         ..Default::default()
     };
     scene.pluses.clear();
-    let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
+    let node = |z: f32, presence: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
-        activation,
-        envelope: activation,
+        presence_with_opacity: presence,
+        presence_without_opacity: presence,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,
@@ -423,10 +423,10 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
     };
     // The stock resting state: one sheet, and an untouched node painting
     // nothing at all, which is every idle node.
-    let node = |activation: f32| harmonigraph_scene::NodeInstance {
+    let node = |presence: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, 0.0),
-        activation,
-        envelope: activation,
+        presence_with_opacity: presence,
+        presence_without_opacity: presence,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,
@@ -878,8 +878,8 @@ fn a_names_shadow_is_the_same_after_another_name_as_after_a_node() {
     // lit node's with nothing drawn between the two.
     let silent = harmonigraph_scene::NodeInstance {
         world_pos: lit.world_pos + glam::Vec3::Z,
-        activation: 0.0,
-        envelope: 0.0,
+        presence_with_opacity: 0.0,
+        presence_without_opacity: 0.0,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,

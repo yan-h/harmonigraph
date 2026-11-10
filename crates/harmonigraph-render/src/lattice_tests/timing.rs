@@ -99,7 +99,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
             ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
         scene.camera.distance = harmonigraph_scene::Camera::default().distance;
         let mut node = scene.nodes[0];
-        node.activation = 0.0;
+        node.presence_with_opacity = 0.0;
         node.octaves.fill(0.0);
         node.melody_level = 0.0;
         node.bass_level = 0.0;
@@ -118,7 +118,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
             .collect();
         if lit {
             let n = &mut scene.nodes[112];
-            n.activation = 1.0;
+            n.presence_with_opacity = 1.0;
             n.octaves.fill(1.0);
             n.glow = harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 };
         }
@@ -221,10 +221,10 @@ fn atmosphere_costs_by_polyphony() {
                 // node, or those outside pitch classes C to F, keeps only
                 // its glow, which is what ships an ink-less instance.
                 "released" | "6-pcs-held" => {
-                    for node in variant.nodes.iter_mut().filter(|n| n.activation > 0.0) {
+                    for node in variant.nodes.iter_mut().filter(|n| n.presence_with_opacity > 0.0) {
                         let pc = (node.cents / 100.0).round() as u32 % 12;
                         if case == "released" || pc >= 6 {
-                            node.activation = 0.0;
+                            node.presence_with_opacity = 0.0;
                             node.octaves.fill(0.0);
                             node.melody_level = 0.0;
                             node.bass_level = 0.0;
@@ -274,8 +274,9 @@ fn animation_costs_by_pose_and_density() {
             scene.view.shadow.lattice_geometry.width = 0.6;
             scene.view.shadow.lattice_geometry.depth = 0.8;
             if dense {
-                let mut node = scene.nodes.iter().find(|n| n.activation > 0.0).copied().unwrap();
-                node.activation = 0.0;
+                let mut node =
+                    scene.nodes.iter().find(|n| n.presence_with_opacity > 0.0).copied().unwrap();
+                node.presence_with_opacity = 0.0;
                 node.octaves = [1.0; 11];
                 node.melody_level = 0.0;
                 node.bass_level = 0.0;
@@ -337,7 +338,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, n)| n.activation > 0.0)
+        .filter(|(_, n)| n.presence_with_opacity > 0.0)
         .filter_map(|(i, n)| {
             let at = projector.project(n.world_pos)?;
             let inside = at.cmpge(glam::Vec2::splat(unit)).all()
@@ -453,7 +454,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     eprintln!(
         "{what}: {named} names on {} lit nodes at {}x{} px, {ppp} px/pt: prepare + composite GPU \
          {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames); prepare CPU {cpu_median:.3} ms median",
-        scene.nodes.iter().filter(|n| n.activation > 0.0).count(),
+        scene.nodes.iter().filter(|n| n.presence_with_opacity > 0.0).count(),
         size[0],
         size[1],
         samples.len(),
