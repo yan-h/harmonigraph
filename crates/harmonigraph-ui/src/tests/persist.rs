@@ -1365,29 +1365,20 @@ fn an_appearance_missing_any_one_group_keeps_the_rest() {
     }
 }
 
-/// The Spiral pane's framing round-trips, and a hand-edited one comes back
-/// drawable.
-///
-/// Persisted for the reason the lattice's camera is — a framing is dialled in by
-/// hand and comes back when the editor reopens — so what has to hold is that the pair
-/// SURVIVES rather than being re-derived from the fit, and that a nonsense one
-/// cannot reach the pane: both fields multiply the geometry it paints, and NaN
-/// geometry is a panic inside egui's tessellator.
+/// A hand-edited Spiral framing comes back drawable: both fields multiply the
+/// geometry the pane paints, and NaN geometry is a panic inside egui's
+/// tessellator. That a framing round-trips is
+/// [`every_editor_preference_round_trips`]'s.
 #[test]
-fn persist_round_trips_the_spiral_framing() {
+fn a_hand_edited_spiral_framing_comes_back_drawable() {
     let mut state = fresh();
     // A zoom off both ends of the range and a look off both axes, so a field
     // dropped or transposed on the way through shows up.
     state.workspace.interaction.prefs.spiral =
         crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
 
-    let mut restored = fresh();
-    assert!(restored.load_persist(&state.save_persist()));
-    assert_eq!(restored.workspace.interaction.prefs.spiral.zoom, 2.75);
-    assert_eq!(restored.workspace.interaction.prefs.spiral.look, glam::vec2(0.4, -0.6));
-
-    // And the repair on the way in, which is `load_persist`'s call rather than
-    // the pane's: a blob nothing but a text editor could have written.
+    // The repair on the way in is `load_persist`'s call rather than the
+    // pane's: a blob nothing but a text editor could have written.
     let saved = state.save_persist();
     let edited = replace_pair(&saved, "zoom", "2.75", "NaN");
     assert_ne!(edited, saved, "`zoom` is not in the blob to edit");
@@ -1471,23 +1462,39 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
 }
 
 /// Every editor preference comes back from a save dialled, as one struct.
+///
+/// Destructured without `..`, so a preference added later does not compile
+/// here until it is dialled: the blob's key list no longer names each one.
 #[test]
 fn every_editor_preference_round_trips() {
     let mut state = fresh();
     // Each off its default, so a preference re-derived rather than restored
     // shows up.
-    let prefs = &mut state.workspace.interaction.prefs;
-    prefs.folded_sections.insert("System/Performance".into());
-    prefs.frame_rate = crate::FrameRate::Third;
-    prefs.ui_scale = 1.25;
-    prefs.frameless = true;
-    prefs.skin_dials.accent_hue = 120.0;
-    prefs.perf_pos = Some(egui::pos2(40.0, 60.0));
-    prefs.show_perf = true;
-    prefs.show_perf_detail = true;
-    prefs.spiral.zoom = 2.75;
+    let crate::EditorPrefs {
+        folded_sections,
+        frame_rate,
+        ui_scale,
+        frameless,
+        skin_dials,
+        perf_pos,
+        show_perf,
+        show_perf_detail,
+        spiral,
+    } = &mut state.workspace.interaction.prefs;
+    folded_sections.insert("System/Performance".into());
+    *frame_rate = crate::FrameRate::Third;
+    *ui_scale = 1.25;
+    *frameless = true;
+    skin_dials.accent_hue = 120.0;
+    *perf_pos = Some(egui::pos2(40.0, 60.0));
+    *show_perf = true;
+    *show_perf_detail = true;
+    *spiral = crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
     let dialled = ron::to_string(&state.workspace.interaction.prefs).unwrap();
-    assert_ne!(dialled, ron::to_string(&crate::EditorPrefs::default()).unwrap());
+    let fresh_pairs = top_level_pairs(&ron::to_string(&crate::EditorPrefs::default()).unwrap());
+    for pair in top_level_pairs(&dialled) {
+        assert!(!fresh_pairs.contains(&pair), "{} is not dialled", pair.0);
+    }
 
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
@@ -2591,10 +2598,6 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
 fn tab_visibility_is_saved_only_with_the_editor() {
     let mut state = fresh();
     state.workspace.interaction.prefs.frameless = true;
-    let saved = state.save_persist();
-    let mut restored = fresh();
-    assert!(restored.load_persist(&saved));
-    assert!(restored.workspace.interaction.prefs.frameless);
     let appearance = ron::to_string(&state.picture.appearance).unwrap();
     assert!(!appearance.contains("frameless"));
     let old = appearance.replacen("view:(", "view:(frameless:true,", 1);

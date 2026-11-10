@@ -296,21 +296,14 @@ fn the_perf_overlay_comes_back_where_it_was_switched_off() {
     assert_eq!(back, placed, "the HUD should come back where it was switched off");
 }
 
-/// Where the HUD was dragged to outlives the session, and a hand-edited
-/// position that cannot be drawn is dropped rather than honoured.
+/// A hand-edited overlay position that cannot be drawn is dropped rather
+/// than honoured. That a dragged one outlives the session is
+/// `every_editor_preference_round_trips`'s.
 #[test]
-fn a_dragged_perf_overlay_is_persisted() {
+fn an_undrawable_perf_overlay_position_is_dropped() {
     let mut state = fresh();
     state.workspace.interaction.prefs.show_perf = true;
     state.workspace.interaction.prefs.perf_pos = Some(egui::pos2(123.0, 456.0));
-
-    let mut restored = fresh();
-    assert!(restored.load_persist(&state.save_persist()));
-    assert_eq!(
-        restored.workspace.interaction.prefs.perf_pos,
-        Some(egui::pos2(123.0, 456.0)),
-        "a dragged overlay should open where it was left",
-    );
 
     // NaN reaches the tessellator as geometry, and a blob is a file someone
     // can edit — see `load_persist`, which repairs the spiral framing for the
@@ -354,14 +347,5 @@ fn the_performance_overlay_ships_off() {
     assert!(
         !restored.workspace.interaction.prefs.show_perf,
         "a blob without show_perf opens with the overlay off"
-    );
-
-    // And a project that asked for it still gets it: the cut above is what
-    // makes the blob old, not the value, so the round-trip has to still work.
-    let mut kept = fresh();
-    kept.load_persist(&saved);
-    assert!(
-        kept.workspace.interaction.prefs.show_perf,
-        "a project that turned the overlay on keeps it"
     );
 }
