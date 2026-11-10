@@ -463,14 +463,12 @@ fn render_controls(
             ],
         );
         // Here rather than beside Finish recording: a render choice like Output
-        // size, which a queued export takes from the current look. Always shown,
-        // because whether it applies turns on the trigger a take was RECORDED
-        // under, not the one selected now.
+        // size, which a queued export takes from the current look.
         ui.horizontal_wrapped(|ui| {
             crate::widgets::label(ui, "Tail").on_hover_text(
                 "How long the video runs past the last recorded note or automation, so releases finish fading. \
                  The video always runs to the end of the recorded audio, so 0 ends an audio export at its \
-                 range end. A take recorded under Loop end ends with its loop and ignores this.",
+                 range end.",
             );
             ui.add(
                 egui::DragValue::new(&mut state.appearance.render.tail)

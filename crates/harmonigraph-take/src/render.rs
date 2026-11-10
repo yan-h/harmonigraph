@@ -234,10 +234,9 @@ pub struct RenderConfig {
     /// Seconds the video runs past the take's last event, so releases finish
     /// fading and the roll clears. The Video pane's Tail.
     ///
-    /// Ignored for a take RECORDED under [`AtLoopEnd`](RenderTrigger::AtLoopEnd),
-    /// whose video ends with its loop (#1125), and never cuts the soundtrack
-    /// short: the render still runs to the end of the take's audio. So 0 ends an
-    /// audio export at its range end rather than a few silent seconds past it.
+    /// Never cuts the soundtrack short: the render still runs to the end of the
+    /// take's audio. So 0 ends an audio export at its range end rather than a
+    /// few silent seconds past it.
     ///
     /// A render choice like [`short_edge`](Self::short_edge): a queued export's
     /// appearance supplies it, and the offline renderer's `--tail` overrides it.
@@ -623,12 +622,6 @@ pub fn archive_path(video: &std::path::Path) -> std::path::PathBuf {
         video.file_stem().unwrap_or_default().to_string_lossy()
     ))
 }
-
-/// How the offline renderer starts the line saying an archive copy failed.
-/// The export queue keeps that line apart from the first `warning:` it keeps,
-/// because the copy's is the one that decides whether the video may be
-/// deleted, and it comes last.
-pub const ARCHIVE_FAILED: &str = "warning: no archive copy: ";
 
 /// Session-only export state; never persisted in a project or take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
