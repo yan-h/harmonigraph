@@ -431,11 +431,9 @@ pub(crate) struct RollPipelines {
     /// the same resolution, same knee, same kernel, same fractions of the
     /// pane's screen size, in the same half floats ([`BLOOM_FORMAT`]). Only
     /// the threshold's reading of coverage and the composite's target are the
-    /// roll's own, which is why the pipelines are its own and the chain is not.
-    bright_pipeline: wgpu::RenderPipeline,
-    downsample_pipeline: wgpu::RenderPipeline,
-    blur_h_pipeline: wgpu::RenderPipeline,
-    blur_v_pipeline: wgpu::RenderPipeline,
+    /// roll's own, which is why it holds its own build of
+    /// [`crate::BloomPipelines`].
+    chain_pipelines: crate::BloomPipelines,
     bloom_pipeline: wgpu::RenderPipeline,
     /// One sampled texture + the shared sampler (the three chain passes).
     filter_layout: wgpu::BindGroupLayout,
@@ -640,25 +638,7 @@ impl RollPipelines {
             label: Some("roll_holdout_bind_group_layout"),
             entries: &[texture_entry(2)],
         });
-        // Binding 4 for the strength, matching `AddUniforms` in blit.wgsl —
-        // the lattice's own composite holds 3.
-        let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("roll_bloom_bind_group_layout"),
-            entries: &[
-                texture_entry(0),
-                sampler_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let bloom_layout = crate::BloomChain::add_layout(device, "roll_bloom_bind_group_layout");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("roll_shader"),
             source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
@@ -666,19 +646,7 @@ impl RollPipelines {
         let core_pipeline = |format| {
             create_core_pipeline(device, &shader, format, target_format.is_srgb(), &layout)
         };
-        // The chain overwrites its whole target, so those three take no blend;
-        // the bloom composite uses ordinary over in the egui pass.
         let blit_shader = crate::blit_module(device);
-        let filter = |entry| {
-            crate::create_post_pipeline(
-                device,
-                &blit_shader,
-                entry,
-                BLOOM_FORMAT,
-                &filter_layout,
-                None,
-            )
-        };
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("roll_bloom_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -707,17 +675,18 @@ impl RollPipelines {
             holdout_pipeline: create_holdout_pipeline(device, &shader, &layout),
             holdout_layout,
             layout,
-            bright_pipeline: filter("fs_bright_coverage"),
-            downsample_pipeline: filter("fs_downsample"),
-            blur_h_pipeline: filter("fs_blur_h"),
-            blur_v_pipeline: filter("fs_blur_v"),
-            bloom_pipeline: crate::create_post_pipeline(
+            chain_pipelines: crate::BloomPipelines::new(
                 device,
                 &blit_shader,
-                "fs_bloom_add",
+                BLOOM_FORMAT,
+                &filter_layout,
+                crate::BloomSource::Coverage,
+            ),
+            bloom_pipeline: crate::BloomChain::add_pipeline(
+                device,
+                &blit_shader,
                 target_format,
                 &bloom_layout,
-                Some(EGUI_BLEND),
             ),
             filter_layout,
             bloom_layout,
@@ -1121,10 +1090,7 @@ impl CallbackTrait for RollCallback {
                     surround_composite,
                     holdout_pipeline,
                     holdout_layout,
-                    bright_pipeline,
-                    downsample_pipeline,
-                    blur_h_pipeline,
-                    blur_v_pipeline,
+                    chain_pipelines,
                     filter_layout,
                     bloom_layout,
                     sampler,
@@ -1190,17 +1156,7 @@ impl CallbackTrait for RollCallback {
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, 0..pane.count);
             }
-            bloom.bloom.run(
-                egui_encoder,
-                crate::BloomPipelines {
-                    bright: bright_pipeline,
-                    downsample: downsample_pipeline,
-                    blur_h: blur_h_pipeline,
-                    blur_v: blur_v_pipeline,
-                },
-                "roll",
-                None,
-            );
+            bloom.bloom.run(egui_encoder, chain_pipelines, "roll", None);
         }
 
         // Kept while the cut draws, and dropped with it, since only the

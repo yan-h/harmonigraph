@@ -1029,17 +1029,6 @@ impl LatticeCallback {
     fn drives_timer(&self) -> bool {
         self.stats.is_some()
     }
-
-    /// The lattice's own pipelines, in the order [`BloomChain::run`] steps
-    /// through them.
-    fn bloom_pipelines(resources: &LatticeResources) -> BloomPipelines<'_> {
-        BloomPipelines {
-            bright: &resources.compiled.bright_pipeline,
-            downsample: &resources.compiled.downsample_pipeline,
-            blur_h: &resources.compiled.blur_h_pipeline,
-            blur_v: &resources.compiled.blur_v_pipeline,
-        }
-    }
 }
 
 /// One world point through `view_proj` onto a pane of `extent` — points or
@@ -1071,10 +1060,7 @@ struct CompiledLatticeResources {
     shaders: ShaderPipelines,
     composite_pipeline: wgpu::RenderPipeline,
     /// Bloom chain: bright pass, half->quarter downsample, blur x2.
-    bright_pipeline: wgpu::RenderPipeline,
-    downsample_pipeline: wgpu::RenderPipeline,
-    blur_h_pipeline: wgpu::RenderPipeline,
-    blur_v_pipeline: wgpu::RenderPipeline,
+    bloom: BloomPipelines,
     glow_statistics_layout: wgpu::BindGroupLayout,
     material: lattice_material::Pipelines,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -1413,20 +1399,13 @@ impl CompiledLatticeResources {
             &composite_layout,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
-        let filter = |entry| {
-            create_post_pipeline(
-                device,
-                &blit_shader,
-                entry,
-                LATTICE_COLOR_FORMAT,
-                &filter_layout,
-                None,
-            )
-        };
-        let bright_pipeline = filter("fs_bright");
-        let downsample_pipeline = filter("fs_downsample");
-        let blur_h_pipeline = filter("fs_blur_h");
-        let blur_v_pipeline = filter("fs_blur_v");
+        let bloom = BloomPipelines::new(
+            device,
+            &blit_shader,
+            LATTICE_COLOR_FORMAT,
+            &filter_layout,
+            BloomSource::Picture,
+        );
         // Linear filtering: identity when render scale is 1 (texel-aligned
         // sampling), smooth resampling at any other scale.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1507,10 +1486,7 @@ impl CompiledLatticeResources {
         Self {
             shaders,
             composite_pipeline,
-            bright_pipeline,
-            downsample_pipeline,
-            blur_h_pipeline,
-            blur_v_pipeline,
+            bloom,
             glow_statistics_layout,
             material: lattice_material::Pipelines::new(device, &filter_layout),
             bind_group_layout,
