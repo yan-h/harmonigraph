@@ -273,10 +273,14 @@ def openings(ticks, gpu_end, presented, events):
     """Each time an editor was opened: its frames and its events, split at
     the `open` row its first frame logs."""
     window_of = {int(row['frame']): w for w, rows in ticks.items() for row in rows}
+    start_of = {int(row['frame']): float(row['t']) for rows in ticks.values() for row in rows}
     by_window = {}
-    for event in events:
-        if event[0] in window_of:
-            by_window.setdefault(window_of[event[0]], []).append(event)
+    for f, _, text in events:
+        # Timed by the frame it was logged in rather than the moment it was
+        # written, which comes after that frame's drawing: the frame a note
+        # first lands on starts before its own event.
+        if f in window_of:
+            by_window.setdefault(window_of[f], []).append((f, start_of[f], text))
     for w, evs in by_window.items():
         frames = sorted((frame(row, gpu_end, presented) for row in ticks[w]),
                         key=lambda fr: fr['frame'])
@@ -351,14 +355,18 @@ def report_first_note(run, evs, t0):
     s = stretch(run, note, note + NOTE_AFTER)
     for fr, glass, why in s['stalls']:
         print(f"    stall at +{(fr['t'] - note) * 1000:.0f} ms: {glass} refreshes, {why}; "
-              f"tick {fr['tick_ms']:.2f} ms, render {fr['render_ms']:.2f} ms")
+              f"tick {fr['tick_ms']:.2f} ms")
     if not s['stalls']:
         print(f'    no stall in the {NOTE_AFTER} s after it')
-    usual = median(fr['tick_ms'] + fr['render_ms'] for fr in run if fr['submitted'])
-    worst = sorted(s['frames'], key=lambda fr: -(fr['tick_ms'] + fr['render_ms']))[:3]
-    costs = ', '.join(f"+{(fr['t'] - note) * 1000:.0f} ms: {fr['tick_ms'] + fr['render_ms']:.2f}"
-                      for fr in worst)
-    print(f'    costliest frames (tick + render ms) {costs}; this opening\'s median {usual:.2f}')
+    # `render_ms` is the part of `tick_ms` spent rendering, so the tick is the
+    # frame's whole main-thread cost. A costly frame can still miss nothing,
+    # when the frames queued ahead of it cover the time it took.
+    usual = median(fr['tick_ms'] for fr in run if fr['submitted'])
+    print(f'    costliest frames, main-thread ms (this opening\'s median {usual:.2f}):')
+    for fr in sorted(s['frames'], key=lambda fr: -fr['tick_ms'])[:3]:
+        print(f"      +{(fr['t'] - note) * 1000:.0f} ms: tick {fr['tick_ms']:.2f} "
+              f"(render {fr['render_ms']:.2f}), submitted "
+              f"{(fr['submitted'] - fr['target']) * 1000:+.2f} ms from its target")
 
 
 def report_exports(run, evs, t0):
