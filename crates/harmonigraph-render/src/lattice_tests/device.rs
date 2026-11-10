@@ -18,6 +18,20 @@ fn pipelines_build_against_a_headless_device() {
     let _resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
+/// The lattice resources a window's cache install leaves it.
+#[cfg(not(feature = "hot-reload"))]
+fn installed(
+    cache: &LatticePipelineCache,
+    instance: &wgpu::Instance,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+) -> LatticeResources {
+    let mut resources = CallbackResources::default();
+    cache.install(instance, device, queue, format, &mut resources);
+    resources.remove::<LatticeResources>().expect("install inserts the lattice's")
+}
+
 /// Use the real prepare/paint path, populate its pane and atlas, then destroy
 /// the window's resource map. The retained cache must reuse compiled objects
 /// without keeping either the old pixels or a pane's temporal state alive.
@@ -68,7 +82,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     shooter.resources = CallbackResources::default();
 
     let started = std::time::Instant::now();
-    let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
+    let reopened = installed(&cache, &instance, &shooter.device, &shooter.queue, shooter.format);
     eprintln!("cached lattice reopen: {:?}", started.elapsed());
     assert_eq!(
         reopened.compiled.shaders.scenes[0].draws.nodes, pipeline,
@@ -123,8 +137,10 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
             other => panic!("unexpected startup result: {other:?}"),
         }
     }
-    let pipeline =
-        cache.compiled.lock().unwrap().as_ref().unwrap().2.shaders.scenes[0].draws.nodes.clone();
+    let pipeline = cache.compiled.lock().unwrap().as_ref().unwrap().2.lattice.shaders.scenes[0]
+        .draws
+        .nodes
+        .clone();
     let asynchronous = shooter.draw_modified(&scene, LatticeLabels::default(), |callback| {
         callback.pipeline_cache = Some(cache.clone());
     });
@@ -150,26 +166,27 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
     let (device, queue) =
         pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     let cache = LatticePipelineCache::default();
-    let rgba = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    let bgra = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    let rgba = installed(&cache, &instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    let bgra = installed(&cache, &instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
     assert_ne!(rgba.compiled.composite_pipeline, bgra.compiled.composite_pipeline);
     assert_eq!(bgra.compiled.target_format, wgpu::TextureFormat::Bgra8Unorm);
     let (other, other_queue) =
         pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     let replaced =
-        cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
+        installed(&cache, &instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
     assert_ne!(
         bgra.compiled.shaders.scenes[0].draws.nodes,
         replaced.compiled.shaders.scenes[0].draws.nodes
     );
 
     // Separate instances can mint equal device IDs. Test that case explicitly.
-    let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
+    let _ = installed(&cache, &instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
     let (other_instance, adapter) = crate::test_gpu_adapter().expect("second GPU instance");
     let (other, other_queue) =
         pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).unwrap();
     assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
-    let _ = cache.resources(&other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
+    let _ =
+        installed(&cache, &other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
     let retained = cache.compiled.lock().unwrap();
     let (owner_instance, owner, _) = retained.as_ref().unwrap();
     assert_eq!(owner_instance, &other_instance);

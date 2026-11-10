@@ -231,7 +231,7 @@ fn darkened(got: [u8; 4]) -> bool {
 /// rather than a slope — the two fades have
 /// [`pieces_tile_their_note_and_a_fade_runs_along_it`] and
 /// [`a_lead_fade_takes_the_ribbon_out_toward_its_tip`] to themselves.
-fn centered_note() -> RollInstance {
+pub(crate) fn centered_note() -> RollInstance {
     RollInstance {
         center: [128.0, 128.0],
         half_extent: [12.0, 60.0],

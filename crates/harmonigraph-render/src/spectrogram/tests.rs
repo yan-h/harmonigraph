@@ -678,6 +678,14 @@ fn the_starfield_moves_by_the_drift() {
     }
 }
 
+/// [`cloud_fixture`] as the pane hands it to egui, for a test elsewhere that
+/// runs whole frames.
+#[cfg(not(feature = "hot-reload"))]
+pub(crate) fn cloud_paint_callback() -> egui::PaintCallback {
+    let cb = cloud_fixture();
+    egui_wgpu::Callback::new_paint_callback(cb.rect, cb)
+}
+
 fn cloud_fixture() -> SpectrogramCallback {
     // Three device pixels of pitch over the middle third of the time
     // axis: wide enough to seed the quarter target, with dark room on
