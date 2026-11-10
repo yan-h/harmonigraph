@@ -945,6 +945,112 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
     }
 }
 
+/// A node swelled past its band, marked, and still arriving from outside its
+/// rim casts its whole shadow: the profile out from its ink falls all the way
+/// to nothing, with no step where the caster's cell ends.
+///
+/// A node's extent is decided twice. The billboard is sized in WGSL
+/// (`node_vertex`), and the box its cell is packed from on the CPU
+/// (`node_caster` in lattice_frame.rs), each with its own term for a slice
+/// swelled past the band and for an arrival that starts outside the rim. A box
+/// that fell short of the ink would pack a cell holding part of it, and the
+/// shadow would end at the cell's edge.
+/// `the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar` reads a
+/// node with neither term, so this one dials both: every slice at the widest
+/// thickness, every slot marked, and the arrival starting at twice the settled
+/// size, part of the way in. A narrow Shadow keeps the cell's own padding from
+/// covering a short box.
+///
+/// Dropping either term from `node_caster` fails this, with the shadow held
+/// flat out to the cell's edge and cut there.
+#[test]
+fn a_swelled_node_arriving_from_outside_casts_its_whole_shadow() {
+    const SHADOW: f32 = 0.3;
+    const PULL_BACK: f32 = 3.0;
+    // Under a third of the way home: the slices stand well outside where they
+    // settle, at that share of their ink.
+    const PROGRESS: f32 = 0.3;
+    let Some(mut shooter) = Shooter::new(SIZE) else {
+        return;
+    };
+    shooter.clear = over_ground();
+    let staged = |depth: f32| -> Scene {
+        let mut scene = on_ground(SHADOW, depth);
+        scene.camera.distance *= PULL_BACK;
+        scene.view.note_bloom = 0.0;
+        for style in scene.view.shadow.groups_mut() {
+            style.spread = 0.0;
+        }
+        scene.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
+            stagger_spread: 0.0,
+            radial_start: *harmonigraph_scene::RADIAL_START_RANGE.end(),
+            ..Default::default()
+        };
+        let node = &mut scene.nodes[0];
+        node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.thickness =
+            [*harmonigraph_scene::THICKNESS_MAX_RANGE.end(); harmonigraph_scene::OCTAVE_SLOTS];
+        node.melody_slots = (1 << harmonigraph_scene::OCTAVE_SLOTS) - 1;
+        node.melody_level = 1.0;
+        node.slice_progress = [PROGRESS; harmonigraph_scene::OCTAVE_SLOTS];
+        scene
+    };
+    let (deep_scene, flat_scene) = (staged(1.0), staged(0.0));
+
+    // Both of the caster box's terms are in play: the slices swell past the
+    // band, and the arrival's reach widens what that swell left.
+    let swell = swelled_past_band(&deep_scene, &pack_thickness(&deep_scene.nodes[0].thickness));
+    let swelled = deep_scene.outer_outer + swell;
+    let reach = deep_scene.view.note_animation.reach(swelled);
+    eprintln!(
+        "swell {swell} uv past the band at {}; arrival reach {reach} uv",
+        deep_scene.outer_outer
+    );
+    assert!(swell > 0.0, "no slice swells past the band");
+    assert!(reach > swelled, "the arrival starts no further out than the rim");
+
+    let flat = shooter.shot(&flat_scene);
+    let deep = shooter.shot(&deep_scene);
+    let ground = (GROUND * 255.0).round() as i64;
+    // Past the farthest column any ink reaches, on any row, so every point the
+    // profile reads is further from all of it than the one before.
+    let inked = (0..SIZE[1])
+        .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+        .filter(|&(x, y)| (bright_at(&flat, x, y) - 3 * ground).abs() > 3)
+        .map(|(x, _)| x)
+        .max()
+        .expect("the node drew no ink");
+    let centre = on_screen(&deep_scene, SIZE, glam::Vec3::ZERO);
+    let row = centre.y.round() as u32;
+    let start = inked + 2;
+    let mut profile = Vec::new();
+    for x in start..SIZE[0] {
+        let ground = bright_at(&flat, x, row);
+        assert!(ground > 500, "the node leaves {ground} of ground at column {x}");
+        profile.push(1.0 - bright_at(&deep, x, row) as f64 / ground as f64);
+    }
+    let last = profile.iter().rposition(|&v| v > 0.0).expect("a shadow to walk");
+    assert!(
+        last + 1 < profile.len(),
+        "the shadow runs off the pane, so where it ends is not measured",
+    );
+    assert!(profile[0] > 0.02, "the node cast {:.3} past its ink", profile[0]);
+    for (i, pair) in profile.windows(2).enumerate() {
+        assert!(
+            pair[1] <= pair[0] + 1e-9,
+            "the shadow rises from {:.4} to {:.4} at {i} px out from the ink",
+            pair[0],
+            pair[1],
+        );
+    }
+    assert!(
+        profile[last] <= 1.0 / (GROUND * 255.0) + 1e-9,
+        "the shadow stops at {:.4} of the ground {last} px out from the ink: the caster's \
+         cell ended inside the blur",
+        profile[last],
+    );
+}
+
 /// A node the camera all but stands on packs a cell the atlas can hold, and
 /// every other caster that darkens something still gets one.
 ///
