@@ -20,10 +20,11 @@ test-support = ["harmonigraph-take/test-support"]
 # may allocate or block: rtrb for the rings, parking_lot for the one mutex the
 # GUI and writer threads share. Nothing here reaches egui or wgpu, and the
 # dependency list is what makes that checkable rather than merely intended —
-# `ParamKey` (what a recorded automation record is named by) and `RenderConfig`
-# (what the Video pane asks for) are take payload and live in
-# harmonigraph-take, and `RenderProgress` (what this crate reports back) sits
-# beside them, so no GUI stack is linked.
+# `ParamKey` (what a recorded automation record is named by) is take payload,
+# and the export queue's `ExportJob` and `RenderProgress` (what this crate
+# reports back) live beside it in harmonigraph-take, so no GUI stack is linked.
+# The Video pane's settings reach this crate only as the opaque appearance
+# string the UI owns, never as types.
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-take = { workspace = true }

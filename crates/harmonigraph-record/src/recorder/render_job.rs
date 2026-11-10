@@ -24,9 +24,11 @@ mod tests;
 #[derive(Clone)]
 pub struct RenderRequest {
     pub program: std::path::PathBuf,
-    /// A appearance document passed as `--appearance`, overriding the take's record-time
-    /// look — set for an Exports queue job so post-record settings reach the video;
-    /// `None` for auto-render (which uses the take's own recorded look).
+    /// The appearance document passed as `--appearance`. An Exports queue job
+    /// sets it at queue time, so post-record settings reach the video; an
+    /// automatic render starts with `None`, and `spawn_render` fills it from
+    /// the take's header before queueing, so the job keeps the look the take
+    /// carried then. It stays `None` only for a take whose header has none.
     pub appearance: Option<String>,
     /// A session-local completion notice, owned by this request so a new
     /// recording cannot erase the reason an earlier render was cut short.
