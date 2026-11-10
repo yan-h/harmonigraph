@@ -346,6 +346,7 @@ pub(super) fn param_bar(
     ui: &mut egui::Ui,
     params: &dyn ParamBackend,
     key: ParamKey,
+    hint: &str,
 ) -> egui::Response {
     let mut value = params.get(key);
     let (scale, suffix, decimals) = key.unit();
@@ -354,6 +355,7 @@ pub(super) fn param_bar(
         .unit(scale, suffix)
         .decimals(decimals)
         .default_value(key.default_value())
+        .hint(hint)
         .show(ui);
     // Bracket drags so the host records one automation gesture per drag;
     // one-shot changes (typed values) go through set() alone.
@@ -371,7 +373,8 @@ pub(super) fn param_bar(
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
 /// range whose ends are both automatable params (the Mappings page's Pitch color range).
-/// `label` names the bar and `display` formats each end's readout.
+/// `label` names the bar, `hint` says what it sets on its hover, and
+/// `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed
 /// frame, so a drag on either handle records as one gesture on each. A
@@ -384,7 +387,7 @@ pub(super) fn param_range_bar(
     (low_key, high_key): (ParamKey, ParamKey),
     range: std::ops::RangeInclusive<f32>,
     min_span: f32,
-    label: &str,
+    (label, hint): (&str, &str),
     display: fn(f32) -> String,
 ) -> egui::Response {
     let (mut low, mut high) = (params.get(low_key), params.get(high_key));
@@ -392,6 +395,7 @@ pub(super) fn param_range_bar(
         .min_span(min_span)
         .default_value((low_key.default_value(), high_key.default_value()))
         .display(display)
+        .hint(hint)
         .show(ui);
     if response.drag_started() {
         params.begin_set(low_key);
@@ -446,6 +450,7 @@ pub(super) fn edge_bar(
     label: &str,
     fresh: (f32, f32),
     display: fn(f32) -> String,
+    hint: &str,
 ) -> egui::Response {
     // Clamped rather than trusted: a fade wider than its reach draws the same
     // as one exactly as wide (both shaders floor the fade at the edge it
@@ -458,6 +463,7 @@ pub(super) fn edge_bar(
         .fade_span()
         .default_value(((fresh.0 - fresh.1).max(0.0), fresh.0))
         .display(display)
+        .hint(hint)
         .show(ui);
     if response.changed() {
         (*reach, *fade) = (high, high - low);
