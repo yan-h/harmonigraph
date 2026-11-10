@@ -924,69 +924,136 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     assert!(!restored.picture.appearance.spectrum.show_spectrogram);
 }
 
-/// The nested groups whose owner's `Default` deliberately builds them off their
-/// own bare default, as path prefixes with the reason each: a key missing
-/// INSIDE one comes back at the group's bare default, which is not the value a
-/// fresh save holds there. Any other key must come back at the fresh save's
-/// value. An entry no dropped key needs any more fails the sweep.
-const NESTED_DEFAULTS: &[(&str, &str)] = &[
-    (
-        "layout.below",
-        "the dock below the lattice has its own sizes; `Sizes` defaults to the right's",
-    ),
-    (
-        "appearance.view.pitch_gradient",
-        "the lattice's pitch gradient is a tuned look, not `Gradient`'s",
-    ),
-    (
-        "appearance.spectrum.spectrogram_gradient",
-        "the heatmap's gradient and its bend are tuned, not `Gradient`'s",
-    ),
-    ("appearance.view.atmosphere.material_settings", "the lattice glow's captured Watercolor"),
-    ("appearance.view.atmosphere.stars", "the lattice's captured stars, four layers of five"),
-    ("appearance.spectrum.atmosphere.material_settings", "the spectrogram's captured texture"),
-    ("appearance.spectrum.atmosphere.stars", "the spectrogram's captured stars"),
-    (
-        "appearance.view.shadow.lattice_geometry",
-        "each Shadow group is tuned apart from the bare `ShadowStyle` (see its `impl Default`)",
-    ),
-    ("appearance.view.shadow.lattice_text", "as `lattice_geometry`"),
-    ("appearance.view.shadow.spectral_text", "as `lattice_geometry`"),
-];
+/// The mirror of the case above: a field the blob is MISSING must not sink it
+/// either, and must come back as what a fresh install has rather than as a bare
+/// `0`/`false`.
+///
+/// What makes it worth pinning is what the alternative COSTS. No field of
+/// [`SpectrumConfig`](crate::SpectrumConfig) carries a fallback of its own, so
+/// without the struct's container-level `#[serde(default)]` a blob missing any
+/// one key fails to parse — and a parse that fails loses the WHOLE UI state
+/// rather than that key: the camera, the dock and the view go with it. The
+/// container-level attribute is what closes that, every field falling back to
+/// `impl Default`'s value, so a missing key costs only itself.
+///
+/// Pinned per field rather than once, because the hazard is per field: nothing
+/// at a declaration says whether it has a fallback, so the next field added is
+/// covered silently and the next one REMOVED is the one that would sink a saved
+/// project.
+#[test]
+fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
+    let defaults = crate::SpectrumConfig::default();
+    for key in [
+        format!("release:{:?},", defaults.release),
+        format!("floor_db:{:?},", defaults.floor_db),
+        format!("roll_thickness:{:?},", defaults.roll_thickness),
+        format!("volume_floor_db:{:?},", defaults.volume_floor_db),
+        format!("window:{:?},", defaults.window),
+    ] {
+        let mut state = fresh();
+        // A non-default elsewhere in the blob, so "the blob survived" is
+        // distinguishable from "it sank and everything reverted".
+        state.picture.appearance.view.max_sevens = 3;
+        let saved = state.save_persist();
+        let without = saved.replacen(key.as_str(), "", 1);
+        assert_ne!(without, saved, "{key:?} must be in the blob to drop");
 
-/// A key missing from a saved blob costs that key alone, at every depth, and
-/// comes back at its fresh value.
+        let mut restored = fresh();
+        restored.load_persist(&without);
+        assert_eq!(
+            restored.picture.appearance.view.max_sevens, 3,
+            "dropping {key:?} must cost that key alone, not the whole blob",
+        );
+        assert_eq!(
+            restored.picture.appearance.spectrum, defaults,
+            "and the config it belongs to must load at the fresh-install values",
+        );
+    }
+}
+
+/// The nested groups whose owner's `Default` deliberately builds them off their
+/// own bare default, as path prefixes with that bare default serialized and the
+/// reason each: a key missing INSIDE one comes back at the same key of the
+/// group's bare default, which is not the value a fresh save holds there. Any
+/// other key must come back at the fresh save's value. An entry no dropped key
+/// needs any more fails the sweep.
+fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
+    fn bare<T: Default + serde::Serialize>() -> String {
+        ron::to_string(&T::default()).expect("a default serializes")
+    }
+    use harmonigraph_scene::{Gradient, MaterialSettings, ShadowStyle, StarSettings};
+    let shadow =
+        "each Shadow group is tuned apart from the bare `ShadowStyle` (its `impl Default`)";
+    [
+        (
+            "layout.below",
+            bare::<workspace::Sizes>(),
+            "the dock below the lattice has its own sizes; `Sizes` defaults to the right's",
+        ),
+        (
+            "appearance.view.pitch_gradient",
+            bare::<Gradient>(),
+            "the lattice's pitch gradient is a tuned look",
+        ),
+        (
+            "appearance.spectrum.spectrogram_gradient",
+            bare::<Gradient>(),
+            "the heatmap's gradient and its bend are tuned",
+        ),
+        (
+            "appearance.view.atmosphere.material_settings",
+            bare::<MaterialSettings>(),
+            "the lattice glow's captured Watercolor",
+        ),
+        (
+            "appearance.view.atmosphere.stars",
+            bare::<StarSettings>(),
+            "the lattice's captured stars, four layers of five",
+        ),
+        (
+            "appearance.spectrum.atmosphere.material_settings",
+            bare::<MaterialSettings>(),
+            "the spectrogram's captured texture",
+        ),
+        (
+            "appearance.spectrum.atmosphere.stars",
+            bare::<StarSettings>(),
+            "the spectrogram's captured stars",
+        ),
+        ("appearance.view.shadow.lattice_geometry", bare::<ShadowStyle>(), shadow),
+        ("appearance.view.shadow.lattice_text", bare::<ShadowStyle>(), shadow),
+        ("appearance.view.shadow.spectral_text", bare::<ShadowStyle>(), shadow),
+    ]
+}
+
+/// The layer under the missing-key tests above and below: every key of every
+/// struct the editor save holds, at any depth, dropped in turn — through
+/// `Some`, tuples, lists and enum payloads as well — and the rest parsed with
+/// the parse `load_persist` runs.
 ///
-/// What makes it worth pinning is what the alternative COSTS. Nothing at a
-/// declaration says whether a struct carries its container-level
-/// `#[serde(default)]`, and without it a blob missing any one of its keys fails
-/// to parse — and a parse that fails loses the WHOLE editor state rather than
-/// that key: the camera, the dock and the view go with it. A field-level
-/// default instead parses, but loads the key at the field type's own default
-/// (0, `false`) rather than at `impl Default`'s. So the property is probed from
-/// the outside, by dropping each key of every struct the save holds in turn —
-/// through `Some`, tuples and lists as well — which is the shape a hand-edited
-/// RON or a `--appearance` file arrives in.
+/// Those tests each sweep one level through the real doors, `load_persist` or
+/// `AppearanceDocument::parse`, and compare what loads: the persist sections
+/// (`a_persist_blob_missing_any_one_section_keeps_the_rest`), the appearance's
+/// groups (`an_appearance_missing_any_one_group_keeps_the_rest`), the view's
+/// keys (`a_view_missing_any_one_key_reloads_at_the_fresh_value`), and the
+/// spectrum, Spiral, glow curve, atmosphere and preset or look below them.
+/// This one adds what a level-by-level sweep does not reach: the structs
+/// nested further in (`Camera`, `IntensitySettings`, `Gradient`, `Bend`,
+/// `SkinDials`, `RenderConfig` among them), asked at the parse alone, since
+/// normalization may rightly move a sibling of the dropped key.
 ///
-/// Each drop asks three things:
-/// - the parse `load_persist` runs accepts the rest, and reserializes it with
-///   every other key at the value saved;
-/// - the dropped key comes back at the value a fresh save holds there, save
-///   inside [`NESTED_DEFAULTS`], inside a list a fresh save leaves empty, and
-///   for the editor's `version`, which reads as 0;
-/// - the real doors accept the blob: `load_persist` for every key but the
-///   top-level `version` (which the floor refuses on purpose,
-///   `a_blob_older_than_the_version_floor_is_refused_whole`), and
-///   `AppearanceDocument::parse` for every group of the appearance but its
-///   `version`. Values are not compared through the doors: normalization may
-///   rightly move a sibling of the dropped key, a gradient's ramp being clamped
-///   to fit the lightness it falls back to.
+/// Each drop must cost that key alone: the rest reserializes at the value
+/// saved, and the dropped key comes back at the value a fresh save holds there
+/// — or, inside one of [`nested_defaults`], at its group's bare default. A
+/// struct without its container-level `#[serde(default)]` fails the parse, and
+/// one whose fields carry their own defaults loads the key at 0 or `false`.
+/// Exempt from the value check are keys inside a list a fresh save leaves
+/// empty, which the preset/look test pins, and the editor's `version`, which
+/// reads as 0 for the floor to refuse.
 ///
 /// The fixture is `dialled`, which moves a few values in the camera, view,
 /// spectrum, render and workspace off fresh, plus a camera preset and a stored
 /// look, so the walk reaches the structs inside a list, a tuple and a `Some`.
-/// Specific fallbacks (a preset's fields, the shadow groups' two sources) stay
-/// pinned by their own tests beside this one.
 #[test]
 fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
     use crate::appearance_edit::{AppearanceEditor, Look, Slots};
@@ -1027,13 +1094,21 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         assert!(pairs.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
     }
 
-    let under = |path: &str, owner: &str| {
-        path.strip_prefix(owner).is_some_and(|rest| rest.starts_with('.'))
-    };
+    // Each group's bare default, by its path within the group.
+    let nested: Vec<_> = nested_defaults()
+        .into_iter()
+        .map(|(owner, bare, _)| {
+            let keys: std::collections::HashMap<_, _> = nested_pairs(&bare)
+                .into_iter()
+                .map(|(path, range)| (path, bare[range].to_string()))
+                .collect();
+            (owner, keys)
+        })
+        .collect();
     let (mut needed, mut stale_values) = (std::collections::HashSet::new(), Vec::new());
     for (path, range) in &pairs {
-        // A blob without the editor's `version` reads as 0 and is refused
-        // whole on purpose, so neither its value nor the door applies.
+        // A blob without the editor's `version` reads as 0, which the floor
+        // refuses whole on purpose.
         let refused = path == "version";
         // The pair and the comma that separates it from a neighbour.
         let cut = if saved[range.end..].starts_with(',') {
@@ -1054,42 +1129,36 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
             .unwrap_or_else(|| panic!("dropping {path} lost the key from the next save"));
         // The dropped key's own value.
         let came_back = &again[back.clone()];
-        match fresh_pairs.get(path) {
-            Some(fresh) if !refused && came_back != fresh => {
-                match NESTED_DEFAULTS.iter().find(|(owner, _)| under(path, owner)) {
-                    Some((owner, _)) => drop(needed.insert(*owner)),
-                    None => {
-                        stale_values.push(format!("{path}: {came_back} where fresh is {fresh}"))
-                    }
+        let group = nested.iter().find_map(|(owner, keys)| {
+            let inner = path.strip_prefix(owner)?.strip_prefix('.')?;
+            Some((owner, &keys[inner]))
+        });
+        let want = match (group, fresh_pairs.get(path)) {
+            (Some((owner, bare)), Some(fresh)) => {
+                if bare != fresh {
+                    needed.insert(*owner);
                 }
+                Some(bare)
             }
-            _ => {}
+            (None, fresh) if !refused => fresh,
+            _ => None,
+        };
+        if let Some(want) = want.filter(|want| came_back != *want) {
+            stale_values.push(format!("{path}: {came_back} where it should load {want}"));
         }
         // Everything else: put the saved value back where the reparsed one
         // stands and compare.
         let masked =
             format!("{}{}{}", &again[..back.start], &saved[range.clone()], &again[back.end..]);
         assert_eq!(masked, saved, "dropping {path} changed more than {path}");
-
-        if !refused {
-            assert!(fresh().load_persist(&without), "load_persist refused a blob without {path}");
-        }
-        let group = path.strip_prefix("appearance.");
-        if group.is_some_and(|group| !group.contains('.') && group != "version") {
-            let (_, whole) = nested_pairs(&without)
-                .into_iter()
-                .find(|(p, _)| p == "appearance")
-                .expect("the appearance is still in the blob");
-            let document = &without[whole.start + "appearance:".len()..whole.end];
-            if let Err(e) = AppearanceDocument::parse(document) {
-                panic!("AppearanceDocument::parse refused an appearance without {path}: {e}");
-            }
-        }
     }
-    assert!(stale_values.is_empty(), "a dropped key did not load fresh: {stale_values:#?}");
+    assert!(stale_values.is_empty(), "a dropped key loaded the wrong value: {stale_values:#?}");
     let stale: Vec<_> =
-        NESTED_DEFAULTS.iter().filter(|(owner, _)| !needed.contains(owner)).collect();
-    assert!(stale.is_empty(), "NESTED_DEFAULTS names groups that load fresh: {stale:?}");
+        nested.iter().map(|(owner, _)| owner).filter(|owner| !needed.contains(*owner)).collect();
+    assert!(
+        stale.is_empty(),
+        "nested_defaults names groups whose bare default is fresh: {stale:?}"
+    );
 }
 
 /// Workspace settings stay alongside one nested appearance document.
@@ -1118,10 +1187,60 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
     assert_eq!(keys, KEYS, "the persist blob's top-level keys have moved");
 }
-/// What a key dropped from a struct inside a list comes back as: `CameraPreset`
-/// and a stored slot's `Look`. [`a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest`]
-/// drops these keys too, but a fresh save holds no preset or look to compare
-/// the dropped value with.
+/// The same property for EVERY section that carries the attribute, not just
+/// `render`: dropping one costs that section alone.
+///
+/// Swept rather than pinned one at a time, because nothing at a declaration
+/// says whether `#[serde(default)]` is there — `camera` and `view` went
+/// without it for a while precisely because the omission is invisible, and a
+/// hand-authored `--appearance` file setting one thing omits most of the rest.
+/// A section added without the attribute fails here rather than the day a
+/// blob is short of it.
+///
+/// This drops whole sections from a fresh state, whose lists are empty, so the
+/// structs inside a list never appear;
+/// [`a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest`] is the
+/// layer in.
+#[test]
+fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
+    let mut state = fresh();
+    // A witness in a section that is never the one dropped below, so "the
+    // blob survived" is distinguishable from "it sank and everything
+    // reverted". The camera is not swept for that reason.
+    state.picture.appearance.camera.yaw = 1.23;
+    state.picture.appearance.view.max_sevens = 3;
+    let saved = state.save_persist();
+
+    for (key, _) in top_level_pairs(&saved) {
+        if key == "version" || key == "appearance" {
+            continue;
+        }
+        let kept: Vec<String> = top_level_pairs(&saved)
+            .into_iter()
+            .filter(|(k, _)| *k != key)
+            .map(|(_, text)| text)
+            .collect();
+        let without = format!("({})", kept.join(","));
+        assert_ne!(without, saved, "{key:?} must be in the blob to drop");
+
+        let mut restored = fresh();
+        assert!(
+            restored.load_persist(&without),
+            "dropping {key:?} sank the whole document instead of costing itself",
+        );
+        assert_eq!(
+            restored.picture.appearance.camera.yaw, 1.23,
+            "dropping {key:?} cost the camera too"
+        );
+        // Every top-level value in `saved` is the fresh one, so a dropped key
+        // must come back exactly as it was.
+        assert_eq!(restored.save_persist(), saved, "{key:?} came back at a non-fresh value");
+    }
+}
+
+/// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`]:
+/// the structs that live inside a list, `CameraPreset` and a stored slot's
+/// `Look`, which a fresh state never holds and so never sweeps.
 ///
 /// One preset and one stored look, each off its defaults, are written, and each
 /// key in turn is dropped from them. A struct added to a list without its own
@@ -1224,6 +1343,36 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     assert_eq!(AppearanceDocument::parse(&appearance).unwrap().serialize(), appearance);
 }
 
+/// Missing groups use their own defaults without costing the other groups.
+#[test]
+fn an_appearance_missing_any_one_group_keeps_the_rest() {
+    let mut state = fresh();
+    state.picture.appearance.camera.yaw = 1.23;
+    state.picture.appearance.view.max_sevens = 3;
+    state.picture.appearance.spectrum.low_midi = 40.5;
+    state.picture.appearance.render.short_edge = 2160;
+    let saved = state.picture.appearance.serialize();
+    let defaults = AppearanceDocument::default().serialize();
+    let pairs = top_level_pairs(&saved);
+    for (missing, _) in &pairs {
+        let without = format!(
+            "({})",
+            pairs
+                .iter()
+                .filter(|(key, _)| key != missing)
+                .map(|(_, pair)| pair.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let restored = AppearanceDocument::parse(&without).expect("missing group defaults");
+        for (key, pair) in top_level_pairs(&restored.serialize()) {
+            let source = if &key == missing { &defaults } else { &saved };
+            let expected = top_level_pairs(source).into_iter().find(|(k, _)| k == &key).unwrap().1;
+            assert_eq!(pair, expected, "dropping {missing} changed {key}");
+        }
+    }
+}
+
 /// The Spiral pane's framing round-trips, and a hand-edited one comes back
 /// drawable.
 ///
@@ -1257,6 +1406,74 @@ fn persist_round_trips_the_spiral_framing() {
         "a NaN zoom opened at {}",
         restored.workspace.interaction.spiral.zoom,
     );
+}
+
+/// Dropping any one key from INSIDE the `spiral` section costs that key alone:
+/// the rest of the blob loads, the section's other field keeps the value the blob
+/// names, and the dropped one comes back at the fresh-install value.
+///
+/// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`],
+/// and that is the whole reason it exists: sweeping whole sections exercises
+/// `UiPersist`'s container-level attribute, where this is the only thing that
+/// asks after `SpiralView`'s container-level one — the attribute nothing at a
+/// declaration says is there.
+///
+/// The input is `spiral: (zoom: 3.0)` and no `look`, which is what a person
+/// writing a framing into a saved blob by hand writes: the field they came to
+/// change. Without the attribute that blob does not cost `look` — it sinks the
+/// whole document, dock and camera with it, and nothing but this would fail.
+#[test]
+fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
+    let mut state = fresh();
+    // A witness outside the section, so "the blob survived" is distinguishable
+    // from "it sank and every section reverted together".
+    state.picture.appearance.camera.yaw = 1.23;
+    // Both fields off their fresh values, and the look off both axes: a field
+    // that came back from the wrong place is only visible against a value the
+    // default is not.
+    state.workspace.interaction.spiral =
+        crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
+    let saved = state.save_persist();
+
+    let whole = top_level_pairs(&saved)
+        .into_iter()
+        .find_map(|(key, text)| (key == "spiral").then_some(text))
+        .expect("the blob carries a spiral section");
+    // The section's own pairs, through the same depth-aware split: `look` is a
+    // nested struct, so a comma split would cut it in half.
+    let inner = whole.trim_start_matches("spiral:");
+    let pairs = top_level_pairs(inner);
+    assert_eq!(pairs.len(), 2, "the probe must see the whole framing, got {pairs:?}");
+
+    let opened = crate::panes::spiral::SpiralView::default();
+    for (key, _) in &pairs {
+        let kept: Vec<&str> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let without = replace_pair(&saved, "spiral", inner, &format!("({})", kept.join(",")));
+        assert_ne!(without, saved, "the spiral's {key:?} must be in the blob to drop");
+
+        let mut restored = fresh();
+        assert!(
+            restored.load_persist(&without),
+            "dropping the spiral's {key:?} sank the whole document instead of costing itself",
+        );
+        assert_eq!(
+            restored.picture.appearance.camera.yaw, 1.23,
+            "dropping the spiral's {key:?} cost the camera too"
+        );
+        let framing = state.workspace.interaction.spiral;
+        let want = match key.as_str() {
+            "zoom" => (opened.zoom, framing.look),
+            "look" => (framing.zoom, opened.look),
+            other => panic!("the framing grew a {other:?} field this sweep does not name"),
+        };
+        let restored = restored.workspace.interaction.spiral;
+        assert_eq!(
+            (restored.zoom, restored.look),
+            want,
+            "dropping the spiral's {key:?} did not cost that key alone",
+        );
+    }
 }
 
 #[test]
@@ -1465,6 +1682,43 @@ fn loading_a_project_preserves_released_temperaments() {
     }
 }
 
+/// Dropping any one key from a serialized view costs THAT KEY alone, and the
+/// value it comes back with is the fresh-install one.
+///
+/// [`ViewConfig`](harmonigraph_scene::ViewConfig) carries a container-level
+/// `#[serde(default)]`, so `impl Default` is the single source of every
+/// field's fallback. That is the whole arrangement, and this is what holds it:
+/// nothing at a declaration says whether a field can survive being absent, so
+/// the property is probed from the outside instead — rebuild the blob without
+/// one key at a time, which is exactly the shape a hand-edited RON or a
+/// `--appearance` file can arrive in, and reload.
+///
+/// A field that fails here either sank the whole view (no fallback) or came
+/// back as something other than the fresh value (a second default hiding
+/// behind a field-level attribute). Both are the same bug one layer up, where
+/// `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` pins
+/// it for `SpectrumConfig`: a missing key must cost only itself.
+#[test]
+fn a_view_missing_any_one_key_reloads_at_the_fresh_value() {
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let full = ron::to_string(&fresh).expect("a view serializes");
+    let pairs = top_level_pairs(&full);
+    assert!(pairs.len() > 40, "the probe must see the whole struct, got {}", pairs.len());
+
+    for (key, _) in &pairs {
+        let kept: Vec<&str> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let without = format!("({})", kept.join(","));
+        let loaded = ron::from_str::<harmonigraph_scene::ViewConfig>(&without)
+            .unwrap_or_else(|e| panic!("dropping {key:?} sank the whole view: {e}"));
+        assert_eq!(
+            ron::to_string(&loaded).expect("a view serializes"),
+            full,
+            "dropping {key:?} did not come back at the fresh-install value",
+        );
+    }
+}
+
 #[test]
 fn lattice_map_indicator_visibility_round_trips_and_defaults_on() {
     let mut state = fresh();
@@ -1613,11 +1867,29 @@ fn a_shadow_group_carrying_the_retired_kernel_and_falloff_loads_at_its_other_fie
     assert_eq!(restored.picture.appearance.view.shadow.lattice_geometry, held);
 }
 
+/// A missing shape inside the glow curve costs that field alone. The curve is
+/// a persisted struct nested inside `ViewConfig`, so the view-level sweep
+/// above only proves the whole curve has a fallback; it cannot see whether its
+/// field accidentally became required.
+#[test]
+fn a_glow_curve_missing_shape_uses_the_fresh_shape() {
+    use harmonigraph_scene::GlowCurve;
+
+    let curve = GlowCurve { shape: -3.0 };
+    let fresh = GlowCurve::default();
+    let full = ron::to_string(&curve).expect("a glow curve serializes");
+    let pairs = top_level_pairs(&full);
+    assert_eq!(pairs.len(), 1, "the probe must see the curve's one shape: {full}");
+    let loaded = ron::from_str::<GlowCurve>("()")
+        .unwrap_or_else(|e| panic!("dropping shape sank the glow curve: {e}"));
+    assert_eq!(loaded, fresh);
+}
+
 /// A key the struct no longer has costs that key alone: the rest of the view
 /// loads, at the values the blob holds.
 ///
-/// The other half of [`a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest`],
-/// and the half that decides what a RETIRED field costs. A saved project still carries every key it was written with —
+/// The other half of the sweep above, and the half that decides what a RETIRED
+/// field costs. A saved project still carries every key it was written with —
 /// `glow_feather` and `glow_meld` among them — and nothing in the tree reads
 /// them; what must not happen is the parse failing and taking the whole view
 /// with it, which is what `deny_unknown_fields` anywhere on this struct would
@@ -1641,7 +1913,7 @@ fn a_view_carrying_a_key_the_struct_does_not_have_loads_intact() {
 }
 
 #[test]
-fn atmosphere_retired_keys_are_ignored_and_values_normalize_on_load() {
+fn atmosphere_keys_default_individually_and_normalize_on_load() {
     use harmonigraph_scene::AtmosphereSettings;
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
@@ -1670,6 +1942,26 @@ fn atmosphere_retired_keys_are_ignored_and_values_normalize_on_load() {
         state.picture.appearance.view.atmosphere
     );
 
+    let defaults = ron::to_string(&AtmosphereSettings::default()).unwrap();
+    let pairs = top_level_pairs(&full);
+    let fresh_pairs: std::collections::HashMap<_, _> =
+        top_level_pairs(&defaults).into_iter().collect();
+    for (key, _) in &pairs {
+        let kept: Vec<_> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let without = replace_pair(&saved, "atmosphere", &full, &format!("({})", kept.join(",")));
+        assert_ne!(saved, without, "the omitted key must be in the saved blob");
+        let mut restored = fresh();
+        assert!(restored.load_persist(&without), "omitting {key} sank the document");
+        assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+        let loaded = ron::to_string(&restored.picture.appearance.view.atmosphere).unwrap();
+        let loaded: std::collections::HashMap<_, _> =
+            top_level_pairs(&loaded).into_iter().collect();
+        for (other, text) in &pairs {
+            let expected = if other == key { &fresh_pairs[other] } else { text };
+            assert_eq!(&loaded[other], expected, "omitting {key} changed {other}");
+        }
+    }
     // Retired keys are ignored rather than parsed as the new stage enums.
     let old = replace_pair(&saved, "atmosphere", &full,
         "(enabled:false,material:Watercolor,nebula_depth:0.9,nebula_scale:2.0,nebula_speed:3.0,breath_amount:0.6,breath_speed:1.5,source_roughness:0.7)");
@@ -1896,9 +2188,7 @@ fn pair_ranges(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
 }
 
 /// The top-level items of a serialized struct, tuple or list, as byte ranges
-/// in `blob`. Depth-aware, and string-aware only so far as to refuse a quoted
-/// string holding a character the depth count reads, which would mis-split
-/// silently.
+/// in `blob`. Depth-aware, and a quoted string's characters count for nothing.
 fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
     let lead = blob.len() - blob.trim_start().len();
     let trimmed = blob.trim();
@@ -1923,9 +2213,6 @@ fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
                 _ if escaped => escaped = false,
                 '\\' => escaped = true,
                 '"' => quoted = false,
-                ',' | '(' | ')' | '[' | ']' => {
-                    panic!("a quoted string holding {c:?} would mis-split this walk: {blob}")
-                }
                 _ => {}
             }
             continue;
@@ -1947,9 +2234,14 @@ fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
 
 /// Every `key:value` pair of every struct a serialized blob holds, at any
 /// depth, as its path and its byte range in `blob`: through nested structs,
-/// `Some`, tuples and lists, whose items are numbered (`stored[1]`). An enum
-/// variant's own payload is not walked.
+/// tuples and lists, whose items are numbered (`stored[1]`), and through a
+/// `Some` or an enum variant's payload at the path of the value it is.
 fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    fn named_struct(text: &str) -> bool {
+        let Some(inner) = text.strip_prefix('(') else { return false };
+        let key = inner.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
+        key > 0 && inner[key..].starts_with(':')
+    }
     fn walk(
         blob: &str,
         value: std::ops::Range<usize>,
@@ -1957,14 +2249,20 @@ fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
         out: &mut Vec<(String, std::ops::Range<usize>)>,
     ) {
         let text = &blob[value.clone()];
-        if let Some(inner) = text.strip_prefix("Some(").and_then(|t| t.strip_suffix(')')) {
-            let start = value.start + "Some(".len();
-            return walk(blob, start..start + inner.len(), path, out);
+        let name = text.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
+        if name > 0 && text[name..].starts_with('(') {
+            // A struct variant's payload is its struct; a `Some` or other
+            // newtype's single item is the value itself.
+            let payload = value.start + name..value.end;
+            let items = item_ranges(&blob[payload.clone()]);
+            return match items.as_slice() {
+                [one] if !named_struct(&blob[payload.clone()]) => {
+                    walk(blob, payload.start + one.start..payload.start + one.end, path, out)
+                }
+                _ => walk(blob, payload, path, out),
+            };
         }
-        let key = text[1.min(text.len())..]
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(0);
-        if text.starts_with('(') && key > 0 && text[1 + key..].starts_with(':') {
+        if named_struct(text) {
             for (name, range) in pair_ranges(text) {
                 let range = value.start + range.start..value.start + range.end;
                 let path = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };

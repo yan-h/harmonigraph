@@ -596,8 +596,7 @@ pub struct ViewConfig {
     /// decaying rather than as being wound down. A blob with no `fade_shape`
     /// key gets that, like every other missing key: the container-level
     /// `#[serde(default)]` makes `impl Default` the one fallback, and
-    /// `a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest` holds
-    /// it.
+    /// `a_view_missing_any_one_key_reloads_at_the_fresh_value` holds it.
     pub fade_shape: f32,
     /// Appearance of note arrivals and departures, on the shared Note fade clock.
     pub note_animation: NoteAnimationConfig,
