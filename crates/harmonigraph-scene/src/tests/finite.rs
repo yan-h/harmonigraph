@@ -107,7 +107,22 @@ fn poisoned_view() -> ViewConfig {
         atmosphere: AtmosphereSettings {
             material_style: base.atmosphere.material_style,
             material_amount: nan,
-            stars: crate::StarSettings::default(),
+            stars: crate::StarSettings {
+                star_randomness: nan,
+                star_size_variation: nan,
+                star_jitter: nan,
+                star_layers: base.atmosphere.stars.star_layers,
+                star_spacing_ratio: [nan; crate::star_plan::STAR_DEPTHS],
+                star_size: [nan; crate::star_plan::STAR_DEPTHS],
+                star_speed: [nan; crate::star_plan::STAR_DEPTHS],
+                star_lifetime: nan,
+                star_twinkle_dip: nan,
+                star_solid: [nan; crate::star_plan::STAR_DEPTHS],
+                star_cover: nan,
+                star_glow_falloff: nan,
+                star_resolution: nan,
+                star_solo: base.atmosphere.stars.star_solo,
+            },
             material_settings: crate::MaterialSettings {
                 velvet_size: nan,
                 velvet_variety: nan,
@@ -177,26 +192,23 @@ impl Floats {
             self.vec4(&format!("{name}[{i}]"), *color);
         }
     }
-
-    fn shadow(&mut self, name: &str, style: &ShadowStyle) {
-        let ShadowStyle { width, spread, depth } = style;
-        self.one(format!("{name}.width"), *width);
-        self.one(format!("{name}.spread"), *spread);
-        self.one(format!("{name}.depth"), *depth);
-    }
 }
 
-/// The whole scene, flattened.
+/// Every float the scene DERIVES, flattened.
 ///
 /// Every struct is destructured EXHAUSTIVELY — no `..` anywhere below — so a
 /// field added to the scene, to a node or to a marker breaks this walk rather
 /// than going unwatched. That is the half of the claim a test cannot assert:
 /// the assertion says the floats are real numbers, and this says which floats
 /// there are.
+///
+/// The view the scene carries is not walked. The test compares it whole
+/// against a sanitized copy, and a NaN left anywhere in it fails that
+/// comparison on its own, being unequal to itself.
 fn scene_floats(scene: &Scene) -> Floats {
     let mut f = Floats::default();
     let Scene {
-        view,
+        view: _,
         edge_softness_points,
         nodes,
         camera,
@@ -221,22 +233,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         glow_rows: _,
         glow_timing,
     } = scene;
-    let ViewConfig {
-        note_animation,
-        render_scale,
-        note_bloom: bloom_strength,
-        glow_reach,
-        glow_strength,
-        glow_curve,
-        shadow,
-        hide_behind,
-        glow_wash,
-        glow_blend,
-        glow_accumulation,
-        mark_thickness,
-        atmosphere,
-        ..
-    } = view;
     f.one("edge_softness_points", *edge_softness_points);
 
     for (i, node) in nodes.iter().enumerate() {
@@ -292,11 +288,6 @@ fn scene_floats(scene: &Scene) -> Floats {
 
     f.one("node_radius", *node_radius);
 
-    let NoteAnimationConfig { stagger_spread, radial_start, fade_out_delay } = note_animation;
-    f.one("note_animation.stagger_spread", *stagger_spread);
-    f.one("note_animation.radial_start", *radial_start);
-    f.one("note_animation.fade_out_delay", *fade_out_delay);
-
     f.one("outer_inner", *outer_inner);
     f.one("outer_outer", *outer_outer);
     f.one("rings_outer", *rings_outer);
@@ -338,29 +329,11 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("plus_half_width", *plus_half_width);
     f.one("plus_taper_start", *plus_taper_start);
     f.vec4("background", *background);
-    f.one("mark_thickness", *mark_thickness);
     f.luts("pitch_lut", pitch_lut);
     f.many("pitch_lut_spacing", [pitch_lut_spacing.at, pitch_lut_spacing.share]);
     f.one("darkest_pitch", *darkest_pitch);
     f.one("brightest_pitch", *brightest_pitch);
-    f.one("render_scale", *render_scale);
-    f.one("bloom_strength", *bloom_strength);
-    f.one("glow_reach", *glow_reach);
-    f.one("glow_strength", *glow_strength);
-
-    let GlowCurve { shape } = glow_curve;
-    f.one("glow_curve.shape", *shape);
-
-    let ShadowSettings { lattice_geometry, lattice_text, spectral_text } = shadow;
-    f.shadow("shadow.lattice_geometry", lattice_geometry);
-    f.shadow("shadow.lattice_text", lattice_text);
-    f.shadow("shadow.spectral_text", spectral_text);
-
-    f.one("hide_behind", *hide_behind);
-    f.one("glow_wash", *glow_wash);
     f.one("marker_unit", *marker_unit);
-    f.one("glow_blend", *glow_blend);
-    f.one("glow_accumulation", *glow_accumulation);
 
     // Nothing to walk here, and that is worth saying rather than leaving as a
     // silent pass: `derive_scene` ships `glow_timing: None` unconditionally,
@@ -376,69 +349,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.one("glow_timing.attack", *attack);
         f.one("glow_timing.release", *release);
     }
-
-    let AtmosphereSettings {
-        material_style: _,
-        material_amount,
-        material_settings,
-        stars,
-        material_speed,
-        material_direction,
-        texture_depth,
-        texture_scale,
-        texture_speed,
-        breath_amount,
-        breath_speed,
-    } = atmosphere;
-    f.one("atmosphere.stars.star_randomness", stars.star_randomness);
-    f.one("atmosphere.stars.star_size_variation", stars.star_size_variation);
-    f.one("atmosphere.stars.star_jitter", stars.star_jitter);
-    f.many("atmosphere.stars.star_spacing_ratio", stars.star_spacing_ratio);
-    f.many("atmosphere.stars.star_size", stars.star_size);
-    f.many("atmosphere.stars.star_speed", stars.star_speed);
-    f.one("atmosphere.stars.star_lifetime", stars.star_lifetime);
-    f.one("atmosphere.stars.star_twinkle_dip", stars.star_twinkle_dip);
-    f.many("atmosphere.stars.star_solid", stars.star_solid);
-    f.one("atmosphere.stars.star_cover", stars.star_cover);
-    f.one("atmosphere.stars.star_glow_falloff", stars.star_glow_falloff);
-    f.one("atmosphere.stars.star_resolution", stars.star_resolution);
-    f.one("atmosphere.material_amount", *material_amount);
-    let crate::MaterialSettings {
-        velvet_size,
-        velvet_variety,
-        velvet_edge,
-        velvet_irregularity,
-        velvet_shape,
-        velvet_square,
-        velvet_tilt,
-        wash_size,
-        wash_fuzz,
-        wash_lobe,
-        wash_refract,
-        wash_layers,
-        wash_randomness,
-    } = material_settings;
-    f.one("atmosphere.material_settings.velvet_size", *velvet_size);
-    f.one("atmosphere.material_settings.velvet_variety", *velvet_variety);
-    f.one("atmosphere.material_settings.velvet_edge", *velvet_edge);
-    f.one("atmosphere.material_settings.velvet_irregularity", *velvet_irregularity);
-    f.one("atmosphere.material_settings.velvet_shape", *velvet_shape);
-    f.one("atmosphere.material_settings.velvet_square", *velvet_square);
-    f.one("atmosphere.material_settings.velvet_tilt", *velvet_tilt);
-    f.one("atmosphere.material_settings.wash_size", *wash_size);
-    f.one("atmosphere.material_settings.wash_fuzz", *wash_fuzz);
-    f.one("atmosphere.material_settings.wash_lobe", *wash_lobe);
-    f.one("atmosphere.material_settings.wash_refract", *wash_refract);
-    f.one("atmosphere.material_settings.wash_layers", *wash_layers);
-    f.one("atmosphere.material_settings.wash_randomness", *wash_randomness);
-
-    f.one("atmosphere.material_speed", *material_speed);
-    f.one("atmosphere.material_direction", *material_direction);
-    f.one("atmosphere.texture_depth", *texture_depth);
-    f.one("atmosphere.texture_scale", *texture_scale);
-    f.one("atmosphere.texture_speed", *texture_speed);
-    f.one("atmosphere.breath_amount", *breath_amount);
-    f.one("atmosphere.breath_speed", *breath_speed);
 
     f
 }
@@ -499,6 +409,8 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &RingFade::default(),
         0.0,
     );
+    // The view's half of the claim: any NaN its repair missed is unequal to
+    // itself, so this fails on it before the derived walk below runs.
     assert_eq!(scene.view, expected.view);
     assert_eq!(scene_floats(&scene).0, scene_floats(&expected).0);
     assert_eq!(off_sheet, normalized.sevens_size);
