@@ -30,4 +30,4 @@
 
 ## 2026-11-09 (performance audit, #1670)
 
-- The Archive copy stays a second pass after the video: time to the video matters more than time to both files. Encoding the two side by side in one ffmpeg finished both in 55 s against 79.5 s (5,302 frames at 2560x1440@60), but held the video back from 32 s to 55 s, and the video is the file used first. #1670 Q1
+- The Archive copy stays a second pass after the video: time to the video matters more than time to both files. With the Hardware encoder, encoding the two side by side in one ffmpeg finished both in 55 s against 79.5 s (5,302 frames at 2560x1440@60), but held the video back from 32 s to 55 s, and the video is the file used first. #1670 Q1

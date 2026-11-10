@@ -111,10 +111,11 @@ pub enum Delivery {
     /// A batch arrived whose newest frame is at this shell time, which keeps
     /// the curve live even while the analyzer refills and makes no column.
     Arrival(f64),
-    /// Boxed, because every callback delivers an arrival and only every few
-    /// a column: at 64-frame blocks and 48 kHz six of seven deliveries are
-    /// arrivals, and a list whose every slot was sized for a column (15.3 KB)
-    /// kept 31 MB after one step that found the plugin's audio ring full.
+    /// Boxed, because a block shorter than the 8 ms between columns delivers
+    /// an arrival and seldom a column: at 64-frame blocks and 48 kHz six of
+    /// seven deliveries are arrivals, and a list whose every slot was sized
+    /// for a column (15.3 KB) kept 31 MB after one step that found the
+    /// plugin's audio ring full.
     Column(Box<AnalyzedColumn>),
 }
 

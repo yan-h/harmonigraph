@@ -394,11 +394,11 @@ mod tests {
 
     /// A step that finds the whole ring waiting, as a faster-than-realtime
     /// bounce leaves it with the window shut, must not leave megabytes in the
-    /// spare buffers for the plugin's lifetime. The delivery list is the one
-    /// that could: it holds an entry per callback, and 64-frame blocks filled
-    /// 2,048 slots, 31 MB of them while every slot was sized for a column.
+    /// spare delivery list for the plugin's lifetime. It holds an entry per
+    /// callback, and 64-frame blocks filled 2,048 slots, 31 MB of them while
+    /// every slot was sized for a column.
     #[test]
-    fn a_full_ring_step_leaves_little_in_the_spare_buffers() {
+    fn a_full_ring_step_leaves_a_small_spare_delivery_list() {
         let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
         let format =
             crate::audio_ingress::Format { channels: 2, sample_rate: 48_000.0, sidechain: false };
