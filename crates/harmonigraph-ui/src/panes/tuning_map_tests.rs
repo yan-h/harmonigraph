@@ -11,11 +11,19 @@ struct Edits {
     follow: Follow,
     maps: usize,
     pending: bool,
+    offsets: crate::lattice_maps::MapOffsets,
     edits: RefCell<Vec<MapEdit>>,
 }
 impl Edits {
     fn new(engine: TuningEngine, follow: Follow, maps: usize) -> Self {
-        Self { engine, follow, maps, pending: false, edits: Default::default() }
+        Self {
+            engine,
+            follow,
+            maps,
+            pending: false,
+            offsets: Default::default(),
+            edits: Default::default(),
+        }
     }
 }
 impl ParamBackend for Edits {
@@ -36,7 +44,7 @@ impl ParamBackend for Edits {
                 ..Default::default()
             },
             names: document.names(),
-            offsets: Default::default(),
+            offsets: self.offsets,
             followed: harmonigraph_core::LatticePos::ORIGIN,
             pending: self.pending,
             edit_shape: false,
@@ -330,4 +338,37 @@ fn follow_harmony_shows_adaptive_context_under_lattice_map() {
     assert_eq!(controls, [true; 5], "Follow reads the context, reachable without opening a fold");
     let (title, controls) = drawn(TuningEngine::LatticeMap, Follow::Off);
     assert!(!title && controls == [false; 5], "nothing reads it with Follow off");
+}
+
+/// An offset lane is a value bar: a double-click puts it back on zero, sent
+/// to the host as one gesture.
+#[test]
+fn a_double_click_resets_an_offset_lane_in_one_gesture() {
+    let ctx = themed();
+    let mut params = Edits::new(TuningEngine::LatticeMap, Follow::Off, 1);
+    params.offsets.extension.threes = 3;
+    let mut state = fresh_picture();
+    let size = egui::vec2(420.0, 2000.0);
+    let mut frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            tuning_pane(ui, &mut state, &params, 0.0);
+        })
+    };
+    frame(vec![]);
+    let at = text_at(&frame(vec![]), "Fifths coarse").expect("the Coarse lane is drawn");
+    frame(vec![egui::Event::PointerMoved(at)]);
+    for _ in 0..2 {
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+    }
+    frame(vec![]);
+    let edits: Vec<_> = params.edits.borrow().iter().map(|edit| format!("{edit:?}")).collect();
+    assert_eq!(
+        edits,
+        [
+            "BeginOffset(Fifths, Extension)",
+            "Offset(Fifths, Extension, 0)",
+            "EndOffset(Fifths, Extension)"
+        ]
+    );
 }

@@ -849,27 +849,23 @@ fn instance_controls(
                 if row.max_delay > 1 {
                     let id = ui.id().with("delay-draft");
                     let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
-                    ui.horizontal_wrapped(|ui| {
-                        crate::widgets::label(ui, "Buffers of delay");
-                        let response =
-                            ui.add(egui::DragValue::new(&mut delay).range(1..=row.max_delay));
-                        // Commit one completed drag, preserving the draft between frames.
-                        let draft = ui.data(|data| data.get_temp::<u32>(id));
-                        if response.changed() {
-                            ui.data_mut(|data| data.insert_temp(id, delay));
-                        }
-                        if response.drag_stopped() || response.changed() && !response.dragged() {
-                            params.edit_tuning_instance(
-                                row.id,
-                                InstanceEdit::Delay(if response.changed() {
-                                    delay
-                                } else {
-                                    draft.unwrap_or(delay)
-                                }),
-                            );
-                            ui.data_mut(|data| data.remove::<u32>(id));
-                        }
-                    });
+                    let response = delay_bar(ui, &mut delay, row.max_delay, "Buffers of delay");
+                    // Commit one completed drag, preserving the draft between frames.
+                    let draft = ui.data(|data| data.get_temp::<u32>(id));
+                    if response.changed() {
+                        ui.data_mut(|data| data.insert_temp(id, delay));
+                    }
+                    if response.drag_stopped() || response.changed() && !response.dragged() {
+                        params.edit_tuning_instance(
+                            row.id,
+                            InstanceEdit::Delay(if response.changed() {
+                                delay
+                            } else {
+                                draft.unwrap_or(delay)
+                            }),
+                        );
+                        ui.data_mut(|data| data.remove::<u32>(id));
+                    }
                 } else {
                     delay_text.on_hover_text("Harmonigraph's own input needs one buffer.");
                 }
@@ -888,24 +884,21 @@ fn instance_controls(
                 .data(|data| data.get_temp::<((u64, u32), u32)>(id))
                 .filter(|&(from, _)| from == seed)
                 .map_or(tuner.delay, |(_, draft)| draft);
-            ui.horizontal_wrapped(|ui| {
-                crate::widgets::label(ui, "Buffers");
-                ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
-                if ui
-                    .button("Apply to all tuners")
-                    .on_hover_text(
-                        "Each tuner reports its own latency; Source details overrides one. \
-                         Harmonigraph's own input stays at one buffer.",
-                    )
-                    .clicked()
-                {
-                    for row in instances {
-                        if !row.is_hub {
-                            params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
-                        }
+            delay_bar(ui, &mut delay, tuner.max_delay, "Buffers");
+            if ui
+                .button("Apply to all tuners")
+                .on_hover_text(
+                    "Each tuner reports its own latency; Source details overrides one. \
+                     Harmonigraph's own input stays at one buffer.",
+                )
+                .clicked()
+            {
+                for row in instances {
+                    if !row.is_hub {
+                        params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
                     }
                 }
-            });
+            }
             ui.data_mut(|data| data.insert_temp(id, (seed, delay)));
         });
     }
@@ -916,6 +909,21 @@ fn instance_controls(
     {
         params.edit_tuning_instance(instances[0].id, InstanceEdit::Reset);
     }
+}
+
+/// A tuner's delay in whole buffers, from one to `max`. A double-click puts
+/// it back on one buffer, the fresh value of every tuner's `Tuning Delay`
+/// param (`harmonigraph-plugin`'s `TuneParams`). The caller commits the edit:
+/// the delay is the tuner's configuration, not the look, so nothing here
+/// reaches the appearance's undo.
+fn delay_bar(ui: &mut egui::Ui, delay: &mut u32, max: u32, label: &str) -> egui::Response {
+    let mut value = *delay as f32;
+    let response =
+        ValueBar::new(&mut value, 1.0..=max as f32, label).integer().default_value(1.0).show(ui);
+    if response.changed() {
+        *delay = value.round() as u32;
+    }
+    response
 }
 
 fn monitor_pitch(cents: f64) -> String {
@@ -1216,54 +1224,41 @@ fn map_name_field(
 /// shape at. Each drag is one host gesture per lane.
 fn map_offsets(ui: &mut egui::Ui, view: &crate::lattice_maps::MapView, params: &dyn ParamBackend) {
     use crate::lattice_maps::{MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
-    let mut fine = view.offsets.fine;
-    let mut extension = view.offsets.extension;
-    // A grid does not wrap, so under the narrowest column the dock can
-    // still draw it scrolls on its own rather than running off the pane.
-    theme::reserve_scroll_gutter(ui);
-    egui::ScrollArea::horizontal().id_salt("map-offsets-scroll").show(ui, |ui| {
-        egui::Grid::new("map-offsets").show(ui, |ui| {
-            for heading in ["Axis", "Fine", "Coarse", "Total"] {
-                crate::widgets::label(ui, heading);
+    let offsets = view.offsets;
+    let axes =
+        [("Fifths", MapAxis::Fifths), ("Thirds", MapAxis::Thirds), ("Sevenths", MapAxis::Sevenths)];
+    for (name, axis) in axes {
+        for (lane, scale, lane_name) in
+            [(MapOffsetLane::Fine, 1, "fine"), (MapOffsetLane::Extension, EXTENSION_STEP, "coarse")]
+        {
+            let label = format!("{name} {lane_name}");
+            let mut value = offsets.lane(axis, lane) as f32;
+            // Read out and typed in lattice steps, so Coarse reads 20 for two
+            // of its steps, and a typed 25 lands on 30.
+            let response =
+                ValueBar::new(&mut value, -OFFSET_LIMIT as f32..=OFFSET_LIMIT as f32, &label)
+                    .integer()
+                    .unit(scale as f32, "")
+                    .default_value(0.0)
+                    .show(ui);
+            let one_shot = response.changed() && !response.dragged() && !response.drag_stopped();
+            if response.drag_started() || one_shot {
+                params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
             }
-            ui.end_row();
-            for (label, fine, extension, axis) in [
-                ("Fifths", &mut fine.threes, &mut extension.threes, MapAxis::Fifths),
-                ("Thirds", &mut fine.fives, &mut extension.fives, MapAxis::Thirds),
-                ("Sevenths", &mut fine.sevens, &mut extension.sevens, MapAxis::Sevenths),
-            ] {
-                crate::widgets::label(ui, label);
-                for (lane, value, scale) in [
-                    (MapOffsetLane::Fine, &mut *fine, 1),
-                    (MapOffsetLane::Extension, &mut *extension, EXTENSION_STEP),
-                ] {
-                    let response = ui.add(
-                        egui::DragValue::new(value)
-                            .range(-OFFSET_LIMIT..=OFFSET_LIMIT)
-                            .speed(0.1)
-                            .custom_formatter(move |value, _| {
-                                format!("{:.0}", value * f64::from(scale))
-                            })
-                            .custom_parser(move |text| {
-                                let value: i32 = text.trim().parse().ok()?;
-                                (value % scale == 0).then_some(f64::from(value / scale))
-                            }),
-                    );
-                    let one_shot =
-                        response.changed() && !response.dragged() && !response.drag_stopped();
-                    if response.drag_started() || one_shot {
-                        params.edit_lattice_map(MapEdit::BeginOffset(axis, lane));
-                    }
-                    if response.changed() {
-                        params.edit_lattice_map(MapEdit::Offset(axis, lane, *value));
-                    }
-                    if response.drag_stopped() || one_shot {
-                        params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
-                    }
-                }
-                crate::widgets::label(ui, (*fine + EXTENSION_STEP * *extension).to_string());
-                ui.end_row();
+            if response.changed() {
+                params.edit_lattice_map(MapEdit::Offset(axis, lane, value.round() as i32));
             }
-        });
-    });
+            if response.drag_stopped() || one_shot {
+                params.edit_lattice_map(MapEdit::EndOffset(axis, lane));
+            }
+        }
+    }
+    let total = offsets.total();
+    crate::widgets::label(
+        ui,
+        format!(
+            "Total: {} fifths, {} thirds, {} sevenths",
+            total.threes, total.fives, total.sevens
+        ),
+    );
 }
