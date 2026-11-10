@@ -234,7 +234,7 @@ const LOOK_MAX: f32 = 1.0;
 /// Persisted, like the lattice's [`Camera`](harmonigraph_scene::Camera): a
 /// framing is dialled in by hand, so a disc dialled in on its inner turns
 /// comes back framed that way when the editor reopens. Unlike the camera it is
-/// editor state ([`Interaction::spiral`](crate::Interaction::spiral)) rather
+/// editor state ([`EditorPrefs::spiral`](crate::EditorPrefs::spiral)) rather
 /// than appearance: the Spiral is never exported (#974), so no take carries
 /// it. What persisting costs is that a framing left somewhere odd is still
 /// there next session — the same trade the camera already makes, and the

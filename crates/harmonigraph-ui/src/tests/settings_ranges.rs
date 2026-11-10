@@ -119,13 +119,13 @@ fn poison(saved: &mut SharedState, edge: Edge) {
             velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape, velvet_square,
             velvet_tilt);
     }
-    saved.workspace.interaction.ui_scale = v;
-    poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
+    saved.workspace.interaction.prefs.ui_scale = v;
+    poison!(saved.workspace.interaction.prefs.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real load boundary; zero Video visits below explicitly records that its
     // text/choice/divider controls are not range-guard coverage.
-    saved.workspace.interaction.spiral.zoom = v;
-    saved.workspace.interaction.spiral.look = glam::Vec2::splat(v);
+    saved.workspace.interaction.prefs.spiral.zoom = v;
+    saved.workspace.interaction.prefs.spiral.look = glam::Vec2::splat(v);
     a.render.stop_bar = v as f64;
     a.render.tail = v as f64;
     a.render.frame.split = v;
@@ -147,8 +147,8 @@ fn loaded(edge: Edge) -> SharedState {
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
-    assert!((1.0..=8.0).contains(&state.workspace.interaction.spiral.zoom));
-    assert!(state.workspace.interaction.spiral.look.length() <= 1.0);
+    assert!((1.0..=8.0).contains(&state.workspace.interaction.prefs.spiral.zoom));
+    assert!(state.workspace.interaction.prefs.spiral.look.length() <= 1.0);
     assert!(
         (STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1).contains(&state.picture.appearance.render.stop_bar)
     );

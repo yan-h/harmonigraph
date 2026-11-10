@@ -298,7 +298,7 @@ fn the_video_pane_starts_with_appearance_actions_before_any_rule() {
 fn a_folded_heading_keeps_its_rules_and_chevron_clear() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
-    state.workspace.interaction.folded_sections.insert("Analyzer/Analysis".to_owned());
+    state.workspace.interaction.prefs.folded_sections.insert("Analyzer/Analysis".to_owned());
     let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0));
     h.settle(&mut state);
     let out = h.frame(&mut state, vec![]);
@@ -1887,17 +1887,17 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     assert_ne!(heading_color(&out, leaf, "MIDI RIBBONS"), lit, "an off heading reads as on");
     assert!(painted_in(&out, leaf, "Ribbon width").is_none(), "a ribbon row outlived the ribbons");
     assert!(
-        state.workspace.interaction.folded_sections.is_empty(),
+        state.workspace.interaction.prefs.folded_sections.is_empty(),
         "the switch folded a section: {:?}",
-        state.workspace.interaction.folded_sections,
+        state.workspace.interaction.prefs.folded_sections,
     );
     // Off, the heading has nothing to fold, so a click on its name records none.
     click_at(&mut h, &mut state, heading.center());
     h.frame(&mut state, vec![]);
     assert!(
-        state.workspace.interaction.folded_sections.is_empty(),
+        state.workspace.interaction.prefs.folded_sections.is_empty(),
         "a click on an off heading folded it: {:?}",
-        state.workspace.interaction.folded_sections,
+        state.workspace.interaction.prefs.folded_sections,
     );
 
     click_at(&mut h, &mut state, switch);

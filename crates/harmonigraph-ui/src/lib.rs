@@ -72,8 +72,8 @@ pub use spectrum::{
     SpectrumHistory,
 };
 pub use state::{
-    CameraPreset, Console, ExportAction, FrameRate, Interaction, PictureState, SharedState,
-    SurfaceState, TakeState,
+    CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
+    SharedState, SurfaceState, TakeState,
 };
 pub use text::use_renderer_font_texture;
 
@@ -267,7 +267,7 @@ pub fn root_ui(
     // color accessor reads it, and on a thread shared with another editor the
     // one in force is whichever that editor last set. A scale change below
     // rebuilds the style from it.
-    let reskinned = theme::set_skin(ui.ctx(), state.workspace.interaction.skin_dials);
+    let reskinned = theme::set_skin(ui.ctx(), state.workspace.interaction.prefs.skin_dials);
     if startup::draw(ui, state) {
         return;
     }
@@ -287,7 +287,7 @@ pub fn root_ui(
     // would be behind on is the one being dragged, where every intermediate
     // size shows. `reset_style` takes the rebuilt one from the context, which
     // `set_ui_scale` has already put there.
-    if theme::set_ui_scale(ui.ctx(), state.workspace.interaction.ui_scale) || reskinned {
+    if theme::set_ui_scale(ui.ctx(), state.workspace.interaction.prefs.ui_scale) || reskinned {
         ui.reset_style();
     }
     // Cleared before the panes run, so a frame with the roll hidden (or the
@@ -310,7 +310,8 @@ pub fn root_ui(
             (tab, i.modifiers.is_none() && i.consume_shortcut(&FRAMELESS_SHORTCUT))
         });
         if toggle {
-            state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
+            state.workspace.interaction.prefs.frameless =
+                !state.workspace.interaction.prefs.frameless;
         }
         if tab {
             ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
@@ -321,7 +322,7 @@ pub fn root_ui(
     let text_edit_was_focused = ui.ctx().text_edit_focused();
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
-    let frameless = workspace.interaction.frameless;
+    let frameless = workspace.interaction.prefs.frameless;
     if let Some(change) = workspace::show(
         ui,
         &mut workspace.layout,
@@ -392,16 +393,16 @@ pub fn root_ui(
             animating,
         },
     );
-    if state.workspace.interaction.show_perf {
+    if state.workspace.interaction.prefs.show_perf {
         // The whole editor, which is the region the HUD may be dragged around
         // in — where inside it the HUD sits is the user's, and `perf_pos` is
         // where that answer lives.
         perf::draw_overlay(
             ui.ctx(),
             ui.max_rect(),
-            &mut state.workspace.interaction.perf_pos,
+            &mut state.workspace.interaction.prefs.perf_pos,
             &state.picture.instruments.perf,
-            state.workspace.interaction.show_perf_detail,
+            state.workspace.interaction.prefs.show_perf_detail,
             build_tag,
         );
     }

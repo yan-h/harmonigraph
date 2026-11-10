@@ -638,11 +638,11 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
             for index in [first, 1 - first] {
                 region_click(&mut h, &mut state, index);
                 assert!(
-                    !state.workspace.interaction.analyzer_regions.collapsed[index],
+                    !state.workspace.interaction.prefs.analyzer_regions.collapsed[index],
                     "click frame retains its old picture"
                 );
                 h.settle_folds(&mut state);
-                assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
+                assert!(state.workspace.interaction.prefs.analyzer_regions.collapsed[index]);
                 assert!(h.screen.width() < window - 10.0);
                 for (tab, width) in
                     [(panes::Tab::Lattice, before[0]), (panes::Tab::Tuning, before[2])]
@@ -656,7 +656,7 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
             // Folding the container preserves both independently folded regions.
             h.collapse_click(&mut state, panes::Tab::Spectral);
             h.collapse_click(&mut state, panes::Tab::Spectral);
-            assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [true; 2]);
+            assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [true; 2]);
             for index in [first, 1 - first] {
                 region_click(&mut h, &mut state, index);
                 h.settle_folds(&mut state);
@@ -700,7 +700,7 @@ fn analyzer_region_restore_survives_a_saved_project() {
         "saved layout retains neighboring widths"
     );
     assert_eq!(reopened.workspace.take_window_size_change(), None);
-    assert_eq!(reopened.workspace.interaction.analyzer_regions.collapsed, [false, true]);
+    assert_eq!(reopened.workspace.interaction.prefs.analyzer_regions.collapsed, [false, true]);
     region_click(&mut h, &mut reopened, 1);
     h.settle_folds(&mut reopened);
     assert!((h.screen.width() - width).abs() < 1.0, "saved internal fold lost its restore ceiling");
@@ -749,7 +749,7 @@ fn analyzer_region_folds_remain_usable_when_the_host_constrains_the_window() {
                 "no repeated resize requests"
             );
         }
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+        assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [false; 2]);
         assert!((h.screen.width() - 1000.0).abs() < 1.0);
     }
 }
@@ -781,7 +781,7 @@ fn analyzer_local_region_folds_restore_the_original_split() {
                 assert_eq!(pane_body(&state, &panes::Tab::Lattice).unwrap(), lattice);
                 assert_eq!(h.screen.width(), 1000.0);
             }
-            assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+            assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [false; 2]);
             let after = h.ctx.read_response(id).unwrap().rect.center();
             assert!(
                 before.distance(after) < 1.0,
@@ -867,7 +867,7 @@ fn resetting_the_layout_restores_space_held_by_analyzer_regions() {
         state.workspace.reset_layout();
         h.frame(&mut state, vec![]);
         h.settle_folds(&mut state);
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+        assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [false; 2]);
         assert!(
             (h.screen.width() - unfolded).abs() < 1.0,
             "order {fold_lattice_first:?}: {}, not the unfolded {unfolded}",
@@ -936,9 +936,9 @@ fn a_discarded_pass_does_not_charge_an_internal_fold_twice() {
     );
     assert!(output.platform_output.num_completed_passes > 1);
     assert_eq!(state.workspace.layout_runtime.rects[1], rect);
-    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
+    assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [false; 2]);
     h.settle_folds(&mut state);
-    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false, true]);
+    assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [false, true]);
     region_click(&mut h, &mut state, 1);
     h.settle_folds(&mut state);
     near(h.screen.size(), original);
@@ -1090,7 +1090,7 @@ fn another_analyzer_tab_borrows_back_the_width_of_folded_regions() {
             near(now.size(), was.size());
         }
         assert_eq!((state.workspace.layout.right, state.workspace.layout.region_widths), saved);
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false, true]);
+        assert_eq!(state.workspace.interaction.prefs.analyzer_regions.collapsed, [false, true]);
     }
 }
 
@@ -1171,7 +1171,7 @@ fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
         let collapse = button(&mut h, &mut state);
         region_click(&mut h, &mut state, index);
         h.settle_folds(&mut state);
-        assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
+        assert!(state.workspace.interaction.prefs.analyzer_regions.collapsed[index]);
         assert!(h.screen.width() < window - 10.0, "the fold did not resize the window");
         let expand = button(&mut h, &mut state);
         near(expand.min.to_vec2(), collapse.min.to_vec2());

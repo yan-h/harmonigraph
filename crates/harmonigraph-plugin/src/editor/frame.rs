@@ -150,7 +150,7 @@ pub(super) fn frame(
 
     // AFTER the UI has run, so a rate picked this frame takes effect on the
     // next refresh rather than the one after it.
-    queue.set_frame_divisor(shared.ui.workspace.interaction.frame_rate.divisor());
+    queue.set_frame_divisor(shared.ui.workspace.interaction.prefs.frame_rate.divisor());
     queue.set_focus_takes_only_arrows(harmonigraph_ui::plot_handle_focused(ui.ctx()));
     queue.set_key_capture(key_capture(shared.ui.picture.runtime.map_arrows));
 }

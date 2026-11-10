@@ -533,7 +533,7 @@ pub(crate) fn show(
     // across egui's discarded/repeated passes as well as the answering frame.
     let frame = ui.ctx().cumulative_frame_nr();
     if runtime.frame != Some(frame) {
-        viewer.interaction.analyzer_regions.begin_frame();
+        viewer.interaction.prefs.analyzer_regions.begin_frame();
         runtime.frame = Some(frame);
     }
     let answering = runtime.requested.is_some_and(|asked| frame <= asked + 1);
@@ -579,10 +579,10 @@ pub(crate) fn show(
     dividers(ui, layout, runtime, &drawn, unchanged, scale, floor);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
     if repeated {
-        viewer.interaction.analyzer_regions.request = None;
+        viewer.interaction.prefs.analyzer_regions.request = None;
         return None;
     }
-    let region_request = viewer.interaction.analyzer_regions.request;
+    let region_request = viewer.interaction.prefs.analyzer_regions.request;
     // A fold, a dock move or a region fold reshapes the layout, starting from
     // the layout as drawn. A switch between analyzer tabs, which lends or takes
     // back the region width, edits no saved width but asks the window for its
@@ -595,10 +595,10 @@ pub(crate) fn show(
     let edited = reshaped || before.repaid() != layout.repaid();
     if let Some(request) = region_request {
         layout.resize_region(request.region, request.width, theme::min_pane(scale));
-        viewer.interaction.analyzer_regions.land();
+        viewer.interaction.prefs.analyzer_regions.land();
     }
     if reset {
-        viewer.interaction.analyzer_regions = Default::default();
+        viewer.interaction.prefs.analyzer_regions = Default::default();
         *layout = Layout { sized: true, ..Layout::default() };
     }
     if reset || edited {

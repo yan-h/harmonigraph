@@ -35,7 +35,7 @@ fn dialled() -> SharedState {
     appearance.render.short_edge = 2160;
     appearance.render.frame.split = 0.37;
     appearance.render.spectrogram = crate::SpectrogramRender::Scrolling;
-    state.workspace.interaction.ui_scale = 1.25;
+    state.workspace.interaction.prefs.ui_scale = 1.25;
     state
 }
 
@@ -133,11 +133,11 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
     ("stagger_spread", "order:Simultaneous,", true),
     // Lit slices first, now how every note moves.
     ("stagger_spread", "lit_first:false,", true),
-    // The overlay switches, moved out of the view to the editor's top level:
-    // one inside a view must not reach the top-level key of the same name.
+    // The overlay switches, moved out of the view to the editor's preferences:
+    // one inside a view must not reach the preference of the same name.
     ("render_scale", "show_perf:true,show_perf_detail:true,", true),
-    // The Spiral's framing, moved out of the appearance to the editor's top
-    // level for the same reason, and a struct where those were flags.
+    // The Spiral's framing, moved out of the appearance to the editor's
+    // preferences for the same reason, and a struct where those were flags.
     ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),", true),
     // The analyzer's spectrum averaging (#1573), an enum token.
     ("window", "tapers:Three,", true),
@@ -1086,8 +1086,8 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
         "appearance.view.atmosphere.stars.star_jitter",
         "appearance.spectrum.atmosphere.material_settings.wash_size",
         "appearance.render.frame.split",
-        "skin_dials.tint",
-        "spiral.zoom",
+        "prefs.skin_dials.tint",
+        "prefs.spiral.zoom",
         "camera_presets[0].yaw",
         "look_slots.stored[1].view.shadow.lattice_text.width",
     ] {
@@ -1165,23 +1165,8 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
 #[test]
 fn the_persist_blob_carries_exactly_these_top_level_keys() {
     // UiPersist's fields, in declaration order.
-    const KEYS: &[&str] = &[
-        "version",
-        "layout",
-        "analyzer_regions",
-        "spiral",
-        "folded_sections",
-        "appearance",
-        "camera_presets",
-        "look_slots",
-        "frame_rate",
-        "ui_scale",
-        "frameless",
-        "skin_dials",
-        "perf_pos",
-        "show_perf",
-        "show_perf_detail",
-    ];
+    const KEYS: &[&str] =
+        &["version", "layout", "appearance", "camera_presets", "look_slots", "prefs"];
 
     let saved = fresh().save_persist();
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
@@ -1326,11 +1311,11 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     let appearance = state.picture.appearance.serialize();
     let editor = state.save_persist();
     state.workspace.layout = workspace::Layout::solo(crate::panes::Tab::Console);
-    state.workspace.interaction.spiral.zoom = 2.75;
+    state.workspace.interaction.prefs.spiral.zoom = 2.75;
     state.workspace.layout.right.lattice = 320.0;
-    state.workspace.interaction.folded_sections.insert("System/Performance".into());
-    state.workspace.interaction.ui_scale = 1.25;
-    state.workspace.interaction.frame_rate = crate::FrameRate::Half;
+    state.workspace.interaction.prefs.folded_sections.insert("System/Performance".into());
+    state.workspace.interaction.prefs.ui_scale = 1.25;
+    state.workspace.interaction.prefs.frame_rate = crate::FrameRate::Half;
     assert_ne!(state.save_persist(), editor);
     assert_eq!(state.picture.appearance.serialize(), appearance);
     let mut restored = fresh();
@@ -1386,13 +1371,13 @@ fn persist_round_trips_the_spiral_framing() {
     let mut state = fresh();
     // A zoom off both ends of the range and a look off both axes, so a field
     // dropped or transposed on the way through shows up.
-    state.workspace.interaction.spiral =
+    state.workspace.interaction.prefs.spiral =
         crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
 
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
-    assert_eq!(restored.workspace.interaction.spiral.zoom, 2.75);
-    assert_eq!(restored.workspace.interaction.spiral.look, glam::vec2(0.4, -0.6));
+    assert_eq!(restored.workspace.interaction.prefs.spiral.zoom, 2.75);
+    assert_eq!(restored.workspace.interaction.prefs.spiral.look, glam::vec2(0.4, -0.6));
 
     // And the repair on the way in, which is `load_persist`'s call rather than
     // the pane's: a blob nothing but a text editor could have written.
@@ -1402,9 +1387,9 @@ fn persist_round_trips_the_spiral_framing() {
     let mut restored = fresh();
     assert!(restored.load_persist(&edited));
     assert!(
-        restored.workspace.interaction.spiral.zoom.is_finite(),
+        restored.workspace.interaction.prefs.spiral.zoom.is_finite(),
         "a NaN zoom opened at {}",
-        restored.workspace.interaction.spiral.zoom,
+        restored.workspace.interaction.prefs.spiral.zoom,
     );
 }
 
@@ -1431,14 +1416,16 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
     // Both fields off their fresh values, and the look off both axes: a field
     // that came back from the wrong place is only visible against a value the
     // default is not.
-    state.workspace.interaction.spiral =
+    state.workspace.interaction.prefs.spiral =
         crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
     let saved = state.save_persist();
 
-    let whole = top_level_pairs(&saved)
-        .into_iter()
-        .find_map(|(key, text)| (key == "spiral").then_some(text))
-        .expect("the blob carries a spiral section");
+    let section = |pairs: Vec<(String, String)>, name: &str| {
+        pairs.into_iter().find_map(|(key, text)| (key == name).then_some(text))
+    };
+    let prefs = section(top_level_pairs(&saved), "prefs").expect("the blob carries preferences");
+    let whole = section(top_level_pairs(prefs.trim_start_matches("prefs:")), "spiral")
+        .expect("the preferences carry a spiral section");
     // The section's own pairs, through the same depth-aware split: `look` is a
     // nested struct, so a comma split would cut it in half.
     let inner = whole.trim_start_matches("spiral:");
@@ -1461,13 +1448,13 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
             restored.picture.appearance.camera.yaw, 1.23,
             "dropping the spiral's {key:?} cost the camera too"
         );
-        let framing = state.workspace.interaction.spiral;
+        let framing = state.workspace.interaction.prefs.spiral;
         let want = match key.as_str() {
             "zoom" => (opened.zoom, framing.look),
             "look" => (framing.zoom, opened.look),
             other => panic!("the framing grew a {other:?} field this sweep does not name"),
         };
-        let restored = restored.workspace.interaction.spiral;
+        let restored = restored.workspace.interaction.prefs.spiral;
         assert_eq!(
             (restored.zoom, restored.look),
             want,
@@ -1476,16 +1463,29 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
     }
 }
 
+/// Every editor preference comes back from a save dialled, as one struct.
 #[test]
-fn persist_round_trips_the_frame_rate() {
+fn every_editor_preference_round_trips() {
     let mut state = fresh();
-    // Not the default, so it proves the choice round-trips rather than being
-    // re-derived from one.
-    state.workspace.interaction.frame_rate = crate::FrameRate::Third;
+    // Each off its default, so a preference re-derived rather than restored
+    // shows up.
+    let prefs = &mut state.workspace.interaction.prefs;
+    prefs.folded_sections.insert("System/Performance".into());
+    prefs.frame_rate = crate::FrameRate::Third;
+    prefs.ui_scale = 1.25;
+    prefs.frameless = true;
+    prefs.skin_dials.accent_hue = 120.0;
+    prefs.perf_pos = Some(egui::pos2(40.0, 60.0));
+    prefs.show_perf = true;
+    prefs.show_perf_detail = true;
+    prefs.analyzer_regions.collapsed = [true, false];
+    prefs.spiral.zoom = 2.75;
+    let dialled = ron::to_string(&state.workspace.interaction.prefs).unwrap();
+    assert_ne!(dialled, ron::to_string(&crate::EditorPrefs::default()).unwrap());
 
     let mut restored = fresh();
-    restored.load_persist(&state.save_persist());
-    assert_eq!(restored.workspace.interaction.frame_rate, crate::FrameRate::Third);
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(ron::to_string(&restored.workspace.interaction.prefs).unwrap(), dialled);
 }
 
 /// A blob saved before the control existed loads at the design size. `f32`'s
@@ -1494,20 +1494,20 @@ fn persist_round_trips_the_frame_rate() {
 #[test]
 fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
     let mut state = fresh();
-    state.workspace.interaction.ui_scale = 0.75;
+    state.workspace.interaction.prefs.ui_scale = 0.75;
     let saved = state.save_persist();
     let mut back = fresh();
     back.load_persist(&saved);
-    assert_eq!(back.workspace.interaction.ui_scale, 0.75, "the scale did not round-trip");
+    assert_eq!(back.workspace.interaction.prefs.ui_scale, 0.75, "the scale did not round-trip");
 
     // The same blob with the field taken back out, which is what every project
     // saved before this looks like.
-    let stripped =
-        saved.split(",ui_scale:").next().expect("the blob names the field").to_owned() + ")";
+    let stripped = saved.replacen(",ui_scale:0.75", "", 1);
+    assert_ne!(stripped, saved, "the blob names the field");
     let mut older = fresh();
-    older.load_persist(&stripped);
+    assert!(older.load_persist(&stripped));
     assert_eq!(
-        older.workspace.interaction.ui_scale, 1.0,
+        older.workspace.interaction.prefs.ui_scale, 1.0,
         "a blob with no scale did not load at the design size"
     );
 }
@@ -2117,9 +2117,9 @@ fn a_folded_section_survives_an_editor_reopen() {
     window.frame(&mut state, vec![press(header, false)]);
     let out = window.frame(&mut state, vec![]);
     assert!(
-        state.workspace.interaction.folded_sections.contains("Analyzer/Spectrogram"),
+        state.workspace.interaction.prefs.folded_sections.contains("Analyzer/Spectrogram"),
         "the click did not reach the persisted field: {:?}",
-        state.workspace.interaction.folded_sections,
+        state.workspace.interaction.prefs.folded_sections,
     );
     assert!(!drawn(&out, leaf, "Softness"), "the click did not fold the section");
     let saved = state.save_persist();
@@ -2149,7 +2149,7 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
     for section in ["Analyzer/Spectrogram", "Analyzer/MIDI ribbons", "Analyzer/View"] {
-        state.workspace.interaction.folded_sections.insert(section.to_owned());
+        state.workspace.interaction.prefs.folded_sections.insert(section.to_owned());
     }
     let mut window = super::harness::DockHarness::new();
     window.settle(&mut state);
@@ -2567,11 +2567,11 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
 #[test]
 fn tab_visibility_is_saved_only_with_the_editor() {
     let mut state = fresh();
-    state.workspace.interaction.frameless = true;
+    state.workspace.interaction.prefs.frameless = true;
     let saved = state.save_persist();
     let mut restored = fresh();
     assert!(restored.load_persist(&saved));
-    assert!(restored.workspace.interaction.frameless);
+    assert!(restored.workspace.interaction.prefs.frameless);
     let appearance = ron::to_string(&state.picture.appearance).unwrap();
     assert!(!appearance.contains("frameless"));
     let old = appearance.replacen("view:(", "view:(frameless:true,", 1);

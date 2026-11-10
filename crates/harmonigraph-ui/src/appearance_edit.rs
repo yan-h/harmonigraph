@@ -1,5 +1,7 @@
 //! Editor appearance history. The live document remains PictureState's;
-//! snapshots deliberately exclude host state, navigation and output settings.
+//! snapshots deliberately exclude host state and output settings. The
+//! Analyzer's navigation (pitch range, History, Level) is part of the look, so
+//! undo and the slots carry it (#1635).
 
 use crate::{AppearanceDocument, SpectrumConfig};
 use harmonigraph_scene::{Camera, ViewConfig};

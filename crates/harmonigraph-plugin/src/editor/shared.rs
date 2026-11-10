@@ -365,7 +365,7 @@ mod tests {
         shared.ui.picture.appearance.view.max_sevens = 3;
         shared.ui.picture.appearance.spectrum.low_midi = 40.5;
         shared.ui.picture.appearance.render.short_edge = 2160;
-        shared.ui.workspace.interaction.ui_scale = 1.25;
+        shared.ui.workspace.interaction.prefs.ui_scale = 1.25;
         let expected = shared.ui.picture.appearance.serialize();
         shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(44_100.0);
