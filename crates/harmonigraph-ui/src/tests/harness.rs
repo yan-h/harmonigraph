@@ -7,6 +7,7 @@
 //! reaching for the harness gets both.
 
 use crate::*;
+use harmonigraph_take::RenderProgress;
 
 pub(super) use super::probe::{fresh, press};
 

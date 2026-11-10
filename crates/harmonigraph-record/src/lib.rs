@@ -13,11 +13,11 @@
 //! What it does NOT need is the editor. `ParamKey` (what an automation record
 //! is named by) and the export queue's vocabulary — `ExportJob` and
 //! `RenderProgress`, what the Video pane reads back — live in
-//! `harmonigraph-take`. Of the Video pane's settings, a take's look reaches
-//! this crate only as the opaque appearance string the UI owns (#797), and
-//! its trigger only as the plain values `Control` is handed each frame; the
-//! code names none of their types, the docs link `RenderTrigger` and the tests
-//! build a `RenderConfig`. So this crate needs no harmonigraph crate but core
+//! `harmonigraph-take`. The Video pane's settings live in `harmonigraph-ui`
+//! beside the appearance document: a take's look reaches this crate only as
+//! that document's opaque string (#797), and its trigger only as the plain
+//! values `Control` is handed each frame, so neither the code nor the tests
+//! name their types. So this crate needs no harmonigraph crate but core
 //! and the format — the rest of the list is `rtrb` and `parking_lot`, the two
 //! audio-thread primitives. That is what makes the manifest's "nothing here
 //! reaches egui or wgpu" a promise the dependency list can keep rather than

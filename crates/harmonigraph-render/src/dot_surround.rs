@@ -101,14 +101,22 @@ struct DotLocals {
 }
 }
 
-struct Resources {
+pub(crate) struct Resources {
+    pipelines: Pipelines,
+    /// The one copy's buffers, built on its first cutting frame.
+    pane: Option<Pane>,
+}
+
+/// The cut's program and layout: keyed on the device and target format alone,
+/// so the editor's loading stage builds them once for every window
+/// (`crate::startup`).
+#[derive(Clone)]
+pub(crate) struct Pipelines {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
     #[cfg(feature = "hot-reload")]
     generation: u64,
-    /// The one copy's buffers, built on its first cutting frame.
-    pane: Option<Pane>,
 }
 
 struct Pane {
@@ -131,6 +139,21 @@ struct Buffers {
 }
 
 impl Resources {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Resources { pipelines: Pipelines::new(device, format), pane: None }
+    }
+
+    /// Hand a renderer the loading stage's build, unless it holds one already;
+    /// replacing a stale one stays with the callback.
+    #[cfg(not(feature = "hot-reload"))]
+    pub(crate) fn adopt(pipelines: &Pipelines, resources: &mut CallbackResources) {
+        if resources.get::<Resources>().is_none() {
+            resources.insert(Resources { pipelines: pipelines.clone(), pane: None });
+        }
+    }
+}
+
+impl Pipelines {
     fn is_stale(&self, format: wgpu::TextureFormat) -> bool {
         #[cfg(feature = "hot-reload")]
         if self.generation != crate::reload::generation() {
@@ -139,7 +162,9 @@ impl Resources {
         self.format != format
     }
 
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        #[cfg(test)]
+        crate::startup::record_build("dot surround");
         let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -172,13 +197,12 @@ impl Resources {
             "fs_dot_surround",
             format,
         );
-        Resources {
+        Pipelines {
             pipeline,
             layout,
             format,
             #[cfg(feature = "hot-reload")]
             generation: crate::reload::generation(),
-            pane: None,
         }
     }
 }
@@ -273,8 +297,9 @@ impl CallbackTrait for DotSurroundCallback {
         let size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
         let wants = surround.draws() && !self.dots.is_empty() && size.iter().all(|&d| d > 0);
 
-        // Nothing to cut builds nothing, so a reader whose cut is off never
-        // pays for the pipeline. What is built is held through a quiet stretch
+        // Nothing to cut builds nothing, so a renderer the editor's loading
+        // stage did not prepare (`crate::startup`) never pays for a pipeline
+        // it may not draw with. What is built is held through a quiet stretch
         // rather than dropped, since a dot comes and goes with every note: a
         // frame with none skips the work, not the buffers, and with no dots
         // `paint` declines.
@@ -288,11 +313,11 @@ impl CallbackTrait for DotSurroundCallback {
         }
         let stale = callback_resources
             .get::<Resources>()
-            .is_none_or(|resources| resources.is_stale(self.target_format));
+            .is_none_or(|resources| resources.pipelines.is_stale(self.target_format));
         if stale {
             callback_resources.insert(Resources::new(device, self.target_format));
         }
-        let Resources { layout, pane, .. } =
+        let Resources { pipelines: Pipelines { layout, .. }, pane } =
             callback_resources.get_mut::<Resources>().expect("inserted above");
         let pane = pane.get_or_insert_with(|| Pane {
             buffers: Buffers::new(device, layout, [INITIAL_CAPACITY; 2]),
@@ -344,7 +369,7 @@ impl CallbackTrait for DotSurroundCallback {
             0.0,
             1.0,
         );
-        pass.set_pipeline(&resources.pipeline);
+        pass.set_pipeline(&resources.pipelines.pipeline);
         pass.set_bind_group(0, &pane.buffers.bind, &[]);
         pass.draw(0..4, 0..pane.dots.len() as u32);
     }

@@ -274,7 +274,9 @@ impl<'a> Queue<'a> {
 
     /// Run the frame callback on every `divisor`th refresh of the display
     /// from here on; 0 and 1 are every refresh. See
-    /// [`baseview::Window::set_frame_divisor`].
+    /// [`baseview::Window::set_frame_divisor`]. While the UI waits on a later
+    /// repaint deadline, the window skips the frames before it
+    /// ([`paced_divisor`]).
     ///
     /// Applied once the frame returns (the window isn't reachable from
     /// inside), so calling it repeatedly within one frame keeps only the last
@@ -400,6 +402,13 @@ where
     /// `repaint_after` is what the UI asked for, this is what the surface has
     /// shown it will accept. See [`wants_render`].
     retry_after: Option<Instant>,
+    /// The divisor the app last chose ([`Queue::set_frame_divisor`]): the
+    /// link's rate whenever the UI wants a frame at once, and the one any
+    /// event restores. See [`paced_divisor`] for the rest of the time.
+    frame_divisor: u32,
+    /// When the window last changed size, by [`SizeSource`] or a `Resized`
+    /// event: the chosen rate is held for [`RESIZE_HOLD`] after it.
+    resized_at: Option<Instant>,
     key_capture: KeyCapture,
     /// See [`Queue::set_focus_takes_only_arrows`].
     focus_takes_only_arrows: bool,
@@ -569,6 +578,8 @@ where
             repaint_after: Some(start_time),
             refused_presents: 0,
             retry_after: None,
+            frame_divisor: frame_divisor.unwrap_or(1),
+            resized_at: None,
             key_capture,
             focus_takes_only_arrows,
             tess_ms: 0.0,
@@ -742,6 +753,69 @@ fn wants_render(
         Some(t) => now >= t || repaint_delay.is_zero(),
         None => repaint_delay.is_zero(),
     }
+}
+
+/// The furthest apart, in seconds, [`paced_divisor`] spaces the link's frames
+/// beyond the app's chosen rate, whatever the UI waits for: a UI that asks for
+/// no repaint at all still runs a pass this often, and so still sees what
+/// changed outside it. It bounds the gap between UI passes while the editor
+/// idles, and so how late a change from another thread is seen; a chosen rate
+/// slower than this is kept as it is, never sped up.
+///
+/// Public so the app's own check for a stalled loop can sit clear above it:
+/// paced gaps land on whole refreshes and run-loop jitter on top, so a cap
+/// equal to a stall threshold reads half its idle gaps as stalls.
+pub const MAX_FRAME_GAP: f64 = 0.08;
+
+/// How long after a size change [`paced_divisor`] keeps the chosen rate.
+///
+/// A host resizing the window on macOS sends no event: the size is polled at
+/// the top of each frame ([`SizeSource`]), so a link slowed to the idle poll
+/// would take each step of a border drag up to a poll late, about 18 a second.
+/// Held, the next size of the drag is seen within one chosen frame. The hold
+/// restarts at every size, so it need only bridge the gap between two host
+/// updates, which follow the pointer's moves; 0.2 s bridges a hand slowing
+/// mid-drag. What it costs is a fifth of a second of undrawn passes at the
+/// chosen rate once a resize ends, under 30 at 144 Hz, and nothing while idle.
+const RESIZE_HOLD: Duration = Duration::from_millis(200);
+
+/// The divisor to pace the display link at until the next frame: `chosen`, or
+/// a whole multiple of it that skips the frames which could draw nothing
+/// because they fall before the deadline `until_due` away (`None`: there is
+/// none).
+///
+/// The UI pass runs on every frame the link paces, drawn or not, and an idle
+/// editor waiting out its 50 ms poll ran it on every refresh for nothing
+/// (#1676). So the link skips to the first of the chosen rate's frames
+/// strictly past the deadline, which is the frame `wants_render` would draw
+/// on anyway: the drawn cadence is the one the chosen rate gives, and only the
+/// undrawn passes go. One that lands exactly on the deadline is skipped,
+/// because it need not draw: the deadline is `now` after this frame's UI pass,
+/// and that frame compares it with `now` after its own, so it draws only if
+/// its pass ran no faster than this one. A deadline of now (the UI asked for
+/// a frame at once, as an animating editor does every frame) is the chosen
+/// rate itself, so the first animating frame restores it. A frame that still
+/// lands a hair before its deadline is no loss: it reads the deadline as
+/// moments away and paces the next of the chosen rate's frames. What the UI
+/// does not schedule waits for the next of these frames:
+/// an event restores the chosen rate at once (see `on_event`), but a change
+/// from another thread (a note, audio, a host parameter) is seen when the
+/// deadline comes.
+///
+/// A size change is the exception: `since_resize` (how long ago the window
+/// last changed size) within [`RESIZE_HOLD`] keeps the chosen rate.
+fn paced_divisor(
+    chosen: u32, refresh: f64, until_due: Option<Duration>, since_resize: Option<Duration>,
+) -> u32 {
+    let chosen = chosen.max(1);
+    let period = refresh * f64::from(chosen);
+    if !(period.is_finite() && period > 0.0) || since_resize.is_some_and(|t| t < RESIZE_HOLD) {
+        return chosen;
+    }
+    let wait = until_due.map_or(MAX_FRAME_GAP, |due| due.as_secs_f64().min(MAX_FRAME_GAP));
+    let most = (MAX_FRAME_GAP / period).floor().max(1.0);
+    let frames = ((wait / period).floor() + 1.0).min(most);
+    chosen * frames as u32
 }
 
 /// What a finished render leaves behind for [`wants_render`] to read next
@@ -961,6 +1035,57 @@ mod wants_render_tests {
         // No deadline yet and nothing urgent asked for: still waits.
         assert!(!wants_render(false, None, None, capped, now));
     }
+
+    /// Waiting out the 50 ms idle poll, the link skips to the first of the
+    /// chosen rate's frames past it, at any display rate, never further apart
+    /// than the cap unless the chosen rate is, and never faster than the
+    /// chosen rate; a frame asked for at once (an animating editor) puts the
+    /// chosen rate back.
+    #[test]
+    fn an_idle_poll_slows_the_link_to_the_frame_it_draws_on() {
+        let poll = Some(Duration::from_millis(50));
+        for hz in [60.0, 100.0, 120.0, 144.0] {
+            let refresh = 1.0 / hz;
+            for chosen in 1..=4 {
+                let idle = paced_divisor(chosen, refresh, poll, None);
+                let gap = f64::from(idle) * refresh;
+                let step = f64::from(chosen) * refresh;
+                assert_eq!(idle % chosen, 0, "{hz} Hz, divisor {chosen}: off the chosen grid");
+                assert!(gap > 0.05 - 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap < 0.05 + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap <= MAX_FRAME_GAP + 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
+                assert_eq!(paced_divisor(chosen, refresh, Some(Duration::ZERO), None), chosen);
+            }
+        }
+        // #1673's still picture in Bitwig drew every 8th refresh at 144 Hz.
+        assert_eq!(paced_divisor(1, 1.0 / 144.0, poll, None), 8);
+        // Third at 60 Hz is the poll's own period: doubling it to the next
+        // frame past the poll would space passes 100 ms apart, which the
+        // plugin's stall check reads as a stall. The cap keeps it at Third.
+        assert_eq!(paced_divisor(3, 1.0 / 60.0, poll, None), 3);
+        // Quarter at 60 Hz is already slower than the poll.
+        assert_eq!(paced_divisor(4, 1.0 / 60.0, poll, None), 4);
+        // Nothing asked for at all: still a pass every 0.08 s or sooner.
+        assert_eq!(paced_divisor(1, 1.0 / 144.0, None, None), 11);
+    }
+
+    /// A host resize on macOS arrives as no event, only as a size the next
+    /// frame polls, so a still editor whose link idles would step a border
+    /// drag at the poll. Within the hold after a size change the link keeps
+    /// the chosen rate, whatever the deadline; after it the link idles again.
+    #[test]
+    fn a_resize_holds_the_chosen_rate_for_a_moment() {
+        let poll = Some(Duration::from_millis(50));
+        let refresh = 1.0 / 144.0;
+        let just = Some(Duration::from_millis(10));
+        let late = Some(RESIZE_HOLD - Duration::from_millis(1));
+        assert_eq!(paced_divisor(1, refresh, poll, just), 1);
+        assert_eq!(paced_divisor(2, refresh, poll, late), 2);
+        assert_eq!(paced_divisor(1, refresh, None, just), 1);
+        let after = Some(RESIZE_HOLD + Duration::from_millis(1));
+        assert_eq!(paced_divisor(1, refresh, poll, after), 8);
+        assert_eq!(paced_divisor(2, refresh, poll, after), 8);
+    }
 }
 
 impl<State, U> WindowHandler for EguiWindow<State, U>
@@ -993,6 +1118,7 @@ where
                 (size.height * self.pixels_per_point as f64).round().max(1.0) as u32,
             );
             self.physical_size = adopted;
+            self.resized_at = Some(tick_start);
         }
 
         self.egui_time = egui_time(self.egui_time, self.start_time, window.frame_timing());
@@ -1032,7 +1158,7 @@ where
         });
 
         if let Some(divisor) = frame_divisor {
-            window.set_frame_divisor(divisor);
+            self.frame_divisor = divisor;
         }
 
         if self.close_requested {
@@ -1149,6 +1275,19 @@ where
                 Some(self.repaint_after.map_or(candidate, |pending| pending.min(candidate)));
         }
 
+        // The link's rate until the next frame, now that what that frame waits
+        // for is known: the deadline `wants_render` reads next.
+        let until_due =
+            self.retry_after.or(self.repaint_after).map(|due| due.saturating_duration_since(now));
+        let since_resize = self.resized_at.map(|at| now.saturating_duration_since(at));
+        let divisor = match window.frame_timing() {
+            Some(timing) => {
+                paced_divisor(self.frame_divisor, timing.refresh, until_due, since_resize)
+            }
+            None => self.frame_divisor,
+        };
+        window.set_frame_divisor(divisor);
+
         for command in full_output.platform_output.commands {
             match command {
                 egui::OutputCommand::CopyText(text) => {
@@ -1203,6 +1342,11 @@ where
 
     #[allow(unused_variables)]
     fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
+        // Back to the chosen rate, so an editor the link has slowed to its
+        // poll ([`paced_divisor`]) draws this event on the next refresh rather
+        // than a poll later. Nothing changes while the link is not slowed.
+        window.set_frame_divisor(self.frame_divisor);
+
         // Parent/embedded windows do not always gain keyboard focus
         // Automatically on click. Request focus explicitly before forwarding the event.
         if matches!(
@@ -1377,8 +1521,11 @@ where
                     viewport_info.native_pixels_per_point = Some(self.pixels_per_point);
                     viewport_info.inner_rect = Some(screen_rect);
 
-                    // Schedule to repaint on the next frame.
-                    self.repaint_after = Some(Instant::now());
+                    // Schedule to repaint on the next frame, and hold the
+                    // chosen rate for the rest of a drag (`RESIZE_HOLD`).
+                    let now = Instant::now();
+                    self.repaint_after = Some(now);
+                    self.resized_at = Some(now);
                 }
                 baseview::WindowEvent::Focused => {
                     self.egui_input

@@ -258,11 +258,8 @@ struct SpectrogramUniforms {
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
-struct SpectrogramResources {
-    pipeline: wgpu::RenderPipeline,
-    cloud: Option<atmosphere::Pipelines>,
-    layout: wgpu::BindGroupLayout,
-    target_format: wgpu::TextureFormat,
+pub(crate) struct SpectrogramResources {
+    pipelines: SpectrogramPipelines,
     /// Every spectrogram this renderer has drawn, by pane id, and never
     /// swept, like the lattice's panes. An id is a surface, so the map
     /// holds as many entries as there are surfaces, and it goes with the
@@ -270,6 +267,18 @@ struct SpectrogramResources {
     /// export ends. Until then a hidden tab or a closed preview keeps its grid
     /// copy and the cloud's targets, so switching back rebuilds nothing.
     panes: HashMap<u64, SpectrogramPane>,
+}
+
+/// The heatmap's program and layout, and the cloud's: keyed on the device and
+/// target format alone, so the editor's loading stage builds both once for
+/// every window (`crate::startup`). Elsewhere the cloud's are built by the
+/// first frame that draws one.
+#[derive(Clone)]
+pub(crate) struct SpectrogramPipelines {
+    pipeline: wgpu::RenderPipeline,
+    cloud: Option<atmosphere::Pipelines>,
+    layout: wgpu::BindGroupLayout,
+    target_format: wgpu::TextureFormat,
 }
 
 /// The resource owner remembers only the snapshot it actually uploaded.
@@ -353,12 +362,33 @@ pub(super) fn timing_pipeline_startup(
     let resources = SpectrogramResources::new(device, format);
     let plain = started.elapsed();
     let started = std::time::Instant::now();
-    let _cloud = atmosphere::Pipelines::new(device, format, &resources.layout);
+    let _cloud = atmosphere::Pipelines::new(device, format, &resources.pipelines.layout);
     [plain, started.elapsed()]
 }
 
 impl SpectrogramResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        Self::from_pipelines(SpectrogramPipelines::new(device, target_format))
+    }
+
+    fn from_pipelines(pipelines: SpectrogramPipelines) -> Self {
+        SpectrogramResources { pipelines, panes: HashMap::new() }
+    }
+
+    /// Hand a renderer the loading stage's build, unless it holds one already;
+    /// replacing a stale one stays with the callback.
+    #[cfg(not(feature = "hot-reload"))]
+    pub(crate) fn adopt(pipelines: &SpectrogramPipelines, resources: &mut CallbackResources) {
+        if resources.get::<SpectrogramResources>().is_none() {
+            resources.insert(Self::from_pipelines(pipelines.clone()));
+        }
+    }
+}
+
+impl SpectrogramPipelines {
+    pub(crate) fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        #[cfg(test)]
+        crate::startup::record_build("spectrogram");
         let buffer_entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
@@ -394,7 +424,7 @@ impl SpectrogramResources {
             ],
         });
         let shader = spectrogram_shader(device);
-        SpectrogramResources {
+        SpectrogramPipelines {
             pipeline: create_spectrogram_pipeline(
                 device,
                 &shader,
@@ -410,8 +440,16 @@ impl SpectrogramResources {
             cloud: None,
             layout,
             target_format,
-            panes: HashMap::new(),
         }
+    }
+
+    /// The cloud's pipelines as well, for a renderer that has none yet.
+    #[cfg(not(feature = "hot-reload"))]
+    pub(crate) fn with_cloud(mut self, device: &wgpu::Device) -> Self {
+        if self.cloud.is_none() {
+            self.cloud = Some(atmosphere::Pipelines::new(device, self.target_format, &self.layout));
+        }
+        self
     }
 }
 
@@ -523,13 +561,14 @@ impl CallbackTrait for SpectrogramCallback {
             callback_resources.get::<atmosphere::CloudSampling>().copied().unwrap_or(sampling);
         let recreate = callback_resources
             .get::<SpectrogramResources>()
-            .is_none_or(|r| r.target_format != self.target_format);
+            .is_none_or(|r| r.pipelines.target_format != self.target_format);
         if recreate {
             callback_resources.insert(SpectrogramResources::new(device, self.target_format));
         }
         let resources: &mut SpectrogramResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        let SpectrogramResources { layout, panes, cloud, .. } = resources;
+        let SpectrogramResources { pipelines: SpectrogramPipelines { layout, cloud, .. }, panes } =
+            resources;
         let pane = SpectrogramPane::get(panes, device, self.pane_id);
         pane.cloud_ready = false;
 
@@ -865,7 +904,7 @@ impl CallbackTrait for SpectrogramCallback {
             1.0,
         );
         if pane.cloud_ready {
-            let pipelines = resources.cloud.as_ref().expect("prepared cloud pipelines");
+            let pipelines = resources.pipelines.cloud.as_ref().expect("prepared cloud pipelines");
             let cloud = pane.cloud.as_ref().expect("prepared cloud");
             // The spectrogram's bed is black, including unwritten history.
             // Color the diffused intensity there first; then the measured mesh
@@ -877,7 +916,7 @@ impl CallbackTrait for SpectrogramCallback {
             render_pass.draw(0..6, 0..1);
             render_pass.set_pipeline(&pipelines.composite);
         } else {
-            render_pass.set_pipeline(&resources.pipeline);
+            render_pass.set_pipeline(&resources.pipelines.pipeline);
         }
         render_pass.set_bind_group(0, bind_group, &[]);
         render_pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
@@ -973,12 +1012,12 @@ impl SpectrogramHeadless {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
 pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
     let resources = SpectrogramResources::new(device, format);
     // Runtime creation stays lazy, but the strict Metal catalog must cover
     // every production route before the first enabled atmospheric frame.
-    drop(atmosphere::Pipelines::new(device, format, &resources.layout));
+    drop(atmosphere::Pipelines::new(device, format, &resources.pipelines.layout));
 }

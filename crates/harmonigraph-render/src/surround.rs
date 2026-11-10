@@ -169,6 +169,7 @@ const SURROUND_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth16U
 /// The composite that lays a producer's [`SurroundTargets`] over the picture,
 /// premultiplied, in the shading the target wants; and the layout its targets
 /// bind through.
+#[derive(Clone)]
 pub(crate) struct SurroundComposite {
     pipeline: wgpu::RenderPipeline,
     read_layout: wgpu::BindGroupLayout,

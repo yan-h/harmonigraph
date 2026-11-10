@@ -4,6 +4,7 @@
 
 use super::harness::*;
 use crate::*;
+use harmonigraph_take::RenderProgress;
 
 #[test]
 fn opening_analyzer_settings_does_not_change_loaded_values() {
