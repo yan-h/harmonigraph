@@ -173,6 +173,129 @@ fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
     1.0 - ((now - end) / f64::from(release)).clamp(0.0, 1.0) as f32
 }
 
+/// How far a note's quad reaches past its box, in points: the twin, in the
+/// UI, of what `vs_note_cut` hands `note_vertex` in `roll.wgsl`.
+///
+/// The shader grows each note's box by its surround's reach plus one feather
+/// (`cut_reach() + locals.feather`) on both axes, and across pitch by the
+/// centre line's drift over the box's half length as well, and ink outside
+/// that quad is never drawn. Every cull here keeps a note while that quad can
+/// still touch what it is tested against, so each asks this rather than
+/// restating it: #1118 had to change the shader's distance, its quad and the
+/// UI's cull in lockstep, and four restatements had drifted half a feather
+/// apart. A cull short of it clips ink silently; past it costs a quad of
+/// fragments that compute nothing.
+#[derive(Clone, Copy)]
+struct Quad {
+    /// The surround's reach and one feather.
+    margin: f32,
+}
+
+impl Quad {
+    fn new(outline_px: f32, feather_px: f32) -> Self {
+        Quad { margin: outline_px + feather_px }
+    }
+
+    /// Across pitch from the box's centre: `note_vertex`'s `extent.x`, for a
+    /// box `half_width` across, sheared by `slope` over `half_depth`.
+    fn pitch(self, half_width: f32, slope: f32, half_depth: f32) -> f32 {
+        half_width + slope.abs() * half_depth + self.margin
+    }
+
+    /// Along depth from the box's centre: `note_vertex`'s `extent.y`.
+    fn depth(self, half_depth: f32) -> f32 {
+        half_depth + self.margin
+    }
+}
+
+/// How wide the roll draws a note's body across pitch, decided once a frame:
+/// the Ribbon width at this pitch zoom, the Thickness mapping on top of it and
+/// the [`MIN_RIBBON_PT`] floor under the result.
+///
+/// The roll draws by it, and the note names cull by it ([`reaches`]), so a
+/// name leaves the pitch zoom with the body under it rather than with a width
+/// restated beside it: the names once culled at half the Ribbon width, and
+/// went while a Thickness-swollen or floored ribbon was still in view.
+///
+/// [`reaches`]: Self::reaches
+#[derive(Clone, Copy)]
+pub(super) struct Width {
+    intensity: IntensitySettings,
+    /// Half the Ribbon width, in points across pitch.
+    half_pitch: f32,
+    /// [`MIN_RIBBON_PT`] as a multiple of the Ribbon width.
+    floor: f32,
+    /// The widest any note can swell to, as a multiple of `half_pitch`.
+    widest: f32,
+    /// Half the Ribbon width, in semitones.
+    half_semitones: f32,
+}
+
+impl Width {
+    /// The width for this pane and pitch zoom. The base width follows pitch
+    /// zoom; readability floors follow the composition's logical scale and
+    /// apply AFTER the Thickness mapping.
+    pub(super) fn of(
+        state: &PictureState,
+        axes: &Axes,
+        scale: &PitchScale,
+        point_scale: f32,
+    ) -> Width {
+        let cfg = &state.appearance.spectrum;
+        let half_pitch =
+            ((cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len()).max(1e-6);
+        let floor = MIN_RIBBON_PT * point_scale.max(0.0) * 0.5 / half_pitch;
+        // How each note's playing reads on every display, shared with the
+        // lattice, and what that comes to on this roll.
+        let intensity = state.appearance.view.intensity.sanitized();
+        // The widest any note can swell to: what the pitch culls reach by, so
+        // a swelled note is kept while any of it can be on screen. Each
+        // segment's box grows to its own widest point alone (see
+        // [`push_pieces`]).
+        let widest = if intensity.routes_to(IntensityTarget::Thickness) {
+            intensity.thickness_max.max(1.0)
+        } else {
+            intensity.thickness_base.max(1.0)
+        }
+        .max(floor);
+        let half_semitones = half_pitch * scale.span / axes.pitch_len().max(1e-6);
+        Width { intensity, half_pitch, floor, widest, half_semitones }
+    }
+
+    /// Whether `note`'s body still reaches `beyond` semitones from its centre
+    /// line: half the widest body the roll has drawn it with up to `now`, its
+    /// Thickness readings floored as the roll floors a drawn body.
+    ///
+    /// Its widest so far, and not its width where the name stands, for two
+    /// reasons. The widest only grows, so a held note's name is not culled
+    /// and restored, losing its thinning state each time, as live pressure
+    /// crosses the threshold. And a reading of zero at the name's end says
+    /// nothing of the body beside it: the roll lifts a zero end to the floor
+    /// where the body next to it is positive ([`floor_widths`]). A note
+    /// thinner now than it was keeps its name by the difference, which is the
+    /// safe direction: a name leaving while its body shows is #825's pop.
+    ///
+    /// The body and not its ink: the surround the shader adds past it is in
+    /// points, and nothing that asks this waits for it.
+    pub(super) fn reaches(&self, note: &RollNote, now: f64, beyond: f32) -> bool {
+        if beyond <= 0.0 {
+            return true;
+        }
+        // The widest any note may swell to bounds this one, so a note well
+        // clear of the edge is settled without reading its expressions.
+        if beyond > self.widest * self.half_semitones {
+            return false;
+        }
+        let width = note
+            .expressions()
+            .iter()
+            .take_while(|(at, _)| *at <= now)
+            .map(|&(_, e)| Look::of(&self.intensity, note.velocity, e).width)
+            .fold(0.0, f32::max);
+        beyond <= Look { fade: 1.0, width }.floored(self.floor).width * self.half_semitones
+    }
+}
+
 /// Draw every remembered note that falls inside the pane's time window and
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
@@ -222,6 +345,7 @@ pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,
     scale: &PitchScale,
+    width: &Width,
     state: &PictureState,
     options: RollDrawOptions,
 ) {
@@ -229,6 +353,7 @@ pub(super) fn draw_roll(
     let (notes, detached) = roll_instances_with_floor(
         axes,
         scale,
+        width,
         state,
         options.split,
         options.now,
@@ -327,7 +452,9 @@ pub(super) fn note_instances(
     // Physical pixels per point, used only for antialiasing reach.
     ppp: f32,
 ) -> Vec<RollInstance> {
-    let (mut notes, detached) = roll_instances_with_floor(axes, scale, state, split, now, ppp, 1.0);
+    let width = Width::of(state, axes, scale, 1.0);
+    let (mut notes, detached) =
+        roll_instances_with_floor(axes, scale, &width, state, split, now, ppp, 1.0);
     notes.extend(detached);
     notes
 }
@@ -337,9 +464,11 @@ pub(super) fn note_instances(
 /// width is in semitones and already follows the preview's pitch axis; only
 /// the fallback for hairline notes needs this extra scale to keep its relative
 /// size matched to the export.
+#[allow(clippy::too_many_arguments)]
 fn roll_instances_with_floor(
     axes: &Axes,
     scale: &PitchScale,
+    width: &Width,
     state: &PictureState,
     split: f32,
     now: f64,
@@ -351,12 +480,7 @@ fn roll_instances_with_floor(
     let time = TimeAxis::new(state, split, now);
     let oldest = time.oldest();
 
-    // The base width follows pitch zoom; readability floors follow the
-    // composition's logical scale and apply AFTER the Thickness mapping.
-    let half_pitch =
-        ((cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len()).max(1e-6);
-    let min_half_pitch = MIN_RIBBON_PT * point_scale.max(0.0) * 0.5;
-    let width_floor = min_half_pitch / half_pitch;
+    let Width { intensity, half_pitch, floor: width_floor, widest, .. } = *width;
     let min_half_depth = 0.5 * MIN_LENGTH_PT * point_scale.max(0.0);
 
     // Build in START order. The tracker hands notes back finished-first and
@@ -380,19 +504,6 @@ fn roll_instances_with_floor(
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
     let feather_px = 1.0 / ppp.max(1e-3);
-    // How each note's playing reads on every display, shared with the lattice,
-    // and what that comes to on this roll.
-    let intensity = state.appearance.view.intensity.sanitized();
-    // The widest any note can swell to, as a multiple of `half_pitch`: what the
-    // pitch culls below reach by, so a swelled note is kept while any of it can
-    // be on screen. Each segment's box grows to its own widest point alone (see
-    // [`push_pieces`]).
-    let widest = if intensity.routes_to(IntensityTarget::Thickness) {
-        intensity.thickness_max.max(1.0)
-    } else {
-        intensity.thickness_base.max(1.0)
-    }
-    .max(width_floor);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -419,10 +530,11 @@ fn roll_instances_with_floor(
     // to nothing — so without it the last sliver of a floored note would appear
     // INSIDE the far edge on the frame before the cull takes it, which is the
     // pop the overhang exists to prevent.
-    // The outline and the ramp: the outline wraps the note's ENDS as well as
-    // its flanks, so a note's ink runs the outline's whole reach past its box
-    // along this axis too, and half a ramp past that.
-    let ink_px = min_half_depth + outline_px + 0.5 * feather_px;
+    // The rest is the quad's own reach along depth: the outline wraps the
+    // note's ENDS as well as its flanks, so its ink runs the outline's whole
+    // reach past its box along this axis too.
+    let quad = Quad::new(outline_px, feather_px);
+    let ink_px = quad.depth(min_half_depth);
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang) is
@@ -441,9 +553,31 @@ fn roll_instances_with_floor(
     //
     // What that costs is sorting the notes that are inside the WINDOW but off
     // the octave zoom — a comparison each.
+    //
+    // The cull reaches a band further back than the ink for the notes BEFORE
+    // the ones it keeps. A ribbon's trim, and whether it joins a dense run,
+    // are decided by the note of its key before it (`density::layout`), and
+    // that note leaves the cull first: laid out only from the notes whose ink
+    // is still in, the note closing a fast run dropped its hatching on the
+    // frame the run before it left, while it was still on the pane, and a
+    // repeat's drawn onset jumped back by its trim.
+    //
+    // How far back a note can still decide anything drawn: it trims the next
+    // note's onset to no later than a cut past its own stop, which is hidden
+    // past `edge` unless its stop is within a cut of it; and it joins the next
+    // note into a run only while their one-point cores are within a cut,
+    // which for a next note reaching `edge` puts its stop within a floored
+    // length and two cuts of it. A note in the band draws nothing itself —
+    // every segment of it ends before `edge` — and counts for no paint order
+    // (`density::layout`'s `drawn_from`).
+    let minimum = f64::from(2.0 * min_half_depth) * per_point;
+    let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
+    let band = minimum + 2.0 * gap;
     let mut notes: Vec<&RollNote> = roll
         .notes()
-        .filter(|note| note.stop(now) >= edge || lead_alpha(note, now, cfg.roll_lead_release) > 0.0)
+        .filter(|note| {
+            note.stop(now) >= edge - band || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
+        })
         .collect();
     notes.sort_unstable_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
 
@@ -452,12 +586,7 @@ fn roll_instances_with_floor(
     let mut instances = Vec::with_capacity(notes.len());
     let mut painted = Vec::with_capacity(notes.len());
     let mut detached = Vec::new();
-    let ribbons = density::layout(
-        &notes,
-        now,
-        f64::from(2.0 * min_half_depth) * per_point,
-        density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point,
-    );
+    let ribbons = density::layout(&notes, now, minimum, gap, edge);
     for ribbon in ribbons {
         let note = ribbon.last();
         let first_instance = instances.len();
@@ -471,8 +600,7 @@ fn roll_instances_with_floor(
         if note.end.is_some() && standing > 0.0 && lead_px > 0.0 {
             let pitch = note.end_pitch();
             let t = scale.t_of(pitch);
-            let ink_pitch =
-                (half_pitch * widest + outline_px + 0.5 * feather_px) / axes.pitch_len().max(1e-3);
+            let ink_pitch = quad.pitch(half_pitch * widest, 0.0, 0.0) / axes.pitch_len().max(1e-3);
             if t + ink_pitch >= 0.0 && t - ink_pitch <= 1.0 {
                 let half = 0.5 * lead_px;
                 let center = axes.at(t, split) - axes.dir_depth() * half;
@@ -554,8 +682,10 @@ fn roll_instances_with_floor(
             // `cap_px`'s to meter and can be given only the room it has.
             //
             // How far the note's own end sits inside the roll, in points, and
-            // how far the surround stands off it: the same reach `vs_note_cut`
-            // grows the quad by, since it is the same ink.
+            // how far the surround's ink stands off it: its reach and the half
+            // feather the antialiasing ramp carries past that. The ink, not
+            // the quad: `vs_note_cut` grows the quad by a whole feather
+            // ([`Quad`]), whose outer half holds no ink.
             let behind_px = (d1 - split) * axes.depth_len();
             let outline_reach_px = outline_px + 0.5 * feather_px;
             let leads = lead_px > 0.0 && last && (standing > 0.0 || behind_px < outline_reach_px);
@@ -627,20 +757,13 @@ fn roll_instances_with_floor(
             // segment actually reaches rather than the note's endpoints — the
             // cull the filter above deliberately leaves undone.
             //
-            // Term for term what `vs_note_cut` grows the quad by along pitch: the
-            // drawn ribbon's own half width, the center line's drift over the
-            // box's half length, and the outline's reach — the shader's
-            // distance being Euclidean, the same reach every way. Measured
-            // from the segment's own center, which is where the shader
-            // measures it from. The half width is the widest any note may
-            // swell to rather than this segment's own, which is not read
-            // until it survives: never short, and over only while Thickness
-            // is routed.
-            let ink_pitch_px = half_pitch * widest
-                + slope.abs() * half_depth
-                + outline_reach_px
-                + 0.5 * feather_px;
-            let ink_pitch = ink_pitch_px / axes.pitch_len().max(1e-3);
+            // The quad's reach across pitch ([`Quad::pitch`]), measured from the
+            // segment's own center, which is where the shader measures it
+            // from. The half width is the widest any note may swell to rather
+            // than this segment's own, which is not read until it survives:
+            // never short, and over only while Thickness is routed.
+            let ink_pitch =
+                quad.pitch(half_pitch * widest, slope, half_depth) / axes.pitch_len().max(1e-3);
             let center_pitch = (a0 + a1) * 0.5;
             if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
                 continue;
@@ -734,9 +857,9 @@ fn roll_instances_with_floor(
             let center_depth = (center - axes.at(0.5, time.split)).dot(axes.dir_depth());
             let offset =
                 |at| (time.depth_of_unclamped(at) - time.split) * axes.depth_len() - center_depth;
-            // Match vs_note_cut's expanded quad: a cut at a pitch-segment end
-            // still owes the outline and antialiasing beyond that body end.
-            let extent = instance.half_extent[1] + outline_px + feather_px;
+            // The quad's reach along depth: a cut at a pitch-segment end still
+            // owes the outline and antialiasing beyond that body end.
+            let extent = quad.depth(instance.half_extent[1]);
             let oldest = instance.span[1].min(extent);
             let newest = instance.span[0].max(-extent);
             let first = ribbon
@@ -1035,8 +1158,9 @@ fn note_instances_with_floor(
     ppp: f32,
     point_scale: f32,
 ) -> Vec<RollInstance> {
+    let width = Width::of(state, axes, scale, point_scale);
     let (mut notes, detached) =
-        roll_instances_with_floor(axes, scale, state, split, now, ppp, point_scale);
+        roll_instances_with_floor(axes, scale, &width, state, split, now, ppp, point_scale);
     notes.extend(detached);
     notes
 }
@@ -1111,7 +1235,8 @@ mod tests {
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
-        roll_instances_with_floor(&axes, &scale, state, split, now, PPP, 1.0)
+        let width = Width::of(state, &axes, &scale, 1.0);
+        roll_instances_with_floor(&axes, &scale, &width, state, split, now, PPP, 1.0)
     }
 
     fn instances(state: &PictureState, now: f64) -> Vec<RollInstance> {
@@ -1191,6 +1316,7 @@ mod tests {
                 ui.painter(),
                 &axes,
                 &scale,
+                &Width::of(&state, &axes, &scale, 1.0),
                 &state,
                 RollDrawOptions { split: 0.5, now: 1.0, surface: 0, point_scale: 1.0 },
             );
@@ -1373,6 +1499,114 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A note that closed a fast run keeps the run's hatching while it slides
+    /// out under the far edge: the repeats before it leaving the time cull is
+    /// not an event in the picture.
+    ///
+    /// The run is a decision about neighbours, and the neighbours that made it
+    /// are past the edge before the note that ends it is. Laid out only from
+    /// the notes the cull kept, the last of them dropped back to a plain
+    /// ribbon on the frame its predecessor left.
+    #[test]
+    fn the_note_closing_a_run_keeps_its_hatching_as_the_run_leaves() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_seconds = 10.0;
+        state.appearance.spectrum.roll_fraction = 1.0;
+        // Three slivers 1.5 points apart and a two-point note right after: one
+        // dense run of four.
+        for start in [1.0, 1.05, 1.1] {
+            state.runtime.tracker.handle_event(NoteEvent::on(start, SourceId::DIRECT, 0, 60, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::off(
+                start + 0.02,
+                SourceId::DIRECT,
+                0,
+                60,
+            ));
+        }
+        state.runtime.tracker.handle_event(NoteEvent::on(1.15, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(1.22, SourceId::DIRECT, 0, 60));
+        let cfg = &state.appearance.spectrum;
+        let axes = Axes::new(PANE, cfg);
+        let split = super::super::axes::spectrum_share(cfg);
+        // The time cull's edge short of the band: the oldest time whose ink
+        // still reaches the window.
+        let ink_px = min_half_depth_for(PPP) + surround(&state, 1.0) + 1.0 / PPP;
+        let mut alone = 0;
+        for frame in 0..60 {
+            let now = 11.5 + f64::from(frame) / 120.0;
+            let notes = instances(&state, now);
+            assert!(
+                notes.iter().all(|n| n.tremolo[1] > 0.0),
+                "at {now}s the run's last note is drawn without its hatching",
+            );
+            // The run's other notes have all left the ink.
+            let time = super::super::axes::TimeAxis::new(&state, split, now);
+            let edge = time.oldest() - f64::from(ink_px) * time.seconds_per_point(&axes);
+            if !notes.is_empty() && edge > 1.12 {
+                alone += 1;
+            }
+        }
+        assert!(alone > 0, "the fixture is vacuous: the last note never outlived the rest");
+    }
+
+    /// A repeat leaving the far edge takes nothing with it: the note after it
+    /// keeps the trim the roll drew while both were in view.
+    ///
+    /// The cut between two repeats trims both facing ends. Laid out only from
+    /// the notes the time cull kept, the survivor lost its trim on the frame
+    /// its predecessor left the cull, and its drawn onset hopped out by the
+    /// trim under the far edge.
+    #[test]
+    fn a_repeats_onset_holds_as_the_note_before_it_leaves() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 72.0;
+        state.appearance.spectrum.roll_seconds = 10.0;
+        state.appearance.spectrum.roll_fraction = 1.0;
+        // The shortest surround there is, so the survivor is still drawn when
+        // its predecessor's ink leaves.
+        state.appearance.spectrum.note_cut_reach =
+            *harmonigraph_render::SURROUND_REACH_RANGE.start();
+        for (start, stop) in [(1.0, 2.0), (2.03, 2.5)] {
+            state.runtime.tracker.handle_event(NoteEvent::on(start, SourceId::DIRECT, 0, 60, 1.0));
+            state.runtime.tracker.handle_event(NoteEvent::off(stop, SourceId::DIRECT, 0, 60));
+        }
+        let cfg = &state.appearance.spectrum;
+        let axes = Axes::new(PANE, cfg);
+        let split = super::super::axes::spectrum_share(cfg);
+        let step = 1.0 / 60.0;
+        let scroll = (step
+            / super::super::axes::TimeAxis::new(&state, split, 0.0).seconds_per_point(&axes))
+            as f32;
+        let (mut onsets, mut counts) = (Vec::new(), Vec::new());
+        for frame in 0..27 {
+            let ribbons = instances(&state, 11.95 + f64::from(frame) * step);
+            // The survivor is the newer ribbon: its near end is the nearer.
+            let survivor = ribbons
+                .iter()
+                .min_by(|a, b| {
+                    (a.center[0] - a.half_extent[1]).total_cmp(&(b.center[0] - b.half_extent[1]))
+                })
+                .expect("the survivor is drawn throughout");
+            onsets.push(survivor.center[0] + survivor.half_extent[1]);
+            counts.push(ribbons.len());
+        }
+        assert!(
+            counts[0] == 2 && counts[counts.len() - 1] == 1,
+            "the fixture is vacuous: the first repeat should leave during the sweep ({counts:?})",
+        );
+        // The onset scrolls by one step a frame until the far edge's crop
+        // catches it and holds it there, so it is asked only that it never
+        // jumps outward.
+        let drawn: Vec<f32> = onsets.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            drawn.iter().all(|s| *s < scroll + 1e-3),
+            "the survivor's drawn onset jumps outward: {drawn:?}",
+        );
     }
 
     #[test]
@@ -2130,7 +2364,9 @@ mod tests {
             let axes = Axes::new(rect, &state.appearance.spectrum);
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
             let now = 15.0;
-            let (notes, _) = roll_instances_with_floor(&axes, &scale, &state, 0.5, now, PPP, 1.0);
+            let width = Width::of(&state, &axes, &scale, 1.0);
+            let (notes, _) =
+                roll_instances_with_floor(&axes, &scale, &width, &state, 0.5, now, PPP, 1.0);
             let bent = notes
                 .iter()
                 .find(|note| note.shear != 0.0 && note.span[1] == f32::MAX)
@@ -2220,7 +2456,7 @@ mod tests {
         let time =
             super::super::axes::TimeAxis::new(&state, super::super::axes::spectrum_share(cfg), now);
         let outline_px = surround(&state, 1.0);
-        let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
+        let ink_px = min_half_depth_for(PPP) + outline_px + 1.0 / PPP;
         // Put the note's stop exactly on the live ink boundary, by the cull's
         // own arithmetic: solving for `now` from the stop instead lands it an
         // ulp either side depending on the pane's proportions.
