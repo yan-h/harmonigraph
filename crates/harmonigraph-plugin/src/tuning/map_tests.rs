@@ -121,9 +121,7 @@ fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_stat
     let mut hub = Device::new(false);
     hub.activate();
     let (first, second) = install(&hub);
-    // Past the top step, which decodes as the top step, Lattice Map, as the
-    // host's label reads it; the attack on the same sample shows the decode.
-    hub.run(0, vec![note(1, 0, 64, 0, true), parameter("tuning-engine", 5.0, 0)], None);
+    hub.run(0, vec![note(1, 0, 64, 0, true), parameter("tuning-engine", 2.0, 0)], None);
     hub.run(512, vec![parameter("lattice-map", 1.0, 0)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 64).frozen_offset_microcents,
@@ -146,6 +144,21 @@ fn lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_stat
         voice(&hub, crate::tuning::DIRECT, 76).frozen_offset_microcents,
         second.correction(76, Tuning::just())
     );
+}
+
+/// A host value past the engine's or Follow's top step decodes as that top
+/// step, which is what the host's label reads, rather than as Off. Read before
+/// the next callback, whose boundary reseeds from the clamped parameters.
+#[test]
+fn an_engine_or_follow_event_past_the_top_step_selects_the_top_step() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    hub.run(0, vec![parameter("tuning-engine", 5.0, 0), parameter("map-follow", 4.0, 0)], None);
+    let playback =
+        hub_wrapper(&hub).test_inspect_plugin(|plugin| *plugin.params.map_playback.lock());
+    assert_eq!(playback.engine, TuningEngine::LatticeMap);
+    assert_eq!(playback.follow, harmonigraph_core::lattice_map::Follow::ThirdsAndFifths);
 }
 
 #[test]
@@ -405,9 +418,7 @@ fn lattice_map_follow_moves_the_map_for_a_chord_and_drifts_with_what_it_heard() 
     hub_wrapper(&hub).test_inspect_plugin(|plugin| {
         assert_eq!(crate::lattice_maps::view(&plugin.params).followed, LatticePos::ORIGIN);
     });
-    // Automation past the top step reads as Thirds and fifths, the mode
-    // already on, so the chord on the same sample still follows.
-    hub.run(4608, vec![parameter("map-follow", 4.0, 0), on(9, 62), on(10, 65), on(11, 69)], None);
+    hub.run(4608, vec![on(9, 62), on(10, 65), on(11, 69)], None);
     for key in [62, 65, 69] {
         assert_eq!(node(&hub, key), Some(at(down, key)));
     }
