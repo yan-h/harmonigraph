@@ -224,14 +224,14 @@ impl Logged {
             .count();
         if self.exports != Some(running) {
             self.exports = Some(running);
-            // The running job's own encoder, not the pane's: a frame over the
-            // hardware limit runs x264, and an automatic export the take's look.
+            // The encoder the renderer said it started, not the pane's: a frame
+            // over the hardware limit runs x264, and an automatic export the
+            // take's own look.
             let job =
                 exports.find(|job| job.state == harmonigraph_take::render::ExportStatus::Running);
             let encoder = match job.map(|job| job.encoder) {
-                Some(Some(harmonigraph_ui::VideoEncoder::X264)) => "x264",
-                Some(Some(harmonigraph_ui::VideoEncoder::Hardware)) => "hardware",
-                Some(None) => "recorded",
+                Some(Some(encoder)) => encoder.name(),
+                Some(None) => "starting",
                 None => "none",
             };
             egui_baseview::frame_log::event(&format!("exports {running} {encoder}"));

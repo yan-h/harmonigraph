@@ -88,9 +88,6 @@ pub enum ExportAction {
         /// derives from `appearance`, computed from the same document and
         /// not an input to the render.
         size: [u32; 2],
-        /// The encoder the job runs at `size`, read the same way and for the
-        /// job to report; the renderer resolves its own.
-        encoder: crate::VideoEncoder,
     },
     Cancel(u64),
     Retry(u64),

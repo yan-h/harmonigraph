@@ -68,12 +68,18 @@ pub(super) struct Progress {
     done: AtomicU64,
     total: AtomicU64,
     in_flight: AtomicBool,
+    /// What the renderer said it started, once it has.
+    encoder: Mutex<Option<VideoEncoder>>,
 }
 impl Progress {
     fn begin(&self) {
         self.done.store(0, Ordering::Relaxed);
         self.total.store(0, Ordering::Relaxed);
+        *self.encoder.lock() = None;
         self.in_flight.store(true, Ordering::Release);
+    }
+    fn encoder(&self) -> Option<VideoEncoder> {
+        *self.encoder.lock()
     }
     fn end(&self) {
         self.in_flight.store(false, Ordering::Release);
@@ -125,6 +131,7 @@ impl RenderControl {
                 let mut snapshot = job.snapshot.clone();
                 if matches!(snapshot.state, ExportStatus::Running | ExportStatus::Cancelling) {
                     snapshot.progress = progress.read().unwrap_or_default();
+                    snapshot.encoder = progress.encoder();
                 }
                 snapshot
             })
@@ -196,6 +203,7 @@ impl RenderControl {
             job.snapshot.state = ExportStatus::Pending;
             job.snapshot.detail.clear();
             job.snapshot.progress = RenderProgress::default();
+            job.snapshot.encoder = None;
             queue.jobs.push(job);
             start_worker(self, &mut queue, progress);
         }
@@ -206,7 +214,6 @@ pub(super) fn spawn_render(
     mut request: RenderRequest,
     take: PathBuf,
     size: Option<[u32; 2]>,
-    encoder: Option<VideoEncoder>,
     progress: Arc<Progress>,
     control: Arc<RenderControl>,
 ) {
@@ -237,7 +244,7 @@ pub(super) fn spawn_render(
             take,
             output,
             size,
-            encoder,
+            encoder: None,
             state: if error.is_some() { ExportStatus::Failed } else { ExportStatus::Pending },
             progress: RenderProgress::default(),
             detail: error.unwrap_or_default(),
@@ -271,11 +278,13 @@ fn start_worker(control: &Arc<RenderControl>, queue: &mut Queue, progress: Arc<P
         let result = run_job(&control, &snapshot, &request, &progress);
         let mut queue = control.queue.lock();
         let final_progress = progress.read().unwrap_or_default();
+        let encoder = progress.encoder();
         progress.end();
         let Some(job) = queue.jobs.iter_mut().find(|job| job.snapshot.id == snapshot.id) else {
             continue;
         };
         job.snapshot.progress = final_progress;
+        job.snapshot.encoder = encoder;
         if job.snapshot.state == ExportStatus::Cancelling {
             job.snapshot.state = ExportStatus::Cancelled;
         } else {
@@ -524,8 +533,8 @@ fn rendered_detail(notice: Option<&str>, warning: Option<&str>, archive: Option<
     [notice, warning, archive].into_iter().flatten().collect::<Vec<_>>().join(" — ")
 }
 
-/// Follow the renderer's stderr to its end, publishing progress as it arrives,
-/// and hand back what it said that was not progress.
+/// Follow the renderer's stderr to its end, publishing progress and the
+/// encoder it started as they arrive, and hand back what else it said.
 ///
 /// Read continuously rather than collected at the end (what `Command::output`
 /// would do) for two reasons: a frame counter is only useful while the render
@@ -542,24 +551,26 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
     let take = |segment: &mut Vec<u8>, tail: &mut Tail| {
         let text = String::from_utf8_lossy(segment);
         let text = text.trim();
-        match RenderProgress::parse_record(text) {
-            Some(RenderProgress { done, total }) => {
-                progress.done.store(done, Ordering::Relaxed);
-                progress.total.store(total, Ordering::Relaxed);
-            }
+        // A record that does not parse is still the protocol's, never a word
+        // about the render.
+        let record =
+            [RenderProgress::PREFIX, VideoEncoder::PREFIX].iter().any(|p| text.starts_with(p));
+        if let Some(RenderProgress { done, total }) = RenderProgress::parse_record(text) {
+            progress.done.store(done, Ordering::Relaxed);
+            progress.total.store(total, Ordering::Relaxed);
+        } else if let Some(encoder) = VideoEncoder::parse_record(text) {
+            *progress.encoder.lock() = Some(encoder);
+        } else if !text.is_empty() && !record {
             // Diagnostics, warnings, the renderer's own error. The last of
             // them is the job's detail if the render fails; the first
             // `warning:` among them is its own, because success discards the
             // last and a warned-about export still needs to say so.
-            None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {
-                if text.starts_with(ARCHIVE_FAILED) {
-                    tail.archive = Some(text.to_owned());
-                } else if tail.warning.is_none() && text.starts_with("warning:") {
-                    tail.warning = Some(text.to_owned());
-                }
-                tail.last = text.to_owned();
+            if text.starts_with(ARCHIVE_FAILED) {
+                tail.archive = Some(text.to_owned());
+            } else if tail.warning.is_none() && text.starts_with("warning:") {
+                tail.warning = Some(text.to_owned());
             }
-            None => {}
+            tail.last = text.to_owned();
         }
         segment.clear();
     };

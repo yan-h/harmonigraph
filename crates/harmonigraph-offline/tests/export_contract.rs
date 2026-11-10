@@ -130,6 +130,8 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         }
         assert!(result.status.success(), "{name}: {stderr}");
         assert!(stderr.contains(&format!("done: {frames} frames")), "{name}: {stderr}");
+        // The record the export queue reads the job's encoder from.
+        assert!(stderr.lines().any(|line| line == "encoder: x264"), "{name}: {stderr}");
         let probe = Command::new("ffprobe")
             .args([
                 "-v",

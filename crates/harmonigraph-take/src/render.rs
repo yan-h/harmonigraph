@@ -180,22 +180,28 @@ pub enum VideoEncoder {
 }
 
 impl VideoEncoder {
-    /// The longest side VideoToolbox's H.264 encoder takes, either way round: on
-    /// an M1 Pro under ffmpeg 7.1, 4096x2160 and 2160x4096 encode while 4098x2160
-    /// and 5040x2160 refuse to open a compression session (-12903).
-    pub const HARDWARE_MAX_SIDE: u32 = 4096;
+    /// Reserved stderr prefix for the renderer's line naming the encoder it
+    /// started, which is not always the one asked for: a frame too big for
+    /// VideoToolbox goes through x264.
+    pub const PREFIX: &str = "encoder: ";
 
-    /// The encoder an export of `size` runs: this one, except a frame too big
-    /// for VideoToolbox, which goes through x264 rather than failing at its
-    /// first frame. The Video pane's 21:9 at 2160 is 5040 wide. The renderer
-    /// encodes by it and the plugin names a queued export's encoder by it.
-    pub fn for_size(self, size: [u32; 2]) -> VideoEncoder {
+    /// The name the renderer's `--encoder` flag and its encoder record use.
+    pub fn name(self) -> &'static str {
         match self {
-            VideoEncoder::Hardware if size[0].max(size[1]) > Self::HARDWARE_MAX_SIDE => {
-                VideoEncoder::X264
-            }
-            encoder => encoder,
+            VideoEncoder::X264 => "x264",
+            VideoEncoder::Hardware => "hardware",
         }
+    }
+
+    /// The line the renderer prints once its encoder is running.
+    pub fn record(self) -> String {
+        format!("{}{}", Self::PREFIX, self.name())
+    }
+
+    /// Read one complete encoder record.
+    pub fn parse_record(record: &str) -> Option<Self> {
+        let name = record.strip_prefix(Self::PREFIX)?;
+        [VideoEncoder::X264, VideoEncoder::Hardware].into_iter().find(|e| e.name() == name)
     }
 }
 
@@ -608,6 +614,16 @@ mod tests {
     }
 
     #[test]
+    fn encoder_records_round_trip_and_require_the_whole_record() {
+        for encoder in [VideoEncoder::X264, VideoEncoder::Hardware] {
+            assert_eq!(VideoEncoder::parse_record(&encoder.record()), Some(encoder));
+        }
+        for text in ["x264", "encoder: x265", "encoder: hardware ", "warning: encoder: x264"] {
+            assert_eq!(VideoEncoder::parse_record(text), None, "{text}");
+        }
+    }
+
+    #[test]
     fn retired_export_fields_are_ignored_and_not_saved_again() {
         let config: RenderConfig = ron::from_str(
             r#"(record_audio:true,auto_render:false,audio_path:"old.wav",audio_offset:"12.5",
@@ -668,9 +684,9 @@ pub struct ExportJob {
     /// `None` for a recorded take's automatic export: its appearance rides in
     /// the take's header, and this crate never parses an appearance.
     pub size: Option<[u32; 2]>,
-    /// The encoder the job runs, as [`VideoEncoder::for_size`] resolves the
-    /// Encoder it was queued with; the frame log names it. `None` for an
-    /// automatic export, whose Encoder is the recorded look's, as with `size`.
+    /// The encoder the renderer said it started ([`VideoEncoder::PREFIX`]),
+    /// for the frame log. `None` until it has said, and for a job that never
+    /// started one.
     pub encoder: Option<VideoEncoder>,
     pub state: ExportStatus,
     pub progress: RenderProgress,
