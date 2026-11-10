@@ -173,6 +173,41 @@ fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
     1.0 - ((now - end) / f64::from(release)).clamp(0.0, 1.0) as f32
 }
 
+/// How far a note's quad reaches past its box, in points: the twin, in the
+/// UI, of what `vs_note_cut` hands `note_vertex` in `roll.wgsl`.
+///
+/// The shader grows each note's box by its surround's reach plus one feather
+/// (`cut_reach() + locals.feather`) on both axes, and across pitch by the
+/// centre line's drift over the box's half length as well, and ink outside
+/// that quad is never drawn. Every cull here keeps a note while that quad can
+/// still touch what it is tested against, so each asks this rather than
+/// restating it: #1118 had to change the shader's distance, its quad and the
+/// UI's cull in lockstep, and four restatements had drifted half a feather
+/// apart. A cull short of it clips ink silently; past it costs a quad of
+/// fragments that compute nothing.
+#[derive(Clone, Copy)]
+struct Quad {
+    /// The surround's reach and one feather.
+    margin: f32,
+}
+
+impl Quad {
+    fn new(outline_px: f32, feather_px: f32) -> Self {
+        Quad { margin: outline_px + feather_px }
+    }
+
+    /// Across pitch from the box's centre: `note_vertex`'s `extent.x`, for a
+    /// box `half_width` across, sheared by `slope` over `half_depth`.
+    fn pitch(self, half_width: f32, slope: f32, half_depth: f32) -> f32 {
+        half_width + slope.abs() * half_depth + self.margin
+    }
+
+    /// Along depth from the box's centre: `note_vertex`'s `extent.y`.
+    fn depth(self, half_depth: f32) -> f32 {
+        half_depth + self.margin
+    }
+}
+
 /// One frame of the roll, laid out once: every number the roll's geometry is
 /// derived from, and the ribbons [`density::layout`] made of the notes in its
 /// window. [`draw_roll`] draws from it and the note names read their ribbons
@@ -198,6 +233,8 @@ pub(super) struct RollLayout<'a> {
     lead_fade_px: f32,
     /// One physical pixel, in points: the shader's antialiasing ramp.
     feather_px: f32,
+    /// How far each note's quad reaches past its box.
+    quad: Quad,
     intensity: IntensitySettings,
     /// The widest any note can swell to, as a multiple of `half_pitch`.
     widest: f32,
@@ -529,10 +566,11 @@ fn layout_at<'a>(
     // to nothing — so without it the last sliver of a floored note would appear
     // INSIDE the far edge on the frame before the cull takes it, which is the
     // pop the overhang exists to prevent.
-    // The outline and the ramp: the outline wraps the note's ENDS as well as
-    // its flanks, so a note's ink runs the outline's whole reach past its box
-    // along this axis too, and half a ramp past that.
-    let ink_px = min_half_depth + outline_px + 0.5 * feather_px;
+    // The rest is the quad's own reach along depth: the outline wraps the
+    // note's ENDS as well as its flanks, so its ink runs the outline's whole
+    // reach past its box along this axis too.
+    let quad = Quad::new(outline_px, feather_px);
+    let ink_px = quad.depth(min_half_depth);
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang) is
@@ -573,6 +611,7 @@ fn layout_at<'a>(
         lead_px,
         lead_fade_px,
         feather_px,
+        quad,
         intensity,
         widest,
         edge,
@@ -599,6 +638,7 @@ fn roll_instances(
         lead_px,
         lead_fade_px,
         feather_px,
+        quad,
         intensity,
         widest,
         edge,
@@ -625,8 +665,7 @@ fn roll_instances(
         if note.end.is_some() && standing > 0.0 && lead_px > 0.0 {
             let pitch = note.end_pitch();
             let t = scale.t_of(pitch);
-            let ink_pitch =
-                (half_pitch * widest + outline_px + 0.5 * feather_px) / axes.pitch_len().max(1e-3);
+            let ink_pitch = quad.pitch(half_pitch * widest, 0.0, 0.0) / axes.pitch_len().max(1e-3);
             if t + ink_pitch >= 0.0 && t - ink_pitch <= 1.0 {
                 let half = 0.5 * lead_px;
                 let center = axes.at(t, split) - axes.dir_depth() * half;
@@ -781,20 +820,13 @@ fn roll_instances(
             // segment actually reaches rather than the note's endpoints — the
             // cull the filter above deliberately leaves undone.
             //
-            // Term for term what `vs_note_cut` grows the quad by along pitch: the
-            // drawn ribbon's own half width, the center line's drift over the
-            // box's half length, and the outline's reach — the shader's
-            // distance being Euclidean, the same reach every way. Measured
-            // from the segment's own center, which is where the shader
-            // measures it from. The half width is the widest any note may
-            // swell to rather than this segment's own, which is not read
-            // until it survives: never short, and over only while Thickness
-            // is routed.
-            let ink_pitch_px = half_pitch * widest
-                + slope.abs() * half_depth
-                + outline_reach_px
-                + 0.5 * feather_px;
-            let ink_pitch = ink_pitch_px / axes.pitch_len().max(1e-3);
+            // The quad's reach across pitch ([`Quad::pitch`]), measured from the
+            // segment's own center, which is where the shader measures it
+            // from. The half width is the widest any note may swell to rather
+            // than this segment's own, which is not read until it survives:
+            // never short, and over only while Thickness is routed.
+            let ink_pitch =
+                quad.pitch(half_pitch * widest, slope, half_depth) / axes.pitch_len().max(1e-3);
             let center_pitch = (a0 + a1) * 0.5;
             if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
                 continue;
@@ -888,9 +920,9 @@ fn roll_instances(
             let center_depth = (center - axes.at(0.5, time.split)).dot(axes.dir_depth());
             let offset =
                 |at| (time.depth_of_unclamped(at) - time.split) * axes.depth_len() - center_depth;
-            // Match vs_note_cut's expanded quad: a cut at a pitch-segment end
-            // still owes the outline and antialiasing beyond that body end.
-            let extent = instance.half_extent[1] + outline_px + feather_px;
+            // The quad's reach along depth: a cut at a pitch-segment end still
+            // owes the outline and antialiasing beyond that body end.
+            let extent = quad.depth(instance.half_extent[1]);
             let oldest = instance.span[1].min(extent);
             let newest = instance.span[0].max(-extent);
             let first = ribbon
@@ -2366,14 +2398,12 @@ mod tests {
         let cfg = &state.appearance.spectrum;
         let axes = Axes::new(PANE, cfg);
         let now = 14.3;
-        let time =
-            super::super::axes::TimeAxis::new(&state, super::super::axes::spectrum_share(cfg), now);
-        let outline_px = surround(&state, 1.0);
-        let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
-        // Put the note's stop exactly on the live ink boundary, by the cull's
-        // own arithmetic: solving for `now` from the stop instead lands it an
-        // ulp either side depending on the pane's proportions.
-        let stop = time.oldest() - f64::from(ink_px) * time.seconds_per_point(&axes);
+        let split = super::super::axes::spectrum_share(cfg);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        // Put the note's stop exactly on the live ink boundary, read off the
+        // cull itself: solving for `now` from the stop instead lands it an ulp
+        // either side depending on the pane's proportions.
+        let stop = layout_at(&axes, &scale, &state, split, now, PPP, 1.0).edge;
         state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(stop, SourceId::DIRECT, 0, 60));
         let ins = instances(&state, now);
