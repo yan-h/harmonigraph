@@ -250,7 +250,7 @@ impl Viewer<'_> {
                 // `spectral_pane` too, and either holding its own size would be
                 // a second answer overwriting this one in the single fraction
                 // all three compose from.
-                self.interaction.prefs.analyzer_regions.draw(
+                self.interaction.analyzer_regions.draw(
                     ui,
                     self.state,
                     self.now,

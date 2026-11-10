@@ -1165,8 +1165,15 @@ fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
 #[test]
 fn the_persist_blob_carries_exactly_these_top_level_keys() {
     // UiPersist's fields, in declaration order.
-    const KEYS: &[&str] =
-        &["version", "layout", "appearance", "camera_presets", "look_slots", "prefs"];
+    const KEYS: &[&str] = &[
+        "version",
+        "layout",
+        "analyzer_regions",
+        "appearance",
+        "camera_presets",
+        "look_slots",
+        "prefs",
+    ];
 
     let saved = fresh().save_persist();
     let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
@@ -1478,7 +1485,6 @@ fn every_editor_preference_round_trips() {
     prefs.perf_pos = Some(egui::pos2(40.0, 60.0));
     prefs.show_perf = true;
     prefs.show_perf_detail = true;
-    prefs.analyzer_regions.collapsed = [true, false];
     prefs.spiral.zoom = 2.75;
     let dialled = ron::to_string(&state.workspace.interaction.prefs).unwrap();
     assert_ne!(dialled, ron::to_string(&crate::EditorPrefs::default()).unwrap());
@@ -2174,6 +2180,23 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
 /// counted as one.
 fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
     pair_ranges(blob).into_iter().map(|(key, range)| (key, blob[range].to_string())).collect()
+}
+
+/// An editor save in the shape builds before #1677 wrote: every pair inside
+/// `prefs` lifted back to the top level, where each preference sat under the
+/// same key. Only where they sit changed, not how each one serializes.
+pub(super) fn before_prefs(saved: &str) -> String {
+    let pairs: Vec<String> = top_level_pairs(saved)
+        .into_iter()
+        .flat_map(|(key, text)| match key.as_str() {
+            "prefs" => top_level_pairs(&text["prefs:".len()..])
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>(),
+            _ => vec![text],
+        })
+        .collect();
+    format!("({})", pairs.join(","))
 }
 
 /// [`top_level_pairs`], with each whole pair as its byte range in `blob`.

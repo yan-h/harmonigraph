@@ -290,9 +290,6 @@ pub struct EditorPrefs {
     /// the frame", and once it has, a dozen rows of scaffolding is not what
     /// you want sitting over the picture. Inert while `show_perf` is off.
     pub show_perf_detail: bool,
-    /// Which of the Analyzer's regions are folded, and the composition they
-    /// fold back open to (see [`panes::spectral::collapse::Regions`]).
-    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
     ///
     /// Here rather than in the appearance for the reason [`Self::show_perf`] is: the
@@ -312,7 +309,6 @@ impl Default for EditorPrefs {
             perf_pos: None,
             show_perf: false,
             show_perf_detail: false,
-            analyzer_regions: Default::default(),
             spiral: Default::default(),
         }
     }
@@ -329,7 +325,6 @@ impl EditorPrefs {
         // Clamped for the reason the scale is: each bar reads out what the
         // chrome is drawn in.
         self.skin_dials.sanitize();
-        self.analyzer_regions.sanitize();
         self.spiral.sanitize();
         // A hand-edited NaN is dropped rather than honoured, on the grounds
         // the Spiral's framing is repaired on above: it positions drawn
@@ -347,6 +342,13 @@ pub struct Interaction {
     pub(crate) appearance_editor: crate::appearance_edit::AppearanceEditor,
     /// How this editor is set up to work, saved whole (see [`EditorPrefs`]).
     pub prefs: EditorPrefs,
+    /// Which of the Analyzer's regions are folded, and the composition they
+    /// fold back open to (see [`panes::spectral::collapse::Regions`]).
+    ///
+    /// The layout's content rather than a preference: the width a folded
+    /// region gives up is held in `Layout::region_widths`, so the two are
+    /// saved, loaded and reset together.
+    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see Camera in the Lattice page's View section).
     pub camera_presets: Vec<CameraPreset>,
@@ -589,6 +591,7 @@ impl SharedState {
         ron::to_string(&UiPersist {
             version: UI_PERSIST_VERSION,
             layout: self.workspace.layout.clone(),
+            analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
             look_slots: self.workspace.interaction.appearance_editor.slots.clone(),
@@ -637,6 +640,8 @@ impl SharedState {
         self.workspace.interaction.prefs.sanitize();
         self.workspace.layout = persist.layout;
         self.workspace.layout.sanitize();
+        self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
+        self.workspace.interaction.analyzer_regions.sanitize();
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.picture.install_appearance(appearance);
@@ -713,6 +718,9 @@ pub(crate) struct UiPersist {
     /// the floor — [`SharedState::load_persist`] refuses it entirely.
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
+    /// See [`Interaction::analyzer_regions`]: the half of a folded region
+    /// that `layout` does not hold.
+    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
     pub(crate) look_slots: crate::appearance_edit::Slots,
