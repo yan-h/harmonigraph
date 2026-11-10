@@ -94,7 +94,7 @@ fn a_memory_touches_no_field_but_trail() {
     assert!(marked.nodes.iter().any(|n| n.trail > 0.0), "nothing was remembered at all");
 
     for (a, b) in bare.nodes.iter().zip(&marked.nodes) {
-        assert_eq!(a.activation, b.activation, "at {:?}", a.lattice_pos);
+        assert_eq!(a.presence_with_opacity, b.presence_with_opacity, "at {:?}", a.lattice_pos);
         assert_eq!(a.octaves, b.octaves, "at {:?}", a.lattice_pos);
         assert_eq!(a.melody_slots, b.melody_slots);
         assert_eq!(a.bass_slots, b.bass_slots);
@@ -133,8 +133,11 @@ fn a_remembered_position_loses_its_marker_to_its_own_name() {
         );
     }
     // Only the remembered ones: a memory takes its own marker and no others.
-    let unvisited =
-        scene.nodes.iter().filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0).count();
+    let unvisited = scene
+        .nodes
+        .iter()
+        .filter(|n| n.on_home && n.trail == 0.0 && n.presence_with_opacity == 0.0)
+        .count();
     assert_eq!(scene.pluses.len(), unvisited, "a memory reached past its own position");
 }
 

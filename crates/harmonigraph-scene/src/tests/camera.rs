@@ -168,7 +168,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         .iter()
         .find(|n| !n.on_home)
         .expect("default view spans more than the home sheet");
-    assert_eq!(off.activation, 0.0);
+    assert_eq!(off.presence_with_opacity, 0.0);
     assert!(!off.is_visible());
     let off_px = idle.project(viewport, off.world_pos).unwrap();
     assert_ne!(
@@ -186,7 +186,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     let lit = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
     let lit_off = lit.nodes.iter().find(|n| n.lattice_pos == off.lattice_pos).unwrap();
-    assert!(lit_off.activation > 0.0, "the note should light this node");
+    assert!(lit_off.presence_with_opacity > 0.0, "the note should light this node");
     assert!(lit_off.is_visible());
     assert_eq!(
         lit.pick(viewport, off_px, 24.0),

@@ -462,9 +462,13 @@ pub struct NodeInstance {
     /// one holds while its release travels the slices, then decays. Never
     /// below any slot's colour in [`octaves`](Self::octaves), which leaves at
     /// the release.
-    pub activation: f32,
-    /// [`activation`](Self::activation) before Opacity: the loudest octave
-    /// slot's presence alone, so a held note is 1 however softly it was played.
+    ///
+    /// A change to what this level means renames the field, so every reader is
+    /// visited.
+    pub presence_with_opacity: f32,
+    /// [`presence_with_opacity`](Self::presence_with_opacity) before Opacity:
+    /// the loudest octave slot's presence alone, so a held note is 1 however
+    /// softly it was played.
     ///
     /// What reads it is the NAME ([`name_level`](Self::name_level)), and the
     /// cross that is its complement. A name says which position this is, not
@@ -472,20 +476,24 @@ pub struct NodeInstance {
     /// the departing reserve at key-up (#1316). The name's grey-to-white ink
     /// follows neither: it reads the drawn colour, the loudest of
     /// [`octaves`](Self::octaves), which leaves at the release while
-    /// `activation` waits through a Fade-out delay.
-    pub envelope: f32,
+    /// `presence_with_opacity` waits through a Fade-out delay.
+    ///
+    /// A change to what this level means renames the field, so every reader is
+    /// visited.
+    pub presence_without_opacity: f32,
     /// Whether the voice this node is lit by is on its way OUT — its key is
     /// up and its departure has begun.
     ///
-    /// [`activation`](Self::activation) alone cannot answer this: it is the
-    /// arrival times what is left of the departure, so a level part-way up
-    /// and the same level part-way down are one number. The two ends run on
-    /// one dial and never overlap, which is what makes a single flag enough
-    /// to tell them apart — a voice is arriving, or full, or departing.
+    /// [`presence_with_opacity`](Self::presence_with_opacity) alone cannot
+    /// answer this: it is the arrival times what is left of the departure, so
+    /// a level part-way up and the same level part-way down are one number.
+    /// The two ends run on one dial and never overlap, which is what makes a
+    /// single flag enough to tell them apart — a voice is arriving, or full,
+    /// or departing.
     ///
-    /// What needs it is anything that reads a low activation or envelope as
-    /// "nearly gone" and acts on it, which is only true on the way out. The kept
-    /// note names are the case: their level is reserved ahead of the trail
+    /// What needs it is anything that reads a low presence, with Opacity or
+    /// without, as "nearly gone" and acts on it, which is only true on the way
+    /// out. The kept note names are the case: their level is reserved ahead of the trail
     /// record that takes over when the release finishes, and reserving that
     /// on the way IN draws a name ahead of the note it names.
     pub departing: bool,
@@ -495,7 +503,7 @@ pub struct NodeInstance {
     /// Per-octave activation (slot = MIDI octave + 1, clamped into the span
     /// the view shows — see [`octaves`]): each octave's indicator fades on
     /// its own voice's envelope, independent of the node's overall
-    /// activation. Slots outside the shown span stay 0, so a note beyond the
+    /// presence. Slots outside the shown span stay 0, so a note beyond the
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
@@ -545,7 +553,7 @@ pub struct NodeInstance {
     /// duration ([`FrameParams::fade_time`]) from the moment its note TOOK
     /// that end (plus whatever wait [`ViewConfig::mark_delay`] asks for
     /// first), rather than appearing at full the frame it is claimed.
-    /// Separate from `activation` because a mark can be arriving while the
+    /// Separate from `presence_with_opacity` because a mark can be arriving while the
     /// node it sits on has been fully lit for a while — the mark has to
     /// follow its own note, not the node's.
     ///
@@ -573,7 +581,8 @@ pub struct NodeInstance {
     pub bass_color: Vec4,
     /// How much of the audio ring this node wears, 0..=1 — the gate's answer
     /// for its wedges ([`RingGate`]) carried on the note Fade ([`RingFade`]),
-    /// and never less than the node's own [`activation`](Self::activation).
+    /// and never less than the node's own
+    /// [`presence_with_opacity`](Self::presence_with_opacity).
     ///
     /// A LEVEL and not the gate's own yes or no, because a ring is a layer of a
     /// node and every other layer of a node arrives and leaves on the Fade: a
@@ -610,7 +619,7 @@ pub struct NodeInstance {
     /// is, which row of the frame's ink strip is this node's, and how much of
     /// this frame's reading the pair of them take (see [`GlowStep`]).
     ///
-    /// [`NodeMotion::step`] seeds the current activation on the snapshot row
+    /// [`NodeMotion::step`] seeds the current presence on the snapshot row
     /// assigned by [`derive_scene`]. The shell's pass
     /// (`panes::glow_fade` in harmonigraph-ui) is what replaces it with a
     /// level carried on the Glow attack and release, a row that holds still
@@ -625,7 +634,8 @@ pub struct NodeInstance {
     /// unmistakable for a sounding note — the two are not the same kind of
     /// thing on screen. No drawn layer looks at it, and this node's other
     /// fields are untouched by the trail: a remembered node's `color` and
-    /// `activation` are the ones it would carry having never been played.
+    /// `presence_with_opacity` are the ones it would carry having never been
+    /// played.
     pub trail: f32,
 }
 
@@ -648,8 +658,8 @@ impl NodeInstance {
             on_home,
             cents,
             hovered,
-            activation: 0.0,
-            envelope: 0.0,
+            presence_with_opacity: 0.0,
+            presence_without_opacity: 0.0,
             departing: false,
             slice_progress: [1.0; OCTAVE_SLOTS],
             thickness: [1.0; OCTAVE_SLOTS],
@@ -687,7 +697,7 @@ impl NodeInstance {
     /// actually played, the node carrying it is one to reveal the pitch of,
     /// and that is the reasoning here rather than in the caller.
     pub fn is_visible(&self) -> bool {
-        self.activation > 0.0 || self.on_home || self.trail > 0.0
+        self.presence_with_opacity > 0.0 || self.on_home || self.trail > 0.0
     }
 
     /// How much NOTE NAME stands over this node, 0 to 1.
@@ -707,16 +717,17 @@ impl NodeInstance {
     ///
     /// A LEVEL rather than a yes or no, and that is the whole of what keeps
     /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
-    /// exactly the node's [`envelope`](Self::envelope) (`draw_node_labels` in
-    /// `harmonigraph-ui`), so a released note spends the end of its fade with a
-    /// name too faint to see. Answered as a predicate, the marker under it
-    /// stays away for all of that and then arrives at full ground opacity the
-    /// frame the envelope reaches 0 — a hole in the field, and then a cross
-    /// popping into it, once per note. As a level the two cross-fade: what the
-    /// name gives up, the marker takes, and the position carries the same ink
-    /// throughout.
+    /// exactly the node's
+    /// [`presence_without_opacity`](Self::presence_without_opacity)
+    /// (`draw_node_labels` in `harmonigraph-ui`), so a released note spends
+    /// the end of its fade with a name too faint to see. Answered as a
+    /// predicate, the marker under it stays away for all of that and then
+    /// arrives at full ground opacity the frame that presence reaches 0 — a
+    /// hole in the field, and then a cross popping into it, once per note. As
+    /// a level the two cross-fade: what the name gives up, the marker takes,
+    /// and the position carries the same ink throughout.
     ///
-    /// The envelope rather than `activation`, which carries Opacity: a soft
+    /// The presence without Opacity rather than with it: a soft
     /// note held at its Opacity reading and then reserved whole at key-up
     /// would step its name up and its cross out in one frame (#1316).
     ///
@@ -761,13 +772,13 @@ impl NodeInstance {
         let reserved = if view.note_names == NoteNames::Past
             && self.on_home
             && self.departing
-            && self.envelope > 0.0
+            && self.presence_without_opacity > 0.0
         {
             1.0
         } else {
             0.0
         };
-        self.envelope.max(resting).max(reserved).clamp(0.0, 1.0)
+        self.presence_without_opacity.max(resting).max(reserved).clamp(0.0, 1.0)
     }
 
     /// Whether a note name is drawn over this node AT ALL — the gate the label
@@ -781,7 +792,7 @@ impl NodeInstance {
 
     /// How lit the node is DRAWN: its most opaque octave slot's colour, Opacity
     /// included, which leaves at the release rather than waiting out a Fade-out
-    /// delay as [`activation`](Self::activation) does.
+    /// delay as [`presence_with_opacity`](Self::presence_with_opacity) does.
     ///
     /// The one spelling of "the drawn colour" for everything that follows it:
     /// the [`glow_target`](Self::glow_target) (which adds the marks) and the
@@ -794,8 +805,8 @@ impl NodeInstance {
     /// Where this node's light is heading: its most opaque octave slot or mark
     /// as drawn, each after the Opacity mapping, in 0..=1 — so a soft note's
     /// halo is as faint as its ink and one faded to nothing has none. Not
-    /// [`activation`](Self::activation), the presence that holds through a
-    /// release.
+    /// [`presence_with_opacity`](Self::presence_with_opacity), the presence
+    /// that holds through a release.
     ///
     /// Asked of the node rather than stored beside its light, so it cannot go
     /// stale against the layers it reads: the stateless level

@@ -290,11 +290,11 @@ fn neither_proportion_moves_a_marker_or_changes_how_far_it_reaches() {
 ///
 /// This is the one place the two claims on a position cross, and a predicate
 /// gets it wrong in a way no still picture shows. Under `Played` a name is
-/// drawn at exactly the node's envelope, so the end of a release is a name
-/// too faint to see — and a marker that waits for the name to be gone entirely
-/// stays away through all of it and then arrives at FULL opacity the frame
-/// activation reaches 0. Measured on the fixture below before this was a
-/// level: at an activation of 0.0005 the position held a name at 0.05% and no
+/// drawn at exactly the node's presence without Opacity, so the end of a
+/// release is a name too faint to see — and a marker that waits for the name
+/// to be gone entirely stays away through all of it and then arrives at FULL
+/// opacity the frame that presence reaches 0. Measured on the fixture below before this was a
+/// level: at a presence of 0.0005 the position held a name at 0.05% and no
 /// marker at all, and one frame later a marker at 1.0. A hole, then a pop, once
 /// per note.
 ///
@@ -322,8 +322,8 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
         let standing =
             scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
         // The complement, exactly: the name's level under Played IS the
-        // envelope (`NodeInstance::name_level`), so the two together
-        // are one whole marker's worth of ink at every instant.
+        // presence without Opacity (`NodeInstance::name_level`), so the two
+        // together are one whole marker's worth of ink at every instant.
         let want = ground * (1.0 - node.name_level(&view));
         assert!(
             (standing - want).abs() < 1e-5,
@@ -511,7 +511,7 @@ fn a_marker_that_survives_a_chord_is_painted_exactly_as_it_was() {
         assert_eq!(marker.strength, 1.0, "{marker:?}");
     }
     assert!(
-        scene.nodes.iter().any(|n| n.activation > 0.0),
+        scene.nodes.iter().any(|n| n.presence_with_opacity > 0.0),
         "the chord has to reach the lattice for this to mean anything",
     );
 }
@@ -536,8 +536,11 @@ fn a_named_position_draws_no_marker() {
     }
     // And the positions with no memory on them keep theirs — the rule is about
     // the name, not about the mode being on.
-    let unvisited =
-        scene.nodes.iter().filter(|n| n.on_home && n.trail == 0.0 && n.activation == 0.0).count();
+    let unvisited = scene
+        .nodes
+        .iter()
+        .filter(|n| n.on_home && n.trail == 0.0 && n.presence_with_opacity == 0.0)
+        .count();
     assert_eq!(scene.pluses.len(), unvisited, "an unnamed home position lost its marker");
 
     // All names every node on screen, so the field goes with it — the mode
@@ -611,7 +614,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
     let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
     assert!(
-        scene.nodes.iter().any(|n| !n.on_home && n.activation > 0.0),
+        scene.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
         "the off-sheet note has to be lit for this to mean anything",
     );
     assert_eq!(
@@ -658,7 +661,7 @@ fn a_node_lit_by_no_key_keeps_its_cross_whole() {
     }
 
     // What a ring's carried light looks like by the time the marker field is
-    // asked: a node fully lit with an activation of 0 under it. The ink the
+    // asked: a node fully lit with a presence of 0 under it. The ink the
     // field is derived at is arbitrary — the claim is a difference, not a grey.
     let ink = glam::Vec4::new(0.5, 0.5, 0.5, 0.75);
     let unlit = crate::derive::derive_pluses(&view, &scene.nodes, ink);
@@ -668,7 +671,7 @@ fn a_node_lit_by_no_key_keeps_its_cross_whole() {
         }
     }
     assert!(
-        origin_node(&scene).activation < 1e-5,
+        origin_node(&scene).presence_with_opacity < 1e-5,
         "the fixture must light the node without a key, or it proves nothing",
     );
     let shining = crate::derive::derive_pluses(&view, &scene.nodes, ink);
@@ -757,9 +760,9 @@ fn a_markers_shadow_fades_in_with_its_cross() {
 }
 
 /// A SOFT note's name and the cross under it hold still across key-up under
-/// `Past` (#1316): the name level reads the note's unfaded envelope, so a note
-/// Opacity holds below full is named whole while held, and the departing
-/// reserve has nothing to jump from.
+/// `Past` (#1316): the name level reads the note's presence without Opacity,
+/// so a note Opacity holds below full is named whole while held, and the
+/// departing reserve has nothing to jump from.
 ///
 /// Frame by frame through one carried [`NodeMotion`], with the key let go
 /// mid-walk, because the jump lived on the one frame where a held level below 1
@@ -798,8 +801,9 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
         let name = node.name_level(&view);
         let cross =
             scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
-        held_soft |= step < 120 && node.activation > 0.0 && node.activation < 0.95;
-        departed |= node.departing && node.on_home && node.activation > 0.0;
+        held_soft |=
+            step < 120 && node.presence_with_opacity > 0.0 && node.presence_with_opacity < 0.95;
+        departed |= node.departing && node.on_home && node.presence_with_opacity > 0.0;
         if let Some((name_was, cross_was)) = last {
             // One frame of a one-second Fade is a sixtieth of the way; the jump
             // was the whole of the gap Opacity left, near a fifth here.

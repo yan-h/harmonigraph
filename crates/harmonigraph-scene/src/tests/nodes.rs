@@ -657,7 +657,7 @@ fn octaves_fade_independently() {
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
     let scene = scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 2.5);
     let origin = origin_node(&scene);
-    assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
+    assert_eq!(origin.presence_with_opacity, 1.0, "node stays lit by the held C4");
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
     assert!(
         origin.octaves[MIDDLE_C_SLOT + 1] > 0.0 && origin.octaves[MIDDLE_C_SLOT + 1] < 0.75,
@@ -703,7 +703,7 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     };
     // C4 sits on the origin node; its body is half-faded...
     let origin = origin_node(&scene);
-    half("the core", origin.activation);
+    half("the core", origin.presence_with_opacity);
     half("the octave glyph", origin.octaves[MIDDLE_C_SLOT]);
     // ...and so is the bass mark it left with. C4 was the bottom of the
     // chord, so its slot is still marked, at the same level as the glyph
@@ -812,7 +812,7 @@ fn every_channel_draws_the_same_node() {
     let lit = drawn(0);
     // Against a node that is DRAWN, or sixteen blank nodes would agree just
     // as well and this would assert nothing.
-    assert!(lit.contains("activation: 1.0"), "the note has to be lit: {lit}");
+    assert!(lit.contains("presence_with_opacity: 1.0"), "the note has to be lit: {lit}");
     for channel in 1..16u8 {
         assert_eq!(drawn(channel), lit, "channel {channel}");
     }
@@ -828,7 +828,7 @@ fn held_note_lights_matching_nodes() {
     // the note-on instant itself the whole thing is still at zero.
     let scene = scene_of(&tracker, &tuning, &ViewConfig::default(), &plain_frame(), 0.5);
     let origin = origin_node(&scene);
-    assert_eq!(origin.activation, 1.0);
+    assert_eq!(origin.presence_with_opacity, 1.0);
     assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0);
 }
 
@@ -899,7 +899,7 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
         "the ring has to reach under the packing, or this tests nothing"
     );
     let origin = origin_node(&scene);
-    assert_eq!(origin.activation, 1.0, "the played C lights the node it wraps onto");
+    assert_eq!(origin.presence_with_opacity, 1.0, "the played C lights the node it wraps onto");
     let lit: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| origin.octaves[s] > 0.0).collect();
     assert_eq!(lit, [0], "the note folds onto the lowest slot the packing has");
 }
@@ -1129,7 +1129,10 @@ fn the_reading_leaves_the_midi_picture_alone() {
         assert_eq!(scene.nodes.len(), midi.nodes.len(), "{reading:?} changed how many nodes draw");
         for (now, was) in scene.nodes.iter().zip(&midi.nodes) {
             let at = was.lattice_pos;
-            assert_eq!(now.activation, was.activation, "{reading:?} changed {at:?}'s activation");
+            assert_eq!(
+                now.presence_with_opacity, was.presence_with_opacity,
+                "{reading:?} changed {at:?}'s presence"
+            );
             assert_eq!(now.octaves, was.octaves, "{reading:?} changed {at:?}'s held octaves");
             assert_eq!(now.melody_slots, was.melody_slots, "{reading:?} moved {at:?}'s melody");
             assert_eq!(now.bass_slots, was.bass_slots, "{reading:?} moved {at:?}'s bass mark");
@@ -1201,7 +1204,10 @@ fn the_gate_takes_the_ring_and_leaves_the_node() {
     let (mut rings, mut dark) = (0, 0);
     for (now, was) in gated.nodes.iter().zip(&midi.nodes) {
         let at = was.lattice_pos;
-        assert_eq!(now.activation, was.activation, "the gate changed {at:?}'s activation");
+        assert_eq!(
+            now.presence_with_opacity, was.presence_with_opacity,
+            "the gate changed {at:?}'s presence"
+        );
         assert_eq!(now.octaves, was.octaves, "the gate changed {at:?}'s held octaves");
         assert_eq!(now.melody_slots, was.melody_slots, "the gate moved {at:?}'s melody mark");
         // The partial is an F#, and the wheel gives every node its own octaves
@@ -1221,7 +1227,7 @@ fn the_gate_takes_the_ring_and_leaves_the_node() {
         // is about a node nobody is playing
         // (`a_node_the_keys_have_lit_rings_whatever_the_gate_says` is the
         // other side of it).
-        if off > 20.0 && now.activation == 0.0 {
+        if off > 20.0 && now.presence_with_opacity == 0.0 {
             let cents = now.cents;
             assert_eq!(now.audio_ring, 0.0, "{at:?} at {cents}¢ rang {off}¢ off the partial");
         }
@@ -1255,13 +1261,13 @@ fn a_node_the_keys_have_lit_rings_whatever_the_gate_says() {
     animate_measured(&mut scene, &sounding(), &view, &plain_frame(), 0.5);
     let (mut lit, mut idle) = (0, 0);
     for node in &scene.nodes {
-        if node.activation > 0.0 {
+        if node.presence_with_opacity > 0.0 {
             lit += 1;
             assert!(
-                node.audio_ring >= node.activation,
+                node.audio_ring >= node.presence_with_opacity,
                 "{:?} is lit at {} and wears {} of its ring",
                 node.lattice_pos,
-                node.activation,
+                node.presence_with_opacity,
                 node.audio_ring,
             );
         } else {
@@ -1302,15 +1308,15 @@ fn a_played_nodes_ring_leaves_on_the_notes_own_fade() {
         scene.spectral = SpectralPaint::new(&view, Gradient::default());
         animate_measured(&mut scene, &tracker, &view, &frame, now);
         let node = origin_node(&scene);
-        (node.activation, node.audio_ring)
+        (node.presence_with_opacity, node.audio_ring)
     };
     for now in [1.25, 1.5, 1.75] {
-        let (activation, ring) = ring_at(now);
-        assert!((0.0..1.0).contains(&activation), "the note reads {activation} mid-release");
-        assert_eq!(ring, activation, "the ring is not what the node is drawn at, {now}s in");
+        let (presence, ring) = ring_at(now);
+        assert!((0.0..1.0).contains(&presence), "the note reads {presence} mid-release");
+        assert_eq!(ring, presence, "the ring is not what the node is drawn at, {now}s in");
     }
-    let (activation, ring) = ring_at(2.5);
-    assert_eq!((activation, ring), (0.0, 0.0), "the note is over and its ring is not");
+    let (presence, ring) = ring_at(2.5);
+    assert_eq!((presence, ring), (0.0, 0.0), "the note is over and its ring is not");
 }
 
 /// With the ring dialled OFF the gate decides nothing, and says so by leaving

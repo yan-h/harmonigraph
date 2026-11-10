@@ -52,9 +52,9 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         }
         paint.color_levels.clone_from(&paint.levels);
         // ...and a node with a ring and nothing else, which is the idle
-        // branch's new case: no activation, no marks, and an annulus to draw.
+        // branch's new case: no presence, no marks, and an annulus to draw.
         let mut silent = scene.nodes[0];
-        silent.activation = 0.0;
+        silent.presence_with_opacity = 0.0;
         silent.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         silent.melody_slots = 0;
         silent.bass_slots = 0;
@@ -479,7 +479,7 @@ fn ringing_view() -> harmonigraph_scene::ViewConfig {
 /// is itself a reason to ship an instance: the cull that drops idle nodes
 /// keeps all of them the moment the annulus is real. Nothing else reaches
 /// that term — the pixel tests above light their nodes, which passes the
-/// cull on activation instead.
+/// cull on presence instead.
 #[test]
 fn an_open_ring_ships_every_idle_node() {
     let view = ringing_view();
@@ -586,7 +586,7 @@ fn ring_at_level(gpu: &mut Shooter, level: u8, spacing: harmonigraph_scene::LutS
     // Nothing held, so what is on screen is the ring alone: the band's own
     // wedges are the MIDI picture and would sum into the channels below.
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-    node.activation = 1.0;
+    node.presence_with_opacity = 1.0;
     let rings = view.rings();
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
@@ -679,7 +679,7 @@ type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
 
 /// Each of the four things that make a node sounding keeps it on its own.
 ///
-/// The cull's first question is whether anything is lit — an envelope, a
+/// The cull's first question is whether anything is lit — a presence, a
 /// melody or bass ring's level, or a lit octave — and it is a disjunction
 /// over four terms that ordinarily move together: `derive_scene` rides all
 /// of them on one envelope, so a scene built by playing notes has either
@@ -689,7 +689,7 @@ type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
 ///
 /// They come apart in practice, which is why each gets a node here. An
 /// octave's level is `envelope * attack(...)` and is packed to a byte, so
-/// for the first frames after a note-on a node has a full activation and an
+/// for the first frames after a note-on a node has a full presence and an
 /// octave word of exactly zero — `params[0]` alone is holding it in the
 /// buffer, and a cull that stopped reading it would drop the first frame of
 /// a note. The mark levels ride their own ease-in (`melody_attack`) rather
@@ -724,7 +724,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
 
     // One node per term, each the ONLY lit thing about it.
     let cases: [(&str, LightUp); 4] = [
-        ("activation", |n| n.activation = 1.0),
+        ("presence", |n| n.presence_with_opacity = 1.0),
         ("melody level", |n| n.melody_level = 1.0),
         ("bass level", |n| n.bass_level = 1.0),
         ("a lit octave", |n| n.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0),
@@ -772,7 +772,7 @@ fn a_released_node_ships_for_its_light_alone() {
         let node = &mut scene.nodes[0];
         node.glow = harmonigraph_scene::GlowStep { incarnation: 1, level: 0.5, row: 0 };
         if inked {
-            node.activation = 1.0;
+            node.presence_with_opacity = 1.0;
             node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
         }
         scene
@@ -821,17 +821,17 @@ fn a_culled_node_behind_home_moves_no_marker() {
     scene.nodes.truncate(3);
     for node in &mut scene.nodes {
         node.trail = 0.0;
-        node.activation = 0.0;
+        node.presence_with_opacity = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
     }
     // Which world z is "behind" is the camera's to say — the sort keys on
     // `world_pos.z * forward.z` — and the default camera's eye sits at +z, so
     // the sheets behind the home one are the negative side.
     scene.nodes[0].world_pos.z = -2.0;
-    scene.nodes[0].activation = 1.0; // behind home, lit: ships, before the markers
+    scene.nodes[0].presence_with_opacity = 1.0; // behind home, lit: ships, before the markers
     scene.nodes[1].world_pos.z = -1.0; // behind home, idle: culled
     scene.nodes[2].world_pos.z = 0.0;
-    scene.nodes[2].activation = 1.0; // the home sheet: ships, after the markers
+    scene.nodes[2].presence_with_opacity = 1.0; // the home sheet: ships, after the markers
     scene.nodes[2].on_home = true;
 
     scene.pluses = vec![one_marker(2, scene.nodes[2].world_pos, 0.2, scene.lattice_ground, 1.0)];
@@ -894,13 +894,13 @@ fn a_marker_nearer_the_eye_than_a_node_draws_after_it() {
     // and +Y is the NEAR end of it. The lit node goes at the far end.
     let far = harmonigraph_core::LatticePos::new(0, -1, 0);
     let near = harmonigraph_core::LatticePos::new(0, 1, 0);
-    for (node, (pos, y, activation)) in
+    for (node, (pos, y, presence)) in
         scene.nodes.iter_mut().zip([(far, -3.0, 1.0), (near, 3.0, 0.0)])
     {
         node.world_pos = glam::Vec3::new(0.0, y, 0.0);
         node.lattice_pos = pos;
         node.on_home = true;
-        node.activation = activation;
+        node.presence_with_opacity = presence;
         node.trail = 0.0;
     }
     scene.pluses = [far, near]

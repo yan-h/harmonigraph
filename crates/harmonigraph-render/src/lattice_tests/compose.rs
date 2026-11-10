@@ -230,7 +230,7 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         // all now, so the cull drops it, and a scene of idle nodes would leave
         // the order below comparing an empty list with itself.
         for node in &mut scene.nodes {
-            node.activation = 1.0;
+            node.presence_with_opacity = 1.0;
         }
         let call = LatticeCallback::from_scene(
             &scene,

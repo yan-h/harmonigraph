@@ -449,9 +449,10 @@ fn paint_reach(in: VsOut, aa: f32) -> f32 {
 
 struct Instance {
     @location(0) world_pos: vec3<f32>,
-    // x: activation 0..1, the node's presence. y/z: the melody and bass marks'
+    // x: the node's presence with Opacity 0..1
+    // (NodeInstance::presence_with_opacity). y/z: the melody and bass marks'
     // own levels, which follow the marked voice rather than this node's
-    // activation — each ring eases in over the scene layer's attack when its
+    // presence — each ring eases in over the scene layer's attack when its
     // note takes that end, and falls from the frame the key comes up. w is
     // the CPU's (the glow's target, for the ink history) and is dropped on
     // the way in.

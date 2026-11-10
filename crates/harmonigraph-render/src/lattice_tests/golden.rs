@@ -181,7 +181,7 @@ fn lattice(view: &harmonigraph_scene::ViewConfig, camera: Camera) -> Scene {
     let at = settled
         .nodes
         .iter()
-        .filter(|n| n.activation > 0.0)
+        .filter(|n| n.presence_with_opacity > 0.0)
         .min_by(|a, b| a.world_pos.length_squared().total_cmp(&b.world_pos.length_squared()))
         .expect("the chord must light a node inside the drawn window")
         .world_pos;
@@ -476,7 +476,7 @@ pub(super) fn names_overlapping_on_one_sheet() -> Shot {
         .nodes
         .iter()
         .enumerate()
-        .filter(|(_, n)| n.activation > 0.0)
+        .filter(|(_, n)| n.presence_with_opacity > 0.0)
         .filter_map(|(i, n)| {
             let at = projector.project(n.world_pos)?;
             let inside = at.cmpge(glam::Vec2::splat(size)).all()

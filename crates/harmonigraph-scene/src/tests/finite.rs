@@ -238,8 +238,8 @@ fn scene_floats(scene: &Scene) -> Floats {
         let NodeInstance {
             lattice_pos: _,
             world_pos,
-            activation,
-            envelope,
+            presence_with_opacity,
+            presence_without_opacity,
             departing: _,
             slice_progress,
             octaves,
@@ -259,8 +259,8 @@ fn scene_floats(scene: &Scene) -> Floats {
             trail,
         } = node;
         f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
-        f.one(format!("nodes[{i}].activation"), *activation);
-        f.one(format!("nodes[{i}].envelope"), *envelope);
+        f.one(format!("nodes[{i}].presence_with_opacity"), *presence_with_opacity);
+        f.one(format!("nodes[{i}].presence_without_opacity"), *presence_without_opacity);
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);
         f.many(&format!("nodes[{i}].thickness"), *thickness);

@@ -126,7 +126,7 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            params: [n.activation, n.melody_level, n.bass_level, n.glow_target()],
+            params: [n.presence_with_opacity, n.melody_level, n.bass_level, n.glow_target()],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -171,7 +171,7 @@ impl LatticeCallback {
         // ring is a window onto the spectrum rather than a level a node
         // carries, so it takes BOTH the layer being on and this node wearing
         // some of the ring (`NodeMotion::step`: its measured level, floored at
-        // the node's carried MIDI activation) for the node to owe an
+        // the node's presence with Opacity) for the node to owe an
         // annulus. With the gate at its floor that is every node in the window,
         // silence included — the ungated picture, and what "the ring reads raw"
         // costs; dialled up, an idle node with nothing sounding at it goes back

@@ -250,7 +250,7 @@ fn a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger() {
     // curves are exactly equal half way — and what the viewer sees move is
     // the link rather than the brightness.
     let later = at(1.0 + ATTACK * 0.75);
-    assert_eq!(later.activation, 1.0, "the held C4 keeps the node lit throughout");
+    assert_eq!(later.presence_with_opacity, 1.0, "the held C4 keeps the node lit throughout");
     assert_eq!(later.melody_slots, 1 << MIDDLE_C_SLOT, "the mark has moved to the held C4");
     assert!(
         (later.melody_level - 0.75).abs() < 1e-5,

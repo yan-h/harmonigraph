@@ -30,14 +30,14 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     scene.view.note_bloom = 1.0;
     scene.pitch_lut = [glam::Vec4::new(1.0, 0.1, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
     scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
-    scene.nodes[0].activation = 1.0;
+    scene.nodes[0].presence_with_opacity = 1.0;
     scene.nodes[0].audio_ring = 0.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
     scene.nodes[0].glow.incarnation = 1;
     shooter.shot(&scene);
     // Nothing but the held GPU colour remains.
-    scene.nodes[0].activation = 0.0;
+    scene.nodes[0].presence_with_opacity = 0.0;
     scene.nodes[0].octaves.fill(0.0);
     let bloomed = shooter.shot_again(&scene);
     assert!(total_light(&bloomed) > 64, "release fixture must emit visible light");
@@ -110,7 +110,7 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     assert_eq!(total_light(&grown), 0, "growth reseeds from empty current ink");
     // Reusing row zero seeds its new green owner instead of stale red.
     scene.nodes[0].glow.incarnation = 2;
-    scene.nodes[0].activation = 1.0;
+    scene.nodes[0].presence_with_opacity = 1.0;
     scene.nodes[0].octaves.fill(1.0);
     scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
     let reused = shooter.shot_again(&scene);
@@ -163,7 +163,7 @@ fn history_scene() -> Scene {
 
 fn release(scene: &mut Scene) {
     for node in &mut scene.nodes {
-        node.activation = 0.0;
+        node.presence_with_opacity = 0.0;
         node.octaves.fill(0.0);
     }
 }
@@ -301,7 +301,7 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     held.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
     held.glow.row = 64;
     held.glow.incarnation = 2;
-    held.activation = 1.0;
+    held.presence_with_opacity = 1.0;
     held.octaves.fill(1.0);
     scene.nodes.push(held);
     scene.glow_rows = 128;
@@ -362,7 +362,7 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
 /// `to_gpu` packs: a release under a held presence at the release rate, then a
 /// re-strike while the light is still falling at the attack rate, then a mark
 /// alone at the attack rate. The readings a slot could carry instead each fail
-/// one frame: the presence (`activation`) the release, the stepped
+/// one frame: the presence (`presence_with_opacity`) the release, the stepped
 /// `glow.level` the re-strike, and the drawn colour (`drawn_level`) the mark.
 #[test]
 fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
@@ -383,7 +383,7 @@ fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
     mix(&mut shooter, &scene);
     // Released: the colour has gone and the presence holds above the light.
     scene.nodes[0].octaves.fill(0.0);
-    scene.nodes[0].activation = 1.0;
+    scene.nodes[0].presence_with_opacity = 1.0;
     scene.nodes[0].glow.level = 0.7;
     scene.glow_timing.as_mut().unwrap().now = 0.1;
     let released = mix(&mut shooter, &scene);

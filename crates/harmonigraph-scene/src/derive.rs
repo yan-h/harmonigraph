@@ -276,10 +276,10 @@ pub(crate) fn marker_world(uv: f32) -> f32 {
 /// The name takes the marker by DEGREE, not by decree: a marker's opacity is
 /// what is left over from the name above it. Under
 /// [`Played`](crate::NoteNames::Played) a name is drawn at the node's own
-/// envelope, so a released note's name spends the end of its fade invisible —
-/// and a marker that waited for the name to be gone ENTIRELY would leave the
-/// position empty for that stretch and then pop in at full opacity. The
-/// complement makes the two one crossing surface.
+/// presence without Opacity, so a released note's name spends the end of its
+/// fade invisible — and a marker that waited for the name to be gone ENTIRELY
+/// would leave the position empty for that stretch and then pop in at full
+/// opacity. The complement makes the two one crossing surface.
 pub(crate) fn derive_pluses(
     view: &ViewConfig,
     nodes: &[NodeInstance],
@@ -316,9 +316,9 @@ pub(crate) fn derive_pluses(
     // A name and NOTHING else, which is the whole rule: the cross disappears if
     // and only if a name is present. A note reaches it through the name rather
     // than beside it, and does so under every Label visibility mode —
-    // `name_level` is `envelope.max(resting)` and, on the way out under `Past`,
-    // the departing reserve, so a sounding note is named at its own envelope
-    // even under `Played`, where nothing rests. Asking the note a second time
+    // `name_level` is `presence_without_opacity.max(resting)` and, on the way
+    // out under `Past`, the departing reserve, so a sounding note is named at
+    // its own presence even under `Played`, where nothing rests. Asking the note a second time
     // here would therefore change nothing.
     //
     // So an analyzer ring moves this by nothing, having no name to put over a

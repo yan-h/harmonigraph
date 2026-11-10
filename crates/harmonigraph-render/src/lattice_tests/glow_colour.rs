@@ -288,7 +288,7 @@ fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
         // Silence at the node, and the analyzer still reading: no key down, no
         // octave sounding, no mark at either end — and the ring at full, which
         // is the view's Gate answered for this node.
-        node.activation = 0.0;
+        node.presence_with_opacity = 0.0;
         node.melody_level = 0.0;
         node.bass_level = 0.0;
         node.melody_slots = 0;
@@ -377,7 +377,7 @@ fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
 
     let node = &mut scene.nodes[0];
     node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
-    node.activation = 1.0;
+    node.presence_with_opacity = 1.0;
     // FLAT green rather than the fixture's two hues, so the strip's colour is
     // the strip's colour wherever it is read: what is being measured here is
     // which layer the light took its hue from.
@@ -443,7 +443,7 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
     let ring_only = || -> Scene {
         let mut scene = two_colour_node(BAND, RING);
         let node = &mut scene.nodes[0];
-        node.activation = 0.0;
+        node.presence_with_opacity = 0.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         scene
     };
@@ -582,7 +582,7 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
             }
         });
         let node = &mut scene.nodes[0];
-        node.activation = 1.0;
+        node.presence_with_opacity = 1.0;
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[lit] = 1.0;
         node.octaves[beside] = releasing;
@@ -882,7 +882,7 @@ fn a_node_added_to_a_pane_lights_in_its_own_colour() {
         };
         let mark = {
             let mut node = node;
-            node.activation = 0.0;
+            node.presence_with_opacity = 0.0;
             node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
             node.world_pos = glam::Vec3::new(1.8, 0.0, 0.0);
             node.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
@@ -986,7 +986,7 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
         let mut idle = scene.nodes[0];
         idle.world_pos.x += 1.2;
         idle.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        idle.activation = 0.0;
+        idle.presence_with_opacity = 0.0;
         idle.melody_slots = u32::MAX;
         idle.melody_level = 1.0;
         // What `GlowFade` hands a node it gave no row to.
@@ -1180,7 +1180,7 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
             }
             let mut node = original;
             node.world_pos = glam::vec3(x as f32 * 0.8, y as f32 * 0.8, 0.0);
-            node.activation = 0.0;
+            node.presence_with_opacity = 0.0;
             node.octaves.fill(0.0);
             node.melody_level = 0.0;
             node.melody_slots = 0;
@@ -1208,14 +1208,14 @@ fn glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse() {
         match phase {
             1 => {
                 // Positive glow, no current MIDI ink, but an audio ring remains.
-                scene.nodes[0].activation = 0.0;
+                scene.nodes[0].presence_with_opacity = 0.0;
                 scene.nodes[0].octaves.fill(0.0);
             }
             2 => scene.nodes[0].glow.level = 0.0,
             3 => {
                 // Row zero's new owner seeds green.
                 scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-                scene.nodes[1].activation = 1.0;
+                scene.nodes[1].presence_with_opacity = 1.0;
                 scene.nodes[1].octaves.fill(1.0);
                 scene.nodes[1].glow = original.glow;
             }

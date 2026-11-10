@@ -66,19 +66,19 @@ fn each_arrival_casts_a_measurable_shadow() {
             };
             scene.nodes[0].slice_progress =
                 std::array::from_fn(|i| (p * span - delays[i]).clamp(0.0, 1.0));
-            scene.nodes[0].activation = p;
+            scene.nodes[0].presence_with_opacity = p;
             scene.nodes[0].octaves = [p; 11];
             scene.nodes[0].melody_level = p;
             scene.nodes[0].bass_level = p;
             if name == "marks" {
                 scene.nodes[0].slice_progress = [1.0; 11];
-                scene.nodes[0].activation = 1.0;
+                scene.nodes[0].presence_with_opacity = 1.0;
                 scene.nodes[0].octaves = [1.0; 11];
                 scene.nodes[0].melody_slots = if p > 0.0 { MIDDLE_C } else { 0 };
             }
             if name == "audio" {
                 scene.nodes[0].slice_progress = [1.0; 11];
-                scene.nodes[0].activation = 0.0;
+                scene.nodes[0].presence_with_opacity = 0.0;
                 scene.nodes[0].octaves = [0.0; 11];
                 scene.nodes[0].audio_ring = p;
             }

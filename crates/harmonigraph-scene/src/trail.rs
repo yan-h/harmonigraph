@@ -78,7 +78,7 @@ impl TrailField {
     /// Mark the nodes the music has been to. `node_pcs` is each node's pitch
     /// class, parallel to `nodes`.
     ///
-    /// `trail` is the ONLY field written — not the color, not the activation,
+    /// `trail` is the ONLY field written — not the color, not the presence,
     /// not an octave. Every field that means "is sounding" is left alone,
     /// which is what keeps a memory from reading as a note, and a memory
     /// reaches the screen through the label layer alone.
