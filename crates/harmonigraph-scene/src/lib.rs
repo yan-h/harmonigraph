@@ -112,10 +112,16 @@ fn lattice_to_world(pos: LatticePos) -> Vec3 {
 /// Node radius in world units; adjacent lattice positions are one unit apart.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
+/// One quad uv in node radii: uv 1, the octave band's outer edge at the
+/// default stack, is this many of a node's own radii out. The one conversion
+/// between the size bars' unit and the world; lattice.wgsl declares the same
+/// constant, and harmonigraph-render's contract test pins the two together.
+pub const RADII_PER_UV: f32 = 1.8;
+
 /// The floor lattice.wgsl puts under a node's per-sheet scale
-/// ([`NodeInstance::scale`]) wherever it sizes that node's quads
-/// (`max(inst.scale, 0.05)`), so a CPU bound on one of those quads applies the
-/// same.
+/// ([`NodeInstance::scale`]) wherever it sizes that node's quads, so a CPU
+/// bound on one of those quads applies the same. Declared in the shader too,
+/// and pinned to it like [`RADII_PER_UV`].
 pub const MIN_NODE_SCALE: f32 = 0.05;
 
 /// How far a node's halo reaches, in the node's quad uv: the view's widest rim

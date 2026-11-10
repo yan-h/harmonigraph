@@ -128,6 +128,16 @@ struct Uniforms {
 
 const TAU: f32 = 6.2831853;
 
+// One quad uv in node radii: uv 1.0, the octave band's outer edge at the
+// default stack, is this many of the node's own radii out. The one conversion
+// between the size bars' unit and the world (`RADII_PER_UV` in
+// harmonigraph-scene, which `contract.rs` pins to this).
+const RADII_PER_UV: f32 = 1.8;
+// The floor under a node's per-sheet scale wherever it sizes that node's quads,
+// so a sheet scaled toward nothing keeps a quad to draw in
+// (`MIN_NODE_SCALE` in harmonigraph-scene, pinned the same way).
+const MIN_NODE_SCALE: f32 = 0.05;
+
 // Billboard headroom past the octave band's outer edge (uv 1.0): the quad
 // and its uv are both scaled by this, so the uv->world mapping is
 // unchanged (slices, band, glyphs, glow all render identically) but there is
@@ -250,12 +260,12 @@ fn plus_shadow_reach() -> f32 {
 // is drawn at `scale`.
 //
 // σ is HALF the Shadow over a node's radius in points (`shadow::sigma_points`), and
-// one uv is 1.8 of those radii (`node_vertex`) — so σ is `shadow / 3.6` of a
+// one uv is RADII_PER_UV of those radii (`node_vertex`) — so σ is `shadow / 3.6` of a
 // home node's uv. A sheet drawn smaller reads the same width in POINTS, which
 // is more of its own uv, which is what the division by `scale` says: the Shadow
 // is one width across the picture and not a share of each node.
 fn shadow_reach_uv(scale: f32) -> f32 {
-    return 0.5 * glow_shadow() * glow_shadow_reach() / (1.8 * max(scale, 0.05));
+    return 0.5 * glow_shadow() * glow_shadow_reach() / (RADII_PER_UV * max(scale, MIN_NODE_SCALE));
 }
 
 // A clip position as a point of the pane, in points — the units a caster's box
@@ -603,7 +613,7 @@ fn vs_node_cell(
 ) -> VsOut {
     var out = node_vertex(vertex_index, inst);
     let centre_clip = u.camera.view_proj * vec4<f32>(inst.world_pos, 1.0);
-    let uv_world = u.node.radius * 0.90 * 2.0 * max(inst.scale, 0.05);
+    let uv_world = u.node.radius * RADII_PER_UV * max(inst.scale, MIN_NODE_SCALE);
     let right_clip =
         u.camera.view_proj * vec4<f32>(inst.world_pos + u.camera.right.xyz * uv_world, 1.0);
     let centre = pane_points(centre_clip);
@@ -678,10 +688,10 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // distance from the ground and not depth toward the eye. The uv is
     // deliberately NOT scaled with it, so every layer inside the node keeps
     // its proportions and only the node's size on screen changes. (The
-    // `0.90 * 2.0` below puts uv 1.0 at 1.8 node radii — one uv in world
+    // `RADII_PER_UV` below puts uv 1.0 at 1.8 node radii — one uv in world
     // units, which `Scene::marker_unit` is the CPU's copy of — and QUAD_MARGIN
     // is the outer glyphs' soft edge on top of it.)
-    let scale = max(inst.scale, 0.05);
+    let scale = max(inst.scale, MIN_NODE_SCALE);
     // A lit slice swelled past the band reaches past the stack's own edge, and
     // carries its mark out with it (`mark_radii`).
     let marked = (inst.marks.x | inst.marks.y) != 0u;
@@ -706,7 +716,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     let midi_rim = select(0.0, rim, u.node.band_outer > u.node.band_inner || ((inst.marks.x | inst.marks.y) != 0u && u.node.mark_thickness > 0.0));
     let bounds = select(rim, max(rim, max(midi_rim * u.node.pose.z, spectral_radii().y)), u.node.animation != 0.0);
     let margin = quad_margin(bounds, shadow_reach_uv(scale));
-    let radius = u.node.radius * 0.90 * 2.0 * margin * scale;
+    let radius = u.node.radius * RADII_PER_UV * margin * scale;
 
     let world = inst.world_pos
         + (u.camera.right.xyz * corner.x + u.camera.up.xyz * corner.y) * radius;
@@ -2700,7 +2710,7 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     //
     // Free of the Shadow DEPTH, which only says how DARK the shadow is: the
     // multiply is laid over the same quad at every depth.
-    let plus_reach_uv = 0.5 * plus_shadow_width() * plus_shadow_reach() / 1.8;
+    let plus_reach_uv = 0.5 * plus_shadow_width() * plus_shadow_reach() / RADII_PER_UV;
     let stand = select(0.0, plus_reach_uv / arm, arm > 0.0);
     let margin = max(PLUS_QUAD_MARGIN, 1.0 + stand);
     // Camera-facing, like every other billboard here: a marker is a mark ON
@@ -3302,7 +3312,7 @@ fn vs_glow_splat(@builtin(vertex_index) vertex: u32, inst: Instance) -> GlowSpla
     }
     let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u)) * 2.0 - 1.0;
     out.uv = corner * u.glow.span;
-    let radius = u.node.radius * 1.8 * max(inst.scale, 0.05);
+    let radius = u.node.radius * RADII_PER_UV * max(inst.scale, MIN_NODE_SCALE);
     let world = inst.world_pos
         + (u.camera.right.xyz * out.uv.x + u.camera.up.xyz * out.uv.y) * radius;
     out.position = u.camera.view_proj * vec4<f32>(world, 1.0);

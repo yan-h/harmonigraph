@@ -351,9 +351,12 @@ impl LatticeCallback {
             if ringing && g.ring > 0.0 {
                 rim = rim.max(scene.spectral.outer);
             }
-            // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
+            // uv 1 is `RADII_PER_UV` node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
-            let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
+            let reach = rim
+                * scene.node_radius
+                * harmonigraph_scene::RADII_PER_UV
+                * n.scale.max(harmonigraph_scene::MIN_NODE_SCALE);
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
                 to_points(n.world_pos + right * reach),
