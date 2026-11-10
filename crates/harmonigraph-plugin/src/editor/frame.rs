@@ -129,6 +129,8 @@ pub(super) fn frame(
         window_size: egui::vec2(window_width as f32, window_height as f32),
     }
     .draw();
+    #[cfg(all(feature = "frame-log", target_os = "macos"))]
+    state.logged.note(&shared.ui, now);
 
     // Also where a host restore that moved the setting reaches an open editor.
     if let Some(own) = shared.ui.workspace.interaction.own_window {
@@ -170,6 +172,9 @@ pub(super) struct WindowState {
     pub(super) shared: Arc<Mutex<EditorShared>>,
     pub(super) params: Arc<HarmonigraphParams>,
     pub(super) pop_out: Weak<PopOut>,
+    /// What the frame log was last told the editor was doing.
+    #[cfg(all(feature = "frame-log", target_os = "macos"))]
+    logged: Logged,
 }
 
 impl WindowState {
@@ -178,6 +183,51 @@ impl WindowState {
         params: Arc<HarmonigraphParams>,
         pop_out: Weak<PopOut>,
     ) -> Self {
-        WindowState { shared, params, pop_out }
+        WindowState {
+            shared,
+            params,
+            pop_out,
+            #[cfg(all(feature = "frame-log", target_os = "macos"))]
+            logged: Logged::default(),
+        }
+    }
+}
+
+/// The editor's side of the frame log: a row as the window opens, with the
+/// Span, and one each time why it animates or how many exports run changes,
+/// which `tools/frame-log-summary.py --events` reads to find the silent
+/// stretches, first notes and exports #1670 asks about. `None` until the
+/// window's first frame, so that frame logs all three.
+#[cfg(all(feature = "frame-log", target_os = "macos"))]
+#[derive(Default)]
+struct Logged {
+    animating: Option<harmonigraph_ui::Animating>,
+    exports: Option<usize>,
+}
+
+#[cfg(all(feature = "frame-log", target_os = "macos"))]
+impl Logged {
+    fn note(&mut self, ui: &harmonigraph_ui::SharedState, now: f64) {
+        if self.animating.is_none() {
+            let span = ui.picture.appearance.spectrum.roll_seconds;
+            egui_baseview::frame_log::event(&format!("open span={span}"));
+        }
+        let animating = harmonigraph_ui::Animating::of(ui, now);
+        if self.animating != Some(animating) {
+            self.animating = Some(animating);
+            egui_baseview::frame_log::event(&format!("animating {animating}"));
+        }
+        let exports = ui.workspace.interaction.take.exports.iter();
+        let running = exports
+            .filter(|job| job.state == harmonigraph_take::render::ExportStatus::Running)
+            .count();
+        if self.exports != Some(running) {
+            self.exports = Some(running);
+            let encoder = match ui.picture.appearance.render.encoder {
+                harmonigraph_ui::VideoEncoder::X264 => "x264",
+                harmonigraph_ui::VideoEncoder::Hardware => "hardware",
+            };
+            egui_baseview::frame_log::event(&format!("exports {running} {encoder}"));
+        }
     }
 }

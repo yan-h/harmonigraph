@@ -15,7 +15,11 @@
 //!   That buffer only presents, and the queue reaches it once the frame's own
 //!   work is through, so its `gpu_end` is when the GPU finished the frame;
 //! - `present`, from the drawable's presented handler. A `presented` of 0
-//!   means the drawable was never shown.
+//!   means the drawable was never shown;
+//! - `event`, from the editor during a frame callback through [`event`]: what
+//!   it was doing when that frame ran (why it animates, an export running),
+//!   so a summary can find the moments a question is about without anyone
+//!   noting the times by hand (#1670).
 
 use std::cell::Cell;
 use std::fs::File;
@@ -29,7 +33,7 @@ use objc2_metal::{MTLCommandBuffer, MTLDrawable};
 use objc2_quartz_core::CACurrentMediaTime;
 
 const HEADER: &str = "kind,frame,t,fired,timestamp,target,refresh,tick_ms,acquire_ms,\
-                      render_ms,submitted,drawables,gpu_start,gpu_end,presented,window,divisor";
+                      render_ms,submitted,drawables,gpu_start,gpu_end,presented,window,divisor,event";
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 
@@ -79,7 +83,7 @@ pub(crate) fn end(tick: Tick) {
     let submitted = if tick.rendered { SUBMITTED.get() } else { 0.0 };
     write(&format!(
         "tick,{},{:.6},{fired:.6},{timestamp:.6},{target:.6},{refresh:.6},{:.3},{:.3},{:.3},\
-         {submitted:.6},{},,,,{:x},{}",
+         {submitted:.6},{},,,,{:x},{},",
         FRAME.get(),
         tick.start,
         tick.tick_ms,
@@ -89,6 +93,14 @@ pub(crate) fn end(tick: Tick) {
         tick.window,
         tick.timing.map_or(String::new(), |t| t.divisor.to_string()),
     ));
+}
+
+/// Note what the editor is doing during the frame now running, on the main
+/// thread inside a frame callback so the row joins that frame's tick. The text
+/// is the summary's to parse, and must hold no comma.
+pub fn event(text: &str) {
+    debug_assert!(!text.contains(','), "frame log event {text:?} holds a comma");
+    write(&format!("event,{},{:.6},,,,,,,,,,,,,,,{text}", FRAME.get(), CACurrentMediaTime()));
 }
 
 /// The observer wgpu-hal calls with each present, before it commits.
@@ -101,7 +113,7 @@ pub(crate) fn observe_present(
         // SAFETY: Metal hands the handler the buffer it is attached to.
         let buffer = unsafe { buffer.as_ref() };
         write(&format!(
-            "gpu,{frame},,,,,,,,,,,{:.6},{:.6},,,",
+            "gpu,{frame},,,,,,,,,,,{:.6},{:.6},,,,",
             buffer.GPUStartTime(),
             buffer.GPUEndTime()
         ));
@@ -109,7 +121,7 @@ pub(crate) fn observe_present(
     let presented = RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
         // SAFETY: Metal hands the handler the drawable it is attached to.
         let drawable = unsafe { drawable.as_ref() };
-        write(&format!("present,{frame},,,,,,,,,,,,,{:.6},,", drawable.presentedTime()));
+        write(&format!("present,{frame},,,,,,,,,,,,,{:.6},,,", drawable.presentedTime()));
     });
     // SAFETY: both blocks are 'static and Metal copies them before returning.
     unsafe {
