@@ -1102,13 +1102,19 @@ impl SpectrogramAgg {
     /// column's slab, and it starts no later than the admitted slab: the fast
     /// path is taken only then, and a refold folds every column from the
     /// retention bound on, filling from the bound itself when an older column
-    /// seeds it.
+    /// seeds it. Debug builds check it; the clamp stays for a release build
+    /// handed an out-of-order history, which `push_history` asserts against.
     fn view(&self, bucket: f64, admitted: Option<i64>) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
         let (Some(admitted), Some(&front_center)) = (admitted, self.grid.centers.first()) else {
             return (self.grid.centers.clone(), self.grid.power.as_slice().into());
         };
         let front = (front_center / bucket).floor() as i64;
         let kept = self.grid.centers.len().saturating_sub(1) as i64;
+        debug_assert!(
+            (0..=kept).contains(&(admitted - front)),
+            "admitted slab {admitted} outside the kept grid {front}..={}: is the history ordered?",
+            front + kept,
+        );
         let start = (admitted - front).clamp(0, kept) as usize;
         (self.grid.centers[start..].to_vec(), self.grid.power[start..].into())
     }
