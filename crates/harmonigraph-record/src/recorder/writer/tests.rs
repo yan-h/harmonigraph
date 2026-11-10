@@ -162,44 +162,21 @@ impl Bench {
         let (producer, entries) = rtrb::RingBuffer::new(1024);
         let (audio, samples) = rtrb::RingBuffer::new(1024);
         let (take_lane, publications) = publication::channel();
-        let end_at_rewind = Arc::new(AtomicBool::new(false));
-        let latches = Arc::new(TakeLatches::default());
-        let dropped = Arc::new(AtomicU64::new(0));
+        let rec = Recorder::new(producer, audio, take_lane, publication::channel().0, None);
         Bench {
-            rec: Recorder {
-                _writer_lifetime: None,
-                publication: take_lane,
-                display: publication::channel().0,
-                outage: publication::Lanes::default(),
-                fence: Arc::new(RecordFence::default()),
-                record_epoch: 0,
-                record_pass: 1,
-                closed_epoch: 0,
-                producer,
-                audio,
-                dropped: dropped.clone(),
-                last_params: [f32::NAN; ParamKey::ALL.len()],
-                lifecycle: State::Disarmed,
-                history: History::default(),
-                rolling: Arc::new(AtomicBool::new(false)),
-                audio_started: false,
-                run: 0,
-                run_live: false,
-                end_at_rewind: end_at_rewind.clone(),
-                latches: latches.clone(),
-            },
+            end_at_rewind: rec.end_at_rewind.clone(),
+            latches: rec.latches.clone(),
+            dropped: rec.dropped.clone(),
+            rec,
             entries,
             publications,
             samples,
-            end_at_rewind,
-            latches,
-            dropped,
         }
     }
 
     /// Take the arming edge, as `process` does on a take's first block.
     fn arm(&mut self) {
-        self.rec.fence.intent.store((self.rec.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+        self.rec.fence.arm(self.rec.fence.epoch() + 1);
         assert!(self.rec.is_armed(), "the arming edge");
     }
 
@@ -353,7 +330,7 @@ fn a_zero_channel_bus_reserves_nothing() {
 #[test]
 fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     ctrl.set_end_at_rewind(true);
     assert!(rec.is_armed(), "arming clears the position history and the done latch");
 
@@ -375,7 +352,7 @@ fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
 #[test]
 fn a_wrap_without_at_loop_end_splits_and_keeps_rolling() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     // end_at_rewind stays off — the default OnDisarm/looping behavior.
     assert!(rec.is_armed());
     assert!(rec.observe_transport(1.0, true, BLOCK_SECONDS));
@@ -388,7 +365,7 @@ fn a_wrap_without_at_loop_end_splits_and_keeps_rolling() {
 #[test]
 fn re_arming_clears_the_loop_end_latch() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     ctrl.set_end_at_rewind(true);
     assert!(rec.is_armed());
     assert!(rec.observe_transport(1.0, true, BLOCK_SECONDS));
@@ -398,9 +375,9 @@ fn re_arming_clears_the_loop_end_latch() {
 
     // Disarm, then re-arm: the done latch and the loop-end flag clear, so
     // the next take records from scratch rather than starting finished.
-    ctrl.fence.intent.store(ctrl.fence.epoch() << 1, Ordering::Release);
+    ctrl.fence.disarm();
     assert!(!rec.is_armed());
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     assert!(rec.is_armed(), "re-arm");
     assert!(!ctrl.hit_rewind(), "the latch cleared on re-arm");
     assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0), "records again");
@@ -409,7 +386,7 @@ fn re_arming_clears_the_loop_end_latch() {
 #[test]
 fn at_loop_end_ignores_the_jump_to_the_loop_start_when_playback_begins() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     ctrl.set_end_at_rewind(true);
     assert!(rec.is_armed());
 
@@ -651,7 +628,7 @@ fn re_arming_clears_the_stop_bar_latch() {
     assert!(b.rec.observe_bar(Some(5.0)));
     assert!(b.hit_stop_bar());
 
-    b.rec.fence.intent.store(b.rec.fence.epoch() << 1, Ordering::Release);
+    b.rec.fence.disarm();
     assert!(!b.rec.is_armed(), "disarmed");
     b.arm();
     assert!(!b.hit_stop_bar(), "the latch cleared on re-arm");
@@ -878,7 +855,7 @@ fn a_playhead_restored_after_an_export_ends_the_take_there() {
 #[test]
 fn a_scrub_forward_and_back_before_playing_does_not_end_the_take() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     ctrl.set_end_at_rewind(true);
     assert!(rec.is_armed());
     let duration = 64.0 / 48_000.0;
@@ -1007,7 +984,7 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
 fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
     for retire in [false, true] {
         let mut b = Bench::new();
-        b.rec.fence.intent.store(3, Ordering::Release);
+        b.rec.fence.arm(1);
         assert!(b.rec.is_armed());
         let fence = b.rec.fence.clone();
         let dir = std::env::temp_dir()
@@ -1050,10 +1027,10 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
 #[test]
 fn configuration_stop_preserves_the_observed_callback_and_drop_refuses_unclosed_work() {
     let mut b = Bench::new();
-    b.rec.fence.intent.store(3, Ordering::Release);
+    b.rec.fence.arm(1);
     let observed = b.rec.capture_recording_intent();
     // Main thread stops after the callback captured its intent.
-    b.rec.fence.intent.store(2, Ordering::Release);
+    b.rec.fence.disarm();
     assert!(b.rec.is_armed_at(observed));
     b.rec.audio(&mut [1.0, 2.0, 3.0, 4.0].into_iter(), 4);
     assert!(matches!(b.entries.pop(), Ok(Entry::AudioSamples(4))));
@@ -1283,19 +1260,16 @@ fn gui_ticks_cannot_hide_a_nondrop_recording_ownership_failure() {
 #[test]
 fn stopping_a_take_that_is_not_running_does_nothing() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     // No file is open, so no Stop below can finish a take and launch a render.
     assert!(rec.is_armed());
     ctrl.stop();
-    assert!(
-        ctrl.fence.intent.load(Ordering::Acquire) & 1 != 0,
-        "not recording, so there is nothing to stop"
-    );
+    assert!(ctrl.fence.intent().is_armed(), "not recording, so there is nothing to stop");
     assert!(rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
     ctrl.recording.store(true, Ordering::Relaxed);
     ctrl.stop();
-    assert_eq!(ctrl.fence.intent.load(Ordering::Acquire) & 1, 0, "a running take disarms");
+    assert!(!ctrl.fence.intent().is_armed(), "a running take disarms");
     assert!(!ctrl.is_recording());
     assert!(rec.wants_audio(), "the observed callback still owns its audio");
     assert!(!rec.is_armed());
@@ -1329,7 +1303,7 @@ fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
 #[test]
 fn the_gui_reads_back_the_rolling_the_audio_thread_published() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     assert!(rec.is_armed());
 
     assert!(!rec.observe_transport(3.0, false, 64.0 / 48_000.0));
@@ -1443,7 +1417,7 @@ fn the_recording_run_changes_at_arming_a_resume_and_a_split_only() {
 #[test]
 fn the_guis_stop_bar_reaches_the_audio_thread_and_its_end_comes_back() {
     let (mut rec, ctrl) = channel();
-    ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
+    ctrl.fence.arm(ctrl.fence.epoch() + 1);
     assert!(rec.is_armed());
     ctrl.set_stop_bar(Some(5.0));
     assert!(!rec.observe_bar(Some(5.0 - BLOCK_BARS)));

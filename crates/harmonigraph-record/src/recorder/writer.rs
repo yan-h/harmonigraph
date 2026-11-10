@@ -41,19 +41,16 @@ pub fn channel() -> (Recorder, Control) {
     let (display, display_consumer) = publication::channel();
     let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
     let (commands, orders) = mpsc::channel::<Command>();
-    let dropped = Arc::new(AtomicU64::new(0));
+    let recorder =
+        Recorder::new(producer, audio_producer, publication, display, Some(commands.clone()));
     let recording = Arc::new(AtomicBool::new(false));
-    let rolling = Arc::new(AtomicBool::new(false));
-    let end_at_rewind = Arc::new(AtomicBool::new(false));
-    let latches = Arc::new(TakeLatches::default());
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
     let progress = Arc::new(Progress::default());
     let render = Arc::new(RenderControl::default());
 
-    let fence = Arc::new(RecordFence::default());
-    let thread_fence = fence.clone();
-    let thread_latches = latches.clone();
+    let thread_fence = recorder.fence.clone();
+    let thread_latches = recorder.latches.clone();
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
@@ -155,45 +152,22 @@ pub fn channel() -> (Recorder, Control) {
         }
     });
 
-    (
-        Recorder {
-            _writer_lifetime: Some(commands.clone()),
-            publication,
-            display,
-            outage: publication::Lanes::default(),
-            fence: fence.clone(),
-            record_epoch: 0,
-            record_pass: 1,
-            closed_epoch: 0,
-            producer,
-            dropped: dropped.clone(),
-            last_params: [f32::NAN; ParamKey::ALL.len()],
-            lifecycle: State::Disarmed,
-            history: History::default(),
-            rolling: rolling.clone(),
-            audio_started: false,
-            run: 0,
-            run_live: false,
-            audio: audio_producer,
-            end_at_rewind: end_at_rewind.clone(),
-            latches: latches.clone(),
-        },
-        Control {
-            stop_wakeup: None,
-            display: Arc::new(Mutex::new(Some(display_consumer))),
-            fence,
-            commands,
-            dropped,
-            status,
-            last_take,
-            recording,
-            rolling,
-            end_at_rewind,
-            latches,
-            progress,
-            render,
-        },
-    )
+    let control = Control {
+        stop_wakeup: None,
+        display: Arc::new(Mutex::new(Some(display_consumer))),
+        fence: recorder.fence.clone(),
+        commands,
+        dropped: recorder.dropped.clone(),
+        status,
+        last_take,
+        recording,
+        rolling: recorder.rolling.clone(),
+        end_at_rewind: recorder.end_at_rewind.clone(),
+        latches: recorder.latches.clone(),
+        progress,
+        render,
+    };
+    (recorder, control)
 }
 
 /// Everything one writer carries between passes of the pump: the file it is

@@ -23,7 +23,7 @@ pub use writer::channel;
 #[doc(hidden)]
 pub use writer::testing;
 
-use configuration::{RecordAddress, RecordFence};
+use configuration::{RecordAddress, RecordFence, RecordIntent};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
 /// Record-ring capacity. Expressive voices can produce several records per
@@ -279,6 +279,44 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    /// The audio-thread half over these rings and lanes, with fresh shared
+    /// state for the [`Control`] or fixture beside it to clone out, and every
+    /// per-take field at the value a new instance starts from.
+    ///
+    /// The one place the struct is spelled: the writer's `channel` and both
+    /// test fixtures used to write it out whole, so each new field was three
+    /// edits (#1129, #901, #850, #849).
+    fn new(
+        producer: rtrb::Producer<Entry>,
+        audio: rtrb::Producer<f32>,
+        publication: publication::Publisher,
+        display: publication::Publisher,
+        writer_lifetime: Option<mpsc::Sender<Command>>,
+    ) -> Recorder {
+        Recorder {
+            _writer_lifetime: writer_lifetime,
+            fence: Arc::default(),
+            publication,
+            display,
+            outage: publication::Lanes::default(),
+            record_epoch: 0,
+            record_pass: 1,
+            closed_epoch: 0,
+            producer,
+            audio,
+            dropped: Arc::default(),
+            last_params: [f32::NAN; ParamKey::ALL.len()],
+            lifecycle: State::Disarmed,
+            history: History::default(),
+            rolling: Arc::default(),
+            audio_started: false,
+            run: 0,
+            run_live: false,
+            end_at_rewind: Arc::default(),
+            latches: Arc::default(),
+        }
+    }
+
     /// What EACH lane can still take. There is deliberately no combined
     /// number: a full display ring must not gate a snapshot an otherwise
     /// healthy writer is waiting for, and the minimum of the two did exactly
@@ -410,9 +448,9 @@ impl Recorder {
 
     /// Use the arm/disarm intent captured at the enclosing callback boundary,
     /// so a concurrent stop cannot cut off that callback's remaining audio.
-    pub fn is_armed_at(&mut self, intent: u64) -> bool {
-        let armed = intent & 1 != 0;
-        let epoch = intent >> 1;
+    pub fn is_armed_at(&mut self, intent: RecordIntent) -> bool {
+        let armed = intent.is_armed();
+        let epoch = intent.epoch();
         if armed && epoch != self.record_epoch {
             self.record_epoch = epoch;
             self.record_pass = 1;
@@ -628,8 +666,8 @@ impl Recorder {
     /// Capture a callback boundary's arm/disarm intent. A Stop after it cannot
     /// cut off that callback's audio: the producer closes the epoch only when
     /// a later boundary observes the disarm.
-    pub fn capture_recording_intent(&self) -> u64 {
-        let intent = self.fence.intent.load(Ordering::Acquire);
+    pub fn capture_recording_intent(&self) -> RecordIntent {
+        let intent = self.fence.intent();
         #[cfg(feature = "test-support")]
         self.fence.boundary_pause.reach();
         intent
@@ -874,7 +912,8 @@ impl Control {
 
         self.dropped.store(0, Ordering::Relaxed);
         let spec = AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 };
-        let Some(epoch) = self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= u64::MAX >> 1)
+        let Some(epoch) =
+            self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= RecordIntent::MAX_EPOCH)
         else {
             *self.status.lock() = "recording epoch exhausted".into();
             return;
@@ -889,7 +928,7 @@ impl Control {
         // [`TakeLatches`] for why both ends do it.
         self.latches.clear();
         // Finishing barred Start until every old armed callback retired.
-        self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
+        self.fence.arm(epoch);
         *self.status.lock() = "waiting for playback".into();
     }
 
@@ -907,7 +946,7 @@ impl Control {
         // armed still finishes its block, audio included.
         let epoch = self.fence.epoch();
         self.fence.finishing.store(true, Ordering::Release);
-        self.fence.intent.fetch_and(!1, Ordering::AcqRel);
+        self.fence.disarm();
         let _ = self.commands.send(Command::Stop(epoch));
         self.recording.store(false, Ordering::Relaxed);
         if let Some(wake) = &self.stop_wakeup {

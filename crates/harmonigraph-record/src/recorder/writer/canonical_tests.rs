@@ -1176,7 +1176,7 @@ fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
     current.fail_marker_on_pass = Some(2);
     let mut open = Some(current);
     let fence = RecordFence::default();
-    fence.intent.store(3, Ordering::Release);
+    fence.arm(1);
     let failure = FailureAccount::default();
     let (mut producer, mut consumer) = rtrb::RingBuffer::new(1);
     producer.push(Entry::NewPass).unwrap();
@@ -1249,7 +1249,7 @@ fn pump_flushes_buffered_records_in_current_and_retained_files() {
         )
         .unwrap();
     let fence = RecordFence::default();
-    fence.intent.store(3, Ordering::Release); // Epoch 1, armed.
+    fence.arm(1);
     let pumped = pump.pass(&mut entries, &mut samples, &mut publications, &status, &fence, false);
     assert!(pumped.finished.is_none(), "neither file needs finalization to publish its bytes");
     assert!(!fence.failed.load(Ordering::Acquire));
@@ -1281,7 +1281,7 @@ fn pump_flush_failure_is_accounted_before_stop() {
     let (_audio, mut samples) = rtrb::RingBuffer::<f32>::new(8);
     let (_publisher, mut publications) = publication::channel();
     let fence = RecordFence::default();
-    fence.intent.store(3, Ordering::Release); // Epoch 1, armed.
+    fence.arm(1);
     let pumped = pump.pass(&mut entries, &mut samples, &mut publications, &status, &fence, false);
     assert!(pumped.finished.is_none());
     assert!(fence.failed.load(Ordering::Acquire));
