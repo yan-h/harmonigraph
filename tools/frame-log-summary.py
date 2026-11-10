@@ -370,10 +370,13 @@ def report_first_note(run, evs, t0):
 
 
 def report_exports(run, evs, t0):
+    # The time before an export is compared only back to the last one's end.
+    quiet_since = run[0]['t']
     for start, stop, words in timeline(evs, run[-1]['t'], 'exports'):
         if words[0] == '0':
+            quiet_since = start
             continue
-        length = min(EXPORT_COMPARE, stop - start, start - run[0]['t'])
+        length = min(EXPORT_COMPARE, stop - start, start - quiet_since)
         if length <= 0:
             continue
         print(f'  export {start - t0:.0f}-{stop - t0:.0f} s, {words[0]} running, '
