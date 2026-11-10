@@ -155,15 +155,13 @@ impl FileWriter {
             finished: None,
         }
     }
-    /// The Stop the GUI sends. Its render request is never launched: there is
-    /// no worker loop here to hand the finished take to `spawn_render`, which
-    /// has its own tests, so the request is dropped with it in [`drain`].
+    /// The Stop the GUI sends. Nothing is rendered: there is no worker loop
+    /// here to hand the finished take to `spawn_render`, which has its own
+    /// tests, so [`drain`] keeps only where the take landed.
     ///
     /// [`drain`]: Self::drain
     pub fn stop(&mut self) {
-        let unlaunched =
-            RenderRequest { program: std::path::PathBuf::new(), appearance: None, notice: None };
-        self.pump.pending_stop = Some((self.fence.epoch(), Box::new(unlaunched)));
+        self.pump.pending_stop = Some(self.fence.epoch());
     }
     pub fn drain(&mut self, capture: &mut Capture) {
         let pumped = self.pump.pass(

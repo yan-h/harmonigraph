@@ -131,7 +131,7 @@ pub struct AudioSpec {
 enum Command {
     Start(u64, Box<harmonigraph_take::Header>, std::path::PathBuf, AudioSpec),
     /// Close the file and render it to video.
-    Stop(u64, Box<RenderRequest>),
+    Stop(u64),
 }
 
 /// The user's home directory, or `.` when `HOME` is unset — the base for the
@@ -897,8 +897,9 @@ impl Control {
     ///
     /// The render is launched by the writer thread, after it has closed
     /// the file — the only place that knows the take is actually complete.
-    /// A take that failed is never rendered; its request is dropped there.
-    pub fn stop(&self, render: RenderRequest) {
+    /// It is always [`RenderRequest::recorded`], with the notice only the
+    /// writer can know; a take that failed is never rendered.
+    pub fn stop(&self) {
         if !self.is_recording() {
             return;
         }
@@ -907,7 +908,7 @@ impl Control {
         let epoch = self.fence.epoch();
         self.fence.finishing.store(true, Ordering::Release);
         self.fence.intent.fetch_and(!1, Ordering::AcqRel);
-        let _ = self.commands.send(Command::Stop(epoch, Box::new(render)));
+        let _ = self.commands.send(Command::Stop(epoch));
         self.recording.store(false, Ordering::Relaxed);
         if let Some(wake) = &self.stop_wakeup {
             wake();

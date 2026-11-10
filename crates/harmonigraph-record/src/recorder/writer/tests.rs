@@ -1284,10 +1284,9 @@ fn gui_ticks_cannot_hide_a_nondrop_recording_ownership_failure() {
 fn stopping_a_take_that_is_not_running_does_nothing() {
     let (mut rec, ctrl) = channel();
     ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
-    // No file is open, so no Stop below can finish a take and launch this.
-    let render = || unlaunchable_render(&std::env::temp_dir());
+    // No file is open, so no Stop below can finish a take and launch a render.
     assert!(rec.is_armed());
-    ctrl.stop(render());
+    ctrl.stop();
     assert!(
         ctrl.fence.intent.load(Ordering::Acquire) & 1 != 0,
         "not recording, so there is nothing to stop"
@@ -1295,7 +1294,7 @@ fn stopping_a_take_that_is_not_running_does_nothing() {
     assert!(rec.wants_audio(), "and nothing to stop reading the selected audio for");
 
     ctrl.recording.store(true, Ordering::Relaxed);
-    ctrl.stop(render());
+    ctrl.stop();
     assert_eq!(ctrl.fence.intent.load(Ordering::Acquire) & 1, 0, "a running take disarms");
     assert!(!ctrl.is_recording());
     assert!(rec.wants_audio(), "the observed callback still owns its audio");

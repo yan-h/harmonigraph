@@ -4,7 +4,7 @@ use harmonigraph_core::confirmed::PitchProvenance;
 use harmonigraph_core::notes::NoteEvent;
 use publication::Lane;
 
-/// Whether an [`unlaunchable_render`] was reached: its job failed to start.
+/// Whether a [`worker_in`]'s render was reached: its job failed to start.
 fn could_not_run(control: &Control) -> bool {
     control.export_jobs().iter().any(|job| job.detail.contains("could not run"))
 }
@@ -307,7 +307,7 @@ fn worker_take(directory: &std::path::Path) -> std::path::PathBuf {
 /// The overflow no longer supplies that failure: #712 makes a hole in the note
 /// history a marker on the file rather than a refusal, so the second case names
 /// its own ownership failure. See
-/// `an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with`
+/// `an_overflowed_take_finalises_and_launches_its_render`
 /// for what the overflow alone now does.
 #[test]
 fn real_worker_materializes_pending_start_before_accounting_a_recording_failure() {
@@ -316,8 +316,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             .parent()
             .unwrap()
             .to_path_buf();
-        let (mut recorder, control) = channel();
-        *control.fence.test_directory.lock() = Some(directory.clone());
+        let (mut recorder, control) = worker_in(&directory);
         let fence = control.fence.clone();
         let _resume_on_panic = WorkerPause(fence.clone());
         fence.worker_after_empty.enabled.store(true, Ordering::Release);
@@ -362,7 +361,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             fence.worker_after_empty.enabled.store(false, Ordering::Release);
             wait_for(&fence.worker_failure_accounted);
             fence.worker_after_stop.enabled.store(true, Ordering::Release);
-            control.stop(unlaunchable_render(&directory));
+            control.stop();
             wait_for(&fence.worker_after_stop.entered);
             fence.worker_after_empty.entered.store(false, Ordering::Release);
             fence.worker_after_empty.enabled.store(true, Ordering::Release);
@@ -416,7 +415,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
 /// never reached.
 ///
 /// The real worker, a real 4,096-cell overflow, and the real Stop the Video
-/// pane sends. `program` points at nothing, so the launch is observable
+/// pane sends. The renderer points at nothing ([`worker_in`]), so the launch is observable
 /// (and instant) through the export job's detail rather than by running a
 /// GPU render: the message only exists if `spawn_render` was reached at all,
 /// which is the assertion the old behaviour failed. That the resulting file
@@ -424,10 +423,9 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
 /// `a_take_missing_note_history_is_exported_with_a_warning` in
 /// harmonigraph-offline; this is the half that gets it there.
 #[test]
-fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
+fn an_overflowed_take_finalises_and_launches_its_render() {
     let directory = path("worker-overflow-render").parent().unwrap().to_path_buf();
-    let (mut recorder, control) = channel();
-    *control.fence.test_directory.lock() = Some(directory.clone());
+    let (mut recorder, control) = worker_in(&directory);
     let fence = control.fence.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     control.start(48000.0, String::new());
@@ -468,7 +466,7 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
     }
     assert!(!fence.failed.load(Ordering::Acquire), "the overflow alone must not fail the take");
 
-    control.stop(unlaunchable_render(&directory));
+    control.stop();
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -507,8 +505,7 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
 #[test]
 fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let directory = path("worker-stop").parent().unwrap().to_path_buf();
-    let (mut recorder, control) = channel();
-    *control.fence.test_directory.lock() = Some(directory.clone());
+    let (mut recorder, control) = worker_in(&directory);
     let fence = control.fence.clone();
     let render = control.render.clone();
     let last_take = control.last_take.clone();
@@ -522,7 +519,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
         harmonigraph_core::configuration::ConfigReducer::default().resolved(),
     );
     fence.worker_after_stop.enabled.store(true, Ordering::Release);
-    control.stop(unlaunchable_render(&directory));
+    control.stop();
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -565,8 +562,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         ("error", Some("cannot start renderer: test error")),
     ] {
         let directory = path(&format!("worker-status-{case}")).parent().unwrap().to_path_buf();
-        let (mut recorder, control) = channel();
-        *control.fence.test_directory.lock() = Some(directory.clone());
+        let (mut recorder, control) = worker_in(&directory);
         let fence = control.fence.clone();
         let _resume_on_panic = WorkerPause(fence.clone());
         control.start(48000.0, String::new());
@@ -600,7 +596,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
             wait_for(&fence.worker_before_commands.entered);
             recorder.producer.push(Entry::NewPass).unwrap();
         }
-        control.stop(unlaunchable_render(&directory));
+        control.stop();
         assert!(!recorder.is_armed());
         recorder.configuration_pass_complete(address);
         recorder.configuration_epoch_complete(1);
@@ -670,8 +666,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
 #[test]
 fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() {
     let directory = path("retired-producer").parent().unwrap().to_path_buf();
-    let (mut recorder, control) = channel();
-    *control.fence.test_directory.lock() = Some(directory.clone());
+    let (mut recorder, control) = worker_in(&directory);
     let fence = control.fence.clone();
     let render = control.render.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
@@ -686,7 +681,7 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
         harmonigraph_core::configuration::ConfigReducer::default().resolved(),
     );
     fence.worker_after_stop.enabled.store(true, Ordering::Release);
-    control.stop(unlaunchable_render(&directory));
+    control.stop();
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -818,8 +813,7 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
 #[test]
 fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     let directory = path("worker-gap-before-start").parent().unwrap().to_path_buf();
-    let (mut recorder, control) = channel();
-    *control.fence.test_directory.lock() = Some(directory.clone());
+    let (mut recorder, control) = worker_in(&directory);
     let fence = control.fence.clone();
     let render = control.render.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
@@ -864,7 +858,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     recorder
         .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route)
         .expect_both();
-    control.stop(unlaunchable_render(&directory));
+    control.stop();
     assert!(!recorder.is_armed(), "the disarm boundary closes the producer's prefix");
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -1070,9 +1064,8 @@ fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
 #[test]
 fn a_marker_flush_failure_refuses_stop_and_render() {
     let directory = path("marker-flush-failure").parent().unwrap().to_path_buf();
-    let (mut recorder, control) = channel();
+    let (mut recorder, control) = worker_in(&directory);
     let fence = control.fence.clone();
-    *fence.test_directory.lock() = Some(directory.clone());
     *fence.test_marker_failure.lock() = Some(1);
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
@@ -1094,7 +1087,7 @@ fn a_marker_flush_failure_refuses_stop_and_render() {
         recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route).take,
         Err(publication::PublishError::Lost),
     );
-    control.stop(unlaunchable_render(&directory));
+    control.stop();
     assert!(!recorder.is_armed());
     fence.worker_after_empty.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_stop_processed);

@@ -1264,7 +1264,7 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
 /// finished take's render launches nothing.
 fn stop(shared: &std::sync::Arc<parking_lot::Mutex<crate::editor::EditorShared>>) {
     let shared = shared.lock();
-    shared.take.stop(harmonigraph_record::RenderRequest::recorded());
+    shared.take.stop();
 }
 
 #[test]

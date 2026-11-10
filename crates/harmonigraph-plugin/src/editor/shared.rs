@@ -109,7 +109,7 @@ impl EditorShared {
             // Silent-but-harmless if no audio reaches that input.
             self.take.start(sample_rate, self.ui.picture.appearance.serialize());
         } else if !self.ui.workspace.interaction.take.recording && recording {
-            self.take.stop(harmonigraph_record::RenderRequest::recorded());
+            self.take.stop();
         }
 
         self.ui.workspace.interaction.take.last_take = self.take.last_take();
@@ -191,7 +191,7 @@ impl EditorShared {
         let ended = self.take.has_ended();
         if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;
-            self.take.stop(harmonigraph_record::RenderRequest::recorded());
+            self.take.stop();
         }
 
         // "The take is done" as soon as the transport stops, if asked —
@@ -209,7 +209,7 @@ impl EditorShared {
                 let since = *self.take_still_since.get_or_insert(now);
                 if now >= since + Self::STOP_SECONDS {
                     self.ui.workspace.interaction.take.recording = false;
-                    self.take.stop(harmonigraph_record::RenderRequest::recorded());
+                    self.take.stop();
                 }
             }
         } else {
