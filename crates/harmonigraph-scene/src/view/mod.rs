@@ -978,6 +978,18 @@ impl ViewConfig {
         self.mark_thickness > 0.0
     }
 
+    /// Whether the node glow draws at all: a Reach to spread it over and a
+    /// gain to light it with, either at 0 being the light off.
+    ///
+    /// The one spelling of that boundary, which the renderer, the glow's own
+    /// clock (`GlowFade` in harmonigraph-ui) and the pane's greyed rows all
+    /// ask: #1333 was a row testing Reach alone and staying live at a gain of
+    /// 0. The Background glow gain bar alone tests Reach by itself, because
+    /// it must stay live at its own 0 to be dialled back up.
+    pub fn glow_draws(&self) -> bool {
+        self.glow_reach > 0.0 && self.glow_strength > 0.0
+    }
+
     /// Where every layer of a node lands, read outward from its center: the
     /// four size bars turned into the radii everything that draws a node wants
     /// (see [`RingStack`]).

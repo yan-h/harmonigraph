@@ -344,6 +344,19 @@ pub(super) fn frame_with(
     readback(device, queue, &texture, size)
 }
 
+/// The pane every fixture draws, as `prepare` left it.
+pub(super) fn pane(resources: &CallbackResources) -> &SpectrogramPane {
+    resources
+        .get::<SpectrogramResources>()
+        .and_then(|resources| resources.panes.get(&0))
+        .expect("the spectrogram prepared a pane")
+}
+
+/// That pane's cloud targets, which a fixture that draws a cloud holds.
+pub(super) fn cloud(resources: &CallbackResources) -> &atmosphere::Targets {
+    pane(resources).cloud.as_ref().expect("a clouded pane holds its targets")
+}
+
 /// The same frame from resources that have never seen this pane — the
 /// full-upload path.
 fn fresh_frame(device: &wgpu::Device, queue: &wgpu::Queue, cb: &SpectrogramCallback) -> Vec<u8> {
@@ -419,9 +432,7 @@ fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.material_settings.wash_refract = f32::MIN_POSITIVE;
             let vanishing = frame_with(&device, &queue, &mut resources, &cb);
-            let pane = resources.get::<SpectrogramResources>().unwrap();
-            let targets = pane.panes.get(&0).unwrap().cloud.as_ref().unwrap();
-            assert!(targets.shape().tile.is_some(), "{style:?} drew no cloud");
+            assert!(cloud(&resources).shape().tile.is_some(), "{style:?} drew no cloud");
             assert!(vanishing == bare, "{style:?}: the texture moved the levels");
         }
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
@@ -432,15 +443,7 @@ fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
         let bent = frame_with(&device, &queue, &mut resources, &cb);
         let moved = bent.iter().zip(&straight).filter(|(a, b)| a.abs_diff(**b) > 4).count();
         assert!(moved > bent.len() / 50, "{style:?} did not displace structured sound");
-        let targets = resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .unwrap()
-            .cloud
-            .as_ref()
-            .unwrap();
+        let targets = cloud(&resources);
         assert_eq!(targets.shape().tone.is_some(), pixel > 1.0);
         assert!(targets.shape().tile.is_some());
         // Intermediate depth must stay on the curved palette too.
@@ -560,8 +563,7 @@ fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
             .count()
     };
     assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars");
-    let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
-    let targets = targets.cloud.as_ref().unwrap();
+    let targets = cloud(&resources);
     let shape = targets.shape();
     assert!(shape.stars.is_some() && shape.tone.is_none() && shape.tile.is_none());
     assert!(targets.shape().memory.is_some(), "the fresh Stars ran without their history");
@@ -723,16 +725,11 @@ fn cloud_fixture() -> SpectrogramCallback {
             ..Default::default()
         },
         region: cb.rect,
-        pitch_vertical: true,
-        points_per_cent: 0.03,
-        points_per_ms: 0.01,
         // The twelve slabs `full_quad` lays across the pane's width. A
         // fixture that re-lays the quad owes this number too, which is what
         // `relay_quad` is for.
         points_per_slab: SIZE[0] as f32 / 12.0,
-        now: 0.0,
-        history_epoch: 0,
-        light_hold: None,
+        ..SpectrogramAtmosphere::fixture(Default::default())
     });
     cb
 }
@@ -1076,8 +1073,7 @@ fn golden_spectrogram_style_blur() {
     let cb = styles_fixture();
     let mut resources = CallbackResources::default();
     let blur = frame_with(&device, &queue, &mut resources, &cb);
-    let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
-    let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
+    let passes = cloud(&resources).encoded_passes.load(Ordering::Relaxed);
     assert_eq!(passes, 4, "source, two filters and decode bake");
     harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR")).check(
         "spectrogram-style-blur",
@@ -1356,15 +1352,7 @@ fn spectral_cloud_targets_survive_pitch_zoom_and_span_drags() {
             exact_allocations += usize::from(previous_requested != Some(requested));
             previous_requested = Some(requested);
             frame_with(&device, &queue, &mut resources, &cb);
-            let target = resources
-                .get::<SpectrogramResources>()
-                .unwrap()
-                .panes
-                .get(&0)
-                .expect("the spectrogram prepared a pane")
-                .cloud
-                .as_ref()
-                .unwrap();
+            let target = cloud(&resources);
             allocations += usize::from(previous.as_ref() != Some(&target.source_view));
             previous = Some(target.source_view.clone());
             for (held, requested) in target.shape().size.into_iter().zip(requested) {
@@ -1398,15 +1386,7 @@ fn palette_uploads_follow_prepared_snapshots_and_resource_lifetimes() {
     let mut resources = CallbackResources::default();
     let mut cb = cloud_fixture();
     let uploaded = |resources: &CallbackResources| {
-        let lut = resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .unwrap()
-            .lut
-            .as_ref()
-            .unwrap();
+        let lut = pane(resources).lut.as_ref().unwrap();
         (lut.texture.clone(), lut.snapshot.clone(), lut.uploads)
     };
     let first = frame_with(&device, &queue, &mut resources, &cb);
@@ -1470,17 +1450,7 @@ fn spectral_cloud_targets_refresh_after_palette_resize_disable_and_empty_frames(
     let smaller = frame_with(&device, &queue, &mut resources, &cb);
     assert_eq!(smaller, fresh_frame(&device, &queue, &cb));
     assert_eq!(
-        resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .expect("the spectrogram prepared a pane")
-            .cloud
-            .as_ref()
-            .unwrap()
-            .shape()
-            .size,
+        cloud(&resources).shape().size,
         atmosphere::source_size([128, 64], 1.0, cb.atmosphere.unwrap())
     );
     let mut other = cloud_fixture();
@@ -1512,15 +1482,7 @@ fn spectral_cloud_targets_refresh_after_palette_resize_disable_and_empty_frames(
     cb.vertices.clear();
     let empty = frame_with(&device, &queue, &mut resources, &cb);
     assert!(empty.as_chunks::<4>().0.iter().all(|p| *p == [0, 0, 0, 255]));
-    assert!(
-        !resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .expect("the spectrogram prepared a pane")
-            .cloud_ready
-    );
+    assert!(!pane(&resources).cloud_ready);
 }
 
 #[test]
@@ -1848,15 +1810,7 @@ fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize, s
         };
         assert_eq!(incremental, fresh_frame(device, queue, &reference), "{}: pixels", step.label);
         // Reusing this exact snapshot has no writes, including after extent changes.
-        let held = resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .unwrap()
-            .grid
-            .as_ref()
-            .unwrap();
+        let held = pane(&resources).grid.as_ref().unwrap();
         assert!(held.changed_slabs(&grid).is_empty());
         assert_eq!(incremental, frame_with(device, queue, &mut resources, &cb));
         assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
@@ -1886,15 +1840,7 @@ fn check_delta_upload(device: &wgpu::Device, queue: &wgpu::Queue, bins: usize, s
         // The third callback is constructed and discarded without prepare.
     }
     assert_eq!(uploads.load(Ordering::Relaxed), expected_uploads);
-    let held = resources
-        .get::<SpectrogramResources>()
-        .unwrap()
-        .panes
-        .get(&0)
-        .unwrap()
-        .grid
-        .as_ref()
-        .unwrap();
+    let held = pane(&resources).grid.as_ref().unwrap();
     assert!(Arc::ptr_eq(&held.snapshot.run, &last.run));
     let resumed = SpectrogramGrid {
         full_uploads: uploads.clone(),
@@ -2415,14 +2361,7 @@ fn watercolor_random_brightness_preserves_average_color() {
             let plain = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_randomness = 1.0;
             let varied = frame_with(&device, &queue, &mut resources, &cb);
-            let cloud = resources
-                .get::<SpectrogramResources>()
-                .unwrap()
-                .panes
-                .get(&0)
-                .unwrap()
-                .cloud
-                .as_ref();
+            let cloud = pane(&resources).cloud.as_ref();
             let cloud = cloud.expect("zero refraction must still draw random brightness");
             if sampling > 1.0 {
                 let size = cloud.shape().tone.expect("fixture must reach reduced tone");
@@ -2580,19 +2519,8 @@ fn a_reduced_cloud_draws_the_same_picture_softened() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    let passes = |resources: &CallbackResources| {
-        resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .expect("the spectrogram prepared a pane")
-            .cloud
-            .as_ref()
-            .expect("a clouded pane holds its targets")
-            .encoded_passes
-            .load(Ordering::Relaxed)
-    };
+    let passes =
+        |resources: &CallbackResources| cloud(resources).encoded_passes.load(Ordering::Relaxed);
     // The wash fixture's coarse glob: at the fresh size this 128-point
     // pane draws the texture a handful of pixels wide, which measures its
     // own aliasing rather than what the tone target lost.
@@ -2951,15 +2879,9 @@ fn the_tile_is_rebaked_only_when_the_walk_moves() {
         atmosphere::tile_key(
             [1920, 1080],
             SpectrogramAtmosphere {
-                settings,
-                region: egui::Rect::ZERO,
                 pitch_vertical,
-                points_per_cent: 0.03,
-                points_per_ms: 0.01,
-                points_per_slab: 0.0,
                 now,
-                history_epoch: 0,
-                light_hold: None,
+                ..SpectrogramAtmosphere::fixture(settings)
             },
             atmosphere::CloudSampling::default().tile_cells,
         )
@@ -3006,19 +2928,8 @@ fn the_tile_is_rebaked_only_when_the_walk_moves() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    let passes = |resources: &CallbackResources| {
-        resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .expect("the spectrogram prepared a pane")
-            .cloud
-            .as_ref()
-            .expect("a clouded pane holds its targets")
-            .encoded_passes
-            .load(Ordering::Relaxed)
-    };
+    let passes =
+        |resources: &CallbackResources| cloud(resources).encoded_passes.load(Ordering::Relaxed);
     let mut cb = wash_fixture();
     // `encoded_passes` lives on the TARGETS, so it only counts across
     // frames that hold on to them — and the orientation flip below

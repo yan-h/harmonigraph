@@ -111,7 +111,7 @@ pub use text::{text_paint_callback, FontAtlas, GlyphInstance, GlyphRuns, SheetUp
 
 /// Generic shadow packing and kernels, shared by every group.
 mod shadow;
-pub use shadow::SPECTRAL_WIDTH_POINTS;
+pub use shadow::{shadow_darkness, GAUSSIAN_GAIN, SPECTRAL_WIDTH_POINTS};
 /// A spectral text pane's own shadow atlas and blur.
 mod spectral_shadow;
 
@@ -353,39 +353,6 @@ const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Flo
 /// Clamp on the render-scale view setting, over whatever the UI offers.
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
-/// Entry points a (re)loaded shader must provide. The `_scene` pair is the
-/// four-attachment form with bloom; `_split` writes the visible pair and local
-/// transmission; the bare pair is
-/// the single-attachment one the parity test's reference path uses; the
-/// `glow` entry points rasterize directional halos and resolve overlap statistics;
-/// the `ink` four
-/// are the strip the nodes' light is coloured out of, read and then blurred
-/// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
-/// and the Gaussian's one marker cross into the shadow atlas (`shadow.rs`).
-#[cfg(any(test, feature = "hot-reload"))]
-const LATTICE_ENTRY_POINTS: &[&str] = &[
-    "vs_main",
-    "fs_main",
-    "fs_main_scene",
-    "fs_main_split",
-    "vs_plus",
-    "fs_plus",
-    "fs_plus_scene",
-    "fs_plus_split",
-    "vs_glow_splat",
-    "fs_glow_splat",
-    "vs_glow_resolve",
-    "fs_glow_resolve",
-    "vs_ink_strip",
-    "fs_ink_strip",
-    "vs_ink_blur",
-    "fs_ink_blur",
-    "vs_node_cell",
-    "fs_node_cell",
-    "vs_plus_cell",
-    "fs_plus_cell",
-];
-
 /// The two modules a reload rebuilds, each already carrying the common half
 /// it was read beside.
 #[cfg(any(test, feature = "hot-reload"))]
@@ -503,9 +470,9 @@ impl ShaderWatcher {
 /// `source` is a WHOLE module — what [`with_common`] or the watcher hands back,
 /// never lattice.wgsl on its own, which names functions it does not declare and
 /// would fail here for that alone. `name` is the module's own file, and
-/// `required` the entry points it has to keep: the two modules validated here
-/// declare different ones, and a list checked against the wrong module reports
-/// every entry point in it missing.
+/// `required` the entry points it has to keep (see [`entry_points`]): the
+/// modules validated here declare different ones, and a list checked against
+/// the wrong module reports every entry point in it missing.
 ///
 /// A diagnostic's line number is the CONCATENATED module's, which is no line of
 /// either file. Naga weaves those numbers through a rendered snippet, so the
@@ -517,7 +484,12 @@ impl ShaderWatcher {
 /// joined to a different one, and be wrong by however many lines common.wgsl
 /// has gained or lost since the build.
 #[cfg(any(test, feature = "hot-reload"))]
-fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Result<(), String> {
+fn validate_wgsl(
+    name: &str,
+    source: &str,
+    seam: usize,
+    required: &[impl AsRef<str>],
+) -> Result<(), String> {
     let banner = |body: String| {
         format!(
             "in {name} (lines 1-{seam} below are common.wgsl; past that, \
@@ -532,12 +504,35 @@ fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Re
     )
     .validate(&module)
     .map_err(|e| banner(format!("{e:?}")))?;
-    for entry in required {
-        if !module.entry_points.iter().any(|ep| ep.name == *entry) {
+    for entry in required.iter().map(AsRef::as_ref) {
+        if !module.entry_points.iter().any(|ep| ep.name == entry) {
             return Err(format!("{name} is missing entry point `{entry}`"));
         }
     }
     Ok(())
+}
+
+/// Every entry point the compiled-in module `baked` declares: what a reload of
+/// it has to keep, since the build's pipelines were made from exactly these.
+///
+/// The one rule for entry points, in two halves. What a RELOAD must keep is
+/// read off the baked module here, never listed beside it, so a renamed or
+/// added entry point is one edit, in the shader and the pipeline that names it.
+/// That the BAKED module has every entry point a pipeline names is the device
+/// tests' to hold, which build every pipeline from it (and which CI runs on a
+/// GPU, `HARMONIGRAPH_REQUIRE_GPU=1`). The hand lists left in the crate
+/// (`ROLL_ENTRY_POINTS`, `GLOW_ENTRY_POINTS` and their kind) do a third job and
+/// must not be derived from this: they hold the names Rust ASSEMBLES at runtime,
+/// out of a shading's name, or (the spectrogram's) builds only lazily, against
+/// the shader that has to declare them.
+///
+/// A parse of the baked module per call. Only a reload calls it, once per
+/// baked module per save, beside the parse and validation of the module read
+/// off disk, so it is not cached.
+#[cfg(any(test, feature = "hot-reload"))]
+fn entry_points(baked: &str) -> Vec<String> {
+    let module = naga::front::wgsl::parse_str(baked).expect("the baked module parses");
+    module.entry_points.into_iter().map(|ep| ep.name).collect()
 }
 
 mod uniforms;
@@ -582,9 +577,9 @@ struct GpuInstance {
     /// x: activation, the node's presence, y: melody mark level, z: bass
     /// mark level (see lattice.wgsl). The first three are levels the same
     /// node draws at, read together by the layers that draw it. w is the
-    /// most colour any slot wears, which the shader never reads: with the
-    /// marks it is the glow's target, which the presence outlasts after a
-    /// release, for [`ink_history`].
+    /// glow's target ([`harmonigraph_scene::NodeInstance::glow_target`]), which the
+    /// presence outlasts after a release, for [`ink_history`]; the shader
+    /// never reads it.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
@@ -882,6 +877,10 @@ struct LatticeCallback {
     /// Row owners in exactly the shipped instance order, after sorting and culling.
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
+    /// [`ViewConfig::glow_draws`](harmonigraph_scene::ViewConfig::glow_draws)
+    /// for the scene this frame was built from: the same answer that packed
+    /// the glow uniform group or zeroed it.
+    glow_draws: bool,
     glow_blend: f32,
     material: lattice_material::Material,
     /// The Pattern speed the pane's travel turns the glow's texture at.

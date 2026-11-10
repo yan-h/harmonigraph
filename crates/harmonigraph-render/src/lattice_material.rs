@@ -402,11 +402,10 @@ fn rate(material: &Material, layout: Option<&crate::stars::StarLayout>) -> crate
 /// scales the pane.
 fn drift(material: &Material, motion: crate::travel::Motion) -> [f32; 2] {
     let velvet = material.style == harmonigraph_scene::LatticeMaterial::VelvetScales;
-    // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling its
-    // 40-cell tile, so a screen-axis wrap spans five tile periods and the
-    // rotated jump is still a whole-number tile repeat. Velvet's domain warp
-    // is nonperiodic: wrapping would jump.
-    let drift_period = 200.0;
+    // A screen-axis wrap of Watercolor is a whole-number repeat of its rotated
+    // tile. Velvet's domain warp is nonperiodic: wrapping would jump.
+    let drift_period = f64::from(crate::material_cells::WASH_PERIOD)
+        * f64::from(crate::material_cells::WASH_REPEAT_PERIODS);
     let per_unit = material_cells(material);
     std::array::from_fn(|axis| {
         if velvet {
@@ -493,7 +492,8 @@ pub(super) fn prepare(
     let drift = drift(material, motion);
     let dials = &material.settings;
     let geometry = [dials.wash_fuzz.to_bits(), dials.wash_lobe.to_bits()];
-    let texels = ((40.0 * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
+    let texels =
+        ((crate::material_cells::WASH_PERIOD * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
     if velvet {
         pane.material_tile = None;
     } else if pane
@@ -534,6 +534,9 @@ mod tests {
     fn settings_match_the_shader() {
         crate::uniforms::layout::check_binding::<Settings>(SOURCE, 0, 0);
         crate::uniforms::layout::check_binding::<Geometry>(SOURCE, 0, 3);
+        // The tile the CPU sizes and wraps the drift by is the one the shader samples.
+        let period = crate::shadow::tests::shader_const(SOURCE, "PERIOD");
+        assert_eq!(crate::material_cells::WASH_PERIOD, period.parse::<f32>().unwrap());
     }
 
     /// Walk the saved numeric dials at ten minutes of travel. Read production

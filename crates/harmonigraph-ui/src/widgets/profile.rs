@@ -264,15 +264,6 @@ fn star(ui: &Ui, centre: egui::Pos2, radius: f32, coverage: impl Fn(f32) -> f32)
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
-/// Match the renderer's two compositing curves, including its ten-stop floor.
-fn shadow_darkness(depth: f32, coverage: f32, lattice: bool) -> f32 {
-    if lattice {
-        depth * coverage
-    } else {
-        1.0 - (1.0 - depth).max(1.0 / 1024.0).powf(coverage)
-    }
-}
-
 /// `text` is a group whose casters are type, whose Spread deepens the blur
 /// rather than growing the ink (`ShadowStyle::text_spread_stops`).
 pub(crate) fn shadow(
@@ -349,7 +340,7 @@ fn shadow_preview(
         } else {
             (style.gaussian_spread_points(sigma), 0.0)
         };
-        let gain = 2.5 * stops.exp2();
+        let gain = harmonigraph_render::GAUSSIAN_GAIN * stops.exp2();
         let blurred = caster.expand(spread);
         let xs: [f32; COLUMNS as usize + 1] = std::array::from_fn(|x| {
             let p = egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32);
@@ -366,10 +357,9 @@ fn shadow_preview(
                     egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32),
                     egui::lerp(rect.y_range(), y as f32 / ROWS as f32),
                 );
-                // The renderer's GAUSSIAN_GAIN in common.wgsl, lifted by
-                // text's Spread.
+                // The renderer's gain, lifted by text's Spread, and its law.
                 let coverage = (gain * xs[x as usize] * ys[y as usize]).min(1.0);
-                let darkness = shadow_darkness(style.depth, coverage, lattice);
+                let darkness = harmonigraph_render::shadow_darkness(coverage, style.depth, lattice);
                 mesh.colored_vertex(
                     p,
                     egui::Color32::from_black_alpha((255.0 * darkness).round() as u8),
@@ -399,12 +389,33 @@ fn gaussian_interval(p: f32, low: f32, high: f32, sigma: f32) -> f32 {
 
 #[cfg(test)]
 mod shadow_tests {
-    use super::shadow_darkness;
+    /// The spectral preview spends the renderer's law with coverage and depth
+    /// each where the law takes it. Under the sample's middle the coverage
+    /// saturates at 1, where the law's darkness is the depth (0.9) and the
+    /// arguments swapped come to 1 less the floor (0.999): a swap at the call
+    /// leaves the symmetric lattice preview as it was and moves this one.
     #[test]
-    fn spectral_preview_keeps_the_stronger_tails_and_finite_full_darkness() {
-        assert!((shadow_darkness(0.91, 0.3, true) - 0.273).abs() < 1e-5);
-        assert!((shadow_darkness(0.91, 0.3, false) - 0.5144066).abs() < 1e-5);
-        assert_eq!(shadow_darkness(1.0, 0.0, false), 0.0);
-        assert_eq!(shadow_darkness(1.0, 1.0, false), 1.0 - 1.0 / 1024.0);
+    fn the_spectral_preview_spends_the_renderers_law() {
+        const DEPTH: f32 = 0.9;
+        let max = harmonigraph_scene::SPECTRAL_SHADOW_MAX;
+        let style = harmonigraph_scene::ShadowStyle { width: 0.5 * max, spread: 0.0, depth: DEPTH };
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let rect = egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(200.0, 120.0));
+            super::shadow_preview(ui, rect, style, max, false, false);
+        });
+        let darkest = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh.vertices.iter().map(|v| v.color.a())),
+                _ => None,
+            })
+            .flatten()
+            .max()
+            .expect("the preview drew no shadow mesh");
+        let law = harmonigraph_render::shadow_darkness(1.0, DEPTH, false);
+        assert_ne!(law, harmonigraph_render::shadow_darkness(DEPTH, 1.0, false));
+        assert_eq!(darkest, (255.0 * law).round() as u8, "the preview's darkest vertex");
     }
 }

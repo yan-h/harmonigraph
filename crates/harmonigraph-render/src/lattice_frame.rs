@@ -126,7 +126,7 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            params: [n.activation, n.melody_level, n.bass_level, n.drawn_level()],
+            params: [n.activation, n.melody_level, n.bass_level, n.glow_target()],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -197,7 +197,7 @@ impl LatticeCallback {
         // are all exactly nothing: the walk below gives it none of the three.
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
-        let lights = scene.view.glow_reach > 0.0 && scene.view.glow_strength > 0.0;
+        let lights = scene.view.glow_draws();
         let inked = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
@@ -351,9 +351,12 @@ impl LatticeCallback {
             if ringing && g.ring > 0.0 {
                 rim = rim.max(scene.spectral.outer);
             }
-            // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
+            // uv 1 is `RADII_PER_UV` node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
-            let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
+            let reach = rim
+                * scene.node_radius
+                * harmonigraph_scene::RADII_PER_UV
+                * n.scale.max(harmonigraph_scene::MIN_NODE_SCALE);
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
                 to_points(n.world_pos + right * reach),
@@ -421,10 +424,7 @@ impl LatticeCallback {
             });
         }
         let mut draws = emptied(draws, order.len());
-        let breathes = scene.glow_timing.is_some()
-            && scene.view.glow_reach > 0.0
-            && scene.view.glow_strength > 0.0
-            && atmosphere.breath_amount > 0.0;
+        let breathes = scene.glow_timing.is_some() && lights && atmosphere.breath_amount > 0.0;
         let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
         for &(_, _, i, ships, inked) in &order {
             let instance = to_gpu(&scene.nodes[i]);
@@ -479,6 +479,7 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
+            glow_draws: lights,
             material: lattice_material::Material {
                 style: atmosphere.material_style,
                 amount: atmosphere.material_amount,
@@ -559,9 +560,14 @@ impl LatticeCallback {
                 },
                 glow: if lights {
                     GlowParams {
-                        reach: scene.view.glow_reach,
-                        strength: scene.view.glow_strength,
                         padding: 0.0,
+                        strength: scene.view.glow_strength,
+                        span: harmonigraph_scene::glow_span(
+                            scene.rings_outer,
+                            scene.mark_inner,
+                            scene.view.mark_thickness,
+                            scene.view.glow_reach,
+                        ),
                         curve: scene.view.glow_curve.shape(),
                         wash: scene.view.glow_wash,
                         row_capacity: scene.glow_rows.max(1) as f32,

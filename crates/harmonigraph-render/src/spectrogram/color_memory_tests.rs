@@ -2,24 +2,13 @@
 //! carried star from a newly lit one or expose repeated subpixel diffusion.
 use super::*;
 use crate::gpu_harness::headless_device;
-use crate::spectrogram::tests::{prepare_once, refracted_fixture};
-use crate::spectrogram::{SpectrogramCallback, SpectrogramResources};
+use crate::spectrogram::tests::{cloud, prepare_once, refracted_fixture};
+use crate::spectrogram::SpectrogramCallback;
 use egui_wgpu::CallbackResources;
 use harmonigraph_scene::CloudStyle;
 
 fn memory(resources: &CallbackResources) -> &Memory {
-    resources
-        .get::<SpectrogramResources>()
-        .unwrap()
-        .panes
-        .get(&0)
-        .unwrap()
-        .cloud
-        .as_ref()
-        .unwrap()
-        .memory
-        .as_ref()
-        .unwrap()
+    cloud(resources).memory.as_ref().unwrap()
 }
 
 /// The history's physical allocation, read off the texture itself.
@@ -470,8 +459,7 @@ fn star_passes_shade_the_layouts_rows_and_carry_its_last_one() {
     let last_row = (rows as usize - 1) * STAR_ATLAS_WIDTH as usize;
     assert!(cells > last_row, "the layout's last row holds no cell");
     let atlas = {
-        let cloud = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
-        let atlas = cloud.cloud.as_ref().unwrap().stars.as_ref().unwrap().atlas.texture();
+        let atlas = cloud(&resources).stars.as_ref().unwrap().atlas.texture();
         texels(&device, &queue, atlas, allocation)
     };
     let lit = pixels(&device, &queue, memory(&resources));
@@ -609,18 +597,7 @@ fn resolution_changes_carry_stars_color_history() {
     for resolution in [0.25, 1.0, 0.5, 0.75] {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_resolution = resolution;
         prepare_once(&device, &queue, &mut changed, &cb);
-        let size = changed
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .unwrap()
-            .cloud
-            .as_ref()
-            .unwrap()
-            .shape()
-            .stars
-            .map(|stars| stars.image);
+        let size = cloud(&changed).shape().stars.map(|stars| stars.image);
         assert_ne!(size, prior_size, "fixture did not change the star image");
         prior_size = size;
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
@@ -695,17 +672,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         s.color_pickup = 0.0;
         s.color_release = 0.0;
         prepare_once(&device, &queue, &mut resources, &cb);
-        assert!(resources
-            .get::<SpectrogramResources>()
-            .unwrap()
-            .panes
-            .get(&0)
-            .unwrap()
-            .cloud
-            .as_ref()
-            .unwrap()
-            .memory
-            .is_none());
+        assert!(cloud(&resources).memory.is_none());
         cb = fixture(CloudStyle::Watercolor);
         cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
         cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
@@ -720,10 +687,7 @@ fn a_look_turned_off_holds_no_color_history() {
     let Some((device, queue)) = headless_device() else { return };
     let mut cb = fixture(CloudStyle::Watercolor);
     cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
-    let held = |resources: &CallbackResources| {
-        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
-        pane.cloud.as_ref().unwrap().memory.is_some()
-    };
+    let held = |resources: &CallbackResources| cloud(resources).memory.is_some();
     let mut resources = CallbackResources::default();
     prepare_once(&device, &queue, &mut resources, &cb);
     assert!(held(&resources), "fixture kept no history");
@@ -826,8 +790,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         cb.atmosphere.as_mut().unwrap().settings = shipped;
         let mut resources = fresh();
         hold(&mut cb, &mut resources);
-        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(&0).unwrap();
-        let targets = pane.cloud.as_ref().unwrap();
+        let targets = cloud(&resources);
         let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
         assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");
         assert_eq!(targets.shape().tone, None, "{case}: a tone target nothing draws");
@@ -1020,10 +983,7 @@ fn a_tide_lines_width_resets_the_history_only_while_one_is_drawn() {
 #[test]
 fn stars_drift_on_across_a_rebuilt_pane() {
     let Some((device, queue)) = headless_device() else { return };
-    let targets = |resources: &CallbackResources| {
-        let panes = &resources.get::<SpectrogramResources>().unwrap().panes;
-        panes.get(&0).unwrap().cloud.as_ref().unwrap().shape
-    };
+    let targets = |resources: &CallbackResources| cloud(resources).shape;
     let mut cb = fixture(CloudStyle::Stars);
     let mut resources = CallbackResources::default();
     prepare_once(&device, &queue, &mut resources, &cb);
@@ -1145,9 +1105,7 @@ fn cloud_uniforms(
     queue: &wgpu::Queue,
     resources: &CallbackResources,
 ) -> Uniforms {
-    let panes = &resources.get::<SpectrogramResources>().unwrap().panes;
-    let targets = panes.get(&0).unwrap().cloud.as_ref().unwrap();
-    crate::gpu_harness::read_uniform(device, queue, &targets.uniform)
+    crate::gpu_harness::read_uniform(device, queue, &cloud(resources).uniform)
 }
 
 /// Every saved numeric atmosphere dial is exercised through production prepare,

@@ -232,13 +232,14 @@ pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
 
 /// One quad-uv length of the home sheet, as a world length.
 ///
-/// uv 1 is 1.8 node radii out (`node_vertex` in lattice.wgsl), so the bars a
+/// uv 1 is [`RADII_PER_UV`](crate::RADII_PER_UV) node radii out (`node_vertex`
+/// in lattice.wgsl), so the bars a
 /// marker is dialled on — the same units every ring radius on a node is in —
 /// resolve here, once, rather than the shader carrying a second copy of the
 /// convention for one more layer. The home sheet has no scale of its own, which
 /// is the sheet every marker stands on ([`derive_pluses`]).
 pub(crate) fn marker_world(uv: f32) -> f32 {
-    NODE_RADIUS_FACTOR * 1.8 * uv
+    NODE_RADIUS_FACTOR * crate::RADII_PER_UV * uv
 }
 
 /// The lattice's resting picture: an idle position paints nothing of its

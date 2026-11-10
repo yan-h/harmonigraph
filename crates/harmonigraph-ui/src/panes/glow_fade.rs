@@ -145,6 +145,11 @@ pub struct GlowFade {
 struct Lit {
     incarnation: u64,
     level: f32,
+    /// The node's [`glow_target`](harmonigraph_scene::NodeInstance::glow_target)
+    /// as of this step, for the two passes after the walk over the nodes (which
+    /// lights to keep, and how long the falling ones stay visible). Written on
+    /// every step that sees the node, and a light not seen is dropped, so it
+    /// never outlives the step it was read on.
     target: f32,
     row: u32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
@@ -163,9 +168,9 @@ struct Lit {
 /// With the light off nothing is stepped and nothing is allocated — the state
 /// is dropped instead, so the frame Background glow reach comes back off 0 starts a fresh attack.
 pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize, now: f64) {
-    // The renderer's own test for whether the light draws at all, asked of the
-    // scene's normalized view so the two cannot disagree about the boundary.
-    if scene.view.glow_reach <= 0.0 || scene.view.glow_strength <= 0.0 {
+    // Whether the light draws at all, by the test the renderer asks too
+    // (`ViewConfig::glow_draws`), of the scene's normalized view.
+    if !scene.view.glow_draws() {
         state.surfaces.glow_fade.remove(&surface);
         return;
     }
@@ -212,11 +217,11 @@ impl GlowFade {
             // which leaves the ring's annulus out of the walk), so the two
             // halves of one light cannot come to disagree about what lit it.
             //
-            // `NodeMotion::step` has already answered that into `glow.level`,
+            // The node answers that itself (`NodeInstance::glow_target`),
             // marks included, each layer read after the Opacity mapping, as
             // the slots' colours (`octaves`) and the mark levels carry it --
             // not `activation`, the presence that holds through a release.
-            let target = node.glow.level.clamp(0.0, 1.0);
+            let target = node.glow_target();
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
                     lit.seen = self.frame;

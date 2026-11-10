@@ -64,6 +64,14 @@ uniform_group! {
     }
 }
 uniform_group! {
+    /// Binding 4 in blit.wgsl: the strength of a bloom laid over a pane that
+    /// is not the lattice's — the roll's and the Spiral's dots' (`crate::glow`).
+    struct AddUniforms {
+        /// Strength in x; the rest is the 16 bytes a uniform block takes.
+        strength: Float4,
+    }
+}
+uniform_group! {
     struct CameraParams {
         view_proj: Matrix4,
         right: Float4,
@@ -128,11 +136,14 @@ uniform_group! {
     }
 }
 uniform_group! {
-    /// Zeroed when reach or strength disables glow. Reach is the shared draw predicate.
+    /// Zeroed when the glow does not draw (`ViewConfig::glow_draws`).
     struct GlowParams {
-        reach: f32,
-        strength: f32,
         padding: f32,
+        strength: f32,
+        /// The halo's footprint in node uv, [`harmonigraph_scene::glow_span`]:
+        /// worked out once on the CPU, where the selector of off-pane light
+        /// owners bounds the same halo.
+        span: f32,
         curve: f32,
         wash: f32,
         /// Allocated row capacity, independent of this frame's instance count.

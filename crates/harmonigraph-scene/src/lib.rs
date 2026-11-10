@@ -84,6 +84,45 @@ fn lattice_to_world(pos: LatticePos) -> Vec3 {
 /// Node radius in world units; adjacent lattice positions are one unit apart.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
 
+/// One quad uv in node radii: uv 1, the octave band's outer edge at the
+/// default stack, is this many of a node's own radii out. The one conversion
+/// between the size bars' unit and the world; lattice.wgsl declares the same
+/// constant, and harmonigraph-render's contract test pins the two together.
+pub const RADII_PER_UV: f32 = 1.8;
+
+/// The floor lattice.wgsl puts under a node's per-sheet scale
+/// ([`NodeInstance::scale`]) wherever it sizes that node's quads, so a CPU
+/// bound on one of those quads applies the same. Declared in the shader too,
+/// and pinned to it like [`RADII_PER_UV`].
+pub const MIN_NODE_SCALE: f32 = 0.05;
+
+/// How far a node's halo reaches, in the node's quad uv: the view's widest rim
+/// — the rings' outer edge, or the mark strip's where marks draw at all — plus
+/// the Background glow reach, floored at 0.1 so a node drawn down to almost
+/// nothing still has a footprint to fall off over.
+///
+/// One rim for every halo, whether or not the node wears a mark now, so a mark
+/// arriving or leaving does not resize the light. The one spelling of the
+/// footprint: the renderer ships it to the glow splat (`GlowParams::span` in
+/// harmonigraph-render), and [`ViewConfig::light_owner_radius`] bounds the
+/// off-pane light owners on it. #1252 widened a second spelling and missed
+/// the first.
+///
+/// It takes the rim's inputs rather than a [`ViewConfig`] because the renderer
+/// has to size the halo on the rings it packs for the node's own geometry,
+/// which are the [`Scene`]'s stored `rings_outer` and `mark_inner`. Out of
+/// [`derive_scene`] those are `view.rings()` of the scene's own view, but a
+/// scene built by hand need not agree (the lattice tests set rings from a
+/// probe view, or move `mark_inner` alone), and a halo sized off the view
+/// there would no longer fit the node it is drawn around.
+pub fn glow_span(rings_outer: f32, mark_inner: f32, mark_thickness: f32, reach: f32) -> f32 {
+    let mut rim = rings_outer.max(0.0);
+    if mark_thickness > 0.0 {
+        rim = rim.max(mark_inner + mark_thickness);
+    }
+    (rim + reach.max(0.0)).max(0.1)
+}
+
 /// The most nodes one drawn window may hold, and the backstop on a lattice
 /// with no size of its own: the window is derived from the viewport
 /// ([`ViewConfig::scrolled`]), so what decides how much work a frame is is the
@@ -369,14 +408,13 @@ pub struct GlowStep {
     /// Unique owner of this row while the light lives. The renderer compares
     /// it with the owner whose ink it actually encoded, across discarded UI passes.
     pub incarnation: u64,
-    /// How lit this node is for the purpose of the light it gives off. Out of
-    /// [`NodeMotion::step`] it is the TARGET: the most opaque octave slot or
-    /// mark level as drawn, after the Opacity mapping, so a soft note's halo
-    /// is as faint as its ink and one faded to nothing has none. The shell's
-    /// glow pass (`GlowFade` in harmonigraph-ui) then replaces it with where
-    /// that target has got to on the Glow attack and release, so it can be
-    /// above zero on a node whose every layer has gone silent — which is the
-    /// whole of what makes a halo linger.
+    /// How lit this node's light is drawn. Out of [`NodeMotion::step`] it is
+    /// the node's [`glow_target`](NodeInstance::glow_target) itself, which is
+    /// what a stateless snapshot draws. The shell's glow pass (`GlowFade` in
+    /// harmonigraph-ui) then replaces it with where that target has got to on
+    /// the Glow attack and release, so it can be above zero on a node whose
+    /// every layer has gone silent — which is the whole of what makes a halo
+    /// linger.
     pub level: f32,
     /// Which row of this frame's ink strip holds this node's colour.
     ///
@@ -746,12 +784,28 @@ impl NodeInstance {
     /// delay as [`activation`](Self::activation) does.
     ///
     /// The one spelling of "the drawn colour" for everything that follows it:
-    /// the glow's target (which adds the marks), the ink strip's attack or
-    /// release test (`ink_history` in `harmonigraph-render`) and the name's
-    /// ink, so a name, a halo and the colour they follow cannot disagree about
-    /// whether the node is going dark.
+    /// the [`glow_target`](Self::glow_target) (which adds the marks) and the
+    /// name's ink, so a name, a halo and the colour they follow cannot
+    /// disagree about whether the node is going dark.
     pub fn drawn_level(&self) -> f32 {
         self.octaves.iter().copied().fold(0.0, f32::max)
+    }
+
+    /// Where this node's light is heading: its most opaque octave slot or mark
+    /// as drawn, each after the Opacity mapping, in 0..=1 — so a soft note's
+    /// halo is as faint as its ink and one faded to nothing has none. Not
+    /// [`activation`](Self::activation), the presence that holds through a
+    /// release.
+    ///
+    /// Asked of the node rather than stored beside its light, so it cannot go
+    /// stale against the layers it reads: the stateless level
+    /// [`NodeMotion::step`] writes, the step `GlowFade` takes in
+    /// harmonigraph-ui and the ink strip's attack-or-release test
+    /// (`ink_history` in harmonigraph-render, shipped in the instance's
+    /// `params.w`) all ask this one, so brightness and colour cannot come to
+    /// disagree about which way a light is going (#1304, #1339).
+    pub fn glow_target(&self) -> f32 {
+        self.drawn_level().max(self.melody_level).max(self.bass_level).clamp(0.0, 1.0)
     }
 }
 
