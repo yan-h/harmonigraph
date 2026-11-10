@@ -67,8 +67,9 @@ OPTIONS:
                            which ends with its loop]
         --encoder <E>      x264 or hardware. hardware is the machine's
                            H.264 encoder (VideoToolbox) at a constant
-                           quality: about three times as fast at 1440p, a
-                           slightly larger file, and no grain tuning; it fails
+                           quality: about a third faster at 1440p on far
+                           less processor, a file up to a quarter larger,
+                           and no grain tuning; it fails
                            rather than falling back where there is no hardware
                            encoder, and needs Apple Silicon.
                            A frame over 4096 px a side goes through x264.

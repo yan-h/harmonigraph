@@ -166,16 +166,16 @@ pub enum SpectrogramRender {
 /// Which H.264 encoder a video export runs through ffmpeg.
 ///
 /// The picture is the same either way; what differs is how long the export
-/// waits on the encoder and what the file costs. At 2560x1440@60 an 82.6 s take
-/// took 90.2 s end to end through x264 and 31.5 s through VideoToolbox on an
-/// M5 Pro, for a file about 1.1x the size.
+/// waits on the encoder and what the file costs. At 2560x1440@60 an 82.6 s
+/// video took 40-42 s end to end through x264 and 30.1 s through VideoToolbox on
+/// an M5 Pro, for a file 4% smaller; a denser take's was a quarter larger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VideoEncoder {
     /// libx264 at the `--crf` quality, tuned for the spectrogram's grain.
     X264,
     /// The machine's hardware H.264 encoder (`h264_videotoolbox`) at a constant
-    /// quality. About three times as fast as x264 at 1440p, for a slightly
-    /// larger file and no grain tuning.
+    /// quality. About a third faster than x264 at 1440p on a fraction of the
+    /// processor, for a file up to a quarter larger and no grain tuning.
     Hardware,
 }
 

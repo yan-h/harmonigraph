@@ -490,12 +490,12 @@ fn render_controls(
                 (
                     crate::VideoEncoder::X264,
                     "x264",
-                    "Software H.264 at the quality YouTube recommends, tuned so the spectrogram's grain does not flicker. The slower of the two: at 1440p the export waits on it.",
+                    "Software H.264 at the quality YouTube recommends, tuned so the spectrogram's grain does not flicker. The slower of the two, and it takes most of the processor while it runs.",
                 ),
                 (
                     crate::VideoEncoder::Hardware,
                     "Hardware",
-                    "This Mac's hardware H.264 encoder: about three times as fast as x264 at 1440p, for a slightly larger file and no grain tuning. An export fails on a Mac without one or without Apple Silicon. A frame over 4096 px on a side (21:9 at 2160) goes through x264 instead.",
+                    "This Mac's hardware H.264 encoder: about a third faster than x264 at 1440p and it leaves the processor free, for a file up to a quarter larger and no grain tuning. An export fails on a Mac without one or without Apple Silicon. A frame over 4096 px on a side (21:9 at 2160) goes through x264 instead.",
                 ),
             ],
         );
