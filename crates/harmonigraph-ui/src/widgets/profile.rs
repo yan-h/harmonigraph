@@ -164,8 +164,8 @@ pub(crate) fn depth(
         plot.fields(ui, |ui| {
             let response = RangeBar::new(&mut a, &mut b, low..=high, name)
                 .display(display)
-                .show(ui)
-                .on_hover_text(format!("{hover} {PLOT}"));
+                .hint(&format!("{hover} {PLOT}"))
+                .show(ui);
             // Written back only on a change: the round trip is not exact, and
             // the values key star placement. Each layer keeps its share of the
             // range; when every layer is level they move with the end dragged.

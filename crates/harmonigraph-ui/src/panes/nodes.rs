@@ -20,8 +20,10 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ValueBar::new(&mut count, MIN_SPAN as f32..=MAX_SPAN as f32, "Octaves")
         .integer()
         .default_value(super::fresh_view().octave_count as f32)
-        .show(ui)
-        .on_hover_text("Equal octave slices shared by the MIDI ring, audio ring and marks. Notes beyond the range use the end slices.");
+        .hint(
+            "Equal octave slices shared by the MIDI ring, audio ring and marks. Notes beyond the range use the end slices.",
+        )
+        .show(ui);
     view.octave_count = count as u32;
     // Whole semitones, because that is the step the wheel can act on and what
     // the readout can name.
@@ -30,10 +32,10 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .integer()
             .unit(1.0, " MIDI")
             .display(|midi| format!("{} / {midi:.0} MIDI", super::pitch_readout(midi)))
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Pitch at the top of every octave ring. Each node shows its own octaves nearest this pitch. Type a MIDI note number to set it.",
-            );
+            )
+            .show(ui);
 }
 
 /// Audio ring: what the ring inside the octave band measures — one reading of
@@ -134,13 +136,13 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .default_value(super::fresh_view().spectral_width)
         .unit(1.0, "¢")
         .decimals(0)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Pitch distance over which audio can light an octave slice. \
                      More distant pitches appear dimmer. \
                      Widen for tempered music. \
                      Used by Octave levels only.",
-        );
+        )
+        .show(ui);
     });
     // The SPECTRUM reading's zoom, under the Pitch tolerance it stands opposite:
     // how much pitch a wedge shows, where Pitch tolerance is how much of it
@@ -157,10 +159,10 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
             // would read it out as the zero the floor exists to forbid.
             .unit(1.0, "¢").decimals(1)
             .display(|cents| if cents < 10.0 { format!("{cents:.1}¢") } else { format!("{cents:.0}¢") })
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Frequency span within each octave slice, in cents. 1200¢ shows a full octave. Used by Spectrum only.",
-            );
+            )
+            .show(ui);
         });
 }
 
@@ -177,11 +179,12 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Directly above the Gap, because the two are one idea: the sizes are
     // the layers and that gap is the padding standing between them, the bar
     // draws both, and dragging it is visibly the stack opening up.
-    StackBar::new(view).show(ui).on_hover_text(
+    StackBar::new(view)
+        .hint(
             "Node layers from the center out: empty center, audio ring, MIDI octave ring, then melody and bass marks. \
-                     Drag a handle to resize its layer; zero width hides it. \
-                     Double-click resets.",
-        );
+             Drag a handle to resize its layer; zero width hides it.",
+        )
+        .show(ui);
     // One node-wide padding directly under the bar that draws its radial use.
     // The same value spaces the concentric layers and cuts the sectors, so the
     // two axes carry one rhythm of empty space. It is a whole-note setting
@@ -196,22 +199,22 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .default_value(super::fresh_view().ring_gap)
         .unit(super::QUAD_UV_PERCENT, "%")
         .decimals(1)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Space between concentric layers and between octave sectors, as a percentage of the node radius. \
-                     0% joins both layers and sectors.",
-        );
+             0% joins both layers and sectors.",
+        )
+        .show(ui);
     // L*, shared with the gradient brightness scale. Black is a colour here;
     // layer width, rather than brightness, controls whether a ring exists.
     ValueBar::new(&mut view.lattice_ground, LATTICE_GROUND_RANGE, "Silent slice brightness")
         .default_value(super::fresh_view().lattice_ground)
         .unit(1.0, "%")
         .integer()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Brightness of silent MIDI octave slices in sounding or fading nodes, and the audio ring's quiet endpoint. \
              0% is black, 100% is white. Idle lattice positions have their own label/cross brightness.",
-        );
+        )
+        .show(ui);
 }
 
 /// Shared visibility timing followed by the MIDI slices' motion and ordering.
@@ -235,31 +238,36 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
             .default_value(super::fresh_view().mark_delay)
             .unit(1000.0, " ms")
             .decimals(0)
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Time the highest or lowest note must stay in place before its mark appears. \
                      Increase to avoid flicker during fast passages. \
                      0 ms marks immediately.",
-            );
+            )
+            .show(ui);
     });
     ValueBar::new(&mut view.note_animation.stagger_spread, STAGGER_SPREAD_RANGE, "Stagger spread")
                 .default_value(super::fresh_view().note_animation.stagger_spread)
                 .unit(100.0, "%")
-                .show(ui)
-                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring; the slices a note lights appear first and leave in their turn, and a released note starts losing its colour at once. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note cut short, or pressed again before it has gone, keeps the same sweep, each slice following it in its turn. Zero starts every slice together.");
+                .hint(
+                    "Time between the first and last slice starts, as a percentage of Note fade. Both ends start at the seam where the highest and lowest meet, then sweep toward each other across the ring; the slices a note lights appear first and leave in their turn, and a released note starts losing its colour at once. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer. A note cut short, or pressed again before it has gone, keeps the same sweep, each slice following it in its turn. Zero starts every slice together.",
+                )
+                .show(ui);
     ValueBar::new(&mut view.note_animation.fade_out_delay, FADE_OUT_DELAY_RANGE, "Fade-out delay")
         .default_value(super::fresh_view().note_animation.fade_out_delay)
         .unit(1000.0, " ms")
         .decimals(0)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Time a node keeps its slices after its last note is released, before they start to leave. \
-                 The released pitches lose their colour at once, so the node stands uncoloured for this long. \
-                 Playing the node again inside the wait brings it back from where it stands. \
-                 0 ms starts leaving at the release.",
-        );
+             The released pitches lose their colour at once, so the node stands uncoloured for this long. \
+             Playing the node again inside the wait brings it back from where it stands. \
+             0 ms starts leaving at the release.",
+        )
+        .show(ui);
     ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
             .default_value(super::fresh_view().note_animation.radial_start)
-            .unit(100.0, "%").show(ui)
-            .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
+            .unit(100.0, "%")
+            .hint(
+                "Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.",
+            )
+            .show(ui);
 }

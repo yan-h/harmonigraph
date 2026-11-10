@@ -32,14 +32,14 @@ pub(super) fn system_pane(
             ValueBar::new(&mut appearance.view.render_scale, LATTICE_RENDER_SCALE_RANGE, "Lattice resolution")
                 .default_value(super::fresh_view().render_scale)
                 .percent()
-                .show(ui)
-                .on_hover_text(
+                .hint(
                     "Lattice render dimensions relative to native resolution. \
-                         100% is native; \
-                         50% uses a quarter of the pixels; \
-                         200% uses four times as many. \
-                         Lower values reduce GPU load and detail in the editor, preview and exported lattice. Video output size is set separately.",
-                );
+                     100% is native; \
+                     50% uses a quarter of the pixels; \
+                     200% uses four times as many. \
+                     Lower values reduce GPU load and detail in the editor, preview and exported lattice. Video output size is set separately.",
+                )
+                .show(ui);
             let atmosphere = &mut appearance.spectrum.atmosphere;
             ui.add_enabled_ui(atmosphere.effects().light(), |ui| {
                 ValueBar::new(
@@ -51,13 +51,13 @@ pub(super) fn system_pane(
                 .decimals(1)
                 .step(0.5)
                 .default_value(super::fresh_spectrum().atmosphere.blur_time_step)
-                .show(ui)
-                .on_hover_text(
+                .hint(
                     "Sample spacing along time for spectrogram softness and cloud effects, as a multiple of one displayed history column. \
                      Higher values reduce GPU cost at long history durations, with extra softening along time. \
                      0 disables this additional reduction; 1 is the default. Pitch detail and MIDI ribbons are unaffected. \
                      Requires spectrogram softness or cloud texture.",
-                );
+                )
+                .show(ui);
             });
         });
         // The other half of the cost dial: render scale sets what each frame
@@ -125,10 +125,10 @@ pub(super) fn system_pane(
         ValueBar::new(&mut interaction.prefs.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
             .percent()
             .default_value(crate::EditorPrefs::default().ui_scale)
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
-            );
+            )
+            .show(ui);
         // Colors the panel and nothing in the picture, which keeps fixed colors
         // of its own (`harmonigraph_scene::skin::PICTURE`), so these cannot
         // change what an export looks like either (`Skin::from_dials`).
@@ -136,10 +136,10 @@ pub(super) fn system_pane(
         ValueBar::new(&mut dials.lightness, skin::LIGHTNESS_RANGE, "Interface lightness")
             .decimals(3)
             .default_value(SkinDials::default().lightness)
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
-            );
+            )
+            .show(ui);
         let held = *dials;
         crate::widgets::skin_color(
             ui,

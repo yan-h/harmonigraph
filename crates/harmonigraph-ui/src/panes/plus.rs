@@ -57,11 +57,11 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
         .unit(1.0, "%")
         // Whole L* points, matching the gradients' brightness scale.
         .integer()
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
                      Raise it to keep the resting lattice easy to navigate.",
-        );
+        )
+        .show(ui);
         // Stored in the same quad UV a node's ring radii are dialled in, so this
         // pair and the Layers bar's Inner handle are positions on ONE axis. The
         // Layers bar shows no numbers, so whether a cross fits inside the middle
@@ -78,13 +78,10 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
             // In true node radii, as the Gap and the Reach read
             // (`QUAD_UV_PERCENT`); the stored pair stays in quad uv.
             |v| format!("{:.1}%", v * super::QUAD_UV_PERCENT),
-        )
-        .on_hover_text(
             "Cross-arm length from the center, as a percentage of the node radius. \
                      180% reaches the edge no ring crosses on the Layers bar in Note layers. \
                      Solid to the inner handle, faded out by the outer handle. \
-                     0% hides crosses; named nodes draw none. \
-                     Double-click resets.",
+                     0% hides crosses; named nodes draw none.",
         );
     });
 }

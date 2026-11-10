@@ -206,11 +206,6 @@ pub(super) fn value_bar(
         .decimals(decimals)
         .default_value(fresh)
         .show(ui)
-        .on_hover_text(format!(
-            "{} · drag to adjust, double-click to reset, {} to type",
-            labels[0],
-            super::type_gesture(ui.ctx()),
-        ))
 }
 
 pub(super) fn curve(plot: &Plot, ui: &Ui, sample: impl Fn(f32) -> (f32, f32), color: Color32) {

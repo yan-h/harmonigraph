@@ -12,7 +12,8 @@ use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PIT
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
-    BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    with_gestures, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE,
+    HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -357,6 +358,7 @@ impl GradientPreview {
 pub struct SpectrumBar<'a> {
     gradient: &'a mut Gradient,
     home: Gradient,
+    hint: Option<&'a str>,
 }
 
 impl<'a> SpectrumBar<'a> {
@@ -375,7 +377,16 @@ impl<'a> SpectrumBar<'a> {
     /// one pane over. Read it off the fresh config rather than restating it,
     /// so a reset follows any later change to the shipped defaults.
     pub fn new(gradient: &'a mut Gradient, home: Gradient) -> Self {
-        SpectrumBar { gradient, home }
+        SpectrumBar { gradient, home, hint: None }
+    }
+
+    /// What the hover says the setting is; the bar ends it with the
+    /// gestures it answers to (see [`ValueBar::hint`]).
+    ///
+    /// [`ValueBar::hint`]: super::value::ValueBar::hint
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -664,6 +675,8 @@ impl<'a> SpectrumBar<'a> {
         // track turns the circle under it. Off the track it says neither,
         // because a press there starts nothing — see [`SpectrumGrab::Outside`].
         // Read off the same grab the handle is lit by.
+        // Every SpectrumBar has a home, so every one resets.
+        let response = with_gestures(response, self.hint, true, false);
         match in_hand {
             Some(SpectrumGrab::Span) => {
                 response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
@@ -1085,6 +1098,7 @@ pub struct SpreadBar<'a> {
     gradient: &'a mut Gradient,
     spread: Spread,
     home: Gradient,
+    hint: Option<&'a str>,
 }
 
 /// Both constructors take the gradient a double-click takes this bar's PAIR home
@@ -1093,13 +1107,22 @@ pub struct SpreadBar<'a> {
 impl<'a> SpreadBar<'a> {
     /// The `L*` the bottom and the top of the range are drawn at.
     pub fn brightness(gradient: &'a mut Gradient, home: Gradient) -> Self {
-        SpreadBar { gradient, spread: Spread::Brightness, home }
+        SpreadBar { gradient, spread: Spread::Brightness, home, hint: None }
     }
 
     /// How much of the color available to them the bottom and the top of the
     /// range carry.
     pub fn chroma(gradient: &'a mut Gradient, home: Gradient) -> Self {
-        SpreadBar { gradient, spread: Spread::Chroma, home }
+        SpreadBar { gradient, spread: Spread::Chroma, home, hint: None }
+    }
+
+    /// What the hover says the setting is; the bar ends it with the
+    /// gestures it answers to (see [`ValueBar::hint`]).
+    ///
+    /// [`ValueBar::hint`]: super::value::ValueBar::hint
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -1234,6 +1257,7 @@ impl<'a> SpreadBar<'a> {
         // The cursor says which gesture a press would start before committing
         // to it: a handle opens the ramp, the middle picks the whole thing up.
         // Read off the same grab the thumbs are lit by.
+        let response = with_gestures(response, self.hint, true, false);
         match in_hand {
             Some(SpreadGrab::Middle { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
             Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
