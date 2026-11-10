@@ -258,8 +258,9 @@ pub(crate) fn draw_spectrogram(
     let plan = Plan::new(&view, &columns, surfaces.at(surface).held_bucket);
 
     // The run already on the surface when the aggregator folded nothing new
-    // into it, and a fresh one otherwise. The pitch axis, the rows and the colours are uniforms, so a
-    // zoom, a resize or a palette drag reaches neither.
+    // into it, and a fresh one otherwise. The pitch axis, the rows and the
+    // colours are uniforms, so a zoom, a resize or a palette drag reaches
+    // neither.
     let Some(layout) = run_for(spectrum.history(), surfaces, surface, &plan) else {
         return;
     };

@@ -1568,6 +1568,36 @@ fn retention_changes_reuse_a_run_that_already_covers_its_columns() {
     }
 }
 
+/// A smaller retention trims slabs off the grid's front while the window's
+/// first slab stays inside it: the slice's start moves and its run does not,
+/// so the memo must still hand back the run it served.
+#[test]
+fn a_smaller_retention_that_trims_only_the_slack_reuses_the_served_run() {
+    let bucket = 4.0 * crate::AudioSpectrum::FFT_INTERVAL;
+    let mut history = crate::SpectrumHistory::default();
+    // 100 slabs, keys 0..=99.
+    for i in 0..400 {
+        history.push(col(i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 0.5)]));
+    }
+    // Slab 70: inside both 80 kept slabs (from 20) and 40 (from 60).
+    let first = 280;
+    let key = |center: f64| (center / bucket).floor() as i64;
+    let mut agg = SpectrogramAgg::new();
+
+    let (center, run) = agg.serve(&history, first, bucket, 80);
+    assert_eq!(key(center.unwrap()), 70);
+    let front = key(agg.grid.centers[0]);
+    let held = agg.grid.centers.len();
+    assert!(front < 60, "no slack in front of the admitted slab to trim: front {front}");
+
+    let (again, reused) = agg.serve(&history, first, bucket, 40);
+    assert_eq!(key(agg.grid.centers[0]), 60, "the smaller keep trimmed nothing");
+    assert!(agg.grid.centers.len() < held);
+    assert_eq!(again, center, "the admitted first slab moved");
+    assert!(Arc::ptr_eq(&run, &reused), "a trim of the slack alone re-served the run");
+    assert_eq!(agg.rebuilds(), 1);
+}
+
 /// The gradient table is keyed on what decides a texel of it, so two
 /// gradients that draw one picture share a table and every other change
 /// builds a new one.
