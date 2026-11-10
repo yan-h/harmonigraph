@@ -362,10 +362,6 @@ fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> b
 /// surviving records are still the truth about what was played, and #712 makes
 /// them a video with a warning on it rather than no video at all. Nothing is
 /// invented to fill the hole — no fabricated notes, no guessed durations.
-///
-/// The incompleteness comes FIRST because only the first warning reaches
-/// the export job's row (`harmonigraph-record`'s `follow`), and of the things
-/// that can be wrong with an export this is the one that changes the picture.
 fn take_warnings(take_path: &str, take: &harmonigraph_take::Take) -> Vec<String> {
     let mut warnings = Vec::new();
     if let Some(incomplete) = take.incomplete {
@@ -577,7 +573,7 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
     // After the video, which is the export: a copy that fails leaves it whole
-    // and says why on the export job's row, by its `ARCHIVE_FAILED` line.
+    // and says why on the export job's row, as a warning.
     if let Some(archive) = &archive {
         let began = std::time::Instant::now();
         match sink::archive(&out, archive, args.ffmpeg.as_deref(), total, |count| {
@@ -588,7 +584,7 @@ fn export(args: Args) -> Result<(), String> {
                 archive.display(),
                 began.elapsed().as_secs_f64()
             ),
-            Err(error) => eprintln!("\n{}{error}", harmonigraph_take::render::ARCHIVE_FAILED),
+            Err(error) => eprintln!("\nwarning: no archive copy: {error}"),
         }
     }
     // Always publish the encoder's final count, even inside the reporting period.

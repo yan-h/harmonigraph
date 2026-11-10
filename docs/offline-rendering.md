@@ -268,8 +268,8 @@ Override with `--ffmpeg /path` when running the renderer by hand, or set `LATTIC
 
 The render runs on its own thread and never touches the audio thread or the GUI, so a long one does not hold up the DAW.
 Each export gets a row under Render, named for its video, with a progress bar while it runs.
-A finished row shows the renderer's own error or warning, if it printed one —
-the only place you'll see it, since a plugin has no terminal.
+A failed row shows the renderer's own error, and a finished one each distinct warning it printed, one per line —
+the only place you'll see them, since a plugin has no terminal.
 
 `./load-plugin.sh` with no argument builds the renderer alongside the plugin and installs it to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so the two always match —
 they share the take format, so a mismatched pair would fail at the version check.

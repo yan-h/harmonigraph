@@ -1,7 +1,7 @@
 //! Instance-owned sequential export queue and renderer subprocess lifetime.
 use super::home_dir;
 use harmonigraph_take::{
-    render::{archive_path, ExportJob, ExportStatus, ARCHIVE_FAILED},
+    render::{archive_path, ExportJob, ExportStatus},
     RenderProgress,
 };
 use parking_lot::Mutex;
@@ -447,8 +447,7 @@ fn run_job(
     current.snapshot.state = ExportStatus::Completed;
     current.snapshot.output = output.clone();
     current.snapshot.progress = progress.read().unwrap_or_default();
-    let archive_warning = archive_lost.as_deref().or(tail.archive.as_deref());
-    let detail = rendered_detail(request.notice, tail.warning.as_deref(), archive_warning);
+    let detail = rendered_detail(request.notice, &tail.warnings, archive_lost.as_deref());
     current.snapshot.detail = detail.clone();
     Ok((output, detail))
 }
@@ -478,33 +477,25 @@ struct Tail {
     /// The last segment that was not a progress counter: the renderer's own
     /// last word, and what a failed render is reported by.
     last: String,
-    /// The FIRST segment the renderer marked `warning:`, kept even when the
-    /// render then succeeds.
+    /// Each distinct segment the renderer marked `warning:`, in the order it
+    /// printed them, kept even when the render then succeeds.
     ///
     /// A render that warns and finishes is the case #712 asks for — the video
     /// exists and something about it is not what was played — and success
     /// otherwise throws [`last`](Self::last) away, so without this the only
-    /// notice of it is a stderr pipe nobody reads. The job's detail line is the
+    /// notice of it is a stderr pipe nobody reads. The job's detail is the
     /// one place a plugin user sees the renderer at all.
-    ///
-    /// First rather than last: the renderer prints the take's own warnings
-    /// before anything the command line can add, so what a person is told
-    /// about is the recording rather than the flags.
-    warning: Option<String>,
-    /// The renderer's [`ARCHIVE_FAILED`] line, kept apart from
-    /// [`warning`](Self::warning): it is printed after the video, so a take
-    /// that warned first would otherwise hide that the copy someone means to
-    /// keep was never made.
-    archive: Option<String>,
+    warnings: Vec<String>,
 }
 
-/// What a finished job's detail line says beyond its Completed state: the
-/// take's notice, the renderer's warning and a missing archive copy, because
-/// Completed alone would say a take with holes in its note history came out
-/// whole. Empty for a clean render, since the job row already names the video
-/// it wrote.
-fn rendered_detail(notice: Option<&str>, warning: Option<&str>, archive: Option<&str>) -> String {
-    [notice, warning, archive].into_iter().flatten().collect::<Vec<_>>().join(" — ")
+/// What a finished job's detail says beyond its Completed state, one line
+/// each: the take's notice, the renderer's warnings and a copy lost at
+/// publication, because Completed alone would say a take with holes in its
+/// note history came out whole. Empty for a clean render, since the job row
+/// already names the video it wrote.
+fn rendered_detail(notice: Option<&str>, warnings: &[String], archive: Option<&str>) -> String {
+    let warnings = warnings.iter().map(String::as_str);
+    notice.into_iter().chain(warnings).chain(archive).collect::<Vec<_>>().join("\n")
 }
 
 /// Follow the renderer's stderr to its end, publishing progress as it arrives,
@@ -531,14 +522,12 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
                 progress.total.store(total, Ordering::Relaxed);
             }
             // Diagnostics, warnings, the renderer's own error. The last of
-            // them is the job's detail if the render fails; the first
-            // `warning:` among them is its own, because success discards the
-            // last and a warned-about export still needs to say so.
+            // them is the job's detail if the render fails; every `warning:`
+            // among them is kept, because success discards the last and a
+            // warned-about export still needs to say so.
             None if !text.is_empty() && !text.starts_with(RenderProgress::PREFIX) => {
-                if text.starts_with(ARCHIVE_FAILED) {
-                    tail.archive = Some(text.to_owned());
-                } else if tail.warning.is_none() && text.starts_with("warning:") {
-                    tail.warning = Some(text.to_owned());
+                if text.starts_with("warning:") && !tail.warnings.iter().any(|w| w == text) {
+                    tail.warnings.push(text.to_owned());
                 }
                 tail.last = text.to_owned();
             }

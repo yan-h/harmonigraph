@@ -282,8 +282,8 @@ impl Sink {
                 "note: video duration is at or below AAC priming (21.333 ms); exporting video only"
             );
         }
-        // `warning:`, not `note:`: an export job's row keeps the first warning
-        // of a render that succeeds, and the Encoder row still reads Hardware.
+        // `warning:`, not `note:`: an export job's row keeps the warnings of a
+        // render that succeeds, and the Encoder row still reads Hardware.
         if options.encoder() != options.encoder {
             eprintln!(
                 "warning: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
@@ -621,8 +621,8 @@ pub fn archive(
             .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
         let mut encoded = Encoded::spawn(child.stdout.take().ok_or("ffmpeg stdout closed")?);
         // Passed through as the video's ffmpeg does, its first and last lines
-        // kept: the failure is reported after the video, where only the
-        // `ARCHIVE_FAILED` line on the export job's row says why. ffmpeg names
+        // kept: the failure is reported after the video, where only its
+        // warning on the export job's row says why. ffmpeg names
         // the cause first ("Unknown encoder 'libsvtav1'") and ends on a summary
         // ("Encoder not found").
         // Read to the end whatever the bytes, as `follow` does: a reader that

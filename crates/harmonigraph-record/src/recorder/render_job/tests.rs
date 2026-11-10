@@ -22,7 +22,7 @@ fn diagnostics_and_malformed_records_do_not_retarget_progress() {
         &progress,
     );
     assert_eq!(progress.read(), Some(RenderProgress { done: 0, total: 300 }));
-    assert_eq!(tail.warning.as_deref(), Some(warning));
+    assert_eq!(tail.warnings, [warning]);
     assert_eq!(tail.last, warning);
     follow(
         b"progress: 120/120 frames (100%)\ndone: 120 frames\ntiming: 300 frames drawn".as_slice(),
@@ -69,47 +69,48 @@ fn a_failed_renders_last_word_is_kept_over_the_counters() {
 }
 
 /// #712's other half: a render that WARNED and then succeeded says so on
-/// its job's detail line, which is the only place a plugin user sees the
-/// renderer's output.
+/// its job's detail, which is the only place a plugin user sees the
+/// renderer's output — every distinct warning, one line each.
 ///
 /// The fixture is shaped like the real stream rather than like a warning on
-/// its own. The warning is printed before the render starts, and what comes
-/// after it is the counters and then ffmpeg's own summary — ffmpeg is a
-/// grandchild sharing this pipe, so it gets the last word on every
-/// successful render. `last` is therefore NOT the warning by the end, which
-/// is the whole reason the warning is carried separately.
+/// its own: a take with a hole in its note history, exported over the
+/// hardware encoder's size limit, so the encoder's own warning follows the
+/// take's. After them come the counters and then ffmpeg's own summary —
+/// ffmpeg is a grandchild sharing this pipe, so it gets the last word on
+/// every successful render. `last` is therefore NOT a warning by the end,
+/// which is the whole reason warnings are carried separately.
 #[test]
-fn a_render_that_warned_carries_it_onto_the_detail_it_succeeded_with() {
-    let warning = "warning: take-1.take: note history 6..=8 is missing \
+fn a_render_that_warned_carries_each_warning_onto_the_detail_it_succeeded_with() {
+    let gap = "warning: take-1.take: note history 6..=8 is missing \
                        (PublicationFull) — rendering the records that survived.";
+    let x264 = "warning: the hardware encoder takes at most 4096 px a side; \
+                exported 5040x2160 through x264";
     let muxed = "video:512kB audio:0kB subtitle:0kB muxing overhead: 1.234567%";
-    // The renderer's second warning, in the order `run()` prints them: the
-    // take's own trouble, then the command line's. Present so "first, not
-    // last" is a claim this fixture can tell apart.
-    let later = "warning: take names take-1.wav but it is not beside the take";
     let stream = format!(
-        "take-1.take: 2.0s of events -> 120 frames at 60 fps, 640x360 @ 1.00x \
+        "take-1.take: 2.0s of events -> 120 frames at 60 fps, 5040x2160 @ 1.00x \
              -> take-1.mp4\n\
-             {warning}\n\
-             {later}\n\
-             \rprogress: 60/120 frames (50%)\rprogress: 120/120 frames (100%)\n\
+             {gap}\n\
+             {x264}\n\
+             \rprogress: 60/120 frames (50%)\n\
+             {x264}\n\
+             \rprogress: 120/120 frames (100%)\n\
              done: 120 frames -> take-1.mp4\n\
              {muxed}\n"
     );
     let progress = Progress::default();
     progress.begin();
     let tail = follow(stream.as_bytes(), &progress);
-    assert_eq!(tail.warning.as_deref(), Some(warning), "the take's warning, not the flags'");
+    assert_eq!(tail.warnings, [gap, x264], "each distinct warning, in the order printed");
     assert_eq!(
         tail.last, muxed,
-        "the warning is kept BESIDE the last word, which ffmpeg has taken",
+        "the warnings are kept BESIDE the last word, which ffmpeg has taken",
     );
 
-    let detail = rendered_detail(None, tail.warning.as_deref(), None);
-    assert!(detail.contains("note history 6..=8 is missing"), "{detail}");
+    let detail = rendered_detail(None, &tail.warnings, None);
+    assert_eq!(detail, format!("{gap}\n{x264}"));
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
-    assert_eq!(rendered_detail(None, None, None), "");
+    assert_eq!(rendered_detail(None, &[], None), "");
 }
 
 /// A render killed mid-frame leaves its last counter unterminated. It is

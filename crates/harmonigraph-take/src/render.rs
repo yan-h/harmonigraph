@@ -624,12 +624,6 @@ pub fn archive_path(video: &std::path::Path) -> std::path::PathBuf {
     ))
 }
 
-/// How the offline renderer starts the line saying an archive copy failed.
-/// The export queue keeps that line apart from the first `warning:` it keeps,
-/// because the copy's is the one that decides whether the video may be
-/// deleted, and it comes last.
-pub const ARCHIVE_FAILED: &str = "warning: no archive copy: ";
-
 /// Session-only export state; never persisted in a project or take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportStatus {
