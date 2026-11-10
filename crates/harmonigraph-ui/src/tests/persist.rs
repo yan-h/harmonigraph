@@ -82,69 +82,40 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
     panic!("no struct encloses byte {at}");
 }
 
-/// Every key a retirement has left in saved projects, as `(a live key in the
-/// same struct, the retired pairs as those builds wrote them, whether that
-/// struct is part of the appearance)`: the retired pairs are spliced back in
-/// ahead of the live key. The last is `false` for editor-only state, which
-/// only the editor door reads.
+/// One retired key per SHAPE of value a retirement can leave in saved
+/// projects, as `(a live key in the same struct, the retired pair as an older
+/// build wrote it, whether that struct is part of the appearance)`: the
+/// retired pair is spliced back in ahead of the live key. The last is `false`
+/// for editor-only state, which only the editor door reads.
 ///
-/// The VALUE shapes are the point as much as the names. A number is skipped by
-/// any parser; a bare identifier (`Fibres`, `Pop`) is an enum token with no
-/// type left to parse it into, and a string and `NaN` are tokens of their own.
-/// Retiring a FIELD is safe for every one of them, where retiring a VARIANT is
-/// not — that is [`DROPPED_VARIANTS`].
+/// The shape is what is tested, not the name. A number is skipped by any
+/// parser; a bare identifier (`Fibres`) is an enum token with no type left to
+/// parse it into, and a string, `NaN`, an `Option` and a nested struct are
+/// tokens of their own. Retiring a FIELD is safe for every one of them, where
+/// retiring a VARIANT is not — that is [`DROPPED_VARIANTS`].
 ///
-/// Retiring another key is a row here, not another test. Only keys a blob at
-/// or above the version floor can hold earn one: anything retired before it
-/// is refused with the blob that carries it.
+/// So retiring a key adds no row (#1677 area 5 Q1): serde ignores it the way
+/// it ignores the row of its shape. A row is owed only by a shape none of
+/// these has.
 const RETIRED_KEYS: &[(&str, &str, bool)] = &[
-    // Condensed controls are ignored without disturbing the surviving values.
+    // A number.
     ("pitch_softness", "spread:0.75,", true),
-    ("material_amount", "material_shadow_width:7.0,material_shadow_softness:0.1,", true),
-    // The lattice's segment pickup.
-    (
-        "material_amount",
-        "material_shadow_pickup:0.3,material_color_pickup:0.7,pigment_reach:6.0,",
-        true,
-    ),
-    ("texture_depth", "texture:None,", true),
-    ("texture_depth", "texture:Clouds,", true),
-    // The cloud's sampling grid.
-    ("cloud_depth", "cloud_tile:20.0,cloud_pixel:4.0,", true),
-    // Node spacing, including a non-finite one.
-    ("label_scale", "spacing:3.0,", true),
+    // A non-finite number.
     ("label_scale", "spacing:NaN,", true),
-    // The independent angular gap. `ring_gap` is the shared one now, and the
-    // dialled 0.02 must not be overwritten by it.
-    ("ring_gap", "octave_gap:0.17,", true),
-    // The entire combined lattice material key is retired, including its old variants.
-    ("material_style", "material:Fibres,", true),
-    ("material_style", "material:Liquid,", true),
-    // The hidden renderer override, a string.
-    ("short_edge", "renderer_path:\"/old/renderer\",", true),
-    // The view's retired switches.
-    ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,", true),
-    // The note animation's own retired fields, inside its struct.
-    ("stagger_spread", "animation:Pop,start_size:0.2,", true),
-    // The slice order, every variant of it gone with the key: the live ones
-    // and those whose removal once refused the whole document.
-    ("stagger_spread", "order:Circular,", true),
-    ("stagger_spread", "order:RandomStagger,", true),
-    ("stagger_spread", "order:Simultaneous,", true),
-    // Lit slices first, now how every note moves.
+    // A flag.
     ("stagger_spread", "lit_first:false,", true),
-    // The overlay switches, moved out of the view to the editor's preferences:
-    // one inside a view must not reach the preference of the same name.
-    ("render_scale", "show_perf:true,show_perf_detail:true,", true),
-    // The Spiral's framing, moved out of the appearance to the editor's
-    // preferences for the same reason, and a struct where those were flags.
-    ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),", true),
-    // The analyzer's spectrum averaging (#1573), an enum token.
-    ("window", "tapers:Three,", true),
-    // Sweep's two listens (#1603).
-    ("window", "sweep_bass:10240.0,sweep_treble:2048.0,", true),
-    // The frame cap, which the display link's divisor replaced (#1553).
+    // An enum token, its type gone with the key.
+    ("material_style", "material:Fibres,", true),
+    // An `Option`, empty and filled; the filled one through the editor door alone.
+    ("texture_depth", "texture:None,", true),
     ("frame_rate", "fps_cap:Some(90.0),", false),
+    // A string.
+    ("short_edge", "renderer_path:\"/old/renderer\",", true),
+    // A nested struct.
+    ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),", true),
+    // A key that moved to another struct under the same name: one left inside
+    // a view must not reach the preference.
+    ("render_scale", "show_perf:true,show_perf_detail:true,", true),
 ];
 
 /// A retired key costs nothing: through both doors — the editor's

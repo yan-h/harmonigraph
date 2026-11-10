@@ -1,12 +1,12 @@
 # Moving-neighborhood plugin policy
 
-This is the implementation record for policy version 3, based on the [design](adaptive-tuning-design.md) and [simulator](../tools/adaptive-tuning-simulator/README.md).
+This is the implementation record for policy version 3, based on the [design](adaptive-tuning-design.md) and a JavaScript reference model, since retired (#1677).
 It replaces the fixed origin domain and per-key history with a moving neighbourhood and reference.
 The existing central sequencer still orders attacks; this change does not introduce chord batching, extra latency, or automatic retuning.
 
 ## Musical decisions
 
-The Rust scorer uses the simulator's baseline settings and score.
+The Rust scorer kept that model's baseline settings and score.
 Input is an absolute pitch, including its register, per-note attack expression and original MIDI channel displacement.
 The previous assigned onset's full output-minus-input correction establishes the moving reference.
 That displacement is never octave-wrapped, so repeating the same controller chords can continue moving along the lattice.
@@ -141,7 +141,8 @@ the lattice is its fixed target and Learn moves only the shared C offset and key
 Lattice Map suspends Learn.
 Toggling Retune copies nothing in either direction.
 
-The simulator uses the same score but has no keyboard filter.
+No policy fixture makes the keyboard filter bind, so the fixtures say nothing about it;
+the Rust policy tests cover it on their own.
 
 One configuration-edit race remains:
 a policy edit from the pane sends the whole policy the editor last saw, keyboard included.
@@ -161,7 +162,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 ## Controls
 
 The Tuning pane exposes the keyboard tuning, pitch flexibility, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
-Defaults match the simulator's baseline profile.
+Defaults are the baseline profile most policy fixtures replay.
 The precision profile used by the paired intentional-E examples is obtained by setting Pitch flexibility to 50 cents.
 
 Adaptive next-note outlines were retired in [#970](https://github.com/yan-h/harmonigraph/issues/970).
@@ -195,16 +196,17 @@ No persisted compatibility aliases or migration shims are added.
 
 ## Validation
 
-The core parity fixtures are generated from the simulator with:
+The core policy fixtures, `crates/harmonigraph-core/src/policy/fixtures.txt`, were first exported from the JavaScript model;
+since that model retired (#1677) they are committed golden data, and the Rust policy is the reference.
+They record every onset in all eighteen musical examples with their seeded context and with every setting the example declared, named on its case line in the plugin's own integer units.
+A setting the replay cannot honour fails the fixture test rather than replaying at a default the example never chose.
+The test compares coordinates exactly and output pitches within 0.001 cent,
+the axis rounding between the model's floating-point logarithms and the plugin's fixed microcents.
+After a deliberate policy change, this rewrites the node and output of each onset that no longer agrees, leaving the rest, and the PR states every line it moves:
 
 ```sh
-node tools/adaptive-tuning-simulator/export-plugin-fixtures.mjs
+HARMONIGRAPH_BLESS_POLICY_FIXTURES=1 cargo test -p harmonigraph-core policy_fixtures
 ```
-
-They record every onset in all eighteen musical examples with their seeded context and with every setting the example declared, named on its case line in the plugin's own integer units.
-A setting the replay cannot honour fails the parity test rather than replaying at a default the example never chose.
-Rust and JavaScript differ only in axis precision: the plugin uses fixed microcents and the simulator uses floating-point logarithms.
-Parity compares coordinates exactly and output pitches within 0.001 cent.
 
 The production tests exercise the exported CLAP path, including 304 major chords on a repeating controller pattern, post-attack expression, frozen context, configuration boundaries, memory replacement and reset settings.
 The 304-chord journey crosses both the old coordinate and correction representation limits.
