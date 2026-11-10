@@ -355,7 +355,9 @@ fn scene_floats(scene: &Scene) -> Floats {
 /// Every value in the view's `{:#?}` dump that is not a real number, by its
 /// path through the dump. Read off the debug output rather than walked by
 /// hand, so a field added to the view or anything nested in it is covered
-/// without being named here.
+/// without being named here. It sees a value only where derived pretty `Debug`
+/// prints it alone on its line, so a `Range<f32>`, a `Duration` or a
+/// hand-written `Debug` would go unseen.
 fn broken_view(view: &ViewConfig) -> Vec<String> {
     // Each open container's name and how many unnamed items it has shown.
     let (mut path, mut broken) = (Vec::<(String, usize)>::new(), Vec::new());
