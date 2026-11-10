@@ -5,8 +5,8 @@ use std::ops::RangeInclusive;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, elided_name, grip_radius, paint_thumbs, track_fill, BAR_TEXT_PAD,
-    HANDLE_INSET,
+    bar_radius, bar_width, elided_name, grip_radius, paint_thumbs, track_fill, with_gestures,
+    BAR_TEXT_PAD, HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
 use super::text_at;
@@ -76,16 +76,6 @@ fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
     curve_paths(shapes).into_iter().flatten().collect()
 }
 
-/// The click that opens a [`ValueBar`]'s number for typing, named the way
-/// this platform's keyboard is: egui's `command` is Cmd on macOS and Ctrl
-/// elsewhere.
-pub(crate) fn type_gesture(ctx: &egui::Context) -> &'static str {
-    match ctx.os() {
-        egui::os::OperatingSystem::Mac => "Cmd-click",
-        _ => "Ctrl-click",
-    }
-}
-
 pub struct ValueBar<'a> {
     value: &'a mut f32,
     color: Option<Color32>,
@@ -93,6 +83,8 @@ pub struct ValueBar<'a> {
     range: RangeInclusive<f32>,
     label: &'a str,
     caption: Option<&'a str>,
+    /// What the hover says the setting is (see [`ValueBar::hint`]).
+    hint: Option<&'a str>,
     /// Ease the low end of the range (geometric when min > 0, cubic
     /// otherwise), so the fine end of a wide range is draggable.
     eased: bool,
@@ -134,6 +126,7 @@ impl<'a> ValueBar<'a> {
             range,
             label,
             caption: None,
+            hint: None,
             eased: false,
             decimals: 2,
             step: 0.0,
@@ -152,6 +145,15 @@ impl<'a> ValueBar<'a> {
     /// The full label still identifies the setting in the range census.
     pub(crate) fn caption(mut self, caption: &'a str) -> Self {
         self.caption = Some(caption);
+        self
+    }
+
+    /// What the hover says the setting is. The bar ends it with the gestures
+    /// it answers to (`bar::gestures`), so a hint never names them; a bar
+    /// given none says its full label there instead, as a plot's field does
+    /// under its shorter caption.
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
         self
     }
 
@@ -203,8 +205,8 @@ impl<'a> ValueBar<'a> {
 
     /// The value a double-click puts back: the setting's fresh value, which
     /// is what a DAW's own controls reset to on the same gesture. A bar with
-    /// none ignores the double-click; Cmd-click (Ctrl off macOS) types a
-    /// number on every bar either way.
+    /// none ignores the double-click, and its hover does not offer it;
+    /// Cmd-click (Ctrl off macOS) types a number on every bar either way.
     pub fn default_value(mut self, default: f32) -> Self {
         self.default = Some(default);
         self
@@ -598,7 +600,9 @@ impl<'a> ValueBar<'a> {
             );
         }
 
-        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        let hint = self.hint.unwrap_or(self.label);
+        with_gestures(response, Some(hint), self.default.is_some(), true)
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
 
@@ -1118,6 +1122,57 @@ mod tests {
             draw(vec![]);
             assert_eq!(ctx.data(|d| d.get_temp::<String>(id.with("edit"))), None);
             assert_eq!((value, changed), (want, default.is_some()), "default {default:?}");
+        }
+    }
+
+    /// A bar's hover ends with the gestures it answers to, said once by the
+    /// bar: the reset only where there is a default to go back to, and the
+    /// bar's own label where its caller gave no hint.
+    #[test]
+    fn a_bars_hover_ends_with_its_gestures() {
+        use crate::tests::probe::{events_into, themed};
+        for (hint, default, want) in [
+            (
+                Some("How much."),
+                Some(0.5),
+                "How much.\nDrag to adjust, double-click to reset, {type} to type.",
+            ),
+            (None, None, "Amount\nDrag to adjust, {type} to type."),
+        ] {
+            let ctx = themed();
+            ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+            let size = egui::vec2(300.0, 200.0);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut value = 0.8;
+            let mut draw = |events| {
+                events_into(&ctx, size, rect, events, |ui| {
+                    let mut bar = ValueBar::new(&mut value, 0.0..=1.0, "Amount");
+                    if let Some(hint) = hint {
+                        bar = bar.hint(hint);
+                    }
+                    if let Some(default) = default {
+                        bar = bar.default_value(default);
+                    }
+                    bar.show(ui);
+                })
+            };
+            draw(vec![]);
+            draw(vec![egui::Event::PointerMoved(egui::pos2(150.0, 10.0))]);
+            let shown: Vec<_> = (0..3)
+                .map(|_| draw(vec![]))
+                .last()
+                .unwrap()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().contains("Drag") => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let want = want.replace("{type}", super::super::bar::type_gesture(&ctx));
+            assert_eq!(shown, [want]);
         }
     }
 

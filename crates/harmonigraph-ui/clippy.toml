@@ -6,4 +6,5 @@ disallowed-methods = [
     { path = "egui::Checkbox::without_text", reason = "use crate::widgets::checkbox_box" },
     { path = "egui::ComboBox::show_ui", reason = "use crate::widgets::choice_row, or pass the ComboBox to crate::widgets::selected_combo" },
     { path = "egui::ComboBox::show_index", reason = "use crate::widgets::choice_row, or pass the ComboBox to crate::widgets::selected_combo" },
+    { path = "egui::DragValue::new", reason = "use crate::widgets::ValueBar, whose double-click resets and Cmd-click types as every other number's does" },
 ]

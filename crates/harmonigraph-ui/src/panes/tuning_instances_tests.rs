@@ -74,6 +74,57 @@ fn apply_to_all_tuners_applies_the_first_tuners_current_delay() {
     assert_eq!(delays, [1, 4, 4], "the hub keeps its one buffer; the tuners take the first's");
 }
 
+/// The delay is a value bar: a double-click puts it back on one buffer, a
+/// fresh tuner's delay, for "Apply to all tuners" to spread.
+#[test]
+fn a_double_click_resets_the_delay_to_one_buffer() {
+    let params = Instances::new();
+    for row in params.0.borrow_mut().iter_mut().skip(1) {
+        row.delay = 4;
+    }
+    let state = fresh_picture();
+    let ctx = themed();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let size = egui::vec2(300.0, 2400.0);
+    let frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            instance_section(ui, &state, &params)
+        })
+    };
+    let at = |label: &str| {
+        frame(vec![])
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + egui::vec2(4.0, 4.0))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{label} is not drawn"))
+    };
+    let clicks = |label: &str, count: usize| {
+        let at = at(label);
+        frame(vec![egui::Event::PointerMoved(at)]);
+        for _ in 0..count {
+            frame(vec![press(at, true)]);
+            frame(vec![press(at, false)]);
+        }
+        frame(vec![]);
+    };
+    clicks("Tuning delay", 1);
+    // Past egui's triple-click window (twice its 0.3 s double-click delay, at
+    // the 1/60 s a frame with no clock advances), so the heading's click does
+    // not make the bar's second click a third.
+    for _ in 0..40 {
+        frame(vec![]);
+    }
+    clicks("Buffers", 2);
+    clicks("Apply to all tuners", 1);
+    let delays: Vec<_> = params.0.borrow().iter().map(|row| row.delay).collect();
+    assert_eq!(delays, [1, 1, 1]);
+}
+
 #[test]
 fn mixed_global_controls_enable_every_instance_then_disable_independently() {
     for width in [crate::theme::SETTINGS_MIN_CONTENT, 300.0] {

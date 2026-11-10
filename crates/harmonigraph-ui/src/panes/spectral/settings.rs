@@ -96,9 +96,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 );
                 ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                     .default_value(crate::panes::fresh_spectrum().atmosphere.cloud_depth)
-                    .percent().show(ui).on_hover_text(
+                    .percent()
+                    .hint(
                         "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
-                    );
+                    )
+                    .show(ui);
                 // Stars put their resolution first, a choice made once, with the
                 // texture's own rows rather than loose between its blocks.
                 if atmosphere.cloud_style == CloudStyle::Stars {
@@ -205,11 +207,11 @@ pub(crate) fn ribbons_section(
             )
             .default_value(crate::panes::fresh_spectrum().roll_thickness)
             .unit(1.0, " st")
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Ribbon width in semitones (st), measured on the frequency axis. \
                      1 st is the width of one semitone at any zoom.",
-            );
+            )
+            .show(ui);
             super::super::lighting::note_bloom(ui, note_bloom);
             edge_bar(
                 ui,
@@ -221,8 +223,6 @@ pub(crate) fn ribbons_section(
                     (fresh.roll_lead, fresh.roll_lead_fade)
                 },
                 |v| format!("{:.1}%", v * 100.0),
-            )
-            .on_hover_text(
                 "Distance held notes extend into the spectrum, as a percentage of its depth. \
                  Solid to the inner handle, faded out by the outer. \
                  0% stops notes at the history boundary.",
@@ -235,10 +235,10 @@ pub(crate) fn ribbons_section(
             .default_value(crate::panes::fresh_spectrum().roll_lead_release)
             .unit(1000.0, " ms")
             .decimals(0)
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Time for a released extension to fade where it detached from the history boundary. 0 ms removes it immediately.",
-            );
+            )
+            .show(ui);
             crate::widgets::checkbox(ui, &mut cfg.note_names, "Show note names").on_hover_text(
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
@@ -262,11 +262,11 @@ pub(crate) fn ribbons_section(
                 ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
                     .default_value(crate::panes::fresh_spectrum().note_name_scale)
                     .unit(1.0, "×")
-                    .show(ui)
-                    .on_hover_text(
+                    .hint(
                         "Text size relative to each MIDI ribbon. \
                          1× is the reference size; labels also grow when you zoom in on frequency.",
-                    );
+                    )
+                    .show(ui);
             });
         },
     );
@@ -313,12 +313,12 @@ pub(crate) fn view_section(
             (fresh.low_midi, fresh.high_midi)
         })
         .display(hz_readout)
-        .show(ui)
-        .on_hover_text(
+        .hint(
             "Visible frequency range, also used by the Spiral. \
                      Each octave has equal width. \
-                     Drag the ends or the middle; double-click resets.",
-        );
+                     Drag the ends or the middle.",
+        )
+        .show(ui);
         // No choice of what the markings say. They are the analyzer-standard
         // 1-2-5 frequency series, and were switchable to one at every C with
         // Bitwig octave numbers — which is what the note NAMES on the ribbons
@@ -327,11 +327,11 @@ pub(crate) fn view_section(
         ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Axis label scale")
             .default_value(crate::panes::fresh_spectrum().marking_scale)
             .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Size of frequency labels and the pointer readout. \
                      1× is the reference size; labels stay the same size when you zoom.",
-            );
+            )
+            .show(ui);
         ValueBar::new(
             &mut cfg.roll_seconds,
             crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX,
@@ -342,12 +342,11 @@ pub(crate) fn view_section(
         .decimals(1)
         .unit(1.0, " s")
         .display(span_readout)
-        .show(ui)
-        .on_hover_text(format!(
+        .hint(
             "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
-             Drag the picture along its time axis to zoom, or {} this bar to type seconds.",
-            crate::widgets::type_gesture(ui.ctx()),
-        ));
+             Drag the picture along its time axis to zoom.",
+        )
+        .show(ui);
         button_row(ui, |ui| {
             if ui
                 .button("Clear history")
@@ -361,11 +360,13 @@ pub(crate) fn view_section(
             }
         });
         block(ui, "Spectrum", |ui| {
-            ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").default_value(crate::panes::fresh_spectrum().keyline_lift).percent().show(ui).on_hover_text(
-                "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
+            ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").default_value(crate::panes::fresh_spectrum().keyline_lift).percent()
+                .hint(
+                    "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
                      and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
                      100% is a white line, 0% is exactly the color under it.",
-            );
+                )
+                .show(ui);
         });
     });
 }
@@ -451,13 +452,12 @@ pub(crate) fn analysis_section(
                 (fresh.floor_db, fresh.ceiling_db)
             })
             .display(db_readout)
-            .show(ui)
-            .on_hover_text(
+            .hint(
                 "Levels mapped to zero and full height in the Analyzer, also used by lattice audio rings. \
-                         Lower the upper end to enlarge quiet signals. \
-                         Audio colors, including the Spiral's, have their own Level color range on Mappings. \
-                         Double-click resets.",
-            );
+                 Lower the upper end to enlarge quiet signals. \
+                 Audio colors, including the Spiral's, have their own Level color range on Mappings.",
+            )
+            .show(ui);
             let labels: Vec<_> =
                 crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
             let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
