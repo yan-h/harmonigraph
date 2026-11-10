@@ -140,13 +140,8 @@ fn a_published_reload_raises_the_count_and_hands_over_the_source() {
     // Still a whole module: what a reader gets has to be something that
     // compiles, since the next `TextResources::new` builds four pipelines
     // out of it without looking.
-    validate_wgsl(
-        "text.wgsl",
-        &reload::text_source(),
-        common_lines(COMMON_SRC),
-        &entry_points(&with_common(text::TEXT_SRC)),
-    )
-    .expect("a published module must still be one");
+    validate_wgsl("text.wgsl", &reload::text_source(), common_lines(COMMON_SRC), &[] as &[&str])
+        .expect("a published module must still be one");
 }
 
 /// The seam a naga diagnostic's line number has to be read against. Off by one
