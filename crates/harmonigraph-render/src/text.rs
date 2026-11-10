@@ -41,22 +41,6 @@ use crate::{create_vertex_buffer, wgpu};
 
 pub(crate) const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
 
-/// Entry points the text shader must provide.
-#[cfg(any(test, feature = "hot-reload"))]
-pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
-    "vs_glyph",
-    "vs_glyph_lit",
-    "vs_spectral_shadow",
-    "fs_spectral_shadow",
-    "fs_fill",
-    "fs_fill_lit",
-    "vs_glyph_cell",
-    "fs_glyph_ink",
-    "vs_shadow_box",
-    "fs_shadow_box",
-    "fs_shadow_box_plain",
-];
-
 /// One glyph: where it goes on screen, where it lives in the atlas it is cut
 /// from, and the two colors it is drawn in.
 ///
@@ -1319,8 +1303,9 @@ pub(crate) mod tests {
     #[test]
     fn baked_text_shader_validates() {
         let seam = crate::common_lines(crate::COMMON_SRC);
-        crate::validate_wgsl("text.wgsl", &crate::with_common(TEXT_SRC), seam, TEXT_ENTRY_POINTS)
-            .expect("baked text.wgsl must parse, validate, and keep its entry points");
+        let source = crate::with_common(TEXT_SRC);
+        crate::validate_wgsl("text.wgsl", &source, seam, &crate::entry_points(&source))
+            .expect("baked text.wgsl must parse and validate");
     }
 
     #[test]
@@ -1335,17 +1320,6 @@ pub(crate) mod tests {
     #[cfg(not(feature = "hot-reload"))]
     fn a_build_with_no_watcher_compiles_the_baked_text_module() {
         assert_eq!(crate::text_source(), crate::with_common(TEXT_SRC));
-    }
-
-    #[test]
-    fn every_glyph_pipeline_is_built_from_one_module() {
-        let src = crate::text_source();
-        for required in TEXT_ENTRY_POINTS {
-            assert!(
-                src.contains(&format!("fn {required}(")),
-                "the module every glyph pipeline compiles is missing `{required}`"
-            );
-        }
     }
 
     #[test]

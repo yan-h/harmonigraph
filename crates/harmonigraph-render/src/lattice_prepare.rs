@@ -236,10 +236,15 @@ impl LatticeCallback {
                 "lattice.wgsl",
                 &reloaded.lattice,
                 reloaded.seam,
-                LATTICE_ENTRY_POINTS,
+                &entry_points(&with_common(SHADER_SRC)),
             )
             .and_then(|()| {
-                validate_wgsl("text.wgsl", &reloaded.text, reloaded.seam, text::TEXT_ENTRY_POINTS)
+                validate_wgsl(
+                    "text.wgsl",
+                    &reloaded.text,
+                    reloaded.seam,
+                    &entry_points(&with_common(text::TEXT_SRC)),
+                )
             })
             .and_then(|()| {
                 validate_wgsl(

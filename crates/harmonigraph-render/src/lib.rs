@@ -353,39 +353,6 @@ const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Flo
 /// Clamp on the render-scale view setting, over whatever the UI offers.
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
-/// Entry points a (re)loaded shader must provide. The `_scene` pair is the
-/// four-attachment form with bloom; `_split` writes the visible pair and local
-/// transmission; the bare pair is
-/// the single-attachment one the parity test's reference path uses; the
-/// `glow` entry points rasterize directional halos and resolve overlap statistics;
-/// the `ink` four
-/// are the strip the nodes' light is coloured out of, read and then blurred
-/// ahead of it (see [`InkStrip`]); and the `cell` four rasterize a node's ink
-/// and the Gaussian's one marker cross into the shadow atlas (`shadow.rs`).
-#[cfg(any(test, feature = "hot-reload"))]
-const LATTICE_ENTRY_POINTS: &[&str] = &[
-    "vs_main",
-    "fs_main",
-    "fs_main_scene",
-    "fs_main_split",
-    "vs_plus",
-    "fs_plus",
-    "fs_plus_scene",
-    "fs_plus_split",
-    "vs_glow_splat",
-    "fs_glow_splat",
-    "vs_glow_resolve",
-    "fs_glow_resolve",
-    "vs_ink_strip",
-    "fs_ink_strip",
-    "vs_ink_blur",
-    "fs_ink_blur",
-    "vs_node_cell",
-    "fs_node_cell",
-    "vs_plus_cell",
-    "fs_plus_cell",
-];
-
 /// The two modules a reload rebuilds, each already carrying the common half
 /// it was read beside.
 #[cfg(any(test, feature = "hot-reload"))]
@@ -503,7 +470,8 @@ impl ShaderWatcher {
 /// `source` is a WHOLE module — what [`with_common`] or the watcher hands back,
 /// never lattice.wgsl on its own, which names functions it does not declare and
 /// would fail here for that alone. `name` is the module's own file, and
-/// `required` the entry points it has to keep: the two modules validated here
+/// `required` the entry points it has to keep — for the lattice and text
+/// modules, [`entry_points`] of the baked one: the modules validated here
 /// declare different ones, and a list checked against the wrong module reports
 /// every entry point in it missing.
 ///
@@ -517,7 +485,12 @@ impl ShaderWatcher {
 /// joined to a different one, and be wrong by however many lines common.wgsl
 /// has gained or lost since the build.
 #[cfg(any(test, feature = "hot-reload"))]
-fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Result<(), String> {
+fn validate_wgsl(
+    name: &str,
+    source: &str,
+    seam: usize,
+    required: &[impl AsRef<str>],
+) -> Result<(), String> {
     let banner = |body: String| {
         format!(
             "in {name} (lines 1-{seam} below are common.wgsl; past that, \
@@ -532,12 +505,27 @@ fn validate_wgsl(name: &str, source: &str, seam: usize, required: &[&str]) -> Re
     )
     .validate(&module)
     .map_err(|e| banner(format!("{e:?}")))?;
-    for entry in required {
-        if !module.entry_points.iter().any(|ep| ep.name == *entry) {
+    for entry in required.iter().map(AsRef::as_ref) {
+        if !module.entry_points.iter().any(|ep| ep.name == entry) {
             return Err(format!("{name} is missing entry point `{entry}`"));
         }
     }
     Ok(())
+}
+
+/// Every entry point the compiled-in module `baked` declares: what a reload of
+/// it has to keep, since the build's pipelines were made from exactly these.
+///
+/// Read off the module rather than listed beside it, so a renamed or added
+/// entry point is one edit, in the shader and the pipeline that names it. That
+/// a pipeline's entry point exists at all is the device tests' to catch, which
+/// build every pipeline from the baked source.
+///
+/// A parse of the baked module per call, which only a reload makes.
+#[cfg(any(test, feature = "hot-reload"))]
+fn entry_points(baked: &str) -> Vec<String> {
+    let module = naga::front::wgsl::parse_str(baked).expect("the baked module parses");
+    module.entry_points.into_iter().map(|ep| ep.name).collect()
 }
 
 mod uniforms;
