@@ -613,7 +613,7 @@ fn ahead(until: Option<f64>, now: f64) -> bool {
 /// pruned
 /// ([`NodeMotion::moving_until`](harmonigraph_scene::NodeMotion::moving_until):
 /// a departure's Fade-out delay, its stagger and the presence it holds for
-/// them, and a pose the audio ring left), or a node's Background glow is still
+/// them), or a node's Background glow is still
 /// falling ([`GlowFade::moving_until`](panes::glow_fade::GlowFade::moving_until)),
 /// which can outlast the slices by many seconds.
 ///
@@ -653,8 +653,9 @@ pub(crate) fn repaint_after(ctx: &egui::Context, delay: std::time::Duration) {
 /// - The lattice ring's levels, carried on its own attack and release
 ///   ([`RingLevels`](panes::spectral_fold::RingLevels)), and whether each wedge
 ///   is drawn, on the note Fade
-///   ([`RingFade`](harmonigraph_scene::RingFade)). A node the ring posed then
-///   leaves as a note's would, which [`releasing`] answers.
+///   ([`RingFade`](harmonigraph_scene::RingFade)). That fade is the whole of
+///   a ring-posed node's leaving: the pose itself snaps back behind a presence
+///   already at zero, so nothing in [`releasing`] moves for it.
 ///
 /// A stage downstream of another answers only for its own state: while the
 /// stage it reads is still moving, that stage holds the loop, and each frame
