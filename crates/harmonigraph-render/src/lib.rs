@@ -523,7 +523,8 @@ fn validate_wgsl(
 /// GPU, `HARMONIGRAPH_REQUIRE_GPU=1`). The hand lists left in the crate
 /// (`ROLL_ENTRY_POINTS`, `GLOW_ENTRY_POINTS` and their kind) do a third job and
 /// must not be derived from this: they hold the names Rust ASSEMBLES at runtime,
-/// out of a shading's name, against the shader that has to declare them.
+/// out of a shading's name, or (the spectrogram's) builds only lazily, against
+/// the shader that has to declare them.
 ///
 /// A parse of the baked module per call. Only a reload calls it, once per
 /// baked module per save, beside the parse and validation of the module read
