@@ -10,21 +10,49 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-fn engine(value: i32) -> TuningEngine {
-    match value {
-        1 => TuningEngine::Adaptive,
-        2 => TuningEngine::LatticeMap,
-        _ => TuningEngine::Off,
-    }
+/// The highest `lattice-map` value: the host numbers the document's slots.
+pub const LAST_MAP: i32 = MAP_CAPACITY as i32 - 1;
+
+/// The slot a `lattice-map` value selects, clamped as the host's label is.
+fn map_slot(value: i32) -> usize {
+    value.clamp(0, LAST_MAP) as usize
 }
 
-fn follow(value: i32) -> Follow {
-    match value {
-        1 => Follow::Thirds,
-        2 => Follow::ThirdsAndFifths,
-        _ => Follow::Off,
-    }
+/// One host offset lane: an axis, moved one step per value or, as an
+/// extension lane, [`EXTENSION_STEP`]. The ids are spelled again in the
+/// `#[id]` attributes on `HarmonigraphParams`, which take only a literal;
+/// `every_param_key_id_matches_the_host_facing_id` holds the two together.
+pub struct HostLane {
+    pub id: &'static str,
+    pub axis: MapAxis,
+    pub lane: MapOffsetLane,
 }
+
+pub const HOST_LANES: [HostLane; 6] = [
+    HostLane { id: "map-fifths", axis: MapAxis::Fifths, lane: MapOffsetLane::Fine },
+    HostLane { id: "map-thirds", axis: MapAxis::Thirds, lane: MapOffsetLane::Fine },
+    HostLane { id: "map-sevenths", axis: MapAxis::Sevenths, lane: MapOffsetLane::Fine },
+    HostLane { id: "map-fifths-extension", axis: MapAxis::Fifths, lane: MapOffsetLane::Extension },
+    HostLane { id: "map-thirds-extension", axis: MapAxis::Thirds, lane: MapOffsetLane::Extension },
+    HostLane {
+        id: "map-sevenths-extension",
+        axis: MapAxis::Sevenths,
+        lane: MapOffsetLane::Extension,
+    },
+];
+
+/// The stepped selectors a host may automate but not modulate: the map, its
+/// lanes and Follow.
+pub const NON_MODULATABLE: [&str; HOST_LANES.len() + 2] = {
+    let mut ids = ["lattice-map"; HOST_LANES.len() + 2];
+    let mut lane = 0;
+    while lane < HOST_LANES.len() {
+        ids[lane + 1] = HOST_LANES[lane].id;
+        lane += 1;
+    }
+    ids[HOST_LANES.len() + 1] = "map-follow";
+    ids
+};
 
 /// The follow offset as one atomic word: it only ever moves fifths and thirds.
 pub fn pack(offset: LatticePos) -> u64 {
@@ -39,8 +67,9 @@ pub fn unpack(word: u64) -> LatticePos {
 /// reach an attack; the parameters mask it as well, because with no process
 /// callbacks running the Hub publishes nothing at all.
 fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
-    let following = engine(params.tuning_engine.value()) == TuningEngine::LatticeMap
-        && follow(params.map_follow.value()) != Follow::Off;
+    let following = TuningEngine::from_index(params.tuning_engine.value())
+        == TuningEngine::LatticeMap
+        && Follow::from_index(params.map_follow.value()) != Follow::Off;
     if following {
         unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
     } else {
@@ -85,15 +114,15 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     if editor.translated.is_some_and(|(read, _)| read != lanes) {
         editor.translated = None;
     }
-    let selected = params.map.value().clamp(0, 127) as usize;
+    let selected = map_slot(params.map.value());
     let offsets = offsets(params);
     let offset = offsets.total();
     let playback = MapPlayback {
-        engine: engine(params.tuning_engine.value()),
+        engine: TuningEngine::from_index(params.tuning_engine.value()),
         selected,
         offset,
         map: document.map(selected).map(|shape| translated(shape, offset)),
-        follow: follow(params.map_follow.value()),
+        follow: Follow::from_index(params.map_follow.value()),
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
@@ -129,18 +158,13 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
         (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
     };
-    let selected = params.map.value().clamp(0, 127) as usize;
+    let selected = map_slot(params.map.value());
     // Whether the saved document changed, decided by each arm from what it
     // did rather than by its variant: a no-op edit must not mark the host
     // project modified.
     let document_changed = match edit {
         MapEdit::Engine(mode) => {
-            let value = match mode {
-                TuningEngine::Off => 0,
-                TuningEngine::Adaptive => 1,
-                TuningEngine::LatticeMap => 2,
-            };
-            set(&params.tuning_engine, value);
+            set(&params.tuning_engine, mode.index());
             false
         }
         MapEdit::Select(id) => {
@@ -191,12 +215,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             false
         }
         MapEdit::Follow(mode) => {
-            let value = match mode {
-                Follow::Off => 0,
-                Follow::Thirds => 1,
-                Follow::ThirdsAndFifths => 2,
-            };
-            set(&params.map_follow, value);
+            set(&params.map_follow, mode.index());
             false
         }
         MapEdit::Replace(destination) => {
@@ -353,11 +372,11 @@ impl AudioMaps {
                 self.bank_revision = Some(revision);
             }
         }
-        self.set_engine(engine(self.seed_mode));
-        self.playback.selected = self.seed_map.clamp(0, 127) as usize;
+        self.set_engine(TuningEngine::from_index(self.seed_mode));
+        self.playback.selected = map_slot(self.seed_map);
         self.offsets = self.seed_offset;
         self.playback.offset = self.offsets.total();
-        self.set_follow(follow(self.seed_follow));
+        self.set_follow(Follow::from_index(self.seed_follow));
         self.resolve();
         self.adopted = true;
         self.push(self.boundary.steady_time, config);
@@ -398,26 +417,26 @@ impl AudioMaps {
                 return;
             }
             if id == nice_plug::wrapper::hash_param_id("lattice-map") {
-                self.playback.selected = (value.round() as i32).clamp(0, 127) as usize;
+                self.playback.selected = map_slot(value.round() as i32);
             } else if id == nice_plug::wrapper::hash_param_id("tuning-engine") {
-                self.set_engine(engine(value.round() as i32));
+                self.set_engine(TuningEngine::from_index(value.round() as i32));
             } else if id == nice_plug::wrapper::hash_param_id("map-follow") {
-                self.set_follow(follow(value.round() as i32));
+                self.set_follow(Follow::from_index(value.round() as i32));
             } else {
                 // CLAP stepped values are indices from zero, unlike saved/plain params.
                 let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;
-                let component = [
-                    ("map-fifths", &mut self.offsets.fine.threes),
-                    ("map-thirds", &mut self.offsets.fine.fives),
-                    ("map-sevenths", &mut self.offsets.fine.sevens),
-                    ("map-fifths-extension", &mut self.offsets.extension.threes),
-                    ("map-thirds-extension", &mut self.offsets.extension.fives),
-                    ("map-sevenths-extension", &mut self.offsets.extension.sevens),
-                ]
-                .into_iter()
-                .find(|(name, _)| id == nice_plug::wrapper::hash_param_id(name));
-                let Some((_, component)) = component else { return };
-                *component = step;
+                let lane =
+                    HOST_LANES.iter().find(|lane| id == nice_plug::wrapper::hash_param_id(lane.id));
+                let Some(lane) = lane else { return };
+                let grain = match lane.lane {
+                    MapOffsetLane::Fine => &mut self.offsets.fine,
+                    MapOffsetLane::Extension => &mut self.offsets.extension,
+                };
+                *match lane.axis {
+                    MapAxis::Fifths => &mut grain.threes,
+                    MapAxis::Thirds => &mut grain.fives,
+                    MapAxis::Sevenths => &mut grain.sevens,
+                } = step;
                 self.playback.offset = self.offsets.total();
             }
             self.resolve();

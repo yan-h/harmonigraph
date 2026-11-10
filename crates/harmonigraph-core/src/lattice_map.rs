@@ -14,6 +14,29 @@ pub enum TuningEngine {
 }
 
 impl TuningEngine {
+    /// Every engine at its host parameter integer. Saved projects and
+    /// automation hold these integers, so the order is fixed; the editor lists
+    /// them in an order of its own (#1620).
+    pub const HOST: [Self; 3] = [Self::Off, Self::Adaptive, Self::LatticeMap];
+    pub const HOST_MAX: i32 = Self::HOST.len() as i32 - 1;
+
+    pub fn index(self) -> i32 {
+        Self::HOST.iter().position(|&engine| engine == self).unwrap() as i32
+    }
+    /// The engine at a host integer, clamped into range as the host's label
+    /// clamps, so the two never disagree.
+    pub fn from_index(value: i32) -> Self {
+        Self::HOST[value.clamp(0, Self::HOST_MAX) as usize]
+    }
+    /// What the host and the editor call this engine.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Pass through",
+            Self::Adaptive => "Adaptive",
+            Self::LatticeMap => "Lattice Map",
+        }
+    }
+
     /// Whether Learn runs under this engine. Lattice Map reads its own map
     /// instead, so Learn is suspended there.
     pub fn learns(self) -> bool {
@@ -35,6 +58,30 @@ pub enum Follow {
     Off,
     Thirds,
     ThirdsAndFifths,
+}
+
+impl Follow {
+    /// Every mode at its host parameter integer, which saved projects and
+    /// automation hold.
+    pub const HOST: [Self; 3] = [Self::Off, Self::Thirds, Self::ThirdsAndFifths];
+    pub const HOST_MAX: i32 = Self::HOST.len() as i32 - 1;
+
+    pub fn index(self) -> i32 {
+        Self::HOST.iter().position(|&follow| follow == self).unwrap() as i32
+    }
+    /// The mode at a host integer, clamped into range as the host's label
+    /// clamps, so the two never disagree.
+    pub fn from_index(value: i32) -> Self {
+        Self::HOST[value.clamp(0, Self::HOST_MAX) as usize]
+    }
+    /// What the host and the editor call this mode.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Thirds => "Thirds",
+            Self::ThirdsAndFifths => "Thirds and fifths",
+        }
+    }
 }
 
 /// The distinct pitch classes of one attack group a follow decision weighs:
@@ -281,6 +328,32 @@ impl LatticeMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Saved projects and automation hold these integers: every variant
+    /// keeps its number, and one out of range decodes as the nearest end,
+    /// which is what the host's label shows.
+    #[test]
+    fn host_integers_round_trip_and_clamp() {
+        for (index, engine) in TuningEngine::HOST.into_iter().enumerate() {
+            assert_eq!(
+                (engine.index(), TuningEngine::from_index(index as i32)),
+                (index as i32, engine)
+            );
+        }
+        for (index, follow) in Follow::HOST.into_iter().enumerate() {
+            assert_eq!((follow.index(), Follow::from_index(index as i32)), (index as i32, follow));
+        }
+        assert_eq!(
+            TuningEngine::HOST,
+            [TuningEngine::Off, TuningEngine::Adaptive, TuningEngine::LatticeMap]
+        );
+        assert_eq!(Follow::HOST, [Follow::Off, Follow::Thirds, Follow::ThirdsAndFifths]);
+        assert_eq!(TuningEngine::from_index(3), TuningEngine::LatticeMap);
+        assert_eq!(TuningEngine::from_index(-1), TuningEngine::Off);
+        assert_eq!(Follow::from_index(7), Follow::ThirdsAndFifths);
+        assert_eq!(TuningEngine::default().index(), 0);
+        assert_eq!(Follow::default().index(), 0);
+    }
 
     #[test]
     fn travel_rotates_labels_and_keeps_unwrapped_drift() {

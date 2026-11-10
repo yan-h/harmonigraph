@@ -416,8 +416,6 @@ fn draw_map_overlay(
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     let painter = ui.painter().with_clip_rect(rect);
     let maps = state.runtime.lattice_maps.as_ref();
-    let engine =
-        maps.map_or(harmonigraph_core::lattice_map::TuningEngine::Off, |m| m.playback.engine);
     if let Some(pos) = state
         .surfaces
         .hovered
@@ -439,8 +437,8 @@ fn draw_map_overlay(
             }
         }
     }
-    let label = if let Some(maps) =
-        maps.filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
+    let label = if let Some(maps) = maps
+        .filter(|m| m.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
     {
         let hovered = state.surfaces.hovered.zip(maps.playback.map).map(|(destination, map)| {
             let midi = harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
