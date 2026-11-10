@@ -73,11 +73,17 @@ pub struct Replay {
     /// Index of the first parameter change not yet applied.
     next_param: usize,
     next_configuration: usize,
+    /// The links the take's first configuration record carries, until the
+    /// first advance seeds the runtime with them. Frames before that record
+    /// (a lead-in, an early start) spell as the take was recorded rather than
+    /// with the fresh default; a take with no records keeps the default.
+    opening_tempered: Option<harmonigraph_core::Tempered>,
 }
 
 impl Replay {
     pub fn new(take: Take) -> Replay {
         Replay {
+            opening_tempered: take.configurations.first().map(|r| r.resolved().modes.tempered),
             take,
             params: ReplayParams::default(),
             next_note: 0,
@@ -95,6 +101,11 @@ impl Replay {
     /// been delivered yet. Call once per frame with a strictly increasing
     /// `now`; seeking backwards is not supported (use [`Replay::new`]).
     pub fn advance_to(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, now: f64) {
+        // The runtime's reducer restores from these links on its first
+        // observation, so they hold until the first record replaces them.
+        if let Some(tempered) = self.opening_tempered.take() {
+            runtime.tempered = tempered;
+        }
         while let Some(record) = self.take.configurations.get(self.next_configuration) {
             if record.t > now {
                 break;
@@ -533,6 +544,33 @@ mod tests {
                 assert_eq!(state.runtime.learn_active, config.modes.learning);
                 assert_eq!(state.runtime.replayed_configuration, Some(config));
             }
+        }
+    }
+
+    /// An export can open before the take's first configuration record (a
+    /// lead-in, an early `--start`), and lattice names are drawn with nothing
+    /// sounding. Those frames spell with the links the take was recorded with,
+    /// not the fresh default, so nothing respells at the first record.
+    #[test]
+    fn frames_before_the_first_configuration_record_use_its_links() {
+        use harmonigraph_core::configuration::ConfigReducer;
+        use harmonigraph_take::{ConfigurationRecord, Record};
+        let mut config = ConfigReducer::default().resolved();
+        assert!(config.modes.tempered.syntonic, "the fresh default links Meantone");
+        config.modes.tempered.syntonic = false;
+        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
+        encoded.push('\n');
+        encoded.push_str(
+            &ron::to_string(&Record::Configuration(ConfigurationRecord::new(1.0, config))).unwrap(),
+        );
+        let take = Take::parse(std::io::Cursor::new(&encoded)).unwrap();
+        let mut replay = Replay::new(take);
+        let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+        for now in [0.0, 0.5, 1.0, 1.5] {
+            replay.advance_to(&mut state.runtime, now);
+            harmonigraph_ui::begin_frame(&mut state, &replay.params, now);
+            assert_eq!(state.runtime.replayed_configuration.is_some(), now >= 1.0);
+            assert_eq!(state.runtime.tempered, config.modes.tempered, "at {now}");
         }
     }
 
