@@ -194,7 +194,7 @@ impl WindowState {
 }
 
 /// The editor's side of the frame log: a row as the window opens, with the
-/// Span, and one each time why it animates or the running export changes,
+/// Span, and one each time why it animates or how many exports run changes,
 /// which `tools/frame-log-summary.py --events` reads to find the silent
 /// stretches, first notes and exports #1670 asks about. `None` until the
 /// window's first frame, so that frame logs all three.
@@ -202,16 +202,8 @@ impl WindowState {
 #[derive(Default)]
 struct Logged {
     animating: Option<harmonigraph_ui::Animating>,
-    /// Everything the `exports` event prints: how many run, and the running
-    /// job with the encoder its renderer reported. The count alone would log
-    /// two exports back to back as one, since the next starts within a
-    /// millisecond of the last, and never log a label arriving after its job.
-    exports: Option<(usize, Option<RunningExport>)>,
+    exports: Option<usize>,
 }
-
-/// The running export's job id, and the encoder its renderer reported.
-#[cfg(all(feature = "frame-log", target_os = "macos"))]
-type RunningExport = (u64, Option<harmonigraph_ui::VideoEncoder>);
 
 #[cfg(all(feature = "frame-log", target_os = "macos"))]
 impl Logged {
@@ -225,25 +217,24 @@ impl Logged {
             self.animating = Some(animating);
             egui_baseview::frame_log::event(&format!("animating {animating}"));
         }
-        let exports = &ui.workspace.interaction.take.exports;
-        let is_running = |job: &&harmonigraph_take::render::ExportJob| {
-            job.state == harmonigraph_take::render::ExportStatus::Running
-        };
-        let running = exports.iter().filter(is_running).count();
-        let job = exports.iter().find(is_running).map(|job| (job.id, job.encoder));
-        if self.exports != Some((running, job)) {
-            self.exports = Some((running, job));
+        let mut exports = ui.workspace.interaction.take.exports.iter();
+        let running = exports
+            .clone()
+            .filter(|job| job.state == harmonigraph_take::render::ExportStatus::Running)
+            .count();
+        if self.exports != Some(running) {
+            self.exports = Some(running);
             // The encoder the renderer said it started, not the pane's: a frame
             // over the hardware limit runs x264, and an automatic export the
             // take's own look.
-            let event = match job {
-                Some((id, encoder)) => {
-                    let encoder = encoder.map_or("starting", |encoder| encoder.name());
-                    format!("exports {running} {encoder} job={id}")
-                }
-                None => format!("exports {running} none"),
+            let job =
+                exports.find(|job| job.state == harmonigraph_take::render::ExportStatus::Running);
+            let encoder = match job.map(|job| job.encoder) {
+                Some(Some(encoder)) => encoder.name(),
+                Some(None) => "starting",
+                None => "none",
             };
-            egui_baseview::frame_log::event(&event);
+            egui_baseview::frame_log::event(&format!("exports {running} {encoder}"));
         }
     }
 }
