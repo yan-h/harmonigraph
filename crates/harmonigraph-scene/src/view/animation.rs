@@ -86,6 +86,22 @@ impl NoteAnimationConfig {
         }
         ranks
     }
+    /// Seconds a node takes to leave once its last note has gone, for a Fade
+    /// of `fade_time`: the fade-out delay, then the [`delays`](Self::delays)
+    /// sweep, whose last slice starts `stagger_spread` of a fade after the
+    /// first and then runs a whole fade.
+    ///
+    /// This summarizes what [`crate::NodeMotion`] does rather than deciding
+    /// it: its departure edges and presence wait carry the per-slice delays,
+    /// and the widest of those is `stagger_spread` of a fade on any wheel
+    /// whose slices are staggered at all (an unstaggered one leaves sooner).
+    /// The repaint guard keeps the frame loop awake this long, and the replay
+    /// horizon is built on this at the spread's ceiling, so a setting that
+    /// lengthens a departure joins the span here and both follow it.
+    pub fn departure(self, fade_time: f32) -> f64 {
+        f64::from(self.fade_out_delay)
+            + f64::from(fade_time) * (1.0 + f64::from(self.stagger_spread))
+    }
     pub fn moves(self) -> bool {
         self.radial_start != 0.0
     }

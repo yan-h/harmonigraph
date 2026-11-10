@@ -1,7 +1,9 @@
 //! Lattice-only event-time animation. Core envelopes and the other panes keep
 //! their own timing. A checkpoint survives voice pruning and roll retention.
 use crate::derive::lattice_order;
-use crate::{IntensityReading, RingFade, Scene, ViewConfig};
+use crate::{
+    IntensityReading, NoteAnimationConfig, RingFade, Scene, ViewConfig, STAGGER_SPREAD_RANGE,
+};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
@@ -190,18 +192,36 @@ const FADE_MAX: f32 = 1.0;
 
 /// How far back a surface replays note edges.
 ///
-/// The 2.0 is not a round number: one animation now spans
-/// `duration * (1 + stagger_spread)`, so the horizon has to exceed that
-/// or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
-/// wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
-/// puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
-/// that ceiling means raising this too, and 1.0 would leave none.
-///
-/// A departure waits out `fade_out_delay` before its sweep starts, so the
-/// horizon carries that too.
+/// It has to exceed the longest animation a setting can ask for, or a gap
+/// longer than it seeds a MID-FLIGHT arrival or departure as settled and the
+/// wheel pops. That is a departure at the spread's ceiling (`ValueBar` and
+/// `sanitize` both read [`STAGGER_SPREAD_RANGE`]), whose sweep spans as long
+/// as an arrival's and which waits out the fade-out delay first; the marks
+/// add their delay.
 fn horizon(duration: f32, mark_delay: f32, fade_out_delay: f32) -> f64 {
-    f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay) + f64::from(fade_out_delay) + 0.001
+    let duration = duration.max(0.0);
+    let longest = NoteAnimationConfig {
+        stagger_spread: *STAGGER_SPREAD_RANGE.end(),
+        fade_out_delay,
+        ..NoteAnimationConfig::default()
+    };
+    longest.departure(duration)
+        + f64::from(duration) * HORIZON_MARGIN_FADES
+        + f64::from(mark_delay)
+        + 0.001
 }
+
+/// Fades the replay horizon keeps past the longest departure: what is left of
+/// two once the spread's ceiling has had its share, about a tenth of one.
+///
+/// Two fades is what the horizon spanned when the ceiling was only named in a
+/// comment beside it, and taking the margin as the remainder keeps the two
+/// fades exact: a literal 0.1 on top of the ceiling, which is 0.9 only to
+/// within an `f32`, would fall short of two by a few parts in a hundred
+/// million, and a bound may not shrink. A ceiling raised to a whole fade
+/// leaves no margin, which the assertion turns into a build failure.
+const HORIZON_MARGIN_FADES: f64 = 1.0 - *STAGGER_SPREAD_RANGE.end() as f64;
+const _: () = assert!(HORIZON_MARGIN_FADES > 0.0, "the replay horizon needs a margin");
 
 fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     if level == target {
@@ -951,7 +971,6 @@ impl NodeMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoteAnimationConfig;
 
     impl NodeMotion {
         /// A position's motion, absent read as the rest it stands for.
