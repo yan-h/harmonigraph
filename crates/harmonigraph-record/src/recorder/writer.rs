@@ -135,7 +135,8 @@ pub fn channel() -> (Recorder, Control) {
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
                 let render = RenderRequest { notice, ..RenderRequest::recorded() };
-                spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
+                let (progress, control) = (thread_progress.clone(), thread_render.clone());
+                spawn_render(render, path, None, None, progress, control);
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {

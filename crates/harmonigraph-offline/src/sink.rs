@@ -230,16 +230,9 @@ pub struct VideoOptions<'a> {
 }
 
 impl VideoOptions<'_> {
-    /// The encoder this export runs: the one asked for, except a frame too
-    /// big for VideoToolbox, which goes through x264 rather than failing at
-    /// its first frame. The Video pane's 21:9 at 2160 is 5040 wide.
+    /// The encoder this export runs; see [`VideoEncoder::for_size`].
     fn encoder(&self) -> VideoEncoder {
-        match self.encoder {
-            VideoEncoder::Hardware if self.size.into_iter().max() > Some(HARDWARE_MAX_SIDE) => {
-                VideoEncoder::X264
-            }
-            encoder => encoder,
-        }
+        self.encoder.for_size(self.size)
     }
 
     /// Samples available after reserving AAC priming within the video duration.
@@ -287,8 +280,9 @@ impl Sink {
         // Hardware.
         if options.encoder() != options.encoder {
             eprintln!(
-                "warning: the hardware encoder takes at most {HARDWARE_MAX_SIDE} px a side; \
-                 exported {w}x{h} through x264"
+                "warning: the hardware encoder takes at most {} px a side; \
+                 exported {w}x{h} through x264",
+                VideoEncoder::HARDWARE_MAX_SIDE
             );
         }
         let ffmpeg = find_ffmpeg(options.ffmpeg)?;
@@ -404,11 +398,6 @@ impl Sink {
 /// slices of the same take 88 is 0.47 dB better at 720p for 19% more, and
 /// 0.30 dB worse at 4K for 31% less. VideoToolbox offers this mode on Apple Silicon only.
 const HARDWARE_QUALITY: u32 = 88;
-
-/// The longest side VideoToolbox's H.264 encoder takes, either way round: on
-/// an M1 Pro under ffmpeg 7.1, 4096x2160 and 2160x4096 encode while 4098x2160
-/// and 5040x2160 refuse to open a compression session (-12903).
-const HARDWARE_MAX_SIDE: u32 = 4096;
 
 /// Every argument ffmpeg is started with, bar the program itself.
 ///

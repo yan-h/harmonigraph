@@ -872,7 +872,8 @@ pub(crate) fn capture_export(
     let appearance = captured.serialize();
     let render = crate::AppearanceDocument::parse(&appearance)?.render;
     let size = render.frame.pixels(render.short_edge);
-    Ok(crate::ExportAction::Queue { take: path.to_owned(), appearance, size })
+    let encoder = render.encoder.for_size(size);
+    Ok(crate::ExportAction::Queue { take: path.to_owned(), appearance, size, encoder })
 }
 
 #[cfg(test)]
@@ -1557,6 +1558,26 @@ mod export_tests {
         assert_eq!(size, [1080, 1920]);
     }
 
+    /// A Hardware export too big for VideoToolbox runs x264, and the queued job
+    /// says so rather than echoing the pane's Encoder; one inside it does not.
+    #[test]
+    fn a_hardware_export_over_the_encoders_limit_queues_as_x264() {
+        use crate::VideoEncoder::{Hardware, X264};
+        let mut pane = crate::AppearanceDocument::default();
+        pane.render.short_edge = 2160;
+        pane.render.encoder = Hardware;
+        for (aspect_w, expected) in [(16, ([3840, 2160], Hardware)), (21, ([5040, 2160], X264))] {
+            pane.render.frame.aspect_w = aspect_w;
+            pane.render.frame.aspect_h = 9;
+            let path = std::path::Path::new("wide.take");
+            let queued = capture_export(&pane, &crate::Interaction::default(), path).unwrap();
+            let crate::ExportAction::Queue { size, encoder, .. } = queued else {
+                panic!("queue action")
+            };
+            assert_eq!((size, encoder), expected);
+        }
+    }
+
     /// A take whose header holds no appearance has no frame to keep: queueing
     /// it under its recorded look is an ordinary queued export, drawn by the
     /// pane's whole Video configuration and the selected export look, not the
@@ -1663,7 +1684,7 @@ mod export_tests {
             .iter()
             .zip(["/tmp/first.take", "/tmp/path with spaces/second.take"])
         {
-            let crate::ExportAction::Queue { take, appearance, size } = action else {
+            let crate::ExportAction::Queue { take, appearance, size, .. } = action else {
                 panic!("queue action")
             };
             assert_eq!(take, std::path::Path::new(path));

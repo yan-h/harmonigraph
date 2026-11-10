@@ -847,15 +847,16 @@ impl Control {
 
     /// Append an independent export with settings already captured by the caller.
     ///
-    /// `size` is only what the Exports list shows for the job; the renderer
-    /// derives the real size from the request's appearance.
+    /// `size` and `encoder` are only what the job reports; the renderer
+    /// derives both from the request's appearance.
     pub fn queue_export(
         &self,
         path: std::path::PathBuf,
         request: RenderRequest,
         size: Option<[u32; 2]>,
+        encoder: Option<harmonigraph_take::render::VideoEncoder>,
     ) {
-        spawn_render(request, path, size, self.progress.clone(), self.render.clone());
+        spawn_render(request, path, size, encoder, self.progress.clone(), self.render.clone());
     }
     pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
         self.render.snapshots(&self.progress)

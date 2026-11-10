@@ -217,15 +217,22 @@ impl Logged {
             self.animating = Some(animating);
             egui_baseview::frame_log::event(&format!("animating {animating}"));
         }
-        let exports = ui.workspace.interaction.take.exports.iter();
+        let mut exports = ui.workspace.interaction.take.exports.iter();
         let running = exports
+            .clone()
             .filter(|job| job.state == harmonigraph_take::render::ExportStatus::Running)
             .count();
         if self.exports != Some(running) {
             self.exports = Some(running);
-            let encoder = match ui.picture.appearance.render.encoder {
-                harmonigraph_ui::VideoEncoder::X264 => "x264",
-                harmonigraph_ui::VideoEncoder::Hardware => "hardware",
+            // The running job's own encoder, not the pane's: a frame over the
+            // hardware limit runs x264, and an automatic export the take's look.
+            let job =
+                exports.find(|job| job.state == harmonigraph_take::render::ExportStatus::Running);
+            let encoder = match job.map(|job| job.encoder) {
+                Some(Some(harmonigraph_ui::VideoEncoder::X264)) => "x264",
+                Some(Some(harmonigraph_ui::VideoEncoder::Hardware)) => "hardware",
+                Some(None) => "recorded",
+                None => "none",
             };
             egui_baseview::frame_log::event(&format!("exports {running} {encoder}"));
         }

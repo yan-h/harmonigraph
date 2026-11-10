@@ -179,6 +179,26 @@ pub enum VideoEncoder {
     Hardware,
 }
 
+impl VideoEncoder {
+    /// The longest side VideoToolbox's H.264 encoder takes, either way round: on
+    /// an M1 Pro under ffmpeg 7.1, 4096x2160 and 2160x4096 encode while 4098x2160
+    /// and 5040x2160 refuse to open a compression session (-12903).
+    pub const HARDWARE_MAX_SIDE: u32 = 4096;
+
+    /// The encoder an export of `size` runs: this one, except a frame too big
+    /// for VideoToolbox, which goes through x264 rather than failing at its
+    /// first frame. The Video pane's 21:9 at 2160 is 5040 wide. The renderer
+    /// encodes by it and the plugin names a queued export's encoder by it.
+    pub fn for_size(self, size: [u32; 2]) -> VideoEncoder {
+        match self {
+            VideoEncoder::Hardware if size[0].max(size[1]) > Self::HARDWARE_MAX_SIDE => {
+                VideoEncoder::X264
+            }
+            encoder => encoder,
+        }
+    }
+}
+
 /// How a finished take gets turned into a video, edited in the Video
 /// pane (its trigger and stop bar beside Record take, the rest in its Render
 /// section) and persisted with the UI state.
@@ -648,6 +668,10 @@ pub struct ExportJob {
     /// `None` for a recorded take's automatic export: its appearance rides in
     /// the take's header, and this crate never parses an appearance.
     pub size: Option<[u32; 2]>,
+    /// The encoder the job runs, as [`VideoEncoder::for_size`] resolves the
+    /// Encoder it was queued with; the frame log names it. `None` for an
+    /// automatic export, whose Encoder is the recorded look's, as with `size`.
+    pub encoder: Option<VideoEncoder>,
     pub state: ExportStatus,
     pub progress: RenderProgress,
     pub detail: String,

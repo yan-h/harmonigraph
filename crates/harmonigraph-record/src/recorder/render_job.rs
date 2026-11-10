@@ -1,7 +1,7 @@
 //! Instance-owned sequential export queue and renderer subprocess lifetime.
 use super::home_dir;
 use harmonigraph_take::{
-    render::{archive_path, ExportJob, ExportStatus, ARCHIVE_FAILED},
+    render::{archive_path, ExportJob, ExportStatus, VideoEncoder, ARCHIVE_FAILED},
     RenderProgress,
 };
 use parking_lot::Mutex;
@@ -204,6 +204,7 @@ pub(super) fn spawn_render(
     mut request: RenderRequest,
     take: PathBuf,
     size: Option<[u32; 2]>,
+    encoder: Option<VideoEncoder>,
     progress: Arc<Progress>,
     control: Arc<RenderControl>,
 ) {
@@ -238,6 +239,7 @@ pub(super) fn spawn_render(
             take,
             output,
             size,
+            encoder,
             state: if error.is_some() { ExportStatus::Failed } else { ExportStatus::Pending },
             progress: RenderProgress::default(),
             detail: error.unwrap_or_default(),

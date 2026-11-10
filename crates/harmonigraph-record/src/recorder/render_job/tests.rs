@@ -271,6 +271,7 @@ echo 'progress: 10/10 frames (100%)' >&2
             request,
             self.dir.join("music.take"),
             size,
+            None,
             self.progress.clone(),
             self.control.clone(),
         );
@@ -467,7 +468,14 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     .unwrap();
     let other = Arc::new(RenderControl::default());
     let other_progress = Arc::new(Progress::default());
-    spawn_render(f.request("other instance"), take, None, other_progress.clone(), other.clone());
+    spawn_render(
+        f.request("other instance"),
+        take,
+        None,
+        None,
+        other_progress.clone(),
+        other.clone(),
+    );
     drop(gate);
     f.finished();
     wait_until("second instance", || !other.queue.lock().working);
