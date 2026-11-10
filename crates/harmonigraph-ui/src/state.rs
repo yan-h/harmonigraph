@@ -213,25 +213,19 @@ pub struct SurfaceState {
     pub(crate) spectrum_hold: panes::spectral::SpectrumHold,
 }
 
-/// Editor interaction and shell actions. Panes borrow this separately from
-/// the layout being traversed, so a reset request cannot replace a live dock.
-pub struct Interaction {
-    pub(crate) appearance_editor: crate::appearance_edit::AppearanceEditor,
-    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
-    /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
-    ///
-    /// Here rather than in the appearance for the reason `show_perf` is: the
-    /// Spiral is an editor tab and never exported (#974), so its framing is
-    /// how this editor is looking at the picture, and rides in no take.
-    pub(crate) spiral: panes::spiral::SpiralView,
-    /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see Camera in the Lattice page's View section).
-    pub camera_presets: Vec<CameraPreset>,
-    /// Entry buffer for naming a new preset. Runtime-only.
-    pub preset_name: String,
-    /// Take recording and video export, which the Video pane and the shell
-    /// pass between them — see [`TakeState`].
-    pub take: TakeState,
+/// The editor's preferences: how this editor, on this screen, is set up to
+/// work. The line between these and what [`UiPersist`] keeps beside them is
+/// what a reset costs: each of these is a moment's redo (a scale, a switch, a
+/// fold, a framing), where the look, its slots, the camera presets and the
+/// layout with its folded regions are the user's work.
+///
+/// Saved whole under one key, so a preference is a field here, its line in
+/// `Default`, and a repair in [`Self::sanitize`] if it needs one; saving and
+/// loading copy the struct. None of it rides in a take or a recorded
+/// appearance.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct EditorPrefs {
     /// Which settings sections are folded, as "page/section" titles
     /// (persisted).
     ///
@@ -298,6 +292,76 @@ pub struct Interaction {
     /// the frame", and once it has, a dozen rows of scaffolding is not what
     /// you want sitting over the picture. Inert while `show_perf` is off.
     pub show_perf_detail: bool,
+    /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
+    ///
+    /// Here rather than in the appearance for the reason [`Self::show_perf`] is: the
+    /// Spiral is an editor tab and never exported (#974), so its framing is
+    /// how this editor is looking at the picture, and rides in no take.
+    pub(crate) spiral: panes::spiral::SpiralView,
+}
+
+impl Default for EditorPrefs {
+    fn default() -> Self {
+        Self {
+            folded_sections: Default::default(),
+            frame_rate: FrameRate::default(),
+            // The design size, which a fresh install opens at and a blob
+            // without the key loads as; an `f32`'s own default of 0.0 is a
+            // scale of nothing.
+            ui_scale: 1.0,
+            frameless: false,
+            skin_dials: Default::default(),
+            perf_pos: None,
+            show_perf: false,
+            show_perf_detail: false,
+            spiral: Default::default(),
+        }
+    }
+}
+
+impl EditorPrefs {
+    /// Repair what a hand-edited or older blob can carry, once on load.
+    fn sanitize(&mut self) {
+        // Clamped here rather than only where it is drawn, so the control
+        // cannot read out a number the chrome is not at: `set_ui_scale`
+        // would take a hand-edited 5.0 down to the top of the range while
+        // the bar went on saying 500%.
+        self.ui_scale = crate::theme::sane_ui_scale(self.ui_scale);
+        // Clamped for the reason the scale is: each bar reads out what the
+        // chrome is drawn in.
+        self.skin_dials.sanitize();
+        self.spiral.sanitize();
+        // A hand-edited NaN is dropped rather than honoured, on the grounds
+        // the Spiral's framing is repaired on above: it positions drawn
+        // geometry, and NaN geometry is a panic inside egui's
+        // tessellator. A dropped position opens the HUD where an undragged one
+        // opens, which is a place the user can see it and drag it from.
+        self.perf_pos = self.perf_pos.filter(|pos| pos.is_finite());
+    }
+}
+
+/// Editor interaction and shell actions. Panes borrow this separately from
+/// the layout being traversed, so a reset request cannot replace a live dock.
+#[derive(Default)]
+pub struct Interaction {
+    pub(crate) appearance_editor: crate::appearance_edit::AppearanceEditor,
+    /// How this editor is set up to work, saved whole (see [`EditorPrefs`]).
+    pub prefs: EditorPrefs,
+    /// Which of the Analyzer's regions are folded, and the composition they
+    /// fold back open to (see [`panes::spectral::collapse::Regions`]).
+    ///
+    /// The layout's content rather than a preference: the width a folded
+    /// region gives up is held in `Layout::region_widths`, so the two are
+    /// saved, loaded and reset together.
+    pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
+    /// User-saved camera angles, applied like the built-in Flat/Isometric
+    /// presets (persisted; see Camera in the Lattice page's View section).
+    pub camera_presets: Vec<CameraPreset>,
+    /// Entry buffer for naming a new preset. Runtime-only.
+    pub preset_name: String,
+    /// Take recording and video export, which the Video pane and the shell
+    /// pass between them — see [`TakeState`].
+    pub take: TakeState,
     pub(crate) reset_layout: bool,
     /// Whether the editor is in a window of its own rather than the host's,
     /// which the System tab flips; `None` in a shell that cannot do that.
@@ -533,18 +597,10 @@ impl SharedState {
             version: UI_PERSIST_VERSION,
             layout: self.workspace.layout.clone(),
             analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
-            spiral: self.workspace.interaction.spiral,
-            folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
             look_slots: self.workspace.interaction.appearance_editor.slots.clone(),
-            frame_rate: self.workspace.interaction.frame_rate,
-            ui_scale: self.workspace.interaction.ui_scale,
-            frameless: self.workspace.interaction.frameless,
-            skin_dials: self.workspace.interaction.skin_dials,
-            perf_pos: self.workspace.interaction.perf_pos,
-            show_perf: self.workspace.interaction.show_perf,
-            show_perf_detail: self.workspace.interaction.show_perf_detail,
+            prefs: self.workspace.interaction.prefs.clone(),
         })
         .unwrap_or_default()
     }
@@ -585,15 +641,14 @@ impl SharedState {
                 return self.refuse_persist(err);
             }
         };
-        self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
-        self.workspace.interaction.analyzer_regions.sanitize();
-        self.workspace.interaction.spiral = persist.spiral;
-        self.workspace.interaction.spiral.sanitize();
+        self.workspace.interaction.prefs = persist.prefs;
+        self.workspace.interaction.prefs.sanitize();
         self.workspace.layout = persist.layout;
         self.workspace.layout.sanitize();
+        self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
+        self.workspace.interaction.analyzer_regions.sanitize();
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
-        self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
         let mut look_slots = persist.look_slots;
         look_slots.sanitize();
@@ -603,25 +658,6 @@ impl SharedState {
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
         }
-        self.workspace.interaction.frame_rate = persist.frame_rate;
-        self.workspace.interaction.frameless = persist.frameless;
-        // Clamped here rather than only where it is drawn, so the control
-        // cannot read out a number the chrome is not at: `set_ui_scale`
-        // would take a hand-edited 5.0 down to the top of the range while
-        // the bar went on saying 500%.
-        self.workspace.interaction.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
-        // Clamped for the reason the scale is: each bar reads out what the
-        // chrome is drawn in.
-        self.workspace.interaction.skin_dials = persist.skin_dials;
-        self.workspace.interaction.skin_dials.sanitize();
-        // A hand-edited NaN is dropped rather than honoured, on the grounds
-        // the Spiral's framing is repaired on above: it positions drawn
-        // geometry, and NaN geometry is a panic inside egui's
-        // tessellator. A dropped position opens the HUD where an undragged one
-        // opens, which is a place the user can see it and drag it from.
-        self.workspace.interaction.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
-        self.workspace.interaction.show_perf = persist.show_perf;
-        self.workspace.interaction.show_perf_detail = persist.show_perf_detail;
         true
     }
 
@@ -635,15 +671,6 @@ impl SharedState {
         self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
         false
     }
-}
-
-/// The chrome scale a blob without one loads as: the design size, which is
-/// what a fresh install opens at.
-///
-/// Named rather than `#[serde(default)]`, which for an `f32` is 0.0 — a scale
-/// of nothing.
-pub(crate) fn default_ui_scale() -> f32 {
-    1.0
 }
 
 /// The current [`UiPersist`] layout version, and the FLOOR under it. Bumped
@@ -672,65 +699,29 @@ pub(crate) fn default_ui_scale() -> f32 {
 /// spiral framing has since moved back out to a top-level editor key (#1332)
 /// without a bump: the copy an older save nests in its appearance is ignored,
 /// so that framing opens on the whole disc once.
+/// The editor's preferences have since moved under one `prefs` key (#1677),
+/// also without a bump: serde skips an older save's top-level copies, so they
+/// open at their defaults once and its layout, look, slots and presets load.
 pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize reports refusal and leaves the current content intact,
 /// apart from revealing the Console that carries the report.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct UiPersist {
     /// serde(default) reads a pre-versioning blob as version 0, which is below
     /// the floor — [`SharedState::load_persist`] refuses it entirely.
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
+    /// See [`Interaction::analyzer_regions`]: the half of a folded region
+    /// that `layout` does not hold.
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
-    /// See [`Interaction::spiral`]; a blob without it opens on the whole disc.
-    pub(crate) spiral: panes::spiral::SpiralView,
-    /// See [`Interaction::folded_sections`]; a blob without it opens every
-    /// section.
-    pub(crate) folded_sections: std::collections::BTreeSet<String>,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
     pub(crate) look_slots: crate::appearance_edit::Slots,
-    /// A blob without it draws at the display's rate.
-    pub(crate) frame_rate: FrameRate,
-    /// Chrome defaults to the design size, shared with Interaction.
-    pub(crate) ui_scale: f32,
-    pub(crate) frameless: bool,
-    /// See [`Interaction::skin_dials`]; a blob without them opens at the
-    /// default.
-    pub(crate) skin_dials: harmonigraph_scene::skin::SkinDials,
-    /// Where the performance overlay was dragged to; a blob without one opens
-    /// it where an undragged HUD opens. See [`Interaction::perf_pos`].
-    pub(crate) perf_pos: Option<egui::Pos2>,
-    /// See [`Interaction::show_perf`]; a blob without it opens with the
-    /// overlay off.
-    pub(crate) show_perf: bool,
-    /// See [`Interaction::show_perf_detail`].
-    pub(crate) show_perf_detail: bool,
-}
-
-impl Default for UiPersist {
-    fn default() -> Self {
-        Self {
-            version: 0,
-            layout: workspace::Layout::default(),
-            analyzer_regions: Default::default(),
-            spiral: Default::default(),
-            folded_sections: Default::default(),
-            appearance: crate::AppearanceDocument::default(),
-            camera_presets: Vec::new(),
-            look_slots: Default::default(),
-            frame_rate: FrameRate::default(),
-            ui_scale: default_ui_scale(),
-            frameless: false,
-            skin_dials: Default::default(),
-            perf_pos: None,
-            show_perf: false,
-            show_perf_detail: false,
-        }
-    }
+    /// See [`EditorPrefs`]; a blob without them opens at their defaults.
+    pub(crate) prefs: EditorPrefs,
 }
 
 impl PictureState {
@@ -760,30 +751,6 @@ impl SurfaceState {
             node_motion: std::collections::HashMap::new(),
             spare_nodes: Vec::new(),
             spectrum_hold: panes::spectral::SpectrumHold::default(),
-        }
-    }
-}
-impl Default for Interaction {
-    fn default() -> Self {
-        Self {
-            appearance_editor: Default::default(),
-            analyzer_regions: Default::default(),
-            spiral: Default::default(),
-            camera_presets: Vec::new(),
-            preset_name: String::new(),
-            take: TakeState::default(),
-            folded_sections: Default::default(),
-            frame_rate: FrameRate::default(),
-            ui_scale: default_ui_scale(),
-            frameless: false,
-            skin_dials: Default::default(),
-            perf_pos: None,
-            show_perf: false,
-            show_perf_detail: false,
-            reset_layout: false,
-            own_window: None,
-            dock: workspace::Position::default(),
-            open_settings: None,
         }
     }
 }

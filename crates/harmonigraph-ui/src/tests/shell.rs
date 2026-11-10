@@ -315,11 +315,11 @@ fn a_tab_with_a_modifier_moves_no_focus_and_keeps_the_chrome() {
     harness.frame(&mut state, vec![tab(egui::Modifiers::SHIFT)]);
     harness.frame(&mut state, vec![]);
     assert_eq!(harness.ctx.memory(|m| m.focused()), None, "Shift-Tab focused a widget");
-    assert!(!state.workspace.interaction.frameless, "Shift-Tab is not the chrome toggle");
+    assert!(!state.workspace.interaction.prefs.frameless, "Shift-Tab is not the chrome toggle");
     harness.frame(&mut state, vec![tab(egui::Modifiers::NONE)]);
     harness.frame(&mut state, vec![]);
     assert_eq!(harness.ctx.memory(|m| m.focused()), None, "Tab focused a widget");
-    assert!(state.workspace.interaction.frameless, "bare Tab hides the chrome");
+    assert!(state.workspace.interaction.prefs.frameless, "bare Tab hides the chrome");
 }
 
 /// Every tab needs an id of its own, and the title is not allowed to be its

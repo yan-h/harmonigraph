@@ -17,7 +17,8 @@ pub(super) struct Ribbon<'a> {
     /// Original onset index and time where another voice has interleaved.
     /// Geometry stays shared; the renderer clips and orders these paint runs.
     pub paint_starts: Vec<(usize, f64)>,
-    last_order: usize,
+    /// How many drawing notes had been laid out by its last member.
+    drawn: usize,
     core_start: f64,
     core_stop: f64,
 }
@@ -86,16 +87,26 @@ impl<'a> Ribbon<'a> {
 
 /// Input is in onset order; paint runs retain that order across voices.
 /// The protected cores make both cuts around a middle note compatible.
+///
+/// A note stopping before `drawn_from` draws nothing and is here only to
+/// decide the ends of the note after it, so it is no voice between a run's
+/// members: only a note that draws splits a run's paint span.
 pub(super) fn layout<'a>(
     notes: &[&'a RollNote],
     now: f64,
     minimum: f64,
     gap: f64,
+    drawn_from: f64,
 ) -> Vec<Ribbon<'a>> {
     let mut out: Vec<Ribbon<'a>> = Vec::with_capacity(notes.len());
     let mut previous: HashMap<VoiceKey, usize> = HashMap::new();
+    let mut drawn = 0;
     for (order, &note) in notes.iter().enumerate() {
         let stop = note.stop(now);
+        let before = drawn;
+        if stop >= drawn_from {
+            drawn += 1;
+        }
         let start = note.start.min(stop - minimum);
         let center = (start + stop) * 0.5;
         let mut ribbon = Ribbon {
@@ -103,7 +114,7 @@ pub(super) fn layout<'a>(
             start,
             stop,
             paint_starts: vec![(order, f64::NEG_INFINITY)],
-            last_order: order,
+            drawn,
             core_start: center - minimum * 0.5,
             core_stop: center + minimum * 0.5,
         };
@@ -115,10 +126,10 @@ pub(super) fn layout<'a>(
                 let cut_min = prev.core_stop + gap * 0.5;
                 let cut_max = ribbon.core_start - gap * 0.5;
                 if cut_min > cut_max {
-                    if prev.last_order + 1 != order {
+                    if prev.drawn != before {
                         prev.paint_starts.push((order, note.start));
                     }
-                    prev.last_order = order;
+                    prev.drawn = drawn;
                     prev.notes.push(note);
                     prev.stop = stop;
                     prev.core_stop = ribbon.core_stop;
@@ -153,13 +164,35 @@ mod tests {
             roll.note_off(key, start + 0.001);
         }
         let notes: Vec<_> = roll.notes().collect();
-        let ribbons = layout(&notes, 3.0, 0.1, 0.2);
+        let ribbons = layout(&notes, 3.0, 0.1, 0.2, f64::NEG_INFINITY);
         assert_eq!(ribbons.len(), 1, "fixture must form a dense run");
         let ribbon = &ribbons[0];
         assert!(ribbon.start < notes[0].start, "fixture must need onset padding");
         let segments = ribbon.segments(3.0);
         assert_eq!(segments.len(), 1, "padding left a separate line at the untuned key");
         assert_eq!(segments[0], ((ribbon.start, 60.3), (ribbon.stop, 60.3)));
+    }
+
+    /// A note laid out only to decide its neighbour's ends draws nothing, so
+    /// it is no voice between a run's members: a run splits its paint span
+    /// round a note that draws, and only round one.
+    #[test]
+    fn a_note_that_draws_nothing_splits_no_run() {
+        let key = |note| VoiceKey { source: SourceId::DIRECT, channel: 0, note };
+        for (drawn_from, spans) in [(f64::NEG_INFINITY, 2), (1.03, 1)] {
+            let mut roll = NoteRoll::default();
+            roll.note_on(key(60), 1.0, 60.0, 1.0);
+            roll.note_on(key(61), 1.0, 61.0, 1.01);
+            roll.note_off(key(61), 1.02);
+            roll.note_off(key(60), 1.05);
+            roll.note_on(key(60), 1.0, 60.0, 1.1);
+            roll.note_off(key(60), 1.15);
+            let mut notes: Vec<_> = roll.notes().collect();
+            notes.sort_by(|a, b| a.start.total_cmp(&b.start));
+            let ribbons = layout(&notes, 2.0, 0.1, 0.2, drawn_from);
+            let run = ribbons.iter().find(|r| r.dense()).expect("the two repeats form a run");
+            assert_eq!(run.paint_starts.len(), spans, "drawn from {drawn_from}");
+        }
     }
 
     #[test]
@@ -174,7 +207,7 @@ mod tests {
         }
         let mut notes: Vec<_> = roll.notes().collect();
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then_with(|| a.key().cmp(&b.key())));
-        let ribbons = layout(&notes, 12.0, 1.0, GAP_PT);
+        let ribbons = layout(&notes, 12.0, 1.0, GAP_PT, f64::NEG_INFINITY);
         assert_eq!(ribbons.len(), 8);
         for ribbon in ribbons {
             assert_eq!(ribbon.notes.len(), 2);

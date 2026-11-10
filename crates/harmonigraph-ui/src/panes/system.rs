@@ -68,7 +68,7 @@ pub(super) fn system_pane(
             choice_row(
                 ui,
                 "Editor frame rate",
-                &mut interaction.frame_rate,
+                &mut interaction.prefs.frame_rate,
                 &[
                     (
                         FrameRate::Display,
@@ -93,18 +93,22 @@ pub(super) fn system_pane(
                     ),
                 ],
             );
-            crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")
+            crate::widgets::checkbox(ui, &mut interaction.prefs.show_perf, "Performance overlay")
                 .on_hover_text(
                     "A draggable HUD: frame rate (judged against the rate chosen above), \
                  worst recent frame, the GPU's share, memory, and the voice/node \
                  workload, with whether the editor is live or idle.",
                 );
-            if interaction.show_perf {
-                crate::widgets::checkbox(ui, &mut interaction.show_perf_detail, "Frame breakdown")
-                    .on_hover_text(
-                        "Expands the overlay into every stage of the frame, to see which \
+            if interaction.prefs.show_perf {
+                crate::widgets::checkbox(
+                    ui,
+                    &mut interaction.prefs.show_perf_detail,
+                    "Frame breakdown",
+                )
+                .on_hover_text(
+                    "Expands the overlay into every stage of the frame, to see which \
                      one is costing you.",
-                    );
+                );
             }
         });
     });
@@ -118,9 +122,9 @@ pub(super) fn system_pane(
         // where the settings column costs more of the screen than the picture can
         // spare. A render is unaffected for the same reason, and deliberately: the
         // offline renderer draws the picture panes and never this.
-        ValueBar::new(&mut interaction.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
+        ValueBar::new(&mut interaction.prefs.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
             .percent()
-            .default_value(crate::state::default_ui_scale())
+            .default_value(crate::EditorPrefs::default().ui_scale)
             .show(ui)
             .on_hover_text(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
@@ -128,7 +132,7 @@ pub(super) fn system_pane(
         // Colors the panel and nothing in the picture, which keeps fixed colors
         // of its own (`harmonigraph_scene::skin::PICTURE`), so these cannot
         // change what an export looks like either (`Skin::from_dials`).
-        let dials = &mut interaction.skin_dials;
+        let dials = &mut interaction.prefs.skin_dials;
         ValueBar::new(&mut dials.lightness, skin::LIGHTNESS_RANGE, "Interface lightness")
             .decimals(3)
             .default_value(SkinDials::default().lightness)
@@ -155,7 +159,7 @@ pub(super) fn system_pane(
             ["Accent hue", "Accent saturation"],
             |hue, amount| rgb(skin::accent_color(hue, amount)),
         );
-        crate::widgets::checkbox(ui, &mut interaction.frameless, "Hide tab bars (Tab)").on_hover_text(
+        crate::widgets::checkbox(ui, &mut interaction.prefs.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide the dock's tab bars, pane headers, fold buttons and rails for a continuous picture; a folded section then takes no room. Press Tab to toggle while not editing text.",
         );
         if let Some(own) = &mut interaction.own_window {

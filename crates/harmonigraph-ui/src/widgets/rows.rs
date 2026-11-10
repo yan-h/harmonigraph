@@ -33,6 +33,7 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, label: impl Into<egui::WidgetTe
 }
 
 /// The same checkbox with a mixed state for a group of independent switches.
+#[allow(clippy::disallowed_methods)] // the wrapper the rule sends callers to
 pub(crate) fn checkbox_indeterminate(
     ui: &mut Ui,
     checked: &mut bool,
@@ -52,6 +53,7 @@ pub(crate) fn checkbox_indeterminate(
 
 /// A [`checkbox`] with no text of its own, for a switch whose name is drawn
 /// beside it by something else: a section heading.
+#[allow(clippy::disallowed_methods)] // the wrapper the rule sends callers to
 pub(crate) fn checkbox_box(ui: &mut Ui, checked: &mut bool) -> Response {
     let scale = theme::ui_scale(ui.ctx());
     ui.scope(|ui| {
@@ -431,6 +433,7 @@ fn choice_menu<T: Copy + PartialEq>(
 /// button. Restore ordinary widget colors inside its popup so the other choices
 /// and action menus retain their own states, and give the popup the look every
 /// other menu wears.
+#[allow(clippy::disallowed_methods)] // the wrapper the rule sends callers to
 pub(crate) fn selected_combo<R>(
     ui: &mut Ui,
     combo: egui::ComboBox,

@@ -1,5 +1,7 @@
 //! Editor appearance history. The live document remains PictureState's;
-//! snapshots deliberately exclude host state, navigation and output settings.
+//! snapshots deliberately exclude host state and output settings. The
+//! Analyzer's navigation (pitch range, History, Level) is part of the look, so
+//! undo and the slots carry it (#1635).
 
 use crate::{AppearanceDocument, SpectrumConfig};
 use harmonigraph_scene::{Camera, ViewConfig};
@@ -206,23 +208,10 @@ impl AppearanceEditor {
         ctx: &egui::Context,
         text_edit_was_focused: bool,
     ) {
-        // A wheel or pinch zoom of a picture is a gesture like a drag: it
-        // closes as one entry on the first frame after the scroll has settled.
-        // egui keeps `is_scrolling` true between a trackpad's events and until
-        // ~150 ms after the last wheel event, and a picture may zero the
-        // frame's scroll delta once it has taken it, so the delta says nothing
-        // about whether the wheel is still turning. Any scroll in the window
-        // holds the entry open, so two look edits made inside one continuous
-        // scroll merge; that is accepted. A frame that scrolls a settings pane
-        // changes no look, so it holds nothing open on its own.
-        let navigating = ctx.input(|i| i.is_scrolling() || i.zoom_delta() != 1.0);
-        self.history.observe(
-            before,
-            appearance,
-            crate::kept_focus(ctx)
-                && (navigating
-                    || ctx.dragged_id().is_some() && ctx.input(|i| i.pointer.primary_down())),
-        );
+        // A drag, wheel or pinch closes as one entry on the first frame after
+        // it ends. A frame that scrolls a settings pane changes no look, so it
+        // holds nothing open on its own.
+        self.history.observe(before, appearance, crate::gesture_open(ctx));
         // TextEdit leaves key events in the input even after handling them.
         // Keep its ownership for the whole frame: Undo followed by Enter can
         // undo text and release focus in one pass, but must not also undo a look.
@@ -529,6 +518,59 @@ mod tests {
         assert_one_undoable_zoom(crate::panes::spectral::Navigation::Preview, |frame| {
             (2..5).contains(&frame).then(|| egui::vec2(0.0, 20.0))
         });
+    }
+
+    #[test]
+    fn a_secondary_button_drag_of_the_docked_analyzer_is_one_undoable_look_edit() {
+        // egui starts a drag on a press of any button, and the Analyzer pans on
+        // `dragged()`, so a right-button drag moves the look like a left one.
+        let ctx = crate::tests::probe::themed();
+        let mut state = crate::tests::probe::fresh_picture();
+        state.appearance.spectrum.low_midi = 36.0;
+        state.appearance.spectrum.high_midi = 96.0;
+        let original = Look::capture(&state.appearance);
+        let mut editor = AppearanceEditor::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 500.0));
+        let start = rect.center();
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut events: Vec<Vec<egui::Event>> =
+            vec![vec![egui::Event::PointerMoved(start)], vec![button(start, true)]];
+        let mut at = start;
+        for _ in 0..12 {
+            at += egui::vec2(15.0, 0.0);
+            events.push(vec![egui::Event::PointerMoved(at)]);
+        }
+        events.push(vec![button(at, false)]);
+        events.push(vec![]);
+        let mut moving_frames = 0;
+        for events in events {
+            let _ = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(rect), events, ..Default::default() },
+                |ui| {
+                    let before = Look::capture(&state.appearance);
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    crate::panes::spectral::spectral_pane(
+                        &mut child,
+                        &mut state,
+                        0.0,
+                        1,
+                        1.0,
+                        crate::panes::spectral::Navigation::Docked,
+                    );
+                    moving_frames += usize::from(before != Look::capture(&state.appearance));
+                    editor.end_frame(before, &mut state.appearance, ui.ctx(), false);
+                },
+            );
+        }
+        assert!(moving_frames >= 3, "the drag must pan over several frames: {moving_frames}");
+        assert_eq!(editor.history.undo.len(), 1);
+        editor.history.undo(&mut state.appearance);
+        assert_eq!(Look::capture(&state.appearance), original);
     }
 
     #[test]
