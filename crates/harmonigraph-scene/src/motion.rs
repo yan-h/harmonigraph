@@ -1293,6 +1293,38 @@ mod tests {
             assert_eq!(node.slice_progress[..span], [1.0; 11][..span], "a slice retracted");
         }
     }
+    /// [`NoteAnimationConfig::departure`] is the span the repaint guard and the
+    /// replay horizon take for a departure, so it has to be the one the
+    /// schedule here actually runs: a node is still leaving just before it
+    /// ends and has left just after. A departure lengthened here or shortened
+    /// there would otherwise leave slices moving while the loop sleeps.
+    #[test]
+    fn a_released_node_leaves_over_exactly_its_departure_span() {
+        let fade = 0.8;
+        let mut view = view();
+        view.note_animation.stagger_spread = 0.6;
+        view.note_animation.fade_out_delay = 0.3;
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        let off_at = 1.5;
+        tracker.handle_event(on(0.0, 60));
+        let end = off_at + view.note_animation.departure(fade);
+        let mut frames = Vec::new();
+        for k in 0..=500 {
+            let now = f64::from(k) * 0.01;
+            if (now - off_at).abs() < 1e-9 {
+                tracker.handle_event(off(off_at, 60));
+            }
+            frames.push((now, draw_duration(&mut motion, &mut tracker, &view, now, false, fade)));
+        }
+        let span = frames[0].1.octave_layout.span as usize;
+        assert!(span > 2, "the fixture's wheel is not staggered");
+        let leaving = |t: f64| {
+            let node = origin(&frames.iter().find(|(now, _)| *now >= t - 1e-9).unwrap().1);
+            node.activation > 0.0 || node.slice_progress[..span].iter().any(|&p| p > 0.0)
+        };
+        assert!(leaving(end - 0.03), "the node had left before its departure span ended");
+        assert!(!leaving(end + 0.02), "the node was still leaving after its departure span");
+    }
     /// A surface hidden through most of a wait far longer than the fade comes
     /// back to the wheel still standing: the replay horizon carries the delay,
     /// or the reset would seed the node at rest mid-wait.
