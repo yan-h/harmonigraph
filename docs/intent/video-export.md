@@ -27,3 +27,7 @@
 - Upload the full H.264 video; keep a small AV1 copy (SVT-AV1, preset 6, CRF 28) rather than the video once it is uploaded. **Archive copy** writes it beside each export, off fresh, and a recorded look takes it from the Video pane like the Encoder.
 - Why AV1 from the finished video, measured on a 20 s slice of `take-2026-11-04_04-22-42` at 2560x1440@60: 6.3% of the video's bytes at VMAF 96.3 (worst frame 95.8) against it. x265 at CRF 20 matched that at 9.7%; 10-bit, preset 4 and `tune=0` bought nothing. Encoding it from the finished video copies the soundtrack and its alignment as they are.
 - Why not upload the copy instead: YouTube names only H.264 for uploads, and a simulated YouTube re-encode lost 0.5-0.8 VMAF more from the copy than from the full video.
+
+## 2026-11-09 (performance audit, #1670)
+
+- The Archive copy stays a second pass after the video: time to the video matters more than time to both files. Encoding the two side by side in one ffmpeg finished both in 55 s against 79.5 s (5,302 frames at 2560x1440@60), but held the video back from 32 s to 55 s, and the video is the file used first. #1670 Q1
