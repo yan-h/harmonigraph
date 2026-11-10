@@ -392,6 +392,33 @@ mod tests {
         }
     }
 
+    /// A step that finds the whole ring waiting, as a faster-than-realtime
+    /// bounce leaves it with the window shut, must not leave megabytes in the
+    /// spare buffers for the plugin's lifetime. The delivery list is the one
+    /// that could: it holds an entry per callback, and 64-frame blocks filled
+    /// 2,048 slots, 31 MB of them while every slot was sized for a column.
+    #[test]
+    fn a_full_ring_step_leaves_little_in_the_spare_buffers() {
+        let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
+        let format =
+            crate::audio_ingress::Format { channels: 2, sample_rate: 48_000.0, sidechain: false };
+        let block = 64;
+        let frames = crate::AUDIO_RING_CAPACITY / 2;
+        for first in (0..frames).step_by(block) {
+            tx.publish(
+                block,
+                format,
+                first as f64 / 48_000.0,
+                (0..block * 2).map(|i| ((first * 2 + i) as f32 * 0.047).sin()),
+            );
+        }
+        drain_audio(&mut shared, 5.0);
+        let spare = &shared.input.spare;
+        assert!(spare.deliveries.capacity() >= frames / block, "the step must take every block");
+        let held = spare.deliveries.capacity() * size_of::<harmonigraph_ui::Delivery>();
+        assert!(held < 100_000, "the spare delivery list holds {held} bytes");
+    }
+
     /// Several seconds across many drains, so a wall-clock mapper has time to
     /// squeeze successive batches together. Compare the real analyzer and note
     /// publication paths, not just timestamps computed by the clock in isolation.
