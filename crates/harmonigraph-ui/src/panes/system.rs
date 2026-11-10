@@ -124,7 +124,7 @@ pub(super) fn system_pane(
         // offline renderer draws the picture panes and never this.
         ValueBar::new(&mut interaction.prefs.ui_scale, crate::theme::UI_SCALE_RANGE, "Interface scale")
             .percent()
-            .default_value(crate::state::default_ui_scale())
+            .default_value(crate::EditorPrefs::default().ui_scale)
             .show(ui)
             .on_hover_text(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",

@@ -303,7 +303,10 @@ impl Default for EditorPrefs {
         Self {
             folded_sections: Default::default(),
             frame_rate: FrameRate::default(),
-            ui_scale: default_ui_scale(),
+            // The design size, which a fresh install opens at and a blob
+            // without the key loads as; an `f32`'s own default of 0.0 is a
+            // scale of nothing.
+            ui_scale: 1.0,
             frameless: false,
             skin_dials: Default::default(),
             perf_pos: None,
@@ -666,15 +669,6 @@ impl SharedState {
         self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
         false
     }
-}
-
-/// The chrome scale a blob without one loads as: the design size, which is
-/// what a fresh install opens at.
-///
-/// Named rather than `#[serde(default)]`, which for an `f32` is 0.0 — a scale
-/// of nothing.
-pub(crate) fn default_ui_scale() -> f32 {
-    1.0
 }
 
 /// The current [`UiPersist`] layout version, and the FLOOR under it. Bumped

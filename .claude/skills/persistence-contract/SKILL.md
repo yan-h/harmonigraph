@@ -29,7 +29,7 @@ grep -rn --include='*.rs' -A4 '#\[serde(default)\]' crates/ | grep 'pub struct'
 
 ### Editor workspace defaults
 
-`EditorPrefs`'s `Default` holds the UI scale's design size (`default_ui_scale()`), since an `f32` default of 0.0 is a scale of nothing;
+`EditorPrefs`'s `Default` is the one source of the UI scale's design size (1.0), since an `f32` default of 0.0 is a scale of nothing;
 `UiPersist` derives its `Default` from its parts'.
 A missing editor version defaults to 0 and is refused by the version floor.
 
