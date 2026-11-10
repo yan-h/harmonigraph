@@ -2507,13 +2507,22 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     partial.params.insert("map-fifths".into(), nice_plug::plugin::ParamValue::I32(50));
     partial.params.insert("map-thirds".into(), nice_plug::plugin::ParamValue::I32(-50));
     partial.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(1));
-    for id in ["map-fifths-extension", "map-thirds-extension", "map-sevenths-extension"] {
+    for id in [
+        "map-fifths-extension",
+        "map-thirds-extension",
+        "map-sevenths-extension",
+        "tuning-engine",
+        "lattice-map",
+    ] {
         partial.params.remove(id);
     }
     device.load(partial, false);
     device.run(192, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
+        // The instance was in Lattice Map on slot 1: neither leaks in.
+        assert_eq!(preview.playback.engine, TuningEngine::Off);
+        assert_eq!(preview.playback.selected, 0);
         assert_eq!(preview.offsets.extension, harmonigraph_core::LatticePos::ORIGIN);
         assert_eq!(preview.playback.offset, harmonigraph_core::LatticePos::new(9, -9, -9));
         assert_eq!(plugin.params.map_playback.lock().offset, preview.playback.offset);

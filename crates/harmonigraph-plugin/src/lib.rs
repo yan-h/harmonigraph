@@ -704,9 +704,10 @@ impl Plugin for Harmonigraph {
     fn filter_state(state: &mut nice_plug::plugin::PluginState) {
         // Plain restore bypasses IntParam's range normalization, while the
         // host's label clamps. Clamp all six lanes, Map Follow, the engine and
-        // the map index, so the value loaded is the value shown. Absent lanes
-        // and Follow default so a previous preset cannot leak in; an absent
-        // engine or map keeps the instance's own.
+        // the map index, so the value loaded is the value shown. Any of them
+        // absent takes its default so a previous preset cannot leak in: every
+        // state the plugin saves carries all of them, so only an older or
+        // hand-made one omits any.
         use nice_plug::plugin::ParamValue;
         for lane in &lattice_maps::HOST_LANES {
             let value = match state.params.get(lane.id) {
@@ -720,12 +721,16 @@ impl Plugin for Harmonigraph {
             _ => Follow::default(),
         };
         state.params.insert("map-follow".into(), ParamValue::I32(follow.index()));
-        if let Some(ParamValue::I32(value)) = state.params.get_mut("tuning-engine") {
-            *value = TuningEngine::from_index(*value).index();
-        }
-        if let Some(ParamValue::I32(value)) = state.params.get_mut("lattice-map") {
-            *value = (*value).clamp(0, lattice_maps::LAST_MAP);
-        }
+        let engine = match state.params.get("tuning-engine") {
+            Some(ParamValue::I32(value)) => TuningEngine::from_index(*value),
+            _ => TuningEngine::default(),
+        };
+        state.params.insert("tuning-engine".into(), ParamValue::I32(engine.index()));
+        let map = match state.params.get("lattice-map") {
+            Some(ParamValue::I32(value)) => (*value).clamp(0, lattice_maps::LAST_MAP),
+            _ => 0,
+        };
+        state.params.insert("lattice-map".into(), ParamValue::I32(map));
     }
 
     const NAME: &'static str = "Harmonigraph";
