@@ -182,7 +182,7 @@ except that a Hardware frame over 4096 px a side goes through x264, which the ex
 each stretch where nothing kept it animating, so nothing on screen could move, with how often it drew then;
 the frames after each opening's first note;
 and missed refreshes in each export's first 30 s against the 30 s before it.
-So the measurements #1670 owes need only a session that includes them:
+So all three need only one session that includes them:
 leave the transport stopped for longer than the Span plus a minute, open the editor with an empty roll and play a note, and export once per encoder while it plays.
 
 ## Architecture
