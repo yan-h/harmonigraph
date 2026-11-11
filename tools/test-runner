@@ -1,0 +1,184 @@
+#!/usr/bin/env -S python3 -I
+"""Cargo's runner for every binary it runs: logs a failing local test binary.
+
+Invoked by cargo as `test-runner <binary> <args...>` (see `.cargo/config.toml`).
+A test or bench binary run locally is spawned with its stdout passed through
+live and read on the way for the names of failing tests; if it fails, one JSON
+line goes to the failure log. Everything else is exec'd untouched: a binary
+outside `deps/` (`cargo run`, examples), a GitHub Actions run, `--list`, and a
+log pointed at /dev/null.
+
+Why it exists: agents run the tests before every push, so almost every failure
+a test catches happens on a local machine and never reaches CI, whose history
+can only say what a test costs. The guard audit of 2026-11-10 had to dig local
+failures out of agent transcripts; this records them at the source (#1711).
+
+The runner never changes a verdict: the binary's exit status, or the signal it
+died of, is passed on exactly, and a log that cannot be written costs a warning.
+"""
+
+import os
+import signal
+import sys
+
+ARGS = sys.argv[1:]
+# Python starts with these ignored, and an ignored signal survives exec and
+# spawn: the binary must start with the dispositions cargo gave the runner.
+INHERITED = tuple(
+    getattr(signal, name) for name in ("SIGPIPE", "SIGXFSZ") if hasattr(signal, name)
+)
+
+
+def passthrough():
+    for number in INHERITED:
+        signal.signal(number, signal.SIG_DFL)
+    os.execv(ARGS[0], ARGS)
+
+
+def log_path():
+    override = os.environ.get("HARMONIGRAPH_TEST_FAILURE_LOG")
+    if override:
+        return override
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(state, "harmonigraph", "test-failures.jsonl")
+
+
+LOG = log_path()
+if (
+    not ARGS
+    or os.environ.get("GITHUB_ACTIONS")
+    or LOG == os.devnull
+    # Test and bench binaries live in `<target>/<profile>/deps/`; `cargo run`
+    # binaries and examples do not.
+    or os.path.basename(os.path.dirname(ARGS[0])) != "deps"
+    or "--list" in ARGS[1:]
+):
+    if not ARGS:
+        sys.exit("usage: test-runner <binary> [args...]")
+    passthrough()
+
+argv = list(ARGS)
+# A pipe is not a terminal, so libtest would drop its colour; ask for it when
+# the terminal is really there and the caller has not chosen a colour or format.
+if os.isatty(1) and not any(a.startswith(("--color", "--format")) for a in argv[1:]):
+    argv.append("--color=always")
+
+read, write = os.pipe()
+try:
+    child = os.posix_spawn(
+        argv[0],
+        argv,
+        os.environ,
+        file_actions=[(os.POSIX_SPAWN_DUP2, write, 1), (os.POSIX_SPAWN_CLOSE, read)],
+        setsigdef=INHERITED,
+    )
+except OSError:
+    os.close(read)
+    os.close(write)
+    passthrough()
+os.close(write)
+
+# Ctrl-C reaches the whole foreground group, the binary included; the runner
+# waits for the binary's own answer to it rather than dying first. A signal
+# sent to the runner alone is handed on.
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+for forwarded in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+    signal.signal(forwarded, lambda number, _: os.kill(child, number))
+
+def may_name_a_failure(line):
+    return line.startswith(b"---- ") or b"FAILED" in line
+
+
+# Only the lines that can name a failing test are kept, so a long or chatty
+# run costs no memory.
+failed, pending = set(), b""
+while True:
+    try:
+        chunk = os.read(read, 65536)
+    except InterruptedError:
+        continue
+    if not chunk:
+        break
+    try:
+        os.write(1, chunk)
+    except BrokenPipeError:
+        pass
+    lines = (pending + chunk).split(b"\n")
+    pending = lines.pop()
+    for line in lines:
+        if may_name_a_failure(line):
+            failed.add(line)
+os.close(read)
+if may_name_a_failure(pending):
+    failed.add(pending)
+
+while True:
+    try:
+        _, wait_status = os.waitpid(child, 0)
+        break
+    except InterruptedError:
+        continue
+code = os.waitstatus_to_exitcode(wait_status)
+
+if code != 0:
+    try:
+        import datetime
+        import json
+        import re
+        import subprocess
+
+        def git(*arguments):
+            result = subprocess.run(
+                ["git", *arguments], capture_output=True, text=True, stdin=subprocess.DEVNULL
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+
+        ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+        names = set()
+        for line in failed:
+            text = ansi.sub("", line.decode(errors="replace")).rstrip("\r")
+            # libtest's pretty line, its terse (`-q`) line, and the header of a
+            # failure's captured output, which `--nocapture` leaves out.
+            match = (
+                re.fullmatch(r"test (\S+) \.\.\. FAILED", text)
+                or re.fullmatch(r"(\S+) --- FAILED", text)
+                or re.fullmatch(r"---- (\S+) stdout ----", text)
+            )
+            if match:
+                names.add(match.group(1))
+        binary = os.path.basename(argv[0])
+        record = {
+            "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "worktree": git("rev-parse", "--show-toplevel"),
+            "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+            "head": git("rev-parse", "HEAD"),
+            "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+            # `harmonigraph_ui-0123abcd` -> `harmonigraph_ui`: the crate target,
+            # without the hash that changes with every build configuration.
+            "binary": re.sub(r"-[0-9a-f]{16}$", "", binary),
+            "args": ARGS[1:],
+            "status": code if code > 0 else signal.Signals(-code).name,
+            "tests": sorted(names),
+        }
+        line = (json.dumps(record) + "\n").encode()
+        os.makedirs(os.path.dirname(os.path.abspath(LOG)), exist_ok=True)
+        # One write to an O_APPEND descriptor, so binaries failing at once in
+        # parallel worktrees append whole lines rather than interleaving them.
+        descriptor = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(descriptor, line)
+        finally:
+            os.close(descriptor)
+    except Exception as error:  # noqa: BLE001 -- a log must never change a verdict
+        print(f"test-runner: could not record this failure in {LOG}: {error}", file=sys.stderr)
+
+if code < 0:
+    # Die of the same signal, so cargo reports it as the binary's own death.
+    try:
+        signal.signal(-code, signal.SIG_DFL)
+    except (OSError, ValueError):
+        pass  # SIGKILL and SIGSTOP take no handler, and need none.
+    os.kill(os.getpid(), -code)
+    # A signal whose default is to carry on (none a test dies of) ends here.
+    os._exit(128 - code)
+os._exit(code)

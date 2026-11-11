@@ -30,3 +30,20 @@ rustc-wrapper = "sccache"
 # supported. nice-plug-xtask's Info.plist carries no LSMinimumSystemVersion.
 [env]
 MACOSX_DEPLOYMENT_TARGET = "14.0"
+
+# Every binary cargo runs — `cargo test`, `cargo run`, through `ci.sh` or not —
+# goes through tools/test-runner, which appends a line to a log outside the
+# worktree when a LOCAL test binary fails (docs/development.md). Agents run the
+# tests before every push, so nearly every failure a test catches happens here
+# and never reaches CI; the guard audit of 2026-11-10 had to dig them out of
+# transcripts, and the next one (#1711) reads this log instead.
+#
+# A runner in this file rather than a hook in ci.sh, because 18 of the audit's
+# 28 local regression-test failures came from a plain `cargo test` and 1 from
+# ci.sh. It passes everything else, and every run in GitHub Actions, straight
+# to exec. `cfg(all())` matches every target, so a cloud session's Linux build
+# takes it too; the relative path resolves against this file's parent, so it
+# names the script in whichever worktree is building. Doctests never go
+# through a runner.
+[target.'cfg(all())']
+runner = "tools/test-runner"
