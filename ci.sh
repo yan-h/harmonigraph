@@ -288,6 +288,14 @@ run golden_diff
 # stale (#947). The real verdict arrived on the PR, as a `Metal shader assets`
 # workflow failing `strict-catalog` beside a green Full CI.
 #
+# This gate is now the ONE failing verdict on a stale corpus: the workflow
+# still generates the replacement, but reports the staleness rather than
+# failing on it. Both failing made every stale corpus two red checks — red
+# together on all 94 pushes where both finished, 302 of 594 CI failures from
+# July to November — and neither ever caught a defect the other missed. So
+# this line is no longer one of two: dropping it, or letting it skip on the
+# macOS runner, would leave a stale corpus with no red check at all.
+#
 # `strict` is what turns that into a red test here: it drops the
 # compile-from-source fallback, so a missing key becomes a rejected library and
 # a pipeline that fails naming the key and the pass it was for. The test is the

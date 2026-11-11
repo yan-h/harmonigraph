@@ -45,7 +45,8 @@ So a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unm
 
 Regenerate on the runner, not here.
 On a PR there is nothing to dispatch:
-the `Metal shader assets` run whose check fails goes on to generate and validate the replacement, and still fails.
+the `Metal shader assets` run whose check fails goes on to generate and validate the replacement, and reports the stale corpus as a warning rather than failing;
+`Full CI`'s strict-catalog gate is the red one until the replacement is committed.
 Without a PR, dispatch it, and it does the same:
 
 ```

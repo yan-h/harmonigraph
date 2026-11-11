@@ -158,7 +158,7 @@ def fetch(directory):
     """Import the corpus `Metal shader assets` generated for the checked-out commit.
 
     Keyed on `HEAD` rather than a PR or branch, so a run on an older push can
-    never be the one imported: push, let the run fail, then fetch.
+    never be the one imported: push, let the run finish, then fetch.
     """
     def gh(*arguments):
         result = subprocess.run(["gh", *arguments], cwd=ROOT, text=True, stdout=subprocess.PIPE)
