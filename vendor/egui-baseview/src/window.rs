@@ -779,6 +779,32 @@ pub const MAX_FRAME_GAP: f64 = 0.08;
 /// chosen rate once a resize ends, under 30 at 144 Hz, and nothing while idle.
 const RESIZE_HOLD: Duration = Duration::from_millis(200);
 
+/// How far past its deadline, in seconds, [`paced_divisor`] needs a frame to
+/// land before pacing the link to it rather than to the next.
+///
+/// The deadline is `now` after one frame's UI pass, and the frame that meets
+/// it compares it with `now` after its own, so a frame landing a margin past
+/// the deadline draws only if its callback came no more than that margin
+/// earlier, and its pass ran no more than that margin faster, than the last
+/// one's. In three Bitwig frame logs (#1703) two idle passes differ by a
+/// median 0.13 ms, by 1.2 to 1.5 ms one time in a hundred and 3 ms one in a
+/// thousand; the lateness of two link callbacks differs by up to 1 ms one time
+/// in a hundred and 2 ms one in a thousand. A frame closer to the deadline than these draws on
+/// a coin toss, and one that loses runs a pass for nothing and draws a refresh
+/// late: just under 60 Hz the poll's third refresh landed 0.05 ms past it.
+/// 2 ms clears the hundredth case of either.
+///
+/// An absolute time and not a share of the frame, because the jitter belongs
+/// to the pass and the run loop rather than to the display: a share of a slow
+/// chosen rate waits out frames far clear of it. Capped at half a chosen frame
+/// in `paced_divisor`, so a deadline of now still paces the chosen rate.
+///
+/// Every delayed repaint pays it, not only the idle poll: a delay that lands
+/// within it of a refresh waits a refresh more. harmonigraph-ui's startup
+/// splash asks for 14 ms rather than 16 for that reason, so a larger margin
+/// owes it a shorter delay.
+const PACE_MARGIN: f64 = 0.002;
+
 /// The divisor to pace the display link at until the next frame: `chosen`, or
 /// a whole multiple of it that skips the frames which could draw nothing
 /// because they fall before the deadline `until_due` away (`None`: there is
@@ -786,21 +812,20 @@ const RESIZE_HOLD: Duration = Duration::from_millis(200);
 ///
 /// The UI pass runs on every frame the link paces, drawn or not, and an idle
 /// editor waiting out its 50 ms poll ran it on every refresh for nothing
-/// (#1676). So the link skips to the first of the chosen rate's frames
-/// strictly past the deadline, which is the frame `wants_render` would draw
-/// on anyway: the drawn cadence is the one the chosen rate gives, and only the
-/// undrawn passes go. One that lands exactly on the deadline is skipped,
-/// because it need not draw: the deadline is `now` after this frame's UI pass,
-/// and that frame compares it with `now` after its own, so it draws only if
-/// its pass ran no faster than this one. A deadline of now (the UI asked for
-/// a frame at once, as an animating editor does every frame) is the chosen
-/// rate itself, so the first animating frame restores it. A frame that still
-/// lands a hair before its deadline is no loss: it reads the deadline as
-/// moments away and paces the next of the chosen rate's frames. What the UI
-/// does not schedule waits for the next of these frames:
-/// an event restores the chosen rate at once (see `on_event`), but a change
-/// from another thread (a note, audio, a host parameter) is seen when the
-/// deadline comes.
+/// (#1676). So the link skips to the first of the chosen rate's frames at
+/// least [`PACE_MARGIN`] past the deadline, which is the frame `wants_render`
+/// would draw on anyway: the drawn cadence is the one the chosen rate gives,
+/// and only the undrawn passes go. One closer than that is skipped because it
+/// may not draw (see [`PACE_MARGIN`]); what that costs is a frame landing up
+/// to the margin past the deadline is waited out to the next chosen frame. A
+/// deadline of now (the UI asked for a frame at once, as an animating editor
+/// does every frame) is the chosen rate itself, so the first animating frame
+/// restores it. A frame that still lands a hair before its deadline is no
+/// loss: it reads the deadline as moments away and paces the next of the
+/// chosen rate's frames. What the UI does not schedule waits for the next of
+/// these frames: an event restores the chosen rate at once (see `on_event`),
+/// but a change from another thread (a note, audio, a host parameter) is seen
+/// when the deadline comes.
 ///
 /// A size change is the exception: `since_resize` (how long ago the window
 /// last changed size) within [`RESIZE_HOLD`] keeps the chosen rate.
@@ -814,7 +839,8 @@ fn paced_divisor(
     }
     let wait = until_due.map_or(MAX_FRAME_GAP, |due| due.as_secs_f64().min(MAX_FRAME_GAP));
     let most = (MAX_FRAME_GAP / period).floor().max(1.0);
-    let frames = ((wait / period).floor() + 1.0).min(most);
+    let margin = PACE_MARGIN.min(period / 2.0);
+    let frames = (((wait + margin) / period).floor() + 1.0).min(most);
     chosen * frames as u32
 }
 
@@ -1053,7 +1079,7 @@ mod wants_render_tests {
                 let step = f64::from(chosen) * refresh;
                 assert_eq!(idle % chosen, 0, "{hz} Hz, divisor {chosen}: off the chosen grid");
                 assert!(gap > 0.05 - 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
-                assert!(gap < 0.05 + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap < 0.05 + PACE_MARGIN + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
                 assert!(gap <= MAX_FRAME_GAP + 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
                 assert_eq!(paced_divisor(chosen, refresh, Some(Duration::ZERO), None), chosen);
             }
@@ -1066,8 +1092,43 @@ mod wants_render_tests {
         assert_eq!(paced_divisor(3, 1.0 / 60.0, poll, None), 3);
         // Quarter at 60 Hz is already slower than the poll.
         assert_eq!(paced_divisor(4, 1.0 / 60.0, poll, None), 4);
+        // 75 Hz's fourth refresh lands 3.3 ms past the poll, clear of the
+        // margin, so it keeps it.
+        assert_eq!(paced_divisor(1, 1.0 / 75.0, poll, None), 4);
         // Nothing asked for at all: still a pass every 0.08 s or sooner.
         assert_eq!(paced_divisor(1, 1.0 / 144.0, None, None), 11);
+    }
+
+    /// The frame paced for an idle poll draws even when it reaches its UI
+    /// pass's end up to [`PACE_MARGIN`] sooner after its refresh than the
+    /// frame that set the deadline did. Just under 60 and 120 Hz the poll's
+    /// third and sixth refreshes land 0.05 ms past it, which a pass that much
+    /// faster misses, and the missed frame ran a pass for nothing and drew a
+    /// refresh late (#1703). Pacing cannot help where the link already runs
+    /// unslowed because its next chosen frame is past `MAX_FRAME_GAP` (Third
+    /// near 60 Hz, Quarter up to 90 Hz), so those are left out.
+    #[test]
+    fn the_paced_frame_draws_though_its_pass_runs_faster() {
+        let poll = Duration::from_millis(50);
+        let faster = Duration::from_secs_f64(PACE_MARGIN) - Duration::from_micros(100);
+        let pass = Duration::from_millis(3);
+        let fired = Instant::now();
+        let deadline = fired + pass + poll;
+        for hz in [59.94, 60.0, 75.0, 90.0, 100.0, 119.88, 120.0, 144.0, 165.0] {
+            let refresh = 1.0 / hz;
+            for chosen in 1..=4 {
+                let divisor = paced_divisor(chosen, refresh, Some(poll), None);
+                if divisor == chosen && f64::from(2 * chosen) * refresh > MAX_FRAME_GAP {
+                    continue;
+                }
+                let next = fired + Duration::from_secs_f64(f64::from(divisor) * refresh);
+                let now = next + pass - faster;
+                assert!(
+                    wants_render(false, Some(deadline), None, poll, now),
+                    "{hz} Hz, divisor {chosen}: paced {divisor} lands too close to the poll"
+                );
+            }
+        }
     }
 
     /// A host resize on macOS arrives as no event, only as a size the next

@@ -92,7 +92,11 @@ pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
         ));
     }
     if status != Status::Failed {
-        crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(16));
+        // About every 60 Hz refresh, asked a little under one: the shell
+        // paces the link only to a refresh at least 2 ms past the deadline
+        // (egui-baseview's `PACE_MARGIN`), and 16 ms would wait for every
+        // second refresh at 60 and 120 Hz.
+        crate::repaint_after(ui.ctx(), std::time::Duration::from_millis(14));
     }
     ui.ctx().data_mut(|data| data.insert_temp(id(), loading));
     true
