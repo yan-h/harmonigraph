@@ -787,13 +787,22 @@ const RESIZE_HOLD: Duration = Duration::from_millis(200);
 /// The UI pass runs on every frame the link paces, drawn or not, and an idle
 /// editor waiting out its 50 ms poll ran it on every refresh for nothing
 /// (#1676). So the link skips to the first of the chosen rate's frames
-/// strictly past the deadline, which is the frame `wants_render` would draw
-/// on anyway: the drawn cadence is the one the chosen rate gives, and only the
-/// undrawn passes go. One that lands exactly on the deadline is skipped,
-/// because it need not draw: the deadline is `now` after this frame's UI pass,
-/// and that frame compares it with `now` after its own, so it draws only if
-/// its pass ran no faster than this one. A deadline of now (the UI asked for
-/// a frame at once, as an animating editor does every frame) is the chosen
+/// past the deadline, which is the frame `wants_render` would draw on anyway:
+/// the drawn cadence is the one the chosen rate gives, and only the undrawn
+/// passes go. "Past" means by at least a quarter of a chosen frame, because a
+/// frame closer than that need not draw: the deadline is `now` after this
+/// frame's UI pass, and that frame compares it with `now` after its own, so a
+/// frame landing a margin past the deadline draws only if its pass ran no more
+/// than that margin faster than this one. Two idle passes in Bitwig differ by
+/// about 0.13 ms, and by over a millisecond about one time in a hundred, so
+/// a frame landing within that of the deadline draws on a coin toss, and one
+/// that loses runs a pass for nothing and draws a refresh late. Just under
+/// 60 Hz the poll's third refresh lands 0.05 ms past it, so it would lose
+/// about every other poll (#1703). A quarter of a chosen frame (4.2 ms at
+/// 60 Hz, 1.7 at 144) clears nearly all of that; what it costs is that a frame
+/// landing within it is waited out to the next, at most one chosen frame later
+/// than the poll asked for. A deadline of now (the UI asked for a frame at
+/// once, as an animating editor does every frame) is the chosen
 /// rate itself, so the first animating frame restores it. A frame that still
 /// lands a hair before its deadline is no loss: it reads the deadline as
 /// moments away and paces the next of the chosen rate's frames. What the UI
@@ -814,7 +823,7 @@ fn paced_divisor(
     }
     let wait = until_due.map_or(MAX_FRAME_GAP, |due| due.as_secs_f64().min(MAX_FRAME_GAP));
     let most = (MAX_FRAME_GAP / period).floor().max(1.0);
-    let frames = ((wait / period).floor() + 1.0).min(most);
+    let frames = ((wait / period + 0.25).floor() + 1.0).min(most);
     chosen * frames as u32
 }
 
@@ -1038,10 +1047,10 @@ mod wants_render_tests {
     }
 
     /// Waiting out the 50 ms idle poll, the link skips to the first of the
-    /// chosen rate's frames past it, at any display rate, never further apart
-    /// than the cap unless the chosen rate is, and never faster than the
-    /// chosen rate; a frame asked for at once (an animating editor) puts the
-    /// chosen rate back.
+    /// chosen rate's frames a quarter of one past it, at any display rate,
+    /// never further apart than the cap unless the chosen rate is, and never
+    /// faster than the chosen rate; a frame asked for at once (an animating
+    /// editor) puts the chosen rate back.
     #[test]
     fn an_idle_poll_slows_the_link_to_the_frame_it_draws_on() {
         let poll = Some(Duration::from_millis(50));
@@ -1052,8 +1061,10 @@ mod wants_render_tests {
                 let gap = f64::from(idle) * refresh;
                 let step = f64::from(chosen) * refresh;
                 assert_eq!(idle % chosen, 0, "{hz} Hz, divisor {chosen}: off the chosen grid");
-                assert!(gap > 0.05 - 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
-                assert!(gap < 0.05 + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
+                let margin = step / 4.0;
+                let capped = gap + step > MAX_FRAME_GAP + 1e-9;
+                assert!(gap > 0.05 + margin - 1e-9 || capped, "{hz} Hz, {chosen}: {gap} s");
+                assert!(gap < 0.05 + margin + step + 1e-9, "{hz} Hz, {chosen}: {gap} s");
                 assert!(gap <= MAX_FRAME_GAP + 1e-9 || idle == chosen, "{hz} Hz, {chosen}: {gap} s");
                 assert_eq!(paced_divisor(chosen, refresh, Some(Duration::ZERO), None), chosen);
             }
@@ -1068,6 +1079,39 @@ mod wants_render_tests {
         assert_eq!(paced_divisor(4, 1.0 / 60.0, poll, None), 4);
         // Nothing asked for at all: still a pass every 0.08 s or sooner.
         assert_eq!(paced_divisor(1, 1.0 / 144.0, None, None), 11);
+    }
+
+    /// The frame paced for an idle poll draws even when its UI pass runs a
+    /// millisecond faster than the pass that set the deadline, about the
+    /// 99th percentile of the difference between two idle passes in Bitwig's
+    /// frame logs. Just under 60 and 120 Hz the poll's third and sixth
+    /// refreshes land 0.05 ms past it, which a pass that much faster misses,
+    /// and the missed frame ran a pass for nothing and drew a refresh late
+    /// (#1703). Third just under 60 Hz is the exception it cannot help: the
+    /// chosen frame is itself the poll's period, and the next one is past
+    /// `MAX_FRAME_GAP`, so the link runs at the chosen rate, unslowed.
+    #[test]
+    fn the_paced_frame_draws_though_its_pass_runs_faster() {
+        let poll = Duration::from_millis(50);
+        let faster = Duration::from_millis(1);
+        let pass = Duration::from_micros(1500);
+        let fired = Instant::now();
+        let deadline = fired + pass + poll;
+        for hz in [59.94, 60.0, 75.0, 90.0, 100.0, 119.88, 120.0, 144.0, 165.0] {
+            let refresh = 1.0 / hz;
+            for chosen in 1..=4 {
+                let divisor = paced_divisor(chosen, refresh, Some(poll), None);
+                if divisor == chosen && f64::from(2 * chosen) * refresh > MAX_FRAME_GAP {
+                    continue;
+                }
+                let next = fired + Duration::from_secs_f64(f64::from(divisor) * refresh);
+                let now = next + pass - faster;
+                assert!(
+                    wants_render(false, Some(deadline), None, poll, now),
+                    "{hz} Hz, divisor {chosen}: paced {divisor} lands too close to the poll"
+                );
+            }
+        }
     }
 
     /// A host resize on macOS arrives as no event, only as a size the next

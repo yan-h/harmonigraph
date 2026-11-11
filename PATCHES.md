@@ -389,7 +389,7 @@ Built only on request (`--features frame-log` on the plugin);
 `tools/frame-log-summary.py` reads the log.
 - **Patch 21** (`src/window.rs`): skip the display link's frames that could draw nothing (#1676).
 The UI pass runs on every frame the link paces, drawn or not, so an idle editor waiting out its 50 ms poll ran it on every refresh: 107 ms per second of Bitwig's main thread at 144 Hz.
-After the render decision, `paced_divisor` sets the link to the first of the app's chosen frames (`Queue::set_frame_divisor`) strictly past the next repaint deadline, which is the frame that would draw anyway (one exactly on it draws only if its UI pass runs no faster, so it is skipped), never more than `MAX_FRAME_GAP` (0.08 s) apart unless the chosen rate is.
+After the render decision, `paced_divisor` sets the link to the first of the app's chosen frames (`Queue::set_frame_divisor`) at least a quarter of a chosen frame past the next repaint deadline, which is the frame that would draw anyway (one within that of the deadline draws only if its UI pass runs no more than that much faster, a coin toss just under 60 or 120 Hz, so it is skipped: #1703), never more than `MAX_FRAME_GAP` (0.08 s) apart unless the chosen rate is.
 `MAX_FRAME_GAP` is public so the plugin can assert its 0.1 s stall threshold sits a refresh above it.
 A frame asked for at once (an animating editor, input, an egui animation) puts the chosen divisor back, and so does any event, before egui sees it (`on_event`), so input draws on the next refresh.
 A size change holds the chosen divisor for `RESIZE_HOLD` (0.2 s): on macOS a host resize is no event, only a size polled at the top of a frame, so an idling link stepped a border drag at the poll.
