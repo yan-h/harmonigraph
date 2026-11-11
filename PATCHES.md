@@ -176,7 +176,8 @@ ci.sh runs them.
 macOS only.
 - **Patch 7** (`src/platform/macos/view.rs`): a new frame divisor takes effect at once (#1676).
 The link schedules its next frame before running this one, so a divisor set from a frame paced only the interval after the next frame, and one set between frames waited out the old divisor's whole interval.
-Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw.
+Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw,
+which marks that frame's `FrameTiming::woken` so a frame log can tell a frame the event brought forward from one the link paced.
 egui-baseview Patch 21 needs both, to slow the link while the editor idles and restore it on the next refresh.
 macOS only, like the divisor.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
@@ -380,7 +381,7 @@ without it, a worktree under `.claude/worktrees/` walks past its own root to the
 `tick_ms` and `render_ms` leave out the drawable wait, which `acquire_ms` reports on its own:
 with three drawables, a frame the display paces waits most of a refresh for one in steady state, and a total counting that read as a frame that was always nearly too slow.
 The `frame-log` feature (macOS, wgpu) writes every frame's timing to `~/Library/Logs/Harmonigraph/`:
-the display link's timestamps and frame divisor from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
+the display link's timestamps, frame divisor and `woken` from baseview patches 4 and 7, the app's chosen divisor the pacing served (which Patch 21 multiplies while the editor idles), the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
 and, through the wgpu-hal present observer, the GPU's start and end on the present's command buffer and the drawable's `presentedTime`.
 Together they classify a missed refresh as a late link callback, a wait for a drawable, late CPU or GPU work, or a late latch.
 `frame_log::event` is public so the plugin can add its own rows on the same clock and frame (#1670).

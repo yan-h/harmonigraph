@@ -6,11 +6,12 @@ The log comes from the plugin's `--features frame-log` build
 `~/Library/Logs/Harmonigraph/`. With no path, the newest log there is read.
 
 The run is split into phases at every change of the chosen Editor frame rate
-(the editor's `rate` event rows) and at every frame the display link did not
-ask for, so a minimized editor's watchdog frames and the silence around them
-count in no phase. A log without `rate` rows does not say the chosen rate, so
-it is split at silences alone and each phase is named for the fastest rate it
-ran at. A log written before the `divisor` column existed is read as all
+(the `chosen` column) and at every frame the display link did not ask for, so a
+minimized editor's watchdog frames and the silence around them count in no
+phase. A log written before the `chosen` column existed is read as chosen at
+its `divisor`, which holds for one recorded before #1692 slowed a still
+editor's link; one recorded between the two cannot be told apart, so record
+it again. A log written before the `divisor` column existed is read as all
 Display rate.
 
 A tick row's `divisor` is the pacing of the interval that led to that frame:
@@ -22,9 +23,8 @@ chosen rate though the note's own frame was paced at the poll's.
 Per phase, counted in the display's refreshes:
 - missed refreshes: a glass gap longer than the divisor that paced it
   (a stall) misses each refresh beyond it. An input event restores the chosen
-  rate between frames and the next refresh draws, so a frame that cuts a
-  still frame's slowed interval short is held to the link's own gap instead
-  (a log without `animating` rows treats every slowed frame as still);
+  rate between frames and the next refresh draws, so a frame the log marks
+  `woken` is held to the link's own gap instead;
 - jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
 - the p99 gap between presents, in ms;
@@ -124,29 +124,11 @@ def frame(row, gpu_end, presented):
         'acquire_ms': float(row['acquire_ms']),
         'submitted': float(row['submitted']),
         'divisor': int(row.get('divisor') or 1),
-        'rate': None,
-        'still': None,
+        'chosen': int(row.get('chosen') or row.get('divisor') or 1),
+        'woken': row.get('woken') == '1',
         'gpu_end': gpu_end.get(f, 0.0),
         'presented': presented.get(f),
     }
-
-
-def assign_states(frames, events):
-    """Set each frame's chosen rate, and whether nothing kept it animating,
-    from the latest `rate` and `animating` rows logged at or before it, where
-    the log has them: frame numbers count across every window of the process,
-    so a row joins the window whose frame logged it."""
-    def latest(kind, value):
-        marks = sorted((f, value(text.split()[1:])) for f, _, text in events
-                       if text.split()[0] == kind)
-        starts = [f for f, _ in marks]
-        for fr in frames:
-            i = bisect.bisect_right(starts, fr['frame']) - 1
-            yield marks[i][1] if i >= 0 else None
-    for fr, rate in zip(frames, latest('rate', lambda words: int(words[0]))):
-        fr['rate'] = rate
-    for fr, still in zip(frames, latest('animating', lambda words: not words)):
-        fr['still'] = still
 
 
 def phases(frames):
@@ -161,7 +143,7 @@ def phases(frames):
             current = []
             continue
         if current and (
-            fr['rate'] != current[-1]['rate']
+            fr['chosen'] != current[-1]['chosen']
             or fr['timestamp'] - current[-1]['timestamp'] > LINK_SILENCE
         ):
             out.append(current)
@@ -186,7 +168,7 @@ def cause(fr, refresh):
 
 def measure(phase):
     """One phase's counts, in a form that sums across phases."""
-    divisor = phase[0]['rate'] or min(fr['divisor'] for fr in phase)
+    divisor = phase[0]['chosen']
     refresh = statistics.median(fr['refresh'] for fr in phase)
     m = {
         'divisor': divisor,
@@ -218,12 +200,7 @@ def measure(phase):
             link = round((fr['timestamp'] - previous['timestamp']) / refresh)
             m['refreshes'] += glass
             m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
-            expected = fr['divisor']
-            # Only a still frame's slowed interval can be cut short by an
-            # input event: an animating one set the next frame's pacing inside
-            # itself, so a longer link gap after it is the main thread late.
-            if previous['divisor'] > expected and previous['still'] is not False:
-                expected = max(expected, min(link, previous['divisor']))
+            expected = link if fr['woken'] else fr['divisor']
             if glass > expected:
                 m['missed'] += glass - expected
                 why = 'dropped before it' if dropped else cause(fr, refresh)
@@ -347,7 +324,6 @@ def openings(ticks, gpu_end, presented, events):
     for w, evs in by_window.items():
         frames = sorted((frame(row, gpu_end, presented) for row in ticks[w]),
                         key=lambda fr: fr['frame'])
-        assign_states(frames, evs)
         starts = [f for f, _, text in evs if text.startswith('open')]
         for k, first in enumerate(starts):
             last = starts[k + 1] if k + 1 < len(starts) else float('inf')
@@ -498,8 +474,6 @@ def main():
 
     frames = [frame(row, gpu_end, presented) for row in ticks[window]]
     frames.sort(key=lambda fr: fr['frame'])
-    own = {fr['frame'] for fr in frames}
-    assign_states(frames, [e for e in events if e[0] in own])
     t0 = frames[0]['t']
     frames = [fr for fr in frames if args.start <= fr['t'] - t0 <= args.end]
     measured = [measure(p) for p in phases(frames)]

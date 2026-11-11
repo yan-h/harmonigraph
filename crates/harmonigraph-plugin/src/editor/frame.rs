@@ -186,19 +186,15 @@ impl WindowState {
 }
 
 /// The editor's side of the frame log: a row as the window opens, with the
-/// Span, and one each time why it animates, how many exports run or the chosen
-/// Editor frame rate changes, which `tools/frame-log-summary.py --events`
-/// reads to find the silent stretches, first notes and exports #1670 asks
-/// about. The rate is logged because a tick row's `divisor` is the pacing of
-/// that one frame, slowed to the poll while the editor is still (#1692), so it
-/// no longer says what the user chose. `None` until the window's first frame,
-/// so that frame logs all four.
+/// Span, and one each time why it animates or how many exports run changes,
+/// which `tools/frame-log-summary.py --events` reads to find the silent
+/// stretches, first notes and exports #1670 asks about. `None` until the
+/// window's first frame, so that frame logs all three.
 #[cfg(all(feature = "frame-log", target_os = "macos"))]
 #[derive(Default)]
 struct Logged {
     animating: Option<harmonigraph_ui::Animating>,
     exports: Option<usize>,
-    rate: Option<u32>,
 }
 
 #[cfg(all(feature = "frame-log", target_os = "macos"))]
@@ -222,11 +218,6 @@ impl Logged {
         if self.exports != Some(running) {
             self.exports = Some(running);
             egui_baseview::frame_log::event(&format!("exports {running}"));
-        }
-        let rate = ui.workspace.interaction.prefs.frame_rate.divisor();
-        if self.rate != Some(rate) {
-            self.rate = Some(rate);
-            egui_baseview::frame_log::event(&format!("rate {rate}"));
         }
     }
 }

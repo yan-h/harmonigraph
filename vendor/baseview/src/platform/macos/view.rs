@@ -90,6 +90,9 @@ pub(crate) struct BaseviewView {
     frame_divisor: Cell<u32>,
     /// The earliest target timestamp the next divided frame may aim at.
     next_frame_due: Cell<Option<f64>>,
+    /// The divisor changed between frames since the last one ran: the next
+    /// frame's [`crate::FrameTiming::woken`].
+    woken: Cell<bool>,
     /// The link callback running the current frame, if one is.
     frame_timing: Cell<Option<crate::FrameTiming>>,
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
@@ -131,6 +134,7 @@ impl BaseviewView {
             last_link_fire: 0.0.into(),
             frame_divisor: 1.into(),
             next_frame_due: None.into(),
+            woken: false.into(),
             frame_timing: None.into(),
             window_handler: None.into(),
             notification_center_observer: None.into(),
@@ -303,6 +307,9 @@ impl BaseviewView {
         let running = this.frame_timing.get().map(|t| (t.target_timestamp, t.refresh));
         let due = due_after_divisor(divisor, was, this.next_frame_due.get(), running);
         this.next_frame_due.set(due);
+        if running.is_none() && divisor != was {
+            this.woken.set(true);
+        }
     }
 
     /// When the display asked for the frame now running, if the link did.
@@ -732,6 +739,7 @@ impl ViewImpl for BaseviewView {
             target_timestamp: target,
             refresh,
             divisor,
+            woken: this.woken.take(),
         }));
         Self::trigger_frame(this);
         this.frame_timing.set(None);

@@ -173,7 +173,7 @@ missed refreshes (each frame against the divisor that paced it, which is slowed 
 `--misses` lists every stall with what made it late.
 The method and the measured baseline are in #1551 and #1553.
 
-The editor also logs what it was doing: a row as each window opens, with the Span, and one whenever why it animates, how many exports run or the chosen frame rate changes,
+The editor also logs what it was doing: a row as each window opens, with the Span, and one whenever why it animates or how many exports run changes,
 a cancelled export counting until its renderer is reaped.
 That row names no encoder:
 an export runs the pane's Encoder, or the take's recorded one for an automatic export,
