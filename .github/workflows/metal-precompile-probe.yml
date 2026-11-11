@@ -99,7 +99,11 @@ jobs:
       # (`generate` ends with them), so this is for a run whose check passed, and
       # only where the PR touched what they exercise: the backend patch that
       # loads libraries, the renderer's asset lookup and fallback, the probe
-      # they drive, the corpus crate and this tooling. Run on every green check,
+      # they drive and the manifest declaring the feature they build with, the
+      # corpus crate and this tooling. `lattice_tests.rs` is left out though it
+      # holds the probe's `mod` line: it changes with most lattice work, and a
+      # dropped line fails the next controls run, which requires a passing test.
+      # Run on every green check,
       # they cost ~2.3 macOS-minutes a run and never once failed. A dispatch has
       # no base to diff against and is a deliberate run, so it always runs them.
       - name: Decide whether the controls are owed
@@ -110,10 +114,11 @@ jobs:
             echo "controls=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          exercised='^(vendor/wgpu-hal/|crates/harmonigraph-metal-assets/|crates/harmonigraph-render/src/shader_assets|crates/harmonigraph-render/src/lattice_tests/metal_assets\.rs$|tools/shader-assets\.py$|\.github/workflows/metal-precompile-probe\.yml$)'
+          exercised='^(vendor/wgpu-hal/|crates/harmonigraph-metal-assets/|crates/harmonigraph-render/src/shader_assets|crates/harmonigraph-render/src/lattice_tests/metal_assets\.rs$|crates/harmonigraph-render/Cargo\.toml$|tools/shader-assets\.py$|\.github/workflows/metal-precompile-probe\.yml$)'
           # Its own statement, so a diff that cannot run fails the step rather
-          # than reading as "nothing changed".
-          changed=$(git diff --name-only HEAD^1 HEAD)
+          # than reading as "nothing changed". `--no-renames` names both ends of
+          # a move, so moving `shader_assets.rs` away still runs the controls.
+          changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
           if printf '%s\n' "$changed" | grep -E "$exercised"; then
             echo "controls=true" >> "$GITHUB_OUTPUT"
           else
