@@ -98,109 +98,24 @@ quick() {
 # as a plain statement in a subshell that turns errexit back on, and its status
 # is read afterwards.
 failures=
-
-# A LOCAL run records each gate that fails, one JSON line apiece, in a log
-# outside the worktree so it outlives it: when, which branch and HEAD, whether
-# the tree was dirty, the gate, its exit status, the tests it names as failed
-# and its first `error:` line. Sessions run this script before every push, so
-# nearly everything a test catches is caught here and never reaches CI; the
-# guard audit of 2026-11-10 found CI firings could only measure what tests
-# cost, not what they catch, and this log is the other half.
-#
-# Not in GitHub Actions, whose own run history is that record already. The
-# gate's output is copied through `tee` to be read for test names, which merges
-# its stderr into stdout and makes stdout a pipe, so a terminal run asks cargo
-# for colour explicitly. Recording runs only after the status is read, and a
-# failure to record is a warning: the log never changes a gate's verdict.
-# HARMONIGRAPH_CI_FAILURE_LOG moves it, and /dev/null turns it off.
-failure_log=
-if [ -z "${GITHUB_ACTIONS:-}" ]; then
-  failure_log="${HARMONIGRAPH_CI_FAILURE_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/harmonigraph/ci-failures.jsonl}"
-  if [ -t 1 ]; then
-    export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
-  fi
-fi
-
-record_failure() {
-  local status=$1 output=$2
-  shift 2
-  python3 -B - "$failure_log" "$output" "$status" "$CI_GROUP" "$*" 2>/dev/null <<'PY' \
-    || echo "  (could not record this failure in $failure_log)" >&2
-import datetime, json, os, re, subprocess, sys
-
-log, output, status, group, gate = sys.argv[1:]
-
-def git(*arguments):
-    result = subprocess.run(["git", *arguments], capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else None
-
-with open(output, errors="replace") as file:
-    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", file.read())
-# libtest's per-test line and its captured-output header; unittest's FAIL/ERROR.
-tests = set(re.findall(r"^test (\S+) \.\.\. FAILED$", text, re.M))
-tests |= set(re.findall(r"^---- (\S+) stdout ----$", text, re.M))
-tests |= {f"{name} {owner}" for name, owner in re.findall(r"^(?:FAIL|ERROR): (\S+) (\(\S+\))", text, re.M)}
-error = next(iter(re.findall(r"^(error(?:\[E\d+\])?: .*)$", text, re.M)), None)
-line = json.dumps({
-    "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-    "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
-    "head": git("rev-parse", "HEAD"),
-    "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
-    "group": group,
-    "gate": gate,
-    "status": int(status),
-    "tests": sorted(tests),
-    "error": error and error[:300],
-}) + "\n"
-os.makedirs(os.path.dirname(os.path.abspath(log)), exist_ok=True)
-# One write to an O_APPEND descriptor, so runs in parallel worktrees append
-# whole lines rather than interleaving them.
-descriptor = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-try:
-    os.write(descriptor, line.encode())
-finally:
-    os.close(descriptor)
-PY
-}
-
 run() {
   in_group || return 0
   echo
   echo "▶ $*"
-  local output= status
-  if [ -n "$failure_log" ]; then
-    output=$(mktemp "${TMPDIR:-/tmp}/harmonigraph-ci-gate.XXXXXX") || output=
-  fi
   set +e
-  if [ -n "$output" ]; then
-    (
-      set -e
-      "$@"
-    ) 2>&1 | tee "$output"
-    status=${PIPESTATUS[0]}
-  else
-    (
-      set -e
-      "$@"
-    )
-    status=$?
-  fi
+  (
+    set -e
+    "$@"
+  )
+  local status=$?
   set -e
   # Interrupted (SIGINT, SIGTERM) rather than failed: a gate that catches the
   # signal and exits with its code would otherwise only skip to the next gate.
-  case "$status" in 130 | 143)
-    [ -z "$output" ] || rm -f "$output"
-    exit "$status"
-    ;;
-  esac
+  case "$status" in 130 | 143) exit "$status" ;; esac
   if [ "$status" != 0 ]; then
     echo "✗ exit $status: $*" >&2
     failures="$failures  ✗ $*"$'\n'
-    if [ -n "$output" ]; then
-      record_failure "$status" "$output" "$@"
-    fi
   fi
-  [ -z "$output" ] || rm -f "$output"
 }
 
 group workspace

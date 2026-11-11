@@ -68,15 +68,6 @@ A bare local `./ci.sh` runs every group.
 A failing gate does not stop the run:
 every gate runs, and the summary at the end lists each one that failed.
 
-A local run also appends one JSON line per failing gate to `~/.local/state/harmonigraph/ci-failures.jsonl` (under `$XDG_STATE_HOME` when that is set, or wherever `HARMONIGRAPH_CI_FAILURE_LOG` points; `/dev/null` turns it off):
-the time, branch, HEAD and whether the tree was dirty, the gate and its exit status, the test names it reported failing, and its first `error:` line.
-It lives outside the repository so it outlives the worktree that wrote it.
-Sessions run `ci.sh` before every push, so almost every failure a test catches happens here and never reaches CI;
-a guard audit reads this log to learn what each test catches, where CI's history shows only what it costs.
-GitHub Actions runs record nothing, since their run history is that record already.
-Recording never changes a gate's verdict, but it does copy the gate's output through `tee`,
-so a gate's stderr arrives merged into stdout.
-
 CI sets `HARMONIGRAPH_REQUIRE_GPU=1`,
 so an unavailable GPU adapter fails renderer,
 UI and offline pixel tests instead of skipping their assertions.
