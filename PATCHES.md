@@ -180,6 +180,7 @@ Now a divisor set inside a link frame re-paces from that frame's target, and a c
 egui-baseview Patch 21 needs both, to slow the link while the editor idles and restore it on the next refresh.
 macOS only, like the divisor.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
+its disposition table is a snapshot that stops at Patch 6, so dispose of later patches from their entries here.
 baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
 Download the new crates.io tarball into `vendor/baseview`,
 re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor (re-paced at once when it changes), watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
@@ -393,7 +394,8 @@ A frame asked for at once (an animating editor, input, an egui animation) puts t
 A size change holds the chosen divisor for `RESIZE_HOLD` (0.2 s): on macOS a host resize is no event, only a size polled at the top of a frame, so an idling link stepped a border drag at the poll.
 What changes on another thread, a note, audio or a host parameter, is seen at the next deadline, up to one poll later than on a link that ran every refresh.
 Needs baseview Patch 7.
-- **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
+- **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package;
+its disposition table is a snapshot that stops at Patch 17, so dispose of later patches from their entries here.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);
 the current recommendation is to retain the product stack until the need-driven trigger the map names.
