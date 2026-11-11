@@ -204,6 +204,13 @@ fn frame_health(fps: f32, target_fps: Option<f32>, animating: bool) -> egui::Col
     }
 }
 
+/// The headline rate's colour as the overlay draws it: judged only once the
+/// rate it shows is one an animating editor ran at
+/// ([`PerfStats::shown_animating`]).
+fn headline_health(perf: &PerfStats) -> egui::Color32 {
+    frame_health(perf.fps(), perf.target_fps, perf.shown_animating)
+}
+
 /// Draw the overlay over `editor`, at `pos` — dragging it writes the new
 /// position back through that handle, and nothing else in the tree moves it.
 ///
@@ -221,7 +228,7 @@ pub(crate) fn draw_overlay(
     build_tag: &str,
 ) {
     let fps = perf.fps();
-    let health = frame_health(fps, perf.target_fps, perf.workload.animating);
+    let health = headline_health(perf);
     let state = if perf.workload.animating { "live" } else { "idle" };
 
     let dim = egui::Color32::from_gray(0x9A);
@@ -701,6 +708,42 @@ mod tests {
         assert_eq!(frame_health(36.0, None, true), amber, "36 fps against the fixed 50");
         assert_eq!(frame_health(20.0, None, true), red, "20 fps against the fixed 30");
         assert_eq!(frame_health(60.0, Some(144.0), false), green, "an idle editor is not judged");
+    }
+
+    /// A still editor's link is slowed to its poll, so its passes run at
+    /// about 18 a second on a 144 Hz display; the first note restores the
+    /// chosen rate at once. The headline is a mean held over a quarter second,
+    /// so it reads the idle rate for up to half a second after, and judging
+    /// that against the new target flashed red on every first note. A slow
+    /// rate held through a whole animating window still reads red.
+    #[test]
+    fn the_headline_is_judged_only_once_it_shows_animating_frames() {
+        let red = frame_health(0.0, Some(144.0), true);
+        let mut perf = PerfStats::default();
+        let mut now = 0.0;
+        let mut run = |perf: &mut PerfStats, hz: f64, seconds: f64, animating: bool| {
+            let mut healths = Vec::new();
+            for _ in 0..(hz * seconds) as usize {
+                now += 1.0 / hz;
+                let costs = FrameCosts { target_fps: Some(hz as f32), ..Default::default() };
+                perf.record(costs, now, Workload { animating, ..Default::default() });
+                healths.push(headline_health(perf));
+            }
+            healths
+        };
+        run(&mut perf, 18.0, 2.0, false);
+        let note = run(&mut perf, 144.0, 1.0, true);
+        assert!(!note.contains(&red), "a first note on time flashed red");
+
+        let mut slow = PerfStats::default();
+        run(&mut slow, 144.0, 1.0, true);
+        // Asked for 144 and running at 60, as a costly frame loop would.
+        for _ in 0..60 {
+            now += 1.0 / 60.0;
+            let costs = FrameCosts { target_fps: Some(144.0), ..Default::default() };
+            slow.record(costs, now, Workload { animating: true, ..Default::default() });
+        }
+        assert_eq!(headline_health(&slow), red, "a slow animating editor reads red");
     }
 
     /// The build tag wraps rather than widening the HUD, at any branch name.
