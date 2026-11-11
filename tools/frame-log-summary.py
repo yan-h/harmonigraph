@@ -27,7 +27,7 @@ Per phase, counted in the display's refreshes:
   `woken` is held to the link's own gap instead;
 - jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
-- the p99 gap between presents, in ms;
+- the p99 gap between presents paced at the chosen rate, in ms;
 - depth: `presented - target`, how many refreshes after the link's target
   each frame reached the glass;
 - main-thread blocking: `acquire_ms` summed per second, the time the host's
@@ -199,8 +199,10 @@ def measure(phase):
             glass = round((fr['presented'] - previous['presented']) / refresh)
             link = round((fr['timestamp'] - previous['timestamp']) / refresh)
             m['refreshes'] += glass
-            m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
             expected = link if fr['woken'] else fr['divisor']
+            if expected == fr['chosen']:
+                # An idle poll's gap is its pacing, not a slow present.
+                m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
             if glass > expected:
                 m['missed'] += glass - expected
                 why = 'dropped before it' if dropped else cause(fr, refresh)
@@ -232,7 +234,7 @@ def report(m, title, t0):
     span = f"{m['start'] - t0:.1f}-{m['end'] - t0:.1f} s" if 'seconds' not in m else ''
     print(f"{title} {span}  {seconds:.1f} s, {m['refreshes']} refreshes at "
           f"{1 / m['refresh']:.0f} Hz")
-    gaps = sorted(m['gaps_ms'])
+    gaps = sorted(m['gaps_ms']) or [float('nan')]
     p99 = gaps[int(0.99 * (len(gaps) - 1))]
     print(f"  missed refreshes {m['missed']} ({pct(m['missed'], m['refreshes'])}) "
           f"in {len(m['stalls'])} stalls; jumps {m['jumps']} "
