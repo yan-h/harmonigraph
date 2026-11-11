@@ -177,7 +177,7 @@ macOS only.
 - **Patch 7** (`src/platform/macos/view.rs`): a new frame divisor takes effect at once (#1676).
 The link schedules its next frame before running this one, so a divisor set from a frame paced only the interval after the next frame, and one set between frames waited out the old divisor's whole interval.
 Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw,
-which marks that frame's `FrameTiming::woken` so a frame log can tell a frame the event brought forward from one the link paced.
+which records the divisor it cut short in that frame's `FrameTiming::woken`, so a frame log can tell a frame the event brought forward from one the link paced, and a late one from either.
 egui-baseview Patch 21 needs both, to slow the link while the editor idles and restore it on the next refresh.
 macOS only, like the divisor.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;

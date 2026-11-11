@@ -13,8 +13,9 @@
 //!   the window is revealed) has 0 for the link's times and no `divisor`.
 //!   `divisor` is the pacing of the interval that led to the frame, slowed to
 //!   the idle poll while the editor is still; `chosen` is the app's frame rate
-//!   divisor that pacing served, and `woken` (1) marks a frame an input event
-//!   brought forward from a slowed interval;
+//!   divisor that pacing served, and `woken`, for a frame an input event
+//!   brought forward from a slowed interval, is that interval's divisor (else
+//!   0);
 //! - `gpu`, from Metal's completion handler on the present's command buffer.
 //!   That buffer only presents, and the queue reaches it once the frame's own
 //!   work is through, so its `gpu_end` is when the GPU finished the frame;
@@ -101,7 +102,7 @@ pub(crate) fn end(tick: Tick) {
         tick.window,
         tick.timing.map_or(String::new(), |t| t.divisor.to_string()),
         tick.timing.map_or(String::new(), |_| tick.chosen.to_string()),
-        tick.timing.map_or(String::new(), |t| u8::from(t.woken).to_string()),
+        tick.timing.map_or(String::new(), |t| t.woken.to_string()),
     ));
 }
 

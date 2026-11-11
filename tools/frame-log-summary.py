@@ -24,7 +24,8 @@ Per phase, counted in the display's refreshes:
 - missed refreshes: a glass gap longer than the divisor that paced it
   (a stall) misses each refresh beyond it. An input event restores the chosen
   rate between frames and the next refresh draws, so a frame the log marks
-  `woken` is held to the link's own gap instead;
+  `woken` is held to the link's own gap instead, up to the slowed interval it
+  cut short;
 - jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
 - the p99 gap between presents paced at the chosen rate, in ms;
@@ -125,7 +126,7 @@ def frame(row, gpu_end, presented):
         'submitted': float(row['submitted']),
         'divisor': int(row.get('divisor') or 1),
         'chosen': int(row.get('chosen') or row.get('divisor') or 1),
-        'woken': row.get('woken') == '1',
+        'woken': int(row.get('woken') or 0),
         'gpu_end': gpu_end.get(f, 0.0),
         'presented': presented.get(f),
     }
@@ -199,7 +200,9 @@ def measure(phase):
             glass = round((fr['presented'] - previous['presented']) / refresh)
             link = round((fr['timestamp'] - previous['timestamp']) / refresh)
             m['refreshes'] += glass
-            expected = link if fr['woken'] else fr['divisor']
+            # A woken frame ran on the first refresh after the event, no later
+            # than the end of the interval it cut short.
+            expected = min(link, fr['woken']) if fr['woken'] else fr['divisor']
             if expected == fr['chosen']:
                 # An idle poll's gap is its pacing, not a slow present.
                 m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)

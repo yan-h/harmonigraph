@@ -30,10 +30,12 @@ pub struct FrameTiming {
     /// The frame rate the frame was paced at: one frame every `divisor`th
     /// refresh, as set by [`Window::set_frame_divisor`].
     pub divisor: u32,
-    /// Whether the divisor changed between frames, so this frame ran on the
-    /// first refresh after that change rather than at the end of the interval
-    /// the last frame set: an input event cutting a slowed interval short.
-    pub woken: bool,
+    /// When the divisor changed between frames (an input event cutting a
+    /// slowed interval short), the divisor of the interval it cut: this frame
+    /// ran on the first refresh after the change, so no later than that many
+    /// refreshes after the last one unless the callback itself was late.
+    /// 0 when the frame ran on the interval the last frame set.
+    pub woken: u32,
 }
 
 impl FrameTiming {
@@ -86,7 +88,7 @@ mod tests {
             target_timestamp,
             refresh: 1.0 / 144.0,
             divisor: 1,
-            woken: false,
+            woken: 0,
         };
         let at = |target| timing(target).target_at();
         assert_eq!(at(500.004), Some(fired_at + Duration::from_secs_f64(0.004)));

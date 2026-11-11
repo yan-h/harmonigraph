@@ -901,7 +901,7 @@ mod wants_render_tests {
                 target_timestamp: 500.0 + vsync + refresh,
                 refresh,
                 divisor: 1,
-                woken: false,
+                woken: 0,
             }
         };
         let mut time = 0.0;
