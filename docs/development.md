@@ -73,22 +73,34 @@ every gate runs, and the summary at the end lists each one that failed.
 Cargo runs every test binary through `tools/test-runner` (`.cargo/config.toml`), whether the run came from `cargo test`, `./ci.sh` or the lifecycle wrapper.
 When a test binary fails on a local machine, the runner appends one JSON line to `~/.local/state/harmonigraph/test-failures.jsonl`,
 or under `$XDG_STATE_HOME` when that is set:
-the time, worktree, branch, HEAD and whether the tree was dirty, the binary's crate target and arguments, its exit status or the signal it died of, and the names of the tests libtest reported failing.
+the time, worktree, branch and HEAD, the changed and untracked paths (the first 50, with their count), the binary's crate target and arguments, its exit status or the signal it died of, and the tests in libtest's closing `failures:` list.
 A passing binary records nothing.
 The log lives outside the repository so it outlives the worktree that wrote it.
 
 It exists because agents run the tests before every push, so nearly every failure a test catches happens locally and never reaches CI, whose history can only say what a test costs.
-A guard audit reads this log to learn what each test catches.
+A guard audit reads this log to learn what each test catches;
+the changed paths are what tell a catch, where only source moved, from an intended change, where the test's own file moved too, after a squash merge has discarded the branch.
+It is temporary: the runner and its config table go once #1711 is decided.
 
 `HARMONIGRAPH_TEST_FAILURE_LOG` moves the log, and `HARMONIGRAPH_TEST_FAILURE_LOG=/dev/null` turns it off.
-GitHub Actions runs, `cargo run` binaries and examples, and `--list` are passed straight to the binary.
-The runner passes on the binary's exit status or signal unchanged and keeps stdin and stderr as they were;
-stdout reaches the terminal live through a pipe, so it adds `--color=always` when stdout is a terminal and no colour or format was asked for.
+Give it an absolute path: cargo runs each test binary in its package's directory, so a relative one lands in a different place per package.
+GitHub Actions runs, `cargo run` binaries, examples and doctests, and `--list` are passed straight to the binary.
+The runner passes on the binary's exit status or signal unchanged, keeps stdin and stderr as they were, and returns when the binary exits even if something it started still holds stdout.
 A log it cannot write costs a warning, never a verdict.
 It adds about 17 ms per test binary.
 
-Doctests are not logged: rustdoc runs them itself, never through a runner.
-Neither are the test binaries `tools/shader-assets.py` builds with `--no-run` and runs directly.
+What it changes, all of it the price of reading stdout through a pipe or of a Python runner:
+
+- stdout reaches the terminal live but through a pipe, so the runner adds `--color=always` when stdout is a terminal and no colour or format was asked for.
+- stdout and stderr no longer keep their relative order where they share a destination, a terminal or `2>&1`. Under libtest's default capture a test's output arrives together; under `--nocapture` the two streams can interleave differently.
+- `cargo test | head` no longer stops the suite: the runner absorbs the closed pipe, so the binary runs on to its own verdict.
+- On macOS the `/usr/bin/env` shebang drops every `DYLD_*` variable, cargo's `DYLD_FALLBACK_LIBRARY_PATH` included, on every path, passthrough too;
+  and Python sets `LC_CTYPE=C.UTF-8` where no locale is set. Nothing here loads a dylib through that path today.
+
+What it does not log:
+doctests and `cargo test --examples` targets, whose binaries live outside `deps/`;
+the test binaries `tools/shader-assets.py` builds with `--no-run` and runs directly;
+and a Linux cloud session's failures, which land in a home directory discarded with the session.
 
 CI sets `HARMONIGRAPH_REQUIRE_GPU=1`,
 so an unavailable GPU adapter fails renderer,
