@@ -108,6 +108,28 @@ class StateExtraction(unittest.TestCase):
                 self.assertIn("  zoom: 2.75", out)
                 self.assertIn("  look: (0.4,-0.6)", out)
 
+    def test_another_plugins_state_is_not_read_as_an_unopened_editor(self):
+        """Every nice-plug plugin saves the same JSON shape, so a project's other
+        plugins are found too; only an editor of ours earns the no-ui-state warning."""
+        saved = [
+            {"version": "0.5.0", "params": {"camera-yaw": {"f32": 0.4}}, "fields": {}},
+            {"version": "0.5.0", "params": {"tuning_delay": {"f32": 0.0}}, "fields": {}},
+            {"version": "1.0.0", "params": {"gain": {"f32": 0.25}, "macro01": {"f32": 0.0}},
+             "fields": {"editor": "{}", "patch": "{}"}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "mixed.bwproject"
+            project.write_bytes(b"BtWg\0" + b"\0\xff".join(
+                json.dumps(s).encode() for s in saved))
+            out = subprocess.check_output(
+                [sys.executable, extractor.__file__, str(project)], text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        self.assertNotIn("gain", out)
+        self.assertEqual(out.count("=== instance"), 2)
+        self.assertEqual(out.count("the editor was never open before a save"), 1)
+        self.assertIn("a Harmonigraph Tune", out)
+
     def test_distinct_compressed_instances_share_a_prefix(self):
         states = [state("first"), state("second")]
         encoded = [json.dumps(s, separators=(",", ":")).encode() for s in states]

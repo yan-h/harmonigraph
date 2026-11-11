@@ -53,6 +53,14 @@ import zlib
 
 STATE_START = b'{"version"'
 
+# Every nice-plug plugin saves this same JSON shape, so a project's other
+# plugins are found too. One of these param ids marks an instance as ours when
+# it has no ui-state to show it (`#[id]`s in crates/harmonigraph-plugin/src/lib.rs
+# and tuning/plugin.rs); without the check another plugin read as an editor
+# "never open before a save", a warning a session acts on.
+OUR_PARAMS = {"camera-yaw", "tuning-engine", "tuning_delay"}
+
+
 
 def newest_project() -> pathlib.Path:
     """The most recently modified .bwproject, auto-backups included — an
@@ -125,8 +133,9 @@ def find_states(path: pathlib.Path):
             ui = st.get("fields", {}).get("ui-state")
             if isinstance(ui, str) and ui.startswith('"'):
                 st["fields"]["ui-state"] = json.loads(ui)
+            ours = ui is not None or OUR_PARAMS & set(st.get("params", {}))
             key = json.dumps(st, sort_keys=True)
-            if key not in seen and "fields" in st:
+            if key not in seen and "fields" in st and ours:
                 seen.add(key)
                 states.append(st)
     return states
