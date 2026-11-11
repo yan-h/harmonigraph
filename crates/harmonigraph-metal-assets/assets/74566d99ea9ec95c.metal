@@ -49,7 +49,7 @@ struct Cloud {
     metal::float2 drift;
     float cloud_depth;
     uint cloud_style;
-    float wash_size;
+    float cell;
     float wash_fuzz;
     float wash_lobe;
     float wash_refract;
@@ -84,7 +84,6 @@ constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RADIUS_MIN = 1.17;
 constant float WASH_RADIUS_MAX = 1.91;
-constant float WASH_CELLS = 5.25;
 constant float WASH_LACUNARITY = 2.1;
 constant float WASH_FINE_OCCUPANCY = 0.2;
 constant float WASH_WARP = 0.45;
@@ -98,12 +97,9 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
-constant float CLOUD_UNITS = 10.0;
 constant float WASH_POOL = 0.44;
 constant float WASH_PIG_DEPTH = 0.35;
 constant float WASH_BLOOM = 2.7;
-constant float VELVET_CELL = 0.05925926;
-constant metal::float2 DRIFT_START = metal::float2(0.0, 0.6);
 
 float velvet_hash(
     metal::int2 cell,
@@ -284,17 +280,13 @@ fragment fs_velvet_toneOutput fs_velvet_tone(
 , metal::sampler cloud_sampler [[sampler(0)]]
 ) {
     const VertexOut in = { position, varyings.slab, varyings.t };
-    float _e4 = cloud.size.y;
-    float _e10 = cloud.velvet_form.x;
-    float cell_2 = (_e4 * VELVET_CELL) * _e10;
-    metal::float2 _e14 = cloud.drift;
-    float _e20 = cloud.size.y;
-    metal::float2 drift_1 = ((_e14 - DRIFT_START) * _e20) / metal::float2(CLOUD_UNITS * cell_2);
-    metal::float2 _e33 = cloud.size;
-    metal::float2 _e37 = cloud.size;
-    metal::float4 _e40 = cloud.velvet;
-    metal::float4 _e43 = cloud.velvet_form;
-    metal::float4 _e45 = velvet_material(close_light, cloud_sampler, metal::float2(in.slab, in.t) * _e33, _e37, cell_2, drift_1, _e40, _e43.yz);
-    float level = _e45.x;
+    metal::float2 _e8 = cloud.size;
+    metal::float2 _e12 = cloud.size;
+    float _e15 = cloud.cell;
+    metal::float2 _e18 = cloud.drift;
+    metal::float4 _e21 = cloud.velvet;
+    metal::float4 _e24 = cloud.velvet_form;
+    metal::float4 _e26 = velvet_material(close_light, cloud_sampler, metal::float2(in.slab, in.t) * _e8, _e12, _e15, _e18, _e21, _e24.xy);
+    float level = _e26.x;
     return fs_velvet_toneOutput { metal::float4(level, 0.0, 0.0, 1.0) };
 }

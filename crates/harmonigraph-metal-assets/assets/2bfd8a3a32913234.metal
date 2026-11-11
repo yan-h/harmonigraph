@@ -55,7 +55,7 @@ struct Cloud {
     metal::float2 drift;
     float cloud_depth;
     uint cloud_style;
-    float wash_size;
+    float cell;
     float wash_fuzz;
     float wash_lobe;
     float wash_refract;
@@ -90,7 +90,6 @@ constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RADIUS_MIN = 1.17;
 constant float WASH_RADIUS_MAX = 1.91;
-constant float WASH_CELLS = 5.25;
 constant float WASH_LACUNARITY = 2.1;
 constant float WASH_FINE_OCCUPANCY = 0.2;
 constant float WASH_WARP = 0.45;
@@ -104,12 +103,9 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
-constant float CLOUD_UNITS = 10.0;
 constant float WASH_POOL = 0.44;
 constant float WASH_PIG_DEPTH = 0.35;
 constant float WASH_BLOOM = 2.7;
-constant float VELVET_CELL = 0.05925926;
-constant metal::float2 DRIFT_START = metal::float2(0.0, 0.6);
 
 metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
@@ -326,11 +322,9 @@ metal::float2 wash_cell_at(
     constant Cloud& cloud
 ) {
     metal::float2 _e3 = cloud.size;
-    float _e10 = cloud.size.y;
-    metal::float2 _e17 = cloud.drift;
-    metal::float2 q = (((pt_3 - (_e3 * 0.5)) / metal::float2(_e10)) * CLOUD_UNITS) + _e17;
-    float _e22 = cloud.wash_size;
-    return q * (WASH_CELLS / _e22);
+    float _e9 = cloud.cell;
+    metal::float2 _e14 = cloud.drift;
+    return ((pt_3 - (_e3 * 0.5)) / metal::float2(_e9)) + _e14;
 }
 
 float wash_cloud_tone(
@@ -344,24 +338,21 @@ float wash_cloud_tone(
     metal::sampler tile_sampler
 ) {
     float level_1 = {};
-    float _e4 = cloud.wash_size;
-    float cells = WASH_CELLS / _e4;
-    float _e9 = cloud.size.y;
-    float pane_per_cell_1 = (_e9 / CLOUD_UNITS) / cells;
-    metal::float2 _e13 = wash_cell_at(pt_4, cloud);
-    WashField _e14 = wash_tile_field(_e13, cloud, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
-    float _e16 = wash_level(_e14.coarse, pane_per_cell_1, pt_4, cloud, close_light, cloud_sampler);
-    level_1 = _e16;
-    float _e20 = cloud.wash_layers;
-    if (_e20 > 0.0) {
-        float _e26 = wash_level(_e14.fine, pane_per_cell_1 / WASH_LACUNARITY, pt_4, cloud, close_light, cloud_sampler);
-        float _e29 = cloud.wash_layers;
-        float over = _e29 * _e14.cover;
-        float _e32 = level_1;
-        level_1 = metal::mix(_e32, _e26, over);
+    float pane_per_cell_1 = cloud.cell;
+    metal::float2 _e4 = wash_cell_at(pt_4, cloud);
+    WashField _e5 = wash_tile_field(_e4, cloud, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    float _e7 = wash_level(_e5.coarse, pane_per_cell_1, pt_4, cloud, close_light, cloud_sampler);
+    level_1 = _e7;
+    float _e11 = cloud.wash_layers;
+    if (_e11 > 0.0) {
+        float _e17 = wash_level(_e5.fine, pane_per_cell_1 / WASH_LACUNARITY, pt_4, cloud, close_light, cloud_sampler);
+        float _e20 = cloud.wash_layers;
+        float over = _e20 * _e5.cover;
+        float _e23 = level_1;
+        level_1 = metal::mix(_e23, _e17, over);
     }
-    float _e34 = level_1;
-    return _e34;
+    float _e25 = level_1;
+    return _e25;
 }
 
 float cloud_tone_at(
@@ -584,15 +575,15 @@ metal::float4 backdrop_color(
     return _e9;
 }
 
-struct fs_cloud_backdrop_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
-  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
 , metal::float4 position_4 [[position]]
 , constant Cloud& cloud [[buffer(2)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -607,5 +598,6 @@ fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
 ) {
     const VertexOut in = { position_4, varyings.slab, varyings.t };
     metal::float4 _e3 = backdrop_color(in.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
-    return fs_cloud_backdrop_gammaOutput { _e3 };
+    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

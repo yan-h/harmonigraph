@@ -397,26 +397,6 @@ fn rate(material: &Material, layout: Option<&crate::stars::StarLayout>) -> crate
     )
 }
 
-/// The material's sampling offset in cells, as the shader takes it: the
-/// travel, already in cells, from the start, which the size scales as it
-/// scales the pane.
-fn drift(material: &Material, motion: crate::travel::Motion) -> [f32; 2] {
-    let velvet = material.style == harmonigraph_scene::LatticeMaterial::VelvetScales;
-    // A screen-axis wrap of Watercolor is a whole-number repeat of its rotated
-    // tile. Velvet's domain warp is nonperiodic: wrapping would jump.
-    let drift_period = f64::from(crate::material_cells::WASH_PERIOD)
-        * f64::from(crate::material_cells::WASH_REPEAT_PERIODS);
-    let per_unit = material_cells(material);
-    std::array::from_fn(|axis| {
-        if velvet {
-            motion.drift[axis] as f32
-        } else {
-            let start = harmonigraph_scene::MaterialSettings::DRIFT_START[axis];
-            (start * per_unit + motion.drift[axis]).rem_euclid(drift_period) as f32
-        }
-    })
-}
-
 /// Draws the frame's material, and returns where the pane's textures are,
 /// which the glow's texture and breathing read too.
 pub(super) fn prepare(
@@ -485,12 +465,16 @@ pub(super) fn prepare(
         );
         return motion;
     }
-    // Match the spectrogram's pane-height calibration. Quantized density keeps
+    // The spectrogram's sampling, on the glow target. Quantized density keeps
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
-    let (scale, cells) = crate::material_cells::size_and_cells(velvet, &material.settings);
-    let cell = size[1] as f32 * scale / (crate::material_cells::CLOUD_UNITS * cells);
-    let drift = drift(material, motion);
     let dials = &material.settings;
+    let cell = crate::material_cells::cell(velvet, dials, size[1] as f32);
+    let drift = crate::material_cells::drift(
+        velvet,
+        dials,
+        motion.drift,
+        crate::material_cells::WASH_PERIOD,
+    );
     let geometry = [dials.wash_fuzz.to_bits(), dials.wash_lobe.to_bits()];
     let texels =
         ((crate::material_cells::WASH_PERIOD * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);

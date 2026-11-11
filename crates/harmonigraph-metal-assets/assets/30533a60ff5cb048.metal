@@ -40,7 +40,6 @@ constant int WASH_RING = 2;
 constant float WASH_JITTER = 0.4;
 constant float WASH_RADIUS_MIN = 1.17;
 constant float WASH_RADIUS_MAX = 1.91;
-constant float WASH_CELLS = 5.25;
 constant float WASH_LACUNARITY = 2.1;
 constant float WASH_FINE_OCCUPANCY = 0.2;
 constant float WASH_WARP = 0.45;
@@ -54,12 +53,9 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
-constant float CLOUD_UNITS = 10.0;
 constant float WASH_POOL = 0.44;
 constant float WASH_PIG_DEPTH = 0.35;
 constant float WASH_BLOOM = 2.7;
-constant float VELVET_CELL = 0.05925926;
-constant metal::float2 DRIFT_START = metal::float2(0.0, 0.6);
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
     return metal::float2(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }

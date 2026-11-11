@@ -7,9 +7,6 @@
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
-use crate::material_cells::{CLOUD_UNITS, WASH_REPEAT_PERIODS};
-#[cfg(test)]
-use crate::material_cells::{VELVET_CELLS, WASH_CELLS};
 pub(super) use crate::stars::*;
 use crate::travel::{Motion, Travel};
 use crate::{create_vertex_buffer, wgpu};
@@ -101,9 +98,7 @@ impl SpectrogramAtmosphere {
 }
 
 /// The drawn material's cells to a cloud unit, which its drift is counted in
-/// ([`Motion::drift`]): what `wash_cell_at` multiplies the offset by, or for
-/// Scales what `fs_velvet_tone` does, its cell `VELVET_CELL` of the pane's
-/// height at a `Scale size` of 1. Stars draw no material, and take the wash's.
+/// ([`Motion::drift`]). Stars draw no material, and take the wash's.
 fn material_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
     crate::material_cells::cells_per_unit(
         settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales,
@@ -111,26 +106,22 @@ fn material_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
     )
 }
 
-/// Cloud-space sampling offset for a texture that has drifted `drift` of its
-/// `cells` to a cloud unit ([`Motion::drift`]), unreduced and still in f64.
-/// The shader samples `screen + drift`, so the sampling offset moves opposite
-/// the texture itself, and multiplies it by the cells again, so a size change
-/// scales the texture about the pane rather than sliding it by its history.
-fn cloud_offset(drift: [f64; 2], cells: f64) -> [f64; 2] {
-    let start = harmonigraph_scene::MaterialSettings::DRIFT_START;
-    std::array::from_fn(|axis| start[axis] + drift[axis] / cells)
-}
-
-/// [`cloud_offset`] after `now` seconds at the dials' drift, as a first frame
-/// at `now` takes it.
+/// The drawn material's drift as the shader takes it after `now` seconds at
+/// the dials' drift, as a first frame at `now` takes it, over a tile of
+/// `period` cells.
 #[cfg(test)]
-fn cloud_offset_at(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f64; 2] {
+fn drift_at(settings: harmonigraph_scene::SpectralAtmosphere, now: f64, period: u32) -> [f32; 2] {
     let rate = harmonigraph_scene::MaterialSettings::drift_rate(
         settings.cloud_speed,
         settings.cloud_direction,
     );
     let cells = material_cells(settings);
-    cloud_offset(rate.map(|v| v * cells * now), cells)
+    crate::material_cells::drift(
+        settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales,
+        &settings.material_settings,
+        rate.map(|v| v * cells * now),
+        period as f32,
+    )
 }
 
 /// The star pixels a second a depth at `Star speed` 1 drifts over a
@@ -146,35 +137,6 @@ pub(super) fn star_pace(points_per_ms: f32, height: f32) -> f64 {
     } else {
         0.0
     }
-}
-
-/// [`cloud_offset`] as the shader takes it. Watercolor repeats its `tile`, so
-/// the offset is reduced by whole repeats before it narrows to f32,
-/// as Stars and the lattice reduce theirs: unreduced, a long clock leaves the
-/// f32 fewer and fewer bits of the cell it lands in. A screen-axis repeat of
-/// the Watercolor tile is [`WASH_REPEAT_PERIODS`] periods, because its basis
-/// is the 3-4-5 rotation. Reduced about zero rather than onto `[0, repeat)`, so an offset
-/// already inside half a repeat passes bit for bit: at the fresh speed and
-/// size that holds for a render's first 24 seconds or so, where it wraps first.
-///
-/// Scales' warp is nonperiodic, and Stars drift by their own slices, so
-/// neither has a tile or a repeat, and their offset passes unreduced.
-fn cloud_drift(
-    settings: harmonigraph_scene::SpectralAtmosphere,
-    offset: [f64; 2],
-    tile: Option<TileKey>,
-) -> [f32; 2] {
-    let repeat = tile.map(|tile| {
-        let periods = match settings.cloud_style {
-            harmonigraph_scene::CloudStyle::Watercolor => WASH_REPEAT_PERIODS,
-            harmonigraph_scene::CloudStyle::Stars
-            | harmonigraph_scene::CloudStyle::VelvetScales => {
-                unreachable!("only Watercolor draws out of a tile")
-            }
-        };
-        f64::from(tile.period() * periods) / material_cells(settings)
-    });
-    offset.map(|v| repeat.map_or(v, |r| v - r * (v / r).round()) as f32)
 }
 
 /// The starfield's layout for a pane of `pixels`, or `None` where no starfield
@@ -296,7 +258,7 @@ pub(super) fn tone_size(
         // selecting/truncating contributors or changing their sampled light.
         // Power-of-two spacings keep nearby dial values on one allocation.
         let material = settings.material_settings;
-        let cell = pixels[1] as f32 / (CLOUD_UNITS * material_cells(settings) as f32);
+        let cell = crate::material_cells::cell(true, &material, pixels[1] as f32);
         let samples = 32.0 * (0.34 / material.velvet_edge).max(1.0);
         let spacing = 2.0f32.powf((cell / samples).max(1.0).log2().floor());
         return Some(pixels.map(|n| (n as f32 / spacing).ceil().max(1.0) as u32));
@@ -422,13 +384,13 @@ pub(super) fn tile_key(
     // live-walk arm was retired because, never taken, it still cost the
     // full-resolution shader 16 to 21% (#1100).
     assert!(period > 0, "a cloud is drawn only out of a tile, so its period cannot be 0");
-    let cells = material_cells(settings) as f32;
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
     // [`TILE_STEP`], which is what keeps a resize off the bake. The 3-4-5
     // transform is a pure rotation, so unlike the former shear it has singular
     // value one and asks for no extra texels in any direction.
-    let wanted = period as f32 * (pixels[1] as f32 / CLOUD_UNITS / cells);
+    let wanted = period as f32
+        * crate::material_cells::cell(false, &settings.material_settings, pixels[1] as f32);
     let texels = ((wanted / TILE_STEP as f32).ceil().max(1.0) as u32)
         .saturating_mul(TILE_STEP)
         .min(TILE_MAX);
@@ -449,7 +411,8 @@ struct Uniforms {
     /// 1 when the tone target holds this frame's reduced scalar cloud field.
     /// The starfield reads its own image and never this.
     tone_baked: u32,
-    /// Cloud-space offset of the cloud texture, reduced from f64 on the CPU.
+    /// The material's sampling offset in its own cells
+    /// ([`crate::material_cells::drift`]), reduced from f64 on the CPU.
     ///
     /// The order below is the WGSL `Cloud` struct's order and has to stay that
     /// way: these are read by OFFSET, not by name, so transposing two `f32`
@@ -459,9 +422,12 @@ struct Uniforms {
     cloud_depth: f32,
     /// 1 for the watercolour wash, 2 for the starfield, 3 for Scales; 0 is
     /// unused. None reads another's own settings; all share what sits above
-    /// them.
+    /// them, and the wash and Scales share `cell` below it.
     cloud_style: u32,
-    wash_size: f32,
+    /// One cell of the drawn material, in points ([`crate::material_cells::cell`]):
+    /// whichever of the wash and Scales is drawn reads it, and the starfield
+    /// does not.
+    cell: f32,
     wash_fuzz: f32,
     wash_lobe: f32,
     wash_refract: f32,
@@ -486,7 +452,7 @@ struct Uniforms {
     memory_extent: Float2,
     previous_slices: [StarSlice; STAR_SLICES],
     velvet: Float4,
-    /// Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
+    /// Scales' `Squareness` and `Tilt`; zw is padding.
     velvet_form: Float4,
     /// The wash's `Edge pooling`, its width, and its softness as an exponent;
     /// w is padding.
@@ -996,16 +962,22 @@ fn memory_key(
 }
 
 /// The history lattice's whole-texel origin and its sub-texel remainder for a
-/// cloud `offset`, on a history of `extent` over the pane `rect`.
+/// material `offset` in its own cells of `cell` points
+/// ([`crate::material_cells::offset`]), on a history of `extent` over the pane
+/// `rect`.
 ///
 /// Off the UNREDUCED offset: the lattice has to run on continuously where the
 /// shader's drift jumps a whole repeat, or every wrap would read as a seek and
 /// reset the history.
-fn memory_origin(offset: [f64; 2], rect: egui::Rect, extent: [u32; 2]) -> ([i32; 2], [f32; 2]) {
+fn memory_origin(
+    offset: [f64; 2],
+    cell: f32,
+    rect: egui::Rect,
+    extent: [u32; 2],
+) -> ([i32; 2], [f32; 2]) {
     let mut fraction = [0.0; 2];
     let origin = std::array::from_fn(|a| {
-        let texels = offset[a]
-            * f64::from(rect.height() / CLOUD_UNITS * (extent[a] - 2) as f32 / rect.size()[a]);
+        let texels = offset[a] * f64::from(cell * (extent[a] - 2) as f32 / rect.size()[a]);
         let integer = texels.floor();
         fraction[a] = (texels - integer) as f32;
         integer as i32
@@ -1811,6 +1783,7 @@ impl Targets {
         // Each texture travels in the cells it is drawn in: the stars'
         // layout's where they are drawn, the plan's where they are not.
         let cells = material_cells(settings);
+        let velvet = settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales;
         let rate = Motion::rate(
             settings.cloud_speed,
             settings.cloud_direction,
@@ -1820,8 +1793,13 @@ impl Targets {
             stars.map_or_else(|| star_cells(settings.stars), |layout| layout.cells),
         );
         let motion = travel.advance(atmosphere.now, rate);
-        let offset = cloud_offset(motion.drift, cells);
-        let drift = cloud_drift(settings, offset, tile);
+        let offset =
+            crate::material_cells::offset(velvet, &settings.material_settings, motion.drift);
+        let cell = crate::material_cells::cell(velvet, &settings.material_settings, rect.height());
+        // Only Watercolor draws out of a tile, and only it reads the period.
+        let period = tile.map_or(crate::material_cells::WASH_PERIOD, |t| t.period() as f32);
+        let drift =
+            crate::material_cells::drift(velvet, &settings.material_settings, motion.drift, period);
         let image = self.shape.stars.map_or([1, 1], |stars| stars.image);
         let slices = stars
             .map(|layout| star_slices(settings.stars, motion.stars, &layout, image))
@@ -1830,7 +1808,7 @@ impl Targets {
         let mut step = MemoryStep::fresh(slices, life);
         if let Some(memory) = self.memory.as_mut() {
             memory.extent = memory_extent.expect("allocated history has a logical extent");
-            let (origin, fraction) = memory_origin(offset, rect, memory.extent);
+            let (origin, fraction) = memory_origin(offset, cell, rect, memory.extent);
             let frame = MemoryFrame {
                 now: atmosphere.now,
                 source_end,
@@ -1862,9 +1840,9 @@ impl Targets {
                 settings.material_settings.velvet_variety,
             ]),
             velvet_form: Float4([
-                settings.material_settings.velvet_size,
                 settings.material_settings.velvet_square,
                 settings.material_settings.velvet_tilt,
+                0.0,
                 0.0,
             ]),
             wash_pigment: Float4([
@@ -1885,7 +1863,7 @@ impl Targets {
                 harmonigraph_scene::CloudStyle::Stars => 2,
                 harmonigraph_scene::CloudStyle::VelvetScales => 3,
             },
-            wash_size: settings.material_settings.wash_size,
+            cell,
             wash_fuzz: settings.material_settings.wash_fuzz,
             wash_lobe: settings.material_settings.wash_lobe,
             wash_refract: settings.material_settings.wash_refract,
@@ -2011,10 +1989,9 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, cloud_offset_at, retained_size, source_size, star_layout, star_slices,
-        tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH,
-        STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
-        VELVET_CELLS, WASH_CELLS,
+        drift_at, retained_size, source_size, star_layout, star_slices, tile_key, tone_size,
+        SpectrogramAtmosphere, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE,
+        STAR_SLICES, TILE_MAX, TILE_STEP,
     };
 
     /// The blur's tap window is the reach the editor's frame loop holds a
@@ -2509,18 +2486,23 @@ mod tests {
                 cloud_direction: direction,
                 ..Default::default()
             };
-            cloud_drift(settings, cloud_offset_at(settings, now), None)
+            drift_at(settings, now, super::CloudSampling::default().tile_cells)
         };
+        // Apart on the tile's screen-axis repeat, which the drift wraps on.
+        let repeat =
+            crate::material_cells::WASH_PERIOD * crate::material_cells::WASH_REPEAT_PERIODS as f32;
+        let apart = |a: f32, b: f32| a - b - repeat * ((a - b) / repeat).round();
         let phase = at(0.0, 1.0, 0.0);
         let travelled = |direction| {
             let later = at(direction, 1.0, 25.0);
-            [later[0] - phase[0], later[1] - phase[1]]
+            [apart(later[0], phase[0]), apart(later[1], phase[1])]
         };
         let close = |got: [f32; 2], want: [f32; 2]| {
             assert!((got[0] - want[0]).abs() < 1e-5, "x: {got:?} != {want:?}");
             assert!((got[1] - want[1]).abs() < 1e-5, "y: {got:?} != {want:?}");
         };
-        let step = 25.0 * 0.047_169_905;
+        let cells = super::material_cells(Default::default()) as f32;
+        let step = 25.0 * 0.047_169_905 * cells;
         // Sampling moves opposite the visible texture direction.
         close(travelled(0.0), [-step, 0.0]);
         close(travelled(90.0), [0.0, -step]);
@@ -2530,86 +2512,22 @@ mod tests {
         let second = {
             let a = at(37.0, 1.0, 25.0);
             let b = at(37.0, 1.0, 50.0);
-            [b[0] - a[0], b[1] - a[1]]
+            [apart(b[0], a[0]), apart(b[1], a[1])]
         };
         close(second, first);
         close(at(220.0, 0.0, 10_000.0), phase);
     }
 
-    /// The wash's drift reaches the shader reduced by whole repeats of its
-    /// tile, so a long clock lands on the cell the f64 offset names — the 3-4-5
-    /// rotated basis included — within a millionth of a cell, where a plain
-    /// cast to f32 misses it by 2.4 cells at this clock. A short clock passes
-    /// bit for bit.
-    #[test]
-    fn a_tiled_drift_is_reduced_by_whole_repeats_before_it_narrows() {
-        let period = super::CloudSampling::default().tile_cells;
-        // Four months at the fresh speed: two million cloud units.
-        let long = 1.0e7;
-        let settings = harmonigraph_scene::SpectralAtmosphere {
-            cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
-            cloud_direction: 37.0,
-            ..Default::default()
-        };
-        let atmosphere = SpectrogramAtmosphere::fixture(settings);
-        let tile = tile_key([1920, 1080], atmosphere, period);
-        assert!(tile.is_some(), "the wash drew no tile");
-        let short = cloud_offset_at(settings, 2.0);
-        assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32));
-        // The tile coordinate the shader samples, in periods: a whole number
-        // apart is the same texel.
-        let cells = f64::from(WASH_CELLS / settings.material_settings.wash_size);
-        let uv = |q: [f64; 2]| {
-            let r = q.map(|v| v * cells / f64::from(period));
-            [0.8 * r[0] + 0.6 * r[1], -0.6 * r[0] + 0.8 * r[1]]
-        };
-        let off = |a: [f64; 2], b: [f64; 2]| {
-            let (a, b) = (uv(a), uv(b));
-            (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
-                * f64::from(period)
-        };
-        let exact = cloud_offset_at(settings, long);
-        let reduced = cloud_drift(settings, exact, tile).map(f64::from);
-        let cast = exact.map(|v| f64::from(v as f32));
-        assert!(off(reduced, exact) < 1e-4, "{} cells off", off(reduced, exact));
-        assert!(off(cast, exact) > 0.01, "the clock is too short to need reducing");
-    }
-
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
-    /// and the cell counts it divides by are the SHADER's own.
+    /// the cell the shader is shipped ([`crate::material_cells::cell`]).
     ///
     /// Both halves matter. Finer than the pane buys nothing and coarser is a
     /// blur the dial did not ask for, so the size follows the pane; but at one
     /// texel per pixel a resize drag would rebake a whole cell walk on every
     /// frame of the drag, which is the too-wide key this repo ships. The step
     /// is what makes a drag cross a boundary a handful of times.
-    ///
-    /// The constants are a mirror of the shader's, since only this side needs
-    /// to know what a cell is. Read off the shipped text, because a mirror that
-    /// drifted would size every tile wrong with nothing saying so.
     #[test]
     fn the_tile_is_as_fine_as_the_pane_draws_a_cell() {
-        let number = |name: &str| -> f32 {
-            crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, name)
-                .split('/')
-                .map(|part| part.trim().parse::<f32>().expect("a number"))
-                .reduce(|a, b| a / b)
-                .expect("a constant has a value")
-        };
-        assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
-        assert_eq!(WASH_CELLS, number("WASH_CELLS"));
-        assert_eq!(1.0 / (CLOUD_UNITS * VELVET_CELLS), number("VELVET_CELL"));
-        let start =
-            crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, "DRIFT_START");
-        let start: Vec<f32> = start
-            .strip_prefix("vec2<f32>(")
-            .and_then(|s| s.strip_suffix(')'))
-            .expect("a vec2<f32> constant")
-            .split(',')
-            .map(|part| part.trim().parse().expect("a number"))
-            .collect();
-        assert_eq!(harmonigraph_scene::MaterialSettings::DRIFT_START.map(|v| v as f32)[..], start);
-
         let at = |cloud_tile, wash_size, height| {
             tile_key(
                 [1920, height],
