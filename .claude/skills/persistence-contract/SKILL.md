@@ -21,10 +21,10 @@ Add a persisted struct, and those tests are what catch a forgotten attribute.
 no second set of values anywhere, and retuning the fresh look is free.
 A key missing from a blob costs that key alone.
 
-To see which structs currently carry it:
+To see which structs currently carry it, private and `pub(crate)` ones included (`UiPersist`, the editor's top-level save, is one):
 
 ```
-grep -rn --include='*.rs' -A4 '#\[serde(default)\]' crates/ | grep 'pub struct'
+grep -rn --include='*.rs' -A4 '#\[serde(default)\]' crates/ | grep -E -- '-[0-9]+-(pub[^ ]* )?struct '
 ```
 
 ### Editor workspace defaults
