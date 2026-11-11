@@ -213,8 +213,9 @@ harmonigraph-ui          Shared pane shell and controls for Lattice, Tuning,
                          Analyzer, Mappings, Spectral, Spiral, System, Console
                          and Video.
 
-harmonigraph-take        Recorded note events, parameter automation and the
-                         settings needed to reproduce a visualization.
+harmonigraph-take        Recorded note events and parameter automation, with
+                         the editor's appearance carried opaque, to reproduce
+                         a visualization.
 
 harmonigraph-record      Realtime-safe take writing and offline-renderer launch.
 

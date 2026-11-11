@@ -56,7 +56,7 @@ Map Thirds and Map Sevenths automation lanes to move any shape in integer genera
 Each axis also has a Coarse lane that adds multiples of 10 without changing existing fine automation.
 The coarse parameters are named Map Fifths x10,
 Map Thirds x10 and Map Sevenths x10;
-the editor labels the two columns Fine and Coarse.
+the editor shows each axis as one row of two bars, Fine captioned with the axis and Coarse beside it.
 These controls sit in the Position block.
 Positive values move along the corresponding generator;
 negative values move back.
@@ -286,7 +286,7 @@ so every integer total from −99 to +99 is reachable.
 For example,
 Fine +4 and Coarse +20 give a total of +24.
 Use Coarse when a passage outgrows the fine lane.
-The editor shows both controls and the total separately for each axis.
+Under the three rows the editor shows the totals on one line, in fifths, thirds and sevenths.
 
 All six plain saved parameters range from −9 to +9 and default to zero;
 coarse counts are multiplied by 10 only when displayed or added to the total.
