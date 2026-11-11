@@ -194,6 +194,8 @@ def captured_appearance(state: dict) -> "str | None":
             camera[key] = repr(movement[key])
     # Match AppearanceDocument::set_camera_movement: absolute pan is an
     # integer lattice center plus a residual target, with ties away from zero.
+    # The fields written here are AppearanceDocument::copy_host_owned's list;
+    # .claude/tests/read-plugin-state.py holds the two together.
     target = camera.get("target", "(0.0,0.0,0.0)")[1:-1].split(",")
     for index, (key, center) in enumerate((("pan-x", "center_fives"),
                                          ("pan-y", "center_threes"))):

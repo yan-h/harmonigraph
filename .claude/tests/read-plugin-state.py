@@ -2,6 +2,7 @@
 """The extractor must retain distinct instances and decode their actual JSON."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -59,6 +60,31 @@ class StateExtraction(unittest.TestCase):
             saved["params"] = {}
             project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
             self.assertEqual(capture("--appearance").strip(), appearance)
+
+    def test_capture_overlays_exactly_the_fields_rust_names_host_owned(self):
+        """The overlay is a copy of the Rust list, so the two are compared."""
+        source = (Path(__file__).resolve().parents[2]
+                  / "crates/harmonigraph-ui/src/camera_movement.rs").read_text()
+        body = source.split("fn copy_host_owned(", 1)[1].split("\n    }\n", 1)[0]
+        owned = set(re.findall(r"^\s*(camera|view)\.(\w+) = from_\1\.\2;", body, re.M))
+        self.assertGreaterEqual(len(owned), 5, "the Rust list was not found")
+        appearance = ('(camera:(target:(0.25,-0.25,1.0),yaw:0.4,pitch:0.3,distance:12.0,'
+                      'projection:Cabinet,cabinet_angle:0.7,cabinet_scale:0.6),'
+                      'view:(center_fives:9,center_threes:8,center_sevens:1,max_sevens:2))')
+        state = {"params": {
+            f"camera-{key}": {"f32": value} for key, value in
+            [("yaw", 1.0), ("pitch", -0.5), ("distance", 6.0), ("pan-x", 2.5), ("pan-y", -3.5)]
+        }, "fields": {"ui-state": f"(version:7,appearance:{appearance})"}}
+        captured = extractor.captured_appearance(state)
+
+        def fields(text):
+            return {(name, key): value
+                    for name in ("camera", "view")
+                    for key, value in extractor.split_ron(extractor.block(f"({text})", name))}
+        before, after = fields(appearance[1:-1]), fields(captured)
+        self.assertEqual(before.keys(), after.keys())
+        written = {field for field in before if before[field] != after[field]}
+        self.assertEqual(written, owned)
 
     def test_the_spiral_framing_is_read_from_either_saved_shape(self):
         spiral = 'spiral:(zoom:2.75,look:(0.4,-0.6))'

@@ -297,8 +297,12 @@ Learn leaves relationships without enough evidence unchanged and preserves targe
 The third and seventh parameter ranges include every interval their links can derive,
 so switching off a link does not clamp the pitch to an older slider limit.
 There is no separate Auto setting.
-Saved links and recorded configurations are restored as saved,
+The links are tuning, not part of the look:
+slots and undo leave them alone.
+The plugin saves them with the project's tuning,
+and saved links and recorded configurations are restored as saved,
 without running recognition again.
+The standalone app does not save them, and opens with both linked.
 **Note retuning** holds only the engine choice;
 each engine's controls follow in a section of their own.
 Adaptive tuning's **Keyboard** and **Context** are blocks,

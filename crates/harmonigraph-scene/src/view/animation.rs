@@ -95,9 +95,11 @@ impl NoteAnimationConfig {
     /// it: its departure edges and presence wait carry the per-slice delays,
     /// and the widest of those is `stagger_spread` of a fade on any wheel
     /// whose slices are staggered at all (an unstaggered one leaves sooner).
-    /// The repaint guard keeps the frame loop awake this long, and the replay
-    /// horizon is built on this at the spread's ceiling, so a setting that
-    /// lengthens a departure joins the span here and both follow it.
+    /// The replay horizon is built on this at the spread's ceiling, so a
+    /// setting that lengthens a departure joins the span here or a replay
+    /// after a gap seeds it as settled. The repaint guard does not read it:
+    /// [`NodeMotion::moving`](crate::NodeMotion::moving) answers
+    /// from the motion's own state.
     ///
     /// Every field is named here, so a field added to the config has to say
     /// whether it lengthens a departure before anything compiles.

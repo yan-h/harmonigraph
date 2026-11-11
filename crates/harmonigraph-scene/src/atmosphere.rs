@@ -227,6 +227,17 @@ impl StarPane {
 /// Longest color-memory time constant in seconds.
 pub const COLOR_MEMORY_MAX: f32 = 5.0;
 
+/// Time constants the colour memory takes to come within half a byte of what
+/// it is following from as far away as a colour can be: `ln(255 / 0.5)`. Its
+/// history eases each texel by `1 - exp(-dt / tau)` a frame, on Color pickup
+/// rising and Color release falling.
+const MEMORY_SETTLE: f64 = 6.234;
+
+/// How many sigmas either side of a texel the spectrogram's blur reads: the tap
+/// window `spectral_atmosphere.wgsl` clips to (`3.0 * sigma`), which the
+/// renderer's tests hold to this.
+pub const BLUR_REACH_SIGMAS: f32 = 3.0;
+
 /// Bounds shared by the [`StarSettings::star_lifetime`] control and
 /// sanitizer, in seconds.
 pub const STAR_LIFETIME_MIN: f32 = 0.5;
@@ -813,6 +824,52 @@ impl SpectralAtmosphere {
     /// about 1.1, close to a linear fade.
     pub fn pool_exponent(softness: f32) -> f32 {
         (4.0 * softness - 2.0).exp2()
+    }
+
+    /// Whether the colour memory runs: the cloud is drawn and either response
+    /// time is above zero. The renderer allocates the history on this.
+    pub fn remembers_color(self) -> bool {
+        self.effects().cloud && (self.color_pickup > 0.0 || self.color_release > 0.0)
+    }
+
+    /// Seconds this atmosphere goes on moving pixels for a column past the
+    /// moment the column itself has scrolled off the far edge: the time blur's
+    /// reach ([`BLUR_REACH_SIGMAS`] of Time softness), then the colour memory
+    /// easing what that edge last showed to what it shows now, on the slower
+    /// of Color pickup and Color release.
+    ///
+    /// What the editor's frame loop holds a heard column for, beside the Span
+    /// and the slab. Every field is named, so a field added to the atmosphere
+    /// has to say whether it lengthens the tail before anything compiles. The
+    /// textures that drift on their own clock only move light, and every one
+    /// keeps silence on the palette's floor, so they settle with the columns
+    /// they light.
+    pub fn tail(self) -> f64 {
+        let settings = self.sanitized();
+        let remembers = settings.remembers_color();
+        let SpectralAtmosphere {
+            pitch_softness: _, // across pitch, not time
+            time_softness,
+            blur_time_step: _, // resamples the blurred field, reaching no further
+            cloud_depth: _,    // in `remembers_color`
+            color_pickup,
+            color_release,
+            cloud_speed: _,        // moves light only
+            cloud_direction: _,    // moves light only
+            wash_pool: _,          // shapes light only
+            wash_pool_width: _,    // shapes light only
+            wash_pool_softness: _, // shapes light only
+            material_settings: _,  // shapes light only
+            cloud_style: _,        // in `remembers_color`
+            stars: _,              // draw nothing at level 0 and lift only with it
+        } = settings;
+        let blur = f64::from(BLUR_REACH_SIGMAS * time_softness) / 1000.0;
+        let memory = if remembers {
+            MEMORY_SETTLE * f64::from(color_pickup.max(color_release))
+        } else {
+            0.0
+        };
+        blur + memory
     }
 
     /// Which effects these settings draw. Read off SANITIZED values — a NaN

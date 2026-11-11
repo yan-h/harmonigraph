@@ -386,6 +386,8 @@ pub(crate) fn spectral_pane(
     // at its actual pitch. Fundamentals line up with their notes' ribbons;
     // the harmonic series marches up the axis from each note.
     if show_spectrum && split > 0.0 {
+        let moving = state.runtime.spectrum.moving(now);
+        state.surfaces.moving_this_frame.audible(moving);
         if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each reading the whole run of buckets
@@ -439,7 +441,12 @@ pub(crate) fn spectral_pane(
     // for it, instead of recoloring the note and costing you the one thing the
     // ribbon's color is for. See `PictureState::shown` (crate::state) for why
     // this reads `shown` rather than the reach.
-    let mut namer = names::Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
+    let mut namer = names::Namer::new(
+        &state.appearance.view,
+        state.shown(),
+        &state.runtime.tuning,
+        state.runtime.tempered,
+    );
     if show_spectrum && split > 0.0 {
         let mut voices: Vec<&harmonigraph_core::Voice> =
             state.runtime.tracker.voices().filter(|v| !namer.shows_node(v.pitch_class)).collect();
@@ -485,6 +492,8 @@ pub(crate) fn spectral_pane(
             state,
             roll::RollDrawOptions { split, now, surface, point_scale },
         );
+        let moving = roll::scrolling(state, now);
+        state.surfaces.moving_this_frame.roll(moving);
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn after

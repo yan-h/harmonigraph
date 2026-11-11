@@ -155,7 +155,7 @@ impl Recorder {
 
     /// Write any parameter that moved since the last frame.
     fn params(&mut self, params: &StandaloneParams, state: &mut SharedState, now: f64) {
-        state.picture.runtime.observe_configuration(&mut state.picture.appearance, params);
+        state.picture.runtime.observe_configuration(params);
         let configuration = state.picture.runtime.resolved_configuration();
         if self.configuration != Some(configuration) {
             let _ = self

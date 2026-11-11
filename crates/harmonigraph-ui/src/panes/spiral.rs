@@ -525,6 +525,8 @@ pub(crate) fn spiral_pane(
     navigate(ui, &response, &fit, view);
     let spiral = fit.framed(view);
     painter.add(egui::Shape::mesh(strip(&spiral, state, &cfg, now)));
+    let moving = state.runtime.spectrum.moving(now);
+    state.surfaces.moving_this_frame.audible(moving);
     seam(&painter, &spiral);
     rays(&painter, &spiral);
     let lit = sounding(&spiral, state, now);
@@ -932,6 +934,7 @@ fn names(
         &state.appearance.view,
         state.shown(),
         &state.runtime.tuning,
+        state.runtime.tempered,
     );
     // `raster` is the rung of the size ladder the type is cut at and `magnify`
     // the rest of what the band asks for, exactly as the roll's names split
