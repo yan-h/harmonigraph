@@ -182,6 +182,28 @@ impl DockHarness {
         state: &mut SharedState,
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, f64) {
+        self.pass(state, events, |_| {})
+    }
+
+    /// One frame with `overlay` drawn over the dock in the same pass, for a
+    /// fixture that needs a control of its own rather than one the dock
+    /// happens to draw today: `root_ui` runs first, as it does for every
+    /// frame, and the overlay's widgets meet the pointer as the dock's do.
+    pub(super) fn frame_over(
+        &mut self,
+        state: &mut SharedState,
+        events: Vec<egui::Event>,
+        overlay: impl FnMut(&egui::Context),
+    ) -> egui::FullOutput {
+        self.pass(state, events, overlay).0
+    }
+
+    fn pass(
+        &mut self,
+        state: &mut SharedState,
+        events: Vec<egui::Event>,
+        mut overlay: impl FnMut(&egui::Context),
+    ) -> (egui::FullOutput, f64) {
         self.t += 1.0 / 60.0;
         // Held as a shell holds them: the modifiers its key events carry. egui
         // matches a shortcut against these, not the event's own.
@@ -207,6 +229,7 @@ impl DockHarness {
             let start = std::time::Instant::now();
             root_ui(ui, state, backend, t, "shell-tag-fixture @0123456");
             ui_ms = start.elapsed().as_secs_f64() * 1000.0;
+            overlay(ui.ctx());
         });
         (output, ui_ms)
     }
