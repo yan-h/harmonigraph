@@ -68,7 +68,7 @@ def view_fields() -> "set[str]":
     (serde skips them on load), and `--rust` pasting one would not compile."""
     source = VIEW_SOURCE.read_text()
     body = source.split("pub struct ViewConfig {", 1)[1].split("\n}\n", 1)[0]
-    fields = set(re.findall(r"^    pub (\w+):", body, re.M))
+    fields = set(re.findall(r"^    (?:pub(?:\([^)]*\))? )?(\w+):", body, re.M))
     if not fields:
         sys.exit(f"No ViewConfig fields found in {VIEW_SOURCE}.")
     return fields

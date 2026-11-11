@@ -23,7 +23,8 @@ Per phase, counted in the display's refreshes:
 - missed refreshes: a glass gap longer than the divisor that paced it
   (a stall) misses each refresh beyond it. An input event restores the chosen
   rate between frames and the next refresh draws, so a frame that cuts a
-  slowed interval short is held to the link's own gap instead;
+  still frame's slowed interval short is held to the link's own gap instead
+  (a log without `animating` rows treats every slowed frame as still);
 - jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
 - the p99 gap between presents, in ms;
@@ -124,21 +125,28 @@ def frame(row, gpu_end, presented):
         'submitted': float(row['submitted']),
         'divisor': int(row.get('divisor') or 1),
         'rate': None,
+        'still': None,
         'gpu_end': gpu_end.get(f, 0.0),
         'presented': presented.get(f),
     }
 
 
-def assign_rates(frames, events):
-    """Set each frame's chosen rate from the latest `rate` row logged at or
-    before it, where the log has them: frame numbers count across every window
-    of the process, so a row joins the window whose frame logged it."""
-    marks = sorted((f, int(text.split()[1])) for f, _, text in events
-                   if text.split()[0] == 'rate')
-    starts = [f for f, _ in marks]
-    for fr in frames:
-        i = bisect.bisect_right(starts, fr['frame']) - 1
-        fr['rate'] = marks[i][1] if i >= 0 else None
+def assign_states(frames, events):
+    """Set each frame's chosen rate, and whether nothing kept it animating,
+    from the latest `rate` and `animating` rows logged at or before it, where
+    the log has them: frame numbers count across every window of the process,
+    so a row joins the window whose frame logged it."""
+    def latest(kind, value):
+        marks = sorted((f, value(text.split()[1:])) for f, _, text in events
+                       if text.split()[0] == kind)
+        starts = [f for f, _ in marks]
+        for fr in frames:
+            i = bisect.bisect_right(starts, fr['frame']) - 1
+            yield marks[i][1] if i >= 0 else None
+    for fr, rate in zip(frames, latest('rate', lambda words: int(words[0]))):
+        fr['rate'] = rate
+    for fr, still in zip(frames, latest('animating', lambda words: not words)):
+        fr['still'] = still
 
 
 def phases(frames):
@@ -211,7 +219,10 @@ def measure(phase):
             m['refreshes'] += glass
             m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
             expected = fr['divisor']
-            if previous['divisor'] > expected:
+            # Only a still frame's slowed interval can be cut short by an
+            # input event: an animating one set the next frame's pacing inside
+            # itself, so a longer link gap after it is the main thread late.
+            if previous['divisor'] > expected and previous['still'] is not False:
                 expected = max(expected, min(link, previous['divisor']))
             if glass > expected:
                 m['missed'] += glass - expected
@@ -336,7 +347,7 @@ def openings(ticks, gpu_end, presented, events):
     for w, evs in by_window.items():
         frames = sorted((frame(row, gpu_end, presented) for row in ticks[w]),
                         key=lambda fr: fr['frame'])
-        assign_rates(frames, evs)
+        assign_states(frames, evs)
         starts = [f for f, _, text in evs if text.startswith('open')]
         for k, first in enumerate(starts):
             last = starts[k + 1] if k + 1 < len(starts) else float('inf')
@@ -488,7 +499,7 @@ def main():
     frames = [frame(row, gpu_end, presented) for row in ticks[window]]
     frames.sort(key=lambda fr: fr['frame'])
     own = {fr['frame'] for fr in frames}
-    assign_rates(frames, [e for e in events if e[0] in own])
+    assign_states(frames, [e for e in events if e[0] in own])
     t0 = frames[0]['t']
     frames = [fr for fr in frames if args.start <= fr['t'] - t0 <= args.end]
     measured = [measure(p) for p in phases(frames)]
