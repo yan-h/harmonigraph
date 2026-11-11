@@ -765,6 +765,27 @@ impl AudioSpectrum {
     pub(crate) fn last_audible(&self) -> Heard {
         self.store.last_audible
     }
+
+    /// When the smoothed display stops moving, which the curve, the Spiral and
+    /// the lattice ring all draw: a column moves it once it lands, a
+    /// [`column_lag`](Self::column_lag) after its own time, and nothing draws
+    /// it [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the samples stop. The
+    /// display's release is inside the stamp it starts from
+    /// ([`Heard::curve`]), so a curve still above silence counts as heard.
+    /// `None` before anything has been.
+    ///
+    /// A bound from the stamp each landing column writes, beside the constants
+    /// it is built from, rather than a second copy of them in the frame loop.
+    pub(crate) fn moving_until(&self) -> Option<f64> {
+        let heard = self.last_audible().curve?;
+        Some(heard + self.column_lag() + Self::HOLD_SECONDS)
+    }
+
+    /// Whether the smoothed display is still moving at `now`: see
+    /// [`moving_until`](Self::moving_until).
+    pub(crate) fn moving(&self, now: f64) -> bool {
+        self.moving_until().is_some_and(|until| until >= now)
+    }
 }
 
 impl SpectrogramSurfaces {

@@ -1304,13 +1304,11 @@ impl Plan {
             .flatten();
         // Light, reduced tone, tile and history have separate sizing rules.
         // A scalar-field resize must not erase color memory.
-        let memory_extent = (settings.effects().cloud
-            && (settings.color_pickup > 0.0 || settings.color_release > 0.0))
-            .then(|| {
-                star_shape
-                    .map(|stars| stars.atlas)
-                    .unwrap_or_else(|| reduced.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
-            });
+        let memory_extent = settings.remembers_color().then(|| {
+            star_shape
+                .map(|stars| stars.atlas)
+                .unwrap_or_else(|| reduced.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
+        });
         // Watercolor with a history works its tone out per history texel in
         // `fs_color_memory` and displays the history, so the reduced size is
         // the history's grid and a tone target would be drawn into by nothing.
@@ -2018,6 +2016,17 @@ mod tests {
         STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
         VELVET_CELLS, WASH_CELLS,
     };
+
+    /// The blur's tap window is the reach the editor's frame loop holds a
+    /// heard column for past the far edge
+    /// ([`SpectralAtmosphere::tail`](harmonigraph_scene::SpectralAtmosphere::tail)),
+    /// so the shader's copy of it is held to the named one.
+    #[test]
+    fn the_blurs_tap_window_is_the_reach_the_frame_loop_waits_for() {
+        let reach = format!("{:.1} * sigma", harmonigraph_scene::BLUR_REACH_SIGMAS);
+        let clips = super::SOURCE.matches(&reach).count();
+        assert_eq!(clips, 3, "the low and high clips and the tap count read {reach}");
+    }
 
     /// Each depth's value off a far-to-near curve, `far · (near / far)^(d^curve)`
     /// at five layers: the shape the size and spacing dials took before each

@@ -218,6 +218,11 @@ pub(super) fn strip_depths(
 /// before that ramp is applied once, keeping the data and its surrounding body
 /// on one palette. With every effect off, the plain path keeps the original
 /// per-pixel level read.
+///
+/// Reports whether what it drew is still moving, off the run and the slab it
+/// drew ([`Moving`](crate::Moving)): what the editor's frame loop stays awake
+/// for. A frame that draws no run reports nothing, and so does a frame
+/// that does not draw the heatmap at all.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -277,6 +282,19 @@ pub(crate) fn draw_spectrogram(
     let Some((grid, shades)) = frame_data(surfaces, surface, &cfg) else {
         return;
     };
+    // How long a column goes on moving pixels here after its own time: it
+    // scrolls across the Span and then the rest of the slab it was folded
+    // into, and the atmosphere carries it on past that edge
+    // ([`tail`](harmonigraph_scene::SpectralAtmosphere::tail)). Only an
+    // audible one moves anything, since silence draws in the bed's colour,
+    // unless a tilt lifts silence off it, when every column's edges show.
+    let reach = time.window() + layout.bucket + cfg.atmosphere.tail();
+    let moving = if silence_shows(&cfg) {
+        hist.back().map(|column| column.time)
+    } else {
+        spectrum.last_audible().column
+    };
+    state.surfaces.moving_this_frame.audible(moving.is_some_and(|t| t + reach >= now));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
     // surface and leaves the scissor egui set from this rect alone.
@@ -303,6 +321,16 @@ pub(crate) fn draw_spectrogram(
             light_hold,
         }),
     ));
+}
+
+/// Whether a silent cell of the heatmap draws in anything but the gradient's
+/// floor, which is the bed's colour. The level is affine in pitch, so the
+/// range's two ends decide it.
+fn silence_shows(cfg: &crate::SpectrumConfig) -> bool {
+    use harmonigraph_core::spectrogram::DB_FLOOR;
+    [cfg.low_midi, cfg.high_midi]
+        .into_iter()
+        .any(|midi| super::axes::spectrogram_level_raw(cfg, DB_FLOOR, midi) > 0.0)
 }
 
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the heatmap's

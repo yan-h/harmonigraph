@@ -20,6 +20,10 @@ The 2026-10-22 section moved here from `editor-shell.md` when the 2026-11-02 dri
 
 - The editor drops to its idle poll once nothing in view can still move, rather than drawing every refresh because the host streams silence: a still picture cost 280-320 ms per second of Bitwig's main thread at 144 Hz. #1670 Q2, #1673
 
+## 2026-11-10 (maintainability audit, #1677)
+
+- Each picture drawn this frame says whether it is still moving, from the state or stamp its own motion runs on, and a picture not drawn holds nothing, so a delay a picture gains reaches the repaint guard with no edit there. #1677 R1
+
 ## 2026-11-10 (host key routing audit, #1675)
 
 - With a label selected and nothing focused, Cmd-X goes to the DAW alone and the label is left as it is: cut means nothing on a read-only label. Escape there is the editor's, and clears the selection. #1675 Q1, #1674

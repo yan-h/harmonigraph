@@ -130,7 +130,7 @@ pub(super) fn frame(
     }
     .draw();
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
-    state.logged.note(&shared.ui, now);
+    state.logged.note(&shared.ui);
 
     // Also where a host restore that moved the setting reaches an open editor.
     if let Some(own) = shared.ui.workspace.interaction.own_window {
@@ -199,12 +199,12 @@ struct Logged {
 
 #[cfg(all(feature = "frame-log", target_os = "macos"))]
 impl Logged {
-    fn note(&mut self, ui: &harmonigraph_ui::SharedState, now: f64) {
+    fn note(&mut self, ui: &harmonigraph_ui::SharedState) {
         if self.animating.is_none() {
             let span = ui.picture.appearance.spectrum.roll_seconds;
             egui_baseview::frame_log::event(&format!("open span={span}"));
         }
-        let animating = harmonigraph_ui::Animating::of(ui, now);
+        let animating = harmonigraph_ui::Animating::of(ui);
         if self.animating != Some(animating) {
             self.animating = Some(animating);
             egui_baseview::frame_log::event(&format!("animating {animating}"));

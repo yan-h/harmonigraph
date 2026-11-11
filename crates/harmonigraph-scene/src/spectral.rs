@@ -577,6 +577,9 @@ pub struct RingFade {
     /// the fade once: the second call's `dt` is zero and every bucket answers
     /// where it already was.
     at: Option<f64>,
+    /// Whether a bucket is still on its way, as of the last step: see
+    /// [`moving`](Self::moving).
+    moving: bool,
 }
 
 impl Default for RingFade {
@@ -585,6 +588,7 @@ impl Default for RingFade {
             open: Box::new([0.0; SPECTRUM_BINS]),
             gated: Box::new([false; SPECTRUM_BINS]),
             at: None,
+            moving: false,
         }
     }
 }
@@ -626,6 +630,7 @@ impl RingFade {
     pub fn advance(&mut self, gate: &RingGate, env: &Envelope, now: f64) {
         let dt = self.at.map(|at| now - at);
         self.at = Some(now);
+        let mut moving = false;
         for (bucket, (level, gated)) in self.open.iter_mut().zip(self.gated.iter_mut()).enumerate()
         {
             let open = gate.opens(bucket, *gated);
@@ -638,7 +643,18 @@ impl RingFade {
                 Some(dt) => env.carried(*level, dt, open),
                 None => target,
             };
+            moving |= *level != target;
         }
+        self.moving = moving;
+    }
+
+    /// Whether a bucket has yet to land where the gate last sent it: what the
+    /// editor's frame loop stays awake for while the ring opens or closes.
+    /// [`Envelope::carried`] lands exactly, so each one ends. A gate that turns
+    /// over later does so on a frame that the levels it reads are already
+    /// holding awake.
+    pub fn moving(&self) -> bool {
+        self.moving
     }
 
     /// How much of its ring a node of pitch class `cents` wears, 0..=1: the
@@ -1617,6 +1633,37 @@ mod tests {
             fade.level(&wheel, 0.0)
         };
         assert_eq!(twice, once, "a pane drawn twice ran the fade twice");
+    }
+
+    /// [`RingFade::moving`] is what the frame loop stays awake for once the
+    /// gate turns over, so from the turn on it says moving on exactly the
+    /// frames some later frame still differs from. Both ways, on a straight and
+    /// a curved Fade.
+    #[test]
+    fn moving_holds_while_a_later_frame_of_the_ring_still_differs() {
+        let view = gated(0.5, SpectralReading::Fold);
+        let sounding = gate_of(&view, partial(60.0, 10.0));
+        let silent = gate_of(&view, empty());
+        for shape in [0.0, 0.6] {
+            let env = Envelope { attack_time: 0.4, fade_time: 1.0, shape };
+            for (before, after) in [(&sounding, &silent), (&silent, &sounding)] {
+                // Every bucket's opening at each frame, the gate turning at
+                // 0.1 s, and what the fade said after.
+                let mut fade = RingFade::default();
+                let frames: Vec<_> = (0..=200)
+                    .map(|k| {
+                        let now = f64::from(k) * 0.01;
+                        fade.advance(if now < 0.1 { before } else { after }, &env, now);
+                        (now, fade.open.clone(), fade.moving())
+                    })
+                    .collect();
+                assert!(frames[10].2, "shape {shape}: the turn moved nothing");
+                for (k, (now, open, moving)) in frames.iter().enumerate().skip(10) {
+                    let changes = frames[k..].iter().any(|(_, later, _)| later != open);
+                    assert_eq!(*moving, changes, "shape {shape}: said moving {moving} at {now}");
+                }
+            }
+        }
     }
 
     /// A ramp running DOWNWARD is pinned at `t` = 0 like any other, and there
