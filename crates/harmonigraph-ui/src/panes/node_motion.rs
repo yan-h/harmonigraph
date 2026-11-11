@@ -19,5 +19,5 @@ pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface:
         &state.runtime.ring_fade,
         now,
     );
-    state.surfaces.moving_this_frame.releasing(motion.moving_until());
+    state.surfaces.moving_this_frame.releasing(motion.moving());
 }

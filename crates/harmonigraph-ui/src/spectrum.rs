@@ -519,19 +519,6 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
     1.0 - (-dt / f64::from(seconds)).exp() as f32
 }
 
-/// Seconds the filter [`hop_alpha`] steps takes to close a gap of `distance`
-/// to `within` of it: [`NEXT_STEP`](harmonigraph_core::NEXT_STEP) where it
-/// lands in one step, 0 where the gap is already that small.
-pub(crate) fn hop_left(seconds: f32, distance: f32, within: f32) -> f64 {
-    if distance.is_nan() || distance <= within {
-        return 0.0;
-    }
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return harmonigraph_core::NEXT_STEP;
-    }
-    f64::from(seconds) * (f64::from(distance) / f64::from(within)).ln()
-}
-
 impl AudioSpectrum {
     /// Seconds of AUDIO between FFTs (125 columns a second), measured in
     /// samples rather than on the shell clock — see
@@ -792,6 +779,12 @@ impl AudioSpectrum {
     pub(crate) fn moving_until(&self) -> Option<f64> {
         let heard = self.last_audible().curve?;
         Some(heard + self.column_lag() + Self::HOLD_SECONDS)
+    }
+
+    /// Whether the smoothed display is still moving at `now`: see
+    /// [`moving_until`](Self::moving_until).
+    pub(crate) fn moving(&self, now: f64) -> bool {
+        self.moving_until().is_some_and(|until| until >= now)
     }
 }
 

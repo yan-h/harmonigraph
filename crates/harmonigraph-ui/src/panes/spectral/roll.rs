@@ -341,6 +341,21 @@ pub(crate) fn take_roll_draw_probe() -> Option<RollDrawProbe> {
     ROLL_DRAW_PROBE.with(std::cell::Cell::take)
 }
 
+/// Whether the roll still has something moving across it: its window reaches
+/// back to a note that was sounding. Goes quiet once the last note has
+/// scrolled off the far edge, so an idle plugin still idles. Asked by the
+/// roll's draw, so a roll that is not drawn holds nothing
+/// ([`Moving`](crate::Moving)).
+pub(crate) fn scrolling(state: &PictureState, now: f64) -> bool {
+    let cfg = &state.appearance.spectrum;
+    state
+        .runtime
+        .tracker
+        .roll()
+        .latest_activity(now)
+        .is_some_and(|last| now - last <= f64::from(cfg.roll_seconds.max(cfg.roll_lead_release)))
+}
+
 pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,

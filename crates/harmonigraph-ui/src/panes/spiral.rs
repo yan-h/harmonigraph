@@ -525,7 +525,7 @@ pub(crate) fn spiral_pane(
     navigate(ui, &response, &fit, view);
     let spiral = fit.framed(view);
     painter.add(egui::Shape::mesh(strip(&spiral, state, &cfg, now)));
-    let moving = state.runtime.spectrum.moving_until();
+    let moving = state.runtime.spectrum.moving(now);
     state.surfaces.moving_this_frame.audible(moving);
     seam(&painter, &spiral);
     rays(&painter, &spiral);

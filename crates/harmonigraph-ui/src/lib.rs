@@ -356,7 +356,7 @@ pub fn root_ui(
     // frame off the analyzer, so with audio playing but no MIDI they'd
     // otherwise crawl at the 50 ms idle poll. Audio that merely arrives does
     // not: a host streams silence with its transport stopped (#1670 Q2).
-    let animating = Animating::of(state, now).any();
+    let animating = Animating::of(state).any();
     if animating {
         // As fast as the shell offers. The frame rate setting is the shell's
         // to apply, by offering fewer frames: a repaint delay cannot bound it,
@@ -426,7 +426,7 @@ pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64
     state.surfaces.drawn = state.surfaces.drawn_this_frame.take();
     // And for the same reason, what the pictures drawn say about when they
     // stop moving: one not drawn this frame holds the loop for nothing.
-    state.surfaces.moving_this_frame = MovingUntil::default();
+    state.surfaces.moving_this_frame = Moving::default();
 }
 
 /// A pane that stands on its own, outside the dock.
@@ -522,13 +522,16 @@ pub struct Animating {
 }
 
 impl Animating {
-    pub fn of(state: &SharedState, now: f64) -> Self {
+    /// What holds the frame loop at full rate, read once every pane has drawn
+    /// (see [`Moving`]).
+    pub fn of(state: &SharedState) -> Self {
+        let moving = state.picture.surfaces.moving_this_frame;
         Self {
             voices: state.picture.runtime.tracker.voices().next().is_some(),
             learn: state.picture.runtime.learn_active,
-            roll: roll_scrolling(state, now),
-            releasing: releasing(state, now),
-            audible: audible(state, now),
+            roll: moving.roll,
+            releasing: moving.releasing,
+            audible: moving.audible,
         }
     }
 
@@ -562,62 +565,67 @@ impl std::fmt::Display for Animating {
     }
 }
 
-/// When what the pictures drawn this frame stop moving, as each draw reported
-/// it, under the two reasons the frame log names: what keeps a picture moving,
-/// and for how long, is the code moving it's to say (#1677 R1).
+/// Whether each picture drawn this frame is still moving, as its draw reported
+/// it, under the reasons the frame log names: what keeps a picture moving is
+/// the code moving it's to say, from the state or stamp that motion runs on,
+/// so a delay a picture gains reaches the guard with no edit here (#1677 R1).
 ///
 /// Cleared by [`begin_frame`] beside
 /// [`drawn_this_frame`](SurfaceState::drawn_this_frame), and for its reason: a
 /// picture not drawn this frame — its pane folded or hidden, its layer off, the
-/// Video tab closed — moves nothing, so it holds nothing, however far off the
-/// deadline it last reported was. A heatmap's runs a Span past its last sound,
-/// and a Clear, a shorter Span or the heatmap switched off cannot reach a
-/// deadline its draw is not there to recompute. One revealed again reports on
-/// its first draw. Two copies drawn in one frame, the docked pane and the
-/// Video preview, report the later of their two.
+/// Video tab closed — moves nothing, so it holds nothing, whatever its last
+/// draw said. One revealed again reports on its first draw. Read by
+/// [`Animating::of`] once every pane has drawn, in the same pass and so at the
+/// same `now`, which is why a yes or no is the whole answer: nothing asks a picture
+/// about a time it has not drawn.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct MovingUntil {
-    /// A lattice node departing or its light falling: see [`releasing`].
-    releasing: Option<f64>,
-    /// A picture drawn from the audio: see [`audible`].
-    audible: Option<f64>,
+pub(crate) struct Moving {
+    /// A lattice node still moving after its voice was pruned
+    /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
+    /// departure's Fade-out delay, its stagger and the presence it holds for
+    /// them), or a node's Background glow still falling
+    /// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), which
+    /// can outlast the slices by many seconds.
+    releasing: bool,
+    /// A picture drawn from audio above silence. Samples arriving are not
+    /// enough, because a host streams silence with its transport stopped and
+    /// drawing that at full rate cost Bitwig's main thread about 30% for a
+    /// still picture (#1670 Q2). So each picture drawn from the spectrum says
+    /// whether what it drew is still moving:
+    ///
+    /// - The smoothed display the curve, the Spiral and the ring read
+    ///   ([`AudioSpectrum::moving`]), off when it last held anything.
+    /// - Each heatmap surface, off the run and slab it drew, its Span and its
+    ///   atmosphere's tail
+    ///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)).
+    /// - The lattice ring's levels, carried on its own attack and release
+    ///   ([`RingLevels`](panes::spectral_fold::RingLevels)), and whether each
+    ///   wedge is drawn, on the note Fade
+    ///   ([`RingFade`](harmonigraph_scene::RingFade)). That fade is the whole of
+    ///   a ring-posed node's leaving: the pose itself snaps back behind a
+    ///   presence already at zero, so nothing in `releasing` moves for it.
+    ///
+    /// A stage downstream of another answers only for its own state: while the
+    /// stage it reads is still moving, that stage holds the loop, and each
+    /// frame it holds steps the next one on what it reads now.
+    audible: bool,
+    /// The piano roll still scrolling a note across its window
+    /// ([`roll::scrolling`](panes::spectral::roll::scrolling)).
+    roll: bool,
 }
 
-impl MovingUntil {
-    pub(crate) fn releasing(&mut self, until: Option<f64>) {
-        Self::report(&mut self.releasing, until);
+impl Moving {
+    pub(crate) fn releasing(&mut self, moving: bool) {
+        self.releasing |= moving;
     }
 
-    pub(crate) fn audible(&mut self, until: Option<f64>) {
-        Self::report(&mut self.audible, until);
+    pub(crate) fn audible(&mut self, moving: bool) {
+        self.audible |= moving;
     }
 
-    fn report(slot: &mut Option<f64>, until: Option<f64>) {
-        if let Some(until) = until {
-            *slot = Some(slot.map_or(until, |held| held.max(until)));
-        }
+    pub(crate) fn roll(&mut self, moving: bool) {
+        self.roll |= moving;
     }
-}
-
-/// Whether `until`, a picture's own answer to when it stops moving, is still
-/// ahead of `now`.
-fn ahead(until: Option<f64>, now: f64) -> bool {
-    until.is_some_and(|until| until >= now)
-}
-
-/// Whether a lattice node drawn this frame is still moving after its voice was
-/// pruned
-/// ([`NodeMotion::moving_until`](harmonigraph_scene::NodeMotion::moving_until):
-/// a departure's Fade-out delay, its stagger and the presence it holds for
-/// them), or a node's Background glow is still
-/// falling ([`GlowFade::moving_until`](panes::glow_fade::GlowFade::moving_until)),
-/// which can outlast the slices by many seconds.
-///
-/// Each lattice surface answers from its own state as it draws
-/// ([`MovingUntil`]), so a delay the motion gains is in its answer without
-/// anything here knowing of it.
-fn releasing(state: &SharedState, now: f64) -> bool {
-    ahead(state.picture.surfaces.moving_this_frame.releasing, now)
 }
 
 /// A repaint after the whole of `delay`.
@@ -631,45 +639,6 @@ pub(crate) fn repaint_after(ctx: &egui::Context, delay: std::time::Duration) {
     let predicted = ctx.input(|i| i.predicted_dt);
     let slack = std::time::Duration::try_from_secs_f32(predicted).unwrap_or_default();
     ctx.request_repaint_after(delay + slack);
-}
-
-/// Whether audio above silence can still be moving something on screen.
-///
-/// Samples arriving are not enough, because a host streams silence with its
-/// transport stopped and drawing that at full rate cost Bitwig's main thread
-/// about 30% for a still picture (#1670 Q2). So each picture drawn from the
-/// spectrum this frame says when what it drew stops moving ([`MovingUntil`]):
-///
-/// - The smoothed display the curve, the Spiral and the ring read
-///   ([`AudioSpectrum::moving_until`]), off when it last held anything, from
-///   whichever of the three is drawn.
-/// - Each heatmap surface, off the run and slab it drew, its Span and its
-///   atmosphere's tail
-///   ([`draw_spectrogram`](panes::spectral::spectrogram::draw_spectrogram)).
-/// - The lattice ring's levels, carried on its own attack and release
-///   ([`RingLevels`](panes::spectral_fold::RingLevels)), and whether each wedge
-///   is drawn, on the note Fade
-///   ([`RingFade`](harmonigraph_scene::RingFade)). That fade is the whole of
-///   a ring-posed node's leaving: the pose itself snaps back behind a presence
-///   already at zero, so nothing in [`releasing`] moves for it.
-///
-/// A stage downstream of another answers only for its own state: while the
-/// stage it reads is still moving, that stage holds the loop, and each frame
-/// it holds steps the next one on what it reads now.
-fn audible(state: &SharedState, now: f64) -> bool {
-    ahead(state.picture.surfaces.moving_this_frame.audible, now)
-}
-
-/// Whether the piano roll still has something moving across it: its window
-/// reaches back to a note that was sounding. Goes quiet once the last note
-/// has scrolled off the far edge, so an idle plugin still idles.
-fn roll_scrolling(state: &SharedState, now: f64) -> bool {
-    let cfg = &state.picture.appearance.spectrum;
-    cfg.show_roll
-        && cfg.roll_fraction > 0.0
-        && state.picture.runtime.tracker.roll().latest_activity(now).is_some_and(|last| {
-            now - last <= f64::from(cfg.roll_seconds.max(cfg.roll_lead_release))
-        })
 }
 
 #[cfg(test)]

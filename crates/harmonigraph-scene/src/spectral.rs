@@ -577,9 +577,9 @@ pub struct RingFade {
     /// the fade once: the second call's `dt` is zero and every bucket answers
     /// where it already was.
     at: Option<f64>,
-    /// When the slowest bucket still on its way lands, as of the last step, or
-    /// `None` when none is moving: see [`moving_until`](Self::moving_until).
-    until: Option<f64>,
+    /// Whether a bucket is still on its way, as of the last step: see
+    /// [`moving`](Self::moving).
+    moving: bool,
 }
 
 impl Default for RingFade {
@@ -588,7 +588,7 @@ impl Default for RingFade {
             open: Box::new([0.0; SPECTRUM_BINS]),
             gated: Box::new([false; SPECTRUM_BINS]),
             at: None,
-            until: None,
+            moving: false,
         }
     }
 }
@@ -630,7 +630,7 @@ impl RingFade {
     pub fn advance(&mut self, gate: &RingGate, env: &Envelope, now: f64) {
         let dt = self.at.map(|at| now - at);
         self.at = Some(now);
-        let mut left = 0.0_f64;
+        let mut moving = false;
         for (bucket, (level, gated)) in self.open.iter_mut().zip(self.gated.iter_mut()).enumerate()
         {
             let open = gate.opens(bucket, *gated);
@@ -643,18 +643,18 @@ impl RingFade {
                 Some(dt) => env.carried(*level, dt, open),
                 None => target,
             };
-            left = left.max(env.remaining(*level, open));
+            moving |= *level != target;
         }
-        self.until = (left > 0.0).then_some(now + left);
+        self.moving = moving;
     }
 
-    /// When every bucket has landed where the gate last sent it, or `None` when
-    /// none is moving: what the editor's frame loop stays awake for while the
-    /// ring opens or closes, off the same envelope [`advance`](Self::advance)
-    /// carries it on. A gate that turns over later does so on a frame that the
-    /// levels it reads are already holding awake.
-    pub fn moving_until(&self) -> Option<f64> {
-        self.until
+    /// Whether a bucket has yet to land where the gate last sent it: what the
+    /// editor's frame loop stays awake for while the ring opens or closes.
+    /// [`Envelope::carried`] lands exactly, so each one ends. A gate that turns
+    /// over later does so on a frame that the levels it reads are already
+    /// holding awake.
+    pub fn moving(&self) -> bool {
+        self.moving
     }
 
     /// How much of its ring a node of pitch class `cents` wears, 0..=1: the
@@ -1635,42 +1635,32 @@ mod tests {
         assert_eq!(twice, once, "a pane drawn twice ran the fade twice");
     }
 
-    /// [`RingFade::moving_until`] is what the frame loop stays awake for once
-    /// the gate turns over, so it has to be when the ring stops moving: a frame
-    /// drawn a hair before it still differs from the one before that, and one
-    /// drawn a hair after it is the ring for good. Both ways, on a straight and
-    /// a curved Fade, asked of the deadline the frame of the turn reports and
-    /// of one part way through.
+    /// [`RingFade::moving`] is what the frame loop stays awake for once the
+    /// gate turns over, so from the turn on it says moving on exactly the
+    /// frames some later frame still differs from. Both ways, on a straight and
+    /// a curved Fade.
     #[test]
-    fn moving_until_is_when_the_ring_stops_changing() {
-        let wheel = wheel();
+    fn moving_holds_while_a_later_frame_of_the_ring_still_differs() {
         let view = gated(0.5, SpectralReading::Fold);
         let sounding = gate_of(&view, partial(60.0, 10.0));
         let silent = gate_of(&view, empty());
         for shape in [0.0, 0.6] {
             let env = Envelope { attack_time: 0.4, fade_time: 1.0, shape };
             for (before, after) in [(&sounding, &silent), (&silent, &sounding)] {
-                // The ring drawn at each of `times`, the gate turning at 0.1 s,
-                // and what the fade said after.
-                let run = |times: &[f64]| {
-                    let mut fade = RingFade::default();
-                    let mut frame = |&now: &f64| {
+                // Every bucket's opening at each frame, the gate turning at
+                // 0.1 s, and what the fade said after.
+                let mut fade = RingFade::default();
+                let frames: Vec<_> = (0..=200)
+                    .map(|k| {
+                        let now = f64::from(k) * 0.01;
                         fade.advance(if now < 0.1 { before } else { after }, &env, now);
-                        (fade.level(&wheel, 0.0), fade.moving_until())
-                    };
-                    times.iter().map(&mut frame).collect::<Vec<_>>()
-                };
-                let times: Vec<f64> = (0..=200).map(|k| f64::from(k) * 0.01).collect();
-                let frames = run(&times);
-                for k in [10, 30] {
-                    let what = format!("shape {shape}, said at {}", times[k]);
-                    let until = frames[k].1.expect("the ring is on its way");
-                    let mut probe = times[..=k].to_vec();
-                    probe.extend([until - 0.01, until - 0.005, until + 0.005, until + 0.5]);
-                    let drawn = run(&probe);
-                    let [.., early, late, past, long] = &drawn[..] else { unreachable!() };
-                    assert_ne!(early.0, late.0, "{what}: still before {until}");
-                    assert_eq!(past.0, long.0, "{what}: moved after {until}");
+                        (now, fade.open.clone(), fade.moving())
+                    })
+                    .collect();
+                assert!(frames[10].2, "shape {shape}: the turn moved nothing");
+                for (k, (now, open, moving)) in frames.iter().enumerate().skip(10) {
+                    let changes = frames[k..].iter().any(|(_, later, _)| later != open);
+                    assert_eq!(*moving, changes, "shape {shape}: said moving {moving} at {now}");
                 }
             }
         }

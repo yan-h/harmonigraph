@@ -73,10 +73,9 @@ pub struct NodeMotion {
     at: Option<f64>,
     boundary: HashSet<(Identity, u64, u32)>,
     seen: HashMap<Identity, FactualTip>,
-    /// When the last step's visible nodes stop moving if nothing new reaches
-    /// them, or `None` when none is moving: see
-    /// [`moving_until`](Self::moving_until).
-    until: Option<f64>,
+    /// Whether the last step's visible nodes are still moving if nothing new
+    /// reaches them: see [`moving`](Self::moving).
+    moving: bool,
     #[cfg(test)]
     replayed_edges: usize,
     /// Keep an entry for every visible node, as the table did before it was
@@ -182,20 +181,10 @@ impl MarkMotion {
             self.waits[i] = (self.waits[i] - dt as f32).max(0.0);
         }
     }
-    /// Seconds until [`advance`](Self::advance) stops changing a level: each
-    /// one's wait, then its approach.
-    fn settles_in(&self, env: &Envelope) -> f64 {
-        (0..11)
-            .map(|i| {
-                let target = f32::from(self.target == Some(i));
-                let left = approach_left(self.levels[i], target, env);
-                if left > 0.0 {
-                    f64::from(self.waits[i]) + left
-                } else {
-                    0.0
-                }
-            })
-            .fold(0.0, f64::max)
+    /// Whether [`advance`](Self::advance) will still change a level: one off
+    /// its target is, once its wait is out, since `approach` lands exactly.
+    fn moving(&self) -> bool {
+        (0..11).any(|i| self.levels[i] != f32::from(self.target == Some(i)))
     }
     fn strongest(&self) -> (u32, f32, usize) {
         let (slot, &level) =
@@ -243,18 +232,6 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 
-/// Seconds [`approach`] takes to land `level` on `target`, on the same
-/// scaling of the envelope.
-fn approach_left(level: f32, target: f32, env: &Envelope) -> f64 {
-    if level == target {
-        return 0.0;
-    }
-    if target > level {
-        env.remaining(level / target, true)
-    } else {
-        env.remaining((level - target) / (1.0 - target).max(1e-6), false)
-    }
-}
 // What an absent entry reads as, by reference. Statics, because a const that
 // owns a `Vec` is not promoted to one: `&Motion::REST` would build a fresh
 // temporary for every visible node on every frame.
@@ -404,48 +381,32 @@ impl Motion {
             self.settle_slices(false);
         }
     }
-    /// Seconds until [`advance`](Self::advance) stops changing anything this
-    /// node draws, if nothing reaches it from outside: no new edge, target or
-    /// pose, each of which arrives on a frame that something else is already
-    /// drawing for.
+    /// Whether [`advance`](Self::advance) will still change anything this node
+    /// draws, if nothing reaches it from outside: no new edge, target or pose,
+    /// each of which arrives on a frame that something else is already drawing
+    /// for.
     ///
-    /// Read off the same state `advance` walks, so every delay it carries is in
-    /// here without being named: a slice waits for the last edge still on its
-    /// way to it and then runs a whole transition toward that edge (an upper
-    /// bound, since it may start part way), and the presence waits out
-    /// `level_wait` before its fall, which is where the fade-out delay and the
-    /// stagger's hold live.
-    fn settles_in(&self, env: &Envelope) -> f64 {
+    /// Read off the same state `advance` walks, and naming that state rather
+    /// than how long it takes, so a delay the motion carries is in here without
+    /// being named: a slice with an edge still on its way to it or short of the
+    /// edge it last saw, a presence or colour off its target (which is where it
+    /// stands through `level_wait`, the fade-out delay and the stagger's hold),
+    /// or a mark off its slot. `approach` lands exactly, so each of these ends.
+    /// A departure whose presence lands on nothing settles its slices on that
+    /// same step (the end of `advance`), so they need no case of their own.
+    fn moving(&self) -> bool {
         if self.at_rest() || self.posed() {
-            return 0.0;
+            return false;
         }
-        let (mut slices, mut presence) = (0.0_f64, 0.0_f64);
-        for i in 0..11 {
-            // An audio pose pins every slice open, whatever reaches it.
-            if !self.audio_waiting {
-                let pending = self
-                    .edges
-                    .iter()
-                    .filter(|edge| edge.delay[i].is_finite())
-                    .map(|edge| (edge.delay[i] - edge.age, edge.on))
-                    .max_by(|a, b| a.0.total_cmp(&b.0));
-                slices = slices.max(match pending {
-                    Some((reach, on)) => reach + env.remaining(f32::from(!on), on),
-                    None => approach_left(self.progress[i], f32::from(self.seen[i]), env),
-                });
-            }
-            let fall = approach_left(self.levels[i], self.targets[i], env);
-            if fall > 0.0 {
-                presence = presence.max(f64::from(self.level_wait[i]) + fall);
-            }
-            presence = presence.max(approach_left(self.colors[i], self.targets[i], env));
-        }
-        // A departure whose presence lands on nothing settles every slice with
-        // it, wherever they stand (the end of `advance`).
-        if !self.gate && !self.audio_waiting && self.targets == [0.0; 11] {
-            slices = slices.min(presence);
-        }
-        slices.max(presence).max(self.melody.settles_in(env)).max(self.bass.settles_in(env))
+        // An audio pose pins every slice open, whatever reaches it.
+        let slices = !self.audio_waiting
+            && (!self.edges.is_empty()
+                || (0..11).any(|i| self.progress[i] != f32::from(self.seen[i])));
+        slices
+            || self.levels != self.targets
+            || self.colors != self.targets
+            || self.melody.moving()
+            || self.bass.moving()
     }
 }
 /// Whether `pos` is among `visible`, a frame's positions in lattice order.
@@ -495,20 +456,19 @@ impl NodeMotion {
         #[cfg(not(test))]
         false
     }
-    /// When the nodes the last [`step`](Self::step) drew stop moving, if no
-    /// edge, target or pose reaches them after it; `None` when none is moving.
+    /// Whether the nodes the last [`step`](Self::step) drew are still moving,
+    /// if no edge, target or pose reaches them after it.
     ///
     /// What the editor's frame loop stays awake for. Read off the state the
     /// step walks rather than summarized from the settings, so a delay that
     /// joins the motion — a hold, a wait, a longer sweep — is in here the
-    /// moment the motion carries it. A deadline rather than a flag, so a
-    /// surface that stops being drawn stops holding the loop at it.
+    /// moment the motion carries it.
     ///
     /// Whatever reaches a node from outside arrives on a frame something else
     /// is already drawing for: a note keeps a voice for a fade past its off,
     /// and the audio ring's own state holds the loop while it is moving.
-    pub fn moving_until(&self) -> Option<f64> {
-        self.until
+    pub fn moving(&self) -> bool {
+        self.moving
     }
     /// Whether a position has carried MIDI ink or marks. Audio poses emit no light.
     pub fn owns_light(&self, pos: LatticePos) -> bool {
@@ -989,8 +949,7 @@ impl NodeMotion {
         if posed.capacity() > 4 * (posed.len() + 64) {
             posed.shrink_to(2 * posed.len());
         }
-        let left = self.nodes.values().map(|motion| motion.settles_in(env)).fold(0.0, f64::max);
-        self.until = (left > 0.0).then_some(now + left);
+        self.moving = self.nodes.values().any(Motion::moving);
         for node in &mut scene.nodes {
             let pos = &node.lattice_pos;
             let resting = if self.posed.contains(pos) { &POSED } else { &REST };
@@ -1423,13 +1382,9 @@ mod tests {
         assert!(leaving(end - 0.03), "the node had left before its departure span ended");
         assert!(!leaving(end + 0.02), "the node was still leaving after its departure span");
     }
-    /// [`NodeMotion::moving_until`] is what the frame loop stays awake for, so
-    /// it has to be when the node stops moving: a frame drawn a hair before it
-    /// still differs from the one before that, and one drawn a hair after it
-    /// is the picture for good. Asked of the deadline a frame reports just
-    /// after the off, and of one part way through the departure, since a
-    /// deadline that is right only on the frame the motion ends is right too
-    /// late to matter.
+    /// [`NodeMotion::moving`] is what the frame loop stays awake for, so after
+    /// the off it says moving on exactly the frames some later frame still
+    /// differs from, and still on the frames that are the picture for good.
     ///
     /// Over a spread of every setting a departure carries — Fade, its curve,
     /// the stagger's hold, the Fade-out delay — and of a note held to full and
@@ -1437,7 +1392,7 @@ mod tests {
     /// instead (the off plus [`departure`](NoteAnimationConfig::departure)):
     /// the same where the node arrived in full, and never later anywhere.
     #[test]
-    fn moving_until_is_when_the_node_stops_changing() {
+    fn moving_holds_while_a_later_frame_still_differs() {
         // What the motion writes on a node, without what a voice draws.
         fn moved(scene: &Scene) -> String {
             let n = origin(scene);
@@ -1469,46 +1424,35 @@ mod tests {
             let what =
                 format!("fade {fade} shape {shape} spread {spread} hold {hold} held {held_for}");
             let (on_at, off_at) = (0.5, 0.5 + held_for);
-            // The node drawn at each of `times`, and what the motion said after.
-            let run = |times: &[f64]| {
-                let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
-                let (mut pressed, mut released) = (false, false);
-                times
-                    .iter()
-                    .map(|&now| {
-                        if now >= on_at && !pressed {
-                            pressed = true;
-                            tracker.handle_event(on(on_at, 60));
-                        }
-                        if now >= off_at && !released {
-                            released = true;
-                            tracker.handle_event(off(off_at, 60));
-                        }
-                        let scene =
-                            draw_duration(&mut motion, &mut tracker, &view, now, false, fade);
-                        (moved(&scene), motion.moving_until())
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let times: Vec<f64> = (0..=500).map(|k| f64::from(k) * 0.01).collect();
-            let frames = run(&times);
-            let after = times.iter().position(|&t| t > off_at).unwrap();
-            for k in [after, after + 30] {
-                let Some(until) = frames[k].1 else { continue };
-                let mut probe = times[..=k].to_vec();
-                probe.extend([until - 0.01, until - 0.005, until + 0.005, until + 0.5]);
-                let drawn = run(&probe);
-                let [.., early, late, past, long] = &drawn[..] else { unreachable!() };
-                assert_ne!(early.0, late.0, "{what}: still before {until}, said at {}", times[k]);
-                assert_eq!(past.0, long.0, "{what}: moved after {until}, said at {}", times[k]);
+            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+            // The node drawn at each frame, and what the motion said after it.
+            let frames: Vec<(f64, String, bool)> = (0..=500)
+                .map(|k| {
+                    let now = f64::from(k) * 0.01;
+                    if (now - on_at).abs() < 1e-9 {
+                        tracker.handle_event(on(on_at, 60));
+                    }
+                    if (now - off_at).abs() < 1e-9 {
+                        tracker.handle_event(off(off_at, 60));
+                    }
+                    let scene = draw_duration(&mut motion, &mut tracker, &view, now, false, fade);
+                    (now, moved(&scene), motion.moving())
+                })
+                .collect();
+            let after = frames.iter().position(|&(now, ..)| now > off_at).unwrap();
+            for (k, (now, drawn, moving)) in frames.iter().enumerate().skip(after) {
+                let changes = frames[k..].iter().any(|(_, later, _)| later != drawn);
+                assert_eq!(*moving, changes, "{what}: said moving {moving} at {now}");
             }
-            let until = frames[after].1.expect("a released node is leaving");
+            let still = after + frames[after..].iter().position(|&(.., moving)| !moving).unwrap();
             let summary = off_at + view.note_animation.departure(fade);
-            assert!(until <= summary + 1e-4, "{what}: {until} past {summary}");
+            let last = frames[still - 1].0;
+            assert!(last <= summary + 1e-4, "{what}: moving at {last}, past {summary}");
             if held_for > 1.0 {
-                assert!(until >= summary - 1e-4, "{what}: {until} before {summary}");
+                let first = frames[still].0;
+                assert!(first >= summary - 1e-4, "{what}: still at {first}, before {summary}");
             }
-            reached_wait |= hold > 0.0 && spread > 0.0 && until > off_at + 1.0;
+            reached_wait |= hold > 0.0 && spread > 0.0 && last > off_at + 1.0;
         }
         assert!(reached_wait, "no fixture held a staggered departure past its delay");
     }

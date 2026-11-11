@@ -219,9 +219,9 @@ pub(super) fn strip_depths(
 /// on one palette. With every effect off, the plain path keeps the original
 /// per-pixel level read.
 ///
-/// Reports when what it drew stops moving, off the run and the slab it drew
-/// ([`MovingUntil`](crate::MovingUntil)): what the editor's frame loop stays
-/// awake for. A frame that draws no run reports nothing, and so does a frame
+/// Reports whether what it drew is still moving, off the run and the slab it
+/// drew ([`Moving`](crate::Moving)): what the editor's frame loop stays awake
+/// for. A frame that draws no run reports nothing, and so does a frame
 /// that does not draw the heatmap at all.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
@@ -294,7 +294,7 @@ pub(crate) fn draw_spectrogram(
     } else {
         spectrum.last_audible().column
     };
-    state.surfaces.moving_this_frame.audible(moving.map(|t| t + reach));
+    state.surfaces.moving_this_frame.audible(moving.is_some_and(|t| t + reach >= now));
     // The painter's own clip is what bounds the heatmap: the quads reach past
     // the pane wherever the oldest slab starts before the region, and the callback draws against the whole
     // surface and leaves the scissor egui set from this rect alone.

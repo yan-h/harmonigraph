@@ -412,9 +412,9 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, now: f64) {
     // What the drawn ring is still moving on: the display it reads, its own
     // levels and its wedges' fade.
     let moving = &mut state.surfaces.moving_this_frame;
-    moving.audible(state.runtime.spectrum.moving_until());
-    moving.audible(state.runtime.ring_levels.moving_until());
-    moving.audible(state.runtime.ring_fade.moving_until());
+    moving.audible(state.runtime.spectrum.moving(now));
+    moving.audible(state.runtime.ring_levels.moving());
+    moving.audible(state.runtime.ring_fade.moving());
 }
 
 /// What the ring's wedges READ, carried across frames on the ring's own attack
@@ -444,10 +444,9 @@ pub struct RingLevels {
     /// docked lattice and the Video tab's preview, off one clock — steps once:
     /// the second call's `dt` is zero and every bucket holds.
     at: Option<f64>,
-    /// When the last byte the shader gets stops changing, as of the last
-    /// fill, or `None` when none is moving: see
-    /// [`moving_until`](Self::moving_until).
-    until: Option<f64>,
+    /// Whether a byte the shader gets is still to change, as of the last fill:
+    /// see [`moving`](Self::moving).
+    moving: bool,
 }
 
 impl Default for RingLevels {
@@ -456,7 +455,7 @@ impl Default for RingLevels {
             level: Box::new([0.0; SPECTRUM_BINS]),
             color_level: Box::new([0.0; SPECTRUM_BINS]),
             at: None,
-            until: None,
+            moving: false,
         }
     }
 }
@@ -501,15 +500,11 @@ impl RingLevels {
             ),
             None => (1.0, 1.0),
         };
-        let mut left = 0.0_f64;
+        let mut moving = false;
         let mut carry = |level: &mut f32, target: f32| {
-            let (alpha, seconds) = if target > *level {
-                (attack, view.spectral_ring_attack)
-            } else {
-                (release, view.spectral_ring_release)
-            };
+            let alpha = if target > *level { attack } else { release };
             *level += (target - *level) * alpha;
-            left = left.max(byte_left(seconds, *level, target));
+            moving |= byte_moving(*level, target);
             byte(*level)
         };
         for (bucket, level) in self.level.iter_mut().enumerate() {
@@ -526,19 +521,19 @@ impl RingLevels {
             });
             paint.color_levels[bucket] = carry(&mut self.color_level[bucket], color_target);
         }
-        self.until = (left > 0.0).then_some(now + left);
+        self.moving = moving;
     }
 
-    /// When every byte the ring is drawn with has stopped changing, if the
-    /// reading it follows holds still; `None` when none is moving.
+    /// Whether a byte the ring is drawn with will still change, if the reading
+    /// it follows holds still.
     ///
     /// What the editor's frame loop stays awake for once the sound has gone,
-    /// off the same levels and attack and release [`fill`](Self::fill) carries
-    /// them on. The reading itself moving is the display's to answer
-    /// ([`AudioSpectrum::moving_until`](crate::AudioSpectrum::moving_until)),
-    /// and each fill reads where it has got to.
-    pub(crate) fn moving_until(&self) -> Option<f64> {
-        self.until
+    /// off the same levels [`fill`](Self::fill) carries. The reading itself
+    /// moving is the display's to answer
+    /// ([`AudioSpectrum::moving`](crate::AudioSpectrum::moving)), and each fill
+    /// reads where it has got to.
+    pub(crate) fn moving(&self) -> bool {
+        self.moving
     }
 
     /// Every byte the last fill handed the shader, levels then colour levels.
@@ -553,25 +548,24 @@ fn byte(level: f32) -> u8 {
     (level * 255.0).round() as u8
 }
 
-/// Seconds a level carried toward `target` by [`hop_alpha`](crate::spectrum::hop_alpha)
-/// over `seconds` goes on changing the byte it is drawn as: until it crosses
-/// the last rounding boundary between it and the target, which can be short of
-/// the target's own byte when the target sits exactly on a boundary.
-fn byte_left(seconds: f32, level: f32, target: f32) -> f64 {
+/// Whether a level carried toward `target` will still change the byte it is
+/// drawn as: whether it has yet to cross the last rounding boundary between it
+/// and the target, which can be short of the target's own byte when the target
+/// sits exactly on a boundary. The carry is exponential, so a level short of
+/// that boundary always reaches it.
+fn byte_moving(level: f32, target: f32) -> bool {
     let (from, to) = (level * 255.0, target * 255.0);
     // The last boundary the level can still cross, on its own side of the
-    // target and strictly short of it.
-    // A level ON a boundary rounds half away from zero, as [`byte`] rounds it, so
-    // one rising has its target's byte there and one falling does not yet.
-    let boundary = if from < to { (to - 0.5).ceil() - 0.5 } else { (to + 0.5).floor() + 0.5 };
-    if (from < to && from >= boundary) || (from > to && from < boundary) || from == to {
-        return 0.0;
+    // target and strictly short of it. A level ON a boundary rounds half away
+    // from zero, as [`byte`] rounds it, so one rising has its target's byte
+    // there and one falling does not yet.
+    if from < to {
+        from < (to - 0.5).ceil() - 0.5
+    } else if from > to {
+        from >= (to + 0.5).floor() + 0.5
+    } else {
+        false
     }
-    // Falling and on it: the next step takes it below.
-    if from == boundary {
-        return harmonigraph_core::NEXT_STEP;
-    }
-    crate::spectrum::hop_left(seconds, (from - to).abs(), (boundary - to).abs())
 }
 
 #[cfg(test)]
@@ -583,15 +577,14 @@ mod tests {
 
     const SR: f32 = 48_000.0;
 
-    /// A level the ring carries stops changing the byte it is drawn as when
-    /// `byte_left` says, walked in frames as `fill` walks it: the last change
-    /// lands on the first frame at or past the answer. Includes a target
-    /// sitting exactly on a rounding boundary, whose own byte the level never
-    /// reaches, a falling level sitting exactly on one, whose byte rounds up and
-    /// so still owes the change down, and a release of nothing, which lands on
-    /// the next frame.
+    /// `byte_moving` says a level carried as `fill` carries it is still moving
+    /// on exactly the frames some later frame changes its byte. Includes a
+    /// target sitting exactly on a rounding boundary, whose own byte the level
+    /// never reaches, a falling level sitting exactly on one, whose byte rounds
+    /// up and so still owes the change down, and a release of nothing, which
+    /// lands on the next frame.
     #[test]
-    fn a_ring_level_stops_changing_its_byte_when_byte_left_says() {
+    fn a_ring_level_is_moving_while_its_byte_will_still_change() {
         let step = 0.004;
         for (seconds, level, target) in [
             (0.25, 1.0, 0.0),
@@ -602,23 +595,21 @@ mod tests {
             (0.25, 0.5, 0.498),
             (0.0, 0.5, 0.0),
         ] {
-            let left = byte_left(seconds, level, target);
-            assert!(left > 0.0, "{seconds} s from {level} to {target}: said nothing is owed");
-            let (mut now, mut carried, mut last) = (0.0, level, None);
-            while now < left + 1.0 {
-                now += step;
-                let before = (carried * 255.0).round();
+            let mut carried: f32 = level;
+            let mut frames = vec![(carried, byte(carried))];
+            for _ in 0..1000 {
                 carried += (target - carried) * crate::spectrum::hop_alpha(seconds, step);
-                if (carried * 255.0).round() != before {
-                    last = Some(now);
-                }
+                frames.push((carried, byte(carried)));
             }
-            let last = last.expect("the level never moved a byte");
-            assert!(
-                last >= left - 1e-3 && last < left + step + 1e-3,
-                "{seconds} s from {level} to {target}: last byte at {last}, said {left}"
-            );
-            assert_eq!(byte_left(seconds, carried, target), 0.0, "a settled level still moving");
+            assert_ne!(frames[0].1, frames[999].1, "{seconds} s from {level} to {target}");
+            for (k, &(level, now)) in frames.iter().enumerate() {
+                let changes = frames[k..].iter().any(|&(_, later)| later != now);
+                assert_eq!(
+                    byte_moving(level, target),
+                    changes,
+                    "{seconds} s from {level} to {target}, frame {k}"
+                );
+            }
         }
     }
 

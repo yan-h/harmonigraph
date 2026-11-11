@@ -257,12 +257,6 @@ pub enum VoiceState {
 /// own resolution spent on nothing.
 const MAX_POWER: f32 = 4.0;
 
-/// A transition that lands on the next step that moves the clock, as a
-/// deadline's distance from now: still to come, but no later than the next
-/// frame. Positive so that `now + NEXT_STEP` is after `now` at any clock a
-/// session reaches.
-pub const NEXT_STEP: Time = 1e-6;
-
 /// The shape and the two durations every fading layer of a node runs on: how
 /// long a note takes to arrive, how long it takes to leave, and the one curve
 /// both of those follow.
@@ -459,27 +453,6 @@ impl Envelope {
         } else {
             left
         }
-    }
-
-    /// Seconds [`carried`](Self::carried) takes to land `level` where it is
-    /// going: the same curve solved for how much of its duration is left.
-    ///
-    /// 0 for a level already there. A transition with no ramp to walk — a
-    /// duration or level that is not a real number — lands on the next step
-    /// that moves the clock at all, so it answers [`NEXT_STEP`]: still to
-    /// come, but no later than the next frame.
-    pub fn remaining(&self, level: f32, arriving: bool) -> Time {
-        let (duration, remaining) =
-            if arriving { (self.attack_time, 1.0 - level) } else { (self.fade_time, level) };
-        if remaining.is_finite() && remaining <= 0.0 {
-            return 0.0;
-        }
-        if !duration.is_finite() || duration <= 0.0 || !remaining.is_finite() {
-            return NEXT_STEP;
-        }
-        // `carried` stands at `p = 1 - remaining^(1/n)` and walks `dt / duration`
-        // further, so what is left of the walk is `remaining^(1/n)` of it.
-        f64::from(duration) * f64::from(remaining.min(1.0)).powf(1.0 / f64::from(self.power()))
     }
 
     /// How far a note that arrived at `since` has eased in, 0..=1.
@@ -1605,28 +1578,6 @@ mod tests {
         // still moves, and it moves on the line every layer fades on.
         let curve = Envelope { attack_time: 1.0, fade_time: 1.0, shape: f32::NAN };
         assert_eq!(curve.carried(1.0, 0.25, false), 0.75);
-    }
-
-    /// `remaining` is when `carried` lands: a hair before it the level is still
-    /// short of its target, a hair after it is there, at every shape and from
-    /// part way along either direction.
-    #[test]
-    fn the_time_remaining_is_when_the_carried_level_lands() {
-        for shape in [0.0, 0.4, 1.0] {
-            let env = Envelope { attack_time: 0.3, fade_time: 0.7, shape };
-            for (level, arriving) in [(0.0, true), (0.6, true), (1.0, false), (0.2, false)] {
-                let left = env.remaining(level, arriving);
-                let target = if arriving { 1.0 } else { 0.0 };
-                assert_ne!(env.carried(level, left - 0.01, arriving), target, "{shape} {level}");
-                assert_eq!(env.carried(level, left + 1e-4, arriving), target, "{shape} {level}");
-            }
-            assert_eq!(env.remaining(1.0, true), 0.0, "an arrived level has nothing left");
-            assert_eq!(env.remaining(0.0, false), 0.0, "a departed level has nothing left");
-        }
-        // No ramp to walk: it lands on the next step, which is still to come.
-        let step = Envelope { attack_time: 0.0, fade_time: f32::NAN, shape: 0.0 };
-        assert_eq!(step.remaining(0.5, true), NEXT_STEP);
-        assert_eq!(step.remaining(0.5, false), NEXT_STEP);
     }
 
     #[test]

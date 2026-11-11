@@ -15,9 +15,15 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
     state.picture.appearance.spectrum.roll_lead_release = 2.0;
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     state.picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
+    let ctx = super::probe::themed();
 
-    assert!(crate::roll_scrolling(&state, 1.6));
-    assert!(!crate::roll_scrolling(&state, 2.2));
+    // A roll that is not drawn holds nothing, though its note is in its window.
+    draw_panes(&ctx, &mut state, 1.5, &[]);
+    assert!(!Animating::of(&state).roll, "an undrawn roll held the loop awake");
+    draw_panes(&ctx, &mut state, 1.6, &[Pane::Spectral]);
+    assert!(Animating::of(&state).roll, "the extension past the window idled");
+    draw_panes(&ctx, &mut state, 2.2, &[Pane::Spectral]);
+    assert!(!Animating::of(&state).roll, "the roll held the loop past its extension");
 }
 
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
@@ -107,13 +113,10 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
                 assert!(level > 0.5, "the held note's light never arrived ({level})");
             }
         } else if t >= 3.0 {
-            assert!(
-                !crate::roll_scrolling(&state, t),
-                "the roll must not be what keeps this awake"
-            );
+            assert!(!Animating::of(&state).roll, "the roll must not be what keeps this awake");
             let visible = level * gain > 0.5 / 255.0;
             assert_eq!(
-                crate::releasing(&state, t),
+                Animating::of(&state).releasing,
                 visible,
                 "at {t} s the light is {level} at gain {gain}"
             );
@@ -132,7 +135,8 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     assert!(idle > 20, "the loop never went idle ({idle} frames)");
     assert!(first_idle.is_some_and(|t| t < 40.0), "went idle at {first_idle:?}");
 
-    // A surface that stops being drawn mid-tail lapses at its deadline.
+    // A surface that stops being drawn mid-tail holds nothing from the next
+    // frame.
     let mut abandoned = fresh();
     abandoned.picture.appearance.spectrum.show_roll = false;
     abandoned.picture.runtime.tracker.handle_event(NoteEvent::on(
@@ -154,12 +158,13 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
         }
         draw(&mut abandoned, t);
     }
-    assert!(crate::releasing(&abandoned, 5.0));
-    assert!(!crate::releasing(&abandoned, 200.0), "an undrawn surface held the loop awake");
+    assert!(Animating::of(&abandoned).releasing, "the tail was over before the surface hid");
+    draw_panes(&ctx, &mut abandoned, 4.05, &[]);
+    assert!(!Animating::of(&abandoned).releasing, "an undrawn surface held the loop awake");
 
     state.picture.appearance.view.glow_strength = 0.0;
     draw(&mut state, 60.0);
-    assert!(!crate::releasing(&state, 60.0), "a glow that does not draw held the loop awake");
+    assert!(!Animating::of(&state).releasing, "a glow that does not draw held the loop awake");
 }
 
 /// A released note keeps the loop awake for its whole departure, the
@@ -197,8 +202,9 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     // starting half a fade later: 1.15 s past the off.
     draw_panes(&ctx, &mut state, 1.0 + 1.1, &[Pane::Lattice]);
     assert!(state.picture.runtime.tracker.voices().next().is_none(), "the voice outlasted 1 s");
-    assert!(crate::releasing(&state, 1.0 + 1.1), "the departure was cut short");
-    assert!(!crate::releasing(&state, 1.0 + 1.2), "the loop stayed awake past the departure");
+    assert!(Animating::of(&state).releasing, "the departure was cut short");
+    draw_panes(&ctx, &mut state, 1.0 + 1.2, &[Pane::Lattice]);
+    assert!(!Animating::of(&state).releasing, "the loop stayed awake past the departure");
 }
 
 /// Feeds `seconds` of audio from `t` in 10 ms blocks, a full-scale A4 while
@@ -232,7 +238,7 @@ fn stream(
         *t += 0.01;
         state.picture.runtime.spectrum.push_samples(&block, 1, RATE, *t, &cfg);
         draw_panes(ctx, state, *t, panes);
-        animated.push((*t, Animating::of(state, *t).audible));
+        animated.push((*t, Animating::of(state).audible));
     }
     animated
 }
@@ -281,17 +287,17 @@ fn flowing_silence_idles_once_the_last_sound_has_left_the_span() {
     for (now, on) in after {
         assert_eq!(on, now - heard <= reach, "at {now}: last heard at {heard}");
     }
-    assert!(!Animating::of(&state, t).any(), "something else held a still picture awake");
+    assert!(!Animating::of(&state).any(), "something else held a still picture awake");
 
     let cfg = &mut state.picture.appearance.spectrum;
     (cfg.tilt, cfg.volume_floor_db, cfg.high_midi) = (-6.0, -100.0, 135.0);
     draw_panes(&ctx, &mut state, t, &panes);
-    assert!(Animating::of(&state, t).audible, "silence drawn off the bed's colour idled");
+    assert!(Animating::of(&state).audible, "silence drawn off the bed's colour idled");
 
     // A heatmap switched off holds nothing, whatever it last said.
     state.picture.appearance.spectrum.show_spectrogram = false;
     draw_panes(&ctx, &mut state, t, &panes);
-    assert!(!Animating::of(&state, t).audible, "a hidden heatmap held the loop awake");
+    assert!(!Animating::of(&state).audible, "a hidden heatmap held the loop awake");
 }
 
 /// A heatmap whose pane stops being drawn — folded, hidden, the Video tab
@@ -344,21 +350,20 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     for _ in 0..200 {
         stream(&ctx, &mut state, &mut t, 0.1, false, &panes);
         let runtime = &state.picture.runtime;
-        let display = runtime.spectrum.moving_until();
-        ring_outlasted_the_display |= runtime.ring_levels.moving_until() > display
-            || runtime.ring_fade.moving_until() > display;
-        wedges_faded |= runtime.ring_fade.moving_until().is_some();
+        ring_outlasted_the_display |= !runtime.spectrum.moving(t)
+            && (runtime.ring_levels.moving() || runtime.ring_fade.moving());
+        wedges_faded |= runtime.ring_fade.moving();
         let nodes =
             (format!("{:?}", state.picture.surfaces.spare_nodes), runtime.ring_levels.bytes());
         match &still {
             Some((at, drawn)) => {
                 assert_eq!(&nodes, drawn, "the lattice or its ring moved after {at}")
             }
-            None if !Animating::of(&state, t).any() => still = Some((t, nodes)),
+            None if !Animating::of(&state).any() => still = Some((t, nodes)),
             None => {}
         }
         if still.is_some() {
-            assert!(!Animating::of(&state, t).any(), "woke at {t} with nothing heard");
+            assert!(!Animating::of(&state).any(), "woke at {t} with nothing heard");
         }
     }
     assert!(ring_outlasted_the_display, "the ring never held the loop past the curve");

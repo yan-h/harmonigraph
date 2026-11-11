@@ -22,7 +22,7 @@ The 2026-10-22 section moved here from `editor-shell.md` when the 2026-11-02 dri
 
 ## 2026-11-10 (maintainability audit, #1677)
 
-- Each picture says when what it drew stops moving, off the state or stamp its own motion runs on, and the repaint guard only combines those deadlines, so a delay a picture gains reaches the guard with no edit there. #1677 R1
+- Each picture drawn this frame says whether it is still moving, from the state or stamp its own motion runs on, and a picture not drawn holds nothing, so a delay a picture gains reaches the repaint guard with no edit there. #1677 R1
 
 ## 2026-11-10 (host key routing audit, #1675)
 

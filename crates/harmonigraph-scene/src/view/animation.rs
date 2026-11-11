@@ -98,7 +98,7 @@ impl NoteAnimationConfig {
     /// The replay horizon is built on this at the spread's ceiling, so a
     /// setting that lengthens a departure joins the span here or a replay
     /// after a gap seeds it as settled. The repaint guard does not read it:
-    /// [`NodeMotion::moving_until`](crate::NodeMotion::moving_until) answers
+    /// [`NodeMotion::moving`](crate::NodeMotion::moving) answers
     /// from the motion's own state.
     ///
     /// Every field is named here, so a field added to the config has to say
