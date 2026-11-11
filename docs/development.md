@@ -85,7 +85,8 @@ It is temporary: the runner and its config table go once #1711 is decided.
 `HARMONIGRAPH_TEST_FAILURE_LOG` moves the log, and `HARMONIGRAPH_TEST_FAILURE_LOG=/dev/null` turns it off.
 Give it an absolute path: cargo runs each test binary in its package's directory, so a relative one lands in a different place per package.
 GitHub Actions runs, `cargo run` binaries, examples and doctests, and `--list` are passed straight to the binary.
-The runner passes on the binary's exit status or signal unchanged, keeps stdin and stderr as they were, and returns when the binary exits even if something it started still holds stdout.
+The runner passes on the binary's exit status or signal unchanged and keeps stdin and stderr as they were.
+It returns when the binary exits, once it has relayed everything the binary wrote, without waiting on a process the binary left running.
 A log it cannot write costs a warning, never a verdict.
 It adds about 17 ms per test binary.
 
@@ -94,6 +95,7 @@ What it changes, all of it the price of reading stdout through a pipe or of a Py
 - stdout reaches the terminal live but through a pipe, so the runner adds `--color=always` when stdout is a terminal and no colour or format was asked for.
 - stdout and stderr no longer keep their relative order where they share a destination, a terminal or `2>&1`. Under libtest's default capture a test's output arrives together; under `--nocapture` the two streams can interleave differently.
 - `cargo test | head` no longer stops the suite: the runner absorbs the closed pipe, so the binary runs on to its own verdict.
+- A process a test leaves running that writes to stdout after the binary exits meets a closed pipe once the runner returns: it dies of SIGPIPE, and a Rust one panics in `println!` on EPIPE, where a direct run would have printed to the terminal.
 - On macOS the `/usr/bin/env` shebang drops every `DYLD_*` variable, cargo's `DYLD_FALLBACK_LIBRARY_PATH` included, on every path, passthrough too;
   and Python sets `LC_CTYPE=C.UTF-8` where no locale is set. Nothing here loads a dylib through that path today.
 
