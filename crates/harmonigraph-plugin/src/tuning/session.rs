@@ -225,11 +225,17 @@ impl Session {
     /// Explicit Reset. Every paired Tune cuts and the Hub clears its context.
     pub fn reset(&self) {
         self.bump();
+        // A test hook inside the callback's allocation guard, so it is let
+        // allocate: a thread's first touch of the thread-local registers its
+        // destructor, and on macOS a `Barrier`'s first wait boxes its lock
+        // (#1713). The `nice_assert_no_alloc` escape hatch, per lib.rs.
         #[cfg(test)]
-        if let Some(gate) = RESET_PAUSE.with_borrow_mut(Option::take) {
-            gate.wait();
-            gate.wait();
-        }
+        nice_assert_no_alloc::permit_alloc(|| {
+            if let Some(gate) = RESET_PAUSE.with_borrow_mut(Option::take) {
+                gate.wait();
+                gate.wait();
+            }
+        });
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
     }
     /// A cut that changes no membership: a host format change, or a host reset
