@@ -19,10 +19,12 @@ died of, is passed on exactly, and a log that cannot be written costs a warning.
 What reading stdout through a pipe does change is in docs/development.md.
 """
 
+import fcntl
 import os
 import select
 import signal
 import sys
+import termios
 
 ARGS = sys.argv[1:]
 # Python starts with these ignored, and an ignored signal survives exec and
@@ -147,17 +149,33 @@ os.close(write)
 # waits for the binary's own answer to it rather than dying first. A signal
 # sent to the runner alone is handed on while the binary lives.
 signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def forward(number, _):
+    try:
+        os.kill(child, number)
+    except ProcessLookupError:
+        pass  # reaped between the signal and this handler
+
+
 for forwarded in FORWARDED:
-    signal.signal(forwarded, lambda number, _: os.kill(child, number))
+    signal.signal(forwarded, forward)
 
 failures = Failures()
+stdout_open = True
 
 
 def relay(chunk):
-    try:
-        os.write(1, chunk)
-    except BrokenPipeError:
-        pass
+    global stdout_open
+    # Whole, in a loop: a signal handler (SIGCHLD above all, at every binary's
+    # exit) interrupts a write blocked on a slow terminal or pager, which then
+    # returns a partial count, and a single write would drop the rest.
+    view = memoryview(chunk)
+    while stdout_open and view:
+        try:
+            view = view[os.write(1, view):]
+        except BrokenPipeError:
+            stdout_open = False
     failures.feed(chunk)
 
 
@@ -182,18 +200,23 @@ while wait_status is None:
         else:
             # Everything holding the pipe has closed it: only the exit is left.
             _, wait_status = os.waitpid(child, 0)
-for forwarded in FORWARDED:
-    signal.signal(forwarded, signal.SIG_DFL)
-# Whatever the binary wrote before it exited, without waiting on anything it
-# left running.
+for number in FORWARDED + (signal.SIGINT,):
+    signal.signal(number, signal.SIG_DFL)
+# What the binary wrote before it exited is all in the pipe now, so read
+# exactly what is there and stop: a process it left running may go on writing
+# without end, and that is not the binary's output.
+left = bytearray(4)
+fcntl.ioctl(read, termios.FIONREAD, left)
+left = int.from_bytes(left, sys.byteorder)
 os.set_blocking(read, False)
-while True:
+while left > 0:
     try:
-        chunk = os.read(read, 65536)
+        chunk = os.read(read, min(left, 65536))
     except BlockingIOError:
         break
     if not chunk:
         break
+    left -= len(chunk)
     relay(chunk)
 os.close(read)
 failures.feed(b"\n")
