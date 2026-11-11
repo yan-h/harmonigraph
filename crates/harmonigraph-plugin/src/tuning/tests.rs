@@ -1368,6 +1368,18 @@ impl Drop for ResetProducer {
     }
 }
 
+/// #1713. The pause runs inside the callback's allocation guard, and on macOS
+/// a std `Barrier`'s lock is boxed by whichever wait reaches it first. The
+/// fixture above only gets there first when its callback thread outruns
+/// `pause`, which aborted the whole binary in CI; a one-party barrier makes
+/// the hook's own wait the first every time.
+#[test]
+fn the_reset_pause_may_allocate_inside_the_callback_guard() {
+    let _scope = crate::test_scope::enter();
+    session::test_pause_reset(std::sync::Arc::new(std::sync::Barrier::new(1)));
+    nice_assert_no_alloc::assert_no_alloc(|| session::session().reset());
+}
+
 fn seed_released_memory(pair: &mut Pair) {
     pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
     pair.idle();
