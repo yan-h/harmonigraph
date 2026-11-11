@@ -623,6 +623,14 @@ pub struct PerfStats {
     /// This frame's workload (voice counts, visible nodes, render scale,
     /// whether it was animating).
     pub workload: Workload,
+    /// Whether every interval the headline rate now shows was paced while
+    /// animating: the frame and the one before it both were. A still editor's
+    /// link is slowed to its poll, so the window a first note lands in holds
+    /// the poll's intervals, and its rate says nothing about the animating
+    /// rate it is judged against.
+    pub shown_animating: bool,
+    /// The same, for the window still filling.
+    filling_animating: bool,
 }
 
 impl Default for PerfStats {
@@ -650,6 +658,8 @@ impl Default for PerfStats {
             gpu_supported: true,
             have_gpu: false,
             workload: Workload::default(),
+            shown_animating: false,
+            filling_animating: true,
         }
     }
 }
@@ -770,6 +780,7 @@ impl PerfStats {
         self.prims = costs.prims;
         self.verts = costs.verts;
         self.roll_notes = costs.roll_notes;
+        self.filling_animating &= workload.animating && self.workload.animating;
         // Close every window at once. `last_readout` starts at -inf, so the
         // first frame latches immediately and the HUD opens showing that
         // frame's real numbers rather than a quarter second of placeholder.
@@ -779,6 +790,8 @@ impl PerfStats {
                 window.latch(slot);
             }
             self.peak_slot = (slot + 1) % PEAK_WINDOWS;
+            self.shown_animating = self.filling_animating;
+            self.filling_animating = true;
             // Per second over the interval just closed. `last_readout` starts
             // at -inf, so the first latch spans forever and reads zero rather
             // than reporting the opening build as an infinite rate.

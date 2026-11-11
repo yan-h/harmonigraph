@@ -53,6 +53,26 @@ import zlib
 
 STATE_START = b'{"version"'
 
+# Every nice-plug plugin saves this same JSON shape, so a project's other
+# plugins are found too. One of these param ids marks an instance as ours when
+# it has no ui-state to show it (`#[id]`s in crates/harmonigraph-plugin/src/lib.rs
+# and tuning/plugin.rs); without the check another plugin read as an editor
+# "never open before a save", a warning a session acts on.
+OUR_PARAMS = {"camera-yaw", "tuning-engine", "tuning_delay"}
+
+VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
+
+
+def view_fields() -> "set[str]":
+    """The fields `ViewConfig` declares now. A saved blob keeps retired keys
+    (serde skips them on load), and `--rust` pasting one would not compile."""
+    source = VIEW_SOURCE.read_text()
+    body = source.split("pub struct ViewConfig {", 1)[1].split("\n}\n", 1)[0]
+    fields = set(re.findall(r"^    (?:pub(?:\([^)]*\))? )?(\w+):", body, re.M))
+    if not fields:
+        sys.exit(f"No ViewConfig fields found in {VIEW_SOURCE}.")
+    return fields
+
 
 def newest_project() -> pathlib.Path:
     """The most recently modified .bwproject, auto-backups included — an
@@ -125,8 +145,9 @@ def find_states(path: pathlib.Path):
             ui = st.get("fields", {}).get("ui-state")
             if isinstance(ui, str) and ui.startswith('"'):
                 st["fields"]["ui-state"] = json.loads(ui)
+            ours = ui is not None or OUR_PARAMS & set(st.get("params", {}))
             key = json.dumps(st, sort_keys=True)
-            if key not in seen and "fields" in st:
+            if key not in seen and "fields" in st and ours:
                 seen.add(key)
                 states.append(st)
     return states
@@ -255,14 +276,21 @@ def main() -> None:
         ]
         if not bodies:
             sys.exit("No view block in any instance's ui-state blob.")
+        declared = view_fields()
         # Numbered where there is more than one, so two runs of fields cannot be
         # read as one: the bodies print back to back, and a paste of the wrong
         # one is a look nobody dialled.
         for n, body in bodies:
             where = f" instance {n}" if len(bodies) > 1 else ""
             print(f"// From a live Bitwig session{where}; see read-plugin-state.py.")
-            for name, value in split_ron(body):
-                print(f"    {name}: {value},")
+            fields = split_ron(body)
+            retired = [name for name, _ in fields if name not in declared]
+            if retired:
+                print(f"# dropped keys ViewConfig no longer has: {', '.join(retired)}",
+                      file=sys.stderr)
+            for name, value in fields:
+                if name in declared:
+                    print(f"    {name}: {value},")
         return
 
     for n, st in enumerate(states, 1):

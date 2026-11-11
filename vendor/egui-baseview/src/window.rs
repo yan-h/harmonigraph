@@ -901,6 +901,7 @@ mod wants_render_tests {
                 target_timestamp: 500.0 + vsync + refresh,
                 refresh,
                 divisor: 1,
+                woken: 0,
             }
         };
         let mut time = 0.0;
@@ -1103,6 +1104,8 @@ where
         let mut waited_ms = 0.0;
         #[cfg(all(feature = "frame-log", target_os = "macos"))]
         let log_start = crate::frame_log::begin();
+        #[cfg(all(feature = "frame-log", target_os = "macos"))]
+        let log_chosen = self.frame_divisor;
         let Some(state) = &mut self.user_state else {
             return;
         };
@@ -1332,6 +1335,7 @@ where
             window: std::ptr::from_ref(self) as usize,
             start: log_start,
             timing: window.frame_timing(),
+            chosen: log_chosen,
             tick_ms: self.tick_ms,
             acquire_ms: waited_ms,
             render_ms: self.render_ms,

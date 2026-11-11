@@ -168,8 +168,8 @@ python3 -I tools/frame-log-summary.py --misses
 
 With no path it reads the newest log, and with no `--window` the window with most frames;
 `--from` and `--to` cut the run to seconds after that window's first frame.
-It splits the run into phases at each change of frame rate and at each stretch the display link was silent (a minimized editor), and reports per phase:
-missed refreshes and jumps (the content stepping further than the glass did), each as a share of refreshes, the p99 present gap, how many refreshes after the link's target frames reached the glass, and how long the host's main thread waited for drawables.
+It splits the run into phases at each change of the chosen Editor frame rate and at each stretch the display link was silent (a minimized editor), and reports per phase:
+missed refreshes (each frame against the divisor that paced it, which is slowed to the poll while the editor is still) and jumps (the content stepping further than the glass did), each as a share of refreshes, the p99 present gap, how many refreshes after the link's target frames reached the glass, and how long the host's main thread waited for drawables.
 `--misses` lists every stall with what made it late.
 The method and the measured baseline are in #1551 and #1553.
 

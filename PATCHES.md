@@ -176,10 +176,12 @@ ci.sh runs them.
 macOS only.
 - **Patch 7** (`src/platform/macos/view.rs`): a new frame divisor takes effect at once (#1676).
 The link schedules its next frame before running this one, so a divisor set from a frame paced only the interval after the next frame, and one set between frames waited out the old divisor's whole interval.
-Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw.
+Now a divisor set inside a link frame re-paces from that frame's target, and a changed one set between frames (an input event) lets the next refresh draw,
+which records the divisor it cut short in that frame's `FrameTiming::woken`, so a frame log can tell a frame the event brought forward from one the link paced, and a late one from either.
 egui-baseview Patch 21 needs both, to slow the link while the editor idles and restore it on the next refresh.
 macOS only, like the divisor.
 - **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
+its disposition table is a snapshot that stops at Patch 6, so dispose of later patches from their entries here.
 baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
 Download the new crates.io tarball into `vendor/baseview`,
 re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the display link with its divisor (re-paced at once when it changes), watchdog and frame timing, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
@@ -231,8 +233,9 @@ Found while adding the System pane's frame-rate cap, which was first built on ex
 the cap is now baseview's frame divisor (Patch 6), and this fix still serves every delayed repaint, the idle poll among them.
 - **Patch 6** (`src/window.rs`): pass baseview's frame divisor through, so the
 app can pace its own window.
-`Queue::set_frame_divisor` sets it from inside a frame (applied after the frame returns, where the `Window` is reachable —
-the same deferred shape `resize` already uses).
+`Queue::set_frame_divisor` sets the app's chosen rate from inside a frame (applied after the frame returns, where the `Window` is reachable —
+the same deferred shape `resize` already uses);
+since Patch 21 baseview's divisor is that rate or a multiple of it while the editor idles.
 This is what makes a frame rate setting enforceable:
 egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a sounding voice) also forces the next pass to zero —
 so a cap built on it evaporates exactly when the UI is busy.
@@ -378,7 +381,7 @@ without it, a worktree under `.claude/worktrees/` walks past its own root to the
 `tick_ms` and `render_ms` leave out the drawable wait, which `acquire_ms` reports on its own:
 with three drawables, a frame the display paces waits most of a refresh for one in steady state, and a total counting that read as a frame that was always nearly too slow.
 The `frame-log` feature (macOS, wgpu) writes every frame's timing to `~/Library/Logs/Harmonigraph/`:
-the display link's timestamps and frame divisor from baseview patch 4, the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
+the display link's timestamps, frame divisor and `woken` from baseview patches 4 and 7, the app's chosen divisor the pacing served (which Patch 21 multiplies while the editor idles), the frame's stages, when it submitted, the layer's `maximumDrawableCount`,
 and, through the wgpu-hal present observer, the GPU's start and end on the present's command buffer and the drawable's `presentedTime`.
 Together they classify a missed refresh as a late link callback, a wait for a drawable, late CPU or GPU work, or a late latch.
 `frame_log::event` is public so the plugin can add its own rows on the same clock and frame (#1670).
@@ -392,7 +395,8 @@ A frame asked for at once (an animating editor, input, an egui animation) puts t
 A size change holds the chosen divisor for `RESIZE_HOLD` (0.2 s): on macOS a host resize is no event, only a size polled at the top of a frame, so an idling link stepped a border drag at the poll.
 What changes on another thread, a note, audio or a host parameter, is seen at the next deadline, up to one poll later than on a link that ran every refresh.
 Needs baseview Patch 7.
-- **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
+- **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package;
+its disposition table is a snapshot that stops at Patch 17, so dispose of later patches from their entries here.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);
 the current recommendation is to retain the product stack until the need-driven trigger the map names.

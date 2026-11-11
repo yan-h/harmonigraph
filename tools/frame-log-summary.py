@@ -5,17 +5,30 @@ The log comes from the plugin's `--features frame-log` build
 (`vendor/egui-baseview/src/frame_log.rs`), one CSV per host process in
 `~/Library/Logs/Harmonigraph/`. With no path, the newest log there is read.
 
-The run is split into phases at every change of frame rate (the `divisor`
-column) and at every frame the display link did not ask for, so a minimized
-editor's watchdog frames and the silence around them count in no phase. A log
-written before the `divisor` column existed is read as all Display rate.
+The run is split into phases at every change of the chosen Editor frame rate
+(the `chosen` column) and at every frame the display link did not ask for, so a
+minimized editor's watchdog frames and the silence around them count in no
+phase. A log written before the `chosen` column existed is read as chosen at
+its `divisor`, which holds for one recorded before #1692 slowed a still
+editor's link; one recorded between the two cannot be told apart, so record
+it again. A log written before the `divisor` column existed is read as all
+Display rate.
+
+A tick row's `divisor` is the pacing of the interval that led to that frame:
+the chosen rate, or a multiple of it while a still editor's link is slowed to
+its poll (#1692). So each glass gap is measured against its own frame's
+divisor, not one per phase: the frame after a first note was paced at the
+chosen rate though the note's own frame was paced at the poll's.
 
 Per phase, counted in the display's refreshes:
-- missed refreshes: a glass gap longer than the divisor's own spacing
-  (a stall) misses each refresh beyond it;
-- jumps: a glass gap of the divisor's spacing whose link timestamps are
+- missed refreshes: a glass gap longer than the divisor that paced it
+  (a stall) misses each refresh beyond it. An input event restores the chosen
+  rate between frames and the next refresh draws, so a frame the log marks
+  `woken` is held to the link's own gap instead, up to the slowed interval it
+  cut short;
+- jumps: a glass gap of the expected spacing whose link timestamps are
   further apart, so the content stepped further than the glass did;
-- the p99 gap between presents, in ms;
+- the p99 gap between presents paced at the chosen rate, in ms;
 - depth: `presented - target`, how many refreshes after the link's target
   each frame reached the glass;
 - main-thread blocking: `acquire_ms` summed per second, the time the host's
@@ -112,13 +125,16 @@ def frame(row, gpu_end, presented):
         'acquire_ms': float(row['acquire_ms']),
         'submitted': float(row['submitted']),
         'divisor': int(row.get('divisor') or 1),
+        'chosen': int(row.get('chosen') or row.get('divisor') or 1),
+        'woken': int(row.get('woken') or 0),
         'gpu_end': gpu_end.get(f, 0.0),
         'presented': presented.get(f),
     }
 
 
 def phases(frames):
-    """Runs of link-paced frames at one divisor, with no silence in between."""
+    """Runs of link-paced frames at one chosen rate, with no silence in
+    between."""
     out, current = [], []
     for fr in frames:
         if fr['timestamp'] == 0.0:
@@ -128,7 +144,7 @@ def phases(frames):
             current = []
             continue
         if current and (
-            fr['divisor'] != current[-1]['divisor']
+            fr['chosen'] != current[-1]['chosen']
             or fr['timestamp'] - current[-1]['timestamp'] > LINK_SILENCE
         ):
             out.append(current)
@@ -153,13 +169,13 @@ def cause(fr, refresh):
 
 def measure(phase):
     """One phase's counts, in a form that sums across phases."""
-    divisor = phase[0]['divisor']
+    divisor = phase[0]['chosen']
     refresh = statistics.median(fr['refresh'] for fr in phase)
     m = {
         'divisor': divisor,
         'refresh': refresh,
         'start': phase[0]['t'],
-        'end': phase[-1]['t'] + divisor * refresh,
+        'end': phase[-1]['t'] + phase[-1]['divisor'] * refresh,
         'acquire_ms': sum(fr['acquire_ms'] for fr in phase),
         'unshown': 0,
         'refreshes': 0,
@@ -184,12 +200,17 @@ def measure(phase):
             glass = round((fr['presented'] - previous['presented']) / refresh)
             link = round((fr['timestamp'] - previous['timestamp']) / refresh)
             m['refreshes'] += glass
-            m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
-            if glass > divisor:
-                m['missed'] += glass - divisor
+            # A woken frame ran on the first refresh after the event, no later
+            # than the end of the interval it cut short.
+            expected = min(link, fr['woken']) if fr['woken'] else fr['divisor']
+            if expected == fr['chosen']:
+                # An idle poll's gap is its pacing, not a slow present.
+                m['gaps_ms'].append((fr['presented'] - previous['presented']) * 1000)
+            if glass > expected:
+                m['missed'] += glass - expected
                 why = 'dropped before it' if dropped else cause(fr, refresh)
                 m['stalls'].append((fr, glass, why))
-            elif link > divisor:
+            elif link > expected:
                 m['jumps'] += 1
         previous = fr
         dropped = False
@@ -216,7 +237,7 @@ def report(m, title, t0):
     span = f"{m['start'] - t0:.1f}-{m['end'] - t0:.1f} s" if 'seconds' not in m else ''
     print(f"{title} {span}  {seconds:.1f} s, {m['refreshes']} refreshes at "
           f"{1 / m['refresh']:.0f} Hz")
-    gaps = sorted(m['gaps_ms'])
+    gaps = sorted(m['gaps_ms']) or [float('nan')]
     p99 = gaps[int(0.99 * (len(gaps) - 1))]
     print(f"  missed refreshes {m['missed']} ({pct(m['missed'], m['refreshes'])}) "
           f"in {len(m['stalls'])} stalls; jumps {m['jumps']} "
