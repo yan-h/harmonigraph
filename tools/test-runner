@@ -3,21 +3,24 @@
 
 Invoked by cargo as `test-runner <binary> <args...>` (see `.cargo/config.toml`).
 A test or bench binary run locally is spawned with its stdout passed through
-live and read on the way for the names of failing tests; if it fails, one JSON
-line goes to the failure log. Everything else is exec'd untouched: a binary
-outside `deps/` (`cargo run`, examples), a GitHub Actions run, `--list`, and a
-log pointed at /dev/null.
+live and read on the way for libtest's list of failing tests; if it fails, one
+JSON line goes to the failure log. Everything else is exec'd untouched: a binary
+outside `deps/` (`cargo run`, examples, doctests), a GitHub Actions run,
+`--list`, a log pointed at /dev/null, and a Python without `posix_spawn`.
 
 Why it exists: agents run the tests before every push, so almost every failure
 a test catches happens on a local machine and never reaches CI, whose history
 can only say what a test costs. The guard audit of 2026-11-10 had to dig local
-failures out of agent transcripts; this records them at the source (#1711).
+failures out of agent transcripts; this records them at the source (#1711),
+and goes once #1711 is decided.
 
 The runner never changes a verdict: the binary's exit status, or the signal it
 died of, is passed on exactly, and a log that cannot be written costs a warning.
+What reading stdout through a pipe does change is in docs/development.md.
 """
 
 import os
+import select
 import signal
 import sys
 
@@ -27,6 +30,10 @@ ARGS = sys.argv[1:]
 INHERITED = tuple(
     getattr(signal, name) for name in ("SIGPIPE", "SIGXFSZ") if hasattr(signal, name)
 )
+FORWARDED = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+# The longest partial line kept while waiting for its newline: a test name is
+# far shorter, and a longer line is skipped rather than buffered.
+LINE_CAP = 4096
 
 
 def passthrough():
@@ -49,9 +56,10 @@ if (
     or os.environ.get("GITHUB_ACTIONS")
     or LOG == os.devnull
     # Test and bench binaries live in `<target>/<profile>/deps/`; `cargo run`
-    # binaries and examples do not.
+    # binaries, examples and rustdoc's doctest binaries do not.
     or os.path.basename(os.path.dirname(ARGS[0])) != "deps"
     or "--list" in ARGS[1:]
+    or not hasattr(os, "posix_spawn")
 ):
     if not ARGS:
         sys.exit("usage: test-runner <binary> [args...]")
@@ -60,17 +68,74 @@ if (
 argv = list(ARGS)
 # A pipe is not a terminal, so libtest would drop its colour; ask for it when
 # the terminal is really there and the caller has not chosen a colour or format.
+# Straight after the binary, since anything after a literal `--` is a filter.
 if os.isatty(1) and not any(a.startswith(("--color", "--format")) for a in argv[1:]):
-    argv.append("--color=always")
+    argv.insert(1, "--color=always")
+
+
+class Failures:
+    """libtest's closing list, read line by line from a stream of chunks.
+
+    The list is the indented names under the LAST `failures:` header before
+    `test result:`. The earlier `failures:` block, which holds each failure's
+    captured output, and `--show-output`'s `successes:` block both name tests
+    in `---- name stdout ----` headers, so those headers are never read: under
+    `--show-output` they name passing tests too.
+    """
+
+    def __init__(self):
+        self.names, self.listing, self.pending, self.skipping = [], None, b"", False
+
+    def feed(self, chunk):
+        lines = chunk.split(b"\n")
+        first = lines[0]
+        if len(lines) == 1:
+            # No newline yet: keep a short partial line, skip a long one.
+            if not self.skipping:
+                if len(self.pending) + len(first) > LINE_CAP:
+                    self.pending, self.skipping = b"", True
+                else:
+                    self.pending += first
+            return
+        if not self.skipping:
+            self.line(self.pending + first)
+        self.skipping = False
+        for line in lines[1:-1]:
+            self.line(line)
+        last = lines[-1]
+        self.pending, self.skipping = (b"", True) if len(last) > LINE_CAP else (last, False)
+
+    def line(self, line):
+        if line == b"failures:":
+            self.listing = []
+        elif self.listing is not None and line.startswith(b"    "):
+            if len(self.listing) < 10000:
+                self.listing.append(line.strip())
+        elif line.startswith(b"test result:"):
+            if self.listing:
+                self.names = [n.decode(errors="replace") for n in self.listing]
+            self.listing = None
+        elif self.listing is not None and line:
+            # Anything else under a header (a `---- name stdout ----` line and
+            # the output after it) means this block is not the closing list.
+            self.listing = None
+
 
 read, write = os.pipe()
+wake_read, wake_write = os.pipe()
+for descriptor in (wake_read, wake_write):
+    os.set_blocking(descriptor, False)
+# The binary's exit wakes the loop below even while something it left running
+# still holds the pipe open, so the runner answers for the binary alone.
+signal.set_wakeup_fd(wake_write)
+signal.signal(signal.SIGCHLD, lambda *_: None)
 try:
     child = os.posix_spawn(
         argv[0],
         argv,
         os.environ,
         file_actions=[(os.POSIX_SPAWN_DUP2, write, 1), (os.POSIX_SPAWN_CLOSE, read)],
-        setsigdef=INHERITED,
+        setsigdef=INHERITED + (signal.SIGCHLD,),
     )
 except OSError:
     os.close(read)
@@ -80,45 +145,64 @@ os.close(write)
 
 # Ctrl-C reaches the whole foreground group, the binary included; the runner
 # waits for the binary's own answer to it rather than dying first. A signal
-# sent to the runner alone is handed on.
+# sent to the runner alone is handed on while the binary lives.
 signal.signal(signal.SIGINT, signal.SIG_IGN)
-for forwarded in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+for forwarded in FORWARDED:
     signal.signal(forwarded, lambda number, _: os.kill(child, number))
 
-def may_name_a_failure(line):
-    return line.startswith(b"---- ") or b"FAILED" in line
+failures = Failures()
 
 
-# Only the lines that can name a failing test are kept, so a long or chatty
-# run costs no memory.
-failed, pending = set(), b""
-while True:
-    try:
-        chunk = os.read(read, 65536)
-    except InterruptedError:
-        continue
-    if not chunk:
-        break
+def relay(chunk):
     try:
         os.write(1, chunk)
     except BrokenPipeError:
         pass
-    lines = (pending + chunk).split(b"\n")
-    pending = lines.pop()
-    for line in lines:
-        if may_name_a_failure(line):
-            failed.add(line)
-os.close(read)
-if may_name_a_failure(pending):
-    failed.add(pending)
+    failures.feed(chunk)
 
+
+wait_status = None
+while wait_status is None:
+    reaped, status = os.waitpid(child, os.WNOHANG)
+    if reaped:
+        wait_status = status
+        break
+    ready, _, _ = select.select([read, wake_read], [], [])
+    if wake_read in ready:
+        while True:
+            try:
+                if not os.read(wake_read, 512):
+                    break
+            except BlockingIOError:
+                break
+    if read in ready:
+        chunk = os.read(read, 65536)
+        if chunk:
+            relay(chunk)
+        else:
+            # Everything holding the pipe has closed it: only the exit is left.
+            _, wait_status = os.waitpid(child, 0)
+for forwarded in FORWARDED:
+    signal.signal(forwarded, signal.SIG_DFL)
+# Whatever the binary wrote before it exited, without waiting on anything it
+# left running.
+os.set_blocking(read, False)
 while True:
     try:
-        _, wait_status = os.waitpid(child, 0)
+        chunk = os.read(read, 65536)
+    except BlockingIOError:
         break
-    except InterruptedError:
-        continue
-code = os.waitstatus_to_exitcode(wait_status)
+    if not chunk:
+        break
+    relay(chunk)
+os.close(read)
+failures.feed(b"\n")
+
+# By hand rather than `os.waitstatus_to_exitcode`, which Python 3.8 lacks.
+if os.WIFSIGNALED(wait_status):
+    code = -os.WTERMSIG(wait_status)
+else:
+    code = os.WEXITSTATUS(wait_status)
 
 if code != 0:
     try:
@@ -129,36 +213,41 @@ if code != 0:
 
         def git(*arguments):
             result = subprocess.run(
-                ["git", *arguments], capture_output=True, text=True, stdin=subprocess.DEVNULL
+                ["git", "--no-optional-locks", *arguments],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
-            return result.stdout.strip() if result.returncode == 0 else None
+            return result.stdout if result.returncode == 0 else None
 
-        ansi = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-        names = set()
-        for line in failed:
-            text = ansi.sub("", line.decode(errors="replace")).rstrip("\r")
-            # libtest's pretty line, its terse (`-q`) line, and the header of a
-            # failure's captured output, which `--nocapture` leaves out.
-            match = (
-                re.fullmatch(r"test (\S+) \.\.\. FAILED", text)
-                or re.fullmatch(r"(\S+) --- FAILED", text)
-                or re.fullmatch(r"---- (\S+) stdout ----", text)
-            )
-            if match:
-                names.add(match.group(1))
+        def text(*arguments):
+            out = git(*arguments)
+            return out.decode(errors="replace").strip() if out is not None else None
+
+        # Every changed path, untracked included, from one porcelain read: a
+        # catch changes only source, an intended change edits the test's own
+        # file too, and a squash-merged branch keeps no other record of which.
+        changed = []
+        entries = iter((git("status", "--porcelain=v1", "-z") or b"").split(b"\0"))
+        for entry in entries:
+            if len(entry) > 3:
+                changed.append(entry[3:].decode(errors="replace"))
+                if entry[:1] in (b"R", b"C"):
+                    next(entries, None)  # the rename's or copy's source path
         binary = os.path.basename(argv[0])
         record = {
             "time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-            "worktree": git("rev-parse", "--show-toplevel"),
-            "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
-            "head": git("rev-parse", "HEAD"),
-            "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+            "worktree": text("rev-parse", "--show-toplevel"),
+            "branch": text("rev-parse", "--abbrev-ref", "HEAD"),
+            "head": text("rev-parse", "HEAD"),
+            "dirty": bool(changed),
+            "changed": changed[:50],
+            "changed_count": len(changed),
             # `harmonigraph_ui-0123abcd` -> `harmonigraph_ui`: the crate target,
             # without the hash that changes with every build configuration.
             "binary": re.sub(r"-[0-9a-f]{16}$", "", binary),
             "args": ARGS[1:],
             "status": code if code > 0 else signal.Signals(-code).name,
-            "tests": sorted(names),
+            "tests": failures.names,
         }
         line = (json.dumps(record) + "\n").encode()
         os.makedirs(os.path.dirname(os.path.abspath(LOG)), exist_ok=True)
