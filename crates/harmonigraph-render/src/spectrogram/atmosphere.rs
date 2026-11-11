@@ -7,7 +7,6 @@
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
-use crate::material_cells::CLOUD_UNITS;
 pub(super) use crate::stars::*;
 use crate::travel::{Motion, Travel};
 use crate::{create_vertex_buffer, wgpu};
@@ -105,16 +104,6 @@ fn material_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> f64 {
         settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales,
         &settings.material_settings,
     )
-}
-
-/// Where the material is in cloud units, unreduced and still in f64, for a
-/// texture that has drifted `drift` of its `cells` to a cloud unit
-/// ([`Motion::drift`]): what the colour history's lattice follows
-/// ([`memory_origin`]). The shaders take the drift in cells instead
-/// ([`crate::material_cells::drift`]).
-fn cloud_offset(drift: [f64; 2], cells: f64) -> [f64; 2] {
-    let start = harmonigraph_scene::MaterialSettings::DRIFT_START;
-    std::array::from_fn(|axis| start[axis] + drift[axis] / cells)
 }
 
 /// The drawn material's drift as the shader takes it after `now` seconds at
@@ -973,16 +962,22 @@ fn memory_key(
 }
 
 /// The history lattice's whole-texel origin and its sub-texel remainder for a
-/// cloud `offset`, on a history of `extent` over the pane `rect`.
+/// material `offset` in its own cells of `cell` points
+/// ([`crate::material_cells::offset`]), on a history of `extent` over the pane
+/// `rect`.
 ///
 /// Off the UNREDUCED offset: the lattice has to run on continuously where the
 /// shader's drift jumps a whole repeat, or every wrap would read as a seek and
 /// reset the history.
-fn memory_origin(offset: [f64; 2], rect: egui::Rect, extent: [u32; 2]) -> ([i32; 2], [f32; 2]) {
+fn memory_origin(
+    offset: [f64; 2],
+    cell: f32,
+    rect: egui::Rect,
+    extent: [u32; 2],
+) -> ([i32; 2], [f32; 2]) {
     let mut fraction = [0.0; 2];
     let origin = std::array::from_fn(|a| {
-        let texels = offset[a]
-            * f64::from(rect.height() / CLOUD_UNITS * (extent[a] - 2) as f32 / rect.size()[a]);
+        let texels = offset[a] * f64::from(cell * (extent[a] - 2) as f32 / rect.size()[a]);
         let integer = texels.floor();
         fraction[a] = (texels - integer) as f32;
         integer as i32
@@ -1798,7 +1793,9 @@ impl Targets {
             stars.map_or_else(|| star_cells(settings.stars), |layout| layout.cells),
         );
         let motion = travel.advance(atmosphere.now, rate);
-        let offset = cloud_offset(motion.drift, cells);
+        let offset =
+            crate::material_cells::offset(velvet, &settings.material_settings, motion.drift);
+        let cell = crate::material_cells::cell(velvet, &settings.material_settings, rect.height());
         // Only Watercolor draws out of a tile, and only it reads the period.
         let period = tile.map_or(crate::material_cells::WASH_PERIOD, |t| t.period() as f32);
         let drift =
@@ -1811,7 +1808,7 @@ impl Targets {
         let mut step = MemoryStep::fresh(slices, life);
         if let Some(memory) = self.memory.as_mut() {
             memory.extent = memory_extent.expect("allocated history has a logical extent");
-            let (origin, fraction) = memory_origin(offset, rect, memory.extent);
+            let (origin, fraction) = memory_origin(offset, cell, rect, memory.extent);
             let frame = MemoryFrame {
                 now: atmosphere.now,
                 source_end,
@@ -1866,7 +1863,7 @@ impl Targets {
                 harmonigraph_scene::CloudStyle::Stars => 2,
                 harmonigraph_scene::CloudStyle::VelvetScales => 3,
             },
-            cell: crate::material_cells::cell(velvet, &settings.material_settings, rect.height()),
+            cell,
             wash_fuzz: settings.material_settings.wash_fuzz,
             wash_lobe: settings.material_settings.wash_lobe,
             wash_refract: settings.material_settings.wash_refract,

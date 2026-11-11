@@ -70,15 +70,29 @@ pub(crate) fn drift(
     period: f32,
 ) -> [f32; 2] {
     let drift_period = f64::from(period) * f64::from(WASH_REPEAT_PERIODS);
-    let per_unit = cells_per_unit(velvet, settings);
-    std::array::from_fn(|axis| {
+    offset(velvet, settings, travel).map(|v| {
         if velvet {
-            travel[axis] as f32
+            v as f32
         } else {
-            let start = harmonigraph_scene::MaterialSettings::DRIFT_START[axis];
-            (start * per_unit + travel[axis]).rem_euclid(drift_period) as f32
+            v.rem_euclid(drift_period) as f32
         }
     })
+}
+
+/// [`drift`] before it is reduced and narrowed: the material's offset in its
+/// own cells, still in f64, which runs on continuously where the drift jumps
+/// a whole repeat. The spectrogram's colour history follows this.
+pub(crate) fn offset(
+    velvet: bool,
+    settings: &harmonigraph_scene::MaterialSettings,
+    travel: [f64; 2],
+) -> [f64; 2] {
+    if velvet {
+        return travel;
+    }
+    let per_unit = cells_per_unit(velvet, settings);
+    let start = harmonigraph_scene::MaterialSettings::DRIFT_START;
+    std::array::from_fn(|axis| start[axis] * per_unit + travel[axis])
 }
 
 #[cfg(test)]
