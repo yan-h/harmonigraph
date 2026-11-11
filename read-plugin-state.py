@@ -60,6 +60,18 @@ STATE_START = b'{"version"'
 # "never open before a save", a warning a session acts on.
 OUR_PARAMS = {"camera-yaw", "tuning-engine", "tuning_delay"}
 
+VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
+
+
+def view_fields() -> "set[str]":
+    """The fields `ViewConfig` declares now. A saved blob keeps retired keys
+    (serde skips them on load), and `--rust` pasting one would not compile."""
+    source = VIEW_SOURCE.read_text()
+    body = source.split("pub struct ViewConfig {", 1)[1].split("\n}\n", 1)[0]
+    fields = set(re.findall(r"^    pub (\w+):", body, re.M))
+    if not fields:
+        sys.exit(f"No ViewConfig fields found in {VIEW_SOURCE}.")
+    return fields
 
 
 def newest_project() -> pathlib.Path:
@@ -264,14 +276,21 @@ def main() -> None:
         ]
         if not bodies:
             sys.exit("No view block in any instance's ui-state blob.")
+        declared = view_fields()
         # Numbered where there is more than one, so two runs of fields cannot be
         # read as one: the bodies print back to back, and a paste of the wrong
         # one is a look nobody dialled.
         for n, body in bodies:
             where = f" instance {n}" if len(bodies) > 1 else ""
             print(f"// From a live Bitwig session{where}; see read-plugin-state.py.")
-            for name, value in split_ron(body):
-                print(f"    {name}: {value},")
+            fields = split_ron(body)
+            retired = [name for name, _ in fields if name not in declared]
+            if retired:
+                print(f"# dropped keys ViewConfig no longer has: {', '.join(retired)}",
+                      file=sys.stderr)
+            for name, value in fields:
+                if name in declared:
+                    print(f"    {name}: {value},")
         return
 
     for n, st in enumerate(states, 1):

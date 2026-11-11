@@ -61,6 +61,21 @@ class StateExtraction(unittest.TestCase):
             project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
             self.assertEqual(capture("--appearance").strip(), appearance)
 
+    def test_rust_output_drops_keys_view_config_no_longer_declares(self):
+        """A project saved before #1698 still holds `meantone` in its view."""
+        ui = '(version:7,appearance:(view:(center_fives:3,meantone:true,max_sevens:2)))'
+        saved = {"version": "0.6.0", "params": {}, "fields": {"ui-state": json.dumps(ui)}}
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "retired.bwproject"
+            project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
+            out = subprocess.check_output(
+                [sys.executable, extractor.__file__, "--rust", str(project)], text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        self.assertIn("center_fives: 3,", out)
+        self.assertIn("max_sevens: 2,", out)
+        self.assertNotIn("meantone", out)
+
     def test_capture_overlays_exactly_the_fields_rust_names_host_owned(self):
         """The overlay is a copy of the Rust list, so the two are compared."""
         source = (Path(__file__).resolve().parents[2]
