@@ -479,8 +479,9 @@ impl Scene {
     /// this and writes the result to the shared UI state.
     ///
     /// Only [visible](crate::NodeInstance::is_visible) nodes are pickable, so the
-    /// pointer can't pull a pitch readout out of an off-sheet node that
-    /// draws nothing.
+    /// pointer can't pull a pitch readout out of an idle off-sheet node. A
+    /// held note off the sheet is pickable even where Opacity draws it at
+    /// nothing, and competes for the nearest pick like any other node.
     pub fn pick(&self, viewport_px: Vec2, pointer_px: Vec2, max_px: f32) -> Option<LatticePos> {
         let projector = self.projector(viewport_px);
         let mut best: Option<(f32, LatticePos)> = None;

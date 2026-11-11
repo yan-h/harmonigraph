@@ -363,7 +363,7 @@ fn export(args: Args) -> Result<(), String> {
         .map(|path| std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}")))
         .transpose()?;
     // Ahead of anything the command line can complain about, so the take's own
-    // trouble is the warning that reaches its export job's row.
+    // trouble leads the warnings its export job's row shows.
     for warning in take_warnings(&take_path, &take) {
         eprintln!("{warning}");
     }

@@ -272,8 +272,8 @@ impl Default for RenderConfig {
 
 impl RenderConfig {
     /// Fit a deserialized render config to what its own controls can
-    /// produce, on the same footing as `ViewConfig::sanitize` and
-    /// `SpectrumConfig::sanitize` in `harmonigraph-ui`: a bar cannot hand
+    /// produce, on the same footing as `ViewConfig::sanitize` in
+    /// `harmonigraph-scene` and `SpectrumConfig::sanitize` here: a bar cannot hand
     /// back a nonsense value, a hand-edited blob can, and this is a video
     /// dial rather than a real-time one, so a bad number here silently
     /// composes a frame nobody would have set rather than merely misdrawing
