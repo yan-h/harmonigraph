@@ -231,8 +231,9 @@ Found while adding the System pane's frame-rate cap, which was first built on ex
 the cap is now baseview's frame divisor (Patch 6), and this fix still serves every delayed repaint, the idle poll among them.
 - **Patch 6** (`src/window.rs`): pass baseview's frame divisor through, so the
 app can pace its own window.
-`Queue::set_frame_divisor` sets it from inside a frame (applied after the frame returns, where the `Window` is reachable —
-the same deferred shape `resize` already uses).
+`Queue::set_frame_divisor` sets the app's chosen rate from inside a frame (applied after the frame returns, where the `Window` is reachable —
+the same deferred shape `resize` already uses);
+since Patch 21 baseview's divisor is that rate or a multiple of it while the editor idles.
 This is what makes a frame rate setting enforceable:
 egui's `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay requested in a pass and any zero-delay `request_repaint` (input event, hover animation, a sounding voice) also forces the next pass to zero —
 so a cap built on it evaporates exactly when the UI is busy.
