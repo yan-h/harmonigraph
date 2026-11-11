@@ -47,7 +47,11 @@ Ordinary reference tests retain normal fallback, so their test-only shaders do n
 The regular workspace gates remain required too.
 Generation also builds a separate temporary storage-array diagnostic corpus and verifies strict rejection/source fallback for missing, mismatched and invalid libraries.
 Those diagnostic libraries are never imported into the shipping corpus.
-The PR workflow runs these controls after checking committed coverage; they can also be run with `python3 tools/shader-assets.py controls` when Apple's compiler is available.
+They are what make a stale corpus safe to ship, since a library it lacks takes the source-fallback path they prove.
+`generate` ends with them, so every run that regenerates runs them;
+a PR whose committed corpus passes its check runs them only when it touches what they exercise —
+`vendor/wgpu-hal`, the renderer's `shader_assets` lookup and fallback, the probe they drive, the corpus crate, `tools/shader-assets.py` or the workflow itself.
+They can also be run with `python3 tools/shader-assets.py controls` when Apple's compiler is available.
 Generation and controls use `HARMONIGRAPH_METAL_ASSET_BUILD_DIR` to embed temporary corpora into their test binaries at build time.
 They never replace the tracked corpus, even during deliberate invalid-library controls, so an interrupted run cannot leave those controls in an ordinary build.
 Cargo tracks this build input and rebuilds with the checked-in corpus when the variable is absent.
@@ -69,9 +73,13 @@ and `import <dir>` does the same from a downloaded `production-metal-assets` art
 Import checks only that the candidate corpus is whole — manifest hashes, each source paired with its options and library, the recorded compiler flags — before replacing the checked-in assets;
 validating it through the production path is the generating run's job, not import's.
 Inspect and commit the changed source/options/manifest together with the binary libraries.
-The ordinary PR workflow checks the committed corpus before generating anything,
-and fails on a stale one even after generating its replacement,
-so generation cannot conceal stale coverage.
+The ordinary PR workflow checks the committed corpus before generating anything.
+A stale one is the `metal_corpus` gate's to fail, in `Full CI` (`ci.sh`), so generation cannot conceal stale coverage;
+the workflow reports it as a warning once the replacement has generated and validated, rather than going red beside that gate.
+Two failing verdicts on one stale corpus made 302 of 594 CI failures from July to November, with neither ever catching a defect the other missed,
+and a stale corpus only slows a cold open: it misses lookup and compiles from source.
+The workflow still fails on its own errors —
+a check failure other than a missing asset, a replacement that does not generate or validate, controls that fail.
 Its path filter covers assets, renderer code, graphics setup and dependencies;
 ordinary tuning implementation edits do not schedule a third macOS job.
 New pushes cancel superseded asset-validation runs.

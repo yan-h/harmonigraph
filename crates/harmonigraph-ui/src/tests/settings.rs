@@ -1005,7 +1005,8 @@ fn no_settings_pane_overruns_a_narrow_column() {
 /// outside the editor, or let the host take focus mid-drag, and the release is
 /// delivered somewhere that is not us. Both gestures below are ones a person
 /// actually makes: panning the Analyzer's pitch range out past its edge, and
-/// dragging any settings bar.
+/// dragging a settings bar — here [`fixture_bar`], the settings pages' own
+/// widget on a value of the test's own.
 ///
 /// [`Lose::Nothing`] is the case with nothing for the first two arms of
 /// `end_stranded_drag` to read: focus kept, pointer inside, and the release
@@ -1015,11 +1016,10 @@ fn no_settings_pane_overruns_a_narrow_column() {
 #[test]
 fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // Default dock: the Analyzer picture is the column at x ~518..720, the
-    // settings section is top-right. The bar is grabbed by NAME — where it sits
-    // under the Display pane's headers is layout, not this test's business.
+    // settings section is top-right.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
-        ("a settings bar", Grab::Bar("Texture mix")),
+        ("a settings bar", Grab::FixtureBar),
     ] {
         for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
             let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
@@ -1042,13 +1042,13 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
 /// outside the window ends that way every time.
 #[test]
 fn the_console_names_a_drag_the_wheel_had_to_end() {
-    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Texture mix"), Lose::Nothing);
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::FixtureBar, Lose::Nothing);
     assert!(
         logged.iter().any(|line| line.starts_with("wheel: a drag on")),
         "the wheel ended a stranded drag without saying so: {logged:?}",
     );
     for quiet in [Lose::Pointer, Lose::Focus] {
-        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Texture mix"), quiet);
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::FixtureBar, quiet);
         assert!(
             !logged.iter().any(|line| line.starts_with("wheel:")),
             "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
@@ -1066,13 +1066,41 @@ enum Lose {
     Nothing,
 }
 
-/// Where the doomed drag takes hold: a fixed point in a picture pane, or a
-/// named settings bar found where it was painted — a bar draws its name at
-/// its own left end, so a small offset from the text is inside the track.
+/// Where the doomed drag takes hold: a fixed point in a picture pane, or the
+/// test's own [`fixture_bar`].
 #[derive(Clone, Copy, Debug)]
 enum Grab {
     Point(egui::Pos2),
-    Bar(&'static str),
+    FixtureBar,
+}
+
+/// Where [`fixture_bar`] is drawn: over the lattice picture at the dock's top
+/// left, clear of the settings column the wheel tests scroll and of the
+/// Analyzer picture [`Grab::Point`] presses.
+const FIXTURE_BAR_AT: egui::Pos2 = egui::pos2(40.0, 120.0);
+
+/// A point inside [`fixture_bar`]'s track: the area puts the bar's top left at
+/// [`FIXTURE_BAR_AT`], and a row is far taller than this offset.
+const FIXTURE_BAR_GRIP: egui::Pos2 = egui::pos2(FIXTURE_BAR_AT.x + 4.0, FIXTURE_BAR_AT.y + 4.0);
+
+/// A 0..=1 [`widgets::ValueBar`] on a value the test owns, in a foreground
+/// area over the dock, for [`DockHarness::frame_over`].
+///
+/// The drag tests used to press a real settings bar by its label, which every
+/// settings reorganisation renamed, moved or removed: 21 edits to one of them,
+/// and a CI failure on all three when #1353 removed the bar they pressed. What
+/// they test is the shell's handling of a bar drag — the stranded-drag repair
+/// at the top of `root_ui`, which runs on every frame of this harness — and
+/// not any one setting, so the bar is the settings pages' own widget on a
+/// value no page holds.
+fn fixture_bar(ctx: &egui::Context, value: &mut f32) {
+    egui::Area::new(egui::Id::new("fixture bar"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(FIXTURE_BAR_AT)
+        .show(ctx, |ui| {
+            ui.set_width(240.0);
+            widgets::ValueBar::new(value, 0.0..=1.0, "Fixture bar").show(ui);
+        });
 }
 
 /// Press and drag at `grab`, lose the release, then wheel over the settings
@@ -1083,16 +1111,14 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that the Analyzer's first bars are inside the settings section:
-    // a bar this fixture presses on outside the section is a press on the pane
-    // below.
+    // Short enough that the Analyzer settings overflow, so the wheel has
+    // somewhere to scroll them.
     let screen_h = 360.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
     let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
     // Named texts inside the settings body, as `wheel_over_settings_pane` does:
     // the position of a string drawn in both frames is the one metric a clip
-    // rect and a culled shape cannot lie about. The whole position rather than
-    // the y alone, so [`Grab::Bar`] can aim a press at a bar it can name.
+    // rect and a culled shape cannot lie about.
     let texts = |out: &egui::FullOutput| {
         let mut map = std::collections::HashMap::new();
         for cs in &out.shapes {
@@ -1112,20 +1138,16 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
     // borrows it: `egui::Context` is an `Arc`, so this reads the same context
     // the frames run on rather than a second one.
     let ctx = h.ctx.clone();
-    let mut frame =
-        |state: &mut SharedState, events: Vec<egui::Event>| texts(&h.frame(state, events));
-    // Where the press lands, off a laid-out frame: a named bar is wherever
-    // the layout put it, which under the Display pane's headers is nowhere a
-    // constant can point.
-    let laid_out = frame(&mut state, vec![]);
+    let mut value = 0.5;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        texts(&h.frame_over(state, events, |ctx| fixture_bar(ctx, &mut value)))
+    };
+    // A laid-out frame first: egui finds the widget under a press in the
+    // previous pass.
+    frame(&mut state, vec![]);
     let from = match grab {
         Grab::Point(pos) => pos,
-        Grab::Bar(name) => {
-            let pos = laid_out
-                .get(name)
-                .unwrap_or_else(|| panic!("no {name:?} bar in the settings body"));
-            *pos + egui::vec2(2.0, 4.0)
-        }
+        Grab::FixtureBar => FIXTURE_BAR_GRIP,
     };
     // Hover, press, drag — and then the release goes missing.
     frame(&mut state, vec![egui::Event::PointerMoved(from)]);
@@ -1188,66 +1210,47 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
-    // At the bottom of its range, so a drag to the right has somewhere to go.
-    state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
-    // The Analyzer settings.
-    let tab = panes::Tab::AnalyzerSettings;
-    state.workspace.layout.select(tab);
-    // Tall enough that Texture mix is actually on screen below the view,
-    // analysis and level-mapping controls; a clipped bar cannot start this drag.
-    let screen_h = 1800.0;
-    let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
-    // The settings section, whose bars run the width of the column at x ~700..1000:
-    // from under its tab bar down to the 0.55 split.
-    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
-    // Where a named bar was drawn, so the gesture takes hold of a bar this test
-    // can name rather than of whatever a fixed coordinate lands on. A bar draws
-    // its name inside its own rectangle, at the left end.
-    let bar_named = |out: &egui::FullOutput, name: &str| {
-        out.shapes.iter().find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t)
-                if body.contains(cs.clip_rect.min) && t.galley.text().starts_with(name) =>
-            {
-                Some(t.pos)
-            }
-            _ => None,
-        })
-    };
+    let mut h = DockHarness::new();
     // As above: an `Arc` handle on the harness's own context, so the drag
     // state read below is the one the frames wrote.
     let ctx = h.ctx.clone();
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Texture mix: a plain 0..=1 bar, so where the
-    // pointer is says what the value should be, and the far end of the range is
-    // what an off-window drag to the right must arrive at.
-    let out = frame(&mut state, vec![]);
-    let name =
-        bar_named(&out, "Texture mix").expect("the Texture mix bar is drawn on the Analyzer page");
-    let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.picture.appearance.spectrum.atmosphere.cloud_depth;
-    frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
-    frame(&mut state, vec![press(on_the_bar, true)]);
-    frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
-    assert!(ctx.dragged_id().is_some(), "the press on the Texture mix bar started no drag");
-    let inside = state.picture.appearance.spectrum.atmosphere.cloud_depth;
-    assert!(inside != before, "the bar did not follow the pointer inside the window");
+    // At the bottom of its range, so a drag to the right has somewhere to go,
+    // and a plain 0..=1 bar, so where the pointer is says what the value
+    // should be and the far end of the range is what an off-window drag to the
+    // right must arrive at.
+    let mut value = 0.0;
+    let mut frame = |state: &mut SharedState, value: &mut f32, events: Vec<egui::Event>| {
+        h.frame_over(state, events, |ctx| fixture_bar(ctx, value));
+    };
+    frame(&mut state, &mut value, vec![]);
+    let on_the_bar = FIXTURE_BAR_GRIP;
+    frame(&mut state, &mut value, vec![egui::Event::PointerMoved(on_the_bar)]);
+    frame(&mut state, &mut value, vec![press(on_the_bar, true)]);
+    frame(
+        &mut state,
+        &mut value,
+        vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))],
+    );
+    assert!(ctx.dragged_id().is_some(), "the press on the fixture bar started no drag");
+    let inside = value;
+    assert!(inside != 0.0, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
     // shell reports the move and nothing else.
-    frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(1400.0, 200.0))]);
+    frame(&mut state, &mut value, vec![egui::Event::PointerMoved(egui::pos2(1400.0, 200.0))]);
     assert!(
         ctx.dragged_id().is_some(),
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.picture.appearance.spectrum.atmosphere.cloud_depth, 1.0,
+        value, 1.0,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 
     // And the release, delivered outside the window, ends it — the case the
     // shell used to drop on the floor (egui-baseview sent a button event only
     // when it had a pointer position, and the exit had cleared it).
-    frame(&mut state, vec![press(egui::pos2(1400.0, 200.0), false)]);
+    frame(&mut state, &mut value, vec![press(egui::pos2(1400.0, 200.0), false)]);
     assert!(
         ctx.dragged_id().is_none(),
         "a release outside the window left the drag standing, which strands every pane's wheel",

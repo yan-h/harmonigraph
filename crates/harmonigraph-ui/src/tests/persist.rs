@@ -2319,49 +2319,72 @@ fn item_ranges(blob: &str) -> Vec<std::ops::Range<usize>> {
 /// depth, as its path and its byte range in `blob`: through nested structs,
 /// tuples and lists, whose items are numbered (`stored[1]`), and through a
 /// `Some` or an enum variant's payload at the path of the value it is.
-fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+pub(super) fn nested_pairs(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    let mut out = Vec::new();
+    walk_blob(blob, 0..blob.len(), "", &mut |found| {
+        if let Nested::Pair(path, range) = found {
+            out.push((path.to_owned(), range));
+        }
+    });
+    out
+}
+
+/// Every scalar a serialized blob holds at any depth — a number, string,
+/// unit variant or `None` — as its path and its byte range in `blob`, on the
+/// paths [`nested_pairs`] names, so a list's items are `star_speed[0]` and a
+/// `Some`'s payload is at the option's own path.
+pub(super) fn nested_scalars(blob: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    let mut out = Vec::new();
+    walk_blob(blob, 0..blob.len(), "", &mut |found| {
+        if let Nested::Scalar(path, range) = found {
+            out.push((path.to_owned(), range));
+        }
+    });
+    out
+}
+
+/// What [`walk_blob`] meets: a whole `key:value` pair, or a value with nothing
+/// inside it to walk.
+enum Nested<'a> {
+    Pair(&'a str, std::ops::Range<usize>),
+    Scalar(&'a str, std::ops::Range<usize>),
+}
+
+fn walk_blob(blob: &str, value: std::ops::Range<usize>, path: &str, visit: &mut dyn FnMut(Nested)) {
     fn named_struct(text: &str) -> bool {
         let Some(inner) = text.strip_prefix('(') else { return false };
         let key = inner.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
         key > 0 && inner[key..].starts_with(':')
     }
-    fn walk(
-        blob: &str,
-        value: std::ops::Range<usize>,
-        path: &str,
-        out: &mut Vec<(String, std::ops::Range<usize>)>,
-    ) {
-        let text = &blob[value.clone()];
-        let name = text.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
-        if name > 0 && text[name..].starts_with('(') {
-            // A struct variant's payload is its struct; a `Some` or other
-            // newtype's single item is the value itself.
-            let payload = value.start + name..value.end;
-            let items = item_ranges(&blob[payload.clone()]);
-            return match items.as_slice() {
-                [one] if !named_struct(&blob[payload.clone()]) => {
-                    walk(blob, payload.start + one.start..payload.start + one.end, path, out)
-                }
-                _ => walk(blob, payload, path, out),
-            };
-        }
-        if named_struct(text) {
-            for (name, range) in pair_ranges(text) {
-                let range = value.start + range.start..value.start + range.end;
-                let path = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
-                out.push((path.clone(), range.clone()));
-                walk(blob, range.start + name.len() + 1..range.end, &path, out);
+    let text = &blob[value.clone()];
+    let name = text.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(0);
+    if name > 0 && text[name..].starts_with('(') {
+        // A struct variant's payload is its struct; a `Some` or other
+        // newtype's single item is the value itself.
+        let payload = value.start + name..value.end;
+        let items = item_ranges(&blob[payload.clone()]);
+        return match items.as_slice() {
+            [one] if !named_struct(&blob[payload.clone()]) => {
+                walk_blob(blob, payload.start + one.start..payload.start + one.end, path, visit)
             }
-        } else if text.starts_with(['(', '[']) {
-            for (index, range) in item_ranges(text).into_iter().enumerate() {
-                let range = value.start + range.start..value.start + range.end;
-                walk(blob, range, &format!("{path}[{index}]"), out);
-            }
-        }
+            _ => walk_blob(blob, payload, path, visit),
+        };
     }
-    let mut out = Vec::new();
-    walk(blob, 0..blob.len(), "", &mut out);
-    out
+    if named_struct(text) {
+        for (name, range) in pair_ranges(text) {
+            let range = value.start + range.start..value.start + range.end;
+            let path = if path.is_empty() { name.clone() } else { format!("{path}.{name}") };
+            visit(Nested::Pair(&path, range.clone()));
+            walk_blob(blob, range.start + name.len() + 1..range.end, &path, visit);
+        }
+    } else if text.starts_with(['(', '[']) {
+        for (index, range) in item_ranges(text).into_iter().enumerate() {
+            let range = value.start + range.start..value.start + range.end;
+            walk_blob(blob, range, &format!("{path}[{index}]"), visit);
+        }
+    } else {
+        visit(Nested::Scalar(path, value));
+    }
 }
 
 /// Replace one `key:value` pair in a serialized blob. RON has no trailing

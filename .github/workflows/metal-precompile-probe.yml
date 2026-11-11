@@ -46,6 +46,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # The PR's merge commit and the base it stands on (HEAD^1), so the
+          # controls below can ask what the PR changed.
+          fetch-depth: 2
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.18.0
@@ -70,10 +73,10 @@ jobs:
           shared-key: full-ci
           save-if: false
       # A failed check carries on to generate the replacement in this same run,
-      # because a stale corpus is what fails it and the replacement is the fix;
-      # the last step still fails the job. Stopping here made a branch dispatch
-      # `regenerate` and wait out a second run of this job before it had
-      # anything to import.
+      # because a stale corpus is what fails it and the replacement is the fix.
+      # Stopping here made a branch dispatch `regenerate` and wait out a second
+      # run of this job before it had anything to import. The last step decides
+      # whether that failure fails the job.
       - name: Check the committed production corpus
         id: check
         if: ${{ !inputs.regenerate }}
@@ -90,8 +93,40 @@ jobs:
         run: >-
           python3 tools/shader-assets.py generate target/generated-metal-assets
           --logs target/shader-asset-logs/generate
-      - name: Exercise metadata and provider fallback
+      # The controls are what make a stale corpus safe to ship: a library that
+      # is missing, mismatched or invalid fails strictly and compiles from
+      # source otherwise. A generating run already runs them on its replacement
+      # (`generate` ends with them), so this is for a run whose check passed, and
+      # only where the PR touched what they exercise: the backend patch that
+      # loads libraries, the renderer's asset lookup and fallback, the probe
+      # they drive and the manifest declaring the feature they build with, the
+      # corpus crate and this tooling. `lattice_tests.rs` is left out though it
+      # holds the probe's `mod` line: it changes with most lattice work, and a
+      # dropped line fails the next controls run, which requires a passing test.
+      # Run on every green check,
+      # they cost ~2.3 macOS-minutes a run and never once failed. A dispatch has
+      # no base to diff against and is a deliberate run, so it always runs them.
+      - name: Decide whether the controls are owed
+        id: scope
         if: ${{ steps.check.outcome == 'success' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "controls=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exercised='^(vendor/wgpu-hal/|crates/harmonigraph-metal-assets/|crates/harmonigraph-render/src/shader_assets|crates/harmonigraph-render/src/lattice_tests/metal_assets\.rs$|crates/harmonigraph-render/Cargo\.toml$|tools/shader-assets\.py$|\.github/workflows/metal-precompile-probe\.yml$)'
+          # Its own statement, so a diff that cannot run fails the step rather
+          # than reading as "nothing changed". `--no-renames` names both ends of
+          # a move, so moving `shader_assets.rs` away still runs the controls.
+          changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
+          if printf '%s\n' "$changed" | grep -E "$exercised"; then
+            echo "controls=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "controls=false" >> "$GITHUB_OUTPUT"
+            echo "No change to what the controls exercise; skipping them."
+          fi
+      - name: Exercise metadata and provider fallback
+        if: ${{ steps.scope.outputs.controls == 'true' }}
         run: python3 tools/shader-assets.py controls
       - name: Preserve assets and validation evidence
         if: always()
@@ -104,8 +139,32 @@ jobs:
             target/shader-asset-logs/**/frames/diff/
           if-no-files-found: warn
           retention-days: 7
-      - name: Fail on the corpus the check rejected
+      # A stale corpus is REPORTED here, not failed: Full CI's `metal_corpus`
+      # gate (ci.sh) runs this same strict catalog and is the one failing
+      # verdict on it. With both failing, every stale corpus went red twice --
+      # both checks red on all 94 pushes where both finished, 302 of 594 CI
+      # failures from July to November, and not one defect either caught that
+      # the other missed. A stale corpus only slows a cold open: the shipped
+      # `Embedded` mode needs full input equality to use a library, so a stale
+      # one misses and compiles from source, which the controls prove.
+      #
+      # Stale means the strict catalog named a missing asset AND the replacement
+      # generated and validated above; a failed generation has failed the job
+      # already. Any other check failure -- a corpus that fails its own hashes,
+      # a library that will not load, goldens drawn through the corpus that
+      # differ from source -- is not staleness and still fails the job. The test
+      # is the strict panic's own words in a log of a check that already
+      # failed, so a reworded panic lands in the failing arm: the safe way to
+      # be wrong.
+      - name: Report the corpus the check rejected
         if: ${{ steps.check.outcome == 'failure' }}
         run: |
-          echo "::error::The committed Metal corpus failed its check, and this run generated and validated a replacement. Read why in the artifact's shader-asset-logs/ (generate/ holds the replacement's own). A missing or rejected Metal asset is a stale corpus: with this commit checked out, run tools/shader-assets.py fetch, into the same commit as the change. Anything else is not the corpus, and the replacement is not the fix."
-          exit 1
+          if grep -q "missing Metal asset" target/shader-asset-logs/strict-catalog.log 2>/dev/null; then
+            message="The committed Metal corpus is stale, and this run generated and validated its replacement. With this commit checked out, run tools/shader-assets.py fetch, into the same commit as the change. Full CI's metal_corpus gate stays red until then."
+            echo "::warning title=Stale Metal corpus::$message"
+            echo "### Stale Metal corpus" >> "$GITHUB_STEP_SUMMARY"
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::The committed Metal corpus failed its check for a reason other than a missing asset. Read why in the artifact's shader-asset-logs/ (generate/ holds the replacement's own). A stale corpus names a missing Metal asset in strict-catalog.log; this one does not, so the replacement is not the fix."
+            exit 1
+          fi

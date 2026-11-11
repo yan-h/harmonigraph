@@ -1,14 +1,25 @@
 //! Loaded-state range guard, additional to settings layout/interaction tests.
 //!
-//! This matrix is MANUAL: new pages, conditional controls and state fields need
-//! a scenario/fixture and a visit expectation here. SETTINGS_PANES only checks
-//! our page inventory, not future conditional coverage. Disabled bars are
-//! recorded, while hidden bars need an enabled scenario that makes them draw.
+//! The poison is DERIVED: every float the saved appearance and preferences
+//! serialize is overwritten in the blob itself, found by the same walk the
+//! persistence guards use, so a new dialled float is poisoned without an edit
+//! here. Only integers and empty options are poisoned by hand, since a blob
+//! names neither's type, and so are the host-owned tuning policy fields in
+//! `backend`, which never cross the editor's blob.
+//!
+//! The bar inventory stays MANUAL: new pages and conditional controls need a
+//! scenario and a visit expectation in `expected_labels`. Nothing but the code
+//! that draws the bars says which bars a page draws, and an expectation taken
+//! from that code would agree with it whatever it drew. SETTINGS_PANES only
+//! checks our page inventory, not future conditional coverage. Disabled bars
+//! are recorded, while hidden bars need an enabled scenario that makes them
+//! draw.
 //! Gradients, StackBar, LayerStrip, choices, text fields, RangeBar
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
 
 use super::harness::{set_optional_sections, SETTINGS_PANES};
+use super::persist::{nested_pairs, nested_scalars};
 use super::probe::{fresh, themed};
 use crate::widgets::range_probe::collect;
 use crate::*;
@@ -31,28 +42,28 @@ enum Edge {
     Fresh,
 }
 
-/// Poison all stored fields feeding the recorded appearance/editor bars,
-/// including the reach/fade pairs whose bar displays a subtraction. Values are
-/// written BEFORE serialization, never clamped by a fixture beside the
-/// production door.
-fn poison(saved: &mut SharedState, edge: Edge) {
+/// The saved blob of a fresh state with every dialled value poisoned to the
+/// edge: each float under `appearance` and `prefs` bar the [`UNPOISONED`]
+/// ones, including the reach/fade pairs whose bar displays a subtraction and
+/// the owners that have no bar at all. Values are written BEFORE the load door,
+/// never clamped by a fixture beside it.
+///
+/// Floats are found in the serialized blob rather than listed: a hand list
+/// here was edited every time a dial was added, and each time one was missed
+/// its bar passed this guard vacuously at the fresh value (#888, #909, #913,
+/// #918, #928 and #933 all walked past it). The walk is [`nested_scalars`],
+/// the persistence guards' own, and not the code that draws the bars, so a
+/// field no bar shows is poisoned all the same.
+fn poisoned(edge: Edge) -> String {
+    let mut saved = fresh();
     let (v, n) = match edge {
-        Edge::Low => (-1.0e6, i32::MIN),
+        Edge::Low => (-1.0e6f32, i32::MIN),
         Edge::High => (1.0e6, i32::MAX),
-        Edge::Fresh => return,
+        Edge::Fresh => return saved.save_persist(),
     };
+    // What a blob cannot say is a float: an integer, whose type sets the edge
+    // it can hold, and an option still empty, which holds no number to find.
     let a = &mut saved.picture.appearance;
-    macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, spiral_bloom, note_bloom, sevens_size, label_scale,
-        octave_center, mark_delay, fade_shape,
-        spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
-        spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
-        ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
-        plus_arm, plus_taper, glow_reach, glow_strength, glow_accumulation,
-        glow_blend, glow_wash, glow_attack, glow_release, hide_behind);
-    a.view.glow_curve.shape = v;
-    poison!(a.view.note_animation; radial_start, stagger_spread, fade_out_delay);
-    poison!(a.view.intensity; opacity_rest, thickness_base, thickness_max);
     for source in [
         &mut a.view.intensity.velocity,
         &mut a.view.intensity.gain,
@@ -63,81 +74,42 @@ fn poison(saved: &mut SharedState, edge: Edge) {
             *source.weight_mut(target) = Some(v);
         }
     }
-    poison!(a.view.atmosphere; texture_depth, texture_scale, texture_speed, material_amount, material_speed, material_direction,
-        breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
     a.view.center_sevens = n;
     a.view.octave_count = if matches!(edge, Edge::Low) { 0 } else { u32::MAX };
-    for shadow in a.view.shadow.groups_mut() {
-        poison!(shadow; width, spread, depth);
+    let mut blob = saved.save_persist();
+    let exempt: Vec<&str> =
+        UNPOISONED.iter().flat_map(|(paths, _)| paths.iter().copied()).collect();
+    let mut floats: Vec<_> = nested_scalars(&blob)
+        .into_iter()
+        .filter(|(path, range)| {
+            (path.starts_with("appearance.") || path.starts_with("prefs."))
+                && !exempt.contains(&path.as_str())
+                && is_float(&blob[range.clone()])
+        })
+        .map(|(_, range)| range)
+        .collect();
+    assert!(!floats.is_empty(), "the walk found no float in the saved blob");
+    // Back to front, so each replacement leaves the ranges before it valid.
+    floats.sort_by_key(|range| std::cmp::Reverse(range.start));
+    let text = format!("{v:.1}");
+    for range in floats {
+        blob.replace_range(range, &text);
     }
-    // `distance` is the zoom and has no bar of its own — navigation rather
-    // than a dial — but it crosses this same door and `Camera::sanitize`
-    // clamps it there, so it is poisoned like the other no-bar owners below
-    // and checked directly in `loaded`.
-    poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
-    poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
-        attack, release, keyline_lift, roll_seconds, roll_thickness, roll_lead,
-        roll_lead_fade, roll_lead_release, note_cut, note_cut_reach, note_cut_shape,
-        note_fill_lightness, note_tint_fade, note_name_scale,
-        volume_floor_db, volume_ceiling_db);
-    // Two more that cross this door without a bar of their own. `tilt` is a
-    // CHOICE that happens to be spelled as a float — its repair snaps to the
-    // nearest offered step rather than clamping — and `roll_fraction` is set
-    // by dragging the divider. Both are checked directly in `loaded`.
-    poison!(a.spectrum; tilt, roll_fraction);
-    // Every dialled float on the atmosphere, not just the eight that predate
-    // the cloud. #888, #909, #913, #918, #928 and #933 each added, retired or
-    // re-ranged bars here and each walked past this list, so the cloud dials
-    // loaded at their fresh values and the `range.contains` check below passed
-    // over them vacuously -- bars reported green by a guard that could not
-    // reach them. #933's contract is that a size the bar can offer is a size
-    // the blob keeps; this is what holds the bar and the clamp to one pair of
-    // numbers.
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, blur_time_step,
-            cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, wash_pool, wash_pool_width,
-            wash_pool_softness
-    );
-    for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
-        poison!(stars;
-        star_randomness, star_size_variation, star_jitter, star_glow_falloff,
-        star_resolution, star_lifetime, star_twinkle_dip, star_cover);
-        for depths in [
-            &mut stars.star_speed,
-            &mut stars.star_spacing_ratio,
-            &mut stars.star_size,
-            &mut stars.star_solid,
-        ] {
-            *depths = [v; harmonigraph_scene::star_plan::STAR_DEPTHS];
-        }
-    }
-    for material in
-        [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
-    {
-        poison!(material; wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
-            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape, velvet_square,
-            velvet_tilt);
-    }
-    saved.workspace.interaction.prefs.ui_scale = v;
-    poison!(saved.workspace.interaction.prefs.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
-    // These owners have NO ValueBar/RangeBar today, bar the Tail. Still pass
-    // through their real load boundary; the Video page's one visit below is
-    // the Tail, and its text/choice/divider controls are not range-guard
-    // coverage.
-    saved.workspace.interaction.prefs.spiral.zoom = v;
-    saved.workspace.interaction.prefs.spiral.look = glam::Vec2::splat(v);
-    a.render.stop_bar = v as f64;
-    a.render.tail = v as f64;
-    a.render.frame.split = v;
+    blob
+}
+
+/// Whether a serialized scalar is a float: RON writes every float with a
+/// fraction or an exponent, and an integer with neither.
+fn is_float(text: &str) -> bool {
+    text.parse::<f64>().is_ok() && text.contains(['.', 'e', 'E'])
 }
 
 /// The poisoned state through its real shared load boundary, with the owners
 /// that have no recorded bar checked on the way out.
 fn loaded(edge: Edge) -> SharedState {
-    let mut saved = fresh();
-    poison(&mut saved, edge);
-    let serialized = saved.save_persist();
+    let serialized = poisoned(edge);
     let mut state = fresh();
     assert!(state.load_persist(&serialized));
     // Plugin and standalone editor shells share this load door. Check the
@@ -189,7 +161,12 @@ fn loaded(edge: Edge) -> SharedState {
         view.max_sevens,
     );
     // Export parses the same document through the other production entry.
-    let exported = AppearanceDocument::parse(&saved.picture.appearance.serialize()).unwrap();
+    let (_, appearance) = nested_pairs(&serialized)
+        .into_iter()
+        .find(|(path, _)| path == "appearance")
+        .expect("the blob holds an appearance");
+    let appearance = &serialized[appearance.start + "appearance:".len()..appearance.end];
+    let exported = AppearanceDocument::parse(appearance).unwrap();
     assert_eq!(state.picture.appearance.serialize(), exported.serialize());
     state
 }
@@ -680,7 +657,7 @@ fn a_fresh_appearance_is_a_fixed_point_of_its_own_normalize() {
     );
 }
 
-/// Walk the fresh appearance against its poisoned copy as RON values, through
+/// Walk a fresh value against its poisoned copy as RON values, through
 /// every struct, sequence, `Some` and enum payload, collecting the path of each
 /// float the poison left as it was. An option still empty after the poison
 /// counts as left as it was, since what it would hold is unclassified; a value
@@ -735,56 +712,71 @@ fn unpoisoned_floats(
     }
 }
 
-/// The floats `poison` leaves at their fresh value on purpose, as exact paths
-/// grouped under one reason each. A new float beside them is not covered by
-/// its neighbours: it fails until it is poisoned or listed.
+/// The floats [`poisoned`] leaves at their fresh value on purpose, as exact
+/// paths grouped under one reason each. A new float beside
+/// them is not covered by its neighbours: the walk poisons it.
 const UNPOISONED: &[(&[&str], &str)] = &[
     (
-        &["camera.target[0]", "camera.target[1]", "camera.target[2]"],
+        &[
+            "appearance.camera.target[0]",
+            "appearance.camera.target[1]",
+            "appearance.camera.target[2]",
+        ],
         "where the orbit looks, set by panning and framing: no bar and no range, so \
          its load repair only refuses a non-finite one",
     ),
     (
+        &["prefs.perf_pos"],
+        "where the performance overlay sits, set by dragging it and empty until then: \
+         no bar and no range, so its load repair only drops a non-finite one",
+    ),
+    (
         &[
-            "view.pitch_gradient.hue_start",
-            "view.pitch_gradient.hue_span",
-            "view.pitch_gradient.lightness",
-            "view.pitch_gradient.lightness_ramp",
-            "view.pitch_gradient.chroma",
-            "view.pitch_gradient.chroma_ramp",
-            "view.pitch_gradient.bend.at",
-            "view.pitch_gradient.bend.share",
-            "spectrum.spectrogram_gradient.hue_start",
-            "spectrum.spectrogram_gradient.hue_span",
-            "spectrum.spectrogram_gradient.lightness",
-            "spectrum.spectrogram_gradient.lightness_ramp",
-            "spectrum.spectrogram_gradient.chroma",
-            "spectrum.spectrogram_gradient.chroma_ramp",
-            "spectrum.spectrogram_gradient.bend.at",
-            "spectrum.spectrogram_gradient.bend.share",
+            "appearance.view.pitch_gradient.hue_start",
+            "appearance.view.pitch_gradient.hue_span",
+            "appearance.view.pitch_gradient.lightness",
+            "appearance.view.pitch_gradient.lightness_ramp",
+            "appearance.view.pitch_gradient.chroma",
+            "appearance.view.pitch_gradient.chroma_ramp",
+            "appearance.view.pitch_gradient.bend.at",
+            "appearance.view.pitch_gradient.bend.share",
+            "appearance.spectrum.spectrogram_gradient.hue_start",
+            "appearance.spectrum.spectrogram_gradient.hue_span",
+            "appearance.spectrum.spectrogram_gradient.lightness",
+            "appearance.spectrum.spectrogram_gradient.lightness_ramp",
+            "appearance.spectrum.spectrogram_gradient.chroma",
+            "appearance.spectrum.spectrogram_gradient.chroma_ramp",
+            "appearance.spectrum.spectrogram_gradient.bend.at",
+            "appearance.spectrum.spectrogram_gradient.bend.share",
         ],
         "gradients are outside this guard (module header)",
     ),
 ];
 
-/// Every float the fresh appearance holds belongs in the poison fixture,
-/// unless [`UNPOISONED`] names it. This is fixture completeness, not discovery
-/// of controls: the conditional scenarios, real bar probes and visit
-/// assertions above still establish UI coverage.
+/// Every float the fresh appearance and preferences hold is poisoned, unless
+/// [`UNPOISONED`] names it. This is fixture completeness, not discovery of
+/// controls: the conditional scenarios, real bar probes and visit assertions
+/// above still establish UI coverage.
+///
+/// The poison finds floats by walking the blob's text; this reads both blobs
+/// through RON's own parser instead, so a float the text walk does not
+/// recognize, or an empty option nobody filled by hand, fails here.
 #[test]
 fn the_loaded_state_guard_poisons_every_dialled_view_float() {
-    let opened = fresh();
-    let mut saved = fresh();
-    poison(&mut saved, Edge::High);
-    let old = &opened.picture.appearance;
-    let new = &saved.picture.appearance;
-    let value = |text: String| ron::from_str::<ron::Value>(&text).expect("an appearance is RON");
+    let value = |text: &str| ron::from_str::<ron::Value>(text).expect("a persist blob is RON");
+    let (before, after) = (value(&fresh().save_persist()), value(&poisoned(Edge::High)));
+    let (ron::Value::Map(before), ron::Value::Map(after)) = (before, after) else {
+        panic!("a persist blob is a struct");
+    };
     let (mut dialled, mut missed) = (0, Vec::new());
-    let (before, after) = (value(old.serialize()), value(new.serialize()));
-    unpoisoned_floats("", &before, &after, &mut dialled, &mut missed);
-    // Detect the appearance going wholly unrecognized if RON's value model
-    // changes.
-    assert!(dialled > 0, "none of the appearance's fields read as floats");
+    for owner in ["appearance", "prefs"] {
+        let key = ron::Value::String(owner.to_owned());
+        let (old, new) = (before.get(&key), after.get(&key));
+        let (Some(old), Some(new)) = (old, new) else { panic!("the blob has no {owner}") };
+        unpoisoned_floats(owner, old, new, &mut dialled, &mut missed);
+    }
+    // Detect the blob going wholly unrecognized if RON's value model changes.
+    assert!(dialled > 0, "none of the blob's fields read as floats");
     let exempt: Vec<&str> =
         UNPOISONED.iter().flat_map(|(paths, _)| paths.iter().copied()).collect();
     let stale: Vec<_> = exempt.iter().filter(|path| !missed.iter().any(|m| m == *path)).collect();
