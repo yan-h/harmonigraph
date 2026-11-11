@@ -126,6 +126,12 @@ one per behavior the task states, sized like the tests already beside it.
 A scratch harness or a one-off probe is verification rather than coverage —
 run it and read it, and commit it only where something reads it again.
 
+**A test builds the inputs its assertion depends on.** When the shipped default or layout is itself the subject, it asserts a property of whatever is there rather than the value there today.
+A test that drives the real UI by bar label or position, or inherits the fresh view's look, breaks on every defaults capture and layout move:
+the guard-ledger audit (#1709) found the top tenth of the regression tests absorbing nearly half the edits that intended changes forced,
+and #836, #1107, #1112 and #1714 each paid that down one test at a time.
+A neighbouring test is a model for size, not for where its inputs come from.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
