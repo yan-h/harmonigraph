@@ -70,6 +70,8 @@ Say what you see, including what still misses the reference — and never tell h
 ## 4. Send, and ask for a pick
 
 Send the PNGs with `SendUserFile` (paths in a terminal are no use on his phone), with three or four lines on how to read them: which sheet answers which question, what the label numbers mean, what this round found.
+Where it refuses ("nowhere to place a file", in a Remote Control session with no project thread), run `open -a Preview <files>` on the Mac instead and say they opened:
+the inline card a `Read` of the image draws does not load in the desktop app either.
 Then ask for a pick, not an opinion.
 More dials is a standing preference of his: when a quality is in doubt, plan to put it on a bar rather than deciding it on a sheet.
 
