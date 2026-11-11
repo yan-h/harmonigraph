@@ -153,6 +153,9 @@ run python3 -B .claude/tests/markdown-links.py
 # Real compressed state sections must retain distinct instances and JSON strings.
 run python3 -B .claude/tests/read-plugin-state.py
 
+# The frame-log summary must hold each frame to the divisor that paced it.
+run python3 -B .claude/tests/frame-log-summary.py
+
 quick run cargo clippy --workspace --all-targets -- -D warnings
 # Guard the existing production performance scenarios at their exported
 # callbacks, and the CLAP configuration owner's allocation-free paths
