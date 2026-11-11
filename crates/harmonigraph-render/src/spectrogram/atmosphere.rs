@@ -433,9 +433,11 @@ struct Uniforms {
     cloud_depth: f32,
     /// 1 for the watercolour wash, 2 for the starfield, 3 for Scales; 0 is
     /// unused. None reads another's own settings; all share what sits above
-    /// them.
+    /// them, and the wash and Scales share `cell` below it.
     cloud_style: u32,
-    /// One cell of the drawn material, in points ([`crate::material_cells::cell`]).
+    /// One cell of the drawn material, in points ([`crate::material_cells::cell`]):
+    /// whichever of the wash and Scales is drawn reads it, and the starfield
+    /// does not.
     cell: f32,
     wash_fuzz: f32,
     wash_lobe: f32,

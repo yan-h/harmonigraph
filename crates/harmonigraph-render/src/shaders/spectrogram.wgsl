@@ -264,13 +264,15 @@ struct Cloud {
     tone_baked: u32,
     // The material's sampling, decided on the CPU for both panes
     // (`material_cells::drift` and `cell`): `drift` is its offset in its own
-    // cells, `cell` one cell in points. The rest are the sanitized settings. The filter shader declares only the head of
-    // this struct, which is why these are appended rather than interleaved.
+    // cells, `cell` one cell in points. The rest are the sanitized settings.
+    // The filter shader declares only the head of this struct, which is why
+    // these are appended rather than interleaved.
     drift: vec2<f32>,
     cloud_depth: f32,
     // Which texture the layer draws: 1 the watercolour wash below, 2 the
     // starfield after it, 3 Scales; 0 is unused. Nothing is shared between them
-    // but the blurred light, the palette, the clock and `cloud_depth`.
+    // but the blurred light, the palette, the clock, `cloud_depth`, and the
+    // drift and cell above and below, which the wash and Scales both read.
     cloud_style: u32,
     cell: f32,
     wash_fuzz: f32,
