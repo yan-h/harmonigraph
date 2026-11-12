@@ -619,6 +619,31 @@ fn bar_position(transport: &Transport) -> Option<f64> {
     }
 }
 
+/// The host's meter, for the Tape tab's ruler. Bars come from `bar_number`
+/// and the bar's start where the host fills them, else from the beat count in
+/// the current meter, as in [`bar_position`]: a host that fills neither hands
+/// zeros, which still count bars from the song's start.
+fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
+    let beats = transport.pos_beats()?;
+    let tempo = transport.tempo.filter(|tempo| *tempo > 0.0)?;
+    let (numerator, denominator) =
+        match (transport.time_sig_numerator, transport.time_sig_denominator) {
+            (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
+                (numerator, denominator)
+            }
+            _ => (4, 4),
+        };
+    let per_bar = f64::from(numerator) * 4.0 / f64::from(denominator);
+    let (bar, bar_start) = match (transport.bar_number, transport.bar_start_pos_beats) {
+        (Some(bar), Some(start)) => (bar, start),
+        _ => {
+            let bar = (beats / per_bar).floor();
+            (bar as i32, bar * per_bar)
+        }
+    };
+    Some(harmonigraph_ui::tape::Meter { beats, tempo, bar_start, bar, numerator, denominator })
+}
+
 /// Continuous presentation time for the display. The current block contributes
 /// sample offsets at its own rate; raw clock resets cannot retime queued history.
 fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
@@ -926,7 +951,7 @@ impl Plugin for Harmonigraph {
                 sidechain: selected == AnalysisInputParam::Sidechain,
             },
             self.presentation_seconds,
-            tape.song,
+            tape.song.map(|seconds| audio_ingress::Song { seconds, meter: tape_meter(transport) }),
             (0..block_samples).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
         );
 

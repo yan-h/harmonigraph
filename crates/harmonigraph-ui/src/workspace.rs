@@ -38,6 +38,7 @@ impl Section {
                 Tab::AnalyzerSettings,
                 Tab::Mappings,
                 Tab::Video,
+                Tab::Tape,
                 Tab::System,
                 Tab::Console,
             ],

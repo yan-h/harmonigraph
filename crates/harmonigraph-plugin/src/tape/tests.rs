@@ -2,12 +2,12 @@
 //! called by hand between blocks, which is what the input worker does on its
 //! own clock.
 
-use harmonigraph_ui::tape::TapeRequest;
+use harmonigraph_ui::tape::{Meter, TapeRequest, TapeView};
 
 use super::deck::{BlockIn, BlockOut};
 use super::store::{FADE_SECONDS, SETTLE_SECONDS};
 use super::*;
-use crate::audio_ingress::{Block, Format};
+use crate::audio_ingress::{Block, Format, Song};
 
 /// A low rate keeps chunks, fades and leads a few hundred frames long.
 const RATE: f64 = 1000.0;
@@ -48,7 +48,7 @@ fn ring_block_of(
         first_frame,
         frames,
         format,
-        song: song.map(|frame| frame as f64 / RATE),
+        song: song.map(|frame| Song { seconds: frame as f64 / RATE, meter: None }),
     };
     let samples = (0..frames as i64)
         .flat_map(|i| (0..format.channels).map(move |c| song.map_or(0.0, |s| recorded(s + i, c))))
@@ -466,4 +466,52 @@ fn a_committed_chunk_keeps_no_spare_half_of_its_buffer() {
             chunk.samples.capacity()
         );
     }
+}
+
+/// The Tape tab sees one span per pass and warmth, with gaps where nothing
+/// was recorded, and the meter of the newest pass wherever passes overlap,
+/// even where its audio lost.
+#[test]
+fn the_tab_sees_spans_by_pass_and_warmth_and_the_newest_meter() {
+    let (_, mut worker) = pair();
+    let mut source = 0;
+    let at_tempo = |tempo: f64| Meter {
+        beats: 0.0,
+        tempo,
+        bar_start: 0.0,
+        bar: 0,
+        numerator: 4,
+        denominator: 4,
+    };
+    let mut pass = |worker: &mut Worker, from: i64, to: i64, tempo: f64| {
+        for song in (from..to).step_by(FRAMES) {
+            let (mut block, samples) = ring_block(source, Some(song), STEREO);
+            block.song.as_mut().unwrap().meter = Some(at_tempo(tempo));
+            worker.capture(block, &samples);
+            source += FRAMES as u64;
+        }
+        let (block, samples) = ring_block(source, None, STEREO);
+        worker.capture(block, &samples);
+        source += FRAMES as u64;
+    };
+    // Warm from the song's start, then a cold stretch further on.
+    pass(&mut worker, 0, 3000, 120.0);
+    pass(&mut worker, 20_000, 21_000, 120.0);
+    let mut view = TapeView::default();
+    worker.exchange(&mut view);
+    let spans: Vec<(f64, f64, bool)> =
+        view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
+    assert_eq!(spans, [(0.0, 3.0, true), (20.0, 21.0, false)]);
+    assert_eq!(view.meters.iter().map(|(at, _)| *at).collect::<Vec<_>>(), [0.0, 1.0, 2.0, 20.0]);
+
+    // A cold replay over warm audio loses every frame, but the song it heard
+    // there is the newest: its meter replaces the old one.
+    pass(&mut worker, 1000, 2000, 90.0);
+    worker.exchange(&mut view);
+    let again: Vec<(f64, f64, bool)> =
+        view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
+    assert_eq!(again, spans);
+    let tempos: Vec<f64> = view.meters.iter().map(|(_, m)| m.tempo).collect();
+    assert_eq!(tempos, [120.0, 90.0, 120.0, 120.0]);
+    assert!(view.present && view.bytes > 0);
 }

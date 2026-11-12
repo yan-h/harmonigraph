@@ -161,7 +161,7 @@ impl Store {
         self.bytes
     }
 
-    #[cfg(test)]
+    /// Every chunk, in song order.
     pub(crate) fn chunks(&self) -> impl Iterator<Item = &Chunk> {
         self.chunks.values()
     }

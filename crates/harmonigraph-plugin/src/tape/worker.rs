@@ -6,12 +6,13 @@
 //! two holds of the editor lock. The Tape tab's view and request are swapped
 //! in the first hold, and the console lines handed over in the second.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
 use harmonigraph_record::transport;
-use harmonigraph_ui::tape::{TapeRequest, TapeView};
+use harmonigraph_ui::tape::{Meter, TapeRequest, TapeSpan, TapeView};
 
 use crate::audio_ingress::Block;
 
@@ -55,6 +56,15 @@ pub(crate) struct Worker {
     /// The pass's chunk still being recorded; committed when it is full, the
     /// pass ends, or a dropped stretch breaks it.
     building: Option<Chunk>,
+    /// The host's meter at each chunk's start, by song frame, for the Tape
+    /// tab's ruler. Kept apart from the chunks because it describes the song,
+    /// not a recording: a pass replaces the anchors where it plays, whether or
+    /// not its audio wins there.
+    meters: BTreeMap<i64, Meter>,
+    /// Bumped whenever the store or the meters change, so the Tape tab's
+    /// spans are rebuilt only then; and the value they were last built at.
+    generation: u64,
+    shown: Option<u64>,
     playback: Option<Playback>,
     scratch: Vec<f32>,
     /// Console lines for the step's second hold.
@@ -83,6 +93,9 @@ impl Worker {
             pass: None,
             next_pass: 0,
             building: None,
+            meters: BTreeMap::new(),
+            generation: 0,
+            shown: None,
             playback: None,
             scratch: Vec::new(),
             logs: Vec::new(),
@@ -106,11 +119,13 @@ impl Worker {
         if main && self.store.as_ref().is_some_and(|s| s.rate != rate || s.channels != channels) {
             self.end_pass();
             self.store = None;
+            self.meters.clear();
+            self.generation += 1;
             self.logs
                 .push(format!("tape: cleared for a new format ({channels} channels at {rate} Hz)"));
         }
-        let song = match block.song {
-            Some(song) if main => song,
+        let (song, meter) = match block.song {
+            Some(song) if main => (song.seconds, song.meter),
             _ => return self.end_pass(),
         };
         let frame = (song * f64::from(rate)).round() as i64;
@@ -146,6 +161,18 @@ impl Worker {
         if self.building.as_ref().is_some_and(|chunk| chunk.end != song_frame || full(chunk)) {
             let chunk = self.building.take().expect("a chunk");
             commit(store, chunk);
+            self.generation += 1;
+        }
+        if self.building.is_none() {
+            let reach = song_frame + (CHUNK_SECONDS * f64::from(rate)) as i64;
+            let stale: Vec<i64> = self.meters.range(song_frame..reach).map(|(&at, _)| at).collect();
+            for at in stale {
+                self.meters.remove(&at);
+            }
+            if let Some(meter) = meter {
+                self.meters.insert(song_frame, meter);
+            }
+            self.generation += 1;
         }
         let chunk = self.building.get_or_insert_with(|| Chunk {
             start: song_frame,
@@ -165,6 +192,7 @@ impl Worker {
         self.pass = None;
         if let (Some(chunk), Some(store)) = (self.building.take(), self.store.as_mut()) {
             commit(store, chunk);
+            self.generation += 1;
         }
     }
 
@@ -194,6 +222,13 @@ impl Worker {
         view.position = seconds(&shared.position);
         view.heard = seconds(&shared.heard);
         view.bytes = self.store.as_ref().map_or(0, Store::bytes);
+        if self.shown != Some(self.generation) {
+            self.shown = Some(self.generation);
+            view.spans = self.store.as_ref().map_or_else(Vec::new, spans);
+            let rate = self.store.as_ref().map_or(1.0, |store| f64::from(store.rate));
+            view.meters =
+                self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
+        }
     }
 
     /// The current cue, read consistently: `(serial, song seconds)`.
@@ -341,6 +376,29 @@ impl Worker {
             ),
         }
     }
+}
+
+/// What is recorded, as the Tape tab draws it: neighbouring chunks of one
+/// pass and one warmth joined into a span.
+fn spans(store: &Store) -> Vec<TapeSpan> {
+    let rate = f64::from(store.rate);
+    let mut spans: Vec<TapeSpan> = Vec::new();
+    let mut last: Option<(u64, i64)> = None;
+    for chunk in store.chunks() {
+        let warm = chunk.stamp.warm(chunk.start, store.rate);
+        let joins = last == Some((chunk.stamp.pass, chunk.start));
+        match spans.last_mut() {
+            Some(span) if joins && span.warm == warm => span.end = chunk.end as f64 / rate,
+            _ => spans.push(TapeSpan {
+                start: chunk.start as f64 / rate,
+                end: chunk.end as f64 / rate,
+                warm,
+                recorded: chunk.stamp.when,
+            }),
+        }
+        last = Some((chunk.stamp.pass, chunk.end));
+    }
+    spans
 }
 
 fn commit(store: &mut Store, mut chunk: Chunk) {

@@ -28,9 +28,18 @@ pub(crate) struct Block {
     pub first_frame: u64,
     pub frames: usize,
     pub format: Format,
-    /// The song position of the block's first frame while the transport
+    /// Where the block's first frame is in the song while the transport
     /// rolls, `None` otherwise: what the tape keys its recording on.
-    pub song: Option<f64>,
+    pub song: Option<Song>,
+}
+
+/// A rolling block's place in the song.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Song {
+    pub seconds: f64,
+    /// The host's bar and beat there, for the Tape tab's ruler, when it
+    /// reports a beats timeline and a tempo.
+    pub meter: Option<harmonigraph_ui::tape::Meter>,
 }
 
 pub(crate) struct Producer {
@@ -79,7 +88,7 @@ impl Producer {
         frames: usize,
         format: Format,
         presentation: f64,
-        song: Option<f64>,
+        song: Option<Song>,
         samples: impl Iterator<Item = f32>,
     ) {
         if self.format != Some(format) {
