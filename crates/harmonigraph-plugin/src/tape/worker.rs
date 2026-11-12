@@ -56,10 +56,12 @@ pub(crate) struct Worker {
     /// The pass's chunk still being recorded; committed when it is full, the
     /// pass ends, or a dropped stretch breaks it.
     building: Option<Chunk>,
+    /// The host's meter where the chunk being recorded starts.
+    building_meter: Option<Meter>,
     /// The host's meter at each chunk's start, by song frame, for the Tape
     /// tab's ruler. Kept apart from the chunks because it describes the song,
     /// not a recording: a pass replaces the anchors where it plays, whether or
-    /// not its audio wins there.
+    /// not its audio wins there, and only over what it recorded.
     meters: BTreeMap<i64, Meter>,
     /// Bumped whenever the store or the meters change, so the Tape tab's
     /// spans are rebuilt only then; and the value they were last built at.
@@ -93,6 +95,7 @@ impl Worker {
             pass: None,
             next_pass: 0,
             building: None,
+            building_meter: None,
             meters: BTreeMap::new(),
             generation: 0,
             shown: None,
@@ -154,26 +157,16 @@ impl Worker {
                 frame
             }
         };
-        let store = self.store.get_or_insert_with(|| Store::new(rate, channels));
-        let pass = self.pass.as_mut().expect("a pass");
+        self.store.get_or_insert_with(|| Store::new(rate, channels));
         let full =
             |chunk: &Chunk| chunk.end - chunk.start >= (CHUNK_SECONDS * f64::from(rate)) as i64;
         if self.building.as_ref().is_some_and(|chunk| chunk.end != song_frame || full(chunk)) {
-            let chunk = self.building.take().expect("a chunk");
-            commit(store, chunk);
-            self.generation += 1;
+            self.close_chunk();
         }
         if self.building.is_none() {
-            let reach = song_frame + (CHUNK_SECONDS * f64::from(rate)) as i64;
-            let stale: Vec<i64> = self.meters.range(song_frame..reach).map(|(&at, _)| at).collect();
-            for at in stale {
-                self.meters.remove(&at);
-            }
-            if let Some(meter) = meter {
-                self.meters.insert(song_frame, meter);
-            }
-            self.generation += 1;
+            self.building_meter = meter;
         }
+        let pass = self.pass.as_mut().expect("a pass");
         let chunk = self.building.get_or_insert_with(|| Chunk {
             start: song_frame,
             end: song_frame,
@@ -190,10 +183,28 @@ impl Worker {
 
     fn end_pass(&mut self) {
         self.pass = None;
-        if let (Some(chunk), Some(store)) = (self.building.take(), self.store.as_mut()) {
-            commit(store, chunk);
-            self.generation += 1;
+        self.close_chunk();
+    }
+
+    /// Commit the chunk being recorded, and set its meter over the stretch it
+    /// covers.
+    fn close_chunk(&mut self) {
+        let meter = self.building_meter.take();
+        let Some(chunk) = self.building.take() else { return };
+        if chunk.end > chunk.start {
+            let stale: Vec<i64> =
+                self.meters.range(chunk.start..chunk.end).map(|(&at, _)| at).collect();
+            for at in stale {
+                self.meters.remove(&at);
+            }
+            if let Some(meter) = meter {
+                self.meters.insert(chunk.start, meter);
+            }
         }
+        if let Some(store) = &mut self.store {
+            commit(store, chunk);
+        }
+        self.generation += 1;
     }
 
     /// Pass a Tape tab request to the audio thread. The position goes first:
