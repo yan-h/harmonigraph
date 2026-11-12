@@ -3,14 +3,15 @@
 //! console lines.
 //!
 //! It runs in the input worker's step with no lock held, between the step's
-//! two holds of the editor lock; only the console lines need the lock, and
-//! the step hands them over in its second hold.
+//! two holds of the editor lock. The Tape tab's view and request are swapped
+//! in the first hold, and the console lines handed over in the second.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
 use harmonigraph_record::transport;
+use harmonigraph_ui::tape::{TapeRequest, TapeView};
 
 use crate::audio_ingress::Block;
 
@@ -100,7 +101,7 @@ impl Worker {
         let channels = block.format.channels;
         let main = !block.format.sidechain && channels > 0;
         // Before the rolling test: a stopped block at a new rate must clear
-        // the tape too, or a click before the transport next rolls would play
+        // the tape too, or a cue before the transport next rolls would play
         // the old recording at the wrong speed.
         if main && self.store.as_ref().is_some_and(|s| s.rate != rate || s.channels != channels) {
             self.end_pass();
@@ -165,6 +166,34 @@ impl Worker {
         if let (Some(chunk), Some(store)) = (self.building.take(), self.store.as_mut()) {
             commit(store, chunk);
         }
+    }
+
+    /// Pass a Tape tab request to the audio thread. The position goes first:
+    /// the deck reads it only once the serial says it is there.
+    pub(crate) fn request(&mut self, request: TapeRequest) {
+        let at = match request {
+            TapeRequest::Cue(at) => at,
+            TapeRequest::Stop => f64::NAN,
+        };
+        self.shared.request_position.store(at.to_bits(), Ordering::SeqCst);
+        self.shared.request.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Take the Tape tab's request, and show it the tape as it is now.
+    pub(crate) fn exchange(&mut self, view: &mut TapeView) {
+        if let Some(request) = view.request.take() {
+            self.request(request);
+        }
+        let shared = &self.shared;
+        let seconds = |bits: &std::sync::atomic::AtomicU64| {
+            Some(f64::from_bits(bits.load(Ordering::Relaxed))).filter(|s| !s.is_nan())
+        };
+        view.present = true;
+        view.enabled = shared.enabled.load(Ordering::Relaxed);
+        view.rolling = shared.rolling.load(Ordering::Relaxed);
+        view.position = seconds(&shared.position);
+        view.heard = seconds(&shared.heard);
+        view.bytes = self.store.as_ref().map_or(0, Store::bytes);
     }
 
     /// The current cue, read consistently: `(serial, song seconds)`.

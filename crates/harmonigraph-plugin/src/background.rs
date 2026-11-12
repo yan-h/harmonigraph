@@ -330,7 +330,7 @@ thread_local! {
 ///
 /// **The tape** (see [`crate::tape`]) works between the two holds as well:
 /// it records the blocks just taken and keeps a cue's audio queued for the
-/// audio thread. Its console lines wait
+/// audio thread. It swaps the Tape tab's view and request in the first hold. Its console lines wait
 /// for the second hold.
 fn step(
     shared: &Mutex<EditorShared>,
@@ -353,6 +353,7 @@ fn step(
             restore.adopt(shared);
         }
         let now = shared.input.now();
+        tape.exchange(&mut shared.ui.picture.runtime.tape);
         shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now)
     };
     if let Some(taken) = &taken {

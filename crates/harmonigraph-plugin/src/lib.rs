@@ -237,12 +237,6 @@ pub struct HarmonigraphParams {
     #[id = "analysis-input"]
     pub analysis_input: EnumParam<AnalysisInputParam>,
 
-    /// Play the tape from the playhead when it is clicked with the transport
-    /// stopped (#1719). A host parameter so it can be mapped to a key or
-    /// controller. Off by default until audition has been measured in Bitwig.
-    #[id = "tape-audition"]
-    pub audition: BoolParam,
-
     #[id = "tuning-c-offset"]
     pub c_offset: FloatParam,
     #[id = "tuning-three"]
@@ -385,7 +379,6 @@ impl Default for HarmonigraphParams {
             ui_state: editor::UiState::new(),
             analysis_input: EnumParam::new("Analyzer Audio Input", AnalysisInputParam::Main)
                 .non_automatable(),
-            audition: BoolParam::new("Audition", false),
             c_offset: param_for_key(ParamKey::COffset),
             three: param_for_key(ParamKey::Three),
             five: param_for_key(ParamKey::Five),
@@ -918,9 +911,7 @@ impl Plugin for Harmonigraph {
                 playing: transport.playing,
                 frames: block_samples,
                 rate: self.sample_rate,
-                enabled: self.params.audition.value()
-                    && selected == AnalysisInputParam::Main
-                    && !self.offline,
+                enabled: selected == AnalysisInputParam::Main && !self.offline,
             },
             buffer.as_slice(),
         );
@@ -1704,7 +1695,7 @@ mod tests {
             );
         }
         let operational: Vec<&str> =
-            ["analysis-input", "lattice-map", "tuning-engine", "map-follow", "tape-audition"]
+            ["analysis-input", "lattice-map", "tuning-engine", "map-follow"]
                 .into_iter()
                 .chain(lattice_maps::HOST_LANE_IDS)
                 .collect();
@@ -2096,11 +2087,12 @@ mod tests {
         plugin.process(&mut main, &mut aux, &mut context)
     }
 
-    fn set_audition(plugin: &Harmonigraph, on: bool) {
-        // SAFETY: as in the sidechain test, the host wrapper's own setter
-        // with the parameter object alive for the call.
-        unsafe { plugin.params.audition._internal_set_plain_value(on) };
-        assert_eq!(plugin.params.audition.value(), on);
+    /// Click the Tape tab, and wait until the input worker has passed the
+    /// request on: two whole rounds, so one began after it was set.
+    fn ask(plugin: &Harmonigraph, request: harmonigraph_ui::tape::TapeRequest) {
+        plugin.editor_shared.lock().ui.picture.runtime.tape.request = Some(request);
+        let rounds = plugin._input_worker.completed_rounds();
+        assert!(a_round_after(plugin, rounds + 1), "the worker never ran a round");
     }
 
     /// Blocks of `frames` from song seconds `from`, as many as fit in
@@ -2111,8 +2103,8 @@ mod tests {
     }
 
     /// The plugin's first write to the main buffer must leave it exactly as
-    /// the host handed it whenever no tape sounds: Audition off, or on with
-    /// the click somewhere nothing was recorded. Bits, not values, because
+    /// the host handed it whenever no tape sounds: nothing asked, or a cue
+    /// somewhere nothing was recorded. Bits, not values, because
     /// even adding a zero would turn a -0.0 into a +0.0, and a NaN payload is
     /// a value nothing compares equal.
     #[test]
@@ -2130,36 +2122,34 @@ mod tests {
         let input: Vec<f32> = (0..512).map(|i| odd[i % odd.len()]).collect();
         let mut plugin = Harmonigraph::default();
         let mut position = 10.0;
-        for audition in [false, true] {
-            set_audition(&plugin, audition);
+        for asked in [false, true] {
             let mut blocks: Vec<(f64, bool)> =
                 song_blocks(&plugin, position, 0.1, 512).into_iter().map(|p| (p, true)).collect();
-            // The stop puts the playhead back, it parks past the grace, and
-            // a click lands where nothing was recorded and holds still.
             blocks.extend(std::iter::repeat_n((position, false), 40));
-            blocks.extend(std::iter::repeat_n((position + 100.0, false), 40));
             let mut cued = false;
-            for (at, playing) in blocks {
+            for (i, (at, playing)) in blocks.into_iter().enumerate() {
+                if asked && i == 30 {
+                    ask(&plugin, harmonigraph_ui::tape::TapeRequest::Cue(position + 100.0));
+                }
                 let (mut left, mut right) = (input.clone(), input.clone());
                 let status = tape_block(&mut plugin, at, playing, &mut left, &mut right);
                 cued |= matches!(status, ProcessStatus::KeepAlive);
                 let bits = |v: &[f32]| v.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
-                assert_eq!(bits(&left), bits(&input), "audition {audition}, block at {at}");
-                assert_eq!(bits(&right), bits(&input), "audition {audition}, block at {at}");
+                assert_eq!(bits(&left), bits(&input), "asked {asked}, block at {at}");
+                assert_eq!(bits(&right), bits(&input), "asked {asked}, block at {at}");
             }
-            assert_eq!(cued, audition, "with Audition on, the click must have cued the tape");
+            assert_eq!(cued, asked, "the cue must have reached the deck");
             position += 200.0;
         }
     }
 
     /// The whole path through the real input worker: rolling blocks reach the
-    /// tape through the analyzer's ring, and a stopped click plays them back
+    /// tape through the analyzer's ring, and a Tape tab cue plays them back
     /// into the main buffer, with `KeepAlive` while it sounds; the transport
     /// starting cuts it and the output is the input again.
     #[test]
-    fn a_stopped_click_plays_back_what_the_worker_recorded() {
+    fn a_tape_tab_cue_plays_back_what_the_worker_recorded() {
         let mut plugin = Harmonigraph::default();
-        set_audition(&plugin, true);
         let rate = plugin.sample_rate;
         // Unique per song frame and channel.
         let song = |frame: usize, channel: usize| {
@@ -2193,8 +2183,10 @@ mod tests {
         let rounds = plugin._input_worker.completed_rounds();
         assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");
 
+        // The host keeps reporting where playback stopped.
+        let parked = 0.0;
         let cue = 0.5;
-        silence(&mut plugin, cue);
+        ask(&plugin, harmonigraph_ui::tape::TapeRequest::Cue(cue));
         let started = Instant::now();
         let first = (cue * rate).round() as usize;
         let mut heard = Vec::new();
@@ -2204,7 +2196,7 @@ mod tests {
             // would starve it whenever a busy runner held the worker back.
             let rounds = plugin._input_worker.completed_rounds();
             assert!(a_round_after(&plugin, rounds), "the worker never ran a round");
-            let (status, left, right) = silence(&mut plugin, cue);
+            let (status, left, right) = silence(&mut plugin, parked);
             assert!(matches!(status, ProcessStatus::KeepAlive), "the tape is cued or sounding");
             let start = if heard.is_empty() {
                 left.iter().position(|&s| s != 0.0).unwrap_or(left.len())
@@ -2233,10 +2225,21 @@ mod tests {
             lines.iter().any(|l| l.starts_with("tape: audition from 0.500 s (warm (from the song's start)")),
             "{lines:?}",
         );
+        // The tab is shown what sounds, and where the transport stopped.
+        let rounds = plugin._input_worker.completed_rounds();
+        assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");
+        {
+            let shared = plugin.editor_shared.lock();
+            let view = &shared.ui.picture.runtime.tape;
+            assert!(view.present && view.enabled && !view.rolling);
+            assert_eq!(view.position, Some(parked));
+            let heard = view.heard.expect("the audition is sounding");
+            assert!(heard > cue && heard < cue + 0.2, "{heard}");
+        }
 
         let input: Vec<f32> = (0..512).map(|f| f as f32).collect();
         let (mut left, mut right) = (input.clone(), input.clone());
-        let status = tape_block(&mut plugin, cue, true, &mut left, &mut right);
+        let status = tape_block(&mut plugin, parked, true, &mut left, &mut right);
         assert!(matches!(status, ProcessStatus::Normal));
         assert_eq!((left, right), (input.clone(), input));
     }

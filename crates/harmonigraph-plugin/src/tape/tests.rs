@@ -2,6 +2,8 @@
 //! called by hand between blocks, which is what the input worker does on its
 //! own clock.
 
+use harmonigraph_ui::tape::TapeRequest;
+
 use super::deck::{BlockIn, BlockOut};
 use super::store::{FADE_SECONDS, SETTLE_SECONDS};
 use super::*;
@@ -89,20 +91,12 @@ fn run_of(
     ([left, right], out)
 }
 
-/// Park the playhead at `position` for long enough that the stop's grace has
-/// passed.
-fn park(deck: &mut Deck, position: f64) {
-    for _ in 0..(deck::STOP_GRACE_SECONDS * RATE / FRAMES as f64) as usize + 2 {
-        assert!(!run(deck, position, false, true).1.sounding);
-    }
-}
-
-/// Click at `position` and hold it there for a block: the cue starts.
-fn click(deck: &mut Deck, position: f64) {
-    let (audio, out) = run(deck, position, false, true);
-    assert!(!out.sounding && audio[0].iter().all(|&s| s == 0.0), "a click alone starts nothing");
-    let (audio, out) = run(deck, position, false, true);
-    assert!(out.sounding, "a click held still for a block cues the tape");
+/// The Tape tab asks for a cue at `position` while the host reports the
+/// transport stopped at `parked`: the next block cues the tape.
+fn cue(deck: &mut Deck, worker: &mut Worker, parked: f64, position: f64) {
+    worker.request(TapeRequest::Cue(position));
+    let (audio, out) = run(deck, parked, false, true);
+    assert!(out.sounding, "a request cues the tape on the next block");
     assert!(audio[0].iter().all(|&s| s == 0.0), "nothing assembled yet");
 }
 
@@ -112,22 +106,25 @@ fn events(worker: &mut Worker) -> Vec<String> {
 }
 
 #[test]
-fn a_stopped_click_plays_the_recording_from_there_and_rolling_cuts_it() {
+fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     let (mut deck, mut worker) = pair();
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
-    // The deck heard the same playback, then the stop with its return.
+    // The deck heard the same playback, then the stop, which leaves the
+    // playhead where playback stopped.
     for song in (0..3000).step_by(FRAMES) {
         let (audio, out) = run(&mut deck, song as f64 / RATE, true, true);
         assert_eq!(out, BlockOut { song: Some(song as f64 / RATE), sounding: false });
         assert!(audio[0].iter().all(|&s| s == 0.0));
     }
-    // Bitwig puts the playhead back where playback began: never a click.
-    park(&mut deck, 0.0);
+    let parked = 2.9;
+    for _ in 0..5 {
+        assert!(!run(&mut deck, parked, false, true).1.sounding, "a stop never starts the tape");
+    }
 
-    click(&mut deck, 1.0);
+    cue(&mut deck, &mut worker, parked, 1.0);
     worker.play();
-    let (audio, out) = run(&mut deck, 1.0, false, true);
+    let (audio, out) = run(&mut deck, parked, false, true);
     assert!(out.sounding && out.song.is_none());
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
@@ -145,7 +142,7 @@ fn a_stopped_click_plays_the_recording_from_there_and_rolling_cuts_it() {
 
     // The transport starts from the parked playhead: a cut, with not one
     // sample of tape in playback's first block.
-    let (audio, out) = run(&mut deck, 1.0, true, true);
+    let (audio, out) = run(&mut deck, parked, true, true);
     assert!(!out.sounding);
     assert!(audio.iter().flatten().all(|&s| s == 0.0));
     let lines = events(&mut worker);
@@ -161,12 +158,11 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
     let (mut deck, mut worker) = pair();
     let mut source = 0;
     record(&mut worker, &mut source, 0, 1000);
-    park(&mut deck, 5.0);
-    click(&mut deck, 0.8);
+    cue(&mut deck, &mut worker, 5.0, 0.8);
     let mut heard = 0;
     for _ in 0..10 {
         worker.play();
-        let (audio, out) = run(&mut deck, 0.8, false, true);
+        let (audio, out) = run(&mut deck, 5.0, false, true);
         heard += audio[0].iter().filter(|&&s| s != 0.0).count();
         if !out.sounding {
             break;
@@ -177,9 +173,9 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
     let lines = events(&mut worker);
     assert!(lines.iter().any(|l| l.contains("by the end of what is recorded")), "{lines:?}");
 
-    click(&mut deck, 7.0);
+    cue(&mut deck, &mut worker, 5.0, 7.0);
     worker.play();
-    let (audio, out) = run(&mut deck, 7.0, false, true);
+    let (audio, out) = run(&mut deck, 5.0, false, true);
     assert!(!out.sounding && audio[0].iter().all(|&s| s == 0.0));
     let lines = events(&mut worker);
     assert!(
@@ -188,15 +184,20 @@ fn audition_ends_at_the_edge_of_what_is_recorded_and_where_nothing_is() {
     );
 }
 
+/// An export reports `playing = false` while its position climbs. It rolls,
+/// so a cue asked during it is dropped, and not played once it ends either.
 #[test]
-fn a_climbing_position_with_playing_false_is_an_export_and_never_cues() {
+fn a_cue_asked_during_an_export_is_dropped() {
     let (mut deck, mut worker) = pair();
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
-    park(&mut deck, 2.0);
+    run(&mut deck, 2.0, false, true);
     // The export starts elsewhere: one stopped move, then it climbs.
     let mut position = 0.0;
     for block in 0..20 {
+        if block == 5 {
+            worker.request(TapeRequest::Cue(1.0));
+        }
         worker.play();
         let (audio, out) = run(&mut deck, position, false, true);
         assert!(!out.sounding && audio.iter().flatten().all(|&s| s == 0.0));
@@ -204,37 +205,56 @@ fn a_climbing_position_with_playing_false_is_an_export_and_never_cues() {
         assert_eq!(out.song.is_some(), block > 0);
         position += FRAMES as f64 / RATE;
     }
+    for _ in 0..5 {
+        worker.play();
+        assert!(!run(&mut deck, position, false, true).1.sounding);
+    }
     let lines = events(&mut worker);
     assert!(!lines.iter().any(|l| l.contains("audition")), "{lines:?}");
 }
 
-#[test]
-fn switching_audition_off_fades_out_and_a_reset_cuts_at_once() {
-    let (mut deck, mut worker) = pair();
-    let mut source = 0;
-    record(&mut worker, &mut source, 0, 3000);
-    park(&mut deck, 0.0);
-    click(&mut deck, 1.0);
-    worker.play();
-    run(&mut deck, 1.0, false, true);
-    worker.play();
-    let (audio, out) = run(&mut deck, 1.0, false, false);
+/// Assert `audio` is a fade-out over its first [`FADE_SECONDS`] and silence
+/// after.
+fn assert_faded(audio: &[Vec<f32>; 2]) {
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
-    assert!(!out.sounding);
     assert!(
         audio[0][..fade].iter().all(|&s| s != 0.0) && audio[0][fade..].iter().all(|&s| s == 0.0)
     );
     assert!(audio[0][fade - 1].abs() < audio[0][0].abs());
+}
 
-    click(&mut deck, 1.5);
+#[test]
+fn leaving_main_and_stop_fade_out_and_a_reset_cuts_at_once() {
+    let (mut deck, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 3000);
+    cue(&mut deck, &mut worker, 0.0, 1.0);
     worker.play();
-    run(&mut deck, 1.5, false, true);
+    run(&mut deck, 0.0, false, true);
+    worker.play();
+    let (audio, out) = run(&mut deck, 0.0, false, false);
+    assert!(!out.sounding);
+    assert_faded(&audio);
+
+    cue(&mut deck, &mut worker, 0.0, 1.5);
+    worker.play();
+    run(&mut deck, 0.0, false, true);
+    worker.request(TapeRequest::Stop);
+    worker.play();
+    let (audio, out) = run(&mut deck, 0.0, false, true);
+    assert!(!out.sounding);
+    assert_faded(&audio);
+
+    cue(&mut deck, &mut worker, 0.0, 2.0);
+    worker.play();
+    run(&mut deck, 0.0, false, true);
     deck.reset();
     assert!(!deck.sounding());
-    let (audio, _) = run(&mut deck, 1.5, false, true);
+    let (audio, _) = run(&mut deck, 0.0, false, true);
     assert!(audio.iter().flatten().all(|&s| s == 0.0), "stale pieces are skipped after a reset");
     let lines = events(&mut worker);
-    assert!(lines.iter().any(|l| l.contains("by Audition off")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("by the analysis input leaving Main")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("by Stop")), "{lines:?}");
     assert!(lines.iter().any(|l| l.contains("plugin reset while the tape sounded")), "{lines:?}");
 }
 
@@ -260,16 +280,19 @@ fn mixing_and_observing_never_allocate() {
         block(&mut deck, song as f64 * 0.1, true);
     }
     for _ in 0..10 {
-        block(&mut deck, 0.0, false);
+        block(&mut deck, 2.9, false);
     }
-    block(&mut deck, 1.0, false);
-    block(&mut deck, 1.0, false);
+    worker.request(TapeRequest::Cue(1.0));
+    block(&mut deck, 2.9, false);
     worker.play();
-    assert!(block(&mut deck, 1.0, false).sounding);
-    // A click mid-audition fades, a drag, then rolling cuts and a reset.
-    block(&mut deck, 1.5, false);
-    block(&mut deck, 1.6, false);
-    block(&mut deck, 1.7, true);
+    assert!(block(&mut deck, 2.9, false).sounding);
+    // A cue mid-audition fades and cues again, then rolling cuts and a reset.
+    worker.request(TapeRequest::Cue(1.5));
+    block(&mut deck, 2.9, false);
+    block(&mut deck, 2.9, false);
+    worker.request(TapeRequest::Stop);
+    block(&mut deck, 2.9, false);
+    block(&mut deck, 2.9, true);
     nice_assert_no_alloc::assert_no_alloc(|| deck.reset());
 }
 
@@ -322,23 +345,23 @@ fn a_cold_pass_does_not_replace_warm_audio_until_it_has_settled() {
 /// A cue cut partway through a piece must leave nothing of that piece in the
 /// playback ring: the next cue plays from its own first frame.
 #[test]
-fn a_click_during_an_audition_plays_the_new_spot_from_its_first_frame() {
+fn a_cue_during_an_audition_plays_the_new_spot_from_its_first_frame() {
     let (mut deck, mut worker) = pair();
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
-    park(&mut deck, 0.0);
-    click(&mut deck, 1.0);
+    cue(&mut deck, &mut worker, 0.0, 1.0);
     worker.play();
     // One block of a piece that is longer than a block: the cut lands inside it.
-    let (audio, _) = run(&mut deck, 1.0, false, true);
+    let (audio, _) = run(&mut deck, 0.0, false, true);
     assert!(audio[0].iter().any(|&s| s != 0.0));
 
-    // Another click fades the first cue; held still, it cues the second.
-    run(&mut deck, 2.0, false, true);
-    let (_, out) = run(&mut deck, 2.0, false, true);
+    // Another cue fades the first; the next block cues the second.
+    worker.request(TapeRequest::Cue(2.0));
+    run(&mut deck, 0.0, false, true);
+    let (_, out) = run(&mut deck, 0.0, false, true);
     assert!(out.sounding);
     worker.play();
-    let (audio, _) = run(&mut deck, 2.0, false, true);
+    let (audio, _) = run(&mut deck, 0.0, false, true);
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
         let gain = if i < fade { (i + 1) as f32 / fade as f32 } else { 1.0 };
@@ -367,24 +390,24 @@ fn a_cold_pass_that_started_later_never_replaces_one_that_started_earlier() {
     }
 }
 
-/// A host block shorter than the fade: the cue a click replaces still fades
-/// all the way down before the new one starts.
+/// A host block shorter than the fade: the cue a new one replaces still
+/// fades all the way down before the new one starts.
 #[test]
-fn a_click_lets_the_old_cue_finish_fading_when_blocks_are_shorter_than_the_fade() {
+fn a_cue_lets_the_old_one_finish_fading_when_blocks_are_shorter_than_the_fade() {
     let (mut deck, mut worker) = pair();
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
-    park(&mut deck, 0.0);
-    click(&mut deck, 1.0);
+    cue(&mut deck, &mut worker, 0.0, 1.0);
     worker.play();
-    run(&mut deck, 1.0, false, true);
+    run(&mut deck, 0.0, false, true);
 
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     assert!(fade > 2, "the fixture needs a fade longer than its two-frame blocks");
-    // The click, then the playhead holding still, two frames at a time.
+    // The request, then blocks of two frames.
+    worker.request(TapeRequest::Cue(2.0));
     let mut faded = Vec::new();
     for _ in 0..fade.div_ceil(2) {
-        let (audio, _) = run_of(2, &mut deck, 2.0, false, true);
+        let (audio, _) = run_of(2, &mut deck, 0.0, false, true);
         faded.extend(audio[0].iter().copied());
     }
     assert!(!deck.sounding(), "the old cue is over and the new one has not started");
@@ -392,14 +415,14 @@ fn a_click_lets_the_old_cue_finish_fading_when_blocks_are_shorter_than_the_fade(
     assert!(faded[..fade].windows(2).all(|w| w[1] < w[0]), "{faded:?}");
     assert!(faded[fade..].iter().all(|&s| s == 0.0));
     // Only then does the new spot cue.
-    run_of(2, &mut deck, 2.0, false, true);
+    run_of(2, &mut deck, 0.0, false, true);
     worker.play();
-    let (audio, _) = run(&mut deck, 2.0, false, true);
+    let (audio, _) = run(&mut deck, 0.0, false, true);
     assert_eq!(audio[0][fade], recorded(2000 + fade as i64, 0));
 }
 
 /// A new sample rate clears the tape on the first block that carries it,
-/// rolling or not: a click before the transport next rolls must find nothing,
+/// rolling or not: a cue before the transport next rolls must find nothing,
 /// not the old recording at the wrong speed.
 #[test]
 fn a_stopped_block_at_a_new_rate_clears_the_tape() {

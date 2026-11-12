@@ -1,5 +1,5 @@
-//! The tape's audio-thread half: it watches the transport, decides when a
-//! stopped click starts audition, and mixes what the input worker assembled.
+//! The tape's audio-thread half: it watches the transport, takes the Tape
+//! tab's requests, and mixes what the input worker assembled.
 //!
 //! Everything here runs inside `process`, so nothing allocates or blocks:
 //! fixed rings, atomics and plain state. The worker does the store lookups,
@@ -9,14 +9,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use harmonigraph_record::transport;
+use harmonigraph_ui::tape::TapeRequest;
 
 use super::{Event, Piece, Reason, Shared};
-
-/// How long after the transport stops a move of the playhead still counts as
-/// Bitwig putting it back where playback began, not as a click. Whether the
-/// return lands in the stop's own block is one of #1719's measurements; this
-/// covers it arriving a few blocks later, and no click comes that fast.
-pub(crate) const STOP_GRACE_SECONDS: f64 = 0.3;
 
 /// How long a cue may wait for its first audio, or a playing one go without,
 /// before it gives up: so a stalled or missing worker cannot hold the tape,
@@ -30,8 +25,7 @@ pub(crate) struct BlockIn {
     pub playing: bool,
     pub frames: usize,
     pub rate: f64,
-    /// Audition is on, the analysis input is Main, and the host is not
-    /// rendering offline.
+    /// The analysis input is Main and the host is not rendering offline.
     pub enabled: bool,
 }
 
@@ -69,10 +63,9 @@ pub(crate) struct Deck {
     events: rtrb::Producer<Event>,
     /// The previous block's position and duration, for [`transport::step`].
     last: Option<(f64, f64)>,
-    was_rolling: bool,
-    /// Seconds of stopped blocks since the transport last rolled.
-    stopped_for: f64,
-    /// A click waiting for the position to hold still for one block.
+    /// The last request serial taken.
+    request: u64,
+    /// A cue waiting for the one it replaces to finish fading.
     pending: Option<f64>,
     play: Play,
     /// The cue's identity, odd while active. Pieces carry the serial they were
@@ -102,8 +95,7 @@ impl Deck {
             pieces,
             events,
             last: None,
-            was_rolling: false,
-            stopped_for: f64::INFINITY,
+            request: 0,
             pending: None,
             play: Play::Idle,
             serial: 0,
@@ -131,8 +123,6 @@ impl Deck {
         self.end(Reason::Reset);
         self.emit(Event::Reset { sounding });
         self.last = None;
-        self.was_rolling = false;
-        self.stopped_for = f64::INFINITY;
         self.pending = None;
         self.mixed = false;
         self.after_reset = Some((0, f64::NAN, false));
@@ -177,7 +167,7 @@ impl Deck {
     }
 
     fn cue(&mut self, position: f64) {
-        self.end(Reason::Click);
+        self.end(Reason::Cue);
         self.serial = (self.serial | 1) + 2;
         self.cue_position = position;
         self.played = 0.0;
@@ -187,55 +177,88 @@ impl Deck {
         self.emit(Event::Started { position });
     }
 
-    /// One block: observe the transport, then mix into `planes` if the tape
-    /// sounds. With nothing to mix, `planes` is not touched at all, so the
-    /// output stays bit-identical to the input.
+    /// The Tape tab's newest request since the last block, if any. Read
+    /// twice around the position, so a request stored while it was read is
+    /// left for the next block rather than taken with the wrong position.
+    fn take_request(&mut self) -> Option<TapeRequest> {
+        let serial = self.shared.request.load(Ordering::SeqCst);
+        if serial == self.request {
+            return None;
+        }
+        let at = f64::from_bits(self.shared.request_position.load(Ordering::SeqCst));
+        if self.shared.request.load(Ordering::SeqCst) != serial {
+            return None;
+        }
+        self.request = serial;
+        Some(if at.is_nan() { TapeRequest::Stop } else { TapeRequest::Cue(at) })
+    }
+
+    /// One block: observe the transport, take a request, then mix into
+    /// `planes` if the tape sounds. With nothing to mix, `planes` is not
+    /// touched at all, so the output stays bit-identical to the input.
     pub(crate) fn process(&mut self, block: BlockIn, planes: &mut [&mut [f32]]) -> BlockOut {
         let duration = block.frames as f64 / block.rate;
+        // Taken whatever the transport does, so a request the deck cannot
+        // honour now is dropped rather than replayed when it can.
+        let request = self.take_request();
+        self.shared.enabled.store(block.enabled, Ordering::Relaxed);
         let Some(position) = block.position else {
             // No song position, no tape: nothing to key a recording on, and
-            // nothing to say where a click went.
+            // nothing to say where a cue would play from.
             self.end(Reason::NoPosition);
+            self.pending = None;
             self.last = None;
-            self.was_rolling = false;
+            self.publish(None, false);
             return BlockOut { song: None, sounding: false };
         };
-        let step = transport::step(self.last, position, block.playing);
-        let rolling = step.rolling();
-        let moved = self.last.is_some_and(|(last, _)| position != last);
+        let rolling = transport::step(self.last, position, block.playing).rolling();
         self.measure(position, block, rolling);
         if rolling {
             self.pending = None;
-            self.stopped_for = 0.0;
             // Cut, not fade: a fade would be heard in, and recorded into, the
             // playback that has just started.
             self.end(Reason::Rolling);
+        } else if !block.enabled {
+            self.pending = None;
+            self.fade(Reason::Off, block.rate);
         } else {
-            if self.was_rolling {
-                self.stopped_for = 0.0;
+            match request {
+                Some(TapeRequest::Cue(at)) => {
+                    self.pending = Some(at);
+                    self.fade(Reason::Cue, block.rate);
+                }
+                Some(TapeRequest::Stop) => {
+                    self.pending = None;
+                    self.fade(Reason::Stop, block.rate);
+                }
+                None => {}
             }
-            let returning = self.stopped_for < STOP_GRACE_SECONDS;
-            if !block.enabled {
-                self.pending = None;
-                self.fade(Reason::Off, block.rate);
-            } else if moved && !self.was_rolling && !returning {
-                self.pending = Some(position);
-                self.fade(Reason::Click, block.rate);
-            } else if !moved && !matches!(self.play, Play::Fading { .. }) {
-                // Not while the cue the click replaced is still fading: a
-                // block shorter than the fade would cut it off partway down.
+            // Not while the cue being replaced is still fading: a block
+            // shorter than the fade would cut it off partway down.
+            if !matches!(self.play, Play::Fading { .. }) {
                 if let Some(at) = self.pending.take() {
                     self.cue(at);
                 }
             }
-            self.stopped_for += duration;
         }
         self.last = Some((position, duration));
-        self.was_rolling = rolling;
 
         let mixed = self.mix(planes, block.frames, duration);
         self.mixed = mixed;
+        self.publish(Some(position), rolling);
         BlockOut { song: rolling.then_some(position), sounding: self.sounding() }
+    }
+
+    /// What the Tape tab draws: the transport, and where the audition is.
+    fn publish(&self, position: Option<f64>, rolling: bool) {
+        let heard = match self.play {
+            Play::Playing { .. } | Play::Fading { .. } => self.cue_position + self.played,
+            Play::Idle | Play::Cued { .. } => f64::NAN,
+        };
+        let shared = &self.shared;
+        shared.position.store(position.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
+        shared.rolling.store(rolling, Ordering::Relaxed);
+        shared.heard.store(heard.to_bits(), Ordering::Relaxed);
     }
 
     /// Mix whatever has been assembled for the current cue into `planes`;
