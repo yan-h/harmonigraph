@@ -6,6 +6,10 @@
 //! must treat that as playback. So a block also rolls when it advanced from the
 //! previous one by about that block's length.
 
+/// How far behind the previous block a playing host's position may land
+/// before it counts as a jump back: playback's jitter, not a loop wrap.
+pub const JITTER_SECONDS: f64 = 0.05;
+
 /// How one block's position relates to the previous block's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -33,7 +37,7 @@ impl Step {
 /// stopped export does.
 pub fn step(previous: Option<(f64, f64)>, position: f64, playing: bool) -> Step {
     match previous {
-        Some((last, _)) if position < last - if playing { 0.05 } else { 0.0 } => {
+        Some((last, _)) if position < last - if playing { JITTER_SECONDS } else { 0.0 } => {
             Step::Back { rolling: playing }
         }
         Some((last, previous_duration)) => {

@@ -185,7 +185,15 @@ impl Deck {
         }
         let ended = Event::Ended { position: self.cue_position, played: self.played, reason };
         self.play = Play::Idle;
-        self.piece = None;
+        // The rest of a piece cut short is still in the ring, with its
+        // descriptor already popped. Left there it would open the next cue,
+        // and put every piece after it out of step with its samples.
+        if let Some((piece, left)) = self.piece.take() {
+            let count = left * piece.channels;
+            if count > 0 {
+                self.samples.read_chunk(count).expect("described samples").commit_all();
+            }
+        }
         // Even: inactive. Whatever the worker still sends for the old serial
         // is skipped as stale.
         self.serial = (self.serial | 1) + 1;
@@ -199,7 +207,7 @@ impl Deck {
             Play::Idle | Play::Fading { .. } => {}
             Play::Cued { .. } => self.end(reason),
             Play::Playing { .. } => {
-                let of = (super::store::FADE_SECONDS * rate).ceil().max(1.0) as usize;
+                let of = super::store::fade_frames(rate);
                 self.play = Play::Fading { left: of, of, reason };
                 // Same serial, inactive: the worker stops assembling, and the
                 // pieces it already sent still play out through the fade.
@@ -257,7 +265,9 @@ impl Deck {
             } else if moved && !self.was_rolling && !returning {
                 self.pending = Some(position);
                 self.fade(Reason::Click, block.rate);
-            } else if !moved {
+            } else if !moved && !matches!(self.play, Play::Fading { .. }) {
+                // Not while the cue the click replaced is still fading: a
+                // block shorter than the fade would cut it off partway down.
                 if let Some(at) = self.pending.take() {
                     self.cue(at);
                 }

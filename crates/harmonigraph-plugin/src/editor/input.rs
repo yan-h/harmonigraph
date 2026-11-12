@@ -56,10 +56,9 @@ struct TakenBlock {
     restart: bool,
     /// Frame zero of its run on the GUI clock, mapped at take.
     origin: f64,
-    channels: usize,
-    sample_rate: f32,
     len: usize,
-    /// The descriptor as drained, for the tape.
+    /// The descriptor as drained: its format for the analysis, all of it for
+    /// the tape.
     block: crate::audio_ingress::Block,
 }
 
@@ -157,8 +156,6 @@ impl LiveInput {
             audio.blocks.push(TakenBlock {
                 restart,
                 origin: self.audio_origin + offset,
-                channels: block.format.channels,
-                sample_rate: block.format.sample_rate,
                 len: samples.len(),
                 block,
             });
@@ -192,8 +189,8 @@ impl LiveInput {
             start += block.len;
             lent.analysis.feed_source(
                 samples,
-                block.channels,
-                block.sample_rate,
+                block.block.format.channels,
+                block.block.format.sample_rate,
                 block.origin,
                 &audio.config,
                 |delivery| audio.deliveries.push(delivery),

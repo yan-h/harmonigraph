@@ -20,6 +20,12 @@ use super::Mark;
 /// or an edge fades: 5 ms.
 pub(crate) const FADE_SECONDS: f64 = 0.005;
 
+/// [`FADE_SECONDS`] in frames at `rate`, and never none: the one length every
+/// fade, seam and kept margin of the tape uses.
+pub(crate) fn fade_frames(rate: f64) -> usize {
+    (FADE_SECONDS * rate).ceil().max(1.0) as usize
+}
+
 /// How long a pass must have played before its audio counts as warm. A guess
 /// good for reverb tails and bus state; see "Warm and cold" in #1719.
 pub(crate) const SETTLE_SECONDS: f64 = 10.0;
@@ -28,8 +34,8 @@ pub(crate) const SETTLE_SECONDS: f64 = 10.0;
 /// sample, however short its run-up.
 pub(crate) const SONG_START_SECONDS: f64 = 0.05;
 
-/// Two cold run-ups closer than this are the same start played again, and the
-/// newer recording wins.
+/// Two cold passes that started closer than this are the same start played
+/// again, and the newer recording wins.
 const SAME_RUN_UP_SECONDS: f64 = 0.05;
 
 /// No memory setting yet (#1719): one generous cap, about 46 minutes of song
@@ -40,32 +46,46 @@ pub(crate) const CAP_BYTES: usize = 1 << 30;
 pub(crate) struct Stamp {
     /// Which pass recorded it: chunks of one pass join without a seam.
     pub pass: u64,
-    /// When it was recorded, as an order: the cap drops the lowest first.
-    pub recorded: u64,
-    /// When it was recorded, for the console.
+    /// When it was recorded: for the console, and the cap drops the earliest
+    /// first.
     pub when: std::time::Instant,
-    /// Song seconds the pass had played before this chunk's first sample.
-    pub run_up: f64,
-    /// The pass started at the song's start, so every chunk of it is exact.
-    pub from_start: bool,
+    /// The song frame the pass started at. Run-up and warmth are computed
+    /// from it at the frame asked about, never stored per chunk: a run-up
+    /// taken at each chunk's own first frame made two passes with different
+    /// starts trade places every chunk, since their chunks are cut at
+    /// different frames.
+    pub pass_start: i64,
 }
 
 impl Stamp {
-    pub(crate) fn warm(&self) -> bool {
-        self.from_start || self.run_up >= SETTLE_SECONDS
+    /// Song seconds the pass had played before `frame`.
+    pub(crate) fn run_up(&self, frame: i64, rate: f32) -> f64 {
+        (frame - self.pass_start) as f64 / f64::from(rate)
+    }
+
+    /// The pass started at the song's start, so all of it is exact.
+    pub(crate) fn is_from_start(&self, rate: f32) -> bool {
+        self.pass_start as f64 <= SONG_START_SECONDS * f64::from(rate)
+    }
+
+    pub(crate) fn warm(&self, frame: i64, rate: f32) -> bool {
+        self.is_from_start(rate) || self.run_up(frame, rate) >= SETTLE_SECONDS
     }
 }
 
-/// Whether a `new` recording replaces an `old` one where they overlap.
+/// Whether a `new` recording replaces an `old` one from song frame `at`, the
+/// first frame they share.
 ///
 /// Warm audio replaces anything, the newer warm audio being the fresher.
-/// Cold audio never replaces warm audio, and replaces cold audio only with at
-/// least as long a run-up.
-pub(crate) fn beats(new: Stamp, old: Stamp) -> bool {
-    if new.warm() {
+/// Cold audio never replaces warm audio. Between two cold passes the one that
+/// started earlier has the longer run-up at every frame, so it wins; the same
+/// start played again wins as the fresher.
+pub(crate) fn beats(new: Stamp, old: Stamp, at: i64, rate: f32) -> bool {
+    if new.warm(at, rate) {
         return true;
     }
-    !old.warm() && new.run_up >= old.run_up - SAME_RUN_UP_SECONDS
+    let same_start = SAME_RUN_UP_SECONDS * f64::from(rate);
+    !old.warm(at, rate) && new.pass_start as f64 <= old.pass_start as f64 + same_start
 }
 
 pub(crate) struct Chunk {
@@ -139,7 +159,6 @@ pub(crate) struct Store {
     chunks: BTreeMap<i64, Chunk>,
     bytes: usize,
     cap: usize,
-    recorded: u64,
     /// Chunks dropped for the cap since the store was made or cleared.
     pub evicted: u64,
 }
@@ -150,7 +169,7 @@ impl Store {
     }
 
     pub(crate) fn with_cap(rate: f32, channels: usize, cap: usize) -> Store {
-        Store { rate, channels, chunks: BTreeMap::new(), bytes: 0, cap, recorded: 0, evicted: 0 }
+        Store { rate, channels, chunks: BTreeMap::new(), bytes: 0, cap, evicted: 0 }
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -162,14 +181,8 @@ impl Store {
         self.chunks.values()
     }
 
-    /// The next stamp's recording order.
-    pub(crate) fn next_recorded(&mut self) -> u64 {
-        self.recorded += 1;
-        self.recorded
-    }
-
     fn margin(&self) -> i64 {
-        (FADE_SECONDS * f64::from(self.rate)).ceil() as i64
+        fade_frames(f64::from(self.rate)) as i64
     }
 
     fn put(&mut self, chunk: Chunk) {
@@ -206,7 +219,7 @@ impl Store {
         let mut lost = Vec::new();
         for start in overlapping {
             let old = self.take(start);
-            if beats(chunk.stamp, old.stamp) {
+            if beats(chunk.stamp, old.stamp, old.start.max(a), self.rate) {
                 if old.start < a {
                     self.put(old.keep(old.start, a, margin, channels));
                 }
@@ -234,8 +247,7 @@ impl Store {
             }
         }
         while self.bytes > self.cap {
-            let Some(oldest) =
-                self.chunks.values().min_by_key(|c| c.stamp.recorded).map(|c| c.start)
+            let Some(oldest) = self.chunks.values().min_by_key(|c| c.stamp.when).map(|c| c.start)
             else {
                 break;
             };
@@ -274,7 +286,7 @@ impl Store {
     pub(crate) fn render(&self, from: i64, out: &mut [f32]) -> Rendered {
         let ch = self.channels;
         let limit = from + (out.len() / ch) as i64;
-        let fade = self.margin().max(1);
+        let fade = self.margin();
         // The unbroken chain of chunks from `from`, one past `limit` if it
         // continues there, so a fade whose window reaches back into the range
         // is seen.
@@ -364,8 +376,13 @@ mod tests {
 
     const RATE: f32 = 1000.0;
 
-    fn stamp(pass: u64, run_up: f64, from_start: bool) -> Stamp {
-        Stamp { pass, recorded: pass, when: std::time::Instant::now(), run_up, from_start }
+    /// The frames of the settling time.
+    const SETTLE: i64 = (SETTLE_SECONDS * RATE as f64) as i64;
+
+    /// Pass `pass`, started at song frame `pass_start`, recorded in pass order.
+    fn stamp(pass: u64, pass_start: i64) -> Stamp {
+        let when = std::time::Instant::now() + std::time::Duration::from_secs(pass);
+        Stamp { pass, when, pass_start }
     }
 
     /// A mono chunk whose every sample is `value`.
@@ -386,33 +403,43 @@ mod tests {
 
     #[test]
     fn warm_replaces_anything_and_cold_only_fills_gaps_or_beats_a_shorter_run_up() {
-        let warm = stamp(1, SETTLE_SECONDS, false);
-        let cold = stamp(2, 1.0, false);
-        let colder = stamp(3, 0.5, false);
-        let from_start = stamp(4, 0.0, true);
-        assert!(warm.warm() && from_start.warm() && !cold.warm());
+        // Judged at a frame 20 s into the song.
+        let at = 2 * SETTLE;
+        let warm = stamp(1, at - SETTLE);
+        let cold = stamp(2, at - 1000);
+        let colder = stamp(3, at - 500);
+        let from_start = stamp(4, 0);
+        let beats = |new, old| beats(new, old, at, RATE);
+        assert!(warm.warm(at, RATE) && from_start.warm(at, RATE) && !cold.warm(at, RATE));
         assert!(beats(warm, cold) && beats(warm, warm) && beats(from_start, warm));
         assert!(!beats(cold, warm) && !beats(cold, from_start));
         assert!(beats(cold, colder) && !beats(colder, cold));
         // The same spot played again: the fresher recording wins.
-        assert!(beats(stamp(5, 1.0, false), cold));
+        assert!(beats(stamp(5, at - 1000), cold));
     }
 
     #[test]
     fn a_cold_pass_fills_around_warm_audio_and_a_warm_one_overwrites_it() {
         let mut store = Store::new(RATE, 1);
-        store.insert(chunk(1000, 2000, stamp(1, SETTLE_SECONDS, false), 1.0));
+        // 20 s into the song, so a pass can be warm without starting at zero.
+        let o = 2 * SETTLE;
+        store.insert(chunk(o + 1000, o + 2000, stamp(1, o + 1000 - SETTLE), 1.0));
         // Cold over the warm chunk's tail and past it: only the gap is taken.
-        store.insert(chunk(1500, 2500, stamp(2, 0.0, false), 2.0));
-        assert_eq!(owners(&store), [(1000, 2000, 1), (2000, 2500, 2)]);
+        store.insert(chunk(o + 1500, o + 2500, stamp(2, o + 1500), 2.0));
+        assert_eq!(owners(&store), [(o + 1000, o + 2000, 1), (o + 2000, o + 2500, 2)]);
         // The loser kept margin before the seam, for the crossfade.
         let margin = (FADE_SECONDS * f64::from(RATE)).ceil() as i64;
-        assert_eq!(store.chunks().nth(1).unwrap().data_start, 2000 - margin);
+        assert_eq!(store.chunks().nth(1).unwrap().data_start, o + 2000 - margin);
         // Warm through the middle splits the old warm chunk around it.
-        store.insert(chunk(1200, 1400, stamp(3, SETTLE_SECONDS, false), 3.0));
+        store.insert(chunk(o + 1200, o + 1400, stamp(3, o + 1200 - SETTLE), 3.0));
         assert_eq!(
             owners(&store),
-            [(1000, 1200, 1), (1200, 1400, 3), (1400, 2000, 1), (2000, 2500, 2)]
+            [
+                (o + 1000, o + 1200, 1),
+                (o + 1200, o + 1400, 3),
+                (o + 1400, o + 2000, 1),
+                (o + 2000, o + 2500, 2)
+            ]
         );
     }
 
@@ -422,7 +449,7 @@ mod tests {
         let mut store = Store::with_cap(RATE, 1, 2 * bytes);
         for pass in [3, 1, 2] {
             let start = pass as i64 * 1000;
-            store.insert(chunk(start, start + 1000, stamp(pass, SETTLE_SECONDS, false), 0.0));
+            store.insert(chunk(start, start + 1000, stamp(pass, 0), 0.0));
         }
         assert_eq!(owners(&store), [(2000, 3000, 2), (3000, 4000, 3)]);
         assert_eq!(store.evicted, 1);
@@ -432,8 +459,8 @@ mod tests {
     #[test]
     fn rendering_crosses_a_seam_through_the_losers_margin_and_fades_at_the_end() {
         let mut store = Store::new(RATE, 1);
-        store.insert(chunk(0, 1000, stamp(1, 0.0, true), 1.0));
-        store.insert(chunk(500, 1500, stamp(2, 0.0, false), 2.0));
+        store.insert(chunk(0, 1000, stamp(1, 0), 1.0));
+        store.insert(chunk(500, 1500, stamp(2, 500), 2.0));
         let fade = (FADE_SECONDS * f64::from(RATE)).ceil() as usize;
         let mut whole = vec![0.0; 2000];
         let rendered = store.render(0, &mut whole);
@@ -462,8 +489,8 @@ mod tests {
     #[test]
     fn a_seam_with_no_margin_on_either_side_dips_through_silence() {
         let mut store = Store::new(RATE, 1);
-        store.insert(chunk(0, 1000, stamp(1, 0.0, true), 1.0));
-        store.insert(chunk(1000, 2000, stamp(2, 0.0, false), 1.0));
+        store.insert(chunk(0, 1000, stamp(1, 0), 1.0));
+        store.insert(chunk(1000, 2000, stamp(2, 1000), 1.0));
         let mut out = vec![0.0; 2000];
         store.render(0, &mut out);
         let fade = (FADE_SECONDS * f64::from(RATE)).ceil() as usize;
@@ -477,11 +504,11 @@ mod tests {
     #[test]
     fn a_trimmed_chunk_opens_with_the_tuning_in_effect_at_its_new_start() {
         let mut store = Store::new(RATE, 1);
-        let mut old = chunk(0, 1000, stamp(1, 0.0, false), 1.0);
+        let mut old = chunk(0, 1000, stamp(1, 0), 1.0);
         old.marks.push((0, Mark::Tuning(Box::default())));
         old.marks.push((700, Mark::Tuning(Box::default())));
         store.insert(old);
-        store.insert(chunk(0, 500, stamp(2, SETTLE_SECONDS, false), 2.0));
+        store.insert(chunk(0, 500, stamp(2, 0), 2.0));
         let survivor = store.chunks().find(|c| c.stamp.pass == 1).unwrap();
         assert_eq!(survivor.start, 500);
         let at: Vec<i64> = survivor.marks.iter().map(|(t, _)| *t).collect();

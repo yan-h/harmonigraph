@@ -11,11 +11,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use harmonigraph_record::transport;
 use harmonigraph_ui::params::ParamKey;
 
 use crate::audio_ingress::Block;
 
-use super::store::{Chunk, Stamp, Store, SONG_START_SECONDS};
+use super::store::{Chunk, Stamp, Store};
 use super::{Event, Mark, Piece, Shared, Tuning};
 
 /// How far ahead of the audio thread the worker keeps a cue's audio: a dozen
@@ -24,10 +25,6 @@ pub(crate) const LEAD_SECONDS: f64 = 0.25;
 
 /// A pass's chunks are cut at about this length.
 const CHUNK_SECONDS: f64 = 1.0;
-
-/// A rolling block whose song position is this close to where the previous
-/// one left off continues its pass: the jitter allowance the take uses.
-const CONTINUITY_SECONDS: f64 = 0.05;
 
 /// Recent rolling blocks kept to place notes, which can arrive ahead of the
 /// audio they sound in.
@@ -45,7 +42,6 @@ struct Pass {
     epoch: u64,
     /// Song frame the pass started at.
     start: i64,
-    from_start: bool,
     /// Where the next block continues: source frame and song frame.
     next_source: u64,
     next_song: i64,
@@ -151,19 +147,25 @@ impl Worker {
         let channels = block.format.channels;
         let presentation = block.origin + block.first_frame as f64 / f64::from(rate);
         self.drained_through = presentation + block.frames as f64 / f64::from(rate);
-        let song = match block.song {
-            Some(song) if !block.format.sidechain && channels > 0 => song,
-            _ => return self.end_pass(),
-        };
-        if self.store.as_ref().is_some_and(|s| s.rate != rate || s.channels != channels) {
+        let main = !block.format.sidechain && channels > 0;
+        // Before the rolling test: a stopped block at a new rate must clear
+        // the tape too, or a click before the transport next rolls would play
+        // the old recording at the wrong speed.
+        if main && self.store.as_ref().is_some_and(|s| s.rate != rate || s.channels != channels) {
             self.end_pass();
             self.store = None;
             self.recent.clear();
             self.logs
                 .push(format!("tape: cleared for a new format ({channels} channels at {rate} Hz)"));
         }
+        let song = match block.song {
+            Some(song) if main => song,
+            _ => return self.end_pass(),
+        };
         let frame = (song * f64::from(rate)).round() as i64;
-        let tolerance = (CONTINUITY_SECONDS * f64::from(rate)) as i64;
+        // A rolling block this close to where the previous one left off
+        // continues its pass: the jitter the shared rolling test allows.
+        let tolerance = (transport::JITTER_SECONDS * f64::from(rate)) as i64;
         let continued = self.pass.and_then(|pass| {
             if pass.epoch != block.epoch || block.first_frame < pass.next_source {
                 return None;
@@ -180,7 +182,6 @@ impl Worker {
                     id: self.next_pass,
                     epoch: block.epoch,
                     start: frame,
-                    from_start: song <= SONG_START_SECONDS,
                     next_source: block.first_frame,
                     next_song: frame,
                 });
@@ -203,13 +204,7 @@ impl Worker {
             Chunk {
                 start: song_frame,
                 end: song_frame,
-                stamp: Stamp {
-                    pass: pass.id,
-                    recorded: 0,
-                    when: Instant::now(),
-                    run_up: (song_frame - pass.start) as f64 / f64::from(rate),
-                    from_start: pass.from_start,
-                },
+                stamp: Stamp { pass: pass.id, when: Instant::now(), pass_start: pass.start },
                 data_start: song_frame,
                 samples: Vec::with_capacity((CHUNK_SECONDS * f64::from(rate)) as usize * channels),
                 marks,
@@ -361,7 +356,7 @@ impl Worker {
         self.scratch.clear();
         self.scratch.resize(want * channels, 0.0);
         let rendered = store.render(playback.cursor, &mut self.scratch);
-        let fade = (super::store::FADE_SECONDS * f64::from(store.rate)).ceil().max(1.0) as i64;
+        let fade = super::store::fade_frames(f64::from(store.rate)) as i64;
         for f in 0..rendered.frames {
             let k = playback.cursor + f as i64 - playback.start;
             if k >= fade {
@@ -427,14 +422,14 @@ impl Worker {
             None => "nothing recorded there".into(),
             Some(stamp) => format!(
                 "{}, run-up {:.1} s, recorded {:.0} s ago",
-                if stamp.from_start {
+                if stamp.is_from_start(store.rate) {
                     "warm (from the song's start)"
-                } else if stamp.warm() {
+                } else if stamp.warm(frame, store.rate) {
                     "warm"
                 } else {
                     "cold"
                 },
-                stamp.run_up,
+                stamp.run_up(frame, store.rate),
                 stamp.when.elapsed().as_secs_f64(),
             ),
         }
@@ -509,7 +504,9 @@ impl Worker {
 
 fn commit(store: &mut Store, mut chunk: Chunk) {
     if chunk.end > chunk.start {
-        chunk.stamp.recorded = store.next_recorded();
+        // A chunk closes on the block that takes it past its reserved second,
+        // which doubles the buffer: give back the half that is never filled.
+        chunk.samples.shrink_to_fit();
         store.insert(chunk);
     }
 }

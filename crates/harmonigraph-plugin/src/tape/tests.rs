@@ -32,15 +32,25 @@ fn recorded(frame: i64, channel: usize) -> f32 {
 /// One analyzer-ring block of the song from song frame `song`, or of silence
 /// with no song position when `song` is `None`.
 fn ring_block(first_frame: u64, song: Option<i64>, format: Format) -> (Block, Vec<f32>) {
+    ring_block_of(FRAMES, first_frame, song, format)
+}
+
+/// [`ring_block`] with a block length of its own.
+fn ring_block_of(
+    frames: usize,
+    first_frame: u64,
+    song: Option<i64>,
+    format: Format,
+) -> (Block, Vec<f32>) {
     let block = Block {
         epoch: 0,
         origin: 0.0,
         first_frame,
-        frames: FRAMES,
+        frames,
         format,
         song: song.map(|frame| frame as f64 / RATE),
     };
-    let samples = (0..FRAMES as i64)
+    let samples = (0..frames as i64)
         .flat_map(|i| (0..format.channels).map(move |c| song.map_or(0.0, |s| recorded(s + i, c))))
         .collect();
     (block, samples)
@@ -61,16 +71,21 @@ fn record(worker: &mut Worker, source: &mut u64, from: i64, to: i64) {
 
 /// One block through the deck, over a silent stereo buffer.
 fn run(deck: &mut Deck, position: f64, playing: bool, enabled: bool) -> ([Vec<f32>; 2], BlockOut) {
-    let mut left = vec![0.0; FRAMES];
-    let mut right = vec![0.0; FRAMES];
-    let block = BlockIn {
-        position: Some(position),
-        playing,
-        frames: FRAMES,
-        rate: RATE,
-        enabled,
-        silent: true,
-    };
+    run_of(FRAMES, deck, position, playing, enabled)
+}
+
+/// [`run`] with a block length of its own.
+fn run_of(
+    frames: usize,
+    deck: &mut Deck,
+    position: f64,
+    playing: bool,
+    enabled: bool,
+) -> ([Vec<f32>; 2], BlockOut) {
+    let mut left = vec![0.0; frames];
+    let mut right = vec![0.0; frames];
+    let block =
+        BlockIn { position: Some(position), playing, frames, rate: RATE, enabled, silent: true };
     let out = {
         let mut planes = [left.as_mut_slice(), right.as_mut_slice()];
         deck.process(block, &mut planes)
@@ -289,12 +304,9 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
         .store()
         .unwrap()
         .chunks()
-        .map(|c| (c.start, c.end, c.stamp.pass, c.stamp.run_up, c.stamp.from_start))
+        .map(|c| (c.start, c.end, c.stamp.pass, c.stamp.pass_start))
         .collect();
-    assert_eq!(
-        chunks,
-        [(0, 300, 1, 0.0, true), (500, 700, 1, 0.5, true), (2000, 2200, 2, 0.0, false)]
-    );
+    assert_eq!(chunks, [(0, 300, 1, 0), (500, 700, 1, 0), (2000, 2200, 2, 2000)]);
 }
 
 #[test]
@@ -346,5 +358,131 @@ fn notes_land_at_their_song_position_and_tuning_opens_each_chunk() {
     assert_eq!(store.chunks().filter(|c| c.stamp.pass == 2).count(), 3);
     for chunk in store.chunks().filter(|c| c.stamp.pass == 2) {
         assert!(matches!(chunk.marks.first(), Some((t, Mark::Tuning(_))) if *t == chunk.start));
+    }
+}
+
+/// A cue cut partway through a piece must leave nothing of that piece in the
+/// playback ring: the next cue plays from its own first frame.
+#[test]
+fn a_click_during_an_audition_plays_the_new_spot_from_its_first_frame() {
+    let (mut deck, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 3000);
+    park(&mut deck, 0.0);
+    click(&mut deck, 1.0);
+    worker.play();
+    // One block of a piece that is longer than a block: the cut lands inside it.
+    let (audio, _) = run(&mut deck, 1.0, false, true);
+    assert!(audio[0].iter().any(|&s| s != 0.0));
+
+    // Another click fades the first cue; held still, it cues the second.
+    run(&mut deck, 2.0, false, true);
+    let (_, out) = run(&mut deck, 2.0, false, true);
+    assert!(out.sounding);
+    worker.play();
+    let (audio, _) = run(&mut deck, 2.0, false, true);
+    let fade = (FADE_SECONDS * RATE).ceil() as usize;
+    for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
+        let gain = if i < fade { (i + 1) as f32 / fade as f32 } else { 1.0 };
+        assert_eq!(
+            (l, r),
+            (recorded(2000 + i as i64, 0) * gain, recorded(2000 + i as i64, 1) * gain),
+            "frame {i} after the second cue"
+        );
+    }
+}
+
+/// Two cold passes over the same stretch: the one that started earlier has
+/// the longer run-up at every frame they share, so the later start only fills
+/// what the earlier one left.
+#[test]
+fn a_cold_pass_that_started_later_never_replaces_one_that_started_earlier() {
+    let (_, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 4000, 7000);
+    record(&mut worker, &mut source, 4500, 7500);
+    let store = worker.store().unwrap();
+    let owners: Vec<(i64, i64, u64)> =
+        store.chunks().map(|c| (c.start, c.end, c.stamp.pass)).collect();
+    for &(start, end, pass) in &owners {
+        assert_eq!(pass == 1, end <= 7000, "{start}..{end} belongs to pass {pass}: {owners:?}");
+    }
+}
+
+/// A host block shorter than the fade: the cue a click replaces still fades
+/// all the way down before the new one starts.
+#[test]
+fn a_click_lets_the_old_cue_finish_fading_when_blocks_are_shorter_than_the_fade() {
+    let (mut deck, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 3000);
+    park(&mut deck, 0.0);
+    click(&mut deck, 1.0);
+    worker.play();
+    run(&mut deck, 1.0, false, true);
+
+    let fade = (FADE_SECONDS * RATE).ceil() as usize;
+    assert!(fade > 2, "the fixture needs a fade longer than its two-frame blocks");
+    // The click, then the playhead holding still, two frames at a time.
+    let mut faded = Vec::new();
+    for _ in 0..fade.div_ceil(2) {
+        let (audio, _) = run_of(2, &mut deck, 2.0, false, true);
+        faded.extend(audio[0].iter().copied());
+    }
+    assert!(!deck.sounding(), "the old cue is over and the new one has not started");
+    assert!(faded[..fade].iter().all(|&s| s != 0.0), "the fade ran its whole length: {faded:?}");
+    assert!(faded[..fade].windows(2).all(|w| w[1] < w[0]), "{faded:?}");
+    assert!(faded[fade..].iter().all(|&s| s == 0.0));
+    // Only then does the new spot cue.
+    run_of(2, &mut deck, 2.0, false, true);
+    worker.play();
+    let (audio, _) = run(&mut deck, 2.0, false, true);
+    assert_eq!(audio[0][fade], recorded(2000 + fade as i64, 0));
+}
+
+/// A new sample rate clears the tape on the first block that carries it,
+/// rolling or not: a click before the transport next rolls must find nothing,
+/// not the old recording at the wrong speed.
+#[test]
+fn a_stopped_block_at_a_new_rate_clears_the_tape() {
+    let (_, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 1000);
+    assert!(worker.store().is_some());
+    let faster = Format { sample_rate: 2.0 * RATE as f32, ..STEREO };
+    let (block, samples) = ring_block(source, None, faster);
+    worker.capture(block, &samples);
+    assert!(worker.store().is_none());
+    // The sidechain's own format is not the main input's: it clears nothing.
+    record(&mut worker, &mut source, 0, 1000);
+    let sidechain = Format { channels: 1, sidechain: true, ..faster };
+    let (block, samples) = ring_block(source, None, sidechain);
+    worker.capture(block, &samples);
+    assert!(worker.store().is_some());
+}
+
+/// A chunk closes on the block that takes it past its second. Blocks that do
+/// not divide the second overrun the reserved buffer, which must not be kept
+/// at the doubled size it grew to.
+#[test]
+fn a_committed_chunk_keeps_no_spare_half_of_its_buffer() {
+    let (_, mut worker) = pair();
+    let frames = 150;
+    for i in 0..20 {
+        let first = (i * frames) as u64;
+        let (block, samples) = ring_block_of(frames, first, Some(first as i64), STEREO);
+        worker.capture(block, &samples);
+    }
+    let (block, samples) = ring_block_of(frames, 3000, None, STEREO);
+    worker.capture(block, &samples);
+    let store = worker.store().unwrap();
+    assert!(store.chunks().any(|c| c.end - c.start > RATE as i64), "no chunk overran its second");
+    for chunk in store.chunks() {
+        assert!(
+            chunk.samples.capacity() < chunk.samples.len() * 3 / 2,
+            "{} samples held in a buffer of {}",
+            chunk.samples.len(),
+            chunk.samples.capacity()
+        );
     }
 }

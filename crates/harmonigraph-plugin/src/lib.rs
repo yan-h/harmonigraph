@@ -2202,6 +2202,11 @@ mod tests {
         let first = (cue * rate).round() as usize;
         let mut heard = Vec::new();
         while heard.len() < 2048 {
+            // A worker round before each block: a cue gives up after half a
+            // second of AUDIO time without a piece, so blocks fed on a timer
+            // would starve it whenever a busy runner held the worker back.
+            let rounds = plugin._input_worker.completed_rounds();
+            assert!(a_round_after(&plugin, rounds), "the worker never ran a round");
             let (status, left, right) = silence(&mut plugin, cue);
             assert!(matches!(status, ProcessStatus::KeepAlive), "the tape is cued or sounding");
             let start = if heard.is_empty() {
@@ -2211,7 +2216,6 @@ mod tests {
             };
             heard.extend(left[start..].iter().zip(&right[start..]).map(|(&l, &r)| (l, r)));
             assert!(started.elapsed() < ANALYSIS_DEADLINE, "no tape audio arrived");
-            std::thread::sleep(background::POLL / 2);
         }
         let fade = (tape::store::FADE_SECONDS * rate).ceil() as usize;
         for (i, &(l, r)) in heard.iter().enumerate().skip(fade) {
