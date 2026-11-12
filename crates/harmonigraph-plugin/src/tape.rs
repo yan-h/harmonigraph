@@ -144,6 +144,14 @@ pub(crate) enum Event {
         to: f64,
         seconds: f64,
     },
+    /// Probe (#1721): one second of blocks while the host says stopped.
+    Heartbeat {
+        blocks: u32,
+        positions: u32,
+        first: Option<f64>,
+        last: Option<f64>,
+        enabled: bool,
+    },
 }
 
 /// The tuning a stretch of tape was recorded under: what the live display

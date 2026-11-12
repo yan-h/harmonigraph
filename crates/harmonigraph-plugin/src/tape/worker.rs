@@ -498,6 +498,16 @@ impl Worker {
                 seconds * 1000.0,
                 seconds * 1000.0 / f64::from(count - 1).max(1.0),
             ),
+            Event::Heartbeat { blocks, positions, first, last, enabled } => {
+                let show = |p: Option<f64>| p.map_or("none".to_string(), at);
+                format!(
+                    "tape: stopped second: {blocks} blocks, {positions} distinct positions, {} → \
+                     {}, deck {}",
+                    show(first),
+                    show(last),
+                    if enabled { "enabled" } else { "DISABLED" },
+                )
+            }
         }
     }
 }

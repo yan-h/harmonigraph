@@ -120,6 +120,9 @@ pub(crate) struct Deck {
     /// Positions of the first two blocks after a reset, for the export
     /// measurement: is the first block already moving?
     after_reset: Option<(u8, f64, bool)>,
+    /// Probe (#1721): blocks, distinct positions, seconds, first and last
+    /// position over the current stopped second.
+    beat: (u32, u32, f64, Option<f64>, Option<f64>),
 }
 
 impl Deck {
@@ -149,6 +152,7 @@ impl Deck {
             gesture: None,
             quiet: 0.0,
             after_reset: None,
+            beat: (0, 0, 0.0, None, None),
         }
     }
 
@@ -235,6 +239,7 @@ impl Deck {
         self.shared.blocks.fetch_add(1, Ordering::Relaxed);
         self.quiet = if block.silent { self.quiet + duration } else { 0.0 };
         self.shared.quiet.store(self.quiet.to_bits(), Ordering::Relaxed);
+        self.heartbeat(&block, duration);
         let Some(position) = block.position else {
             // No song position, no tape: nothing to key a recording on, and
             // nothing to say where a click went.
@@ -282,6 +287,30 @@ impl Deck {
         let mixed = self.mix(planes, block.frames, duration);
         self.mixed = mixed;
         BlockOut { song: rolling.then_some(position), sounding: self.sounding() }
+    }
+
+    /// Probe (#1721): while the host says stopped, report each second what it
+    /// sent: how many blocks, how many distinct positions, which.
+    fn heartbeat(&mut self, block: &BlockIn, duration: f64) {
+        if block.playing {
+            self.beat = (0, 0, 0.0, None, None);
+            return;
+        }
+        let (blocks, positions, seconds, first, last) = &mut self.beat;
+        *blocks += 1;
+        *seconds += duration;
+        if *blocks == 1 {
+            *first = block.position;
+            *positions = u32::from(block.position.is_some());
+        } else if block.position.is_some() && block.position != *last {
+            *positions += 1;
+        }
+        *last = block.position;
+        if *seconds >= 1.0 {
+            let (blocks, positions, _, first, last) = self.beat;
+            self.beat = (0, 0, 0.0, None, None);
+            self.emit(Event::Heartbeat { blocks, positions, first, last, enabled: block.enabled });
+        }
     }
 
     /// Mix whatever has been assembled for the current cue into `planes`;
