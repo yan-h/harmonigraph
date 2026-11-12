@@ -85,7 +85,7 @@ pub(super) fn tape_pane(ui: &mut egui::Ui, view: &mut TapeView) {
             .on_hover_text("Memory the recording holds. It is never saved with the project.");
     });
     let hint = if !view.enabled {
-        "Off while the analyzer listens to the sidechain, or the host renders offline."
+        "No audition while the analyzer listens to the sidechain."
     } else if view.rolling {
         "Stop the transport to audition."
     } else if view.spans.is_empty() {
@@ -199,14 +199,14 @@ fn draw_ruler(
             theme::text_dim(),
         );
     };
-    let lines = view.bar_lines(window.from, window.to);
-    if lines.len() >= 2 {
-        let per_bar = (x_of(lines[1].0) - x_of(lines[0].0)).abs().max(f32::EPSILON);
+    let per_second = (x_of(1.0) - x_of(0.0)).max(f32::EPSILON);
+    if let Some(bar) = view.bar_seconds(window.from) {
+        let per_bar = (bar as f32 * per_second).max(f32::EPSILON);
         let every = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
             .into_iter()
             .find(|n| per_bar * *n as f32 >= LABEL_SPACING)
             .unwrap_or(1024);
-        for (seconds, bar) in lines {
+        for (seconds, bar) in view.bar_lines(window.from, window.to) {
             let x = x_of(seconds);
             let labelled = (bar - 1) % every == 0;
             if labelled || per_bar >= 4.0 {
@@ -220,7 +220,6 @@ fn draw_ruler(
         return;
     }
     // No meter from the host: minutes and seconds.
-    let per_second = (x_of(1.0) - x_of(0.0)).max(f32::EPSILON);
     let every = [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0]
         .into_iter()
         .find(|n| per_second * *n as f32 >= LABEL_SPACING * 1.5)

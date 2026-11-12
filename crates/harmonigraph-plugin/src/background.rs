@@ -330,8 +330,8 @@ thread_local! {
 ///
 /// **The tape** (see [`crate::tape`]) works between the two holds as well:
 /// it records the blocks just taken and keeps a cue's audio queued for the
-/// audio thread. It swaps the Tape tab's view and request in the first hold. Its console lines wait
-/// for the second hold.
+/// audio thread. It takes the Tape tab's request and fills its view in the
+/// first hold; its console lines wait for the second.
 fn step(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,

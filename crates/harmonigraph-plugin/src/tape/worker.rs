@@ -3,8 +3,8 @@
 //! console lines.
 //!
 //! It runs in the input worker's step with no lock held, between the step's
-//! two holds of the editor lock. The Tape tab's view and request are swapped
-//! in the first hold, and the console lines handed over in the second.
+//! two holds of the editor lock. It takes the Tape tab's request and fills its
+//! view in the first hold, and hands its console lines over in the second.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;

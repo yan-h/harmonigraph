@@ -14,7 +14,9 @@ pub enum TapeRequest {
 }
 
 /// The host's bar and beat at one song position, for the ruler. Every field
-/// is the host's own: positions in quarter notes, bars numbered from 0.
+/// is the host's own: positions in quarter notes, bars numbered from 0. The
+/// plugin builds one only with a positive tempo and a meter, defaulting to
+/// 4/4.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Meter {
     pub beats: f64,
@@ -42,10 +44,6 @@ impl Meter {
     fn seconds_to(&self, beats: f64) -> f64 {
         (beats - self.beats) * 60.0 / self.tempo
     }
-
-    fn usable(&self) -> bool {
-        self.tempo > 0.0 && self.numerator > 0 && self.denominator > 0
-    }
 }
 
 /// A stretch recorded by one pass, with no gap in it.
@@ -66,7 +64,8 @@ pub struct TapeView {
     /// A tape exists here: the plugin has one, other shells do not.
     pub present: bool,
     /// The analysis input is Main and the host is not rendering offline: the
-    /// only times the tape records or sounds.
+    /// only times the tape sounds. It records whenever the analysis input is
+    /// Main, an export included.
     pub enabled: bool,
     /// The transport rolls, so a cue would be cut at once.
     pub rolling: bool,
@@ -93,7 +92,13 @@ impl TapeView {
     /// first, both read forward or back at their own tempo.
     fn anchor(&self, seconds: f64) -> Option<(f64, Meter)> {
         let after = self.meters.partition_point(|(at, _)| *at <= seconds);
-        self.meters.get(after.saturating_sub(1)).copied().filter(|(_, m)| m.usable())
+        self.meters.get(after.saturating_sub(1)).copied()
+    }
+
+    /// How long a bar lasts at `seconds`.
+    pub fn bar_seconds(&self, seconds: f64) -> Option<f64> {
+        let (_, meter) = self.anchor(seconds)?;
+        Some(meter.seconds_to(meter.beats + meter.bar_length()))
     }
 
     /// The bar (from 1, as Bitwig numbers them) and the beat in it (from 1,
@@ -113,11 +118,10 @@ impl TapeView {
     /// the first rules back to `from` as well.
     pub fn bar_lines(&self, from: f64, to: f64) -> Vec<(f64, i32)> {
         let mut lines = Vec::new();
-        let usable: Vec<(f64, Meter)> =
-            self.meters.iter().copied().filter(|(_, m)| m.usable()).collect();
-        for (i, &(at, meter)) in usable.iter().enumerate() {
+        let meters = &self.meters;
+        for (i, &(at, meter)) in meters.iter().enumerate() {
             let start = if i == 0 { from } else { at.max(from) };
-            let end = usable.get(i + 1).map_or(to, |(next, _)| next.min(to));
+            let end = meters.get(i + 1).map_or(to, |(next, _)| next.min(to));
             if start >= end {
                 continue;
             }
