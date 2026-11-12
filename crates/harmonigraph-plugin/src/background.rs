@@ -361,7 +361,7 @@ fn step(
         }
     }
     tape.play();
-    tape.report(std::time::Instant::now());
+    tape.report();
     let taken = taken.map(|mut taken| {
         #[cfg(test)]
         BETWEEN_HOLDS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared, &taken)));

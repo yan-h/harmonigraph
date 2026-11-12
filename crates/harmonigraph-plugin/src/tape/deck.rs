@@ -23,13 +23,6 @@ pub(crate) const STOP_GRACE_SECONDS: f64 = 0.3;
 /// and with it `KeepAlive`, open for good.
 const STARVED_SECONDS: f64 = 0.5;
 
-/// A run of stopped moves with no pause longer than this is one gesture, a
-/// drag, for the drag-rate measurement.
-const GESTURE_GAP_SECONDS: f64 = 0.25;
-
-/// How long after a stop the console waits for the playhead's return.
-const RETURN_WATCH_SECONDS: f64 = 1.0;
-
 /// One block as the deck needs it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BlockIn {
@@ -40,9 +33,6 @@ pub(crate) struct BlockIn {
     /// Audition is on, the analysis input is Main, and the host is not
     /// rendering offline.
     pub enabled: bool,
-    /// The main input is all zeros, for the processing-while-stopped
-    /// measurement.
-    pub silent: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,24 +62,6 @@ enum Play {
     },
 }
 
-/// After a stop: waiting for the playhead to move back.
-#[derive(Clone, Copy, Debug)]
-struct ReturnWatch {
-    from: f64,
-    blocks: u32,
-    seconds: f64,
-}
-
-/// A run of stopped moves, for the drag-rate measurement.
-#[derive(Clone, Copy, Debug)]
-struct Gesture {
-    count: u32,
-    from: f64,
-    to: f64,
-    seconds: f64,
-    quiet: f64,
-}
-
 pub(crate) struct Deck {
     shared: Arc<Shared>,
     samples: rtrb::Consumer<f32>,
@@ -98,7 +70,6 @@ pub(crate) struct Deck {
     /// The previous block's position and duration, for [`transport::step`].
     last: Option<(f64, f64)>,
     was_rolling: bool,
-    was_playing: bool,
     /// Seconds of stopped blocks since the transport last rolled.
     stopped_for: f64,
     /// A click waiting for the position to hold still for one block.
@@ -113,16 +84,9 @@ pub(crate) struct Deck {
     piece: Option<(Piece, usize)>,
     /// The previous block carried tape.
     mixed: bool,
-    returning: Option<ReturnWatch>,
-    gesture: Option<Gesture>,
-    /// Seconds of consecutive all-zero input.
-    quiet: f64,
     /// Positions of the first two blocks after a reset, for the export
     /// measurement: is the first block already moving?
     after_reset: Option<(u8, f64, bool)>,
-    /// Probe (#1721): blocks, distinct positions, seconds, first and last
-    /// position over the current stopped second.
-    beat: (u32, u32, f64, Option<f64>, Option<f64>),
 }
 
 impl Deck {
@@ -139,7 +103,6 @@ impl Deck {
             events,
             last: None,
             was_rolling: false,
-            was_playing: false,
             stopped_for: f64::INFINITY,
             pending: None,
             play: Play::Idle,
@@ -148,11 +111,7 @@ impl Deck {
             played: 0.0,
             piece: None,
             mixed: false,
-            returning: None,
-            gesture: None,
-            quiet: 0.0,
             after_reset: None,
-            beat: (0, 0, 0.0, None, None),
         }
     }
 
@@ -173,12 +132,9 @@ impl Deck {
         self.emit(Event::Reset { sounding });
         self.last = None;
         self.was_rolling = false;
-        self.was_playing = false;
         self.stopped_for = f64::INFINITY;
         self.pending = None;
         self.mixed = false;
-        self.returning = None;
-        self.gesture = None;
         self.after_reset = Some((0, f64::NAN, false));
     }
 
@@ -236,23 +192,18 @@ impl Deck {
     /// output stays bit-identical to the input.
     pub(crate) fn process(&mut self, block: BlockIn, planes: &mut [&mut [f32]]) -> BlockOut {
         let duration = block.frames as f64 / block.rate;
-        self.shared.blocks.fetch_add(1, Ordering::Relaxed);
-        self.quiet = if block.silent { self.quiet + duration } else { 0.0 };
-        self.shared.quiet.store(self.quiet.to_bits(), Ordering::Relaxed);
-        self.heartbeat(&block, duration);
         let Some(position) = block.position else {
             // No song position, no tape: nothing to key a recording on, and
             // nothing to say where a click went.
             self.end(Reason::NoPosition);
             self.last = None;
             self.was_rolling = false;
-            self.shared.stopped.store(false, Ordering::Relaxed);
             return BlockOut { song: None, sounding: false };
         };
         let step = transport::step(self.last, position, block.playing);
         let rolling = step.rolling();
         let moved = self.last.is_some_and(|(last, _)| position != last);
-        self.measure(position, block, rolling, moved, duration, step);
+        self.measure(position, block, rolling);
         if rolling {
             self.pending = None;
             self.stopped_for = 0.0;
@@ -281,36 +232,10 @@ impl Deck {
         }
         self.last = Some((position, duration));
         self.was_rolling = rolling;
-        self.was_playing = block.playing;
-        self.shared.stopped.store(!rolling, Ordering::Relaxed);
 
         let mixed = self.mix(planes, block.frames, duration);
         self.mixed = mixed;
         BlockOut { song: rolling.then_some(position), sounding: self.sounding() }
-    }
-
-    /// Probe (#1721): while the host says stopped, report each second what it
-    /// sent: how many blocks, how many distinct positions, which.
-    fn heartbeat(&mut self, block: &BlockIn, duration: f64) {
-        if block.playing {
-            self.beat = (0, 0, 0.0, None, None);
-            return;
-        }
-        let (blocks, positions, seconds, first, last) = &mut self.beat;
-        *blocks += 1;
-        *seconds += duration;
-        if *blocks == 1 {
-            *first = block.position;
-            *positions = u32::from(block.position.is_some());
-        } else if block.position.is_some() && block.position != *last {
-            *positions += 1;
-        }
-        *last = block.position;
-        if *seconds >= 1.0 {
-            let (blocks, positions, _, first, last) = self.beat;
-            self.beat = (0, 0, 0.0, None, None);
-            self.emit(Event::Heartbeat { blocks, positions, first, last, enabled: block.enabled });
-        }
     }
 
     /// Mix whatever has been assembled for the current cue into `planes`;
@@ -405,18 +330,10 @@ impl Deck {
         at > 0
     }
 
-    /// The measurements #1719 asks for before audition merges, as console
-    /// events. Pure observation: nothing here changes what is played.
-    fn measure(
-        &mut self,
-        position: f64,
-        block: BlockIn,
-        rolling: bool,
-        moved: bool,
-        duration: f64,
-        step: transport::Step,
-    ) {
-        // Export: what the first blocks after a reset look like.
+    /// The export measurement #1719 asks for before audition merges, as
+    /// console events. Pure observation: nothing here changes what is played.
+    fn measure(&mut self, position: f64, block: BlockIn, rolling: bool) {
+        // What the first blocks after a reset look like.
         if let Some((seen, first, first_playing)) = self.after_reset {
             if seen == 0 {
                 self.after_reset = Some((1, position, block.playing));
@@ -431,66 +348,11 @@ impl Deck {
                 });
             }
         }
-        // Export: a block with tape in it, followed by playback continuing
-        // from that block, means the tape block was playback's first.
+        // A block with tape in it, followed by playback continuing from that
+        // block, means the tape block was playback's first.
         if rolling && self.mixed {
             let advanced = self.last.is_some_and(|(last, _)| position > last);
             self.emit(Event::TapeBeforeRolling { position, advanced });
-        }
-        // The playhead's return on stop: same block, later, or never.
-        if self.was_playing && !block.playing {
-            let from = self.last.map_or(position, |(last, _)| last);
-            if matches!(step, transport::Step::Back { .. }) {
-                self.emit(Event::Returned { from, to: position, blocks: 0, seconds: 0.0 });
-            } else {
-                self.returning = Some(ReturnWatch { from, blocks: 0, seconds: 0.0 });
-            }
-        } else if let Some(watch) = &mut self.returning {
-            watch.blocks += 1;
-            if moved {
-                let watch = *watch;
-                self.returning = None;
-                self.emit(Event::Returned {
-                    from: watch.from,
-                    to: position,
-                    blocks: watch.blocks,
-                    seconds: watch.seconds,
-                });
-            } else if watch.seconds > RETURN_WATCH_SECONDS {
-                let from = watch.from;
-                self.returning = None;
-                self.emit(Event::NoReturn { from, seconds: RETURN_WATCH_SECONDS });
-            } else {
-                watch.seconds += duration;
-            }
-        }
-        // Drag rate: runs of stopped moves.
-        if !rolling && !block.playing && moved {
-            match &mut self.gesture {
-                Some(g) => {
-                    g.count += 1;
-                    g.to = position;
-                    g.seconds += g.quiet;
-                    g.quiet = 0.0;
-                }
-                None => {
-                    let from = self.last.map_or(position, |(last, _)| last);
-                    self.gesture =
-                        Some(Gesture { count: 1, from, to: position, seconds: 0.0, quiet: 0.0 });
-                }
-            }
-        } else if let Some(g) = &mut self.gesture {
-            g.quiet += duration;
-            if rolling || g.quiet > GESTURE_GAP_SECONDS {
-                let g = *g;
-                self.gesture = None;
-                self.emit(Event::Moves {
-                    count: g.count,
-                    from: g.from,
-                    to: g.to,
-                    seconds: g.seconds,
-                });
-            }
         }
     }
 }

@@ -16,7 +16,7 @@
 //! The tape never records itself: it records only rolling blocks, and sounds
 //! only while stopped. Nothing here is saved with the project.
 
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 pub(crate) mod deck;
@@ -45,12 +45,6 @@ pub(crate) struct Shared {
     cue: AtomicU64,
     /// Song seconds the cue starts at, as f64 bits.
     cue_position: AtomicU64,
-    /// Process calls so far, and whether the last was stopped, and how many
-    /// seconds of all-zero input had run by then (f64 bits): the
-    /// processing-while-stopped measurement.
-    blocks: AtomicU64,
-    stopped: AtomicBool,
-    quiet: AtomicU64,
 }
 
 /// A run of assembled frames in the playback ring, for one cue.
@@ -123,32 +117,6 @@ pub(crate) enum Event {
     TapeBeforeRolling {
         position: f64,
         advanced: bool,
-    },
-    /// The playhead moved after the transport stopped.
-    Returned {
-        from: f64,
-        to: f64,
-        blocks: u32,
-        seconds: f64,
-    },
-    NoReturn {
-        from: f64,
-        seconds: f64,
-    },
-    /// A run of stopped playhead moves.
-    Moves {
-        count: u32,
-        from: f64,
-        to: f64,
-        seconds: f64,
-    },
-    /// Probe (#1721): one second of blocks while the host says stopped.
-    Heartbeat {
-        blocks: u32,
-        positions: u32,
-        first: Option<f64>,
-        last: Option<f64>,
-        enabled: bool,
     },
 }
 

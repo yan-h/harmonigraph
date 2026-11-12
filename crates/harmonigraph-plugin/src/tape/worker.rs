@@ -8,7 +8,7 @@
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use harmonigraph_record::transport;
 
@@ -23,10 +23,6 @@ pub(crate) const LEAD_SECONDS: f64 = 0.25;
 
 /// A pass's chunks are cut at about this length.
 const CHUNK_SECONDS: f64 = 1.0;
-
-/// How long without a process call before the console says the host stopped
-/// calling.
-const PAUSE: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug)]
 struct Pass {
@@ -62,9 +58,6 @@ pub(crate) struct Worker {
     scratch: Vec<f32>,
     /// Console lines for the step's second hold.
     pub(crate) logs: Vec<String>,
-    blocks_seen: u64,
-    blocks_at: Instant,
-    paused: Option<Instant>,
     evicted_reported: bool,
 }
 
@@ -92,9 +85,6 @@ impl Worker {
             playback: None,
             scratch: Vec::new(),
             logs: Vec::new(),
-            blocks_seen: 0,
-            blocks_at: Instant::now(),
-            paused: None,
             evicted_reported: false,
         }
     }
@@ -252,9 +242,8 @@ impl Worker {
         self.playback = Some(playback);
     }
 
-    /// The audio thread's events, and the host's process calls, as console
-    /// lines.
-    pub(crate) fn report(&mut self, now: Instant) {
+    /// The audio thread's events as console lines.
+    pub(crate) fn report(&mut self) {
         while let Ok(event) = self.events.pop() {
             let line = self.describe(event);
             self.logs.push(line);
@@ -267,27 +256,6 @@ impl Worker {
                     store.bytes() >> 20,
                 ));
             }
-        }
-        let blocks = self.shared.blocks.load(Ordering::Relaxed);
-        if blocks != self.blocks_seen {
-            if let Some(since) = self.paused.take() {
-                self.logs.push(format!(
-                    "tape: host resumed processing after {:.1} s without a call",
-                    now.duration_since(since).as_secs_f64(),
-                ));
-            }
-            self.blocks_seen = blocks;
-            self.blocks_at = now;
-        } else if blocks > 0 && self.paused.is_none() && now.duration_since(self.blocks_at) > PAUSE
-        {
-            self.paused = Some(self.blocks_at);
-            let stopped = self.shared.stopped.load(Ordering::Relaxed);
-            let quiet = f64::from_bits(self.shared.quiet.load(Ordering::Relaxed));
-            self.logs.push(format!(
-                "tape: host stopped processing (transport {}, input silent for {quiet:.1} s before \
-                 the last call)",
-                if stopped { "stopped" } else { "rolling" },
-            ));
         }
     }
 
@@ -342,48 +310,6 @@ impl Worker {
                  playback did not",
                 at(position),
             ),
-            Event::Returned { from, to, blocks: 0, .. } => format!(
-                "tape: transport stopped at {}; the playhead returned to {} in the same block",
-                at(from),
-                at(to),
-            ),
-            Event::Returned { from, to, blocks, seconds } => format!(
-                "tape: transport stopped at {}; the playhead returned to {} {blocks} blocks \
-                 ({:.0} ms) later{}",
-                at(from),
-                at(to),
-                seconds * 1000.0,
-                if seconds >= super::deck::STOP_GRACE_SECONDS {
-                    " — past the grace period, so it would start the tape"
-                } else {
-                    ", inside the grace period"
-                },
-            ),
-            Event::NoReturn { from, seconds } => format!(
-                "tape: transport stopped at {}; the playhead did not move within {seconds:.0} s",
-                at(from),
-            ),
-            Event::Moves { count: 1, from, to, .. } => {
-                format!("tape: playhead moved {} → {}", at(from), at(to))
-            }
-            Event::Moves { count, from, to, seconds } => format!(
-                "tape: playhead dragged {} → {}: {count} position updates over {:.0} ms, one per \
-                 {:.0} ms",
-                at(from),
-                at(to),
-                seconds * 1000.0,
-                seconds * 1000.0 / f64::from(count - 1).max(1.0),
-            ),
-            Event::Heartbeat { blocks, positions, first, last, enabled } => {
-                let show = |p: Option<f64>| p.map_or("none".to_string(), at);
-                format!(
-                    "tape: stopped second: {blocks} blocks, {positions} distinct positions, {} → \
-                     {}, deck {}",
-                    show(first),
-                    show(last),
-                    if enabled { "enabled" } else { "DISABLED" },
-                )
-            }
         }
     }
 }

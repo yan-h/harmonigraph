@@ -81,8 +81,7 @@ fn run_of(
 ) -> ([Vec<f32>; 2], BlockOut) {
     let mut left = vec![0.0; frames];
     let mut right = vec![0.0; frames];
-    let block =
-        BlockIn { position: Some(position), playing, frames, rate: RATE, enabled, silent: true };
+    let block = BlockIn { position: Some(position), playing, frames, rate: RATE, enabled };
     let out = {
         let mut planes = [left.as_mut_slice(), right.as_mut_slice()];
         deck.process(block, &mut planes)
@@ -108,7 +107,7 @@ fn click(deck: &mut Deck, position: f64) {
 }
 
 fn events(worker: &mut Worker) -> Vec<String> {
-    worker.report(std::time::Instant::now());
+    worker.report();
     std::mem::take(&mut worker.logs)
 }
 
@@ -254,7 +253,6 @@ fn mixing_and_observing_never_allocate() {
             frames: FRAMES,
             rate: RATE,
             enabled: true,
-            silent: true,
         };
         nice_assert_no_alloc::assert_no_alloc(|| deck.process(input, &mut planes))
     };

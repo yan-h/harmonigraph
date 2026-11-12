@@ -912,8 +912,6 @@ impl Plugin for Harmonigraph {
         // while the transport is stopped, and records only while it rolls, so
         // it never records itself. With nothing to mix it leaves the buffer
         // untouched, bit for bit.
-        let silent =
-            buffer.as_slice_immutable().iter().all(|plane| plane.iter().all(|&s| s == 0.0));
         let tape = self.tape.process(
             tape::deck::BlockIn {
                 position: transport.pos_seconds(),
@@ -923,7 +921,6 @@ impl Plugin for Harmonigraph {
                 enabled: self.params.audition.value()
                     && selected == AnalysisInputParam::Main
                     && !self.offline,
-                silent,
             },
             buffer.as_slice(),
         );
