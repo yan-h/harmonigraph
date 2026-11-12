@@ -65,6 +65,7 @@ impl EditorShared {
                 audio_position: None,
                 audio_origin: 0.0,
                 spare: Default::default(),
+                tape_notes: Vec::new(),
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             last_frame: None,
