@@ -14,8 +14,6 @@
 
 use std::collections::BTreeMap;
 
-use super::Mark;
-
 /// How far a trimmed chunk keeps its samples past the cut, and how long a seam
 /// or an edge fades: 5 ms.
 pub(crate) const FADE_SECONDS: f64 = 0.005;
@@ -97,10 +95,6 @@ pub(crate) struct Chunk {
     pub data_start: i64,
     /// Interleaved, `channels` per frame.
     pub samples: Vec<f32>,
-    /// Notes and tuning by song frame, sorted, all inside `start..end`. A chunk
-    /// opens with the tuning in effect at its start, so it never depends on a
-    /// neighbour that may be overwritten or dropped.
-    pub marks: Vec<(i64, Mark)>,
 }
 
 impl Chunk {
@@ -110,7 +104,6 @@ impl Chunk {
 
     fn bytes(&self) -> usize {
         self.samples.len() * std::mem::size_of::<f32>()
-            + self.marks.len() * std::mem::size_of::<(i64, Mark)>()
     }
 
     /// The sample at song frame `frame`, channel `channel`, if held.
@@ -121,26 +114,18 @@ impl Chunk {
     }
 
     /// A copy of `from..to`, keeping up to `margin` frames of samples past
-    /// either cut, and the tuning in effect at `from`.
+    /// either cut.
     fn keep(&self, from: i64, to: i64, margin: i64, channels: usize) -> Chunk {
         let data_start = (from - margin).max(self.data_start);
         let data_end = (to + margin).min(self.data_end(channels));
         let first = (data_start - self.data_start) as usize * channels;
         let last = (data_end - self.data_start) as usize * channels;
-        let mut marks = Vec::new();
-        if let Some((_, tuning)) =
-            self.marks.iter().rev().find(|(at, mark)| *at < from && matches!(mark, Mark::Tuning(_)))
-        {
-            marks.push((from, tuning.clone()));
-        }
-        marks.extend(self.marks.iter().filter(|(at, _)| (from..to).contains(at)).cloned());
         Chunk {
             start: from,
             end: to,
             stamp: self.stamp,
             data_start,
             samples: self.samples[first..last].to_vec(),
-            marks,
         }
     }
 }
@@ -253,19 +238,6 @@ impl Store {
             };
             self.take(oldest);
             self.evicted += 1;
-        }
-    }
-
-    /// Add a note or tuning mark to the chunk of `pass` that holds `frame`.
-    /// Nothing happens where that pass lost the frame to another recording.
-    pub(crate) fn mark(&mut self, frame: i64, pass: u64, mark: Mark) {
-        let Some(chunk) = self.chunks.range_mut(..=frame).next_back().map(|(_, c)| c) else {
-            return;
-        };
-        if chunk.end > frame && chunk.stamp.pass == pass {
-            let at = chunk.marks.partition_point(|(t, _)| *t <= frame);
-            chunk.marks.insert(at, (frame, mark));
-            self.bytes += std::mem::size_of::<(i64, Mark)>();
         }
     }
 
@@ -387,14 +359,7 @@ mod tests {
 
     /// A mono chunk whose every sample is `value`.
     fn chunk(start: i64, end: i64, stamp: Stamp, value: f32) -> Chunk {
-        Chunk {
-            start,
-            end,
-            stamp,
-            data_start: start,
-            samples: vec![value; (end - start) as usize],
-            marks: Vec::new(),
-        }
+        Chunk { start, end, stamp, data_start: start, samples: vec![value; (end - start) as usize] }
     }
 
     fn owners(store: &Store) -> Vec<(i64, i64, u64)> {
@@ -499,19 +464,5 @@ mod tests {
         assert_eq!(out[1000 + fade], 1.0);
         // Nothing recorded at the cue: an immediate end.
         assert_eq!(store.render(5000, &mut out), Rendered { frames: 0, ended: true });
-    }
-
-    #[test]
-    fn a_trimmed_chunk_opens_with_the_tuning_in_effect_at_its_new_start() {
-        let mut store = Store::new(RATE, 1);
-        let mut old = chunk(0, 1000, stamp(1, 0), 1.0);
-        old.marks.push((0, Mark::Tuning(Box::default())));
-        old.marks.push((700, Mark::Tuning(Box::default())));
-        store.insert(old);
-        store.insert(chunk(0, 500, stamp(2, 0), 2.0));
-        let survivor = store.chunks().find(|c| c.stamp.pass == 1).unwrap();
-        assert_eq!(survivor.start, 500);
-        let at: Vec<i64> = survivor.marks.iter().map(|(t, _)| *t).collect();
-        assert_eq!(at, [500, 700]);
     }
 }

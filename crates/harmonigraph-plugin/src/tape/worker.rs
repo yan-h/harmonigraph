@@ -1,23 +1,21 @@
 //! The tape's input-worker half: it records rolling blocks into the store,
-//! places notes and tuning beside them, assembles audio for a cue, and turns
-//! the audio thread's events into console lines.
+//! assembles audio for a cue, and turns the audio thread's events into
+//! console lines.
 //!
 //! It runs in the input worker's step with no lock held, between the step's
 //! two holds of the editor lock; only the console lines need the lock, and
 //! the step hands them over in its second hold.
 
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use harmonigraph_record::transport;
-use harmonigraph_ui::params::ParamKey;
 
 use crate::audio_ingress::Block;
 
 use super::store::{Chunk, Stamp, Store};
-use super::{Event, Mark, Piece, Shared, Tuning};
+use super::{Event, Piece, Shared};
 
 /// How far ahead of the audio thread the worker keeps a cue's audio: a dozen
 /// of the shut window's 20 ms polls.
@@ -25,12 +23,6 @@ pub(crate) const LEAD_SECONDS: f64 = 0.25;
 
 /// A pass's chunks are cut at about this length.
 const CHUNK_SECONDS: f64 = 1.0;
-
-/// Recent rolling blocks kept to place notes, which can arrive ahead of the
-/// audio they sound in.
-const RECENT: usize = 512;
-/// Notes waiting for their block, and notes the live drain holds for a step.
-pub(crate) const NOTES: usize = 4096;
 
 /// How long without a process call before the console says the host stopped
 /// calling.
@@ -47,16 +39,6 @@ struct Pass {
     next_song: i64,
 }
 
-/// A rolling block's place on both clocks, to place notes.
-#[derive(Clone, Copy, Debug)]
-struct Placed {
-    presentation: f64,
-    seconds: f64,
-    rate: f64,
-    song: i64,
-    pass: u64,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct Playback {
     serial: u64,
@@ -67,8 +49,6 @@ struct Playback {
 
 pub(crate) struct Worker {
     shared: Arc<Shared>,
-    /// Where the tuning is read from.
-    params: Arc<crate::HarmonigraphParams>,
     samples: rtrb::Producer<f32>,
     pieces: rtrb::Producer<Piece>,
     events: rtrb::Consumer<Event>,
@@ -78,17 +58,8 @@ pub(crate) struct Worker {
     /// The pass's chunk still being recorded; committed when it is full, the
     /// pass ends, or a dropped stretch breaks it.
     building: Option<Chunk>,
-    recent: VecDeque<Placed>,
-    pending: VecDeque<(f64, Mark)>,
-    /// The presentation time the drained blocks reach.
-    drained_through: f64,
-    /// The song frame of the last rolling block, for a tuning change.
-    last_song: Option<i64>,
-    tuning: Option<Tuning>,
     playback: Option<Playback>,
     scratch: Vec<f32>,
-    /// Swapped with the live drain's note buffer each step.
-    pub(crate) inbox: Vec<(f64, Mark)>,
     /// Console lines for the step's second hold.
     pub(crate) logs: Vec<String>,
     blocks_seen: u64,
@@ -105,14 +76,12 @@ fn at(seconds: f64) -> String {
 impl Worker {
     pub(super) fn new(
         shared: Arc<Shared>,
-        params: Arc<crate::HarmonigraphParams>,
         samples: rtrb::Producer<f32>,
         pieces: rtrb::Producer<Piece>,
         events: rtrb::Consumer<Event>,
     ) -> Worker {
         Worker {
             shared,
-            params,
             samples,
             pieces,
             events,
@@ -120,14 +89,8 @@ impl Worker {
             pass: None,
             next_pass: 0,
             building: None,
-            recent: VecDeque::with_capacity(RECENT),
-            pending: VecDeque::new(),
-            drained_through: f64::NEG_INFINITY,
-            last_song: None,
-            tuning: None,
             playback: None,
             scratch: Vec::new(),
-            inbox: Vec::with_capacity(NOTES),
             logs: Vec::new(),
             blocks_seen: 0,
             blocks_at: Instant::now(),
@@ -145,8 +108,6 @@ impl Worker {
     pub(crate) fn capture(&mut self, block: Block, samples: &[f32]) {
         let rate = block.format.sample_rate;
         let channels = block.format.channels;
-        let presentation = block.origin + block.first_frame as f64 / f64::from(rate);
-        self.drained_through = presentation + block.frames as f64 / f64::from(rate);
         let main = !block.format.sidechain && channels > 0;
         // Before the rolling test: a stopped block at a new rate must clear
         // the tape too, or a click before the transport next rolls would play
@@ -154,7 +115,6 @@ impl Worker {
         if main && self.store.as_ref().is_some_and(|s| s.rate != rate || s.channels != channels) {
             self.end_pass();
             self.store = None;
-            self.recent.clear();
             self.logs
                 .push(format!("tape: cleared for a new format ({channels} channels at {rate} Hz)"));
         }
@@ -196,117 +156,24 @@ impl Worker {
             let chunk = self.building.take().expect("a chunk");
             commit(store, chunk);
         }
-        let chunk = self.building.get_or_insert_with(|| {
-            let mut marks = Vec::new();
-            if let Some(tuning) = &self.tuning {
-                marks.push((song_frame, Mark::Tuning(Box::new(tuning.clone()))));
-            }
-            Chunk {
-                start: song_frame,
-                end: song_frame,
-                stamp: Stamp { pass: pass.id, when: Instant::now(), pass_start: pass.start },
-                data_start: song_frame,
-                samples: Vec::with_capacity((CHUNK_SECONDS * f64::from(rate)) as usize * channels),
-                marks,
-            }
+        let chunk = self.building.get_or_insert_with(|| Chunk {
+            start: song_frame,
+            end: song_frame,
+            stamp: Stamp { pass: pass.id, when: Instant::now(), pass_start: pass.start },
+            data_start: song_frame,
+            samples: Vec::with_capacity((CHUNK_SECONDS * f64::from(rate)) as usize * channels),
         });
         let frames = samples.len() / channels;
         chunk.samples.extend_from_slice(&samples[..frames * channels]);
         chunk.end += frames as i64;
         pass.next_source = block.first_frame + frames as u64;
         pass.next_song = song_frame + frames as i64;
-        if self.recent.len() == RECENT {
-            self.recent.pop_front();
-        }
-        self.recent.push_back(Placed {
-            presentation,
-            seconds: frames as f64 / f64::from(rate),
-            rate: f64::from(rate),
-            song: song_frame,
-            pass: pass.id,
-        });
-        self.last_song = Some(song_frame);
     }
 
     fn end_pass(&mut self) {
         self.pass = None;
-        self.last_song = None;
         if let (Some(chunk), Some(store)) = (self.building.take(), self.store.as_mut()) {
             commit(store, chunk);
-        }
-    }
-
-    /// Place a mark at song frame `frame` of pass `pass`.
-    fn place(&mut self, frame: i64, pass: u64, mark: Mark) {
-        match &mut self.building {
-            Some(chunk)
-                if chunk.stamp.pass == pass && (chunk.start..chunk.end).contains(&frame) =>
-            {
-                let at = chunk.marks.partition_point(|(t, _)| *t <= frame);
-                chunk.marks.insert(at, (frame, mark));
-            }
-            _ => {
-                if let Some(store) = &mut self.store {
-                    store.mark(frame, pass, mark);
-                }
-            }
-        }
-    }
-
-    /// The tuning the live display draws with now: the published
-    /// configuration and the parameter values the take records.
-    fn current_tuning(&self) -> Tuning {
-        let params = &self.params;
-        Tuning {
-            resolved: params.configuration.get().map(|mailbox| {
-                crate::configuration::view(mailbox.published.load(), false).resolved
-            }),
-            params: ParamKey::ALL.map(|key| params.param_for(key).value()),
-        }
-    }
-
-    /// After a step's blocks: place the notes the live drain handed over, and
-    /// record the tuning if it changed.
-    pub(crate) fn settle(&mut self) {
-        let tuning = self.current_tuning();
-        self.pending.extend(self.inbox.drain(..));
-        while self.pending.len() > NOTES {
-            self.pending.pop_front();
-        }
-        let mut waiting = VecDeque::with_capacity(self.pending.len());
-        while let Some((time, mark)) = self.pending.pop_front() {
-            let placed = self
-                .recent
-                .iter()
-                .rev()
-                .find(|p| p.presentation <= time && time < p.presentation + p.seconds)
-                .copied();
-            match placed {
-                Some(p) => {
-                    let frame = p.song + ((time - p.presentation) * p.rate).round() as i64;
-                    self.place(frame, p.pass, mark);
-                }
-                // Not rolling then: nothing of the tape's.
-                None if time < self.drained_through => {}
-                // Ahead of the audio: wait for its block.
-                None => waiting.push_back((time, mark)),
-            }
-        }
-        self.pending = waiting;
-        if self.tuning.as_ref() != Some(&tuning) {
-            if let (Some(frame), Some(pass)) = (self.last_song, self.pass) {
-                self.place(frame, pass.id, Mark::Tuning(Box::new(tuning.clone())));
-            }
-            self.tuning = Some(tuning);
-        }
-        if let Some(store) = &self.store {
-            if store.evicted > 0 && !self.evicted_reported {
-                self.evicted_reported = true;
-                self.logs.push(format!(
-                    "tape: full at {} MiB; dropping the oldest-recorded audio from here on",
-                    store.bytes() >> 20,
-                ));
-            }
         }
     }
 
@@ -391,6 +258,15 @@ impl Worker {
         while let Ok(event) = self.events.pop() {
             let line = self.describe(event);
             self.logs.push(line);
+        }
+        if let Some(store) = &self.store {
+            if store.evicted > 0 && !self.evicted_reported {
+                self.evicted_reported = true;
+                self.logs.push(format!(
+                    "tape: full at {} MiB; dropping the oldest-recorded audio from here on",
+                    store.bytes() >> 20,
+                ));
+            }
         }
         let blocks = self.shared.blocks.load(Ordering::Relaxed);
         if blocks != self.blocks_seen {

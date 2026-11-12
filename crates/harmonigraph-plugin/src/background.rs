@@ -329,8 +329,8 @@ thread_local! {
 /// on one of those holds is not also waiting for this thread to be scheduled.
 ///
 /// **The tape** (see [`crate::tape`]) works between the two holds as well:
-/// it records the blocks just taken, places the notes the drain copied for it,
-/// and keeps a cue's audio queued for the audio thread. Its console lines wait
+/// it records the blocks just taken and keeps a cue's audio queued for the
+/// audio thread. Its console lines wait
 /// for the second hold.
 fn step(
     shared: &Mutex<EditorShared>,
@@ -353,17 +353,13 @@ fn step(
             restore.adopt(shared);
         }
         let now = shared.input.now();
-        let taken =
-            shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
-        std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
-        taken
+        shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now)
     };
     if let Some(taken) = &taken {
         for (block, samples) in taken.blocks() {
             tape.capture(block, samples);
         }
     }
-    tape.settle();
     tape.play();
     tape.report(std::time::Instant::now());
     let taken = taken.map(|mut taken| {
@@ -511,7 +507,7 @@ mod tests {
     }
 
     fn tape() -> crate::tape::Worker {
-        crate::tape::channel(Arc::new(crate::HarmonigraphParams::default())).1
+        crate::tape::channel().1
     }
 
     fn harness() -> Harness {

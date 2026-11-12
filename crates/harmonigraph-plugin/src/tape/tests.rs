@@ -2,8 +2,6 @@
 //! called by hand between blocks, which is what the input worker does on its
 //! own clock.
 
-use std::sync::Arc;
-
 use super::deck::{BlockIn, BlockOut};
 use super::store::{FADE_SECONDS, SETTLE_SECONDS};
 use super::*;
@@ -15,7 +13,7 @@ const FRAMES: usize = 100;
 const STEREO: Format = Format { channels: 2, sample_rate: RATE as f32, sidechain: false };
 
 fn pair() -> (Deck, Worker) {
-    channel(Arc::new(crate::HarmonigraphParams::default()))
+    channel()
 }
 
 /// The recorded mix at song frame `frame`: distinct per frame and channel, so
@@ -66,7 +64,6 @@ fn record(worker: &mut Worker, source: &mut u64, from: i64, to: i64) {
     let (block, samples) = ring_block(*source, None, STEREO);
     worker.capture(block, &samples);
     *source += FRAMES as u64;
-    worker.settle();
 }
 
 /// One block through the deck, over a silent stereo buffer.
@@ -299,7 +296,6 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
     }
     let (block, samples) = ring_block(source, Some(2200), Format { sidechain: true, ..STEREO });
     worker.capture(block, &samples);
-    worker.settle();
     let chunks: Vec<_> = worker
         .store()
         .unwrap()
@@ -323,42 +319,6 @@ fn a_cold_pass_does_not_replace_warm_audio_until_it_has_settled() {
     assert_eq!(owner(1000), 1, "cold never overwrites warm");
     assert_eq!(owner(1000 + settle - 1), 1);
     assert_eq!(owner(1000 + settle + 500), 2, "once settled, the fresher pass wins");
-}
-
-#[test]
-fn notes_land_at_their_song_position_and_tuning_opens_each_chunk() {
-    use harmonigraph_core::notes::{NoteEvent, SourceId};
-    let (_, mut worker) = pair();
-    let note =
-        |time: f64| (time, Mark::Note(NoteEvent::on(time, SourceId::DIRECT, 0, 60, 0.8).into()));
-    // Presentation 0.05 s is in the first rolling block, at song 4.05 s; 0.95
-    // s arrives before its audio does; 0.15 s fell in a stopped block.
-    worker.inbox.extend([note(0.05), note(0.95)]);
-    for (first, song) in [(0, Some(4000)), (100, None), (200, Some(4200))] {
-        let (block, samples) = ring_block(first, song, STEREO);
-        worker.capture(block, &samples);
-    }
-    worker.inbox.push(note(0.15));
-    worker.settle();
-    for first in (300..2300).step_by(FRAMES) {
-        let (block, samples) = ring_block(first, Some(4200 + first as i64 - 200), STEREO);
-        worker.capture(block, &samples);
-    }
-    let (block, samples) = ring_block(2300, None, STEREO);
-    worker.capture(block, &samples);
-    worker.settle();
-    let store = worker.store().unwrap();
-    let notes: Vec<i64> = store
-        .chunks()
-        .flat_map(|c| c.marks.iter().filter(|(_, m)| matches!(m, Mark::Note(_))).map(|(t, _)| *t))
-        .collect();
-    assert_eq!(notes, [4050, 4950]);
-    // The first tuning sample lands where the second pass is, and every chunk
-    // after it opens with that tuning.
-    assert_eq!(store.chunks().filter(|c| c.stamp.pass == 2).count(), 3);
-    for chunk in store.chunks().filter(|c| c.stamp.pass == 2) {
-        assert!(matches!(chunk.marks.first(), Some((t, Mark::Tuning(_))) if *t == chunk.start));
-    }
 }
 
 /// A cue cut partway through a piece must leave nothing of that piece in the

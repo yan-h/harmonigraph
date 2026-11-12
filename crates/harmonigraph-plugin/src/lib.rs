@@ -673,7 +673,7 @@ impl Default for Harmonigraph {
         #[cfg(test)]
         let take = configuration::injected_recorder().unwrap_or(take);
         let params = Arc::new(HarmonigraphParams::default());
-        let (tape, tape_worker) = tape::channel(params.clone());
+        let (tape, tape_worker) = tape::channel();
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());

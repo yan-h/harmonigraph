@@ -3,8 +3,10 @@
 //!
 //! - **Capture** reuses the analyzer's ring. While the transport rolls, each
 //!   block's descriptor carries its song position, and the input worker
-//!   appends those blocks to the [`store`], with the notes and tuning that
-//!   arrived beside them ([`worker`]).
+//!   appends those blocks to the [`store`] ([`worker`]). Notes and tuning are
+//!   not stored yet: nothing reads them before the lattice and roll follow the
+//!   tape (#1719 slice 3), which needs an exact note chase this shape cannot
+//!   give.
 //! - **Audition** starts when a stopped playhead moves and then holds still
 //!   for a block. The audio thread ([`deck`]) publishes the cue; the input
 //!   worker assembles audio from the store into a ring; the audio thread adds
@@ -16,10 +18,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
-
-use harmonigraph_core::canonical::{NoteDelta, PublicationGap, SourceBaseline};
-use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_ui::params::ParamKey;
 
 pub(crate) mod deck;
 pub(crate) mod store;
@@ -154,38 +152,14 @@ pub(crate) enum Event {
     },
 }
 
-/// The tuning a stretch of tape was recorded under: what the live display
-/// drew it with. Sampled by the worker once a step, so it lands up to a poll
-/// late, and further during a faster-than-realtime export.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Tuning {
-    /// `None` until the CLAP configuration extension has been installed.
-    pub resolved: Option<ResolvedConfig>,
-    /// The values the take records with each block (`ParamKey::ALL`).
-    pub params: [f32; ParamKey::ALL.len()],
-}
-
-/// A note or tuning fact stored beside the audio.
-#[derive(Clone, Debug)]
-#[expect(
-    dead_code,
-    reason = "recorded now, read once the lattice and roll follow the tape (#1719 slice 3)"
-)]
-pub(crate) enum Mark {
-    Note(NoteDelta),
-    Gap(PublicationGap),
-    Baseline(Box<SourceBaseline>),
-    Tuning(Box<Tuning>),
-}
-
 /// The two halves: one for `process`, one for the input worker.
-pub(crate) fn channel(params: Arc<crate::HarmonigraphParams>) -> (Deck, Worker) {
+pub(crate) fn channel() -> (Deck, Worker) {
     let shared = Arc::new(Shared::default());
     let (sample_tx, sample_rx) = rtrb::RingBuffer::new(PLAYBACK_SAMPLES);
     let (piece_tx, piece_rx) = rtrb::RingBuffer::new(PIECES);
     let (event_tx, event_rx) = rtrb::RingBuffer::new(EVENTS);
     (
         Deck::new(shared.clone(), sample_rx, piece_rx, event_tx),
-        Worker::new(shared, params, sample_tx, piece_tx, event_rx),
+        Worker::new(shared, sample_tx, piece_tx, event_rx),
     )
 }

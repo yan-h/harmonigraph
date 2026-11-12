@@ -24,10 +24,6 @@ pub(crate) struct LiveInput {
     /// The buffers the last [`Taken`] came back in, so a step allocates only
     /// when it needs more than any before it.
     pub(super) spare: TakenAudio,
-    /// The display lane's notes, gaps and baselines, copied for the tape at
-    /// their presentation times; the input worker swaps them out each step.
-    /// Bounded, so nothing grows where no worker runs.
-    pub(crate) tape_notes: Vec<(f64, crate::tape::Mark)>,
 }
 
 /// The audio one [`LiveInput::take`] moved out of the ring, and
@@ -105,20 +101,8 @@ impl LiveInput {
         }
         let Some(offset) = self.clock.offset else { return };
         let tracker = &mut runtime.tracker;
-        let tape = &mut self.tape_notes;
         self.consumer.drain(|delivery, _| {
             if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
-                if tape.len() < crate::tape::worker::NOTES {
-                    use harmonigraph_core::canonical::CanonicalEvent;
-                    let mark = match event {
-                        CanonicalEvent::Note(note) => crate::tape::Mark::Note(note),
-                        CanonicalEvent::Gap(gap) => crate::tape::Mark::Gap(gap),
-                        CanonicalEvent::Baseline(frame) => {
-                            crate::tape::Mark::Baseline(Box::new(*frame))
-                        }
-                    };
-                    tape.push((event.time(), mark));
-                }
                 let result = tracker.handle_canonical_mapped(event, offset);
                 debug_assert!(result.is_ok(), "validated canonical publication");
             }
