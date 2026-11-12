@@ -41,16 +41,22 @@ const PIECES: usize = 256;
 /// Console events in flight between two worker steps.
 const EVENTS: usize = 256;
 
+/// The request slot's two values that are not a position: NaNs, which no
+/// song position is.
+const NO_REQUEST: u64 = 0x7ff8_0000_0000_0001;
+const STOP: u64 = 0x7ff8_0000_0000_0002;
+
 /// What the audio thread and the worker publish for each other.
 pub(crate) struct Shared {
     /// The cue serial; odd while a cue wants audio.
     cue: AtomicU64,
     /// Song seconds the cue starts at, as f64 bits.
     cue_position: AtomicU64,
-    /// The Tape tab's requests: a serial the worker bumps, after storing the
-    /// song seconds to cue from (f64 bits, NaN for Stop).
+    /// The Tape tab's newest request, which the deck swaps out for
+    /// [`NO_REQUEST`]: the song seconds to cue from as f64 bits, or [`STOP`].
+    /// One slot, so a newer request replaces one not yet taken and a request
+    /// is taken whole or not at all.
     request: AtomicU64,
-    request_position: AtomicU64,
     /// What the deck last saw, for the Tape tab: the song position (f64 bits,
     /// NaN for none), whether it rolled, whether the tape may sound, and the
     /// song seconds sounding (NaN while silent).
@@ -65,8 +71,7 @@ impl Shared {
         Shared {
             cue: AtomicU64::new(0),
             cue_position: AtomicU64::new(0),
-            request: AtomicU64::new(0),
-            request_position: AtomicU64::new(0),
+            request: AtomicU64::new(NO_REQUEST),
             position: AtomicU64::new(f64::NAN.to_bits()),
             rolling: AtomicBool::new(false),
             enabled: AtomicBool::new(false),

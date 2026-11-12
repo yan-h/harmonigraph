@@ -525,3 +525,29 @@ fn a_short_pass_replaces_the_meter_only_where_it_played() {
     let meters: Vec<(f64, f64)> = view.meters.iter().map(|(at, m)| (*at, m.tempo)).collect();
     assert_eq!(meters, [(0.0, 120.0), (0.5, 90.0), (1.0, 120.0), (2.0, 120.0)]);
 }
+
+/// Stop while a new cue waits for the old one to fade: the fade finishes and
+/// the waiting cue never starts.
+#[test]
+fn a_stop_cancels_a_cue_still_waiting_for_a_fade() {
+    let (mut deck, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 3000);
+    cue(&mut deck, &mut worker, 0.0, 1.0);
+    worker.play();
+    run(&mut deck, 0.0, false, true);
+    worker.request(TapeRequest::Cue(2.0));
+    run_of(2, &mut deck, 0.0, false, true);
+    worker.request(TapeRequest::Stop);
+    for _ in 0..10 {
+        worker.play();
+        run_of(2, &mut deck, 0.0, false, true);
+    }
+    assert!(!deck.sounding());
+    let lines = events(&mut worker);
+    assert!(!lines.iter().any(|l| l.contains("audition from 2.000 s")), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("stopped after") && l.contains("by Stop")),
+        "{lines:?}"
+    );
+}

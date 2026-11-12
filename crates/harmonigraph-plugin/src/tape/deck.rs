@@ -11,7 +11,7 @@ use std::sync::Arc;
 use harmonigraph_record::transport;
 use harmonigraph_ui::tape::TapeRequest;
 
-use super::{Event, Piece, Reason, Shared};
+use super::{Event, Piece, Reason, Shared, NO_REQUEST, STOP};
 
 /// How long a cue may wait for its first audio, or a playing one go without,
 /// before it gives up: so a stalled or missing worker cannot hold the tape,
@@ -63,8 +63,6 @@ pub(crate) struct Deck {
     events: rtrb::Producer<Event>,
     /// The previous block's position and duration, for [`transport::step`].
     last: Option<(f64, f64)>,
-    /// The last request serial taken.
-    request: u64,
     /// A cue waiting for the one it replaces to finish fading.
     pending: Option<f64>,
     play: Play,
@@ -95,7 +93,6 @@ impl Deck {
             pieces,
             events,
             last: None,
-            request: 0,
             pending: None,
             play: Play::Idle,
             serial: 0,
@@ -153,8 +150,10 @@ impl Deck {
 
     /// Ramp down over the fade, then end. Tells the worker to stop now.
     fn fade(&mut self, reason: Reason, rate: f64) {
-        match self.play {
-            Play::Idle | Play::Fading { .. } => {}
+        match &mut self.play {
+            Play::Idle => {}
+            // Already going: the newest reason is the one that keeps it down.
+            Play::Fading { reason: why, .. } => *why = reason,
             Play::Cued { .. } => self.end(reason),
             Play::Playing { .. } => {
                 let of = super::store::fade_frames(rate);
@@ -177,20 +176,13 @@ impl Deck {
         self.emit(Event::Started { position });
     }
 
-    /// The Tape tab's newest request since the last block, if any. Read
-    /// twice around the position, so a request stored while it was read is
-    /// left for the next block rather than taken with the wrong position.
-    fn take_request(&mut self) -> Option<TapeRequest> {
-        let serial = self.shared.request.load(Ordering::SeqCst);
-        if serial == self.request {
-            return None;
+    /// The Tape tab's newest request since the last block, if any.
+    fn take_request(&self) -> Option<TapeRequest> {
+        match self.shared.request.swap(NO_REQUEST, Ordering::AcqRel) {
+            NO_REQUEST => None,
+            STOP => Some(TapeRequest::Stop),
+            bits => Some(TapeRequest::Cue(f64::from_bits(bits))),
         }
-        let at = f64::from_bits(self.shared.request_position.load(Ordering::SeqCst));
-        if self.shared.request.load(Ordering::SeqCst) != serial {
-            return None;
-        }
-        self.request = serial;
-        Some(if at.is_nan() { TapeRequest::Stop } else { TapeRequest::Cue(at) })
     }
 
     /// One block: observe the transport, take a request, then mix into

@@ -17,7 +17,7 @@ use harmonigraph_ui::tape::{Meter, TapeRequest, TapeSpan, TapeView};
 use crate::audio_ingress::Block;
 
 use super::store::{Chunk, Stamp, Store};
-use super::{Event, Piece, Shared};
+use super::{Event, Piece, Shared, STOP};
 
 /// How far ahead of the audio thread the worker keeps a cue's audio: a dozen
 /// of the shut window's 20 ms polls.
@@ -207,15 +207,15 @@ impl Worker {
         self.generation += 1;
     }
 
-    /// Pass a Tape tab request to the audio thread. The position goes first:
-    /// the deck reads it only once the serial says it is there.
+    /// Pass a Tape tab request to the audio thread, replacing one it has not
+    /// taken yet. A cue position that is not a number is no position.
     pub(crate) fn request(&mut self, request: TapeRequest) {
-        let at = match request {
-            TapeRequest::Cue(at) => at,
-            TapeRequest::Stop => f64::NAN,
+        let bits = match request {
+            TapeRequest::Cue(at) if at.is_finite() => at.to_bits(),
+            TapeRequest::Cue(_) => return,
+            TapeRequest::Stop => STOP,
         };
-        self.shared.request_position.store(at.to_bits(), Ordering::SeqCst);
-        self.shared.request.fetch_add(1, Ordering::SeqCst);
+        self.shared.request.store(bits, Ordering::Release);
     }
 
     /// Take the Tape tab's request, and show it the tape as it is now.
