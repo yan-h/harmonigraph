@@ -19,6 +19,7 @@ mod background;
 mod configuration;
 mod editor;
 mod lattice_maps;
+mod tape;
 
 /// Identity of this plugin build, supplied to the shared performance overlay.
 pub(crate) const BUILD_TAG: &str = BUILD_TAG_NUL.split_at(BUILD_TAG_NUL.len() - 1).0;
@@ -152,6 +153,13 @@ pub struct Harmonigraph {
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: RecorderSlot,
+    /// The tape's audio-thread half (#1719): it watches the transport and
+    /// mixes an audition into the main buffer.
+    tape: tape::Deck,
+    /// The host activated us to render offline. The tape never sounds then,
+    /// though Bitwig is not known to flag the export pass this way (see
+    /// `harmonigraph_record`'s crate docs); it is one guard among several.
+    offline: bool,
 }
 
 impl Drop for Harmonigraph {
@@ -596,19 +604,39 @@ fn origin_source(
 /// `pos_beats` is in QUARTER notes, so the meter converts as
 /// `numerator * 4 / denominator` — 4 quarters to a 4/4 bar, 3 to a 6/8 one.
 fn bar_position(transport: &Transport) -> Option<f64> {
+    let meter = host_meter(transport)?;
+    Some(f64::from(meter.bar) + (meter.beats - meter.bar_start) / meter.bar_length())
+}
+
+/// The host's beat, bar and time signature where the transport sits, read as
+/// [`bar_position`] describes, with its tempo or 0.0 where it sends none.
+fn host_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
     let beats = transport.pos_beats()?;
-    let per_bar = match (transport.time_sig_numerator, transport.time_sig_denominator) {
-        (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
-            f64::from(numerator) * 4.0 / f64::from(denominator)
+    let (numerator, denominator) =
+        match (transport.time_sig_numerator, transport.time_sig_denominator) {
+            (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
+                (numerator, denominator)
+            }
+            // 4/4 is what a host that reports no meter is almost always in,
+            // and the alternative is refusing to stop at all.
+            _ => (4, 4),
+        };
+    let per_bar = f64::from(numerator) * 4.0 / f64::from(denominator);
+    let (bar, bar_start) = match (transport.bar_number, transport.bar_start_pos_beats) {
+        (Some(bar), Some(start)) => (bar, start),
+        _ => {
+            let bar = (beats / per_bar).floor();
+            (bar as i32, bar * per_bar)
         }
-        // 4/4 is what a host that reports no meter is almost always in, and
-        // the alternative is refusing to stop at all.
-        _ => 4.0,
     };
-    match (transport.bar_number, transport.bar_start_pos_beats) {
-        (Some(bar), Some(start)) => Some(f64::from(bar) + (beats - start) / per_bar),
-        _ => Some(beats / per_bar),
-    }
+    let tempo = transport.tempo.unwrap_or(0.0);
+    Some(harmonigraph_ui::tape::Meter { beats, tempo, bar_start, bar, numerator, denominator })
+}
+
+/// The host's meter, for the Tape tab's ruler: only with a tempo to place
+/// its bars in time.
+fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
+    host_meter(transport).filter(|meter| meter.tempo > 0.0)
 }
 
 /// Continuous presentation time for the display. The current block contributes
@@ -658,6 +686,7 @@ impl Default for Harmonigraph {
         #[cfg(test)]
         let take = configuration::injected_recorder().unwrap_or(take);
         let params = Arc::new(HarmonigraphParams::default());
+        let (tape, tape_worker) = tape::channel();
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
@@ -681,6 +710,7 @@ impl Default for Harmonigraph {
             editor_shared.clone(),
             params.editor_state.clone(),
             params.ui_state.blob().clone(),
+            tape_worker,
         );
         params.ui_state.attach(&editor_shared, params.editor_state.clone());
         Harmonigraph {
@@ -695,6 +725,8 @@ impl Default for Harmonigraph {
             samples_processed: 0,
             presentation_seconds: 0.0,
             take: RecorderSlot(Some(take)),
+            tape,
+            offline: false,
             _input_worker,
         }
     }
@@ -743,7 +775,8 @@ impl Plugin for Harmonigraph {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    // Main audio passes through untouched. The selected input is tapped for
+    // Main audio passes through, untouched unless the tape is auditioning
+    // with the transport stopped (see `tape`). The selected input is tapped for
     // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
     // mixdown (see `process`, and `interleaved_reservation` for what that
     // costs). MIDI goes out through the Hub, which delays it by D and states
@@ -781,6 +814,7 @@ impl Plugin for Harmonigraph {
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
+        self.offline = buffer_config.process_mode == ProcessMode::Offline;
         true
     }
 
@@ -807,6 +841,8 @@ impl Plugin for Harmonigraph {
         }
         self.samples_processed = 0;
         self.audio_producer.reset();
+        // Before anything else can render: an export may follow a reset.
+        self.tape.reset();
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
         // Presentation time stays continuous when exact raw clock provenance
@@ -877,9 +913,23 @@ impl Plugin for Harmonigraph {
         // input worker stalled — drops frames. The next retained
         // source position explicitly resets analysis across that gap.
         // Read the parameter and choose ONCE per block: the same buffer goes to
-        // the live ring below and the take recorder after it. The main buffer
-        // remains the host's untouched pass-through path either way.
+        // the live ring below and the take recorder after it.
         let selected = self.params.analysis_input.value();
+        // The tape first, so the analyzer and anything after Harmonigraph hear
+        // what is played: the live input plus an audition. It sounds only
+        // while the transport is stopped, and records only while it rolls, so
+        // it never records itself. With nothing to mix it leaves the buffer
+        // untouched, bit for bit.
+        let tape = self.tape.process(
+            tape::deck::BlockIn {
+                position: transport.pos_seconds(),
+                playing: transport.playing,
+                frames: block_samples,
+                rate: self.sample_rate,
+                enabled: selected == AnalysisInputParam::Main && !self.offline,
+            },
+            buffer.as_slice(),
+        );
         let analysis_input = selected_analysis_input(&*buffer, aux.inputs.first(), selected);
         let channels = analysis_input.channels();
         let planes = analysis_input.as_slice_immutable();
@@ -891,6 +941,7 @@ impl Plugin for Harmonigraph {
                 sidechain: selected == AnalysisInputParam::Sidechain,
             },
             self.presentation_seconds,
+            tape.song.map(|seconds| audio_ingress::Song { seconds, meter: tape_meter(transport) }),
             (0..block_samples).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
         );
 
@@ -922,7 +973,13 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
-        ProcessStatus::Normal
+        // `Normal` lets a host stop calling once the input is quiet, which
+        // would freeze an audition mid-phrase (#1719).
+        if tape.sounding {
+            ProcessStatus::KeepAlive
+        } else {
+            ProcessStatus::Normal
+        }
     }
 }
 
@@ -1307,6 +1364,7 @@ mod tests {
                 sidechain: false,
             },
             plugin.presentation_seconds,
+            None,
             (0..frames).map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5),
         );
         plugin.presentation_seconds += frames as f64 / DEFAULT_SAMPLE_RATE;
@@ -2024,5 +2082,180 @@ mod tests {
         assert_eq!(take_right_channel(2), 1);
         // A host offering more than two planes still writes a stereo take.
         assert_eq!(take_right_channel(8), 1);
+    }
+
+    /// One stereo block through `process`, at song seconds `position`.
+    fn tape_block(
+        plugin: &mut Harmonigraph,
+        position: f64,
+        playing: bool,
+        left: &mut [f32],
+        right: &mut [f32],
+    ) -> ProcessStatus {
+        let mut context = EmptyProcessContext::new();
+        context.transport.pos_seconds = Some(position);
+        context.transport.playing = playing;
+        let mut main = stereo_buffer(left, right);
+        let mut inputs: [Buffer; 0] = [];
+        let mut outputs = [];
+        let mut aux = AuxiliaryBuffers { inputs: &mut inputs, outputs: &mut outputs };
+        plugin.process(&mut main, &mut aux, &mut context)
+    }
+
+    /// Click the Tape tab, and wait until the input worker has passed the
+    /// request on: two whole rounds, so one began after it was set.
+    fn ask(plugin: &Harmonigraph, request: harmonigraph_ui::tape::TapeRequest) {
+        plugin.editor_shared.lock().ui.picture.runtime.tape.request = Some(request);
+        let rounds = plugin._input_worker.completed_rounds();
+        assert!(a_round_after(plugin, rounds + 1), "the worker never ran a round");
+    }
+
+    /// Blocks of `frames` from song seconds `from`, as many as fit in
+    /// `seconds`.
+    fn song_blocks(plugin: &Harmonigraph, from: f64, seconds: f64, frames: usize) -> Vec<f64> {
+        let block = frames as f64 / plugin.sample_rate;
+        (0..(seconds / block).ceil() as usize).map(|i| from + i as f64 * block).collect()
+    }
+
+    /// The plugin's first write to the main buffer must leave it exactly as
+    /// the host handed it whenever no tape sounds: nothing asked, or a cue
+    /// somewhere nothing was recorded. Bits, not values, because
+    /// even adding a zero would turn a -0.0 into a +0.0, and a NaN payload is
+    /// a value nothing compares equal.
+    #[test]
+    fn with_no_tape_sounding_the_main_output_is_the_input_bit_for_bit() {
+        let odd = [
+            -0.0f32,
+            f32::from_bits(0x7fc0_1234),
+            f32::MIN_POSITIVE / 2.0,
+            f32::INFINITY,
+            0.25,
+            -1.5,
+            0.0,
+            1e-30,
+        ];
+        let input: Vec<f32> = (0..512).map(|i| odd[i % odd.len()]).collect();
+        let mut plugin = Harmonigraph::default();
+        let mut position = 10.0;
+        for asked in [false, true] {
+            let mut blocks: Vec<(f64, bool)> =
+                song_blocks(&plugin, position, 0.1, 512).into_iter().map(|p| (p, true)).collect();
+            blocks.extend(std::iter::repeat_n((position, false), 40));
+            let mut cued = false;
+            for (i, (at, playing)) in blocks.into_iter().enumerate() {
+                if asked && i == 30 {
+                    ask(&plugin, harmonigraph_ui::tape::TapeRequest::Cue(position + 100.0));
+                }
+                let (mut left, mut right) = (input.clone(), input.clone());
+                let status = tape_block(&mut plugin, at, playing, &mut left, &mut right);
+                cued |= matches!(status, ProcessStatus::KeepAlive);
+                let bits = |v: &[f32]| v.iter().map(|s| s.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&left), bits(&input), "asked {asked}, block at {at}");
+                assert_eq!(bits(&right), bits(&input), "asked {asked}, block at {at}");
+            }
+            assert_eq!(cued, asked, "the cue must have reached the deck");
+            position += 200.0;
+        }
+    }
+
+    /// The whole path through the real input worker: rolling blocks reach the
+    /// tape through the analyzer's ring, and a Tape tab cue plays them back
+    /// into the main buffer, with `KeepAlive` while it sounds; the transport
+    /// starting cuts it and the output is the input again.
+    #[test]
+    fn a_tape_tab_cue_plays_back_what_the_worker_recorded() {
+        let mut plugin = Harmonigraph::default();
+        let rate = plugin.sample_rate;
+        // Unique per song frame and channel.
+        let song = |frame: usize, channel: usize| {
+            let value = (frame + 1) as f32 * 1e-5;
+            if channel == 0 {
+                value
+            } else {
+                -value
+            }
+        };
+        // One second from the song's start: inside the analyzer ring, so a
+        // worker that has not run yet loses nothing.
+        for (i, at) in song_blocks(&plugin, 0.0, 1.0, 512).into_iter().enumerate() {
+            let mut left: Vec<f32> = (0..512).map(|f| song(i * 512 + f, 0)).collect();
+            let mut right: Vec<f32> = (0..512).map(|f| song(i * 512 + f, 1)).collect();
+            assert!(matches!(
+                tape_block(&mut plugin, at, true, &mut left, &mut right),
+                ProcessStatus::Normal
+            ));
+        }
+        let silence = |plugin: &mut Harmonigraph, at: f64| {
+            let (mut left, mut right) = (vec![0.0; 512], vec![0.0; 512]);
+            let status = tape_block(plugin, at, false, &mut left, &mut right);
+            (status, left, right)
+        };
+        for _ in 0..40 {
+            silence(&mut plugin, 0.0);
+        }
+        // Two whole rounds after the stop: one began after it was published,
+        // so the pass is committed before the click.
+        let rounds = plugin._input_worker.completed_rounds();
+        assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");
+
+        // The host keeps reporting where playback stopped.
+        let parked = 0.0;
+        let cue = 0.5;
+        ask(&plugin, harmonigraph_ui::tape::TapeRequest::Cue(cue));
+        let started = Instant::now();
+        let first = (cue * rate).round() as usize;
+        let mut heard = Vec::new();
+        while heard.len() < 2048 {
+            // A worker round before each block: a cue gives up after half a
+            // second of AUDIO time without a piece, so blocks fed on a timer
+            // would starve it whenever a busy runner held the worker back.
+            let rounds = plugin._input_worker.completed_rounds();
+            assert!(a_round_after(&plugin, rounds), "the worker never ran a round");
+            let (status, left, right) = silence(&mut plugin, parked);
+            assert!(matches!(status, ProcessStatus::KeepAlive), "the tape is cued or sounding");
+            let start = if heard.is_empty() {
+                left.iter().position(|&s| s != 0.0).unwrap_or(left.len())
+            } else {
+                0
+            };
+            heard.extend(left[start..].iter().zip(&right[start..]).map(|(&l, &r)| (l, r)));
+            assert!(started.elapsed() < ANALYSIS_DEADLINE, "no tape audio arrived");
+        }
+        let fade = (tape::store::FADE_SECONDS * rate).ceil() as usize;
+        for (i, &(l, r)) in heard.iter().enumerate().skip(fade) {
+            assert_eq!((l, r), (song(first + i, 0), song(first + i, 1)), "frame {i} after the cue");
+        }
+        let lines: Vec<String> = plugin
+            .editor_shared
+            .lock()
+            .ui
+            .picture
+            .runtime
+            .console
+            .lines()
+            .filter(|l| l.starts_with("tape:"))
+            .map(str::to_owned)
+            .collect();
+        assert!(
+            lines.iter().any(|l| l.starts_with("tape: audition from 0.500 s (warm (from the song's start)")),
+            "{lines:?}",
+        );
+        // The tab is shown what sounds, and where the transport stopped.
+        let rounds = plugin._input_worker.completed_rounds();
+        assert!(a_round_after(&plugin, rounds + 1), "the worker never ran a round");
+        {
+            let shared = plugin.editor_shared.lock();
+            let view = &shared.ui.picture.runtime.tape;
+            assert!(view.present && view.enabled && !view.rolling);
+            assert_eq!(view.position, Some(parked));
+            let heard = view.heard.expect("the audition is sounding");
+            assert!(heard > cue && heard < cue + 0.2, "{heard}");
+        }
+
+        let input: Vec<f32> = (0..512).map(|f| f as f32).collect();
+        let (mut left, mut right) = (input.clone(), input.clone());
+        let status = tape_block(&mut plugin, parked, true, &mut left, &mut right);
+        assert!(matches!(status, ProcessStatus::Normal));
+        assert_eq!((left, right), (input.clone(), input));
     }
 }

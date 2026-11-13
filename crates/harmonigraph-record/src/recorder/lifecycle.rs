@@ -130,8 +130,8 @@ pub(super) fn transition(
                 _ => (Motion::Initial, Deferred::None),
             };
             let recording = matches!(state, State::Recording { .. });
-            let rolling = match history.position {
-                Some((last, _)) if position < last - if playing { 0.05 } else { 0.0 } => {
+            let rolling = match crate::transport::step(history.position, position, playing) {
+                crate::transport::Step::Back { rolling } => {
                     if policy.end_at_rewind {
                         if motion == Motion::Forward {
                             next.state = State::Complete;
@@ -144,23 +144,17 @@ pub(super) fn transition(
                         // stay in pass 1 so its configuration can close (#828).
                         deferred = Deferred::Split;
                     }
-                    playing
+                    rolling
                 }
-                Some((last, previous_duration)) => {
-                    // Use the PREVIOUS callback size, inclusive +/-50% (#839).
-                    // A tiny scrub in this interval records one block and can
-                    // qualify a later rewind, exactly like stopped export.
-                    let continuous = previous_duration.is_finite()
-                        && previous_duration > 0.0
-                        && position >= last + previous_duration * 0.5
-                        && position <= last + previous_duration * 1.5;
-                    let rolling = playing || continuous;
-                    if rolling && position > last {
+                crate::transport::Step::Ahead { rolling } => {
+                    // A tiny scrub inside the continuity interval records one
+                    // block and can qualify a later rewind, exactly like a
+                    // stopped export (#839).
+                    if rolling && history.position.is_some_and(|(last, _)| position > last) {
                         motion = Motion::Forward;
                     }
                     rolling
                 }
-                None => playing,
             };
             if rolling {
                 // Host observation history includes parked scrubs. Audio does

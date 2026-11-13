@@ -30,6 +30,7 @@ mod spectrogram;
 mod spectrum;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
+pub mod tape;
 /// The Video pane's settings, which the appearance document carries.
 mod video;
 pub use runtime::VisualRuntime;

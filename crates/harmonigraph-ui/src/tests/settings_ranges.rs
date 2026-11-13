@@ -484,7 +484,8 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
         // Stop at bar stays a drag value (its range runs to 100,000), and
         // draws only under its trigger.
         Tab::Video => labels.push("Tail"),
-        Tab::Console => (),
+        // Readouts with no bars.
+        Tab::Console | Tab::Tape => (),
         _ => panic!("add the new settings page's bar inventory"),
     }
     if scenario.pane == Tab::LatticeSettings {

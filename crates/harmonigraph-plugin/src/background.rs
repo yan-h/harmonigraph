@@ -124,6 +124,7 @@ impl InputWorker {
         shared: Arc<Mutex<EditorShared>>,
         editor_state: Arc<EguiState>,
         ui_state: Arc<RwLock<String>>,
+        tape: crate::tape::Worker,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -136,10 +137,18 @@ impl InputWorker {
             .name("harmonigraph-input-worker".to_string())
             .spawn(move || {
                 raise_to_gui_priority();
+                let mut tape = tape;
                 #[cfg(not(test))]
-                run(&worker, &editor_state, Restore::of(ui_state), &flag);
+                run(&worker, &editor_state, Restore::of(ui_state), &mut tape, &flag);
                 #[cfg(test)]
-                run(&worker, &editor_state, Restore::of(ui_state), &flag, &worker_rounds);
+                run(
+                    &worker,
+                    &editor_state,
+                    Restore::of(ui_state),
+                    &mut tape,
+                    &flag,
+                    &worker_rounds,
+                );
             });
         let thread = match thread {
             Ok(thread) => Some(thread),
@@ -318,7 +327,17 @@ thread_local! {
 /// hold nothing. The thread runs at the GUI's
 /// scheduling class on macOS (see [`InputWorker::spawn`]), so a frame waiting
 /// on one of those holds is not also waiting for this thread to be scheduled.
-fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Restore) {
+///
+/// **The tape** (see [`crate::tape`]) works between the two holds as well:
+/// it records the blocks just taken and keeps a cue's audio queued for the
+/// audio thread. It takes the Tape tab's request and fills its view in the
+/// first hold; its console lines wait for the second.
+fn step(
+    shared: &Mutex<EditorShared>,
+    editor_state: &EguiState,
+    restore: &mut Restore,
+    tape: &mut crate::tape::Worker,
+) {
     #[cfg(test)]
     if let Some(gate) = TICK_PAUSE.with_borrow_mut(Option::take) {
         gate.wait();
@@ -334,21 +353,32 @@ fn step(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
             restore.adopt(shared);
         }
         let now = shared.input.now();
+        tape.exchange(&mut shared.ui.picture.runtime.tape);
         shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now)
     };
+    if let Some(taken) = &taken {
+        for (block, samples) in taken.blocks() {
+            tape.capture(block, samples);
+        }
+    }
+    tape.play();
+    tape.report();
     let taken = taken.map(|mut taken| {
         #[cfg(test)]
         BETWEEN_HOLDS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared, &taken)));
         crate::editor::input::LiveInput::analyze(&mut taken);
         taken
     });
-    if taken.is_none() && editor_state.is_open() {
+    if taken.is_none() && editor_state.is_open() && tape.logs.is_empty() {
         return;
     }
     let mut guard = shared.lock();
     let shared = &mut *guard;
     if let Some(taken) = taken {
         shared.input.give(&mut shared.ui.picture.runtime, taken);
+    }
+    for line in tape.logs.drain(..) {
+        shared.ui.picture.runtime.console.log(line);
     }
     if !editor_state.is_open() {
         let now = shared.input.now();
@@ -377,10 +407,11 @@ fn guarded_step(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,
     restore: &mut Restore,
+    tape: &mut crate::tape::Worker,
     panicked: &mut bool,
 ) -> bool {
     let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        step(shared, editor_state, restore)
+        step(shared, editor_state, restore, tape)
     }));
     if stepped.is_err() {
         let mut guard = shared.lock();
@@ -414,13 +445,14 @@ fn run(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,
     mut restore: Restore,
+    tape: &mut crate::tape::Worker,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
 ) {
     let mut panicked = false;
     let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, &mut restore, &mut panicked) {
+        if guarded_step(shared, editor_state, &mut restore, tape, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -472,6 +504,11 @@ mod tests {
         /// The thread's end of it, held across rounds exactly as [`run`] holds
         /// one — so a test can step twice and see what the second step skips.
         restore: Restore,
+        tape: crate::tape::Worker,
+    }
+
+    fn tape() -> crate::tape::Worker {
+        crate::tape::channel().1
     }
 
     fn harness() -> Harness {
@@ -494,6 +531,7 @@ mod tests {
             editor_state: EguiState::from_size(800, 600),
             restore: Restore::of(ui_state.clone()),
             ui_state,
+            tape: tape(),
         }
     }
 
@@ -518,7 +556,7 @@ mod tests {
         /// One round of the loop the thread runs, against a mirror that
         /// survives between rounds.
         fn step(&mut self) {
-            super::step(&self.shared, &self.editor_state, &mut self.restore);
+            super::step(&self.shared, &self.editor_state, &mut self.restore, &mut self.tape);
         }
 
         /// What the host does when it restores a project — or pushes a preset
@@ -539,6 +577,7 @@ mod tests {
                     sidechain: false,
                 },
                 start as f64 / 48_000.0,
+                None,
                 (0..frames).map(|i| {
                     let t = (start + i as u64) as f32 / 48_000.0;
                     (std::f32::consts::TAU * 440.0 * t).sin() * 0.5
@@ -773,7 +812,7 @@ mod tests {
         h.push_audio(20_000);
         BETWEEN_HOLDS.set(Some(Box::new(|_: &Mutex<EditorShared>, _| panic!("a step's bug"))));
         let mut panicked = false;
-        super::guarded_step(&h.shared, &h.editor_state, &mut h.restore, &mut panicked);
+        super::guarded_step(&h.shared, &h.editor_state, &mut h.restore, &mut h.tape, &mut panicked);
         BETWEEN_HOLDS.set(None);
         assert!(panicked, "the hook did not run");
 
@@ -901,7 +940,7 @@ mod tests {
                 TICK_PAUSE.with_borrow_mut(|pause| *pause = Some(worker_gate));
                 // This worker has not adopted the blob yet.
                 let mut restore = Restore::of(ui_state);
-                step(&shared, &editor_state, &mut restore);
+                step(&shared, &editor_state, &mut restore, &mut tape());
             });
             gate.wait();
             {
@@ -1069,8 +1108,12 @@ mod tests {
         let mut h = harness();
         h.push_audio(20_000);
 
-        let analyzer =
-            InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), h.ui_state.clone());
+        let analyzer = InputWorker::spawn(
+            h.shared.clone(),
+            h.editor_state.clone(),
+            h.ui_state.clone(),
+            tape(),
+        );
         // Polled to a deadline, so a loaded machine cannot fail this for being
         // slow — it is asserting that steps happen at all, not how fast.
         let started = Instant::now();

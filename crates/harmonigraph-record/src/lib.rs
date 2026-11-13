@@ -79,6 +79,7 @@
 pub mod configuration;
 pub mod publication;
 mod recorder;
+pub mod transport;
 
 #[cfg(feature = "test-support")]
 #[doc(hidden)]

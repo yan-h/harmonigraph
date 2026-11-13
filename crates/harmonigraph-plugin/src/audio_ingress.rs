@@ -28,6 +28,18 @@ pub(crate) struct Block {
     pub first_frame: u64,
     pub frames: usize,
     pub format: Format,
+    /// Where the block's first frame is in the song while the transport
+    /// rolls, `None` otherwise: what the tape keys its recording on.
+    pub song: Option<Song>,
+}
+
+/// A rolling block's place in the song.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Song {
+    pub seconds: f64,
+    /// The host's bar and beat there, for the Tape tab's ruler, when it
+    /// reports a beats timeline and a tempo.
+    pub meter: Option<harmonigraph_ui::tape::Meter>,
 }
 
 pub(crate) struct Producer {
@@ -76,6 +88,7 @@ impl Producer {
         frames: usize,
         format: Format,
         presentation: f64,
+        song: Option<Song>,
         samples: impl Iterator<Item = f32>,
     ) {
         if self.format != Some(format) {
@@ -102,6 +115,7 @@ impl Producer {
                 first_frame,
                 frames: retained,
                 format,
+                song,
             })
             .unwrap();
     }
@@ -135,10 +149,10 @@ mod tests {
     fn bounded_publication_keeps_format_frames_and_gaps_coherent() {
         let (mut tx, mut rx) = channel(7);
         let stereo = Format { channels: 2, sample_rate: 96_000.0, sidechain: true };
-        tx.publish(2, MONO, 10.0, [1.0, 2.0].into_iter());
+        tx.publish(2, MONO, 10.0, None, [1.0, 2.0].into_iter());
         // Only two of four stereo frames fit. The spare sample is not a frame.
-        tx.publish(4, stereo, 11.0, (10..18).map(|v| v as f32));
-        tx.publish(3, stereo, 12.0, std::iter::repeat(99.0));
+        tx.publish(4, stereo, 11.0, None, (10..18).map(|v| v as f32));
+        tx.publish(3, stereo, 12.0, None, std::iter::repeat(99.0));
         let mut blocks = Vec::new();
         rx.drain(|b, s| blocks.push((b, s.to_vec())));
         assert_eq!(blocks.len(), 2);
@@ -151,14 +165,14 @@ mod tests {
 
         // Wrap the sample ring through the middle of a stereo frame. Both the
         // partial tail and entirely dropped callback still advanced source time.
-        tx.publish(3, stereo, 13.0, (20..26).map(|v| v as f32));
+        tx.publish(3, stereo, 13.0, None, (20..26).map(|v| v as f32));
         rx.drain(|b, s| {
             assert_eq!(b.first_frame, 7);
             assert_eq!(b.origin, 11.0);
             assert_eq!(s, [20.0, 21.0, 22.0, 23.0, 24.0, 25.0]);
         });
         tx.reset();
-        tx.publish(1, stereo, 14.0, [30.0, 31.0].into_iter());
+        tx.publish(1, stereo, 14.0, None, [30.0, 31.0].into_iter());
         rx.drain(|b, _| {
             assert_ne!(b.epoch, blocks[1].0.epoch);
             assert_eq!(b.first_frame, 0);
@@ -168,7 +182,7 @@ mod tests {
         // Descriptor exhaustion first must not leave undescribed payload.
         let (mut tx, mut rx) = channel(DESCRIPTORS + 10);
         for i in 0..DESCRIPTORS + 2 {
-            tx.publish(1, MONO, i as f64 / 48_000.0, std::iter::once(i as f32));
+            tx.publish(1, MONO, i as f64 / 48_000.0, None, std::iter::once(i as f32));
         }
         let mut count = 0;
         rx.drain(|b, s| {
@@ -177,7 +191,7 @@ mod tests {
             count += 1;
         });
         assert_eq!(count, DESCRIPTORS as u64);
-        tx.publish(1, MONO, 1.0, std::iter::once(42.0));
+        tx.publish(1, MONO, 1.0, None, std::iter::once(42.0));
         rx.drain(|b, s| {
             assert_eq!(b.first_frame, DESCRIPTORS as u64 + 2);
             assert_eq!(s, [42.0]);

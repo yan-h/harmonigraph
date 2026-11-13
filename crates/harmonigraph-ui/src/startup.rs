@@ -195,9 +195,10 @@ mod tests {
             });
             assert!(loading_text(&output), "first reveal enters asynchronous preparation");
             // The splash's own pace, which egui's predicted 1/60 s used to take
-            // whole, repainting the splash on every refresh.
+            // whole, repainting the splash on every refresh. A little under a
+            // 60 Hz refresh, for the pacing margin (#1707).
             let delay = output.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
-            assert_eq!(delay, std::time::Duration::from_millis(16), "the splash's poll");
+            assert_eq!(delay, std::time::Duration::from_millis(14), "the splash's poll");
             assert!(output
                 .shapes
                 .iter()

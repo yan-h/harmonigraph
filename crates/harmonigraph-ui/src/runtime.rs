@@ -59,6 +59,8 @@ pub struct VisualRuntime {
     /// [`ring_fade`](Self::ring_fade) above is whether the annulus is there at
     /// all. Both belong to the shared reading, not to viewport geometry.
     pub ring_levels: crate::panes::spectral_fold::RingLevels,
+    /// The plugin's tape, as the Tape tab shows it. Runtime-only.
+    pub tape: crate::tape::TapeView,
 }
 impl Default for VisualRuntime {
     fn default() -> Self {
@@ -82,6 +84,7 @@ impl Default for VisualRuntime {
             spectrum: AudioSpectrum::default(),
             ring_fade: harmonigraph_scene::RingFade::default(),
             ring_levels: crate::panes::spectral_fold::RingLevels::default(),
+            tape: Default::default(),
         }
     }
 }

@@ -52,12 +52,22 @@ struct TakenBlock {
     restart: bool,
     /// Frame zero of its run on the GUI clock, mapped at take.
     origin: f64,
-    channels: usize,
-    sample_rate: f32,
     len: usize,
+    /// The descriptor as drained: its format for the analysis, all of it for
+    /// the tape.
+    block: crate::audio_ingress::Block,
 }
 
 impl Taken {
+    /// Each block's descriptor and samples, in drain order.
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = (crate::audio_ingress::Block, &[f32])> {
+        let mut start = 0;
+        self.audio.blocks.iter().map(move |block| {
+            let samples = &self.audio.samples[start..start + block.len];
+            start += block.len;
+            (block.block, samples)
+        })
+    }
     /// Whether this step found audio, and has analyzed none of it yet.
     #[cfg(test)]
     pub(crate) fn unanalyzed_audio(&self) -> bool {
@@ -130,9 +140,8 @@ impl LiveInput {
             audio.blocks.push(TakenBlock {
                 restart,
                 origin: self.audio_origin + offset,
-                channels: block.format.channels,
-                sample_rate: block.format.sample_rate,
                 len: samples.len(),
+                block,
             });
             self.audio_position = Some((block.epoch, block.first_frame + block.frames as u64));
         });
@@ -164,8 +173,8 @@ impl LiveInput {
             start += block.len;
             lent.analysis.feed_source(
                 samples,
-                block.channels,
-                block.sample_rate,
+                block.block.format.channels,
+                block.block.format.sample_rate,
                 block.origin,
                 &audio.config,
                 |delivery| audio.deliveries.push(delivery),
@@ -377,6 +386,7 @@ mod tests {
                         sidechain: false,
                     },
                     10.0 + first as f64 / 48_000.0,
+                    None,
                     samples[first * 2..end * 2].iter().copied(),
                 );
                 count += 1;
@@ -412,6 +422,7 @@ mod tests {
                 block,
                 format,
                 first as f64 / 48_000.0,
+                None,
                 (0..block * 2).map(|i| ((first * 2 + i) as f32 * 0.047).sin()),
             );
         }
@@ -453,6 +464,7 @@ mod tests {
                     12_000,
                     format,
                     start,
+                    None,
                     (0..12_000).map(|i| ((batch * 12_000 + i) as f32 * 0.047).sin()),
                 );
                 notes
@@ -499,23 +511,23 @@ mod tests {
         let mono =
             crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
         // Retain a full window plus a hop, then drop an entire callback.
-        tx.publish(window + 384, mono, 0.0, std::iter::repeat(0.5));
-        tx.publish(window, mono, 1.0, std::iter::repeat(-0.5));
+        tx.publish(window + 384, mono, 0.0, None, std::iter::repeat(0.5));
+        tx.publish(window, mono, 1.0, None, std::iter::repeat(-0.5));
         drain_audio(&mut shared, 1.0);
         let before = shared.ui.picture.runtime.spectrum.history().len();
         assert!(before > 0);
         // A gap cannot complete a window using the previous run's tail.
-        tx.publish(window / 2, mono, 2.0, std::iter::repeat(-0.5));
+        tx.publish(window / 2, mono, 2.0, None, std::iter::repeat(-0.5));
         drain_audio(&mut shared, 2.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
         // Queue old-format partial audio before a reset and new-format audio.
-        tx.publish(window / 4, mono, 3.0, std::iter::repeat(0.9));
+        tx.publish(window / 4, mono, 3.0, None, std::iter::repeat(0.9));
         tx.reset();
         let stereo =
             crate::audio_ingress::Format { channels: 2, sample_rate: 96_000.0, sidechain: true };
         // The frame is a length of time, so at 96 kHz it is twice the samples.
         let refill = harmonigraph_ui::SpectrumConfig::default().window.frame(96_000.0);
-        tx.publish(refill / 4, stereo, 4.0, std::iter::repeat(0.0));
+        tx.publish(refill / 4, stereo, 4.0, None, std::iter::repeat(0.0));
         drain_audio(&mut shared, 4.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
         for i in 1..=4 {
@@ -523,6 +535,7 @@ mod tests {
                 refill / 4,
                 stereo,
                 4.0 + i as f64 * refill as f64 / 4.0 / 96_000.0,
+                None,
                 std::iter::repeat(0.0),
             );
             drain_audio(&mut shared, 5.0);
