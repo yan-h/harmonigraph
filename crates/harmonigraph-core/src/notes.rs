@@ -31,6 +31,27 @@ pub struct SourceId(pub u64);
 
 impl SourceId {
     pub const DIRECT: Self = Self(0);
+    /// The tape's namespace (#1719): a recorded note played back from the
+    /// tape keeps the source that played it, with this bit set, so a key held
+    /// live and the same key sounding on the tape are two voices. No live
+    /// source reaches it: the Hub numbers seventeen.
+    const TAPE: u64 = 1 << 40;
+
+    /// The source a note recorded from `self` sounds under on the tape.
+    pub fn on_tape(self) -> SourceId {
+        SourceId(self.0 | Self::TAPE)
+    }
+
+    /// The note is the tape's, not one played live.
+    pub fn is_tape(self) -> bool {
+        self.0 & Self::TAPE != 0
+    }
+
+    /// The source that played a note the tape plays: what its Show switch
+    /// is read from.
+    pub fn off_tape(self) -> SourceId {
+        SourceId(self.0 & !Self::TAPE)
+    }
 }
 
 /// One held address. Same-source retriggers replace this address; host note
@@ -778,9 +799,11 @@ impl NoteTracker {
                 // other departure takes: what publication lost is no longer known
                 // to be held, so those voices leave with a release fade rather than being
                 // dropped between two frames. A stream-wide gap is the one
-                // production emits, and it takes every source with it.
+                // production emits, and it takes every source with it, but
+                // not the tape's: what the tape plays is not published, and
+                // its player alone ends it.
                 self.release_held(gap.time, |key, _| {
-                    gap.source.is_none_or(|source| key.source == source)
+                    !key.source.is_tape() && gap.source.is_none_or(|source| key.source == source)
                 });
             }
         }
@@ -939,7 +962,7 @@ impl NoteTracker {
     /// Preserve the release time and the source visibility at that moment.
     fn release_voice(&mut self, mut voice: Voice, at: Time) {
         voice.state = VoiceState::Released { at };
-        voice.visible_at_release = !self.hidden_sources.contains(&voice.source);
+        voice.visible_at_release = !self.hides(voice.source);
         self.released.push(voice);
     }
 
@@ -1049,18 +1072,32 @@ impl NoteTracker {
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
         self.held
             .values()
-            .filter(|v| !self.hidden_sources.contains(&v.source))
+            .filter(|v| !self.hides(v.source))
             .chain(self.released.iter().filter(|v| v.visible_at_release))
     }
 
-    pub fn held_count(&self) -> usize {
-        self.held.values().filter(|v| !self.hidden_sources.contains(&v.source)).count()
+    /// The source's notes are hidden: its Show switch is off, or for a note
+    /// the tape plays, the switch of the source that played it.
+    pub fn hides(&self, source: SourceId) -> bool {
+        self.hidden_sources.contains(&source) || self.hidden_sources.contains(&source.off_tape())
     }
 
+    /// Every held voice, hidden sources' included: what is down now, for a
+    /// recorder that must not depend on what is shown.
+    pub fn held_voices(&self) -> impl Iterator<Item = &Voice> {
+        self.held.values()
+    }
+
+    pub fn held_count(&self) -> usize {
+        self.held.values().filter(|v| !self.hides(v.source)).count()
+    }
+
+    /// Every published source's notes off. The tape's stay: its player
+    /// alone ends them, and ends them itself when the plugin resets.
     pub fn session_notes_off(&mut self, now: Time) {
         self.certainty = Certainty::default();
-        self.roll.all_off(now);
-        self.release_held(now, |_, _| true);
+        self.roll.published_off(now);
+        self.release_held(now, |key, _| !key.source.is_tape());
     }
 
     /// A source leaving/resetting cannot release another source's held set.
@@ -1861,5 +1898,42 @@ mod tests {
         assert_eq!(tracker.voices().count(), 2);
         tracker.prune(2.1, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
+    }
+
+    /// A note the tape plays is shown or hidden with the source that played
+    /// it, on the lattice and on the roll.
+    #[test]
+    fn the_tape_plays_a_source_under_its_own_show_switch() {
+        let mut tracker = NoteTracker::new();
+        let source = SourceId(3);
+        tracker.handle_event(NoteEvent::on(1.0, source.on_tape(), 0, 60, 1.0));
+        assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (1, 1));
+        tracker.hidden_sources.insert(source);
+        tracker.roll.set_shown(source, false);
+        assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (0, 0));
+        assert!(!tracker.hides(SourceId(4).on_tape()), "another source's tape notes still show");
+    }
+
+    /// A stream-wide gap or a session reset ends what was published, not what
+    /// the tape plays: its player still counts those voices as sounding.
+    #[test]
+    fn a_gap_or_a_session_reset_leaves_the_tapes_voices_to_its_player() {
+        let live = SourceId(1);
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent::on(0.0, live, 0, 60, 0.8));
+        tracker.handle_event(NoteEvent::on(0.0, live.on_tape(), 0, 64, 0.8));
+        let held =
+            |tracker: &NoteTracker| tracker.held_voices().map(|v| v.note).collect::<Vec<_>>();
+        let sounding = |tracker: &NoteTracker| {
+            let live = |n: &&crate::RollNote| n.end.is_none() && n.observed_until.is_none();
+            tracker.roll().notes().filter(live).map(|n| n.note).collect::<Vec<_>>()
+        };
+
+        assert_eq!(tracker.handle_canonical(gap(1.0, None)), Ok(true));
+        assert_eq!((held(&tracker), sounding(&tracker)), (vec![64], vec![64]));
+
+        tracker.handle_event(NoteEvent::on(2.0, live, 0, 60, 0.8));
+        tracker.session_notes_off(3.0);
+        assert_eq!((held(&tracker), sounding(&tracker)), (vec![64], vec![64]));
     }
 }

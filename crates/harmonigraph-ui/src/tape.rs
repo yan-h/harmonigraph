@@ -66,6 +66,26 @@ pub struct TapeSpan {
     pub recorded: std::time::Instant,
 }
 
+/// Where an audition sounding now sits on the display's clock: what maps a
+/// note played live over it onto the song.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Audition {
+    /// The display-clock time the audition's first block reached the picture.
+    pub clock: f64,
+    /// The song seconds it started from.
+    pub song: f64,
+    /// The display-clock time it stopped sounding, once it has.
+    pub until: Option<f64>,
+}
+
+impl Audition {
+    /// The song seconds sounding at display-clock time `t`, had the audition
+    /// played on unbroken.
+    pub fn song_at(&self, t: f64) -> f64 {
+        self.song + (t - self.clock)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TapeView {
     /// A tape exists here: the plugin has one, other shells do not.
@@ -82,6 +102,20 @@ pub struct TapeView {
     pub position: Option<f64>,
     /// The song seconds sounding now, while an audition plays.
     pub heard: Option<f64>,
+    /// The last audition's place on the display's clock, from its first block
+    /// that reached the picture until the next one starts or the transport
+    /// rolls: what places the notes played over it.
+    pub audition: Option<Audition>,
+    /// The tuning axes the spot sounding now was recorded under, while an
+    /// audition is cued or plays: the picture draws with them in place of the
+    /// host's, so a note lands where it was heard (see
+    /// `VisualRuntime::observe_configuration`).
+    pub tuning: Option<harmonigraph_core::Tuning>,
+    /// What was played along the song, in song seconds: each stretch's notes
+    /// from the recording whose audio won there, so the roll shows what an
+    /// audition would play. The worker's copy, shared; rebuilt when the
+    /// recording changes.
+    pub notes: std::sync::Arc<harmonigraph_core::NoteRoll>,
     /// Memory the recording holds.
     pub bytes: usize,
     /// What is recorded, in song order.

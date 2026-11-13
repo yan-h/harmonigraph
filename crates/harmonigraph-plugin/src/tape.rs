@@ -4,10 +4,9 @@
 //!
 //! - **Capture** reuses the analyzer's ring. While the transport rolls, each
 //!   block's descriptor carries its song position, and the input worker
-//!   appends those blocks to the [`store`] ([`worker`]). Notes and tuning are
-//!   not stored yet: nothing reads them before the lattice and roll follow the
-//!   tape (#1719 slice 3), which needs an exact note chase this shape cannot
-//!   give.
+//!   appends those blocks to the [`store`] ([`worker`]), and places the notes
+//!   the display showed and the tuning it drew with beside them, by pass
+//!   ([`notes`]).
 //! - **Audition** starts from a click in the Analyzer's Tape mode. Bitwig's own playhead
 //!   cannot start it: a click in the arranger while stopped does not change
 //!   the song position Bitwig sends a plugin (measured in #1721). The input
@@ -17,6 +16,10 @@
 //!   and real-time safe, at the cost of a few tens of ms after a click.
 //! - **The spectrogram** Tape mode draws is analyzed from the store itself
 //!   ([`spectrum`]), so it shows what an audition would play.
+//! - **The notes** follow the audition into the display: the lattice and the
+//!   live roll show what the tape plays, drawn under the tuning it was
+//!   recorded with, and Tape mode's roll shows the recording's notes along the
+//!   song ([`notes`]).
 //!
 //! The tape never records itself: it records only rolling blocks, and sounds
 //! only while stopped. Nothing here is saved with the project.
@@ -25,6 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
 pub(crate) mod deck;
+pub(crate) mod notes;
 mod spectrum;
 pub(crate) mod store;
 pub(crate) mod worker;
@@ -152,13 +156,13 @@ pub(crate) enum Event {
 }
 
 /// The two halves: one for `process`, one for the input worker.
-pub(crate) fn channel() -> (Deck, Worker) {
+pub(crate) fn channel(params: Arc<crate::HarmonigraphParams>) -> (Deck, Worker) {
     let shared = Arc::new(Shared::new());
     let (sample_tx, sample_rx) = rtrb::RingBuffer::new(PLAYBACK_SAMPLES);
     let (piece_tx, piece_rx) = rtrb::RingBuffer::new(PIECES);
     let (event_tx, event_rx) = rtrb::RingBuffer::new(EVENTS);
     (
         Deck::new(shared.clone(), sample_rx, piece_rx, event_tx),
-        Worker::new(shared, sample_tx, piece_tx, event_rx),
+        Worker::new(shared, params, sample_tx, piece_tx, event_rx),
     )
 }

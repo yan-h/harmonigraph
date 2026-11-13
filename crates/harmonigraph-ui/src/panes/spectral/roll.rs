@@ -18,7 +18,7 @@
 
 use egui::Color32;
 use harmonigraph_core::Expressions;
-use harmonigraph_core::RollNote;
+use harmonigraph_core::{NoteRoll, RollNote};
 use harmonigraph_render::{RollAxes, RollInstance};
 use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget};
 
@@ -318,6 +318,34 @@ pub(super) struct RollDrawOptions {
     pub(super) point_scale: f32,
 }
 
+/// Which notes a roll draws, and along which time axis: the live roll's
+/// tracker on the `now`-anchored window, or Tape mode's recording and the
+/// notes played over an audition, each on the song (#1719).
+#[derive(Clone, Copy)]
+pub(super) struct RollSource<'a> {
+    pub(super) roll: &'a NoteRoll,
+    pub(super) time: TimeAxis,
+    /// A sounding note carries past the now-line ([`lead`]). Off where the
+    /// region's near edge is no now-line, as in Tape mode.
+    pub(super) lead: bool,
+    /// Only the notes played live from the first time until the second,
+    /// none of the tape's own: what was played over an audition, which the
+    /// recording does not hold.
+    pub(super) live_during: Option<(f64, f64)>,
+}
+
+impl<'a> RollSource<'a> {
+    /// The live roll: the tracker's notes on the window ending `now`.
+    pub(super) fn live(state: &'a PictureState, split: f32, now: f64) -> Self {
+        RollSource {
+            roll: state.roll(),
+            time: TimeAxis::new(state, split, now),
+            lead: true,
+            live_during: None,
+        }
+    }
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RollDrawProbe {
@@ -364,17 +392,28 @@ pub(super) fn draw_roll(
     state: &PictureState,
     options: RollDrawOptions,
 ) {
+    let live = RollSource::live(state, options.split, options.now);
+    draw_rolls(painter, axes, scale, width, state, &options, &[live]);
+}
+
+/// Draw `sources` as one roll, in order, through one paint callback.
+pub(super) fn draw_rolls(
+    painter: &egui::Painter,
+    axes: &Axes,
+    scale: &PitchScale,
+    width: &Width,
+    state: &PictureState,
+    options: &RollDrawOptions,
+    sources: &[RollSource],
+) {
     let ppp = painter.ctx().pixels_per_point().max(1e-3);
-    let (notes, detached) = roll_instances_with_floor(
-        axes,
-        scale,
-        width,
-        state,
-        options.split,
-        options.now,
-        ppp,
-        options.point_scale,
-    );
+    let (mut notes, mut detached) = (Vec::new(), Vec::new());
+    for source in sources {
+        let (n, d) = source_instances(axes, scale, width, state, source, ppp, options.point_scale);
+        notes.extend(n);
+        detached.extend(d);
+    }
+    let leads = sources.iter().any(|source| source.lead);
     #[cfg(test)]
     ROLL_DRAW_PROBE.with(|probe| {
         probe.set(Some(RollDrawProbe {
@@ -418,7 +457,8 @@ pub(super) fn draw_roll(
     // already did — a note is deliberately allowed to overhang the window's
     // oldest edge and slide out under the scissor (see `note_instances`), and
     // this is the same edge in the same place.
-    let (lead_px, _) = lead(&state.appearance.spectrum, axes, options.split);
+    let (lead_px, _) =
+        if leads { lead(&state.appearance.spectrum, axes, options.split) } else { (0.0, 0.0) };
     let near = (options.split - lead_px / axes.depth_len().max(1.0)).max(0.0);
     let history_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let detached_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, options.split));
@@ -479,6 +519,7 @@ pub(super) fn note_instances(
 /// width is in semitones and already follows the preview's pitch axis; only
 /// the fallback for hairline notes needs this extra scale to keep its relative
 /// size matched to the export.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn roll_instances_with_floor(
     axes: &Axes,
@@ -490,9 +531,23 @@ fn roll_instances_with_floor(
     ppp: f32,
     point_scale: f32,
 ) -> (Vec<RollInstance>, Vec<RollInstance>) {
+    let live = RollSource::live(state, split, now);
+    source_instances(axes, scale, width, state, &live, ppp, point_scale)
+}
+
+/// The roll's geometry for any [`RollSource`]: what [`draw_rolls`] draws.
+fn source_instances(
+    axes: &Axes,
+    scale: &PitchScale,
+    width: &Width,
+    state: &PictureState,
+    source: &RollSource,
+    ppp: f32,
+    point_scale: f32,
+) -> (Vec<RollInstance>, Vec<RollInstance>) {
     let cfg = &state.appearance.spectrum;
-    // Shared time<->depth mapping: a `now`-anchored scrolling window.
-    let time = TimeAxis::new(state, split, now);
+    let time = source.time;
+    let (split, now) = (time.split, time.now);
     let oldest = time.oldest();
 
     let Width { intensity, half_pitch, floor: width_floor, widest, .. } = *width;
@@ -505,7 +560,7 @@ fn roll_instances_with_floor(
     // has to be TOTAL or the sort is free to vary between runs: a retrigger
     // with no intervening note-off puts two entries at the same start, which
     // is what the channel and note tails settle.
-    let roll = state.roll();
+    let roll = source.roll;
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
@@ -514,7 +569,7 @@ fn roll_instances_with_floor(
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
     // reading of that note's own release.
-    let (lead_px, lead_fade_px) = lead(cfg, axes, split);
+    let (lead_px, lead_fade_px) = if source.lead { lead(cfg, axes, split) } else { (0.0, 0.0) };
     // The antialiasing ramp the shader feathers every edge with — one physical
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
@@ -588,8 +643,18 @@ fn roll_instances_with_floor(
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
     let band = minimum + 2.0 * gap;
+    // A recording keeps every source's notes; the tracker's Show switches
+    // say which to draw, for Tape mode's roll as for the live one.
+    let shown = state.roll();
+    let played = |note: &&RollNote| {
+        !shown.hides(note.source)
+            && source.live_during.is_none_or(|(since, until)| {
+                (since..until).contains(&note.start) && !note.source.is_tape()
+            })
+    };
     let mut notes: Vec<&RollNote> = roll
         .notes()
+        .filter(played)
         .filter(|note| {
             note.stop(now) >= edge - band || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
         })
@@ -912,7 +977,7 @@ fn texture_run(
     let now_line = axes.at(0.5, time.split);
     for instance in &mut instances[first..] {
         let center = egui::pos2(instance.center[0], instance.center[1]);
-        let clock = time.now / time.seconds_per_point(axes)
+        let clock = time.origin / time.seconds_per_point(axes)
             - f64::from((center - now_line).dot(axes.dir_depth()));
         instance.tremolo = [(clock / f64::from(scale)).rem_euclid(6.0) as f32, scale];
     }

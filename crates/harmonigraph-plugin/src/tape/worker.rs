@@ -1,25 +1,52 @@
-//! The tape's input-worker half: it records rolling blocks into the store,
-//! assembles audio for a cue, and turns the audio thread's events into
-//! console lines.
+//! The tape's input-worker half: it records rolling blocks into the store
+//! and the notes the display showed beside them, assembles audio for a cue,
+//! plays the recorded notes into the display as the cue sounds, and turns the
+//! audio thread's events into console lines.
 //!
 //! It runs in the input worker's step with no lock held, between the step's
 //! two holds of the editor lock. It takes Tape mode's request and fills its
 //! view in the first hold, and hands its console lines over in the second.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use harmonigraph_core::{NoteRoll, Tuning};
 
 use harmonigraph_record::transport;
 use harmonigraph_ui::tape::{Meter, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
-use crate::audio_ingress::Block;
+use crate::audio_ingress::{Block, TapePlay};
 
+use super::notes::{Book, Mark, Player, NOTES};
 use super::spectrum::{Spectrum, STEP_BUDGET};
 use super::store::{Chunk, Stamp, Store};
 use super::{Event, Piece, Shared, STOP};
+
+/// Recent rolling blocks kept to place notes, which can arrive ahead of the
+/// audio they sound in: as many as one drain of the ring can bring, so a step
+/// catching up after a stall still places its notes.
+const RECENT: usize = crate::audio_ingress::DESCRIPTORS;
+
+/// Passes recently opened, kept for a mark dated before a pass's start that
+/// is drained after it opened.
+const OPENED: usize = 16;
+
+/// How often Tape mode's roll is rebuilt while the recording keeps changing
+/// under it: a song's whole roll is rebuilt each time, so not every step.
+const ROLL_EVERY: Duration = Duration::from_millis(250);
+
+/// A rolling block's place on both clocks, to place notes.
+#[derive(Clone, Copy, Debug)]
+struct Placed {
+    presentation: f64,
+    seconds: f64,
+    rate: f64,
+    song: i64,
+    pass: u64,
+}
 
 /// How far ahead of the audio thread the worker keeps a cue's audio: a dozen
 /// of the shut window's 20 ms polls.
@@ -75,6 +102,40 @@ pub(crate) struct Worker {
     /// Console lines for the step's second hold.
     pub(crate) logs: Vec<String>,
     evicted_reported: bool,
+    /// Where the tuning is read from.
+    params: Arc<crate::HarmonigraphParams>,
+    /// The notes the live drain recorded, swapped out each step.
+    pub(crate) inbox: Vec<(f64, Mark)>,
+    recent: VecDeque<Placed>,
+    /// Marks waiting for the block they sound in.
+    pending: VecDeque<(f64, Mark)>,
+    /// The presentation time the drained blocks reach.
+    drained_through: f64,
+    /// Passes started, by presentation time and song frame, waiting to be
+    /// opened with the voices held when they started.
+    opening: VecDeque<(u64, f64, i64)>,
+    /// The last passes opened, the same way: a mark dated before one's start
+    /// and drained after it opened is what it opened without.
+    opened: VecDeque<(u64, f64, i64)>,
+    /// The song frame the last rolling block reached, for a tuning change.
+    last_song: Option<i64>,
+    /// The tuning axes last sampled.
+    tuning: Option<Tuning>,
+    notes_dropped_reported: bool,
+    book: Book,
+    player: Player,
+    /// Bumped when a mark is placed or a pass's notes dropped; with
+    /// `generation`, what Tape mode's roll was last built from, and when.
+    notes_generation: u64,
+    roll_shown: Option<(u64, u64)>,
+    roll_built: Option<Instant>,
+    /// Tape mode's roll was on screen at the last exchange, so worth
+    /// building.
+    visible: bool,
+    /// A roll built between holds, for the next exchange to hand over, and
+    /// the one it replaced, freed between holds too.
+    built_roll: Option<Arc<NoteRoll>>,
+    retired_roll: Option<Arc<NoteRoll>>,
 }
 
 /// Song seconds as the console prints them.
@@ -85,6 +146,7 @@ fn at(seconds: f64) -> String {
 impl Worker {
     pub(super) fn new(
         shared: Arc<Shared>,
+        params: Arc<crate::HarmonigraphParams>,
         samples: rtrb::Producer<f32>,
         pieces: rtrb::Producer<Piece>,
         events: rtrb::Consumer<Event>,
@@ -107,6 +169,24 @@ impl Worker {
             spectrum: Spectrum::default(),
             logs: Vec::new(),
             evicted_reported: false,
+            params,
+            inbox: Vec::with_capacity(NOTES),
+            recent: VecDeque::with_capacity(RECENT),
+            pending: VecDeque::new(),
+            drained_through: f64::NEG_INFINITY,
+            opening: VecDeque::new(),
+            opened: VecDeque::with_capacity(OPENED),
+            last_song: None,
+            tuning: None,
+            notes_dropped_reported: false,
+            book: Book::default(),
+            player: Player::default(),
+            notes_generation: 0,
+            roll_shown: None,
+            roll_built: None,
+            visible: false,
+            built_roll: None,
+            retired_roll: None,
         }
     }
 
@@ -115,11 +195,18 @@ impl Worker {
         self.store.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn passes(&self) -> &BTreeMap<u64, super::notes::PassNotes> {
+        &self.book.passes
+    }
+
     /// One analyzer-ring block, in drain order.
     pub(crate) fn capture(&mut self, block: Block, samples: &[f32]) {
         let rate = block.format.sample_rate;
         let channels = block.format.channels;
         let main = !block.format.sidechain && channels > 0;
+        let presentation = block.presentation();
+        self.drained_through = presentation + block.frames as f64 / f64::from(rate);
         // Before the rolling test: a stopped block at a new rate must clear
         // the tape too, or a cue before the transport next rolls would play
         // the old recording at the wrong speed.
@@ -128,6 +215,10 @@ impl Worker {
             self.store = None;
             self.spectrum.clear();
             self.meters.clear();
+            self.book.passes.clear();
+            self.recent.clear();
+            self.opening.clear();
+            self.opened.clear();
             self.generation += 1;
             self.logs
                 .push(format!("tape: cleared for a new format ({channels} channels at {rate} Hz)"));
@@ -159,6 +250,7 @@ impl Worker {
                     next_source: block.first_frame,
                     next_song: frame,
                 });
+                self.opening.push_back((self.next_pass, presentation, frame));
                 frame
             }
         };
@@ -184,11 +276,142 @@ impl Worker {
         chunk.end += frames as i64;
         pass.next_source = block.first_frame + frames as u64;
         pass.next_song = song_frame + frames as i64;
+        if self.recent.len() == RECENT {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(Placed {
+            presentation,
+            seconds: frames as f64 / f64::from(rate),
+            rate: f64::from(rate),
+            song: song_frame,
+            pass: pass.id,
+        });
+        self.last_song = Some(song_frame + frames as i64 - 1);
     }
 
     fn end_pass(&mut self) {
         self.pass = None;
+        self.last_song = None;
         self.close_chunk();
+    }
+
+    /// The tuning the live display draws with now: the configuration the
+    /// audio thread published. `None` until the CLAP configuration extension
+    /// has been installed.
+    fn current_tuning(&self) -> Option<Tuning> {
+        let mailbox = self.params.configuration.get()?;
+        Some(crate::configuration::view(mailbox.published.load(), false).resolved.tuning)
+    }
+
+    /// Open pass `pass` with the voices held now, and keep it a while for a
+    /// mark that turns out to be older than its start.
+    fn open(&mut self, (pass, start, frame): (u64, f64, i64), tuning: Option<Tuning>) {
+        self.book.open(pass, frame, tuning);
+        if self.opened.len() == OPENED {
+            self.opened.pop_front();
+        }
+        self.opened.push_back((pass, start, frame));
+    }
+
+    /// After a step's blocks: place the notes the live drain handed over at
+    /// the song frames they sound at, open the passes that started with the
+    /// voices held then, and record the tuning where it changed.
+    pub(crate) fn settle(&mut self) {
+        let tuning = self.current_tuning();
+        // A full inbox is one the drain stopped recording into.
+        let mut dropped = self.inbox.len() >= NOTES;
+        self.pending.extend(self.inbox.drain(..));
+        while self.pending.len() > NOTES {
+            self.pending.pop_front();
+            dropped = true;
+        }
+        if dropped && !std::mem::replace(&mut self.notes_dropped_reported, true) {
+            self.logs.push(format!(
+                "tape: over {NOTES} notes in one step; some were not recorded, and the tape \
+                 may hold a note past its end"
+            ));
+        }
+        let mut waiting = VecDeque::new();
+        while let Some((time, mark)) = self.pending.pop_front() {
+            // Ahead of the audio: wait for its block, and keep every mark
+            // after it waiting too, so the voices stay in order.
+            if time >= self.drained_through || !waiting.is_empty() {
+                waiting.push_back((time, mark));
+                continue;
+            }
+            while self.opening.front().is_some_and(|&(_, start, _)| start <= time) {
+                let opening = self.opening.pop_front().expect("a pass to open");
+                self.open(opening, tuning.or(self.tuning));
+            }
+            mark.apply(&mut self.book.held);
+            // Older than a pass that has already opened: that pass opened
+            // without it, so it takes it at its start. After every mark
+            // already there, which is right because the Hub publishes in time
+            // order: nothing at the pass's start can be older than this.
+            for &(pass, start, frame) in &self.opened {
+                if start > time {
+                    self.book.passes.entry(pass).or_default().place(frame, mark);
+                    self.notes_generation += 1;
+                }
+            }
+            // Newest first, and no further back than the first block that
+            // ended before the mark: a mark played while stopped would
+            // otherwise compare against every block kept.
+            let placed = self
+                .recent
+                .iter()
+                .rev()
+                .take_while(|p| time < p.presentation + p.seconds)
+                .find(|p| p.presentation <= time)
+                .copied();
+            // Not rolling then: nothing of the tape's.
+            if let Some(p) = placed {
+                let frame = p.song + ((time - p.presentation) * p.rate).round() as i64;
+                self.book.passes.entry(p.pass).or_default().place(frame, mark);
+                // Tape mode's roll draws committed chunks only: a mark in the
+                // chunk still being recorded changes it when that commits.
+                let recording = self.building.as_ref().filter(|c| c.stamp.pass == p.pass);
+                if recording.is_none_or(|chunk| frame < chunk.start) {
+                    self.notes_generation += 1;
+                }
+            }
+        }
+        self.pending = waiting;
+        while let Some(opening) = self.opening.pop_front() {
+            self.open(opening, tuning.or(self.tuning));
+        }
+        if tuning.is_some() && self.tuning != tuning {
+            if let (Some(frame), Some(pass), Some(axes)) = (self.last_song, self.pass, tuning) {
+                if let Some(notes) = self.book.passes.get_mut(&pass.id) {
+                    notes.tunings.push((frame, axes));
+                }
+            }
+            self.tuning = tuning;
+        }
+    }
+
+    /// Play the recorded notes of the stretch each block carried into the
+    /// display's tracker, on the display clock, and say where the audition
+    /// is and what tuning it was recorded under.
+    pub(crate) fn feed(
+        &mut self,
+        taken: &crate::editor::input::Taken,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+    ) {
+        let tracker = &mut runtime.tracker;
+        for (block, clock) in taken.clocked_blocks() {
+            match (block.tape, &self.store) {
+                (TapePlay::Heard { seconds, frames }, Some(store)) => {
+                    self.player.heard(tracker, store, &self.book.passes, seconds, frames, clock)
+                }
+                // Cued, or starved for a block: the audition goes on, and
+                // what it holds stays held.
+                (TapePlay::Waiting, Some(_)) => {}
+                _ => self.player.silent(tracker, clock, block.song.is_some()),
+            }
+        }
+        runtime.tape.audition = self.player.audition;
+        runtime.tape.tuning = self.player.tuning;
     }
 
     /// Commit the chunk being recorded, and set its meter over the stretch it
@@ -218,6 +441,14 @@ impl Worker {
             commit(store, chunk);
             let changed = store.take_changed();
             self.spectrum.invalidate(store, &changed);
+            // A pass none of whose audio survives has no notes to show.
+            let live: BTreeSet<u64> = store.chunks().map(|c| c.stamp.pass).collect();
+            let current = self.pass.map(|p| p.id);
+            let before = self.book.passes.len();
+            self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
+            if self.book.passes.len() != before {
+                self.notes_generation += 1;
+            }
         }
         self.generation += 1;
     }
@@ -234,8 +465,8 @@ impl Worker {
     }
 
     /// Take Tape mode's request, and show it the tape as it is now, analyzed
-    /// under the Analyzer's `settings`.
-    pub(crate) fn exchange(&mut self, view: &mut TapeView, settings: &SpectrumConfig) {
+    /// under the Analyzer's `settings`. `open`: the editor's window is.
+    pub(crate) fn exchange(&mut self, view: &mut TapeView, settings: &SpectrumConfig, open: bool) {
         if let Some(request) = view.request.take() {
             self.request(request);
         }
@@ -251,7 +482,11 @@ impl Worker {
         view.rolling = shared.rolling.load(Ordering::Relaxed);
         view.position = seconds(&shared.position);
         view.heard = seconds(&shared.heard);
-        view.bytes = self.store.as_ref().map_or(0, Store::bytes);
+        view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
+        self.visible = view.showing && open && settings.show_roll;
+        if let Some(roll) = self.built_roll.take() {
+            self.retired_roll = Some(std::mem::replace(&mut view.notes, roll));
+        }
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
             view.spans = self.store.as_ref().map_or_else(Vec::new, spans);
@@ -259,6 +494,25 @@ impl Worker {
             view.meters =
                 self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
         }
+    }
+
+    /// Rebuild Tape mode's roll if the recording changed under it, with no
+    /// lock held: it walks every note recorded. At most every [`ROLL_EVERY`],
+    /// so a recording growing under the view rebuilds it a few times a second
+    /// rather than every step.
+    pub(crate) fn roll(&mut self) {
+        self.retired_roll = None;
+        let built = (self.generation, self.notes_generation);
+        let due = self.roll_built.is_none_or(|at| at.elapsed() >= ROLL_EVERY);
+        if !self.visible || self.roll_shown == Some(built) || !due {
+            return;
+        }
+        self.roll_shown = Some(built);
+        self.roll_built = Some(Instant::now());
+        let roll = self.store.as_ref().map_or_else(Default::default, |store| {
+            super::notes::song_roll(store, &self.book.passes)
+        });
+        self.built_roll = Some(Arc::new(roll));
     }
 
     /// Analyze what the recording changed, for a step's share of time.

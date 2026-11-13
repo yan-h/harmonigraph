@@ -8,6 +8,12 @@
 //! export draw the live picture, which is all they have. The spectrum stays
 //! live in Tape mode, so during an audition it shows the tape.
 //!
+//! With the roll on, the region also rolls the notes the recording holds,
+//! each stretch's from the pass whose audio won it, and the notes played live
+//! over the last audition at the song seconds they sounded over. Note names
+//! stay with the live roll: they follow ribbons out from the now-line, which
+//! the song has none of.
+//!
 //! The song runs from its start at the far edge toward the spectrum, so a
 //! recording made while the transport rolls grows toward the curve, the way
 //! the live picture flows out from it. The region shows the whole recording
@@ -20,7 +26,8 @@ use egui::{Align, Align2, Pos2, Rect, Stroke};
 use harmonigraph_core::spectrum::SPECTRUM_BINS;
 use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
 
-use super::axes::{Axes, PitchScale};
+use super::axes::{Axes, PitchScale, TimeAxis};
+use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
 use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
@@ -167,6 +174,14 @@ fn slab_seconds(level: usize) -> f64 {
     COLUMN_SECONDS * f64::from(1u32 << level)
 }
 
+/// What the roll needs that the pane decides: the width it draws a note at,
+/// the preview's point scale, and the display clock.
+pub(super) struct RollFrame<'a> {
+    pub(super) width: &'a Width,
+    pub(super) point_scale: f32,
+    pub(super) now: f64,
+}
+
 /// Draw the tape over the far region, and take a click there as a cue.
 /// Returns the ruler's labels, for the pane to set with its own.
 #[allow(clippy::too_many_arguments)]
@@ -179,9 +194,13 @@ pub(super) fn draw(
     split: f32,
     surface: usize,
     window: Window,
+    frame: RollFrame,
 ) -> Vec<(Pos2, Align2, String)> {
     let axis = SongAxis::new(axes, split, window);
     heatmap(painter, axes, scale, state, &axis, surface);
+    if state.appearance.spectrum.show_roll {
+        notes(painter, axes, scale, state, &axis, surface, frame);
+    }
     let view = &mut state.runtime.tape;
     for span in view.spans.iter().filter(|span| !span.warm) {
         let (from, to) = (span.start.max(window.from), span.end.min(window.to));
@@ -301,6 +320,49 @@ fn heatmap(
         pane_id(surface),
         None,
     ));
+}
+
+/// The recording's notes along the song, and over them the notes played live
+/// during the last audition, at the song seconds they sounded over.
+fn notes(
+    painter: &egui::Painter,
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &PictureState,
+    axis: &SongAxis,
+    surface: usize,
+    frame: RollFrame,
+) {
+    let view = &state.runtime.tape;
+    let window = axis.window;
+    // Every recorded note has ended: a stretch's notes close where it does.
+    let song = TimeAxis {
+        split: axis.split,
+        depth_span: 1.0 - axis.split,
+        window: window.seconds(),
+        origin: window.to,
+        now: window.to,
+    };
+    let recorded = RollSource { roll: &view.notes, time: song, lead: false, live_during: None };
+    let mut sources = vec![recorded];
+    if let Some(audition) = view.audition {
+        // The display clock at the window's near edge, had the audition
+        // played on: what puts a note played over it at the spot it sounded.
+        let origin = window.to + audition.clock - audition.song;
+        sources.push(RollSource {
+            roll: state.roll(),
+            time: TimeAxis { origin, now: frame.now, ..song },
+            lead: false,
+            live_during: Some((audition.clock, audition.until.unwrap_or(f64::INFINITY))),
+        });
+    }
+    let options = RollDrawOptions {
+        split: axis.split,
+        now: frame.now,
+        surface,
+        point_scale: frame.point_scale,
+    };
+    roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources);
 }
 
 /// Bars, or minutes and seconds with no meter from the host, ticked along the
@@ -442,16 +504,29 @@ fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>, r
     }
     ui.label(format!("{} MiB", view.bytes >> 20))
         .on_hover_text("Memory the recording holds. It is never saved with the project.");
-    let hint = if !view.enabled {
-        "No audition while the analyzer listens to the sidechain."
-    } else if view.rolling {
-        "Stop the transport to audition."
-    } else if view.spans.is_empty() {
-        "Nothing recorded yet. The song records as it plays."
-    } else {
-        "Click to play the recording from there."
-    };
-    ui.label(egui::RichText::new(hint).small().color(theme::text_dim()));
+    ui.label(egui::RichText::new(readout(view)).small().color(theme::text_dim()));
+}
+
+/// The bar's one line (#1719 slice 4): why the tape cannot sound, or what
+/// sounds, or what is recorded where the transport stopped. Bitwig reports
+/// no playhead moved while stopped, so that is where playback stopped.
+fn readout(view: &TapeView) -> String {
+    if !view.enabled {
+        return "Off: the analyzer listens to the sidechain, or the host is rendering.".to_owned();
+    }
+    if view.rolling {
+        return "Recording. Stop the transport to audition.".to_owned();
+    }
+    if view.spans.is_empty() {
+        return "Nothing recorded yet. The song records as it plays.".to_owned();
+    }
+    match (view.heard, view.position) {
+        (Some(heard), _) => format!("Playing {} · {}", place(view, heard), held(view, heard)),
+        (None, Some(at)) => {
+            format!("Stopped at {} · {} · Click to play.", place(view, at), held(view, at))
+        }
+        (None, None) => "Click to play the recording from there.".to_owned(),
+    }
 }
 
 /// Song seconds as `m:ss.s`.
@@ -462,11 +537,20 @@ fn clock(seconds: f64) -> String {
 
 /// The hover text for song seconds `at`.
 fn describe(view: &TapeView, at: f64) -> String {
-    let place = match view.bar_at(at) {
+    format!("{}\n{}", place(view, at), held(view, at))
+}
+
+/// Song seconds `at` as the host's bar and beat, and as a clock.
+fn place(view: &TapeView, at: f64) -> String {
+    match view.bar_at(at) {
         Some((bar, beat)) => format!("Bar {bar}.{beat} · {}", clock(at)),
         None => clock(at),
-    };
-    let held = match view.span_at(at) {
+    }
+}
+
+/// What is recorded at song seconds `at`: warm or cold, and how long ago.
+fn held(view: &TapeView, at: f64) -> String {
+    match view.span_at(at) {
         Some(span) => {
             let ago = span.recorded.elapsed().as_secs_f64();
             let ago =
@@ -474,13 +558,37 @@ fn describe(view: &TapeView, at: f64) -> String {
             format!("{}, recorded {ago} ago", if span.warm { "warm" } else { "cold" })
         }
         None => "nothing recorded".to_owned(),
-    };
-    format!("{place}\n{held}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bar_says_why_the_tape_is_silent_or_what_is_recorded_where_it_plays() {
+        let span = crate::tape::TapeSpan {
+            start: 0.0,
+            end: 40.0,
+            warm: false,
+            recorded: std::time::Instant::now(),
+        };
+        let mut view = TapeView {
+            present: true,
+            spans: vec![span],
+            position: Some(5.0),
+            ..Default::default()
+        };
+        assert!(readout(&view).starts_with("Off: "), "{}", readout(&view));
+        view.enabled = true;
+        let parked = readout(&view);
+        assert!(parked.starts_with("Stopped at 0:05.0 · cold, recorded "), "{parked}");
+        view.heard = Some(12.5);
+        let playing = readout(&view);
+        assert!(playing.starts_with("Playing 0:12.5 · cold"), "{playing}");
+        view.rolling = true;
+        assert!(readout(&view).starts_with("Recording."), "{}", readout(&view));
+    }
 
     #[test]
     fn zooming_out_stops_where_the_widest_slabs_fill_a_live_window() {

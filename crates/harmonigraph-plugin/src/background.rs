@@ -329,10 +329,12 @@ thread_local! {
 /// on one of those holds is not also waiting for this thread to be scheduled.
 ///
 /// **The tape** (see [`crate::tape`]) works between the two holds as well:
-/// it records the blocks just taken and keeps a cue's audio queued for the
-/// audio thread, and analyzes the spectrogram Tape mode draws. It takes Tape
-/// mode's request and fills its view in the first hold; its console lines wait
-/// for the second.
+/// it records the blocks just taken, places the notes the drain recorded
+/// beside them, keeps a cue's audio queued for the audio thread, and analyzes
+/// the spectrogram Tape mode draws. It takes Tape mode's request and fills its
+/// view in the first hold, and plays the notes of the tape the blocks just
+/// taken carried into the tracker there, on their audio's clock; its console
+/// lines wait for the second.
 fn step(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,
@@ -354,15 +356,25 @@ fn step(
             restore.adopt(shared);
         }
         let now = shared.input.now();
-        tape.exchange(&mut shared.ui.picture.runtime.tape, &shared.ui.picture.appearance.spectrum);
-        shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now)
+        let open = editor_state.is_open();
+        let settings = &shared.ui.picture.appearance.spectrum;
+        tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
+        let taken =
+            shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+        std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
+        if let Some(taken) = &taken {
+            tape.feed(taken, &mut shared.ui.picture.runtime);
+        }
+        taken
     };
     if let Some(taken) = &taken {
         for (block, samples) in taken.blocks() {
             tape.capture(block, samples);
         }
     }
+    tape.settle();
     tape.play();
+    tape.roll();
     tape.analyze();
     tape.report();
     let taken = taken.map(|mut taken| {
@@ -510,7 +522,7 @@ mod tests {
     }
 
     fn tape() -> crate::tape::Worker {
-        crate::tape::channel().1
+        crate::tape::channel(Arc::new(crate::HarmonigraphParams::default())).1
     }
 
     fn harness() -> Harness {
@@ -570,6 +582,24 @@ mod tests {
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
         /// cross hop boundaries, so a drain of it must produce columns.
         fn push_audio(&mut self, frames: usize) {
+            self.push_placed(frames, None, None);
+        }
+
+        /// [`Self::push_audio`] rolling at song seconds `song`, or carrying
+        /// the tape's audio from song seconds `heard`.
+        fn push_placed(&mut self, frames: usize, song: Option<f64>, heard: Option<f64>) {
+            let tape = heard.map_or(crate::audio_ingress::TapePlay::Idle, |seconds| {
+                crate::audio_ingress::TapePlay::Heard { seconds, frames }
+            });
+            self.push_tape(frames, song, tape);
+        }
+
+        fn push_tape(
+            &mut self,
+            frames: usize,
+            song: Option<f64>,
+            tape: crate::audio_ingress::TapePlay,
+        ) {
             let start = self.audio_frames;
             self.audio.publish(
                 frames,
@@ -579,7 +609,8 @@ mod tests {
                     sidechain: false,
                 },
                 start as f64 / 48_000.0,
-                None,
+                song.map(|seconds| crate::audio_ingress::Song { seconds, meter: None }),
+                tape,
                 (0..frames).map(|i| {
                     let t = (start + i as u64) as f32 / 48_000.0;
                     (std::f32::consts::TAU * 440.0 * t).sin() * 0.5
@@ -656,6 +687,52 @@ mod tests {
         h.step();
 
         assert_eq!(h.voices(), 2, "a closed window dropped its notes on the floor");
+    }
+
+    /// The tape's notes end to end through the worker's own step: a note the
+    /// drain shows while the song rolls is recorded at its song position,
+    /// and a later block that carries the tape from just after it puts it
+    /// back in the tracker, under the tape's own source. A block the deck
+    /// starved is a pause: the note is held on, not struck again.
+    #[test]
+    fn a_note_recorded_while_rolling_sounds_again_when_the_tape_plays_there() {
+        let mut h = harness();
+        h.push_placed(4800, Some(0.0), None);
+        h.push_note(0.05, 60);
+        h.step();
+        // The transport stops: the pass and its chunk are committed.
+        h.push_placed(4800, None, None);
+        h.step();
+        let tape_held = |h: &Harness| {
+            let shared = h.shared.lock();
+            let tracker = &shared.ui.picture.runtime.tracker;
+            tracker.held_voices().filter(|v| v.source.is_tape()).map(|v| v.note).collect::<Vec<_>>()
+        };
+        let onset = |h: &Harness| {
+            let shared = h.shared.lock();
+            let tracker = &shared.ui.picture.runtime.tracker;
+            let onset = tracker.held_voices().find(|v| v.source.is_tape()).map(|v| v.on_time);
+            onset
+        };
+        assert!(tape_held(&h).is_empty(), "nothing plays before the tape does");
+
+        // Inside what is recorded, which ends at 0.1 s: the deck plays no
+        // further, and the player lets go there.
+        h.push_placed(1200, None, Some(0.06));
+        h.step();
+        assert_eq!(tape_held(&h), [60], "the tape's block did not chase the note held there");
+        assert!(h.shared.lock().ui.picture.runtime.tape.audition.is_some());
+        let struck = onset(&h);
+
+        h.push_tape(600, None, crate::audio_ingress::TapePlay::Waiting);
+        h.step();
+        h.push_placed(600, None, Some(0.085));
+        h.step();
+        assert_eq!(onset(&h), struck, "a starved block ended the audition and struck it again");
+
+        h.push_placed(2400, None, None);
+        h.step();
+        assert!(tape_held(&h).is_empty(), "the audition's end released the tape's note");
     }
 
     /// Feeding the tracker and AGEING it are one job, and this is the drainer
