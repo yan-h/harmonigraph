@@ -3,7 +3,7 @@
 //! console lines.
 //!
 //! It runs in the input worker's step with no lock held, between the step's
-//! two holds of the editor lock. It takes the Tape tab's request and fills its
+//! two holds of the editor lock. It takes Tape mode's request and fills its
 //! view in the first hold, and hands its console lines over in the second.
 
 use std::collections::BTreeMap;
@@ -13,9 +13,11 @@ use std::time::Instant;
 
 use harmonigraph_record::transport;
 use harmonigraph_ui::tape::{Meter, TapeRequest, TapeSpan, TapeView};
+use harmonigraph_ui::SpectrumConfig;
 
 use crate::audio_ingress::Block;
 
+use super::spectrum::{Spectrum, STEP_BUDGET};
 use super::store::{Chunk, Stamp, Store};
 use super::{Event, Piece, Shared, STOP};
 
@@ -63,12 +65,13 @@ pub(crate) struct Worker {
     /// not a recording: a pass replaces the anchors where it plays, whether or
     /// not its audio wins there, and only over what it recorded.
     meters: BTreeMap<i64, Meter>,
-    /// Bumped whenever the store or the meters change, so the Tape tab's
+    /// Bumped whenever the store or the meters change, so Tape mode's
     /// spans are rebuilt only then; and the value they were last built at.
     generation: u64,
     shown: Option<u64>,
     playback: Option<Playback>,
     scratch: Vec<f32>,
+    spectrum: Spectrum,
     /// Console lines for the step's second hold.
     pub(crate) logs: Vec<String>,
     evicted_reported: bool,
@@ -101,6 +104,7 @@ impl Worker {
             shown: None,
             playback: None,
             scratch: Vec::new(),
+            spectrum: Spectrum::default(),
             logs: Vec::new(),
             evicted_reported: false,
         }
@@ -122,6 +126,7 @@ impl Worker {
         if main && self.store.as_ref().is_some_and(|s| s.rate != rate || s.channels != channels) {
             self.end_pass();
             self.store = None;
+            self.spectrum.clear();
             self.meters.clear();
             self.generation += 1;
             self.logs
@@ -211,11 +216,13 @@ impl Worker {
         }
         if let Some(store) = &mut self.store {
             commit(store, chunk);
+            let changed = store.take_changed();
+            self.spectrum.invalidate(store, &changed);
         }
         self.generation += 1;
     }
 
-    /// Pass a Tape tab request to the audio thread, replacing one it has not
+    /// Pass a Tape mode request to the audio thread, replacing one it has not
     /// taken yet. A cue position that is not a number is no position.
     pub(crate) fn request(&mut self, request: TapeRequest) {
         let bits = match request {
@@ -226,11 +233,15 @@ impl Worker {
         self.shared.request.store(bits, Ordering::Release);
     }
 
-    /// Take the Tape tab's request, and show it the tape as it is now.
-    pub(crate) fn exchange(&mut self, view: &mut TapeView) {
+    /// Take Tape mode's request, and show it the tape as it is now, analyzed
+    /// under the Analyzer's `settings`.
+    pub(crate) fn exchange(&mut self, view: &mut TapeView, settings: &SpectrumConfig) {
         if let Some(request) = view.request.take() {
             self.request(request);
         }
+        self.spectrum.configure(settings, self.store.as_ref());
+        self.spectrum.window = view.window.filter(|_| view.showing);
+        self.spectrum.sync(&mut view.spectrogram);
         let shared = &self.shared;
         let seconds = |bits: &std::sync::atomic::AtomicU64| {
             Some(f64::from_bits(bits.load(Ordering::Relaxed))).filter(|s| !s.is_nan())
@@ -247,6 +258,18 @@ impl Worker {
             let rate = self.store.as_ref().map_or(1.0, |store| f64::from(store.rate));
             view.meters =
                 self.meters.iter().map(|(&at, &meter)| (at as f64 / rate, meter)).collect();
+        }
+    }
+
+    /// Analyze what the recording changed, for a step's share of time.
+    pub(crate) fn analyze(&mut self) {
+        self.spectrum.analyze(self.store.as_ref(), STEP_BUDGET);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn analyze_all(&mut self) {
+        while self.spectrum.pending() > 0 {
+            self.spectrum.analyze(self.store.as_ref(), std::time::Duration::MAX);
         }
     }
 
@@ -390,7 +413,7 @@ impl Worker {
     }
 }
 
-/// What is recorded, as the Tape tab draws it: neighbouring chunks of one
+/// What is recorded, as Tape mode draws it: neighbouring chunks of one
 /// pass and one warmth joined into a span.
 fn spans(store: &Store) -> Vec<TapeSpan> {
     let rate = f64::from(store.rate);

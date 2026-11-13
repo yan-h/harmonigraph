@@ -36,8 +36,9 @@ pub(crate) const SONG_START_SECONDS: f64 = 0.05;
 /// again, and the newer recording wins.
 const SAME_RUN_UP_SECONDS: f64 = 0.05;
 
-/// No memory setting yet (#1719): one generous cap, about 46 minutes of song
-/// in stereo at 48 kHz, dropping the oldest-recorded chunks first.
+/// No memory setting yet (#1719): one generous cap, about 29 minutes of song
+/// in stereo at 48 kHz with its spectrogram, dropping the oldest-recorded
+/// chunks first.
 pub(crate) const CAP_BYTES: usize = 1 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,8 +103,12 @@ impl Chunk {
         self.data_start + (self.samples.len() / channels) as i64
     }
 
-    fn bytes(&self) -> usize {
+    /// The memory the chunk stands for: its samples, and the spectrogram of
+    /// its stretch, which is kept beside the store but lives and dies with it.
+    fn bytes(&self, rate: f32) -> usize {
+        let seconds = (self.end - self.start) as f64 / f64::from(rate);
         self.samples.len() * std::mem::size_of::<f32>()
+            + (seconds * harmonigraph_ui::tape::spectrogram::BYTES_PER_SECOND) as usize
     }
 
     /// The sample at song frame `frame`, channel `channel`, if held.
@@ -146,6 +151,9 @@ pub(crate) struct Store {
     cap: usize,
     /// Chunks dropped for the cap since the store was made or cleared.
     pub evicted: u64,
+    /// Song frames whose audio changed since [`take_changed`](Self::take_changed)
+    /// last asked: what a newer recording took, and what the cap dropped.
+    changed: Vec<(i64, i64)>,
 }
 
 impl Store {
@@ -154,7 +162,15 @@ impl Store {
     }
 
     pub(crate) fn with_cap(rate: f32, channels: usize, cap: usize) -> Store {
-        Store { rate, channels, chunks: BTreeMap::new(), bytes: 0, cap, evicted: 0 }
+        Store {
+            rate,
+            channels,
+            chunks: BTreeMap::new(),
+            bytes: 0,
+            cap,
+            evicted: 0,
+            changed: Vec::new(),
+        }
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -172,14 +188,14 @@ impl Store {
 
     fn put(&mut self, chunk: Chunk) {
         if chunk.end > chunk.start {
-            self.bytes += chunk.bytes();
+            self.bytes += chunk.bytes(self.rate);
             self.chunks.insert(chunk.start, chunk);
         }
     }
 
     fn take(&mut self, start: i64) -> Chunk {
         let chunk = self.chunks.remove(&start).expect("a listed chunk");
-        self.bytes -= chunk.bytes();
+        self.bytes -= chunk.bytes(self.rate);
         chunk
     }
 
@@ -192,6 +208,7 @@ impl Store {
     /// [`beats`]. A loser keeps what lies outside the winner, with margin.
     pub(crate) fn insert(&mut self, chunk: Chunk) {
         let (a, b) = (chunk.start, chunk.end);
+        self.changed.push((a, b));
         let margin = self.margin();
         let channels = self.channels;
         let overlapping: Vec<i64> = self
@@ -236,8 +253,36 @@ impl Store {
             else {
                 break;
             };
-            self.take(oldest);
+            let dropped = self.take(oldest);
+            self.changed.push((dropped.start, dropped.end));
             self.evicted += 1;
+        }
+    }
+
+    /// The song frames whose audio changed since the last call. A trimmed
+    /// loser keeps its margin past the cut, so the frames a seam crossfades
+    /// through lie within [`FADE_SECONDS`] of a range reported here.
+    pub(crate) fn take_changed(&mut self) -> Vec<(i64, i64)> {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Fill `out` from song frame `from` on as an audition would play it,
+    /// with silence wherever nothing is recorded.
+    pub(crate) fn read(&self, from: i64, out: &mut [f32]) {
+        out.fill(0.0);
+        let ch = self.channels;
+        let limit = from + (out.len() / ch) as i64;
+        let mut at = from;
+        while at < limit {
+            if self.holding(at).is_none() {
+                match self.chunks.range(at..limit).next() {
+                    Some((&start, _)) => at = start,
+                    None => break,
+                }
+            }
+            let i = (at - from) as usize * ch;
+            let rendered = self.render(at, &mut out[i..]);
+            at += rendered.frames.max(1) as i64;
         }
     }
 
@@ -410,7 +455,9 @@ mod tests {
 
     #[test]
     fn the_cap_drops_the_oldest_recorded_chunks_first() {
-        let bytes = 1000 * std::mem::size_of::<f32>();
+        // A second of samples, and of spectrogram.
+        let bytes = 1000 * std::mem::size_of::<f32>()
+            + harmonigraph_ui::tape::spectrogram::BYTES_PER_SECOND as usize;
         let mut store = Store::with_cap(RATE, 1, 2 * bytes);
         for pass in [3, 1, 2] {
             let start = pass as i64 * 1000;

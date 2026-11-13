@@ -1,5 +1,5 @@
 //! The tape (#1719): an always-on recording of the main input keyed on song
-//! position, played back from wherever the Tape tab is clicked while the
+//! position, played back from wherever Tape mode is clicked while the
 //! transport is stopped.
 //!
 //! - **Capture** reuses the analyzer's ring. While the transport rolls, each
@@ -8,13 +8,15 @@
 //!   not stored yet: nothing reads them before the lattice and roll follow the
 //!   tape (#1719 slice 3), which needs an exact note chase this shape cannot
 //!   give.
-//! - **Audition** starts from a click in the Tape tab. Bitwig's own playhead
+//! - **Audition** starts from a click in the Analyzer's Tape mode. Bitwig's own playhead
 //!   cannot start it: a click in the arranger while stopped does not change
 //!   the song position Bitwig sends a plugin (measured in #1721). The input
 //!   worker passes the click on; the audio thread ([`deck`]) publishes the
 //!   cue; the worker assembles audio from the store into a ring; the audio
 //!   thread adds that ring to the main buffer. The audio thread stays trivial
 //!   and real-time safe, at the cost of a few tens of ms after a click.
+//! - **The spectrogram** Tape mode draws is analyzed from the store itself
+//!   ([`spectrum`]), so it shows what an audition would play.
 //!
 //! The tape never records itself: it records only rolling blocks, and sounds
 //! only while stopped. Nothing here is saved with the project.
@@ -23,6 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
 pub(crate) mod deck;
+mod spectrum;
 pub(crate) mod store;
 pub(crate) mod worker;
 
@@ -52,12 +55,12 @@ pub(crate) struct Shared {
     cue: AtomicU64,
     /// Song seconds the cue starts at, as f64 bits.
     cue_position: AtomicU64,
-    /// The Tape tab's newest request, which the deck swaps out for
+    /// Tape mode's newest request, which the deck swaps out for
     /// [`NO_REQUEST`]: the song seconds to cue from as f64 bits, or [`STOP`].
     /// One slot, so a newer request replaces one not yet taken and a request
     /// is taken whole or not at all.
     request: AtomicU64,
-    /// What the deck last saw, for the Tape tab: the song position (f64 bits,
+    /// What the deck last saw, for Tape mode: the song position (f64 bits,
     /// NaN for none), whether it rolled, whether the tape may sound, and the
     /// song seconds sounding (NaN while silent).
     position: AtomicU64,
@@ -96,7 +99,7 @@ pub(crate) struct Piece {
 pub(crate) enum Reason {
     /// Another cue.
     Cue,
-    /// The Tape tab's Stop.
+    /// Tape mode's Stop.
     Stop,
     /// The analysis input left Main.
     Off,

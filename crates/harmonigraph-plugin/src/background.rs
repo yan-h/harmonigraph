@@ -330,8 +330,9 @@ thread_local! {
 ///
 /// **The tape** (see [`crate::tape`]) works between the two holds as well:
 /// it records the blocks just taken and keeps a cue's audio queued for the
-/// audio thread. It takes the Tape tab's request and fills its view in the
-/// first hold; its console lines wait for the second.
+/// audio thread, and analyzes the spectrogram Tape mode draws. It takes Tape
+/// mode's request and fills its view in the first hold; its console lines wait
+/// for the second.
 fn step(
     shared: &Mutex<EditorShared>,
     editor_state: &EguiState,
@@ -353,7 +354,7 @@ fn step(
             restore.adopt(shared);
         }
         let now = shared.input.now();
-        tape.exchange(&mut shared.ui.picture.runtime.tape);
+        tape.exchange(&mut shared.ui.picture.runtime.tape, &shared.ui.picture.appearance.spectrum);
         shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now)
     };
     if let Some(taken) = &taken {
@@ -362,6 +363,7 @@ fn step(
         }
     }
     tape.play();
+    tape.analyze();
     tape.report();
     let taken = taken.map(|mut taken| {
         #[cfg(test)]

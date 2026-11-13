@@ -3,6 +3,7 @@
 //! own clock.
 
 use harmonigraph_ui::tape::{Meter, TapeRequest, TapeView};
+use harmonigraph_ui::SpectrumConfig;
 
 use super::deck::{BlockIn, BlockOut};
 use super::store::{FADE_SECONDS, SETTLE_SECONDS};
@@ -91,7 +92,7 @@ fn run_of(
     ([left, right], out)
 }
 
-/// The Tape tab asks for a cue at `position` while the host reports the
+/// Tape mode asks for a cue at `position` while the host reports the
 /// transport stopped at `parked`: the next block cues the tape.
 fn cue(deck: &mut Deck, worker: &mut Worker, parked: f64, position: f64) {
     worker.request(TapeRequest::Cue(position));
@@ -486,18 +487,18 @@ fn at_tempo(worker: &mut Worker, source: &mut u64, from: i64, to: i64, tempo: f6
     *source += FRAMES as u64;
 }
 
-/// The Tape tab sees one span per pass and warmth, with gaps where nothing
+/// Tape mode sees one span per pass and warmth, with gaps where nothing
 /// was recorded, and the meter of the newest pass wherever passes overlap,
 /// even where its audio lost.
 #[test]
-fn the_tab_sees_spans_by_pass_and_warmth_and_the_newest_meter() {
+fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram() {
     let (_, mut worker) = pair();
     let mut source = 0;
     // Warm from the song's start, then a cold stretch further on.
     at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
     at_tempo(&mut worker, &mut source, 20_000, 21_000, 120.0);
     let mut view = TapeView::default();
-    worker.exchange(&mut view);
+    worker.exchange(&mut view, &SpectrumConfig::default());
     let spans: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(spans, [(0.0, 3.0, true), (20.0, 21.0, false)]);
@@ -506,13 +507,21 @@ fn the_tab_sees_spans_by_pass_and_warmth_and_the_newest_meter() {
     // A cold replay over warm audio loses every frame, but the song it heard
     // there is the newest: its meter replaces the old one.
     at_tempo(&mut worker, &mut source, 1000, 2000, 90.0);
-    worker.exchange(&mut view);
+    worker.exchange(&mut view, &SpectrumConfig::default());
     let again: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(again, spans);
     let tempos: Vec<f64> = view.meters.iter().map(|(_, m)| m.tempo).collect();
     assert_eq!(tempos, [120.0, 90.0, 120.0, 120.0]);
     assert!(view.present && view.bytes > 0);
+
+    // The spectrogram covers the recording once analyzed, a column every
+    // 32 ms of the 4 s recorded, and reaches the view at the next exchange.
+    assert!(view.spectrogram.is_empty());
+    worker.analyze_all();
+    worker.exchange(&mut view, &SpectrumConfig::default());
+    let columns = view.spectrogram.columns() as f64;
+    assert!((columns - 4.0 / 0.032).abs() <= 2.0, "{columns} columns");
 }
 
 /// A pass replaces the meter only over what it recorded: a short pass across
@@ -525,7 +534,7 @@ fn a_short_pass_replaces_the_meter_only_where_it_played() {
     at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
     at_tempo(&mut worker, &mut source, 500, 1300, 90.0);
     let mut view = TapeView::default();
-    worker.exchange(&mut view);
+    worker.exchange(&mut view, &SpectrumConfig::default());
     // 4/4: a bar is two seconds at 120, 2.67 at 90.
     let bar = |at: f64| (view.bar_seconds(at).unwrap() * 1000.0).round() / 1000.0;
     assert_eq!(bar(0.4), 2.0);
