@@ -109,10 +109,11 @@ impl TapeSpectrogram {
                 let first = key * width;
                 power.fill(0.0);
                 let mut any = false;
+                let powers = powers();
                 for (_, column) in self.levels[0].range(first..first + width) {
                     any = true;
                     for (sum, &byte) in power.iter_mut().zip(column.iter()) {
-                        *sum += power_of(byte);
+                        *sum += powers[usize::from(byte)];
                     }
                 }
                 let slab = any.then(|| {
@@ -126,13 +127,15 @@ impl TapeSpectrogram {
     }
 }
 
-/// The power a stored byte stands for, with the floor as silence: a merge that
-/// takes in a gap or the floor dims toward the floor rather than lifting off it.
-fn power_of(byte: BucketDb) -> f32 {
+/// The power each stored byte stands for, with the floor as silence: a merge
+/// that takes in a gap or the floor dims toward the floor rather than lifting
+/// off it. Taken once per merge rather than per byte, so the inner loop is a
+/// plain table read.
+fn powers() -> &'static [f32; 256] {
     static POWERS: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
         std::array::from_fn(|b| if b == 0 { 0.0 } else { 10f32.powf(db_of(b as BucketDb) / 10.0) })
     });
-    POWERS[usize::from(byte)]
+    &POWERS
 }
 
 /// Analyzes one column at a time from audio read by song frame, through the

@@ -3289,3 +3289,34 @@ fn a_depth_drag_in_tape_mode_pans_the_song_and_leaves_the_span_alone() {
     assert_eq!(state.appearance.spectrum.roll_seconds, cfg.roll_seconds, "the Span moved");
     assert_eq!(state.runtime.tape.request, None, "a drag is not a click");
 }
+
+#[test]
+fn a_tape_drag_carries_the_song_from_its_first_point() {
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.5 * (1.0 - split));
+    // Ten moves of 2 pt: every one under the distance a click may travel.
+    let step = axes.dir_depth() * 2.0;
+    let mut frames = vec![vec![egui::Event::PointerMoved(at)], vec![press(at, true)]];
+    frames.extend((1..=10).map(|i| vec![egui::Event::PointerMoved(at + step * i as f32)]));
+    frames.push(vec![press(at + step * 10.0, false)]);
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, frames);
+    let (from, _) = state.runtime.tape.window.expect("Tape mode reports its window");
+    // 42 s over the far region, panned by all 20 pt but the lean that
+    // commits the drag to the depth axis, as in Live mode; not also the
+    // distance a click may travel.
+    let region = axes.depth_len() * (1.0 - split);
+    let want = 42.0 * f64::from(20.0 - DEPTH_ZOOM_LEAN) / f64::from(region);
+    assert!((from - want).abs() < want * 0.03, "panned {from} s of {want}");
+}
+
+#[test]
+fn tape_mode_needs_a_far_region_to_draw_in() {
+    let mut state = on_tape();
+    assert!(tape::active(&state, Navigation::Docked));
+    state.appearance.spectrum.show_roll = false;
+    state.appearance.spectrum.show_spectrogram = false;
+    assert!(!tape::active(&state, Navigation::Docked), "nowhere to draw the tape");
+}

@@ -510,9 +510,10 @@ fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::Spect
 ///
 /// **In Tape mode** (`song` is the stretch of song shown) the far region holds
 /// song time rather than a Span anchored on now, so what moves it changes
-/// there: a depth drag or a scroll along the depth axis pans the song, and a
-/// pinch or a Ctrl-scroll zooms it about the pointer. A scroll across it still
-/// zooms the pitch, and the spectrum's share answers as it always does.
+/// there: a depth drag pans the song, and so does a sideways scroll where time
+/// runs across the pane; a pinch or a Ctrl-scroll zooms it about the pointer.
+/// The wheel still zooms the pitch, in every layout, and the spectrum's share
+/// answers as it always does.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drag_zoom(
     ui: &egui::Ui,
@@ -546,8 +547,9 @@ pub(super) fn drag_zoom(
     // put this function's rounding between that bar and the value it shows.
     let mut moved = false;
 
-    let pointer = ui.ctx().pointer_hover_pos().filter(|_| response.contains_pointer());
-    let over_song = pointer.filter(|&p| split < 1.0 && axes.depth_at(p) >= split);
+    // Hovered rather than merely under the pointer: Tape mode's bar lies over
+    // the far region, and a scroll over it is not a pan.
+    let over_song = response.hover_pos().filter(|&p| split < 1.0 && axes.depth_at(p) >= split);
     let gesture = match (over_song, song.as_deref_mut()) {
         (Some(at), Some(song)) => {
             let (delta, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
@@ -555,12 +557,20 @@ pub(super) fn drag_zoom(
             if pinch != 1.0 {
                 song.zoom(f64::from(pinch), axis.seconds_at(axes.depth_at(at)));
             }
-            let along = delta.dot(axes.dir_depth());
-            if along != 0.0 {
-                song.pan(f64::from(along) * axis.seconds_per_point());
-            }
             let depth = axes.dir_depth();
-            Some((delta.dot(egui::vec2(depth.y.abs(), depth.x.abs())), 1.0))
+            if depth.x.abs() > 0.5 {
+                // Time runs across the pane: a sideways scroll pans the song,
+                // and the wheel zooms the pitch as it does in Live mode.
+                let along = delta.x * depth.x;
+                if along != 0.0 {
+                    song.pan(f64::from(along) * axis.seconds_per_point());
+                }
+                Some((delta.y, 1.0))
+            } else {
+                // Time runs down the pane, where the wheel is the pitch zoom
+                // it is in Live mode, Shift and all; only a drag pans.
+                zoom_gesture(ui, response).map(|(scroll, _)| (scroll, 1.0))
+            }
         }
         _ => zoom_gesture(ui, response),
     };

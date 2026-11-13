@@ -12,7 +12,7 @@
 //! recording made while the transport rolls grows toward the curve, the way
 //! the live picture flows out from it. The region shows the whole recording
 //! until it is zoomed (pinch or Ctrl+wheel) or panned (a depth drag, or a
-//! scroll along the time axis); see `drag_zoom`.
+//! sideways scroll where time runs across the pane); see `drag_zoom`.
 
 use std::sync::Arc;
 
@@ -32,6 +32,13 @@ const MIN_SECONDS: f64 = 2.0;
 /// The space a label needs along the time axis, in points, before the ruler
 /// labels every bar or every few.
 const LABEL_SPACING: f32 = 44.0;
+/// The widest stretch of song the region will zoom out to: the widest slabs
+/// the pyramid holds, no more of them than a live window is cut into. Past
+/// it, the slabs drawn grow with the window rather than with the pane.
+const MAX_SECONDS: f64 = COLUMN_SECONDS * (1u32 << (LEVELS - 1)) as f64 * LIVE_SLAB_CAP as f64;
+/// The thickness, in points, of the band along the low-pitch edge that marks
+/// what is recorded: the one place a gap reads apart from recorded silence.
+const COVERAGE_PT: f32 = 3.0;
 /// How much of the picture's ground is laid over a cold stretch: recorded
 /// without the run-up its tails and bus state needed, so dimmed.
 const COLD_DIM: f32 = 0.5;
@@ -59,7 +66,7 @@ impl Window {
 
     /// Zoom by `factor` (above 1 zooms in) about song seconds `at`.
     pub(super) fn zoom(&mut self, factor: f64, at: f64) {
-        let width = (self.seconds() / factor).max(MIN_SECONDS);
+        let width = (self.seconds() / factor).clamp(MIN_SECONDS, MAX_SECONDS);
         let share = (at - self.from) / self.seconds();
         self.from = (at - share * width).max(0.0);
         self.to = self.from + width;
@@ -120,10 +127,16 @@ pub(super) fn editor(navigation: Navigation) -> bool {
     matches!(navigation, Navigation::Docked | Navigation::Folded(_))
 }
 
-/// This copy of the pane draws the tape.
+/// This copy of the pane draws the tape: it is the editor's, in Tape mode,
+/// with a far region to draw it in.
 pub(super) fn active(state: &PictureState, navigation: Navigation) -> bool {
     let view = &state.runtime.tape;
-    view.present && view.showing && editor(navigation)
+    view.present && view.showing && editor(navigation) && room(&state.appearance.spectrum)
+}
+
+/// The pane has a far region: the roll or the spectrogram is on.
+fn room(cfg: &crate::SpectrumConfig) -> bool {
+    cfg.show_roll || cfg.show_spectrogram
 }
 
 fn window_id(surface: usize) -> egui::Id {
@@ -180,6 +193,22 @@ pub(super) fn draw(
             painter.rect_filled(band, 0.0, theme::picture().gamma_multiply(COLD_DIM));
         }
     }
+    // What is recorded, along the low-pitch edge under the ruler's ticks, as
+    // the Tape tab's strip drew it.
+    let up = axes.dir_pitch() * COVERAGE_PT;
+    for span in &view.spans {
+        let (from, to) = (span.start.max(window.from), span.end.min(window.to));
+        if from < to {
+            let edge = axes.at(0.0, axis.depth_of(from));
+            let band = Rect::from_two_pos(edge, axes.at(0.0, axis.depth_of(to)) + up);
+            let fill = if span.warm {
+                theme::accent_fill()
+            } else {
+                theme::accent_fill().gamma_multiply(0.45)
+            };
+            painter.rect_filled(band, 0.0, fill);
+        }
+    }
     let labels = ruler(painter, axes, view, &axis);
     let across = |seconds: f64, stroke: Stroke| {
         if axis.shows(seconds) {
@@ -196,7 +225,12 @@ pub(super) fn draw(
     if let Some(pointer) = pointer {
         let at = axis.seconds_at(axes.depth_at(pointer)).max(0.0);
         across(at, Stroke::new(theme::GRID_WIDTH, theme::text()));
-        if response.clicked() && view.enabled && !view.rolling {
+        // The pane senses drags only, so a drag takes hold on the press; a
+        // press let go of before it travelled far enough to be a drag is a
+        // click.
+        let click = response.drag_stopped()
+            && response.ctx.input(|i| i.pointer.could_any_button_be_click());
+        if click && view.enabled && !view.rolling {
             view.request = Some(TapeRequest::Cue(at));
         }
         response.clone().on_hover_text_at_pointer(describe(view, at));
@@ -329,6 +363,9 @@ fn ruler(
 /// Live or Tape, and in Tape mode the audition's controls, in the far
 /// region's corner beside its fold control. `song` is the stretch shown, in
 /// Tape mode.
+///
+/// With no far region it sits in the pane's own corner, where the switch says
+/// what would make room for the tape.
 pub(super) fn bar(
     ui: &mut egui::Ui,
     axes: &Axes,
@@ -338,7 +375,9 @@ pub(super) fn bar(
 ) {
     let ui_scale = theme::ui_scale(ui.ctx());
     let size = theme::tab_bar_height(ui_scale);
-    let region = Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+    // With no far region (`split` 1), the whole pane.
+    let near = if split < 1.0 { split } else { 0.0 };
+    let region = Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let corner = axes.at(1.0, 1.0);
     let right = (corner.x - region.right()).abs() < (corner.x - region.left()).abs();
     let bottom = (corner.y - region.bottom()).abs() < (corner.y - region.top()).abs();
@@ -359,23 +398,36 @@ pub(super) fn bar(
     } else {
         egui::Layout::left_to_right(Align::Center)
     };
+    // The whole bar answers the pointer, not only its buttons: a click on its
+    // padding or its text is not a cue, nor a scroll over it a pan. Laid
+    // under the buttons at last frame's size, which is where the pointer saw
+    // it, so they stay on top.
+    let id = ui.id().with("tape-bar");
+    let held = ui.data(|d| d.get_temp::<Rect>(id));
+    if let Some(held) = held {
+        ui.interact(held, id.with("under"), egui::Sense::click_and_drag());
+    }
     let mut child =
         ui.new_child(egui::UiBuilder::new().id_salt("tape-bar").max_rect(rect).layout(layout));
-    egui::Frame::new()
+    let room = room(&state.appearance.spectrum);
+    let drawn = egui::Frame::new()
         .fill(theme::header())
         .corner_radius(theme::control_radius(ui_scale))
         .inner_margin(egui::Margin::symmetric(4, 1))
-        .show(&mut child, |ui| controls(ui, &mut state.runtime.tape, song));
+        .show(&mut child, |ui| controls(ui, &mut state.runtime.tape, song, room));
+    ui.data_mut(|d| d.insert_temp(id, drawn.response.rect));
 }
 
-fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>) {
+fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>, room: bool) {
     ui.horizontal(|ui| {
-        let live = ui.add(egui::Button::selectable(!view.showing, "Live"));
+        let live = ui.add(egui::Button::selectable(!view.showing || !room, "Live"));
         if live.on_hover_text("The live picture.").clicked() {
             view.showing = false;
         }
-        let tape = ui.add(egui::Button::selectable(view.showing, "Tape"));
-        if tape.on_hover_text("What the tape holds along the song.").clicked() {
+        let tape = ui.add_enabled(room, egui::Button::selectable(view.showing && room, "Tape"));
+        let hover = "What the tape holds along the song.";
+        let disabled = "Turn on the spectrogram or the roll to make room for the tape.";
+        if tape.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
             view.showing = true;
         }
     });
@@ -424,4 +476,18 @@ fn describe(view: &TapeView, at: f64) -> String {
         None => "nothing recorded".to_owned(),
     };
     format!("{place}\n{held}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zooming_out_stops_where_the_widest_slabs_fill_a_live_window() {
+        let mut window = Window { from: 0.0, to: 60.0, zoomed: false };
+        for _ in 0..100 {
+            window.zoom(0.5, 30.0);
+        }
+        assert_eq!(window.seconds(), MAX_SECONDS);
+    }
 }

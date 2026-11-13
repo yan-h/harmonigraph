@@ -201,11 +201,12 @@ pub(crate) fn spectral_pane(
     // is what leaves the divider on top where the two overlap: egui hands a
     // drag to the last widget registered over the pointer.
     //
-    // In Tape mode a click in the far region cues the tape, so it senses
-    // clicks too.
+    // Drags only, in Tape mode too, where a press let go of without travelling
+    // is the click that cues the tape: sensing clicks as well would hold every
+    // drag back until it had travelled far enough not to be one, and the
+    // picture would trail the hand by that much (see `tape::draw`).
     let tape_mode = tape::active(state, navigation);
-    let sense = if tape_mode { Sense::click_and_drag() } else { Sense::drag() };
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), sense);
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
     }
@@ -692,7 +693,8 @@ pub(crate) fn spectral_pane(
         drag.finish(&painter, rect, state);
     }
     // Over everything, so the switch is never under a picture.
-    if tape::editor(navigation) && state.runtime.tape.present && show_history && split < 1.0 {
+    // With no far region the switch still shows, to say what makes room.
+    if tape::editor(navigation) && state.runtime.tape.present && (show_history || split >= 1.0) {
         tape::bar(ui, &axes, state, split, song.as_mut());
     }
     match song {

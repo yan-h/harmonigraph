@@ -152,7 +152,8 @@ pub(crate) struct Store {
     /// Chunks dropped for the cap since the store was made or cleared.
     pub evicted: u64,
     /// Song frames whose audio changed since [`take_changed`](Self::take_changed)
-    /// last asked: what a newer recording took, and what the cap dropped.
+    /// last asked: what a newer recording won, and what the cap dropped. A
+    /// recording that lost changes nothing, so it reports nothing.
     changed: Vec<(i64, i64)>,
 }
 
@@ -208,7 +209,6 @@ impl Store {
     /// [`beats`]. A loser keeps what lies outside the winner, with margin.
     pub(crate) fn insert(&mut self, chunk: Chunk) {
         let (a, b) = (chunk.start, chunk.end);
-        self.changed.push((a, b));
         let margin = self.margin();
         let channels = self.channels;
         let overlapping: Vec<i64> = self
@@ -234,17 +234,20 @@ impl Store {
             }
         }
         if lost.is_empty() {
+            self.changed.push((a, b));
             self.put(chunk);
         } else {
             lost.sort_unstable();
             let mut cursor = a;
             for (from, to) in lost {
                 if from > cursor {
+                    self.changed.push((cursor, from));
                     self.put(chunk.keep(cursor, from, margin, channels));
                 }
                 cursor = cursor.max(to);
             }
             if cursor < b {
+                self.changed.push((cursor, b));
                 self.put(chunk.keep(cursor, b, margin, channels));
             }
         }
@@ -465,6 +468,8 @@ mod tests {
         }
         assert_eq!(owners(&store), [(2000, 3000, 2), (3000, 4000, 3)]);
         assert_eq!(store.evicted, 1);
+        // What the cap dropped changed as much as what was recorded.
+        assert!(store.take_changed().contains(&(1000, 2000)));
         assert!(store.bytes() <= 2 * bytes);
     }
 
@@ -496,6 +501,30 @@ mod tests {
             }
         }
         assert_eq!(pieces, whole[..1500]);
+    }
+
+    #[test]
+    fn a_losing_pass_reports_only_what_it_won_and_a_read_is_silent_in_gaps() {
+        let mut store = Store::new(RATE, 1);
+        // 20 s into the song, so a pass can be warm without starting at zero.
+        let o = 2 * SETTLE;
+        store.insert(chunk(o, o + 1000, stamp(1, o - SETTLE), 1.0));
+        store.take_changed();
+        // Cold across the warm chunk and past it: only the stretch past it.
+        store.insert(chunk(o + 500, o + 1500, stamp(2, o + 500), 2.0));
+        assert_eq!(store.take_changed(), [(o + 1000, o + 1500)]);
+        // Cold entirely over warm audio: nothing.
+        store.insert(chunk(o + 100, o + 400, stamp(3, o + 100), 3.0));
+        assert!(store.take_changed().is_empty());
+
+        // A read across a gap is the recording either side and silence between.
+        store.insert(chunk(o + 2000, o + 2100, stamp(4, o + 2000 - SETTLE), 4.0));
+        let mut out = vec![9.0; 800];
+        store.read(o + 1400, &mut out);
+        assert_eq!(out[0], 2.0);
+        assert_eq!(&out[110..590], &[0.0; 480][..]);
+        assert_eq!(out[650], 4.0);
+        assert_eq!(out[799], 0.0, "past the end of what is recorded");
     }
 
     #[test]

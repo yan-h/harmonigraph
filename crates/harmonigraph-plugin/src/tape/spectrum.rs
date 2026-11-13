@@ -30,6 +30,15 @@ use super::store::{fade_frames, Store};
 /// song in about fifteen seconds.
 pub(crate) const STEP_BUDGET: Duration = Duration::from_millis(1);
 
+/// How often the levels above the columns are rebuilt while columns are still
+/// waiting. A rebuild re-merges a slab of every level over the columns a step
+/// set, about half a millisecond whether the step set one column or thirty,
+/// so a re-analysis that rebuilt every step would spend half as much again as
+/// its budget on slabs the next step rebuilds. At this rate the picture still
+/// fills in at 20 Hz; once nothing waits, every step that sets a column
+/// rebuilds.
+const SETTLE_EVERY: Duration = Duration::from_millis(50);
+
 #[derive(Default)]
 pub(crate) struct Spectrum {
     analyzer: ColumnAnalyzer,
@@ -42,6 +51,8 @@ pub(crate) struct Spectrum {
     changed: BTreeSet<(usize, i64)>,
     /// The view's copy must be emptied before it is given anything.
     cleared: bool,
+    /// When the levels were last rebuilt.
+    settled: Option<Instant>,
     /// The song seconds the Analyzer shows, analyzed first.
     pub(crate) window: Option<(f64, f64)>,
 }
@@ -128,7 +139,10 @@ impl Spectrum {
                 break;
             }
         }
-        self.tape.settle(&mut self.changed);
+        if self.pending.is_empty() || self.settled.is_none_or(|at| at.elapsed() >= SETTLE_EVERY) {
+            self.tape.settle(&mut self.changed);
+            self.settled = Some(Instant::now());
+        }
     }
 
     /// Bring the view's copy up to date.
@@ -175,6 +189,11 @@ mod tests {
         assert_eq!(spectrum.pending(), 0);
     }
 
+    /// The bucket MIDI pitch `midi` falls in.
+    fn bucket(midi: f32) -> usize {
+        ((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize
+    }
+
     /// The MIDI pitch the view's copy of column `k` peaks at.
     fn peak(view: &TapeSpectrogram, k: i64) -> Option<f32> {
         let column = view.slab(0, k)?;
@@ -188,7 +207,9 @@ mod tests {
         let column = |s: f64| (s / COLUMN_SECONDS).round() as i64;
         let mut store = Store::new(RATE, 1);
         let mut spectrum = Spectrum::default();
-        let mut settings = SpectrumConfig { window: SpectrumWindow::Fast, ..Default::default() };
+        // Precise lags its columns about 170 ms, five columns, behind the
+        // newest sample each reads.
+        let mut settings = SpectrumConfig { window: SpectrumWindow::Precise, ..Default::default() };
         spectrum.configure(&settings, Some(&store));
         // A4 from the song's start through 4 s.
         insert(&mut spectrum, &mut store, sine(0, seconds(4.0), 69.0, 1, 0));
@@ -204,18 +225,26 @@ mod tests {
         spectrum.sync(&mut view);
         assert!(near(peak(&view, column(2.0)), 69.0));
 
-        // Played again from the start, E5 through 2 s wins there and only there.
-        insert(&mut spectrum, &mut store, sine(0, seconds(2.0), 76.0, 3, 0));
+        // A pass from the song's start that wins 1..2 s with E5 replaces the
+        // columns there and only there, and reaches the one centred 0.1 s
+        // before the seam through its frame: it hears the replay's first 70 ms.
+        let early = column(0.9);
+        let e5 = |view: &TapeSpectrogram| view.slab(0, early).unwrap()[bucket(76.0)];
+        let before = e5(&view);
+        insert(&mut spectrum, &mut store, sine(seconds(1.0), seconds(2.0), 76.0, 3, 0));
         spectrum.sync(&mut view);
-        assert!(near(peak(&view, column(1.0)), 76.0), "{:?}", peak(&view, column(1.0)));
+        assert!(near(peak(&view, column(1.5)), 76.0), "{:?}", peak(&view, column(1.5)));
         assert!(near(peak(&view, column(3.0)), 69.0));
+        assert!(e5(&view) >= before + 20, "E5 before the seam: {before} -> {}", e5(&view));
 
-        // A sharper window re-analyzes every recorded column.
-        settings.window = SpectrumWindow::Precise;
+        // Another window re-analyzes every recorded column.
+        let precise = view.slab(0, column(3.0)).cloned();
+        settings.window = SpectrumWindow::Fast;
         spectrum.configure(&settings, Some(&store));
         assert!(spectrum.pending() >= column(4.0) as usize);
         spectrum.analyze(Some(&store), Duration::MAX);
         spectrum.sync(&mut view);
         assert!(near(peak(&view, column(3.0)), 69.0));
+        assert_ne!(view.slab(0, column(3.0)).cloned(), precise, "the column was not re-analyzed");
     }
 }
