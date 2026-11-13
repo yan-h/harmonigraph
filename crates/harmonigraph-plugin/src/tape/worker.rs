@@ -345,18 +345,24 @@ impl Worker {
             }
             mark.apply(&mut self.book.held);
             // Older than a pass that has already opened: that pass opened
-            // without it, so it takes it at its start.
+            // without it, so it takes it at its start. After every mark
+            // already there, which is right because the Hub publishes in time
+            // order: nothing at the pass's start can be older than this.
             for &(pass, start, frame) in &self.opened {
                 if start > time {
                     self.book.passes.entry(pass).or_default().place(frame, mark);
                     self.notes_generation += 1;
                 }
             }
+            // Newest first, and no further back than the first block that
+            // ended before the mark: a mark played while stopped would
+            // otherwise compare against every block kept.
             let placed = self
                 .recent
                 .iter()
                 .rev()
-                .find(|p| p.presentation <= time && time < p.presentation + p.seconds)
+                .take_while(|p| time < p.presentation + p.seconds)
+                .find(|p| p.presentation <= time)
                 .copied();
             // Not rolling then: nothing of the tape's.
             if let Some(p) = placed {

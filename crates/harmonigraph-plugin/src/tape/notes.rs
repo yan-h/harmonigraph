@@ -164,10 +164,13 @@ impl PassNotes {
         let at = self.events.partition_point(|(f, _)| *f <= frame);
         self.events.insert(at, (frame, mark));
         self.checkpoints.retain(|(n, _)| *n <= at);
-        let last = self.checkpoints.last().map_or(0, |(n, _)| *n);
-        if self.events.len() >= last + CHECKPOINT {
+        loop {
+            let last = self.checkpoints.last().map_or(0, |(n, _)| *n);
+            let to = last + CHECKPOINT;
+            if to > self.events.len() {
+                break;
+            }
             let mut replay = self.replay_from(last);
-            let to = self.events.len();
             while replay.next < to {
                 self.events[replay.next].1.apply(&mut replay.held);
                 replay.next += 1;
@@ -648,10 +651,12 @@ mod tests {
             }
             held
         };
-        for frame in [0, 16, 10_235, 10_250, 20_480, 30_000, i64::MAX] {
+        // Every checkpoint after the late mark was taken again, so a chase
+        // into the middle of the pass reads from one.
+        assert_eq!(notes.checkpoints.len(), notes.events.len() / CHECKPOINT);
+        for frame in [0, 16, 10_235, 10_250, 15_000, 20_480, 25_000, 30_000, i64::MAX] {
             assert_eq!(Replay::at(&notes, frame).held, whole(frame), "frame {frame}");
         }
-        assert!(!notes.checkpoints.is_empty(), "the fixture never took a checkpoint");
     }
 
     /// Tape mode's roll is what an audition would play: each stretch's notes
