@@ -153,6 +153,9 @@ run python3 -B .claude/tests/markdown-links.py
 # Real compressed state sections must retain distinct instances and JSON strings.
 run python3 -B .claude/tests/read-plugin-state.py
 
+# A generated Metal artifact must pass its run's validation before import.
+run python3 -B .claude/tests/shader-assets.py
+
 # The frame-log summary must hold each frame to the divisor that paced it.
 run python3 -B .claude/tests/frame-log-summary.py
 
