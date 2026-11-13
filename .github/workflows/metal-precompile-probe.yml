@@ -72,23 +72,29 @@ jobs:
           cache-targets: false
           shared-key: full-ci
           save-if: false
-      # A failed check carries on to generate the replacement in this same run,
-      # because a stale corpus is what fails it and the replacement is the fix.
-      # Stopping here made a branch dispatch `regenerate` and wait out a second
-      # run of this job before it had anything to import. The last step decides
-      # whether that failure fails the job.
-      - name: Check the committed production corpus
-        id: check
+      - name: Verify the committed corpus hashes and compiler options
+        if: ${{ !inputs.regenerate }}
+        run: python3 tools/shader-assets.py verify
+      # Full CI runs this same catalog and owns its failing verdict. Keep going
+      # here to generate the replacement in this run, without classifying the
+      # failure by its log text. Hashes, goldens, generation and controls have
+      # their own failing steps: Full CI does not run those checks.
+      - name: Check the committed production catalog
+        id: catalog
         if: ${{ !inputs.regenerate }}
         continue-on-error: true
-        run: python3 tools/shader-assets.py check
+        run: python3 tools/shader-assets.py catalog
+      - name: Compare the committed corpus goldens with source
+        id: goldens
+        if: ${{ steps.catalog.outcome == 'success' }}
+        run: python3 tools/shader-assets.py goldens
       - name: Ensure Apple's compiler is available
         run: |
           if ! xcrun --sdk macosx metal --version; then
             xcodebuild -downloadComponent MetalToolchain
           fi
       - name: Generate and validate replacement embedded assets
-        if: ${{ inputs.regenerate || steps.check.outcome == 'failure' }}
+        if: ${{ inputs.regenerate || steps.catalog.outcome == 'failure' }}
         # Its own logs, so the check's logs that say why it failed survive.
         run: >-
           python3 tools/shader-assets.py generate target/generated-metal-assets
@@ -108,7 +114,7 @@ jobs:
       # no base to diff against and is a deliberate run, so it always runs them.
       - name: Decide whether the controls are owed
         id: scope
-        if: ${{ steps.check.outcome == 'success' }}
+        if: ${{ steps.goldens.outcome == 'success' }}
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             echo "controls=true" >> "$GITHUB_OUTPUT"
@@ -139,32 +145,12 @@ jobs:
             target/shader-asset-logs/**/frames/diff/
           if-no-files-found: warn
           retention-days: 7
-      # A stale corpus is REPORTED here, not failed: Full CI's `metal_corpus`
-      # gate (ci.sh) runs this same strict catalog and is the one failing
-      # verdict on it. With both failing, every stale corpus went red twice --
-      # both checks red on all 94 pushes where both finished, 302 of 594 CI
-      # failures from July to November, and not one defect either caught that
-      # the other missed. A stale corpus only slows a cold open: the shipped
-      # `Embedded` mode needs full input equality to use a library, so a stale
-      # one misses and compiles from source, which the controls prove.
-      #
-      # Stale means the strict catalog named a missing asset AND the replacement
-      # generated and validated above; a failed generation has failed the job
-      # already. Any other check failure -- a corpus that fails its own hashes,
-      # a library that will not load, goldens drawn through the corpus that
-      # differ from source -- is not staleness and still fails the job. The test
-      # is the strict panic's own words in a log of a check that already
-      # failed, so a reworded panic lands in the failing arm: the safe way to
-      # be wrong.
+      # The default success() condition means a replacement that failed to
+      # generate or validate cannot be reported as ready to import.
       - name: Report the corpus the check rejected
-        if: ${{ steps.check.outcome == 'failure' }}
+        if: ${{ steps.catalog.outcome == 'failure' }}
         run: |
-          if grep -q "missing Metal asset" target/shader-asset-logs/strict-catalog.log 2>/dev/null; then
-            message="The committed Metal corpus is stale, and this run generated and validated its replacement. With this commit checked out, run tools/shader-assets.py fetch, into the same commit as the change. Full CI's metal_corpus gate stays red until then."
-            echo "::warning title=Stale Metal corpus::$message"
-            echo "### Stale Metal corpus" >> "$GITHUB_STEP_SUMMARY"
-            echo "$message" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::The committed Metal corpus failed its check for a reason other than a missing asset. Read why in the artifact's shader-asset-logs/ (generate/ holds the replacement's own). A stale corpus names a missing Metal asset in strict-catalog.log; this one does not, so the replacement is not the fix."
-            exit 1
-          fi
+          message="The committed corpus failed the strict catalog; Full CI's metal_corpus gate owns that failure. This run generated and validated a replacement. Read strict-catalog.log in the artifact before importing it with tools/shader-assets.py fetch, into the same commit as the change."
+          echo "::warning title=Metal catalog failed::$message"
+          echo "### Metal catalog failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"

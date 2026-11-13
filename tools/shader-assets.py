@@ -125,10 +125,19 @@ def run(binary, arguments, mode, name, logs, export=None, failure=False, frames=
 
 def check(logs, assets=EMBEDDED):
     verify(assets)
+    catalog(logs, assets)
+    goldens(logs, assets)
+
+
+def catalog(logs, assets=EMBEDDED):
+    renderer = build("harmonigraph-render", logs, assets)
+    run(renderer, ["production_metal_asset_catalog", "--ignored"], "strict", "strict-catalog", logs)
+
+
+def goldens(logs, assets=EMBEDDED):
     frames = logs / "frames"
     shutil.rmtree(frames, ignore_errors=True)
     renderer = build("harmonigraph-render", logs, assets)
-    run(renderer, ["production_metal_asset_catalog", "--ignored"], "strict", "strict-catalog", logs)
     offline = build("harmonigraph-offline", logs, assets)
     # Every golden drawn through the corpus and again compiled from source, which
     # must agree byte for byte. tools/golden-diff.py draws both of a PR's sides
@@ -257,7 +266,7 @@ def binding_controls(production, logs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("generate", "check", "controls", "verify", "import", "fetch"))
+    parser.add_argument("action", choices=("generate", "check", "catalog", "goldens", "controls", "verify", "import", "fetch"))
     parser.add_argument("directory", nargs="?", type=Path)
     parser.add_argument("--logs", type=Path, default=ROOT / "target/shader-asset-logs")
     args = parser.parse_args()
@@ -269,6 +278,10 @@ def main():
         generate(directory, args.logs)
     elif args.action == "check":
         check(args.logs)
+    elif args.action == "catalog":
+        catalog(args.logs)
+    elif args.action == "goldens":
+        goldens(args.logs)
     elif args.action == "controls":
         verify(EMBEDDED)
         binding_controls(EMBEDDED, args.logs)

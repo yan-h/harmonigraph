@@ -40,6 +40,7 @@ python3 tools/shader-assets.py check
 ```
 
 This requires zero source fallback in the constructor catalog and draws the real-path renderer and offline goldens in strict mode.
+`check` composes the separately runnable `verify`, `catalog` and `goldens` stages.
 It draws each golden twice, through the corpus and compiled from source, and requires the two byte-identical:
 whether the picture moved is `Full CI`'s question (`tools/golden-diff.py`, which draws both sides from source),
 and whether the corpus draws what its source does is this one's.
@@ -75,14 +76,19 @@ validating it through the production path is the generating run's job, not impor
 Inspect and commit the changed source/options/manifest together with the binary libraries.
 The ordinary PR workflow checks the committed corpus before generating anything.
 A stale one is the `metal_corpus` gate's to fail, in `Full CI` (`ci.sh`), so generation cannot conceal stale coverage;
-the workflow reports it as a warning once the replacement has generated and validated, rather than going red beside that gate.
+the workflow reports a catalog failure as a warning once the replacement has generated and validated, rather than going red beside that gate.
 Two failing verdicts on one stale corpus made 302 of 594 CI failures from July to November, with neither ever catching a defect the other missed,
 and a stale corpus only slows a cold open: it misses lookup and compiles from source.
 The workflow still fails on its own errors —
-a check failure other than a missing asset, a replacement that does not generate or validate, controls that fail.
+hash or compiler-option verification, corpus-versus-source goldens (run only after the catalog passes), replacement generation and validation, and controls each have a failing step.
+It does not classify catalog failures by matching their log text: `Full CI` runs the same catalog and fails on any error there.
 Its path filter covers assets, renderer code, graphics setup and dependencies;
 ordinary tuning implementation edits do not schedule a third macOS job.
 New pushes cancel superseded asset-validation runs.
+
+Regeneration stays per PR (Yan's decision in #1712, 2026-11-12).
+The replacement is committed with the shader change, so a merged head is ready for ordinary local builds without waiting for a bot commit.
+There is no post-merge corpus writer or separate release freshness gate.
 
 `python3 tools/shader-assets.py generate target/new-metal-assets` does the same export/compile/verify locally when Apple's Metal toolchain is available, but it rebuilds the renderer eight times over — against the production corpus and then against three deliberately broken variants of it — and is the slow way to learn the runner is the right path; see the `metal-corpus` skill.
 
