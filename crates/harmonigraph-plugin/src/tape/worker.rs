@@ -368,13 +368,6 @@ impl Worker {
                 "tape: plugin reset{}",
                 if sounding { " while the tape sounded; it stopped" } else { "" },
             ),
-            Event::AfterReset { first, first_playing, second, second_playing, frames } => format!(
-                "tape: after the reset, block 1 at {} (playing {first_playing}), block 2 at {} \
-                 (playing {second_playing}), {frames} frames: the first block {}",
-                at(first),
-                at(second),
-                if second > first { "is already moving" } else { "is parked" },
-            ),
             Event::TapeBeforeRolling { position, advanced: true } => format!(
                 "tape: LEAK? rolling began at {} continuing a block that carried tape: one block of \
                  tape may be in what the host is rendering or recording",

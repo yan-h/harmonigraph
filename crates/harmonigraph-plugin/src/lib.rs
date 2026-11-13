@@ -820,11 +820,6 @@ impl Plugin for Harmonigraph {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
         self.offline = buffer_config.process_mode == ProcessMode::Offline;
-        // For #1719's export measurement: how the host activates us.
-        self.editor_shared.lock().ui.picture.runtime.console.log(format!(
-            "tape: activated at {} Hz, {:?}, blocks up to {}",
-            buffer_config.sample_rate, buffer_config.process_mode, buffer_config.max_buffer_size,
-        ));
         true
     }
 

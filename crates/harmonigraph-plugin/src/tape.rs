@@ -141,14 +141,6 @@ pub(crate) enum Event {
     Reset {
         sounding: bool,
     },
-    /// The first two blocks after a reset.
-    AfterReset {
-        first: f64,
-        first_playing: bool,
-        second: f64,
-        second_playing: bool,
-        frames: u32,
-    },
     /// A rolling block followed a block that carried tape.
     TapeBeforeRolling {
         position: f64,

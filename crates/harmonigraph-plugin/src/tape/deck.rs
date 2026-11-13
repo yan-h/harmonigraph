@@ -75,9 +75,6 @@ pub(crate) struct Deck {
     piece: Option<(Piece, usize)>,
     /// The previous block carried tape.
     mixed: bool,
-    /// Positions of the first two blocks after a reset, for the export
-    /// measurement: is the first block already moving?
-    after_reset: Option<(u8, f64, bool)>,
 }
 
 impl Deck {
@@ -100,7 +97,6 @@ impl Deck {
             played: 0.0,
             piece: None,
             mixed: false,
-            after_reset: None,
         }
     }
 
@@ -122,7 +118,6 @@ impl Deck {
         self.last = None;
         self.pending = None;
         self.mixed = false;
-        self.after_reset = Some((0, f64::NAN, false));
     }
 
     /// End the cue now, without a fade.
@@ -204,7 +199,7 @@ impl Deck {
             return BlockOut { song: None, sounding: false };
         };
         let rolling = transport::step(self.last, position, block.playing).rolling();
-        self.measure(position, block, rolling);
+        self.watch_for_leak(position, rolling);
         if rolling {
             self.pending = None;
             // Cut, not fade: a fade would be heard in, and recorded into, the
@@ -345,24 +340,11 @@ impl Deck {
         at > 0
     }
 
-    /// The export measurement #1719 asks for before audition merges, as
-    /// console events. Pure observation: nothing here changes what is played.
-    fn measure(&mut self, position: f64, block: BlockIn, rolling: bool) {
-        // What the first blocks after a reset look like.
-        if let Some((seen, first, first_playing)) = self.after_reset {
-            if seen == 0 {
-                self.after_reset = Some((1, position, block.playing));
-            } else {
-                self.after_reset = None;
-                self.emit(Event::AfterReset {
-                    first,
-                    first_playing,
-                    second: position,
-                    second_playing: block.playing,
-                    frames: block.frames as u32,
-                });
-            }
-        }
+    /// A sentinel for tape reaching what the host renders. Exports are kept
+    /// clean by the reset that follows every activation and by `Offline`
+    /// disabling the tape (Bitwig, #1721); this names a way around both on
+    /// the console. Pure observation: nothing here changes what is played.
+    fn watch_for_leak(&mut self, position: f64, rolling: bool) {
         // A block with tape in it, followed by playback continuing from that
         // block, means the tape block was playback's first.
         if rolling && self.mixed {
