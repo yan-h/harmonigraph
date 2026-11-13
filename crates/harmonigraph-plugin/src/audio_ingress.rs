@@ -37,7 +37,7 @@ pub(crate) struct Block {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Song {
     pub seconds: f64,
-    /// The host's bar and beat there, for the Tape tab's ruler, when it
+    /// The host's bar and beat there, for Tape mode's ruler, when it
     /// reports a beats timeline and a tempo.
     pub meter: Option<harmonigraph_ui::tape::Meter>,
 }

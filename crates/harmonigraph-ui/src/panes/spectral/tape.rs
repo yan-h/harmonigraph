@@ -1,0 +1,427 @@
+//! The Analyzer's Tape mode (#1719): the far region shows what the tape holds
+//! along the song, as a spectrogram analyzed from the recording, and a click
+//! there plays the recording from that spot while the transport is stopped.
+//! Bitwig's own playhead cannot do this: a plugin is not told when it is
+//! clicked while stopped (#1721).
+//!
+//! Only the editor's own copy of the pane draws it. The Video preview and an
+//! export draw the live picture, which is all they have. The spectrum stays
+//! live in Tape mode, so during an audition it shows the tape.
+//!
+//! The song runs from its start at the far edge toward the spectrum, so a
+//! recording made while the transport rolls grows toward the curve, the way
+//! the live picture flows out from it. The region shows the whole recording
+//! until it is zoomed (pinch or Ctrl+wheel) or panned (a depth drag, or a
+//! scroll along the time axis); see `drag_zoom`.
+
+use std::sync::Arc;
+
+use egui::{Align, Align2, Pos2, Rect, Stroke};
+use harmonigraph_core::spectrum::SPECTRUM_BINS;
+use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
+
+use super::axes::{Axes, PitchScale};
+use super::Navigation;
+use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
+use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
+use crate::tape::{TapeRequest, TapeView};
+use crate::{theme, PictureState};
+
+/// The narrowest stretch of song the region will zoom to, in seconds.
+const MIN_SECONDS: f64 = 2.0;
+/// The space a label needs along the time axis, in points, before the ruler
+/// labels every bar or every few.
+const LABEL_SPACING: f32 = 44.0;
+/// How much of the picture's ground is laid over a cold stretch: recorded
+/// without the run-up its tails and bus state needed, so dimmed.
+const COLD_DIM: f32 = 0.5;
+
+/// The stretch of song the region shows. `zoomed` is set by any zoom or pan,
+/// until Fit clears it; until then the region follows the recording's length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Window {
+    from: f64,
+    to: f64,
+    zoomed: bool,
+}
+
+impl Window {
+    /// The whole recording, the reported position and what sounds, with a
+    /// little room past the end.
+    fn fit(view: &TapeView) -> Window {
+        let end = [view.end(), view.position, view.heard].into_iter().flatten().fold(0.0, f64::max);
+        Window { from: 0.0, to: (end * 1.05).max(MIN_SECONDS * 4.0), zoomed: false }
+    }
+
+    fn seconds(&self) -> f64 {
+        self.to - self.from
+    }
+
+    /// Zoom by `factor` (above 1 zooms in) about song seconds `at`.
+    pub(super) fn zoom(&mut self, factor: f64, at: f64) {
+        let width = (self.seconds() / factor).max(MIN_SECONDS);
+        let share = (at - self.from) / self.seconds();
+        self.from = (at - share * width).max(0.0);
+        self.to = self.from + width;
+        self.zoomed = true;
+    }
+
+    pub(super) fn pan(&mut self, seconds: f64) {
+        let shift = seconds.max(-self.from);
+        self.from += shift;
+        self.to += shift;
+        self.zoomed = true;
+    }
+}
+
+/// Song time over the far region: its start at the far edge, the newest at
+/// the spectrum.
+#[derive(Clone, Copy)]
+pub(super) struct SongAxis {
+    split: f32,
+    window: Window,
+    /// The region's length along the depth axis, in points.
+    region_len: f32,
+}
+
+impl SongAxis {
+    pub(super) fn new(axes: &Axes, split: f32, window: Window) -> SongAxis {
+        SongAxis { split, window, region_len: axes.depth_len() * (1.0 - split) }
+    }
+
+    fn share(&self, d: f32) -> f64 {
+        f64::from((d - self.split) / (1.0 - self.split).max(f32::EPSILON))
+    }
+
+    /// The depth song seconds `seconds` are drawn at, unclamped.
+    fn depth_of(&self, seconds: f64) -> f32 {
+        let share = (self.window.to - seconds) / self.window.seconds();
+        self.split + share as f32 * (1.0 - self.split)
+    }
+
+    pub(super) fn seconds_at(&self, d: f32) -> f64 {
+        self.window.to - self.share(d) * self.window.seconds()
+    }
+
+    /// Song seconds per point along the depth axis, the rate a drag or a
+    /// scroll pans by.
+    pub(super) fn seconds_per_point(&self) -> f64 {
+        self.window.seconds() / f64::from(self.region_len.max(1.0))
+    }
+
+    fn shows(&self, seconds: f64) -> bool {
+        (self.window.from..=self.window.to).contains(&seconds)
+    }
+}
+
+/// Only the editor's own copy of the pane has a tape to show or a pointer to
+/// cue it with.
+pub(super) fn editor(navigation: Navigation) -> bool {
+    matches!(navigation, Navigation::Docked | Navigation::Folded(_))
+}
+
+/// This copy of the pane draws the tape.
+pub(super) fn active(state: &PictureState, navigation: Navigation) -> bool {
+    let view = &state.runtime.tape;
+    view.present && view.showing && editor(navigation)
+}
+
+fn window_id(surface: usize) -> egui::Id {
+    egui::Id::new(("tape-window", surface))
+}
+
+/// The stretch of song this frame starts from.
+pub(super) fn window(ui: &egui::Ui, view: &TapeView, surface: usize) -> Window {
+    let held = ui.data(|d| d.get_temp::<Window>(window_id(surface)));
+    held.filter(|w| w.zoomed).unwrap_or_else(|| Window::fit(view))
+}
+
+/// Keep the stretch shown for the next frame, and tell the worker which
+/// columns to analyze first.
+pub(super) fn keep_window(ui: &egui::Ui, surface: usize, window: Window, view: &mut TapeView) {
+    ui.data_mut(|d| d.insert_temp(window_id(surface), window));
+    view.window = Some((window.from, window.to));
+}
+
+/// The tape's own GPU grid, apart from the live heatmap's, so that switching
+/// modes re-uploads neither.
+fn pane_id(surface: usize) -> u64 {
+    u64::MAX - surface as u64
+}
+
+/// Seconds one slab of `level` spans.
+fn slab_seconds(level: usize) -> f64 {
+    COLUMN_SECONDS * f64::from(1u32 << level)
+}
+
+/// Draw the tape over the far region, and take a click there as a cue.
+/// Returns the ruler's labels, for the pane to set with its own.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw(
+    painter: &egui::Painter,
+    response: &egui::Response,
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &mut PictureState,
+    split: f32,
+    surface: usize,
+    window: Window,
+) -> Vec<(Pos2, Align2, String)> {
+    let axis = SongAxis::new(axes, split, window);
+    heatmap(painter, axes, scale, state, &axis, surface);
+    let view = &mut state.runtime.tape;
+    for span in view.spans.iter().filter(|span| !span.warm) {
+        let (from, to) = (span.start.max(window.from), span.end.min(window.to));
+        if from < to {
+            let band = Rect::from_two_pos(
+                axes.at(0.0, axis.depth_of(from)),
+                axes.at(1.0, axis.depth_of(to)),
+            );
+            painter.rect_filled(band, 0.0, theme::picture().gamma_multiply(COLD_DIM));
+        }
+    }
+    let labels = ruler(painter, axes, view, &axis);
+    let across = |seconds: f64, stroke: Stroke| {
+        if axis.shows(seconds) {
+            painter.line_segment(axes.across_pitch(axis.depth_of(seconds)), stroke);
+        }
+    };
+    if let Some(position) = view.position {
+        across(position, Stroke::new(theme::LINE_WIDTH, theme::text_dim()));
+    }
+    if let Some(heard) = view.heard {
+        across(heard, Stroke::new(theme::LINE_WIDTH, theme::accent()));
+    }
+    let pointer = response.hover_pos().filter(|&p| axes.depth_at(p) >= split);
+    if let Some(pointer) = pointer {
+        let at = axis.seconds_at(axes.depth_at(pointer)).max(0.0);
+        across(at, Stroke::new(theme::GRID_WIDTH, theme::text()));
+        if response.clicked() && view.enabled && !view.rolling {
+            view.request = Some(TapeRequest::Cue(at));
+        }
+        response.clone().on_hover_text_at_pointer(describe(view, at));
+    }
+    labels
+}
+
+/// The tape's spectrogram over the far region, at the pyramid level whose
+/// slabs come closest to one per device pixel without going under it.
+fn heatmap(
+    painter: &egui::Painter,
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &mut PictureState,
+    axis: &SongAxis,
+    surface: usize,
+) {
+    let cfg = state.appearance.spectrum;
+    let ppp = pane_ppp(painter.ctx());
+    let window = axis.window;
+    let target = f64::from((axis.region_len * ppp).clamp(2.0, LIVE_SLAB_CAP));
+    let level =
+        (0..LEVELS).find(|&n| window.seconds() / slab_seconds(n) <= target).unwrap_or(LEVELS - 1);
+    let width = slab_seconds(level);
+    // A slab either side, so the filtered edge of the run is past the region.
+    let first = (window.from / width).floor() as i64 - 1;
+    let last = (window.to / width).ceil() as i64 + 1;
+    let tape = &state.runtime.tape.spectrogram;
+    let run: Arc<[SpectrogramSlab]> =
+        (first..=last).map(|j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab)).collect();
+    // A power of two over the run, so the ring keeps its size while a pan or
+    // a zoom within one level moves the run.
+    let capacity = ((run.len() + 2).next_power_of_two() + 8) as u32;
+    // Column k is centred on its own song seconds, so slab j of any level
+    // starts half a column before column `j * 2^level`.
+    let origin = first as f64 * width - 0.5 * COLUMN_SECONDS;
+    let vert = |p: f32, d: f32| {
+        let pos = axes.at(p, d);
+        let slab = ((axis.seconds_at(d) - origin) / width) as f32;
+        SpectrogramVertex { pos: [pos.x, pos.y], slab, t: p }
+    };
+    let (low_far, high_far) = (vert(0.0, 1.0), vert(1.0, 1.0));
+    let (high_near, low_near) = (vert(1.0, axis.split), vert(0.0, axis.split));
+    let vertices = vec![low_far, high_far, high_near, low_far, high_near, low_near];
+    let view = PaneView {
+        ppp,
+        pitch_len: axes.pitch_len(),
+        depth_len: axis.region_len,
+        window: window.seconds(),
+        scale: *scale,
+        cfg,
+    };
+    let grid = SpectrogramGrid {
+        capacity,
+        bins: SPECTRUM_BINS as u32,
+        first_key: first,
+        run,
+        full_uploads: Default::default(),
+    };
+    let shades = crate::spectrogram::shades(&mut state.surfaces.spectrogram, surface, &cfg);
+    painter.add(harmonigraph_render::spectrogram_paint_callback(
+        painter.clip_rect(),
+        vertices,
+        grid,
+        read_of(&view, pitch_pixels(axes.pitch_len(), ppp)),
+        shades,
+        state.surfaces.target_format,
+        pane_id(surface),
+        None,
+    ));
+}
+
+/// Bars, or minutes and seconds with no meter from the host, ticked along the
+/// low-pitch edge: ticks rather than lines across, which would lay a mesh over
+/// the picture they measure.
+fn ruler(
+    painter: &egui::Painter,
+    axes: &Axes,
+    view: &TapeView,
+    axis: &SongAxis,
+) -> Vec<(Pos2, Align2, String)> {
+    let window = axis.window;
+    let pitch = axes.dir_pitch();
+    let later = -axes.dir_depth();
+    // The label box grows away from its tick, into the picture.
+    let grows = later + pitch;
+    let align = Align2([
+        if grows.x >= 0.0 { Align::Min } else { Align::Max },
+        if grows.y >= 0.0 { Align::Min } else { Align::Max },
+    ]);
+    let mut labels = Vec::new();
+    let mut tick = |seconds: f64, text: Option<String>| {
+        let edge = axes.at(0.0, axis.depth_of(seconds));
+        let length = if text.is_some() { 12.0 } else { 6.0 };
+        painter.line_segment(
+            [edge, edge + pitch * length],
+            Stroke::new(theme::GRID_WIDTH, theme::picture_marking()),
+        );
+        if let Some(text) = text {
+            labels.push((edge + later * 3.0 + pitch * 3.0, align, text));
+        }
+    };
+    let per_second = (1.0 / axis.seconds_per_point()) as f32;
+    if let Some(bar) = view.bar_seconds(window.from) {
+        let per_bar = (bar as f32 * per_second).max(f32::EPSILON);
+        let every = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+            .into_iter()
+            .find(|n| per_bar * *n as f32 >= LABEL_SPACING)
+            .unwrap_or(1024);
+        for (seconds, bar) in view.bar_lines(window.from, window.to) {
+            let labelled = (bar - 1) % every == 0;
+            if labelled || per_bar >= 4.0 {
+                tick(seconds, labelled.then(|| bar.to_string()));
+            }
+        }
+        return labels;
+    }
+    let every = [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0]
+        .into_iter()
+        .find(|n| per_second * *n as f32 >= LABEL_SPACING * 1.5)
+        .unwrap_or(1200.0);
+    let mut seconds = (window.from / every).ceil() * every;
+    while seconds < window.to {
+        tick(seconds, Some(clock(seconds).trim_end_matches(".0").to_owned()));
+        seconds += every;
+    }
+    labels
+}
+
+/// Live or Tape, and in Tape mode the audition's controls, in the far
+/// region's corner beside its fold control. `song` is the stretch shown, in
+/// Tape mode.
+pub(super) fn bar(
+    ui: &mut egui::Ui,
+    axes: &Axes,
+    state: &mut PictureState,
+    split: f32,
+    song: Option<&mut Window>,
+) {
+    let ui_scale = theme::ui_scale(ui.ctx());
+    let size = theme::tab_bar_height(ui_scale);
+    let region = Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+    let corner = axes.at(1.0, 1.0);
+    let right = (corner.x - region.right()).abs() < (corner.x - region.left()).abs();
+    let bottom = (corner.y - region.bottom()).abs() < (corner.y - region.top()).abs();
+    let gap = 4.0;
+    let (x0, x1) = if right {
+        (region.left() + gap, region.right() - size - gap)
+    } else {
+        (region.left() + size + gap, region.right() - gap)
+    };
+    let (y0, y1) = if bottom {
+        (region.bottom() - size, region.bottom())
+    } else {
+        (region.top(), region.top() + size)
+    };
+    let rect = Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1.max(x0), y1));
+    let layout = if right {
+        egui::Layout::right_to_left(Align::Center)
+    } else {
+        egui::Layout::left_to_right(Align::Center)
+    };
+    let mut child =
+        ui.new_child(egui::UiBuilder::new().id_salt("tape-bar").max_rect(rect).layout(layout));
+    egui::Frame::new()
+        .fill(theme::header())
+        .corner_radius(theme::control_radius(ui_scale))
+        .inner_margin(egui::Margin::symmetric(4, 1))
+        .show(&mut child, |ui| controls(ui, &mut state.runtime.tape, song));
+}
+
+fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>) {
+    ui.horizontal(|ui| {
+        let live = ui.add(egui::Button::selectable(!view.showing, "Live"));
+        if live.on_hover_text("The live picture.").clicked() {
+            view.showing = false;
+        }
+        let tape = ui.add(egui::Button::selectable(view.showing, "Tape"));
+        if tape.on_hover_text("What the tape holds along the song.").clicked() {
+            view.showing = true;
+        }
+    });
+    let Some(song) = song else { return };
+    let stop = ui.add_enabled(view.heard.is_some(), egui::Button::new("Stop"));
+    if stop.on_hover_text("End the audition.").clicked() {
+        view.request = Some(TapeRequest::Stop);
+    }
+    let fit = ui.add_enabled(song.zoomed, egui::Button::new("Fit"));
+    if fit.on_hover_text("Show the whole recording.").clicked() {
+        *song = Window::fit(view);
+    }
+    ui.label(format!("{} MiB", view.bytes >> 20))
+        .on_hover_text("Memory the recording holds. It is never saved with the project.");
+    let hint = if !view.enabled {
+        "No audition while the analyzer listens to the sidechain."
+    } else if view.rolling {
+        "Stop the transport to audition."
+    } else if view.spans.is_empty() {
+        "Nothing recorded yet. The song records as it plays."
+    } else {
+        "Click to play the recording from there."
+    };
+    ui.label(egui::RichText::new(hint).small().color(theme::text_dim()));
+}
+
+/// Song seconds as `m:ss.s`.
+fn clock(seconds: f64) -> String {
+    let minutes = (seconds / 60.0).floor();
+    format!("{minutes:.0}:{:04.1}", seconds - minutes * 60.0)
+}
+
+/// The hover text for song seconds `at`.
+fn describe(view: &TapeView, at: f64) -> String {
+    let place = match view.bar_at(at) {
+        Some((bar, beat)) => format!("Bar {bar}.{beat} · {}", clock(at)),
+        None => clock(at),
+    };
+    let held = match view.span_at(at) {
+        Some(span) => {
+            let ago = span.recorded.elapsed().as_secs_f64();
+            let ago =
+                if ago < 90.0 { format!("{ago:.0} s") } else { format!("{:.0} min", ago / 60.0) };
+            format!("{}, recorded {ago} ago", if span.warm { "warm" } else { "cold" })
+        }
+        None => "nothing recorded".to_owned(),
+    };
+    format!("{place}\n{held}")
+}

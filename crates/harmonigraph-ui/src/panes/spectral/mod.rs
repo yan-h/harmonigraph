@@ -21,6 +21,7 @@ mod profile;
 pub(crate) mod roll;
 pub(super) mod settings;
 pub(crate) mod spectrogram;
+mod tape;
 
 /// The Span drag's gain, reached by `spectrogram`'s
 /// `a_span_drag_refolds_once_per_rung_crossed` so that its fixture drags at the
@@ -199,7 +200,12 @@ pub(crate) fn spectral_pane(
     // divider's own band, which
     // is what leaves the divider on top where the two overlap: egui hands a
     // drag to the last widget registered over the pointer.
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
+    //
+    // In Tape mode a click in the far region cues the tape, so it senses
+    // clicks too.
+    let tape_mode = tape::active(state, navigation);
+    let sense = if tape_mode { Sense::click_and_drag() } else { Sense::drag() };
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), sense);
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
     }
@@ -224,7 +230,19 @@ pub(crate) fn spectral_pane(
     let divider = (regions.is_none() && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface, at_split));
     let drag_navigates = orientation_drag.as_ref().is_none_or(|d| d.navigating);
-    drag_zoom(ui, &axes, &response, state, surface, at_split, navigation, drag_navigates);
+    // The stretch of song Tape mode shows, which the drags below may move.
+    let mut song = tape_mode.then(|| tape::window(ui, &state.runtime.tape, surface));
+    drag_zoom(
+        ui,
+        &axes,
+        &response,
+        state,
+        surface,
+        at_split,
+        navigation,
+        drag_navigates,
+        song.as_mut(),
+    );
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
     // range, the Span or the level ceiling, and everything below has to be this
     // frame's values, not the ones from before the drag. The ceiling is the
@@ -288,7 +306,7 @@ pub(crate) fn spectral_pane(
     // window, or past its oldest column) show the lighter pane `well` in
     // jarring patches. The bed is the heatmap's own silence color, the
     // gradient's floor (#934), so covered and un-covered silence match.
-    if show_history && cfg.show_spectrogram && split < 1.0 {
+    if show_history && (cfg.show_spectrogram || song.is_some()) && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
         let floor = crate::spectrogram::silence_color(cfg.spectrogram_gradient);
         painter.rect_filled(bed, 0.0, floor);
@@ -378,8 +396,17 @@ pub(crate) fn spectral_pane(
     // paints can meet anything the roll paints is ON the line dividing them —
     // which is why the marks for `now` go after all three. Turning the ribbons
     // off (`show_roll`) with the spectrogram on leaves the heatmap alone.
-    if show_history && split < 1.0 && cfg.show_spectrogram {
-        spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
+    //
+    // In Tape mode the far region is the tape's instead, along the song, and
+    // the roll and its names stand down: the tape holds no notes yet.
+    let mut tape_labels = Vec::new();
+    if show_history && split < 1.0 {
+        if let Some(window) = song {
+            tape_labels =
+                tape::draw(&painter, &response, &axes, &scale, state, split, surface, window);
+        } else if cfg.show_spectrogram {
+            spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
+        }
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
@@ -483,7 +510,7 @@ pub(crate) fn spectral_pane(
     // The width it draws a body at is also where the names leave the pitch
     // zoom, so both take this one.
     let width = roll::Width::of(state, &axes, &scale, point_scale);
-    if show_history && split < 1.0 && cfg.show_roll {
+    if show_history && split < 1.0 && cfg.show_roll && song.is_none() {
         roll::draw_roll(
             &painter,
             &axes,
@@ -599,7 +626,18 @@ pub(crate) fn spectral_pane(
     // Each note's own name, over the ribbon it belongs to. In the same batch
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
-    if show_history {
+    for (pos, align, label) in tape_labels {
+        labels.text(
+            &painter,
+            pos,
+            align,
+            label,
+            marking_font.clone(),
+            theme::picture_marking(),
+            theme::picture(),
+        );
+    }
+    if show_history && song.is_none() {
         let mut thinning = state.surfaces.note_names.remove(&surface).unwrap_or_default();
         let note_names = names::plan(
             &painter,
@@ -652,6 +690,15 @@ pub(crate) fn spectral_pane(
     }
     if let Some(drag) = orientation_drag {
         drag.finish(&painter, rect, state);
+    }
+    // Over everything, so the switch is never under a picture.
+    if tape::editor(navigation) && state.runtime.tape.present && show_history && split < 1.0 {
+        tape::bar(ui, &axes, state, split, song.as_mut());
+    }
+    match song {
+        Some(window) => tape::keep_window(ui, surface, window, &mut state.runtime.tape),
+        None if tape::editor(navigation) => state.runtime.tape.window = None,
+        None => {}
     }
 }
 

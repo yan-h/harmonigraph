@@ -28,7 +28,6 @@ pub mod spectral;
 pub mod spectral_fold;
 pub mod spiral;
 pub mod system;
-mod tape;
 pub mod tuning;
 pub mod view;
 
@@ -39,7 +38,6 @@ use pages::{analyzer_settings_pane, lattice_settings_pane};
 use render::render_pane;
 use spiral::spiral_pane;
 use system::system_pane;
-use tape::tape_pane;
 use tuning::tuning_pane;
 
 /// The surface every docked tab draws on. One id serves all of them because the
@@ -142,9 +140,6 @@ pub enum Tab {
     /// A live preview of the offline video frame, composed and adjusted here.
     /// Titled "Video".
     Video,
-    /// The plugin's tape along the song: what is recorded, and a strip to
-    /// click for an audition (#1719).
-    Tape,
 }
 
 impl Tab {
@@ -189,7 +184,6 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         Tab::Spectral => "Analyzer",
         Tab::Spiral => "Spiral",
         Tab::Video => "Video",
-        Tab::Tape => "Tape",
     }
 }
 
@@ -247,7 +241,6 @@ impl Viewer<'_> {
             Tab::Mappings => color_pane(ui, &mut self.state.appearance, self.params),
             Tab::System => system_pane(ui, &mut self.state.appearance, self.interaction),
             Tab::Console => console_pane(ui, &mut self.state.runtime),
-            Tab::Tape => tape_pane(ui, &mut self.state.runtime.tape),
             Tab::Spectral => {
                 // The docked analyzer, and the reason the hold is applied HERE
                 // rather than inside the pane: this is the one copy of it whose

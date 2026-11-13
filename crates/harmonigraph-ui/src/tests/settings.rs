@@ -1456,9 +1456,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             bar <= margin + 0.01,
             "at {scale} a {bar}pt bar does not fit the {margin}pt gutter"
         );
-        // The Tape tab is a status row, a hint and one strip: it cannot be
-        // made to overflow, and has no row to reach the lane with.
-        for &pane in SETTINGS_PANES.iter().filter(|&&pane| pane != panes::Tab::Tape) {
+        for &pane in SETTINGS_PANES {
             let (shapes, body) = scrolling_settings_pane(pane, scale);
             // The flip button ends at the column's right edge, which is the
             // edge of the lane — `SpectrumBar`'s own docs name this test as
@@ -1819,7 +1817,7 @@ fn no_settings_tab_repeats_a_section_heading() {
         titles.sort();
         titles.dedup();
         assert_eq!(titles.len(), drawn, "{tab:?} repeats a heading: {titles:?}");
-        if !matches!(tab, panes::Tab::Console | panes::Tab::Tape) {
+        if !matches!(tab, panes::Tab::Console) {
             assert!(drawn >= 2, "{tab:?} drew {drawn} headings; are they still letter-spaced?");
         }
     }

@@ -633,7 +633,7 @@ fn host_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
     Some(harmonigraph_ui::tape::Meter { beats, tempo, bar_start, bar, numerator, denominator })
 }
 
-/// The host's meter, for the Tape tab's ruler: only with a tempo to place
+/// The host's meter, for Tape mode's ruler: only with a tempo to place
 /// its bars in time.
 fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
     host_meter(transport).filter(|meter| meter.tempo > 0.0)
@@ -2102,7 +2102,7 @@ mod tests {
         plugin.process(&mut main, &mut aux, &mut context)
     }
 
-    /// Click the Tape tab, and wait until the input worker has passed the
+    /// Click in Tape mode, and wait until the input worker has passed the
     /// request on: two whole rounds, so one began after it was set.
     fn ask(plugin: &Harmonigraph, request: harmonigraph_ui::tape::TapeRequest) {
         plugin.editor_shared.lock().ui.picture.runtime.tape.request = Some(request);
@@ -2159,7 +2159,7 @@ mod tests {
     }
 
     /// The whole path through the real input worker: rolling blocks reach the
-    /// tape through the analyzer's ring, and a Tape tab cue plays them back
+    /// tape through the analyzer's ring, and a Tape mode cue plays them back
     /// into the main buffer, with `KeepAlive` while it sounds; the transport
     /// starting cuts it and the output is the input again.
     #[test]

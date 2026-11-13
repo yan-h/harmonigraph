@@ -18,12 +18,12 @@ fn settings_pane_at_scale(case: SettingsCase, scale: f32) -> Vec<egui::epaint::C
     open_settings_pane(&super::probe::themed_scaled(scale), case, &mut state, PANE_WIDTH)
 }
 
-/// The cases of the pages that draw bars — every settings page but the
-/// readouts, Video, Tape and Console.
+/// The cases of the pages that draw bars — every settings page but the two
+/// readouts, Video and Console.
 fn bar_cases() -> impl Iterator<Item = SettingsCase> {
-    settings_cases().into_iter().filter(|case| {
-        !matches!(case.pane, panes::Tab::Video | panes::Tab::Tape | panes::Tab::Console)
-    })
+    settings_cases()
+        .into_iter()
+        .filter(|case| !matches!(case.pane, panes::Tab::Video | panes::Tab::Console))
 }
 
 /// Every shape's bottom edge, ignoring the ones that carry no geometry (they

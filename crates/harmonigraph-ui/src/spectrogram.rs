@@ -563,6 +563,16 @@ pub(crate) fn run_for(
 ///
 /// `None` before anything has been folded into the surface, which is the same
 /// frame [`run_for`] answers `None` on.
+/// The shade table `cfg` draws a heatmap through, shared with the surface's
+/// live heatmap.
+pub(crate) fn shades(
+    surfaces: &mut crate::spectrum::SpectrogramSurfaces,
+    surface: usize,
+    cfg: &SpectrumConfig,
+) -> SpectrogramShades {
+    surfaces.at(surface).folded.shades(cfg)
+}
+
 pub(crate) fn frame_data(
     surfaces: &mut crate::spectrum::SpectrogramSurfaces,
     surface: usize,
