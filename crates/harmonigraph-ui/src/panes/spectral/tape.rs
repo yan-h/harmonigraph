@@ -512,7 +512,7 @@ fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>, r
 /// no playhead moved while stopped, so that is where playback stopped.
 fn readout(view: &TapeView) -> String {
     if !view.enabled {
-        return "Off while the analyzer listens to the sidechain.".to_owned();
+        return "Off: the analyzer listens to the sidechain, or the host is rendering.".to_owned();
     }
     if view.rolling {
         return "Recording. Stop the transport to audition.".to_owned();
@@ -579,7 +579,7 @@ mod tests {
             position: Some(5.0),
             ..Default::default()
         };
-        assert!(readout(&view).starts_with("Off while"), "{}", readout(&view));
+        assert!(readout(&view).starts_with("Off: "), "{}", readout(&view));
         view.enabled = true;
         let parked = readout(&view);
         assert!(parked.starts_with("Stopped at 0:05.0 · cold, recorded 0 s ago"), "{parked}");
