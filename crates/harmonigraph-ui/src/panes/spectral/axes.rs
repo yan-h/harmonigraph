@@ -863,8 +863,10 @@ pub(super) struct TimeAxis {
     pub(super) depth_span: f32,
     /// Visible scrolling history, floored at `MIN_WINDOW`.
     pub(super) window: f64,
-    /// Take time at the near edge: `now`.
+    /// Time at the near edge: `now` for the live roll, the window's end in
+    /// Tape mode.
     pub(super) origin: f64,
+    /// The moment sounding now, where a held note's ribbon ends.
     pub(super) now: f64,
 }
 
@@ -917,7 +919,7 @@ impl TimeAxis {
 
     /// The oldest take time the region shows — its far-edge cull point.
     pub(super) fn oldest(&self) -> f64 {
-        self.now - self.window
+        self.origin - self.window
     }
 
     /// Seconds spanned across the region.
