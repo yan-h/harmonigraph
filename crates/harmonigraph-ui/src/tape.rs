@@ -40,6 +40,11 @@ impl Meter {
         self.beats + seconds * self.tempo / 60.0
     }
 
+    /// The same meter read `seconds` after this anchor.
+    pub fn after(self, seconds: f64) -> Meter {
+        Meter { beats: self.beats_after(seconds), ..self }
+    }
+
     /// Seconds from this anchor to quarter note `beats`.
     fn seconds_to(&self, beats: f64) -> f64 {
         (beats - self.beats) * 60.0 / self.tempo

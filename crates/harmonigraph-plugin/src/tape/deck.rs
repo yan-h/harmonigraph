@@ -115,6 +115,8 @@ impl Deck {
         let sounding = self.sounding();
         self.end(Reason::Reset);
         self.emit(Event::Reset { sounding });
+        // A click from before the reset is not the host's to play now.
+        self.shared.request.store(NO_REQUEST, Ordering::Release);
         self.last = None;
         self.pending = None;
         self.mixed = false;
@@ -195,6 +197,7 @@ impl Deck {
             self.end(Reason::NoPosition);
             self.pending = None;
             self.last = None;
+            self.mixed = false;
             self.publish(None, false);
             return BlockOut { song: None, sounding: false };
         };

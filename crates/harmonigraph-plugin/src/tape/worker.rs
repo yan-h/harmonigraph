@@ -187,11 +187,19 @@ impl Worker {
     }
 
     /// Commit the chunk being recorded, and set its meter over the stretch it
-    /// covers.
+    /// covers: where another recording goes on past its end, the meter that
+    /// ruled there before rules again from there.
     fn close_chunk(&mut self) {
         let meter = self.building_meter.take();
         let Some(chunk) = self.building.take() else { return };
         if chunk.end > chunk.start {
+            if let Some(store) = self.store.as_ref().filter(|s| s.stamp_at(chunk.end).is_some()) {
+                let rate = f64::from(store.rate);
+                let ruling = self.meters.range(..=chunk.end).next_back();
+                if let Some((&at, &old)) = ruling.filter(|&(&at, _)| at != chunk.end) {
+                    self.meters.insert(chunk.end, old.after((chunk.end - at) as f64 / rate));
+                }
+            }
             let stale: Vec<i64> =
                 self.meters.range(chunk.start..chunk.end).map(|(&at, _)| at).collect();
             for at in stale {
