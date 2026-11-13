@@ -281,7 +281,7 @@ impl RollNote {
 }
 
 /// Every note press the roll still remembers, in time order.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct NoteRoll {
     /// Finished notes, oldest release first ([`RollNote::retired`]), held so by
     /// [`retire`](Self::retire) whatever order the releases arrive in — sources
@@ -298,6 +298,10 @@ pub struct NoteRoll {
     /// trimmed.
     live: BTreeMap<VoiceKey, RollNote>,
     hidden_sources: std::collections::BTreeSet<SourceId>,
+    /// Keeps every note, past [`MAX_NOTES`](Self::MAX_NOTES): a roll of a
+    /// whole recording, built once and drawn a window at a time, where the
+    /// cap would forget the song's start.
+    uncapped: bool,
 }
 
 impl NoteRoll {
@@ -545,8 +549,14 @@ impl NoteRoll {
         }
     }
 
+    /// A roll that keeps every note it is given. Nothing trims it either:
+    /// [`trim`](Self::trim) is the caller's.
+    pub fn uncapped() -> Self {
+        Self { uncapped: true, ..Self::default() }
+    }
+
     fn enforce_cap(&mut self) {
-        while self.past.len() > Self::MAX_NOTES {
+        while !self.uncapped && self.past.len() > Self::MAX_NOTES {
             self.past.pop_front();
         }
     }
@@ -560,15 +570,18 @@ impl NoteRoll {
         }
     }
 
+    /// The source's notes are hidden: its Show switch is off, or for a note
+    /// the tape plays, the switch of the source that played it.
+    pub fn hides(&self, source: SourceId) -> bool {
+        self.hidden_sources.contains(&source) || self.hidden_sources.contains(&source.off_tape())
+    }
+
     /// Every remembered note, finished ones first and then the sounding
     /// ones in `(source, channel, note)` order. Not sorted by start time:
     /// overlapping notes draw as overlapping ribbons either way, and the
     /// pane sorts for itself when the paint order matters.
     pub fn notes(&self) -> impl Iterator<Item = &RollNote> {
-        self.past
-            .iter()
-            .chain(self.live.values())
-            .filter(|n| !self.hidden_sources.contains(&n.source))
+        self.past.iter().chain(self.live.values()).filter(|n| !self.hides(n.source))
     }
 
     /// The most recent moment any remembered note was sounding — `now`
@@ -579,14 +592,10 @@ impl NoteRoll {
     /// which outlasts the last voice's release fade. O(1): `past` is
     /// release-ordered, so the latest release is the one on the end.
     pub fn latest_activity(&self, now: Time) -> Option<Time> {
-        if self.live.values().any(|n| !self.hidden_sources.contains(&n.source)) {
+        if self.live.values().any(|n| !self.hides(n.source)) {
             return Some(now);
         }
-        self.past
-            .iter()
-            .rev()
-            .find(|n| !self.hidden_sources.contains(&n.source))
-            .and_then(RollNote::retired)
+        self.past.iter().rev().find(|n| !self.hides(n.source)).and_then(RollNote::retired)
     }
 
     pub fn len(&self) -> usize {
@@ -1015,5 +1024,18 @@ mod tests {
         roll.trim(2.0 + NoteRoll::MAX_AGE + 1.0);
         let left: Vec<_> = roll.notes().map(|n| n.end).collect();
         assert_eq!(left, [Some(10.0)], "the older release is forgotten on time");
+    }
+
+    /// A whole recording's roll keeps the song's start however many notes
+    /// follow it.
+    #[test]
+    fn an_uncapped_roll_keeps_every_note() {
+        let mut roll = NoteRoll::uncapped();
+        let key = VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 };
+        for i in 0..NoteRoll::MAX_NOTES + 10 {
+            roll.note_on(key, 1.0, 60.0, i as f64);
+            roll.note_off(key, i as f64 + 0.5);
+        }
+        assert_eq!(roll.len(), NoteRoll::MAX_NOTES + 10);
     }
 }

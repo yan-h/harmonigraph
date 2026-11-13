@@ -31,6 +31,27 @@ pub struct SourceId(pub u64);
 
 impl SourceId {
     pub const DIRECT: Self = Self(0);
+    /// The tape's namespace (#1719): a recorded note played back from the
+    /// tape keeps the source that played it, with this bit set, so a key held
+    /// live and the same key sounding on the tape are two voices. No live
+    /// source reaches it: the Hub numbers seventeen.
+    const TAPE: u64 = 1 << 40;
+
+    /// The source a note recorded from `self` sounds under on the tape.
+    pub fn on_tape(self) -> SourceId {
+        SourceId(self.0 | Self::TAPE)
+    }
+
+    /// The note is the tape's, not one played live.
+    pub fn is_tape(self) -> bool {
+        self.0 & Self::TAPE != 0
+    }
+
+    /// The source that played a note the tape plays: what its Show switch
+    /// is read from.
+    pub fn off_tape(self) -> SourceId {
+        SourceId(self.0 & !Self::TAPE)
+    }
 }
 
 /// One held address. Same-source retriggers replace this address; host note
@@ -939,7 +960,7 @@ impl NoteTracker {
     /// Preserve the release time and the source visibility at that moment.
     fn release_voice(&mut self, mut voice: Voice, at: Time) {
         voice.state = VoiceState::Released { at };
-        voice.visible_at_release = !self.hidden_sources.contains(&voice.source);
+        voice.visible_at_release = !self.hides(voice.source);
         self.released.push(voice);
     }
 
@@ -1049,12 +1070,24 @@ impl NoteTracker {
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
         self.held
             .values()
-            .filter(|v| !self.hidden_sources.contains(&v.source))
+            .filter(|v| !self.hides(v.source))
             .chain(self.released.iter().filter(|v| v.visible_at_release))
     }
 
+    /// The source's notes are hidden: its Show switch is off, or for a note
+    /// the tape plays, the switch of the source that played it.
+    pub fn hides(&self, source: SourceId) -> bool {
+        self.hidden_sources.contains(&source) || self.hidden_sources.contains(&source.off_tape())
+    }
+
+    /// Every held voice, hidden sources' included: what is down now, for a
+    /// recorder that must not depend on what is shown.
+    pub fn held_voices(&self) -> impl Iterator<Item = &Voice> {
+        self.held.values()
+    }
+
     pub fn held_count(&self) -> usize {
-        self.held.values().filter(|v| !self.hidden_sources.contains(&v.source)).count()
+        self.held.values().filter(|v| !self.hides(v.source)).count()
     }
 
     pub fn session_notes_off(&mut self, now: Time) {
@@ -1861,5 +1894,19 @@ mod tests {
         assert_eq!(tracker.voices().count(), 2);
         tracker.prune(2.1, &Envelope::default());
         assert_eq!(tracker.voices().count(), 0);
+    }
+
+    /// A note the tape plays is shown or hidden with the source that played
+    /// it, on the lattice and on the roll.
+    #[test]
+    fn the_tape_plays_a_source_under_its_own_show_switch() {
+        let mut tracker = NoteTracker::new();
+        let source = SourceId(3);
+        tracker.handle_event(NoteEvent::on(1.0, source.on_tape(), 0, 60, 1.0));
+        assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (1, 1));
+        tracker.hidden_sources.insert(source);
+        tracker.roll.set_shown(source, false);
+        assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (0, 0));
+        assert!(!tracker.hides(SourceId(4).on_tape()), "another source's tape notes still show");
     }
 }
