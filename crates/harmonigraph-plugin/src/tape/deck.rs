@@ -36,6 +36,8 @@ pub(crate) struct BlockOut {
     pub song: Option<f64>,
     /// The tape is cued or sounding, so the host must keep calling.
     pub sounding: bool,
+    /// What the tape added to this block, for the analyzer ring's descriptor.
+    pub heard: Option<crate::audio_ingress::Heard>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -199,7 +201,7 @@ impl Deck {
             self.last = None;
             self.mixed = false;
             self.publish(None, false);
-            return BlockOut { song: None, sounding: false };
+            return BlockOut { song: None, sounding: false, heard: None };
         };
         let rolling = transport::step(self.last, position, block.playing).rolling();
         self.watch_for_leak(position, rolling);
@@ -233,10 +235,12 @@ impl Deck {
         }
         self.last = Some((position, duration));
 
-        let mixed = self.mix(planes, block.frames, duration);
-        self.mixed = mixed;
+        let from = self.cue_position + self.played;
+        let frames = self.mix(planes, block.frames, duration);
+        self.mixed = frames > 0;
         self.publish(Some(position), rolling);
-        BlockOut { song: rolling.then_some(position), sounding: self.sounding() }
+        let heard = (frames > 0).then_some(crate::audio_ingress::Heard { seconds: from, frames });
+        BlockOut { song: rolling.then_some(position), sounding: self.sounding(), heard }
     }
 
     /// What Tape mode draws: the transport, and where the audition is.
@@ -252,8 +256,8 @@ impl Deck {
     }
 
     /// Mix whatever has been assembled for the current cue into `planes`;
-    /// whether any tape was added.
-    fn mix(&mut self, planes: &mut [&mut [f32]], frames: usize, duration: f64) -> bool {
+    /// how many frames of tape were added, from the block's first.
+    fn mix(&mut self, planes: &mut [&mut [f32]], frames: usize, duration: f64) -> usize {
         let active =
             matches!(self.play, Play::Cued { .. } | Play::Playing { .. } | Play::Fading { .. });
         let mut at = 0;
@@ -311,13 +315,13 @@ impl Deck {
                 Play::Cued { .. } => self.play = Play::Playing { starved: 0.0 },
                 Play::Fading { left: 0, reason, .. } => {
                     self.end(reason);
-                    return true;
+                    return at;
                 }
                 _ => {}
             }
         }
         if !active {
-            return false;
+            return 0;
         }
         match &mut self.play {
             Play::Cued { waited } => {
@@ -340,7 +344,7 @@ impl Deck {
             }
             _ => {}
         }
-        at > 0
+        at
     }
 
     /// A sentinel for tape reaching what the host renders. Exports are kept

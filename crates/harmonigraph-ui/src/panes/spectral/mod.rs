@@ -398,13 +398,16 @@ pub(crate) fn spectral_pane(
     // which is why the marks for `now` go after all three. Turning the ribbons
     // off (`show_roll`) with the spectrogram on leaves the heatmap alone.
     //
-    // In Tape mode the far region is the tape's instead, along the song, and
-    // the roll and its names stand down: the tape holds no notes yet.
+    // In Tape mode the far region is the tape's instead, along the song: its
+    // spectrogram, and the roll of what it recorded.
+    let width = roll::Width::of(state, &axes, &scale, point_scale);
     let mut tape_labels = Vec::new();
     if show_history && split < 1.0 {
         if let Some(window) = song {
-            tape_labels =
-                tape::draw(&painter, &response, &axes, &scale, state, split, surface, window);
+            let frame = tape::RollFrame { width: &width, point_scale, now };
+            tape_labels = tape::draw(
+                &painter, &response, &axes, &scale, state, split, surface, window, frame,
+            );
         } else if cfg.show_spectrogram {
             spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
         }
@@ -509,8 +512,7 @@ pub(crate) fn spectral_pane(
     // lead a little way past, into the spectrum peak it is making (see
     // `roll::lead`, and the divider below for what still draws over it).
     // The width it draws a body at is also where the names leave the pitch
-    // zoom, so both take this one.
-    let width = roll::Width::of(state, &axes, &scale, point_scale);
+    // zoom, so both take this one (computed above, for Tape mode's roll too).
     if show_history && split < 1.0 && cfg.show_roll && song.is_none() {
         roll::draw_roll(
             &painter,

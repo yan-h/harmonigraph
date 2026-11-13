@@ -16,7 +16,7 @@ const FRAMES: usize = 100;
 const STEREO: Format = Format { channels: 2, sample_rate: RATE as f32, sidechain: false };
 
 fn pair() -> (Deck, Worker) {
-    channel()
+    channel(Arc::new(crate::HarmonigraphParams::default()))
 }
 
 /// The recorded mix at song frame `frame`: distinct per frame and channel, so
@@ -50,6 +50,7 @@ fn ring_block_of(
         frames,
         format,
         song: song.map(|frame| Song { seconds: frame as f64 / RATE, meter: None }),
+        heard: None,
     };
     let samples = (0..frames as i64)
         .flat_map(|i| (0..format.channels).map(move |c| song.map_or(0.0, |s| recorded(s + i, c))))
@@ -115,7 +116,7 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     // playhead where playback stopped.
     for song in (0..3000).step_by(FRAMES) {
         let (audio, out) = run(&mut deck, song as f64 / RATE, true, true);
-        assert_eq!(out, BlockOut { song: Some(song as f64 / RATE), sounding: false });
+        assert_eq!(out, BlockOut { song: Some(song as f64 / RATE), sounding: false, heard: None });
         assert!(audio[0].iter().all(|&s| s == 0.0));
     }
     let parked = 2.9;
@@ -127,6 +128,8 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     worker.play();
     let (audio, out) = run(&mut deck, parked, false, true);
     assert!(out.sounding && out.song.is_none());
+    let heard = crate::audio_ingress::Heard { seconds: 1.0, frames: FRAMES };
+    assert_eq!(out.heard, Some(heard), "the block says what of the song it played");
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
         let gain = if i < fade { (i + 1) as f32 / fade as f32 } else { 1.0 };
@@ -586,4 +589,55 @@ fn a_stop_cancels_a_cue_still_waiting_for_a_fade() {
         lines.iter().any(|l| l.contains("stopped after") && l.contains("by Stop")),
         "{lines:?}"
     );
+}
+
+/// Notes land at the song frame they sounded at, a note that arrives before
+/// its block waits for it, and a pass opens with the voices already held
+/// when it started, which a note struck before the transport rolled is.
+#[test]
+fn notes_are_placed_by_song_frame_and_a_pass_opens_with_what_is_held() {
+    use super::notes::{key, Mark, Sounding};
+    let (_, mut worker) = pair();
+    let held = |note: u8| Mark::On {
+        key: key(1, note),
+        sounding: Sounding {
+            velocity: 1.0,
+            pitch: f32::from(note),
+            expressions: harmonigraph_core::Expressions::NEUTRAL,
+        },
+    };
+    let mut source = 0;
+    // Stopped, at presentation 0..0.1 s: a 67 struck before playback.
+    let (block, samples) = ring_block(source, None, STEREO);
+    worker.capture(block, &samples);
+    source += FRAMES as u64;
+    worker.inbox.push((0.05, held(67)));
+    worker.settle();
+    // Rolling from the song's start at presentation 0.1 s. A 60 at 0.35 s
+    // arrives a block before its audio does.
+    for (i, song) in (0..500).step_by(FRAMES).enumerate() {
+        if i == 1 {
+            worker.inbox.push((0.35, held(60)));
+        }
+        let (block, samples) = ring_block(source, Some(song), STEREO);
+        worker.capture(block, &samples);
+        source += FRAMES as u64;
+        worker.settle();
+    }
+    let events: Vec<(i64, Mark)> = worker.passes()[&1].events.clone();
+    assert_eq!(events, [(0, held(67)), (250, held(60))]);
+
+    // Stopped, the pass's audio is in the store, and Tape mode's roll, built
+    // between holds, reaches the view at the exchange after.
+    let (block, samples) = ring_block(source, None, STEREO);
+    worker.capture(block, &samples);
+    let mut view = TapeView { showing: true, ..Default::default() };
+    worker.exchange(&mut view, &SpectrumConfig::default());
+    worker.roll();
+    assert_eq!(view.notes.len(), 0, "built with no lock held, handed over next time");
+    worker.exchange(&mut view, &SpectrumConfig::default());
+    let mut notes: Vec<(u8, f64, Option<f64>)> =
+        view.notes.notes().map(|n| (n.note, n.start, n.end)).collect();
+    notes.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert_eq!(notes, [(67, 0.0, Some(0.5)), (60, 0.25, Some(0.5))]);
 }

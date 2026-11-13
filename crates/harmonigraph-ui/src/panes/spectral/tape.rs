@@ -8,6 +8,12 @@
 //! export draw the live picture, which is all they have. The spectrum stays
 //! live in Tape mode, so during an audition it shows the tape.
 //!
+//! With the roll on, the region also rolls the notes the recording holds,
+//! each stretch's from the pass whose audio won it, and the notes played live
+//! over the last audition at the song seconds they sounded over. Note names
+//! stay with the live roll: they follow ribbons out from the now-line, which
+//! the song has none of.
+//!
 //! The song runs from its start at the far edge toward the spectrum, so a
 //! recording made while the transport rolls grows toward the curve, the way
 //! the live picture flows out from it. The region shows the whole recording
@@ -20,7 +26,8 @@ use egui::{Align, Align2, Pos2, Rect, Stroke};
 use harmonigraph_core::spectrum::SPECTRUM_BINS;
 use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
 
-use super::axes::{Axes, PitchScale};
+use super::axes::{Axes, PitchScale, TimeAxis};
+use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
 use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
@@ -167,6 +174,14 @@ fn slab_seconds(level: usize) -> f64 {
     COLUMN_SECONDS * f64::from(1u32 << level)
 }
 
+/// What the roll needs that the pane decides: the width it draws a note at,
+/// the preview's point scale, and the display clock.
+pub(super) struct RollFrame<'a> {
+    pub(super) width: &'a Width,
+    pub(super) point_scale: f32,
+    pub(super) now: f64,
+}
+
 /// Draw the tape over the far region, and take a click there as a cue.
 /// Returns the ruler's labels, for the pane to set with its own.
 #[allow(clippy::too_many_arguments)]
@@ -179,9 +194,13 @@ pub(super) fn draw(
     split: f32,
     surface: usize,
     window: Window,
+    frame: RollFrame,
 ) -> Vec<(Pos2, Align2, String)> {
     let axis = SongAxis::new(axes, split, window);
     heatmap(painter, axes, scale, state, &axis, surface);
+    if state.appearance.spectrum.show_roll {
+        notes(painter, axes, scale, state, &axis, surface, frame);
+    }
     let view = &mut state.runtime.tape;
     for span in view.spans.iter().filter(|span| !span.warm) {
         let (from, to) = (span.start.max(window.from), span.end.min(window.to));
@@ -301,6 +320,49 @@ fn heatmap(
         pane_id(surface),
         None,
     ));
+}
+
+/// The recording's notes along the song, and over them the notes played live
+/// during the last audition, at the song seconds they sounded over.
+fn notes(
+    painter: &egui::Painter,
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &PictureState,
+    axis: &SongAxis,
+    surface: usize,
+    frame: RollFrame,
+) {
+    let view = &state.runtime.tape;
+    let window = axis.window;
+    // Every recorded note has ended: a stretch's notes close where it does.
+    let song = TimeAxis {
+        split: axis.split,
+        depth_span: 1.0 - axis.split,
+        window: window.seconds(),
+        origin: window.to,
+        now: window.to,
+    };
+    let recorded = RollSource { roll: &view.notes, time: song, lead: false, live_during: None };
+    let mut sources = vec![recorded];
+    if let Some(audition) = view.audition {
+        // The display clock at the window's near edge, had the audition
+        // played on: what puts a note played over it at the spot it sounded.
+        let origin = window.to + audition.clock - audition.song;
+        sources.push(RollSource {
+            roll: state.roll(),
+            time: TimeAxis { origin, now: frame.now, ..song },
+            lead: false,
+            live_during: Some((audition.clock, audition.until.unwrap_or(f64::INFINITY))),
+        });
+    }
+    let options = RollDrawOptions {
+        split: axis.split,
+        now: frame.now,
+        surface,
+        point_scale: frame.point_scale,
+    };
+    roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources);
 }
 
 /// Bars, or minutes and seconds with no meter from the host, ticked along the

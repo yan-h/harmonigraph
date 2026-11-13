@@ -201,8 +201,13 @@ impl Store {
     }
 
     /// The chunk holding song frame `frame`.
-    fn holding(&self, frame: i64) -> Option<&Chunk> {
+    pub(crate) fn holding(&self, frame: i64) -> Option<&Chunk> {
         self.chunks.range(..=frame).next_back().map(|(_, c)| c).filter(|c| c.end > frame)
+    }
+
+    /// Where the first chunk after song frame `frame` starts.
+    pub(crate) fn next_start(&self, frame: i64) -> Option<i64> {
+        self.chunks.range(frame + 1..).next().map(|(&start, _)| start)
     }
 
     /// Commit a newly recorded chunk, which wins or loses each overlap by

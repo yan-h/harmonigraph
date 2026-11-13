@@ -152,6 +152,16 @@ impl VisualRuntime {
             }
             self.apply_resolved(self.config_reducer.resolved());
         }
+        // An audition draws its spot under the tuning it was recorded with
+        // (#1719), so a note lands on the node it was heard at. Only the
+        // resolved axes, which decide where a pitch lies: tempering, Learn and
+        // the adaptive policy stay live, since the Tuning pane's switches
+        // show and edit them. Every path above sets the tuning afresh from the
+        // host's and reads nothing of the last one, so the recorded tuning
+        // never reaches the next observation.
+        if let Some(recorded) = self.tape.tuning {
+            self.tuning = recorded.tuning;
+        }
     }
 
     fn tuning_modes(&self) -> harmonigraph_core::configuration::TuningModes {

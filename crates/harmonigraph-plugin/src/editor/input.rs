@@ -24,6 +24,11 @@ pub(crate) struct LiveInput {
     /// The buffers the last [`Taken`] came back in, so a step allocates only
     /// when it needs more than any before it.
     pub(super) spare: TakenAudio,
+    /// What the display did to its voices, at presentation times, for the
+    /// tape to place by song position; the input worker swaps it out each
+    /// step. Bounded, so nothing grows where no worker runs.
+    pub(crate) tape_notes: Vec<(f64, crate::tape::notes::Mark)>,
+    pub(super) recorder: crate::tape::notes::Recorder,
 }
 
 /// The audio one [`LiveInput::take`] moved out of the ring, and
@@ -40,6 +45,8 @@ pub(crate) struct TakenAudio {
     /// The settings when the audio was taken, which analyze it and smooth
     /// the curve it moves.
     config: harmonigraph_ui::SpectrumConfig,
+    /// The presentation clock's offset onto the display's, at take.
+    offset: f64,
     /// Every block's samples, interleaved, back to back.
     samples: Vec<f32>,
     blocks: Vec<TakenBlock>,
@@ -66,6 +73,18 @@ impl Taken {
             let samples = &self.audio.samples[start..start + block.len];
             start += block.len;
             (block.block, samples)
+        })
+    }
+    /// Each block's descriptor and the display time of its first frame.
+    pub(crate) fn clocked_blocks(
+        &self,
+    ) -> impl Iterator<Item = (crate::audio_ingress::Block, f64)> + '_ {
+        let offset = self.audio.offset;
+        self.audio.blocks.iter().map(move |taken| {
+            let block = taken.block;
+            let start =
+                block.origin + block.first_frame as f64 / f64::from(block.format.sample_rate);
+            (block, start + offset)
         })
     }
     /// Whether this step found audio, and has analyzed none of it yet.
@@ -101,10 +120,13 @@ impl LiveInput {
         }
         let Some(offset) = self.clock.offset else { return };
         let tracker = &mut runtime.tracker;
+        let (recorder, tape) = (&mut self.recorder, &mut self.tape_notes);
         self.consumer.drain(|delivery, _| {
             if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
+                recorder.observe(tracker);
                 let result = tracker.handle_canonical_mapped(event, offset);
                 debug_assert!(result.is_ok(), "validated canonical publication");
+                recorder.record(tracker, event.time(), tape);
             }
             true
         });
@@ -129,6 +151,7 @@ impl LiveInput {
         let offset = self.clock.offset?;
         let mut audio = std::mem::take(&mut self.spare);
         audio.config = appearance.spectrum;
+        audio.offset = offset;
         self.audio_consumer.drain(|block, samples| {
             let position = (block.epoch, block.first_frame);
             let restart = self.audio_position != Some(position);
@@ -387,6 +410,7 @@ mod tests {
                     },
                     10.0 + first as f64 / 48_000.0,
                     None,
+                    None,
                     samples[first * 2..end * 2].iter().copied(),
                 );
                 count += 1;
@@ -422,6 +446,7 @@ mod tests {
                 block,
                 format,
                 first as f64 / 48_000.0,
+                None,
                 None,
                 (0..block * 2).map(|i| ((first * 2 + i) as f32 * 0.047).sin()),
             );
@@ -464,6 +489,7 @@ mod tests {
                     12_000,
                     format,
                     start,
+                    None,
                     None,
                     (0..12_000).map(|i| ((batch * 12_000 + i) as f32 * 0.047).sin()),
                 );
@@ -511,23 +537,23 @@ mod tests {
         let mono =
             crate::audio_ingress::Format { channels: 1, sample_rate: 48_000.0, sidechain: false };
         // Retain a full window plus a hop, then drop an entire callback.
-        tx.publish(window + 384, mono, 0.0, None, std::iter::repeat(0.5));
-        tx.publish(window, mono, 1.0, None, std::iter::repeat(-0.5));
+        tx.publish(window + 384, mono, 0.0, None, None, std::iter::repeat(0.5));
+        tx.publish(window, mono, 1.0, None, None, std::iter::repeat(-0.5));
         drain_audio(&mut shared, 1.0);
         let before = shared.ui.picture.runtime.spectrum.history().len();
         assert!(before > 0);
         // A gap cannot complete a window using the previous run's tail.
-        tx.publish(window / 2, mono, 2.0, None, std::iter::repeat(-0.5));
+        tx.publish(window / 2, mono, 2.0, None, None, std::iter::repeat(-0.5));
         drain_audio(&mut shared, 2.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
         // Queue old-format partial audio before a reset and new-format audio.
-        tx.publish(window / 4, mono, 3.0, None, std::iter::repeat(0.9));
+        tx.publish(window / 4, mono, 3.0, None, None, std::iter::repeat(0.9));
         tx.reset();
         let stereo =
             crate::audio_ingress::Format { channels: 2, sample_rate: 96_000.0, sidechain: true };
         // The frame is a length of time, so at 96 kHz it is twice the samples.
         let refill = harmonigraph_ui::SpectrumConfig::default().window.frame(96_000.0);
-        tx.publish(refill / 4, stereo, 4.0, None, std::iter::repeat(0.0));
+        tx.publish(refill / 4, stereo, 4.0, None, None, std::iter::repeat(0.0));
         drain_audio(&mut shared, 4.0);
         assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
         for i in 1..=4 {
@@ -535,6 +561,7 @@ mod tests {
                 refill / 4,
                 stereo,
                 4.0 + i as f64 * refill as f64 / 4.0 / 96_000.0,
+                None,
                 None,
                 std::iter::repeat(0.0),
             );
