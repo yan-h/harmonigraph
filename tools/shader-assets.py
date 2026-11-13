@@ -184,6 +184,9 @@ def fetch(directory):
     latest = runs[0]
     if latest["status"] != "completed":
         raise SystemExit(f"the run on {head[:12]} has not finished: {latest['url']}")
+    if latest["conclusion"] != "success":
+        raise SystemExit(f"the run on {head[:12]} did not validate its corpus "
+                         f"({latest['conclusion']}): {latest['url']}")
     directory = directory or ROOT / f"target/ci-metal-assets/{latest['databaseId']}"
     shutil.rmtree(directory, ignore_errors=True)
     gh("run", "download", str(latest["databaseId"]), "--name", "production-metal-assets",

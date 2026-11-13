@@ -71,6 +71,8 @@ gh workflow run "Metal shader assets" --ref <branch>
 Either way, `python3 tools/shader-assets.py fetch` imports the corpus the run generated for the checked-out commit —
 on a PR, for that commit merged with its base, so a base that changed a shader since the branch point fails the local strict gate until it is merged in —
 and `import <dir>` does the same from a downloaded `production-metal-assets` artifact's `generated-metal-assets`.
+`fetch` requires a successfully completed run: generation can leave hash-valid files before its goldens or controls fail,
+and those files are diagnostic evidence, not a validated replacement.
 Import checks only that the candidate corpus is whole — manifest hashes, each source paired with its options and library, the recorded compiler flags — before replacing the checked-in assets;
 validating it through the production path is the generating run's job, not import's.
 Inspect and commit the changed source/options/manifest together with the binary libraries.
