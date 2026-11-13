@@ -1,10 +1,12 @@
-//! What the Tape tab shows, and what a click in it asks (#1719).
+//! What the Analyzer's Tape mode shows, and what a click in it asks (#1719).
 //!
 //! The plugin's input worker fills a [`TapeView`] under the editor lock once a
 //! step and takes its request. A shell with no tape leaves it at its default,
 //! which says there is none.
 
-/// What a click in the Tape tab asks of the plugin.
+pub mod spectrogram;
+
+/// What a click in Tape mode asks of the plugin.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TapeRequest {
     /// Audition from these song seconds.
@@ -90,6 +92,15 @@ pub struct TapeView {
     pub meters: Vec<(f64, Meter)>,
     /// A click the plugin has not taken yet. A newer click replaces it.
     pub request: Option<TapeRequest>,
+    /// What the tape holds, as a spectrogram: the worker's copy, brought up to
+    /// date in each step's first hold.
+    pub spectrogram: spectrogram::TapeSpectrogram,
+    /// The Analyzer draws the tape rather than the live picture. Never saved:
+    /// the tape is not, so a reopened project would open on an empty picture.
+    pub showing: bool,
+    /// The song seconds the Analyzer shows while [`showing`](Self::showing),
+    /// which the worker analyzes first.
+    pub window: Option<(f64, f64)>,
 }
 
 impl TapeView {

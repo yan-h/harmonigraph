@@ -173,7 +173,7 @@ impl Deck {
         self.emit(Event::Started { position });
     }
 
-    /// The Tape tab's newest request since the last block, if any.
+    /// Tape mode's newest request since the last block, if any.
     fn take_request(&self) -> Option<TapeRequest> {
         match self.shared.request.swap(NO_REQUEST, Ordering::AcqRel) {
             NO_REQUEST => None,
@@ -239,7 +239,7 @@ impl Deck {
         BlockOut { song: rolling.then_some(position), sounding: self.sounding() }
     }
 
-    /// What the Tape tab draws: the transport, and where the audition is.
+    /// What Tape mode draws: the transport, and where the audition is.
     fn publish(&self, position: Option<f64>, rolling: bool) {
         let heard = match self.play {
             Play::Playing { .. } | Play::Fading { .. } => self.cue_position + self.played,

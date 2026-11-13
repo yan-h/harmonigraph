@@ -507,6 +507,13 @@ fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::Spect
 /// wheel is consumed after zooming so the Video tab's enclosing vertical
 /// `ScrollArea` does not move the controls at the same time. Headless/offline
 /// copies opt out explicitly.
+///
+/// **In Tape mode** (`song` is the stretch of song shown) the far region holds
+/// song time rather than a Span anchored on now, so what moves it changes
+/// there: a depth drag pans the song, and so does a sideways scroll where time
+/// runs across the pane; a pinch or a Ctrl-scroll zooms it about the pointer.
+/// The wheel still zooms the pitch, in every layout, and the spectrum's share
+/// answers as it always does.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drag_zoom(
     ui: &egui::Ui,
@@ -525,6 +532,7 @@ pub(super) fn drag_zoom(
     // False while a preview drag is turning the pane instead; see
     // [`OrientationDrag::navigating`].
     drag_navigates: bool,
+    mut song: Option<&mut super::tape::Window>,
 ) {
     use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
 
@@ -539,9 +547,37 @@ pub(super) fn drag_zoom(
     // put this function's rounding between that bar and the value it shows.
     let mut moved = false;
 
+    // Hovered rather than merely under the pointer: Tape mode's bar lies over
+    // the far region, and a scroll over it is not a pan.
+    let over_song = response.hover_pos().filter(|&p| split < 1.0 && axes.depth_at(p) >= split);
+    let gesture = match (over_song, song.as_deref_mut()) {
+        (Some(at), Some(song)) => {
+            let (delta, pinch) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
+            let axis = super::tape::SongAxis::new(axes, split, *song);
+            if pinch != 1.0 {
+                song.zoom(f64::from(pinch), axis.seconds_at(axes.depth_at(at)));
+            }
+            let depth = axes.dir_depth();
+            if depth.x.abs() > 0.5 {
+                // Time runs across the pane: a sideways scroll pans the song,
+                // and the wheel zooms the pitch as it does in Live mode.
+                let along = delta.x * depth.x;
+                if along != 0.0 {
+                    song.pan(f64::from(along) * axis.seconds_per_point());
+                }
+                Some((delta.y, 1.0))
+            } else {
+                // Time runs down the pane, where the wheel is the pitch zoom
+                // it is in Live mode, Shift and all; only a drag pans.
+                zoom_gesture(ui, response).map(|(scroll, _)| (scroll, 1.0))
+            }
+        }
+        _ => zoom_gesture(ui, response),
+    };
+
     // Zoom about the pitch under the pointer, so the note being looked at
     // stays put while the range closes in on it.
-    if let Some((scroll, pinch)) = zoom_gesture(ui, response) {
+    if let Some((scroll, pinch)) = gesture {
         if matches!(navigation, Navigation::Preview) && scroll != 0.0 {
             ui.input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
         }
@@ -593,7 +629,14 @@ pub(super) fn drag_zoom(
         });
         if let Some(zoom) = zoom {
             let along = delta.dot(axes.dir_depth());
+            let panning = song.is_some() && matches!(zoom, DepthZoom::Span);
             match zoom {
+                DepthZoom::Span if song.is_some() => {
+                    // The song under the hand travels with it.
+                    let song = song.expect("matched above");
+                    let axis = super::tape::SongAxis::new(axes, split, *song);
+                    song.pan(f64::from(along) * axis.seconds_per_point());
+                }
                 DepthZoom::Span => {
                     // Dragging toward the past pulls the picture away from the
                     // now-line it is anchored on, spreading it — so the seconds it
@@ -624,7 +667,11 @@ pub(super) fn drag_zoom(
                         .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
                 }
             }
-            ui.ctx().set_cursor_icon(axes.resize_cursor());
+            ui.ctx().set_cursor_icon(if panning {
+                egui::CursorIcon::Grabbing
+            } else {
+                axes.resize_cursor()
+            });
         } else {
             // The pitch under the pointer travels with it, so the range moves
             // the opposite way.

@@ -36,8 +36,9 @@ pub(crate) const SONG_START_SECONDS: f64 = 0.05;
 /// again, and the newer recording wins.
 const SAME_RUN_UP_SECONDS: f64 = 0.05;
 
-/// No memory setting yet (#1719): one generous cap, about 46 minutes of song
-/// in stereo at 48 kHz, dropping the oldest-recorded chunks first.
+/// No memory setting yet (#1719): one generous cap, about 29 minutes of song
+/// in stereo at 48 kHz with its spectrogram, dropping the oldest-recorded
+/// chunks first.
 pub(crate) const CAP_BYTES: usize = 1 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,8 +103,12 @@ impl Chunk {
         self.data_start + (self.samples.len() / channels) as i64
     }
 
-    fn bytes(&self) -> usize {
+    /// The memory the chunk stands for: its samples, and the spectrogram of
+    /// its stretch, which is kept beside the store but lives and dies with it.
+    fn bytes(&self, rate: f32) -> usize {
+        let seconds = (self.end - self.start) as f64 / f64::from(rate);
         self.samples.len() * std::mem::size_of::<f32>()
+            + (seconds * harmonigraph_ui::tape::spectrogram::BYTES_PER_SECOND) as usize
     }
 
     /// The sample at song frame `frame`, channel `channel`, if held.
@@ -146,6 +151,10 @@ pub(crate) struct Store {
     cap: usize,
     /// Chunks dropped for the cap since the store was made or cleared.
     pub evicted: u64,
+    /// Song frames whose audio changed since [`take_changed`](Self::take_changed)
+    /// last asked: what a newer recording won, and what the cap dropped. A
+    /// recording that lost changes nothing, so it reports nothing.
+    changed: Vec<(i64, i64)>,
 }
 
 impl Store {
@@ -154,7 +163,15 @@ impl Store {
     }
 
     pub(crate) fn with_cap(rate: f32, channels: usize, cap: usize) -> Store {
-        Store { rate, channels, chunks: BTreeMap::new(), bytes: 0, cap, evicted: 0 }
+        Store {
+            rate,
+            channels,
+            chunks: BTreeMap::new(),
+            bytes: 0,
+            cap,
+            evicted: 0,
+            changed: Vec::new(),
+        }
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -172,14 +189,14 @@ impl Store {
 
     fn put(&mut self, chunk: Chunk) {
         if chunk.end > chunk.start {
-            self.bytes += chunk.bytes();
+            self.bytes += chunk.bytes(self.rate);
             self.chunks.insert(chunk.start, chunk);
         }
     }
 
     fn take(&mut self, start: i64) -> Chunk {
         let chunk = self.chunks.remove(&start).expect("a listed chunk");
-        self.bytes -= chunk.bytes();
+        self.bytes -= chunk.bytes(self.rate);
         chunk
     }
 
@@ -217,17 +234,20 @@ impl Store {
             }
         }
         if lost.is_empty() {
+            self.changed.push((a, b));
             self.put(chunk);
         } else {
             lost.sort_unstable();
             let mut cursor = a;
             for (from, to) in lost {
                 if from > cursor {
+                    self.changed.push((cursor, from));
                     self.put(chunk.keep(cursor, from, margin, channels));
                 }
                 cursor = cursor.max(to);
             }
             if cursor < b {
+                self.changed.push((cursor, b));
                 self.put(chunk.keep(cursor, b, margin, channels));
             }
         }
@@ -236,8 +256,36 @@ impl Store {
             else {
                 break;
             };
-            self.take(oldest);
+            let dropped = self.take(oldest);
+            self.changed.push((dropped.start, dropped.end));
             self.evicted += 1;
+        }
+    }
+
+    /// The song frames whose audio changed since the last call. A trimmed
+    /// loser keeps its margin past the cut, so the frames a seam crossfades
+    /// through lie within [`FADE_SECONDS`] of a range reported here.
+    pub(crate) fn take_changed(&mut self) -> Vec<(i64, i64)> {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Fill `out` from song frame `from` on as an audition would play it,
+    /// with silence wherever nothing is recorded.
+    pub(crate) fn read(&self, from: i64, out: &mut [f32]) {
+        out.fill(0.0);
+        let ch = self.channels;
+        let limit = from + (out.len() / ch) as i64;
+        let mut at = from;
+        while at < limit {
+            if self.holding(at).is_none() {
+                match self.chunks.range(at..limit).next() {
+                    Some((&start, _)) => at = start,
+                    None => break,
+                }
+            }
+            let i = (at - from) as usize * ch;
+            let rendered = self.render(at, &mut out[i..]);
+            at += rendered.frames.max(1) as i64;
         }
     }
 
@@ -410,7 +458,9 @@ mod tests {
 
     #[test]
     fn the_cap_drops_the_oldest_recorded_chunks_first() {
-        let bytes = 1000 * std::mem::size_of::<f32>();
+        // A second of samples, and of spectrogram.
+        let bytes = 1000 * std::mem::size_of::<f32>()
+            + harmonigraph_ui::tape::spectrogram::BYTES_PER_SECOND as usize;
         let mut store = Store::with_cap(RATE, 1, 2 * bytes);
         for pass in [3, 1, 2] {
             let start = pass as i64 * 1000;
@@ -418,6 +468,8 @@ mod tests {
         }
         assert_eq!(owners(&store), [(2000, 3000, 2), (3000, 4000, 3)]);
         assert_eq!(store.evicted, 1);
+        // What the cap dropped changed as much as what was recorded.
+        assert!(store.take_changed().contains(&(1000, 2000)));
         assert!(store.bytes() <= 2 * bytes);
     }
 
@@ -449,6 +501,30 @@ mod tests {
             }
         }
         assert_eq!(pieces, whole[..1500]);
+    }
+
+    #[test]
+    fn a_losing_pass_reports_only_what_it_won_and_a_read_is_silent_in_gaps() {
+        let mut store = Store::new(RATE, 1);
+        // 20 s into the song, so a pass can be warm without starting at zero.
+        let o = 2 * SETTLE;
+        store.insert(chunk(o, o + 1000, stamp(1, o - SETTLE), 1.0));
+        store.take_changed();
+        // Cold across the warm chunk and past it: only the stretch past it.
+        store.insert(chunk(o + 500, o + 1500, stamp(2, o + 500), 2.0));
+        assert_eq!(store.take_changed(), [(o + 1000, o + 1500)]);
+        // Cold entirely over warm audio: nothing.
+        store.insert(chunk(o + 100, o + 400, stamp(3, o + 100), 3.0));
+        assert!(store.take_changed().is_empty());
+
+        // A read across a gap is the recording either side and silence between.
+        store.insert(chunk(o + 2000, o + 2100, stamp(4, o + 2000 - SETTLE), 4.0));
+        let mut out = vec![9.0; 800];
+        store.read(o + 1400, &mut out);
+        assert_eq!(out[0], 2.0);
+        assert_eq!(&out[110..590], &[0.0; 480][..]);
+        assert_eq!(out[650], 4.0);
+        assert_eq!(out[799], 0.0, "past the end of what is recorded");
     }
 
     #[test]

@@ -3188,3 +3188,135 @@ fn the_handover_wears_the_silent_outline_and_never_vanishes() {
         "the handover vanished into the black ground: {line:?}"
     );
 }
+
+/// A picture whose plugin holds 40 s of warm tape from the song's start, in
+/// Tape mode, on [`pinned`]'s analyzer.
+fn on_tape() -> PictureState {
+    let mut state = fresh();
+    state.appearance.spectrum = pinned();
+    let span = crate::tape::TapeSpan {
+        start: 0.0,
+        end: 40.0,
+        warm: true,
+        recorded: std::time::Instant::now(),
+    };
+    state.runtime.tape = crate::tape::TapeView {
+        present: true,
+        enabled: true,
+        showing: true,
+        spans: vec![span],
+        ..Default::default()
+    };
+    state
+}
+
+/// One frame of each event list through the pane in [`WIDE`].
+fn tape_frames(state: &mut PictureState, navigation: Navigation, frames: Vec<Vec<egui::Event>>) {
+    let ctx = themed();
+    for events in frames {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+            spectral_pane(&mut child, state, 100.0, 0, 1.0, navigation);
+        });
+    }
+}
+
+fn press(at: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn a_click_in_tape_mode_cues_the_song_under_it_with_the_start_at_the_far_edge() {
+    let cfg = pinned();
+    let split = spectrum_share(&cfg);
+    // A quarter of the way from the spectrum to the far edge, over a region
+    // that fits the 40 s recorded with 5% to spare: 42 s down to 0.
+    let at = Axes::new(WIDE, &cfg).at(0.5, split + 0.25 * (1.0 - split));
+    let click =
+        || vec![vec![egui::Event::PointerMoved(at)], vec![press(at, true)], vec![press(at, false)]];
+
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, click());
+    match state.runtime.tape.request.take() {
+        Some(crate::tape::TapeRequest::Cue(seconds)) => {
+            assert!((seconds - 31.5).abs() < 0.2, "{seconds}");
+        }
+        other => panic!("asked {other:?}"),
+    }
+    state.runtime.tape.rolling = true;
+    tape_frames(&mut state, Navigation::Docked, click());
+    assert_eq!(state.runtime.tape.request, None, "a cue while rolling would be cut at once");
+
+    // The Video preview draws the live picture, whatever the editor shows.
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Preview, click());
+    assert_eq!(state.runtime.tape.request, None);
+    assert_eq!(state.runtime.tape.window, None);
+}
+
+#[test]
+fn a_depth_drag_in_tape_mode_pans_the_song_and_leaves_the_span_alone() {
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.5 * (1.0 - split));
+    // Toward the far edge: the song under the hand follows it, so the
+    // region shows later song than before.
+    let to = at + axes.dir_depth() * 40.0;
+    let mut state = on_tape();
+    tape_frames(
+        &mut state,
+        Navigation::Docked,
+        vec![
+            vec![egui::Event::PointerMoved(at)],
+            vec![press(at, true)],
+            vec![egui::Event::PointerMoved(to)],
+            vec![press(to, false)],
+        ],
+    );
+    let (from, _) = state.runtime.tape.window.expect("Tape mode reports its window");
+    assert!(from > 1.0, "the song did not pan: from {from}");
+    assert_eq!(state.appearance.spectrum.roll_seconds, cfg.roll_seconds, "the Span moved");
+    assert_eq!(state.runtime.tape.request, None, "a drag is not a click");
+}
+
+#[test]
+fn a_tape_drag_carries_the_song_from_its_first_point() {
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.5 * (1.0 - split));
+    // Ten moves of 2 pt: every one under the distance a click may travel.
+    let step = axes.dir_depth() * 2.0;
+    let mut frames = vec![vec![egui::Event::PointerMoved(at)], vec![press(at, true)]];
+    frames.extend((1..=10).map(|i| vec![egui::Event::PointerMoved(at + step * i as f32)]));
+    frames.push(vec![press(at + step * 10.0, false)]);
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, frames);
+    let (from, _) = state.runtime.tape.window.expect("Tape mode reports its window");
+    // 42 s over the far region, panned by all 20 pt but the lean that
+    // commits the drag to the depth axis, as in Live mode; not also the
+    // distance a click may travel.
+    let region = axes.depth_len() * (1.0 - split);
+    let want = 42.0 * f64::from(20.0 - DEPTH_ZOOM_LEAN) / f64::from(region);
+    assert!((from - want).abs() < want * 0.03, "panned {from} s of {want}");
+}
+
+#[test]
+fn tape_mode_needs_a_far_region_to_draw_in() {
+    let mut state = on_tape();
+    assert!(tape::active(&state, Navigation::Docked));
+    state.appearance.spectrum.show_roll = false;
+    state.appearance.spectrum.show_spectrogram = false;
+    assert!(!tape::active(&state, Navigation::Docked), "nowhere to draw the tape");
+}
