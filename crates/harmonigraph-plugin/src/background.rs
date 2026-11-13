@@ -356,7 +356,9 @@ fn step(
             restore.adopt(shared);
         }
         let now = shared.input.now();
-        tape.exchange(&mut shared.ui.picture.runtime.tape, &shared.ui.picture.appearance.spectrum);
+        let open = editor_state.is_open();
+        let settings = &shared.ui.picture.appearance.spectrum;
+        tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
         let taken =
             shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
         std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
@@ -586,6 +588,18 @@ mod tests {
         /// [`Self::push_audio`] rolling at song seconds `song`, or carrying
         /// the tape's audio from song seconds `heard`.
         fn push_placed(&mut self, frames: usize, song: Option<f64>, heard: Option<f64>) {
+            let tape = heard.map_or(crate::audio_ingress::TapePlay::Idle, |seconds| {
+                crate::audio_ingress::TapePlay::Heard { seconds, frames }
+            });
+            self.push_tape(frames, song, tape);
+        }
+
+        fn push_tape(
+            &mut self,
+            frames: usize,
+            song: Option<f64>,
+            tape: crate::audio_ingress::TapePlay,
+        ) {
             let start = self.audio_frames;
             self.audio.publish(
                 frames,
@@ -596,7 +610,7 @@ mod tests {
                 },
                 start as f64 / 48_000.0,
                 song.map(|seconds| crate::audio_ingress::Song { seconds, meter: None }),
-                heard.map(|seconds| crate::audio_ingress::Heard { seconds, frames }),
+                tape,
                 (0..frames).map(|i| {
                     let t = (start + i as u64) as f32 / 48_000.0;
                     (std::f32::consts::TAU * 440.0 * t).sin() * 0.5
@@ -678,7 +692,8 @@ mod tests {
     /// The tape's notes end to end through the worker's own step: a note the
     /// drain shows while the song rolls is recorded at its song position,
     /// and a later block that carries the tape from just after it puts it
-    /// back in the tracker, under the tape's own source.
+    /// back in the tracker, under the tape's own source. A block the deck
+    /// starved is a pause: the note is held on, not struck again.
     #[test]
     fn a_note_recorded_while_rolling_sounds_again_when_the_tape_plays_there() {
         let mut h = harness();
@@ -693,6 +708,12 @@ mod tests {
             let tracker = &shared.ui.picture.runtime.tracker;
             tracker.held_voices().filter(|v| v.source.is_tape()).map(|v| v.note).collect::<Vec<_>>()
         };
+        let onset = |h: &Harness| {
+            let shared = h.shared.lock();
+            let tracker = &shared.ui.picture.runtime.tracker;
+            let onset = tracker.held_voices().find(|v| v.source.is_tape()).map(|v| v.on_time);
+            onset
+        };
         assert!(tape_held(&h).is_empty(), "nothing plays before the tape does");
 
         // Inside what is recorded, which ends at 0.1 s: the deck plays no
@@ -701,6 +722,13 @@ mod tests {
         h.step();
         assert_eq!(tape_held(&h), [60], "the tape's block did not chase the note held there");
         assert!(h.shared.lock().ui.picture.runtime.tape.audition.is_some());
+        let struck = onset(&h);
+
+        h.push_tape(600, None, crate::audio_ingress::TapePlay::Waiting);
+        h.step();
+        h.push_placed(600, None, Some(0.085));
+        h.step();
+        assert_eq!(onset(&h), struck, "a starved block ended the audition and struck it again");
 
         h.push_placed(2400, None, None);
         h.step();

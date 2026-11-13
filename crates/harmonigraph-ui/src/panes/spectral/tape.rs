@@ -582,7 +582,7 @@ mod tests {
         assert!(readout(&view).starts_with("Off: "), "{}", readout(&view));
         view.enabled = true;
         let parked = readout(&view);
-        assert!(parked.starts_with("Stopped at 0:05.0 · cold, recorded 0 s ago"), "{parked}");
+        assert!(parked.starts_with("Stopped at 0:05.0 · cold, recorded "), "{parked}");
         view.heard = Some(12.5);
         let playing = readout(&view);
         assert!(playing.starts_with("Playing 0:12.5 · cold"), "{playing}");

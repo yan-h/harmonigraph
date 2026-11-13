@@ -106,10 +106,11 @@ pub struct TapeView {
     /// that reached the picture until the next one starts or the transport
     /// rolls: what places the notes played over it.
     pub audition: Option<Audition>,
-    /// The tuning the spot sounding now was recorded under, while an audition
-    /// plays: the picture draws with it in place of the host's, so a note
-    /// lands where it was heard (see `VisualRuntime::observe_configuration`).
-    pub tuning: Option<harmonigraph_core::configuration::ResolvedConfig>,
+    /// The tuning axes the spot sounding now was recorded under, while an
+    /// audition is cued or plays: the picture draws with them in place of the
+    /// host's, so a note lands where it was heard (see
+    /// `VisualRuntime::observe_configuration`).
+    pub tuning: Option<harmonigraph_core::Tuning>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an
     /// audition would play. The worker's copy, shared; rebuilt when the

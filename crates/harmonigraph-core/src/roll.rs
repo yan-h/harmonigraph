@@ -383,10 +383,9 @@ impl NoteRoll {
 
     pub(crate) fn gap(&mut self, source: Option<SourceId>, at: Time) {
         let keys: Vec<_> = self
-            .live
-            .keys()
+            .published()
+            .into_iter()
             .filter(|key| source.is_none_or(|source| key.source == source))
-            .copied()
             .collect();
         for key in keys {
             let mut note = self.live.remove(&key).unwrap();
@@ -491,6 +490,21 @@ impl NoteRoll {
         if let Some(note) = self.live.get_mut(&key) {
             note.express(at, values);
         }
+    }
+
+    /// Close every sounding note but the tape's: what a session reset or a
+    /// stream-wide gap reaches, which the tape is not part of.
+    fn published(&self) -> Vec<VoiceKey> {
+        self.live.keys().filter(|key| !key.source.is_tape()).copied().collect()
+    }
+
+    pub(crate) fn published_off(&mut self, at: Time) {
+        for key in self.published() {
+            let mut note = self.live.remove(&key).expect("a live key");
+            note.end = Some(at.max(note.start));
+            self.retire(note);
+        }
+        self.enforce_cap();
     }
 
     /// Close every sounding note (transport reset).

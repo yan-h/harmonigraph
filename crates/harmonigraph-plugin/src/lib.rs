@@ -942,7 +942,7 @@ impl Plugin for Harmonigraph {
             },
             self.presentation_seconds,
             tape.song.map(|seconds| audio_ingress::Song { seconds, meter: tape_meter(transport) }),
-            tape.heard,
+            tape.play,
             (0..block_samples).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
         );
 
@@ -1366,7 +1366,7 @@ mod tests {
             },
             plugin.presentation_seconds,
             None,
-            None,
+            audio_ingress::TapePlay::Idle,
             (0..frames).map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5),
         );
         plugin.presentation_seconds += frames as f64 / DEFAULT_SAMPLE_RATE;

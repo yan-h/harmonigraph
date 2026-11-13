@@ -160,7 +160,7 @@ impl VisualRuntime {
         // host's and reads nothing of the last one, so the recorded tuning
         // never reaches the next observation.
         if let Some(recorded) = self.tape.tuning {
-            self.tuning = recorded.tuning;
+            self.tuning = recorded;
         }
     }
 

@@ -12,6 +12,7 @@ use harmonigraph_record::transport;
 use harmonigraph_ui::tape::TapeRequest;
 
 use super::{Event, Piece, Reason, Shared, NO_REQUEST, STOP};
+use crate::audio_ingress::TapePlay;
 
 /// How long a cue may wait for its first audio, or a playing one go without,
 /// before it gives up: so a stalled or missing worker cannot hold the tape,
@@ -36,8 +37,8 @@ pub(crate) struct BlockOut {
     pub song: Option<f64>,
     /// The tape is cued or sounding, so the host must keep calling.
     pub sounding: bool,
-    /// What the tape added to this block, for the analyzer ring's descriptor.
-    pub heard: Option<crate::audio_ingress::Heard>,
+    /// What the tape did in this block, for the analyzer ring's descriptor.
+    pub play: TapePlay,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -201,7 +202,7 @@ impl Deck {
             self.last = None;
             self.mixed = false;
             self.publish(None, false);
-            return BlockOut { song: None, sounding: false, heard: None };
+            return BlockOut { song: None, sounding: false, play: TapePlay::Idle };
         };
         let rolling = transport::step(self.last, position, block.playing).rolling();
         self.watch_for_leak(position, rolling);
@@ -239,8 +240,14 @@ impl Deck {
         let frames = self.mix(planes, block.frames, duration);
         self.mixed = frames > 0;
         self.publish(Some(position), rolling);
-        let heard = (frames > 0).then_some(crate::audio_ingress::Heard { seconds: from, frames });
-        BlockOut { song: rolling.then_some(position), sounding: self.sounding(), heard }
+        let play = if frames > 0 {
+            TapePlay::Heard { seconds: from, frames }
+        } else if self.sounding() {
+            TapePlay::Waiting
+        } else {
+            TapePlay::Idle
+        };
+        BlockOut { song: rolling.then_some(position), sounding: self.sounding(), play }
     }
 
     /// What Tape mode draws: the transport, and where the audition is.

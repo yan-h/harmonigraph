@@ -531,7 +531,6 @@ fn the_pane_paints_the_shells_ground_rather_than_the_skins() {
 /// host's tuning is back the frame after it ends (#1719).
 #[test]
 fn an_audition_draws_under_its_recorded_tuning_and_then_the_hosts_again() {
-    use harmonigraph_core::configuration::{PolicyConfig, ResolvedConfig, TuningModes};
     let mut state = fresh();
     let backend = TuningBackend::default();
     begin_frame(&mut state.picture, &backend, 0.0);
@@ -539,12 +538,7 @@ fn an_audition_draws_under_its_recorded_tuning_and_then_the_hosts_again() {
     let mut tuning = live;
     tuning.five = harmonigraph_core::tuning::microcents(390.0);
     assert_ne!(tuning, live);
-    state.picture.runtime.tape.tuning = Some(ResolvedConfig {
-        revision: 1,
-        tuning,
-        modes: TuningModes::default(),
-        policy: PolicyConfig::default(),
-    });
+    state.picture.runtime.tape.tuning = Some(tuning);
     for frame in 1..3 {
         begin_frame(&mut state.picture, &backend, frame as f64);
         assert_eq!(state.picture.runtime.tuning, tuning, "frame {frame}");

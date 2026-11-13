@@ -799,9 +799,11 @@ impl NoteTracker {
                 // other departure takes: what publication lost is no longer known
                 // to be held, so those voices leave with a release fade rather than being
                 // dropped between two frames. A stream-wide gap is the one
-                // production emits, and it takes every source with it.
+                // production emits, and it takes every source with it, but
+                // not the tape's: what the tape plays is not published, and
+                // its player alone ends it.
                 self.release_held(gap.time, |key, _| {
-                    gap.source.is_none_or(|source| key.source == source)
+                    !key.source.is_tape() && gap.source.is_none_or(|source| key.source == source)
                 });
             }
         }
@@ -1090,10 +1092,12 @@ impl NoteTracker {
         self.held.values().filter(|v| !self.hides(v.source)).count()
     }
 
+    /// Every published source's notes off. The tape's stay: its player
+    /// alone ends them, and ends them itself when the plugin resets.
     pub fn session_notes_off(&mut self, now: Time) {
         self.certainty = Certainty::default();
-        self.roll.all_off(now);
-        self.release_held(now, |_, _| true);
+        self.roll.published_off(now);
+        self.release_held(now, |key, _| !key.source.is_tape());
     }
 
     /// A source leaving/resetting cannot release another source's held set.
@@ -1908,5 +1912,28 @@ mod tests {
         tracker.roll.set_shown(source, false);
         assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (0, 0));
         assert!(!tracker.hides(SourceId(4).on_tape()), "another source's tape notes still show");
+    }
+
+    /// A stream-wide gap or a session reset ends what was published, not what
+    /// the tape plays: its player still counts those voices as sounding.
+    #[test]
+    fn a_gap_or_a_session_reset_leaves_the_tapes_voices_to_its_player() {
+        let live = SourceId(1);
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent::on(0.0, live, 0, 60, 0.8));
+        tracker.handle_event(NoteEvent::on(0.0, live.on_tape(), 0, 64, 0.8));
+        let held =
+            |tracker: &NoteTracker| tracker.held_voices().map(|v| v.note).collect::<Vec<_>>();
+        let sounding = |tracker: &NoteTracker| {
+            let live = |n: &&crate::RollNote| n.end.is_none() && n.observed_until.is_none();
+            tracker.roll().notes().filter(live).map(|n| n.note).collect::<Vec<_>>()
+        };
+
+        assert_eq!(tracker.handle_canonical(gap(1.0, None)), Ok(true));
+        assert_eq!((held(&tracker), sounding(&tracker)), (vec![64], vec![64]));
+
+        tracker.handle_event(NoteEvent::on(2.0, live, 0, 60, 0.8));
+        tracker.session_notes_off(3.0);
+        assert_eq!((held(&tracker), sounding(&tracker)), (vec![64], vec![64]));
     }
 }

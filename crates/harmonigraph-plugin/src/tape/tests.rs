@@ -50,7 +50,7 @@ fn ring_block_of(
         frames,
         format,
         song: song.map(|frame| Song { seconds: frame as f64 / RATE, meter: None }),
-        heard: None,
+        tape: crate::audio_ingress::TapePlay::Idle,
     };
     let samples = (0..frames as i64)
         .flat_map(|i| (0..format.channels).map(move |c| song.map_or(0.0, |s| recorded(s + i, c))))
@@ -116,7 +116,14 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     // playhead where playback stopped.
     for song in (0..3000).step_by(FRAMES) {
         let (audio, out) = run(&mut deck, song as f64 / RATE, true, true);
-        assert_eq!(out, BlockOut { song: Some(song as f64 / RATE), sounding: false, heard: None });
+        assert_eq!(
+            out,
+            BlockOut {
+                song: Some(song as f64 / RATE),
+                sounding: false,
+                play: crate::audio_ingress::TapePlay::Idle,
+            }
+        );
         assert!(audio[0].iter().all(|&s| s == 0.0));
     }
     let parked = 2.9;
@@ -128,8 +135,8 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     worker.play();
     let (audio, out) = run(&mut deck, parked, false, true);
     assert!(out.sounding && out.song.is_none());
-    let heard = crate::audio_ingress::Heard { seconds: 1.0, frames: FRAMES };
-    assert_eq!(out.heard, Some(heard), "the block says what of the song it played");
+    let heard = crate::audio_ingress::TapePlay::Heard { seconds: 1.0, frames: FRAMES };
+    assert_eq!(out.play, heard, "the block says what of the song it played");
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
         let gain = if i < fade { (i + 1) as f32 / fade as f32 } else { 1.0 };
@@ -501,7 +508,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
     at_tempo(&mut worker, &mut source, 20_000, 21_000, 120.0);
     let mut view = TapeView::default();
-    worker.exchange(&mut view, &SpectrumConfig::default());
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
     let spans: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(spans, [(0.0, 3.0, true), (20.0, 21.0, false)]);
@@ -510,7 +517,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     // A cold replay over warm audio loses every frame, but the song it heard
     // there is the newest: its meter replaces the old one.
     at_tempo(&mut worker, &mut source, 1000, 2000, 90.0);
-    worker.exchange(&mut view, &SpectrumConfig::default());
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
     let again: Vec<(f64, f64, bool)> =
         view.spans.iter().map(|s| (s.start, s.end, s.warm)).collect();
     assert_eq!(again, spans);
@@ -522,7 +529,7 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     // 32 ms of the 4 s recorded, and reaches the view at the next exchange.
     assert!(view.spectrogram.is_empty());
     worker.analyze_all();
-    worker.exchange(&mut view, &SpectrumConfig::default());
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
     let columns = view.spectrogram.columns() as f64;
     assert!((columns - 4.0 / 0.032).abs() <= 2.0, "{columns} columns");
 }
@@ -537,7 +544,7 @@ fn a_short_pass_replaces_the_meter_only_where_it_played() {
     at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
     at_tempo(&mut worker, &mut source, 500, 1300, 90.0);
     let mut view = TapeView::default();
-    worker.exchange(&mut view, &SpectrumConfig::default());
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
     // 4/4: a bar is two seconds at 120, 2.67 at 90.
     let bar = |at: f64| (view.bar_seconds(at).unwrap() * 1000.0).round() / 1000.0;
     assert_eq!(bar(0.4), 2.0);
@@ -632,12 +639,50 @@ fn notes_are_placed_by_song_frame_and_a_pass_opens_with_what_is_held() {
     let (block, samples) = ring_block(source, None, STEREO);
     worker.capture(block, &samples);
     let mut view = TapeView { showing: true, ..Default::default() };
-    worker.exchange(&mut view, &SpectrumConfig::default());
+    // Not built while the roll is off.
+    worker.exchange(&mut view, &SpectrumConfig { show_roll: false, ..Default::default() }, true);
+    worker.roll();
+    let rolled = SpectrumConfig { show_roll: true, ..Default::default() };
+    worker.exchange(&mut view, &rolled, true);
+    assert_eq!(view.notes.len(), 0, "built while the roll was off");
+    worker.exchange(&mut view, &rolled, true);
     worker.roll();
     assert_eq!(view.notes.len(), 0, "built with no lock held, handed over next time");
-    worker.exchange(&mut view, &SpectrumConfig::default());
+    worker.exchange(&mut view, &rolled, true);
     let mut notes: Vec<(u8, f64, Option<f64>)> =
         view.notes.notes().map(|n| (n.note, n.start, n.end)).collect();
     notes.sort_by(|a, b| a.1.total_cmp(&b.1));
     assert_eq!(notes, [(67, 0.0, Some(0.5)), (60, 0.25, Some(0.5))]);
+}
+
+/// A mark dated before a pass's start but drained after the pass opened is
+/// what that pass opened without: a loop's last note-off arriving a step
+/// late would otherwise hold that note through the whole of the next pass.
+#[test]
+fn a_late_mark_from_before_a_pass_reaches_the_pass_that_opened_without_it() {
+    use super::notes::{key, Mark, Sounding};
+    let (_, mut worker) = pair();
+    let held = Mark::On {
+        key: key(1, 67),
+        sounding: Sounding {
+            velocity: 1.0,
+            pitch: 67.0,
+            expressions: harmonigraph_core::Expressions::NEUTRAL,
+        },
+    };
+    let mut source = 0;
+    let (block, samples) = ring_block(source, None, STEREO);
+    worker.capture(block, &samples);
+    source += FRAMES as u64;
+    worker.inbox.push((0.05, held));
+    worker.settle();
+    // The pass starts at presentation 0.1 s and opens holding the 67 ...
+    let (block, samples) = ring_block(source, Some(0), STEREO);
+    worker.capture(block, &samples);
+    worker.settle();
+    // ... whose release, at 0.08 s, arrives only now.
+    let off = Mark::Off { key: key(1, 67) };
+    worker.inbox.push((0.08, off));
+    worker.settle();
+    assert_eq!(worker.passes()[&1].events, [(0, held), (0, off)]);
 }
