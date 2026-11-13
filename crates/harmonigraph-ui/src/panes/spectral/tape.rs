@@ -504,16 +504,29 @@ fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>, r
     }
     ui.label(format!("{} MiB", view.bytes >> 20))
         .on_hover_text("Memory the recording holds. It is never saved with the project.");
-    let hint = if !view.enabled {
-        "No audition while the analyzer listens to the sidechain."
-    } else if view.rolling {
-        "Stop the transport to audition."
-    } else if view.spans.is_empty() {
-        "Nothing recorded yet. The song records as it plays."
-    } else {
-        "Click to play the recording from there."
-    };
-    ui.label(egui::RichText::new(hint).small().color(theme::text_dim()));
+    ui.label(egui::RichText::new(readout(view)).small().color(theme::text_dim()));
+}
+
+/// The bar's one line (#1719 slice 4): why the tape cannot sound, or what
+/// sounds, or what is recorded where the transport stopped. Bitwig reports
+/// no playhead moved while stopped, so that is where playback stopped.
+fn readout(view: &TapeView) -> String {
+    if !view.enabled {
+        return "Off while the analyzer listens to the sidechain.".to_owned();
+    }
+    if view.rolling {
+        return "Recording. Stop the transport to audition.".to_owned();
+    }
+    if view.spans.is_empty() {
+        return "Nothing recorded yet. The song records as it plays.".to_owned();
+    }
+    match (view.heard, view.position) {
+        (Some(heard), _) => format!("Playing {} · {}", place(view, heard), held(view, heard)),
+        (None, Some(at)) => {
+            format!("Stopped at {} · {} · Click to play.", place(view, at), held(view, at))
+        }
+        (None, None) => "Click to play the recording from there.".to_owned(),
+    }
 }
 
 /// Song seconds as `m:ss.s`.
@@ -524,11 +537,20 @@ fn clock(seconds: f64) -> String {
 
 /// The hover text for song seconds `at`.
 fn describe(view: &TapeView, at: f64) -> String {
-    let place = match view.bar_at(at) {
+    format!("{}\n{}", place(view, at), held(view, at))
+}
+
+/// Song seconds `at` as the host's bar and beat, and as a clock.
+fn place(view: &TapeView, at: f64) -> String {
+    match view.bar_at(at) {
         Some((bar, beat)) => format!("Bar {bar}.{beat} · {}", clock(at)),
         None => clock(at),
-    };
-    let held = match view.span_at(at) {
+    }
+}
+
+/// What is recorded at song seconds `at`: warm or cold, and how long ago.
+fn held(view: &TapeView, at: f64) -> String {
+    match view.span_at(at) {
         Some(span) => {
             let ago = span.recorded.elapsed().as_secs_f64();
             let ago =
@@ -536,13 +558,37 @@ fn describe(view: &TapeView, at: f64) -> String {
             format!("{}, recorded {ago} ago", if span.warm { "warm" } else { "cold" })
         }
         None => "nothing recorded".to_owned(),
-    };
-    format!("{place}\n{held}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bar_says_why_the_tape_is_silent_or_what_is_recorded_where_it_plays() {
+        let span = crate::tape::TapeSpan {
+            start: 0.0,
+            end: 40.0,
+            warm: false,
+            recorded: std::time::Instant::now(),
+        };
+        let mut view = TapeView {
+            present: true,
+            spans: vec![span],
+            position: Some(5.0),
+            ..Default::default()
+        };
+        assert!(readout(&view).starts_with("Off while"), "{}", readout(&view));
+        view.enabled = true;
+        let parked = readout(&view);
+        assert!(parked.starts_with("Stopped at 0:05.0 · cold, recorded 0 s ago"), "{parked}");
+        view.heard = Some(12.5);
+        let playing = readout(&view);
+        assert!(playing.starts_with("Playing 0:12.5 · cold"), "{playing}");
+        view.rolling = true;
+        assert!(readout(&view).starts_with("Recording."), "{}", readout(&view));
+    }
 
     #[test]
     fn zooming_out_stops_where_the_widest_slabs_fill_a_live_window() {
