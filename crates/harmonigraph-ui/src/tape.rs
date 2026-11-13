@@ -31,7 +31,7 @@ pub struct Meter {
 
 impl Meter {
     /// A bar's length in quarter notes.
-    fn bar_length(&self) -> f64 {
+    pub fn bar_length(&self) -> f64 {
         f64::from(self.numerator) * 4.0 / f64::from(self.denominator)
     }
 

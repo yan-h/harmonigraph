@@ -604,33 +604,21 @@ fn origin_source(
 /// `pos_beats` is in QUARTER notes, so the meter converts as
 /// `numerator * 4 / denominator` — 4 quarters to a 4/4 bar, 3 to a 6/8 one.
 fn bar_position(transport: &Transport) -> Option<f64> {
-    let beats = transport.pos_beats()?;
-    let per_bar = match (transport.time_sig_numerator, transport.time_sig_denominator) {
-        (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
-            f64::from(numerator) * 4.0 / f64::from(denominator)
-        }
-        // 4/4 is what a host that reports no meter is almost always in, and
-        // the alternative is refusing to stop at all.
-        _ => 4.0,
-    };
-    match (transport.bar_number, transport.bar_start_pos_beats) {
-        (Some(bar), Some(start)) => Some(f64::from(bar) + (beats - start) / per_bar),
-        _ => Some(beats / per_bar),
-    }
+    let meter = host_meter(transport)?;
+    Some(f64::from(meter.bar) + (meter.beats - meter.bar_start) / meter.bar_length())
 }
 
-/// The host's meter, for the Tape tab's ruler. Bars come from `bar_number`
-/// and the bar's start where the host fills them, else from the beat count in
-/// the current meter, as in [`bar_position`]: a host that fills neither hands
-/// zeros, which still count bars from the song's start.
-fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
+/// The host's beat, bar and time signature where the transport sits, read as
+/// [`bar_position`] describes, with its tempo or 0.0 where it sends none.
+fn host_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
     let beats = transport.pos_beats()?;
-    let tempo = transport.tempo.filter(|tempo| *tempo > 0.0)?;
     let (numerator, denominator) =
         match (transport.time_sig_numerator, transport.time_sig_denominator) {
             (Some(numerator), Some(denominator)) if numerator > 0 && denominator > 0 => {
                 (numerator, denominator)
             }
+            // 4/4 is what a host that reports no meter is almost always in,
+            // and the alternative is refusing to stop at all.
             _ => (4, 4),
         };
     let per_bar = f64::from(numerator) * 4.0 / f64::from(denominator);
@@ -641,7 +629,14 @@ fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
             (bar as i32, bar * per_bar)
         }
     };
+    let tempo = transport.tempo.unwrap_or(0.0);
     Some(harmonigraph_ui::tape::Meter { beats, tempo, bar_start, bar, numerator, denominator })
+}
+
+/// The host's meter, for the Tape tab's ruler: only with a tempo to place
+/// its bars in time.
+fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
+    host_meter(transport).filter(|meter| meter.tempo > 0.0)
 }
 
 /// Continuous presentation time for the display. The current block contributes
