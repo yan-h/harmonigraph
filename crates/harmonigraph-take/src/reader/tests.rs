@@ -236,6 +236,56 @@ fn a_snapshot_below_a_record_sounding_past_its_run_lifts_level_with_it() {
     assert!(release > 2.0 + 128.0 / RATE);
 }
 
+/// A voice a resume's snapshot restates draws from where it was struck: by the
+/// run that holds its own onset when one does, and from the resume when none
+/// does (struck in the pause). Here the history before the snapshot is lost,
+/// so the snapshot is all that draws either note.
+#[test]
+fn a_restated_voice_draws_from_the_run_its_onset_was_played_in() {
+    let voice = |note: u8, input: i64| {
+        let onset = presentation(0, input + DELAY);
+        VoiceBaseline {
+            note,
+            velocity: 0.8,
+            pitch_microcents: i64::from(note) * 100_000_000,
+            input_onset: presentation(0, input),
+            actual_onset: onset,
+            onset: Some(harmonigraph_core::canonical::EventTiming {
+                clock: harmonigraph_core::canonical::ClockId { runtime_session: 1, epoch: 0 },
+                input,
+                planned: None,
+                sample: input + DELAY,
+                sample_rate: RATE,
+            }),
+            ..Default::default()
+        }
+    };
+    let time = presentation(0, 256);
+    let frame =
+        SourceBaseline::new(SourceId::DIRECT, 1, time, 0, true, &[voice(60, 10), voice(62, 160)])
+            .unwrap();
+    let mut restated = BaselineRecord::from(&frame);
+    restated.at = Some(at(0, 256));
+    let resumed = 2.0 + 128.0 / RATE;
+    let take = read(
+        &[
+            run(1, 0, 0, 2.0),
+            end(0, 128),
+            run(1, 0, 256, resumed),
+            Record::Canonical(CanonicalRecord::Baseline(Box::new(restated))),
+        ],
+        None,
+    )
+    .unwrap();
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for event in &take.events {
+        event.apply(&mut tracker).unwrap();
+    }
+    let start = |key| tracker.roll().notes().find(|n| n.note == key).unwrap().start;
+    assert!((start(60) - (2.0 + 74.0 / RATE)).abs() < 1e-9, "struck in run 1: {}", start(60));
+    assert!((start(62) - resumed).abs() < 1e-9, "struck in the pause: {}", start(62));
+}
+
 /// A record that would need more lift than its maximum's own lateness is a
 /// fault in the stamps: here the resume's song lags the audio, as the host's
 /// position did before the audio origin. It still reads, and the pass warns.

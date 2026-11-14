@@ -172,9 +172,12 @@ pub(crate) fn assemble(
                     last_publication: gap.last,
                     reason: gap.reason,
                 });
-                // Each end moves by the run it falls in, kept inside the runs
-                // it touched, so a gap reaching into another pass lengthens
-                // this one by nothing.
+                // The start moves by the first run touched and is kept at or
+                // after its start; the end moves by the last run touched and is
+                // kept at or before that run's `RunEnd`, so a gap reaching into
+                // another pass lengthens this one by nothing. A gap that begins
+                // after a run's `RunEnd` (a late delta that sounds past it) still
+                // lands past that end, where its lost delta would have.
                 let t = gap.t.max(first.presentation);
                 let end = last.end.map_or(f64::INFINITY, |end| last.presentation(end, rate));
                 let through = gap.through.min(end).max(t);
@@ -195,12 +198,28 @@ pub(crate) fn assemble(
                 let (source, time) = match &mut record {
                     CanonicalRecord::Delta(d) => (d.event.source, &mut d.event.t),
                     CanonicalRecord::Baseline(b) => {
-                        // A voice struck where nothing recorded, in a pause or
-                        // before the arm, is restated here; it draws from the
-                        // run's start, not from a song time the run never had.
+                        // A restated voice moves by the run that holds its own
+                        // onset, as its attack did. One struck where nothing of
+                        // this pass recorded (in a pause, before the arm, or in
+                        // the pass a loop wrapped from) draws from this run's
+                        // start, not from a song time the run never had.
                         for voice in &mut b.voices {
-                            voice.actual_onset = voice.actual_onset.max(start);
-                            voice.input_onset = voice.input_onset.max(start);
+                            let struck = voice.onset.map(|t| StampRecord {
+                                runtime_session: t.runtime_session,
+                                clock_epoch: t.clock_epoch,
+                                input: t.input,
+                            });
+                            let holder = struck.and_then(|at| {
+                                runs.iter().find(|r| r.pass == chosen && r.holds(at))
+                            });
+                            if let Some(holder) = holder {
+                                let shift = holder.offset() - run.offset();
+                                voice.actual_onset += shift;
+                                voice.input_onset += shift;
+                            } else {
+                                voice.actual_onset = voice.actual_onset.max(start);
+                                voice.input_onset = voice.input_onset.max(start);
+                            }
                         }
                         (b.source, &mut b.t)
                     }
@@ -211,6 +230,14 @@ pub(crate) fn assemble(
                         reason: GapReasonRecord::InvalidRecord,
                         ..IncompleteRecord::default()
                     });
+                }
+                // No voice starts after the frame that says it is sounding, even when
+                // the attack that would have lifted the frame was lost.
+                if let CanonicalRecord::Baseline(b) = &mut record {
+                    for voice in &mut b.voices {
+                        voice.actual_onset = voice.actual_onset.min(b.t);
+                        voice.input_onset = voice.input_onset.min(b.t);
+                    }
                 }
                 events.push((record, line));
             }
