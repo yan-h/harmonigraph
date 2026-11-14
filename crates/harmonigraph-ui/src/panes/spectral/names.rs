@@ -234,6 +234,20 @@ fn plan_with_thinning_for_test(
     scales: NameScale,
     thinning: &mut Thinning,
 ) -> Vec<NoteLabel> {
+    let sources = [RollSource::live(state, split, now)];
+    plan_sources_for_test(state, axes, scale, &sources, now, scales, thinning)
+}
+
+#[cfg(test)]
+fn plan_sources_for_test(
+    state: &PictureState,
+    axes: &Axes,
+    scale: &PitchScale,
+    sources: &[RollSource],
+    now: f64,
+    scales: NameScale,
+    thinning: &mut Thinning,
+) -> Vec<NoteLabel> {
     thread_local! { static CONTEXT: egui::Context = crate::tests::probe::themed_at(2.0); }
     CONTEXT.with(|ctx| {
         let mut result = Vec::new();
@@ -246,9 +260,8 @@ fn plan_with_thinning_for_test(
                 state.runtime.tempered,
             );
             let width = Width::of(state, axes, scale, 1.0);
-            let sources = [RollSource::live(state, split, now)];
             result = plan(
-                painter, state, axes, scale, &width, &sources, now, scales, &mut namer, thinning,
+                painter, state, axes, scale, &width, sources, now, scales, &mut namer, thinning,
             );
         });
         result
@@ -330,15 +343,16 @@ pub(super) fn plan(
         // the rate between them — one number, the time axis being linear
         // across the region.
         let sweep_from = time.oldest() - f64::from(reach) * time.seconds_per_point(axes);
-        // Nor any note later than the near edge, which only Tape mode has:
-        // the near-edge clamp in `place` would stack its name on the edge.
-        let in_window =
-            move |note: &RollNote| note.stop(time.now) >= sweep_from && note.start <= time.origin;
         source
             .roll
             .notes()
-            .filter(move |note| source.plays(shown, note) && in_window(note))
-            .map(move |note| (note, time, anchor_edge(note, time.now, anchor)))
+            .filter(move |note| source.plays(shown, note) && note.stop(time.now) >= sweep_from)
+            .map(move |note| (note, time, anchor_edge(note, &time, anchor)))
+            // Nor a note whose named end lies past the near edge, which only
+            // Tape mode's song has: that end is ink this window does not draw,
+            // so its name leaves with it, as a name leaves the far edge with
+            // its onset (#1728's pick).
+            .filter(move |(_, _, edge)| edge.time <= time.origin)
     });
 
     // Measure each pitch class once per frame. Font, scale and direction are
@@ -582,7 +596,7 @@ impl Anchor {
 ///
 /// Neither end is bounded here, and the pair is the true one however far off
 /// the picture it lies. [`plan`] lets a name leave with the end it names.
-fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
+fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: Anchor) -> Edge {
     match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
         // it was pressed at — a retuned note reaches its real pitch a moment
@@ -593,7 +607,7 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
         Anchor::Onset => Edge { time: note.start, pitch: note.settled_pitch() },
         // Live, time runs from the now-line outward, so the ribbon's leading
         // edge is where it most recently sounded.
-        Anchor::Leading => Edge { time: note.stop(now), pitch: note.end_pitch() },
+        Anchor::Leading => Edge { time: note.stop(time.now), pitch: note.end_pitch() },
     }
 }
 
@@ -1002,6 +1016,53 @@ mod tests {
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
         plan_for_test(state, &axes, &scale, split, now, FLAT)
+    }
+
+    /// Tape mode's song runs on past the window's near edge, which the live
+    /// roll never does (#1728). A name stands at its note's named end only
+    /// while that end is in the window: a note sounding across the edge is
+    /// named at its onset, and not under the leading anchor, whose end has
+    /// left; a note later than the window is not named at all.
+    #[test]
+    fn a_tape_note_is_named_only_while_its_named_end_is_in_the_window() {
+        use harmonigraph_core::{NoteRoll, SourceId, VoiceKey};
+        let mut recorded = NoteRoll::uncapped();
+        let key = |note| VoiceKey { source: SourceId(1), channel: 0, note };
+        // Inside the window, across its near edge (42 s) by two seconds, and
+        // past it. The crossing note's end lands on the spectrum's share of
+        // the pane, where a name would draw over the curve.
+        recorded.note_on(key(67), 1.0, 67.0, 33.0);
+        recorded.note_off(key(67), 36.0);
+        recorded.note_on(key(62), 1.0, 62.0, 35.0);
+        recorded.note_off(key(62), 44.0);
+        recorded.note_on(key(57), 1.0, 57.0, 45.0);
+        recorded.note_off(key(57), 48.0);
+        for travel in [false, true] {
+            // Left-facing: the leading anchor, or the onset when travelling.
+            let mut state = state(24.0, 10.0);
+            state.appearance.spectrum.note_names_travel = travel;
+            state.appearance.spectrum.roll_fraction = 0.5;
+            let cfg = &state.appearance.spectrum;
+            let axes = Axes::new(PANE, cfg);
+            let scale = PitchScale { min_midi: 48.0, max_midi: 72.0, span: 24.0 };
+            let split = super::super::axes::spectrum_share(cfg);
+            // As Tape mode's: the window 32 to 42 s, every note ended.
+            let time =
+                TimeAxis { split, depth_span: 1.0 - split, window: 10.0, origin: 42.0, now: 42.0 };
+            let sources = [RollSource { roll: &recorded, time, lead: false, live_during: None }];
+            let mut thinning = Thinning::default();
+            let placed =
+                plan_sources_for_test(&state, &axes, &scale, &sources, 100.0, FLAT, &mut thinning);
+            let named: Vec<f32> = placed.iter().map(|label| label.pitch).collect();
+            let expected: &[f32] = if travel { &[67.0, 62.0] } else { &[67.0] };
+            assert_eq!(named, expected, "travel {travel}");
+            let near = axes.at(0.5, split);
+            for label in &placed {
+                let corners = [label.rect.left_top(), label.rect.right_bottom()];
+                let inside = corners.iter().all(|c| (*c - near).dot(axes.dir_depth()) >= -0.5);
+                assert!(inside, "travel {travel}: {:?} crosses the near edge", label.rect);
+            }
+        }
     }
 
     /// A phrase dense enough that its names have to compete for room: three
