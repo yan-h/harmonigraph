@@ -478,8 +478,8 @@ impl NoteRoll {
     /// whether the rest of the fade is drawn and whether the trail picks the
     /// pitch up — a press hidden when it let go is neither, and one visible
     /// then is both, whatever its source does mid-fade (#905). So a hidden one
-    /// goes straight to `past`, where the timeline still follows the CURRENT
-    /// Show switch.
+    /// is retired at once: filed in `past`, where the timeline still follows
+    /// the CURRENT Show switch, or dropped if it is marked off the timeline.
     fn release(&mut self, note: RollNote) {
         if self.hides(note.source) {
             self.retire(note);
@@ -586,9 +586,10 @@ impl NoteRoll {
     /// what is playing (Yan's call, 2026-09-19).
     ///
     /// Rule 6: a fading note it lists that has an end — a factual off, a
-    /// reset — moves to `past` without a trail mark (a rule-1 pulse, being off
-    /// the timeline, is dropped), since the source says the note is sounding;
-    /// a fresh entry starts at the row's onset.
+    /// reset — is retired without a trail mark, since the source says the
+    /// note is sounding: filed in `past`, or dropped if it is marked off the
+    /// timeline, a rule-1 pulse or a note Clear took. A fresh entry starts at
+    /// the row's onset.
     ///
     /// A note Clear took off the timeline is REVIVED by a row that lists it,
     /// from `live` or by rule 3: replaced by a fresh entry from the row, so the
