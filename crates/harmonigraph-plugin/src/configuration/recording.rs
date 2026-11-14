@@ -25,6 +25,11 @@ impl Presentation {
     }
 }
 
+/// How many changes of arm intent are kept for stamping late input. Arm and
+/// disarm are gestures, a few a second at most, and the frontier passes
+/// each within a callback or two.
+const INTENTS: usize = 4;
+
 /// A run open on the current clock.
 #[derive(Clone, Copy)]
 struct Run {
@@ -45,13 +50,14 @@ pub(crate) struct Recording {
     registered_through: i64,
     /// The end of the last sub-block that recorded on this clock.
     recorded_through: Option<i64>,
-    /// The intent captured at this callback's boundary, and where it began.
+    /// The intent captured at this callback's boundary.
     pub captured_intent: RecordIntent,
-    callback_start: Option<i64>,
-    /// The previous callback's start and intent. The Hub's own row, and a Tune
-    /// the host runs after the Hub, deliver their input a callback late, so
-    /// their notes are stamped with the intent they were played under.
-    previous: Option<(i64, RecordIntent)>,
+    /// Each callback boundary where the captured intent changed, oldest first,
+    /// back to the proven frontier. A Tune the host runs after the Hub delivers
+    /// its input a callback late, and later still behind a full batch, so a
+    /// record is stamped with the intent its own callback was played under.
+    intents: [(i64, RecordIntent); INTENTS],
+    changes: usize,
     run: Option<Run>,
     /// The input span of the last run closed on this clock. With the open run,
     /// the recorded samples a late record can still name: two runs cannot
@@ -85,8 +91,8 @@ impl Default for Recording {
             registered_through: i64::MIN,
             recorded_through: None,
             captured_intent: RecordIntent::default(),
-            callback_start: None,
-            previous: None,
+            intents: [(0, RecordIntent::default()); INTENTS],
+            changes: 0,
             run: None,
             closed: None,
             opened: None,
@@ -103,13 +109,56 @@ impl Default for Recording {
 }
 impl Recording {
     /// A callback boundary: what is captured now stamps this callback's
-    /// input, and what was captured before still stamps the previous one's.
+    /// input, and what was captured before still stamps earlier input the
+    /// frontier has not yet passed.
     pub fn begin(&mut self, start: i64, intent: RecordIntent) {
-        if let Some(previous) = self.callback_start {
-            self.previous = Some((previous, self.captured_intent));
-        }
-        self.callback_start = Some(start);
         self.captured_intent = intent;
+        // A change the frontier passed stamps nothing any more once a later
+        // one starts at or below it.
+        let frontier = self.source_prefix.unwrap_or(i64::MIN);
+        while self.changes > 1 && self.intents[1].0 <= frontier {
+            self.intents.copy_within(1..self.changes, 0);
+            self.changes -= 1;
+        }
+        if self.changes > 0 && self.intents[self.changes - 1].1 == intent {
+            return;
+        }
+        if self.changes == INTENTS {
+            // Arm and disarm toggled faster than the frontier moved: the oldest
+            // change goes, and a record that old fails to stamp.
+            self.intents.copy_within(1.., 0);
+            self.changes -= 1;
+        }
+        self.intents[self.changes] = (start, intent);
+        self.changes += 1;
+    }
+
+    /// The intent of the callback whose input `input` was, if one is known.
+    fn intent_at(&self, input: i64) -> Option<RecordIntent> {
+        self.intents[..self.changes].iter().rev().find(|(start, _)| *start <= input).map(|c| c.1)
+    }
+
+    /// Whether a record whose stamp fails could have been this take's: while
+    /// armed, or while its take still owes a closure.
+    fn could_hold(&self, recorder: &Recorder) -> bool {
+        self.captured_intent.is_armed() || self.owes_closure(recorder, recorder.recording_epoch())
+    }
+
+    /// [`stamp`](Self::stamp), or, when that fails, the input as played
+    /// disarmed: the take fails if it could have held the record, and nothing
+    /// else does, since a record no take holds costs none of them anything.
+    pub fn stamp_or_lose(
+        &self,
+        recorder: &mut Recorder,
+        clock: ClockId,
+        input: i64,
+    ) -> publication::Span {
+        self.stamp(clock, input).unwrap_or_else(|()| {
+            if self.could_hold(recorder) {
+                recorder.fail_configuration();
+            }
+            publication::Span::at(clock, input, RecordIntent::default())
+        })
     }
 
     /// Whether this sub-block records.
@@ -137,11 +186,7 @@ impl Recording {
         if clock != self.clock || self.source_prefix.is_some_and(|through| input < through) {
             return Err(());
         }
-        let intent = match (self.callback_start, self.previous) {
-            (Some(start), _) if input >= start => self.captured_intent,
-            (_, Some((start, intent))) if input >= start => intent,
-            _ => return Err(()),
-        };
+        let intent = self.intent_at(input).ok_or(())?;
         Ok(publication::Span::at(clock, input, intent))
     }
 

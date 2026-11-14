@@ -319,6 +319,9 @@ pub struct Hub {
     /// The last recording run every row was told to open with a take-lane
     /// snapshot. See [`Hub::publish`].
     opened: Option<u64>,
+    /// This callback's collection filled the batch, so the rings may still hold
+    /// captures from before it began: the source frontier waits for them.
+    backlogged: bool,
     status: u32,
     /// Which row the next collection starts from.
     rotation: usize,
@@ -351,6 +354,7 @@ impl Hub {
             clock: ClockId::default(),
             seconds: None,
             opened: None,
+            backlogged: false,
             status: 0,
             rotation: 0,
             #[cfg(test)]
@@ -564,6 +568,9 @@ impl Hub {
             LatticePos::ORIGIN
         });
         self.collect();
+        // A full batch may have left captures in the rings, from inputs this
+        // callback's frontier would otherwise claim were all published.
+        self.backlogged = self.batch.len() == BATCH_EVENTS;
         if self.batch.is_empty() {
             return;
         }
@@ -1117,16 +1124,13 @@ impl Hub {
     /// The take routes and translates from that stamp, so nothing here waits
     /// for a sub-block or asks which pass a delta belongs to.
     ///
-    /// Two stamps fail the take loudly: a stale clock, and an input below the
-    /// proven frontier. Either is a record the take can no longer place.
+    /// Two stamps fail a take that could hold the record: a stale clock, and an
+    /// input below the proven frontier. Either is a record it can no longer place.
     fn flush(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         for position in 0..self.pending.len() {
             let item = self.pending[position];
             let index = usize::from(item.source);
-            let span = owner.recording.stamp(item.timing.clock, item.input).unwrap_or_else(|()| {
-                recorder.fail_configuration();
-                publication::Span::default()
-            });
+            let span = owner.recording.stamp_or_lose(recorder, item.timing.clock, item.input);
             let outcome = recorder.publish_note(item.delta, span);
             for lane in publication::Lane::ALL {
                 if outcome[lane].is_err() {
@@ -1144,13 +1148,8 @@ impl Hub {
         if let Some((time, first, last)) = self.pending_loss.take() {
             // Send it before publish advances the frontier past it, and let
             // the ordinary all-source snapshots repair each lane.
-            let span = owner.recording.stamp(self.clock, first).and_then(|first| {
-                owner.recording.stamp(self.clock, last).map(|last| first.merge(last))
-            });
-            let span = span.unwrap_or_else(|()| {
-                recorder.fail_configuration();
-                publication::Span::default()
-            });
+            let first = owner.recording.stamp_or_lose(recorder, self.clock, first);
+            let span = first.merge(owner.recording.stamp_or_lose(recorder, self.clock, last));
             recorder.publication_lost(time, span);
         }
         let outage = recorder.take_publication_outage();
@@ -1189,10 +1188,15 @@ impl Hub {
         self.flush(owner, recorder);
         let Some(callback) = self.callback else { return };
         self.snapshots(owner, recorder);
-        // Every record collected this callback has been published, and nothing
-        // still to come is scheduled before this callback began, so this is a
-        // sound and monotone frontier without a coverage protocol behind it.
-        if owner.recording.source_frontier(self.clock, callback.steady_time).is_err() {
+        // Every record collected this callback has been published. Unless the
+        // batch filled, nothing still to come is scheduled before this callback
+        // began, so its start is a sound and monotone frontier without a
+        // coverage protocol behind it. A full batch may have left captures from
+        // before it in the rings, so the frontier waits where it was until a
+        // collection drains them.
+        if !self.backlogged
+            && owner.recording.source_frontier(self.clock, callback.steady_time).is_err()
+        {
             recorder.fail_configuration();
         }
     }
@@ -1209,12 +1213,9 @@ impl Hub {
         let block = owner.recording.block_start;
         let time = self.presentation(block);
         // A sub-block of this callback is always above the proven frontier on
-        // the current clock; a stamp that fails anyway would drop the run's
-        // opening snapshot without a word, so it fails the take instead.
-        let span = owner.recording.stamp(self.clock, block).unwrap_or_else(|()| {
-            recorder.fail_configuration();
-            publication::Span::default()
-        });
+        // the current clock; a stamp that fails anyway would drop a run's
+        // opening snapshot without a word, so it fails a take that could hold it.
+        let span = owner.recording.stamp_or_lose(recorder, self.clock, block);
         // Every recording run — each pass, and each resume inside one — opens
         // with a take-lane snapshot of every row (#1129). The take routes a
         // delta by the sample its INPUT arrived at, so a voice whose input fell
