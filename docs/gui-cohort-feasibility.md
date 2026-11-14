@@ -139,7 +139,7 @@ Actual local source diff versus checksum-published 0.3.0: egui-baseview src has 
 
 | Obligation | Disposition / published evidence |
 |---|---|
-| wgpu-hal generic Metal library provider | Adaptation to 30.0.1; no upstream provider. `src/metal/device.rs:162ff` still generates MSL then directly calls newLibraryWithSource_options_error around 280; no shader_library module. Keep three-site provider boundary; audit new Naga/MSL options and native compiler options before port. |
+| wgpu-hal generic Metal library provider | Adaptation to 30.0.1; no upstream provider. `src/metal/device.rs:162ff` still generates MSL then directly calls newLibraryWithSource_options_error around 280; no shader_library module. Kept the three-site provider boundary at the time; superseded by #1746, which deleted the provider, so nothing is left to port. |
 | nice-plug activation ordering | Still needed if moving to 0.4.2: wrapper marks is_activated inside activation loop (~1781), then drops activate_context only at 1807. |
 | nice-plug production CLAP ownership/configuration/performance/setup | Adaptation if moving; no corresponding custom seams or source modules in 0.4.2. Preserve shared host-input ownership, bounded output, setup/main-thread destruction contracts and exported-factory fixtures. |
 | nice-plug auxiliary descriptor bounds/storage sizing | Still needed if moving: clap/wrapper.rs:2065,2089 still use `>` rather than `>=`; util/buffer_management.rs:295 resizes inside input-present path. |
