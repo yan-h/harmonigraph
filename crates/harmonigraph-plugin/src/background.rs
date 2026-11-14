@@ -7,9 +7,8 @@
 //! stereo at 48 kHz, so it saturates within seconds and every sample after
 //! that is dropped. A frame used to drain both with the window open and this
 //! thread with it shut; now this thread drains them always. The window's
-//! state sets how often it polls, and whether it also adopts restores and ages
-//! the picture while nothing draws it; it decides nothing about what is
-//! drained (#1559).
+//! state sets how often it polls, and whether it also ages the picture while
+//! nothing draws it; it decides nothing about what is drained (#1559).
 //!
 //! **The FFTs run with no lock held.** A step takes the editor's lock to move
 //! the notes into the tracker and the audio out of its ring (a copy), lets
@@ -50,21 +49,22 @@
 //! **With the window shut, a step also does the frame's other duties:** the
 //! ageing a frame gets from `begin_frame`
 //! ([`VisualRuntime::advance_time`](harmonigraph_ui::VisualRuntime::advance_time)),
-//! and [`EditorShared::poll_take_end`] so a take can finish and render without
-//! an open editor. This completion poll is separate from the GUI's full
+//! and [`EditorShared::poll_take_end`] so a take can finish and render
+//! without an open editor. This completion poll is separate from the GUI's full
 //! recording control synchronization; the
 //! `a_take_ends_itself_while_the_editor_window_is_shut` test covers it.
 //!
 //! **The project's own settings arrive here too**, for the same reason: this
-//! is the only thing running before the editor's window exists, and that
-//! window's build closure is otherwise the only thing that applies
-//! `params.ui_state` to the state (a host save reads it only to store it).
-//! Left to it, every column analyzed before the first open is analyzed at
-//! [`SpectrumConfig::default`]'s window whatever the project saved — and the
-//! two stretches then differ in how long every pitch listened and how far
-//! behind its audio each column is dated, so their join scrolls across the
-//! heatmap as a seam. See [`Restore`].
+//! is the only thing running before the editor's window exists. A host
+//! restore waits in the editor lock's inbox until a holder of that lock
+//! installs it ([`EditorLock`]), and this thread's first hold of every step
+//! comes before its take. Were it left to the window, every column analyzed
+//! before the first open would be analyzed at [`SpectrumConfig::default`]'s
+//! window whatever the project saved — and the two stretches would then differ
+//! in how long every pitch listened and how far behind its audio each column
+//! is dated, so their join would scroll across the heatmap as a seam (#324).
 //!
+//! [`EditorShared::poll_take_end`]: crate::editor::EditorShared::poll_take_end
 //! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
 //! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
 
@@ -75,9 +75,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use parking_lot::{Mutex, RwLock};
-
-use crate::editor::{EditorShared, EguiState};
+use crate::editor::{EditorLock, EguiState};
 
 /// How often the worker looks for input while the editor window is open.
 ///
@@ -114,16 +112,15 @@ pub(crate) struct InputWorker {
     rounds: Arc<AtomicU64>,
     /// `None` when the thread could not be spawned. The window's frames then
     /// drain both rings themselves, on the host's main thread as before #1559
-    /// (see [`EditorShared::frame_drains`]), and only a shut window loses its
-    /// input.
+    /// (see [`frame_drains`](crate::editor::EditorShared::frame_drains)), and
+    /// only a shut window loses its input.
     thread: Option<JoinHandle<()>>,
 }
 
 impl InputWorker {
     pub(crate) fn spawn(
-        shared: Arc<Mutex<EditorShared>>,
+        shared: Arc<EditorLock>,
         editor_state: Arc<EguiState>,
-        ui_state: Arc<RwLock<String>>,
         tape: crate::tape::Worker,
     ) -> InputWorker {
         let stop = Arc::new(AtomicBool::new(false));
@@ -139,16 +136,9 @@ impl InputWorker {
                 raise_to_gui_priority();
                 let mut tape = tape;
                 #[cfg(not(test))]
-                run(&worker, &editor_state, Restore::of(ui_state), &mut tape, &flag);
+                run(&worker, &editor_state, &mut tape, &flag);
                 #[cfg(test)]
-                run(
-                    &worker,
-                    &editor_state,
-                    Restore::of(ui_state),
-                    &mut tape,
-                    &flag,
-                    &worker_rounds,
-                );
+                run(&worker, &editor_state, &mut tape, &flag, &worker_rounds);
             });
         let thread = match thread {
             Ok(thread) => Some(thread),
@@ -212,108 +202,31 @@ fn raise_to_gui_priority() {
     }
 }
 
-/// The host's saved UI state, and what of it the shared state already holds.
-///
-/// `params.ui_state` is where a project's settings arrive — the host writes it
-/// on state restore, and `LatticeEditorHandle`'s `Drop` writes it again on the
-/// way out of every editor session. Nothing else writes it: a host save with a
-/// window open serializes the live state without storing it (see
-/// [`UiState`](crate::editor::UiState)), so a change of blob still means a
-/// restore or a close. Nothing reads it until a window is built,
-/// so a project's saved analyzer Window reaches nothing that runs before the
-/// first open; applying it here is what closes that gap.
-///
-/// A MIRROR of the blob rather than a done-once flag, because the field is
-/// written more than once: a preset change or an undo pushes fresh state at a
-/// plugin whose window is shut, and the round after it should take that too.
-/// The mirror is also what keeps the cost of a round at one string compare.
-///
-/// One consequence, and it is a harmless one: the first round after every
-/// editor session adopts the blob that session's `Drop` wrote, which is a
-/// reload of the state's own save. That blob is a FIXED POINT of the round
-/// trip, so the round that takes it moves nothing — `save_persist` reads back
-/// every field `load_persist` writes that a shut window has any reader for, and
-/// `a_reloaded_save_leaves_the_state_where_it_was` is what holds the two calls
-/// to that. The two writes it does NOT read back, the fold dial and the comma
-/// verdicts, are frame-scoped: only a draw reads either, no draw is running,
-/// and every window build resets both through `Opening` regardless. What it
-/// costs is one RON round trip per window close, where a window close is
-/// already spending one.
-struct Restore {
-    /// The host's field, shared with the plugin and with the editor.
-    blob: Arc<RwLock<String>>,
-    /// The last blob handed to `load_persist`. Empty until one has been, which
-    /// is also what the field itself holds until a project supplies one.
-    applied: String,
-}
-
-impl Restore {
-    fn of(blob: Arc<RwLock<String>>) -> Restore {
-        Restore { blob, applied: String::new() }
-    }
-
-    /// Apply the host's blob to the shared state, unless the state already
-    /// holds it.
-    ///
-    /// Called with the window SHUT and the state's lock held, and both halves
-    /// are load-bearing. `Opening` applies the same blob through the same call
-    /// whenever a window is built, and the window's frames apply a restore
-    /// that lands while it is open (see [`UiState`](crate::editor::UiState)),
-    /// so an open window is already served; and applying it under one would
-    /// revert everything the user has changed since the window last applied it
-    /// (a save with the window open serializes the live state and stores
-    /// nothing). The lock
-    /// is what makes reading `blob` here safe to order this way — the close
-    /// path takes the same two in the same order (`shared`, then `ui_state`).
-    ///
-    /// The mirror is updated whether or not the blob was ACCEPTED, so one this
-    /// build refuses — below the version floor, or naming a dropped variant —
-    /// says so on the console once rather than fifty times a second.
-    fn adopt(&mut self, shared: &mut EditorShared) {
-        {
-            let blob = self.blob.read();
-            // An empty blob is what a project whose editor has never been open
-            // carries; reading it as one would put a parse failure on the
-            // console of every instance that has never saved.
-            if blob.is_empty() || *blob == self.applied {
-                return;
-            }
-            self.applied.clear();
-            self.applied.push_str(&blob);
-        }
-        shared.ui.load_persist(&self.applied);
-    }
-}
-
 #[cfg(test)]
 thread_local! {
-    /// Pause a step before it obtains shared state.
-    static TICK_PAUSE: std::cell::RefCell<Option<Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
     /// Run between a step's two holds of the lock, just before its FFTs.
     #[allow(clippy::type_complexity)]
-    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&Mutex<EditorShared>, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
+    static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// One step: adopt whatever the host has restored while the window is shut,
-/// take the notes and the audio under the lock, analyze the audio without
-/// it, and give the columns back under it — then, with the window shut, the
-/// frame's other duties.
+/// One step: take the notes and the audio under the lock, analyze the audio
+/// without it, and give the columns back under it — then, with the window
+/// shut, the frame's other duties. Taking the lock installs a host restore
+/// waiting for it ([`EditorLock`]), window open or shut, and the first hold
+/// takes it BEFORE the take: the settings decide how the samples about to be
+/// taken are analyzed.
 ///
-/// Those run once a step, and a shut window's steps come every [`SHUT_POLL`].
-/// `poll_take_end` times its OnTransportStop debounce in seconds
-/// ([`EditorShared::STOP_SECONDS`]), so it holds at whatever rate it is polled.
+/// Those duties run once a step, and a shut window's steps come every
+/// [`SHUT_POLL`]. `poll_take_end` times its OnTransportStop debounce in seconds
+/// ([`STOP_SECONDS`](crate::editor::EditorShared::STOP_SECONDS)), so it holds
+/// at whatever rate it is polled.
 ///
 /// Split out from the sleep loop so what it DECIDES can be tested without a
 /// clock, which is most of what there is to get wrong here.
 ///
-/// The window check carries a job that is about the USER rather than about a
-/// lock: `params.ui_state` names the last restore or window close, so
-/// re-applying it under an open window would revert whatever has been changed
-/// since. See [`Restore::adopt`]. It is made under the lock, where the
-/// window's build reads the same blob: `LatticeEditorHandle::drop` takes the
-/// lock with `open` still true, and `Editor::spawn` sets `open` after the
-/// window is built, which leaves window construction as the one overlap — a
-/// step that found the window shut a moment before it claimed itself.
+/// The window check orders ageing against the window: `LatticeEditorHandle::drop`
+/// takes the lock with `open` still true, so a step ages the picture only once
+/// the window is gone.
 ///
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
@@ -335,26 +248,10 @@ thread_local! {
 /// view in the first hold, and plays the notes of the tape the blocks just
 /// taken carried into the tracker there, on their audio's clock; its console
 /// lines wait for the second.
-fn step(
-    shared: &Mutex<EditorShared>,
-    editor_state: &EguiState,
-    restore: &mut Restore,
-    tape: &mut crate::tape::Worker,
-) {
-    #[cfg(test)]
-    if let Some(gate) = TICK_PAUSE.with_borrow_mut(Option::take) {
-        gate.wait();
-        gate.wait();
-    }
+fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::Worker) {
     let taken = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
-        // BEFORE the take: the settings decide how the samples about to be
-        // taken are analyzed, so a step that adopted them afterwards would
-        // still leave its own columns at the window the blob just replaced.
-        if !editor_state.is_open() {
-            restore.adopt(shared);
-        }
         let now = shared.input.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
@@ -418,15 +315,13 @@ fn step(
 ///
 /// Whether the step completed.
 fn guarded_step(
-    shared: &Mutex<EditorShared>,
+    shared: &EditorLock,
     editor_state: &EguiState,
-    restore: &mut Restore,
     tape: &mut crate::tape::Worker,
     panicked: &mut bool,
 ) -> bool {
-    let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        step(shared, editor_state, restore, tape)
-    }));
+    let stepped =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| step(shared, editor_state, tape)));
     if stepped.is_err() {
         let mut guard = shared.lock();
         let shared = &mut *guard;
@@ -451,14 +346,9 @@ const MAX_PANICS_IN_A_ROW: u32 = 8;
 ///
 /// The stop flag is read once per step. Joining waits for any current step
 /// and sleep, followed by the final drain below.
-///
-/// The [`Restore`] mirror lives here, for the length of the thread: it is what
-/// the host has already been answered about, and a fresh one every step would
-/// re-apply the same blob hundreds of times a second.
 fn run(
-    shared: &Mutex<EditorShared>,
+    shared: &EditorLock,
     editor_state: &EguiState,
-    mut restore: Restore,
     tape: &mut crate::tape::Worker,
     stop: &AtomicBool,
     #[cfg(test)] rounds: &AtomicU64,
@@ -466,7 +356,7 @@ fn run(
     let mut panicked = false;
     let mut in_a_row = 0;
     while !stop.load(Ordering::Relaxed) {
-        if guarded_step(shared, editor_state, &mut restore, tape, &mut panicked) {
+        if guarded_step(shared, editor_state, tape, &mut panicked) {
             in_a_row = 0;
         } else {
             in_a_row += 1;
@@ -500,12 +390,12 @@ mod tests {
     use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
 
     use super::*;
+    use crate::editor::EditorShared;
 
     /// What a shell owns between the audio thread and the GUI: the state, the
-    /// producer ends of both rings, the window's open flag, and the field the
-    /// host restores a project's settings into.
+    /// producer ends of both rings, and the window's open flag.
     struct Harness {
-        shared: Arc<Mutex<EditorShared>>,
+        shared: Arc<EditorLock>,
         /// The audio thread's half of `shared.take`, for a test that needs a
         /// take to have captured something.
         recorder: harmonigraph_record::Recorder,
@@ -513,11 +403,6 @@ mod tests {
         audio: crate::audio_ingress::Producer,
         audio_frames: u64,
         editor_state: Arc<EguiState>,
-        /// The host's end of `params.ui_state`.
-        ui_state: Arc<RwLock<String>>,
-        /// The thread's end of it, held across rounds exactly as [`run`] holds
-        /// one — so a test can step twice and see what the second step skips.
-        restore: Restore,
         tape: crate::tape::Worker,
     }
 
@@ -535,26 +420,15 @@ mod tests {
             Arc::new(AtomicU32::new(48_000.0f32.to_bits())),
             take_control,
         );
-        let ui_state = Arc::new(RwLock::new(String::new()));
         Harness {
-            shared: Arc::new(Mutex::new(shared)),
+            shared: Arc::new(EditorLock::new(shared, Arc::default())),
             recorder,
             notes,
             audio,
             audio_frames: 0,
             editor_state: EguiState::from_size(800, 600),
-            restore: Restore::of(ui_state.clone()),
-            ui_state,
             tape: tape(),
         }
-    }
-
-    /// A project blob that differs from a fresh install in its analyzer Window
-    /// and nothing else, written by the same call the editor saves through.
-    fn blob_with_window(window: harmonigraph_ui::SpectrumWindow) -> String {
-        let mut state = harmonigraph_ui::SharedState::new(crate::editor::ASSUMED_SURFACE_FORMAT);
-        state.picture.appearance.spectrum.window = window;
-        harmonigraph_ui::shell::close(&state)
     }
 
     /// The analysis window's column lag, in seconds, at the harness's rate:
@@ -567,16 +441,9 @@ mod tests {
     }
 
     impl Harness {
-        /// One round of the loop the thread runs, against a mirror that
-        /// survives between rounds.
+        /// One round of the loop the thread runs.
         fn step(&mut self) {
-            super::step(&self.shared, &self.editor_state, &mut self.restore, &mut self.tape);
-        }
-
-        /// What the host does when it restores a project — or pushes a preset
-        /// at a plugin whose window is shut.
-        fn restore(&mut self, blob: &str) {
-            *self.ui_state.write() = blob.to_string();
+            super::step(&self.shared, &self.editor_state, &mut self.tape);
         }
 
         /// Mono audio at 48 kHz, enough for the analyzer to fill a window and
@@ -850,7 +717,7 @@ mod tests {
         h.push_audio(20_000);
         let between = std::rc::Rc::new(std::cell::Cell::new(None));
         let seen = between.clone();
-        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>, taken| {
+        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &EditorLock, taken| {
             seen.set(Some((shared.try_lock().is_some(), taken.unanalyzed_audio())));
         })));
         h.step();
@@ -866,7 +733,7 @@ mod tests {
     fn a_clear_during_the_analysis_keeps_its_columns_out() {
         let mut h = harness();
         h.push_audio(20_000);
-        BETWEEN_HOLDS.set(Some(Box::new(|shared: &Mutex<EditorShared>, _| {
+        BETWEEN_HOLDS.set(Some(Box::new(|shared: &EditorLock, _| {
             shared.lock().ui.picture.runtime.spectrum.clear_history();
         })));
         h.step();
@@ -894,9 +761,9 @@ mod tests {
         let first = newest(&h);
 
         h.push_audio(20_000);
-        BETWEEN_HOLDS.set(Some(Box::new(|_: &Mutex<EditorShared>, _| panic!("a step's bug"))));
+        BETWEEN_HOLDS.set(Some(Box::new(|_: &EditorLock, _| panic!("a step's bug"))));
         let mut panicked = false;
-        super::guarded_step(&h.shared, &h.editor_state, &mut h.restore, &mut h.tape, &mut panicked);
+        super::guarded_step(&h.shared, &h.editor_state, &mut h.tape, &mut panicked);
         BETWEEN_HOLDS.set(None);
         assert!(panicked, "the hook did not run");
 
@@ -928,7 +795,7 @@ mod tests {
             SpectrumWindow::Precise
         };
         h.push_audio(40_000);
-        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &Mutex<EditorShared>, _| {
+        BETWEEN_HOLDS.set(Some(Box::new(move |shared: &EditorLock, _| {
             shared.lock().ui.picture.appearance.spectrum.window = second;
         })));
         h.step();
@@ -938,225 +805,6 @@ mod tests {
         h.push_audio(40_000);
         h.step();
         assert!((h.analyzed_lag() - lag_of(second)).abs() < 1e-9, "the next step missed the edit");
-    }
-
-    /// Issue #324: the project's saved Window has to reach the analyzer with no
-    /// editor anywhere in the picture, because the stretch before the first
-    /// open is exactly what this thread exists to cover.
-    ///
-    /// Asserted on [`AudioSpectrum::column_lag`] — the analysis window's lag —
-    /// rather than on the config, because the two are a step apart and only the
-    /// second one is the picture. Nothing but `push_samples` carries the setting
-    /// across that step, so a load placed after the drain satisfies an assertion
-    /// on the config and still analyzes the round's own audio at the window the
-    /// blob replaced.
-    ///
-    /// [`AudioSpectrum::column_lag`]: harmonigraph_ui::AudioSpectrum::column_lag
-    #[test]
-    fn a_restored_window_reaches_the_analyzer_with_no_editor_ever_built() {
-        use harmonigraph_ui::SpectrumWindow;
-
-        let mut h = harness();
-        h.restore(&blob_with_window(SpectrumWindow::Precise));
-        // A Precise frame is 24,576 samples, so this is comfortably more than
-        // one frameful and the analyzer cannot come out of it empty.
-        h.push_audio(40_000);
-
-        h.step();
-
-        assert!(h.columns() > 0, "nothing was analyzed at all");
-        assert_eq!(h.configured_window(), SpectrumWindow::Precise, "the blob never landed");
-        assert!(
-            (h.analyzed_lag() - lag_of(SpectrumWindow::Precise)).abs() < 1e-9,
-            "columns analyzed at a {:.1} ms lag where the project's window lags {:.1} ms: the \
-             restored setting reached the config and not the analyzer",
-            h.analyzed_lag() * 1000.0,
-            lag_of(SpectrumWindow::Precise) * 1000.0,
-        );
-    }
-
-    /// The trap in fixing it. `params.ui_state` is written only by a host
-    /// restore and on the way OUT of an editor session — a host save with the
-    /// window open serializes the live state rather than storing it — so it
-    /// names something the open window has already applied, and re-applying
-    /// that under it would revert everything the user has changed since. (A
-    /// restore that lands while the window is open reaches it through the
-    /// window's own frame instead; see `UiState`.)
-    ///
-    /// The guard is [`step`]'s existing open-window check, which is why this
-    /// test lives next to the drain it also guards: anything that moved the
-    /// adopt ahead of that check would pass every other test here.
-    #[test]
-    fn an_open_window_keeps_the_settings_it_is_being_used_to_change() {
-        use harmonigraph_ui::SpectrumWindow;
-
-        let mut h = harness();
-        // What the project saved, against what the user has since dialled in.
-        h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.shared.lock().ui.picture.appearance.spectrum.window = SpectrumWindow::Fast;
-        h.editor_state.set_open(true);
-
-        h.step();
-
-        assert_eq!(
-            h.configured_window(),
-            SpectrumWindow::Fast,
-            "the saved blob was re-applied under an open window, reverting the setting the \
-             user is holding the window open to change",
-        );
-    }
-
-    #[test]
-    fn a_tick_admitted_before_opening_cannot_overwrite_a_live_edit() {
-        use harmonigraph_ui::SpectrumWindow;
-        use std::sync::Barrier;
-
-        let mut h = harness();
-        let blob = blob_with_window(SpectrumWindow::Precise);
-        h.restore(&blob);
-        let gate = Arc::new(Barrier::new(2));
-        let shared = h.shared.clone();
-        let editor_state = h.editor_state.clone();
-        let ui_state = h.ui_state.clone();
-        std::thread::scope(|scope| {
-            let worker_gate = gate.clone();
-            let worker = scope.spawn(move || {
-                TICK_PAUSE.with_borrow_mut(|pause| *pause = Some(worker_gate));
-                // This worker has not adopted the blob yet.
-                let mut restore = Restore::of(ui_state);
-                step(&shared, &editor_state, &mut restore, &mut tape());
-            });
-            gate.wait();
-            {
-                let mut shared = h.shared.lock();
-                shared.ui.load_persist(&blob);
-                h.editor_state.set_open(true);
-                shared.ui.picture.appearance.spectrum.window = SpectrumWindow::Fast;
-            }
-            gate.wait();
-            worker.join().unwrap();
-        });
-        assert!(h.editor_state.is_open());
-        assert_eq!(h.configured_window(), SpectrumWindow::Fast);
-    }
-
-    /// A host writes that field more than once — a preset change or an undo
-    /// pushes fresh state at a plugin whose window is shut — so what the thread
-    /// keeps has to be a mirror of the blob and not a done-once flag.
-    #[test]
-    fn a_project_switched_while_the_window_is_shut_is_taken_too() {
-        use harmonigraph_ui::SpectrumWindow;
-
-        let mut h = harness();
-        h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.step();
-        assert_eq!(h.configured_window(), SpectrumWindow::Precise);
-
-        h.restore(&blob_with_window(SpectrumWindow::Fast));
-        h.step();
-
-        assert_eq!(
-            h.configured_window(),
-            SpectrumWindow::Fast,
-            "the second blob was never read: the thread adopts once and then stops looking",
-        );
-    }
-
-    /// An EMPTY blob is a project with nothing saved, not a broken one. A
-    /// plugin whose editor has never been opened carries one, and a host can
-    /// hand it to a live instance — loading such a project over this one with
-    /// the window shut. Read as a blob it would put `persist ignored — the blob
-    /// did not parse` on the console, which is the noise the emptiness check
-    /// exists to keep off it.
-    ///
-    /// Reached only from a mirror that already holds something: against a fresh
-    /// one the check is indistinguishable from the same-blob check beside it,
-    /// which is what every other test here exercises.
-    #[test]
-    fn an_empty_blob_is_a_project_with_nothing_saved() {
-        use harmonigraph_ui::SpectrumWindow;
-
-        let mut h = harness();
-        h.restore(&blob_with_window(SpectrumWindow::Precise));
-        h.step();
-
-        h.restore("");
-        h.step();
-
-        assert_eq!(
-            h.shared
-                .lock()
-                .ui
-                .picture
-                .runtime
-                .console
-                .lines()
-                .filter(|l| l.contains("persist ignored"))
-                .count(),
-            0,
-            "an empty blob was read as a broken one",
-        );
-        // And nothing was reset to defaults on the strength of it: an empty
-        // field says the other project saved nothing, not that this one should
-        // forget what it has.
-        assert_eq!(h.configured_window(), SpectrumWindow::Precise);
-    }
-
-    /// What makes the round after every window close harmless: the blob
-    /// `LatticeEditorHandle::drop` writes is a fixed point of the round trip, so
-    /// adopting it moves nothing. Asserted on the SAVE either side rather than
-    /// on named fields, because the claim is about every persisted field at once
-    /// and a list here would go stale the moment one is added.
-    #[test]
-    fn a_reloaded_save_leaves_the_state_where_it_was() {
-        use harmonigraph_ui::SpectrumWindow;
-
-        let mut h = harness();
-        // Dialled away from the defaults, the way a session leaves a state —
-        // otherwise a load that reset a field to its default would pass.
-        {
-            let ui = &mut h.shared.lock().ui;
-            ui.picture.appearance.spectrum.window = SpectrumWindow::Precise;
-            ui.picture.appearance.spectrum.floor_db = -72.0;
-            ui.workspace.interaction.prefs.frame_rate = harmonigraph_ui::FrameRate::Third;
-        }
-        // What the close writes into `params.ui_state`.
-        let saved = harmonigraph_ui::shell::close(&h.shared.lock().ui);
-        h.restore(&saved);
-
-        h.step();
-
-        assert_eq!(
-            harmonigraph_ui::shell::close(&h.shared.lock().ui),
-            saved,
-            "reloading a state's own save moved something in it",
-        );
-    }
-
-    /// And the mirror's other half. A blob this build refuses — below the
-    /// version floor, or naming a variant that has been dropped — is refused
-    /// LOUDLY, on the console, which is a fine thing to say once and a useless
-    /// thing to say fifty times a second for as long as the project is loaded.
-    #[test]
-    fn a_blob_this_build_refuses_says_so_once() {
-        let mut h = harness();
-        h.restore("this is not a persist blob");
-
-        for _ in 0..5 {
-            h.step();
-        }
-
-        let refusals = h
-            .shared
-            .lock()
-            .ui
-            .picture
-            .runtime
-            .console
-            .lines()
-            .filter(|line| line.contains("persist ignored"))
-            .count();
-        assert_eq!(refusals, 1, "the console holds one line per round, not one per blob");
     }
 
     /// [`POLL`] against the ring it is pacing itself to. A poll slower than the
@@ -1192,12 +840,7 @@ mod tests {
         let mut h = harness();
         h.push_audio(20_000);
 
-        let analyzer = InputWorker::spawn(
-            h.shared.clone(),
-            h.editor_state.clone(),
-            h.ui_state.clone(),
-            tape(),
-        );
+        let analyzer = InputWorker::spawn(h.shared.clone(), h.editor_state.clone(), tape());
         // Polled to a deadline, so a loaded machine cannot fail this for being
         // slow — it is asserting that steps happen at all, not how fast.
         let started = Instant::now();

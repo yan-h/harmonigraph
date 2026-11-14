@@ -7,15 +7,16 @@ use egui::Context;
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SizeSource};
 use nice_plug::prelude::{Editor, GuiContext, ParentWindowHandle, ResizeHint};
 use nice_plug::wrapper::clap::EditorHost;
-use parking_lot::Mutex;
+
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 
 use crate::HarmonigraphParams;
 
 use super::frame::{frame, WindowState};
+use super::lock::EditorLock;
+use super::open_window_session;
 use super::persist::EguiState;
 use super::pop_out::{PopOut, Sized};
-use super::shared::EditorShared;
 use super::MIN_SIZE;
 
 /// The wgpu setup, which is `GraphicsConfig::default()` with the device
@@ -43,7 +44,7 @@ pub(super) fn graphics_config() -> GraphicsConfig {
 
 pub fn create(
     params: Arc<HarmonigraphParams>,
-    shared: Arc<Mutex<EditorShared>>,
+    shared: Arc<EditorLock>,
     host: Option<Arc<dyn EditorHost>>,
 ) -> Option<Box<dyn Editor>> {
     Some(Box::new(LatticeEditor {
@@ -64,7 +65,7 @@ pub fn create(
 pub(super) struct LatticeEditor {
     egui_state: Arc<EguiState>,
     params: Arc<HarmonigraphParams>,
-    shared: Arc<Mutex<EditorShared>>,
+    shared: Arc<EditorLock>,
     host: Option<Arc<dyn EditorHost>>,
     scaling_factor: AtomicCell<Option<f32>>,
     gpu_context: egui_baseview::SharedGpuContext,
@@ -216,24 +217,10 @@ impl Editor for LatticeEditor {
                 harmonigraph_ui::use_renderer_font_texture(egui_ctx);
                 // Everything this context owes the shared UI state, which is
                 // NOT new when the context is: the theme, the release of what
-                // the closed window left behind, the fold floor, and the
-                // layout the host saved with the project (written by a host
-                // restore, or on the way out, in `LatticeEditorHandle`'s Drop).
-                //
-                // Read with the state's lock held, in the order the close and
-                // the input worker take the two (`shared`, then the
-                // blob): taking the blob also answers a pending restore, and a
-                // save on another thread must not see that answered before the
-                // state holds it (see `UiState`).
-                let mut shared = state.shared.lock();
-                let serialized = state.params.ui_state.opening_blob();
-                harmonigraph_ui::shell::Opening {
-                    ctx: egui_ctx,
-                    state: &mut shared.ui,
-                    persist: Some(&serialized),
-                }
-                .open();
-                harmonigraph_ui::begin_editor_loading(egui_ctx);
+                // the closed window left behind, the fold floor and the new
+                // window session. The settings are already in the state; a
+                // host restore waiting is installed by the lock.
+                open_window_session(&state.shared, egui_ctx);
             },
             // Thin shim: the real per-frame work is `frame`, above. The
             // closure exists only to own `egui_state`/`context` for the
@@ -253,7 +240,7 @@ impl Editor for LatticeEditor {
             context: closing_context,
             window,
         };
-        // Bind the entire teardown, including persistence and baseview's
+        // Bind the entire teardown, including the session's end and baseview's
         // non-Send handle, rather than only its native controller. Normal
         // destruction is on main; an off-main drop synchronously waits for it.
         #[cfg(target_os = "macos")]
@@ -315,7 +302,7 @@ struct LatticeEditorHandle {
     // for their invocation, so retaining the view cannot retain this owner.
     pop_out: Arc<PopOut>,
     egui_state: Arc<EguiState>,
-    shared: Arc<Mutex<EditorShared>>,
+    shared: Arc<EditorLock>,
     params: Arc<HarmonigraphParams>,
     context: Arc<dyn GuiContext>,
     window: WindowHandle,
@@ -328,30 +315,22 @@ unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
+        // The session ends, and the host's gestures with it, under the lock
+        // (see `EditorLock::end_window_session` on why in that order). The
+        // lock is taken with `open` still TRUE, which keeps the input worker
+        // from ageing the picture until the window is gone — see
+        // [`crate::background`].
+        let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
+        self.shared.end_window_session(|gestures| {
+            for (key, active) in harmonigraph_ui::params::ParamKey::ALL.into_iter().zip(gestures) {
+                if active {
+                    setter.end_set_parameter(self.params.param_for(key));
+                }
+            }
+        });
         // The editor's own window closes with the editor rather than
         // outliving it empty, and the host's is shown again.
         self.pop_out.close();
-        // Store the UI state (layout, camera, view settings) as the blob a
-        // host save reads once the window is shut; while it is open, the
-        // save serializes the live state instead (see `UiState`). A restore
-        // no frame has drawn yet is applied first, so it is not lost here.
-        // The lock is taken here with `open` still TRUE, which is what keeps
-        // the input worker from adopting the blob this writes, or ageing the
-        // picture, until the window is gone — see [`crate::background`] on why
-        // that ordering is load-bearing rather than incidental.
-        let mut shared = self.shared.lock();
-        let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
-        for (key, active) in harmonigraph_ui::params::ParamKey::ALL
-            .into_iter()
-            .zip(shared.gesture.replace([false; harmonigraph_ui::params::ParamKey::ALL.len()]))
-        {
-            if active {
-                setter.end_set_parameter(self.params.param_for(key));
-            }
-        }
-        self.params.ui_state.store_close(&mut shared.ui);
-        shared.forget_frames();
-        drop(shared);
         self.egui_state.set_open(false);
         self.window.close();
     }

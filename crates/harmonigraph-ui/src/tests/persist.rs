@@ -119,12 +119,12 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
 ];
 
 /// A retired key costs nothing: through both doors — the editor's
-/// `load_persist`, and, for a key inside the appearance, the
+/// `install_document`, and, for a key inside the appearance, the
 /// `AppearanceDocument::parse` that take replay and explicit export share —
 /// the rest of the document loads at the values it holds, and the key is gone
 /// on the next save.
 ///
-/// `load_persist` takes the whole `UiPersist` or nothing, so a key that failed
+/// `install_document` takes the whole `UiPersist` or nothing, so a key that failed
 /// to parse would not degrade: it would discard the dock, the camera and the
 /// view with it. Every retirement rides on serde ignoring what it has no field
 /// for, and this is where that is held.
@@ -150,7 +150,7 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
         }
 
         let mut restored = fresh();
-        assert!(restored.load_persist(&splice(&saved)), "{retired} sank the editor blob");
+        assert!(restored.install_document(&splice(&saved)), "{retired} sank the editor blob");
         assert_eq!(restored.save_persist(), saved, "{retired} changed what the editor loaded");
 
         assert_eq!(!pair_starts(&appearance, anchor).is_empty(), in_appearance, "{anchor}: doors");
@@ -208,7 +208,7 @@ fn a_dropped_variant_refuses_the_whole_document_and_says_so() {
 
         let mut restored = fresh();
         let before = restored.save_persist();
-        assert!(!restored.load_persist(&swap(&saved)), "{key}:{dropped} was applied");
+        assert!(!restored.install_document(&swap(&saved)), "{key}:{dropped} was applied");
         assert!(!collapsed(&restored, panes::Tab::Console), "{dropped}: the refusal is hidden");
         assert!(
             restored
@@ -275,7 +275,7 @@ fn persist_round_trips_camera_and_view() {
     let saved = state.save_persist();
 
     let mut restored = fresh();
-    restored.load_persist(&saved);
+    restored.install_document(&saved);
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(restored.picture.appearance.camera.distance, 18.0);
     assert_eq!(restored.picture.appearance.view.max_sevens, 3);
@@ -314,7 +314,7 @@ fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
         let mut state = fresh();
         state.picture.appearance.view.octave_count = stored;
         let mut restored = fresh();
-        assert!(restored.load_persist(&state.save_persist()));
+        assert!(restored.install_document(&state.save_persist()));
         assert_eq!(restored.picture.appearance.view.octave_count, expected);
     }
 }
@@ -355,7 +355,7 @@ fn a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one() {
         assert_ne!(edited, saved, "{hint}: the level keys are not in the blob to edit");
 
         let mut restored = fresh();
-        restored.load_persist(&edited);
+        restored.install_document(&edited);
         let cfg = restored.picture.appearance.spectrum;
         assert!(
             cfg.floor_db.is_finite() && cfg.ceiling_db.is_finite(),
@@ -486,7 +486,7 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
     assert_ne!(edited, saved, "the edge keys are not in the blob to edit");
 
     let mut restored = fresh();
-    restored.load_persist(&edited);
+    restored.install_document(&edited);
     assert_eq!(
         (
             restored.picture.appearance.spectrum.roll_lead,
@@ -555,7 +555,7 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
         let mut restored = fresh();
-        restored.load_persist(&edited);
+        restored.install_document(&edited);
         let view = &restored.picture.appearance.view;
         let cfg = &restored.picture.appearance.spectrum;
         for (name, v) in [
@@ -610,7 +610,7 @@ fn a_blob_naming_a_lead_release_off_its_own_bar_opens_on_one_that_fits() {
         assert_ne!(edited, saved, "{hint}: `roll_lead_release` is not in the blob to edit");
 
         let mut restored = fresh();
-        restored.load_persist(&edited);
+        restored.install_document(&edited);
         assert_eq!(
             restored.picture.appearance.spectrum.roll_lead_release, want,
             "{hint}: opened at {}",
@@ -651,7 +651,7 @@ fn a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits() {
             assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
             let mut restored = fresh();
-            restored.load_persist(&edited);
+            restored.install_document(&edited);
             let got = if key == "attack" {
                 restored.picture.appearance.spectrum.attack
             } else {
@@ -694,10 +694,10 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
             let mut state = fresh();
             *field(&mut state.picture.appearance.spectrum) = value;
             let mut restored = fresh();
-            assert!(restored.load_persist(&state.save_persist()));
+            assert!(restored.install_document(&state.save_persist()));
             assert_eq!(*field(&mut restored.picture.appearance.spectrum), expected);
             let normalized = restored.save_persist();
-            assert!(restored.load_persist(&normalized));
+            assert!(restored.install_document(&normalized));
             assert_eq!(restored.save_persist(), normalized, "normalization is idempotent");
         }
     }
@@ -716,7 +716,7 @@ fn a_blob_with_outer_octave_settings_keeps_its_count_and_camera() {
     );
     assert_ne!(old, saved);
     let mut restored = fresh();
-    assert!(restored.load_persist(&old));
+    assert!(restored.install_document(&old));
     assert_eq!(restored.picture.appearance.view.octave_count, 7);
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
 }
@@ -733,7 +733,7 @@ fn a_render_frame_round_trips() {
     assert!(saved.contains("lattice:Bottom"), "the side is what gets written");
 
     let mut restored = fresh();
-    restored.load_persist(&saved);
+    restored.install_document(&saved);
     assert_eq!(restored.picture.appearance.render.frame.lattice, LatticeSide::Bottom);
     assert_eq!(restored.picture.appearance.render.frame.split, 0.42);
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "rest of the blob still restores");
@@ -743,7 +743,7 @@ fn a_render_frame_round_trips() {
 fn corrupt_persist_is_ignored() {
     let mut state = fresh();
     let default_distance = state.picture.appearance.camera.distance;
-    assert!(!state.load_persist("not json at all"), "a corrupt blob is not applied");
+    assert!(!state.install_document("not json at all"), "a corrupt blob is not applied");
     assert_eq!(state.picture.appearance.camera.distance, default_distance);
     assert!(!collapsed(&state, panes::Tab::Console), "the explanation is visible");
 }
@@ -763,7 +763,7 @@ fn a_refused_blob_says_why() {
         1,
     );
     let mut older = fresh();
-    assert!(!older.load_persist(&stale), "a blob below the floor is not applied");
+    assert!(!older.install_document(&stale), "a blob below the floor is not applied");
     assert!(
         older.picture.runtime.console.lines().any(|line| line.contains("below the floor")),
         "the floor's refusal was silent",
@@ -774,7 +774,7 @@ fn a_refused_blob_says_why() {
     let mut restored = fresh();
     set_console_collapsed(&mut restored, true);
     let before = restored.save_persist();
-    assert!(!restored.load_persist(&unsupported));
+    assert!(!restored.install_document(&unsupported));
     assert!(!collapsed(&restored, panes::Tab::Console), "appearance refusal opens its report");
     set_console_collapsed(&mut restored, true);
     assert_eq!(
@@ -788,6 +788,39 @@ fn a_refused_blob_says_why() {
         .console
         .lines()
         .any(|line| line.contains("appearance version 0 is unsupported")));
+}
+
+/// What a save stores follows what the last install made of its document
+/// (#1757): one installed whole is saved live, a refused one is held verbatim
+/// until a frame shows why (`shell.rs`'s frame tests), and the empty one —
+/// what an editor never opened saves — puts the fresh settings back and saves
+/// empty again, with nothing on the Console.
+#[test]
+fn an_install_decides_what_a_save_stores() {
+    let saved = dialled().save_persist();
+    let mut state = fresh();
+    assert_eq!(state.save_answer().as_ref(), "", "a fresh editor saves nothing");
+
+    assert!(state.install_document(&saved));
+    assert_eq!(state.save_source(), &SaveSource::Live);
+    assert_eq!(state.save_answer().as_ref(), saved, "a whole install did not save back as it came");
+
+    assert!(!state.install_document("not a blob"));
+    assert_eq!(state.save_answer().as_ref(), "not a blob", "a refused document was not held");
+
+    let lines = state.picture.runtime.console.lines().count();
+    assert!(state.install_document(""));
+    assert_eq!(state.save_source(), &SaveSource::Untouched);
+    assert_eq!(
+        state.save_persist(),
+        fresh().save_persist(),
+        "the empty document is not the fresh one"
+    );
+    assert_eq!(
+        state.picture.runtime.console.lines().count(),
+        lines,
+        "the empty document is not news"
+    );
 }
 
 #[test]
@@ -819,7 +852,7 @@ fn spectrum_config_round_trips_through_persist() {
     let saved = state.save_persist();
 
     let mut restored = fresh();
-    restored.load_persist(&saved);
+    restored.install_document(&saved);
     assert_eq!(restored.picture.appearance.spectrum.floor_db, -48.0);
     assert_eq!(restored.picture.appearance.spectrum.ceiling_db, -12.0);
     assert_eq!(restored.picture.appearance.spectrum.volume_floor_db, -72.0);
@@ -852,7 +885,7 @@ fn a_pitch_range_off_the_current_axis_is_pulled_back_onto_it() {
             .replace("low_midi:60.0", &format!("low_midi:{low}"))
             .replace("high_midi:72.0", &format!("high_midi:{high}"));
         let mut restored = fresh();
-        restored.load_persist(&saved);
+        restored.install_document(&saved);
         (
             restored.picture.appearance.spectrum.low_midi,
             restored.picture.appearance.spectrum.high_midi,
@@ -881,14 +914,14 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     assert_ne!(old, saved, "the field must have been there to strip");
 
     let mut restored = fresh();
-    restored.load_persist(&old);
+    restored.install_document(&old);
     assert!(
         restored.picture.appearance.spectrum.show_spectrogram,
         "a missing field must fall back to the struct's own default, not bool::default()"
     );
     // An explicit `false` is a choice, not an absence, and still round-trips.
     let mut restored = fresh();
-    restored.load_persist(&saved);
+    restored.install_document(&saved);
     assert!(!restored.picture.appearance.spectrum.show_spectrogram);
 }
 
@@ -927,7 +960,7 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
         assert_ne!(without, saved, "{key:?} must be in the blob to drop");
 
         let mut restored = fresh();
-        restored.load_persist(&without);
+        restored.install_document(&without);
         assert_eq!(
             restored.picture.appearance.view.max_sevens, 3,
             "dropping {key:?} must cost that key alone, not the whole blob",
@@ -997,9 +1030,9 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
 /// The layer under the missing-key tests above and below: every key of every
 /// struct the editor save holds, at any depth, dropped in turn — through
 /// `Some`, tuples, lists and enum payloads as well — and the rest parsed with
-/// the parse `load_persist` runs.
+/// the parse `install_document` runs.
 ///
-/// Those tests each sweep one level through the real doors, `load_persist` or
+/// Those tests each sweep one level through the real doors, `install_document` or
 /// `AppearanceDocument::parse`, and compare what loads: the persist sections
 /// (`a_persist_blob_missing_any_one_section_keeps_the_rest`), the appearance's
 /// groups (`an_appearance_missing_any_one_group_keeps_the_rest`), the view's
@@ -1185,7 +1218,7 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
 
         let mut restored = fresh();
         assert!(
-            restored.load_persist(&without),
+            restored.install_document(&without),
             "dropping {key:?} sank the whole document instead of costing itself",
         );
         assert_eq!(
@@ -1246,7 +1279,7 @@ fn a_persist_blob_missing_any_one_preset_or_look_key_keeps_the_rest() {
 
             let mut restored = fresh();
             assert!(
-                restored.load_persist(&without),
+                restored.install_document(&without),
                 "dropping {key:?} sank the whole document instead of costing itself",
             );
             assert_eq!(
@@ -1329,7 +1362,7 @@ fn a_save_from_before_prefs_keeps_its_content_and_resets_its_preferences() {
     assert!(!old.contains("prefs:"), "the old shape has no prefs key");
 
     let mut restored = fresh();
-    assert!(restored.load_persist(&old), "a save from before prefs was refused");
+    assert!(restored.install_document(&old), "a save from before prefs was refused");
     let again = restored.save_persist();
     let fresh_save = fresh().save_persist();
     let pair = |blob: &str, key: &str| {
@@ -1360,12 +1393,12 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     assert_ne!(state.save_persist(), editor);
     assert_eq!(state.picture.appearance.serialize(), appearance);
     let mut restored = fresh();
-    assert!(restored.load_persist(&state.save_persist()));
+    assert!(restored.install_document(&state.save_persist()));
     assert_eq!(restored.picture.appearance.serialize(), appearance);
     // An editor-only enum can make the enclosing save unreadable without
     // affecting the separately captured appearance at all.
     let broken_workspace = state.save_persist().replace("Console", "RetiredConsole");
-    assert!(!restored.load_persist(&broken_workspace));
+    assert!(!restored.install_document(&broken_workspace));
     assert_eq!(AppearanceDocument::parse(&appearance).unwrap().serialize(), appearance);
 }
 
@@ -1411,13 +1444,13 @@ fn a_hand_edited_spiral_framing_comes_back_drawable() {
     state.workspace.interaction.prefs.spiral =
         crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
 
-    // The repair on the way in is `load_persist`'s call rather than the
+    // The repair on the way in is `install_document`'s call rather than the
     // pane's: a blob nothing but a text editor could have written.
     let saved = state.save_persist();
     let edited = replace_pair(&saved, "zoom", "2.75", "NaN");
     assert_ne!(edited, saved, "`zoom` is not in the blob to edit");
     let mut restored = fresh();
-    assert!(restored.load_persist(&edited));
+    assert!(restored.install_document(&edited));
     assert!(
         restored.workspace.interaction.prefs.spiral.zoom.is_finite(),
         "a NaN zoom opened at {}",
@@ -1473,7 +1506,7 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
 
         let mut restored = fresh();
         assert!(
-            restored.load_persist(&without),
+            restored.install_document(&without),
             "dropping the spiral's {key:?} sank the whole document instead of costing itself",
         );
         assert_eq!(
@@ -1544,7 +1577,7 @@ fn every_editor_preference_round_trips() {
     }
 
     let mut restored = fresh();
-    assert!(restored.load_persist(&state.save_persist()));
+    assert!(restored.install_document(&state.save_persist()));
     assert_eq!(ron::to_string(&restored.workspace.interaction.prefs).unwrap(), dialled);
 }
 
@@ -1557,7 +1590,7 @@ fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
     state.workspace.interaction.prefs.ui_scale = 0.75;
     let saved = state.save_persist();
     let mut back = fresh();
-    back.load_persist(&saved);
+    back.install_document(&saved);
     assert_eq!(back.workspace.interaction.prefs.ui_scale, 0.75, "the scale did not round-trip");
 
     // The same blob with the field taken back out, which is what every project
@@ -1565,7 +1598,7 @@ fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
     let stripped = saved.replacen(",ui_scale:0.75", "", 1);
     assert_ne!(stripped, saved, "the blob names the field");
     let mut older = fresh();
-    assert!(older.load_persist(&stripped));
+    assert!(older.install_document(&stripped));
     assert_eq!(
         older.workspace.interaction.prefs.ui_scale, 1.0,
         "a blob with no scale did not load at the design size"
@@ -1622,7 +1655,7 @@ fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
         assert_ne!(broken, saved, "the {end} splice must land for this to test anything");
 
         let mut restored = fresh();
-        restored.load_persist(&broken);
+        restored.install_document(&broken);
         let (low, high) = (
             restored.picture.appearance.spectrum.low_midi,
             restored.picture.appearance.spectrum.high_midi,
@@ -1677,7 +1710,7 @@ fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
         assert_ne!(spliced, saved, "the {key} splice must land for this to test anything");
 
         let mut restored = fresh();
-        restored.load_persist(&spliced);
+        restored.install_document(&spliced);
         let g = restored.picture.appearance.spectrum.spectrogram_gradient;
         assert_eq!(g.sanitized(), g, "{key}:{broken} left the file holding {g:?}");
         // And the knobs the splice did not touch keep what the blob said, so
@@ -1693,7 +1726,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // rather than carried forever, and it costs a real project its settings:
     // the plugin's CLAP id gates everything below version 2, but nothing
     // gates a blob one bump behind, which a project saved by the previous build
-    // is. See `load_persist` for why that price is paid rather than shimmed.
+    // is. See `install_document` for why that price is paid rather than shimmed.
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.max_sevens = 3;
@@ -1706,7 +1739,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
         1,
     );
     let mut restored = fresh();
-    restored.load_persist(&stale);
+    restored.install_document(&stale);
     // Untouched, not partially applied: a refused blob must not leave the
     // camera from one era beside a dock from another.
     let defaults = fresh();
@@ -1719,7 +1752,7 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // And the same blob at the floor still loads, so the test above is
     // measuring the version rather than a blob that was broken anyway.
     let mut current = fresh();
-    current.load_persist(&saved);
+    current.install_document(&saved);
     assert_eq!(current.picture.appearance.camera.yaw, 1.23);
     assert_eq!(current.picture.appearance.view.max_sevens, 3);
 }
@@ -1741,7 +1774,7 @@ fn loading_a_project_leaves_the_links_with_the_configuration() {
     let anchor = pair_starts(&saved, "render_scale");
     assert_eq!(anchor.len(), 1);
     let old = format!("{}meantone:true,marvel:true,{}", &saved[..anchor[0]], &saved[anchor[0]..]);
-    assert!(state.load_persist(&old), "an old save holding the links must still load");
+    assert!(state.install_document(&old), "an old save holding the links must still load");
     for frame in 1..3 {
         begin_frame(&mut state.picture, &Defaults, f64::from(frame));
         assert_eq!(state.picture.runtime.tempered, unlinked, "the save reached the links");
@@ -1792,7 +1825,7 @@ fn lattice_map_indicator_visibility_round_trips_and_defaults_on() {
     let saved = state.save_persist();
 
     let mut restored = fresh();
-    restored.load_persist(&saved);
+    restored.install_document(&saved);
     assert!(
         !restored.picture.appearance.view.show_map_indicators,
         "a project that hid map indicators must keep them hidden"
@@ -1800,7 +1833,7 @@ fn lattice_map_indicator_visibility_round_trips_and_defaults_on() {
 
     let old = saved.replacen("show_map_indicators:false,", "", 1);
     assert_ne!(old, saved, "the visibility-key cut must land");
-    restored.load_persist(&old);
+    restored.install_document(&old);
     assert!(
         restored.picture.appearance.view.show_map_indicators,
         "a project from before the visibility setting existed must keep showing map indicators"
@@ -1893,7 +1926,7 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
 
         let mut restored = fresh();
         assert!(
-            restored.load_persist(&without),
+            restored.install_document(&without),
             "dropping the group's {key:?} sank the whole document instead of costing itself",
         );
         assert_eq!(
@@ -1928,7 +1961,7 @@ fn a_shadow_group_carrying_the_retired_kernel_and_falloff_loads_at_its_other_fie
     assert_ne!(without, saved, "the group must be in the blob to rewrite");
 
     let mut restored = fresh();
-    assert!(restored.load_persist(&without), "the retired keys sank the whole document");
+    assert!(restored.install_document(&without), "the retired keys sank the whole document");
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(restored.picture.appearance.view.shadow.lattice_geometry, held);
 }
@@ -2001,7 +2034,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let retired = format!("(wide_strength:0.9,wide_spread:6.0,{}", &full[1..]);
     let old = replace_pair(&saved, "atmosphere", &full, &retired);
     let mut restored = fresh();
-    assert!(restored.load_persist(&old), "retired wide-glow keys sank the document");
+    assert!(restored.install_document(&old), "retired wide-glow keys sank the document");
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(
         restored.picture.appearance.view.atmosphere,
@@ -2018,7 +2051,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         let without = replace_pair(&saved, "atmosphere", &full, &format!("({})", kept.join(",")));
         assert_ne!(saved, without, "the omitted key must be in the saved blob");
         let mut restored = fresh();
-        assert!(restored.load_persist(&without), "omitting {key} sank the document");
+        assert!(restored.install_document(&without), "omitting {key} sank the document");
         assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
         let loaded = ron::to_string(&restored.picture.appearance.view.atmosphere).unwrap();
         let loaded: std::collections::HashMap<_, _> =
@@ -2032,7 +2065,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let old = replace_pair(&saved, "atmosphere", &full,
         "(enabled:false,material:Watercolor,nebula_depth:0.9,nebula_scale:2.0,nebula_speed:3.0,breath_amount:0.6,breath_speed:1.5,source_roughness:0.7)");
     let mut restored = fresh();
-    assert!(restored.load_persist(&old));
+    assert!(restored.install_document(&old));
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(
         restored.picture.appearance.view.atmosphere,
@@ -2083,7 +2116,7 @@ fn star_resolution_defaults_old_saves_and_roundtrips() {
     state.picture.appearance.spectrum.atmosphere.stars.star_resolution = 0.25;
     let saved = state.save_persist();
     let mut editor = fresh();
-    assert!(editor.load_persist(&saved));
+    assert!(editor.install_document(&saved));
     assert_eq!(editor.picture.appearance.view.atmosphere.stars.star_jitter, 0.37);
     assert_eq!(editor.picture.appearance.view.atmosphere.stars.star_resolution, 0.5);
     assert_eq!(
@@ -2119,7 +2152,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     state.picture.appearance.camera.yaw = 1.23;
     let saved = state.save_persist();
     let mut editor = fresh();
-    assert!(editor.load_persist(&saved));
+    assert!(editor.install_document(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     let expected = SpectralAtmosphere {
         stars: harmonigraph_scene::StarSettings {
@@ -2144,7 +2177,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
 /// of trap as the stale `TextureHandle`
 /// (`PictureState::release_context_resources`). The folds live in `UiPersist`
 /// instead, and this holds the whole path: a REAL click on a section header in
-/// the dock, `save_persist`, then a fresh `Context` and `load_persist`. Both
+/// the dock, `save_persist`, then a fresh `Context` and `install_document`. Both
 /// halves are load-bearing — writing the field by hand would pass with the
 /// click never wired to it, and asserting inside one `Context` would pass with
 /// the state memory-backed, which is the live bug this exists to catch.
@@ -2191,9 +2224,9 @@ fn a_folded_section_survives_an_editor_reopen() {
     let saved = state.save_persist();
 
     // The window closes and reopens: a FRESH `Context`, and the state the
-    // host hands back through `load_persist`.
+    // host hands back through `install_document`.
     let mut reopened = fresh();
-    assert!(reopened.load_persist(&saved), "the blob this build saved must load");
+    assert!(reopened.install_document(&saved), "the blob this build saved must load");
     let mut fresh_window = DockHarness::new();
     fresh_window.settle(&mut reopened);
     let out = fresh_window.frame(&mut reopened, vec![]);
@@ -2455,7 +2488,7 @@ fn a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach() {
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
 
         let mut restored = fresh();
-        restored.load_persist(&edited);
+        restored.install_document(&edited);
         let got = match key {
             "yaw" => restored.picture.appearance.camera.yaw,
             "pitch" => restored.picture.appearance.camera.pitch,
@@ -2504,7 +2537,7 @@ fn a_saved_angle_lands_where_the_camera_controls_could_have_put_it() {
         assert_ne!(edited, saved, "{hint}: the preset is not in the blob to edit");
 
         let mut restored = fresh();
-        restored.load_persist(&edited);
+        restored.install_document(&edited);
         assert_eq!(
             restored.picture.appearance.view.max_sevens, 3,
             "{hint}: the rest of the blob still restores"
@@ -2541,7 +2574,7 @@ fn a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one() {
     assert_ne!(edited, saved, "`target` is not in the blob to edit");
 
     let mut restored = fresh();
-    restored.load_persist(&edited);
+    restored.install_document(&edited);
     assert!(
         restored.picture.appearance.camera.target.is_finite(),
         "a NaN component opened at {:?}",
@@ -2569,7 +2602,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
         assert_ne!(edited, saved, "{hint}: `split` is not in the blob to edit");
 
         let mut restored = fresh();
-        restored.load_persist(&edited);
+        restored.install_document(&edited);
         let got = restored.picture.appearance.render.frame.split;
         assert!(got.is_finite(), "{hint}: `split` opened at {got}");
         assert!(got >= lo && got <= hi, "{hint}: `split` opened at {got}, outside {lo}..={hi}");
@@ -2589,7 +2622,7 @@ fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
         fade_out_delay: 0.4,
     };
     let mut restored = fresh();
-    assert!(restored.load_persist(&state.save_persist()));
+    assert!(restored.install_document(&state.save_persist()));
     assert_eq!(
         restored.picture.appearance.view.note_animation,
         state.picture.appearance.view.note_animation
@@ -2601,7 +2634,7 @@ fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
     let old = state.save_persist();
     let missing_spread = old.replace("stagger_spread:0.63,", "");
     assert_ne!(old, missing_spread);
-    assert!(state.load_persist(&missing_spread));
+    assert!(state.install_document(&missing_spread));
     assert_eq!(
         state.picture.appearance.view.note_animation.stagger_spread,
         harmonigraph_scene::NoteAnimationConfig::default().stagger_spread
@@ -2610,7 +2643,7 @@ fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
     assert_eq!(state.picture.appearance.view.note_animation.radial_start, -0.5);
     let saved = state.save_persist().replace("note_animation:", "retired_animation_config:");
     assert!(!saved.contains("note_animation:"));
-    assert!(state.load_persist(&saved));
+    assert!(state.install_document(&saved));
     assert_eq!(state.picture.appearance.view.note_animation, Default::default());
     assert_eq!(state.picture.appearance.view.label_scale, 0.7);
 }
@@ -2628,7 +2661,7 @@ fn an_old_dock_is_replaced_without_losing_appearance() {
         .collect();
     let old = format!("({},dock:(tabs:[Notes,Console]),folds:[])", kept.join(","));
     let mut restored = fresh();
-    assert!(restored.load_persist(&old));
+    assert!(restored.install_document(&old));
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(restored.workspace.layout.position, workspace::Position::Right);
     assert_eq!(restored.workspace.layout.folded, [false; 3]);
@@ -2655,7 +2688,7 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
     spectral.velvet_irregularity = 0.93;
     spectral.velvet_shape = 0.29;
     let mut restored = fresh();
-    assert!(restored.load_persist(&state.save_persist()));
+    assert!(restored.install_document(&state.save_persist()));
     assert_eq!(
         restored.picture.appearance.view.atmosphere.material_settings,
         state.picture.appearance.view.atmosphere.material_settings

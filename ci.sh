@@ -166,6 +166,24 @@ run python3 -B tools/shader-assets.py verify
 run python3 -B .claude/tests/frame-log-summary.py
 
 quick run cargo clippy --workspace --all-targets -- -D warnings
+
+# harmonigraph-ui's `testing` feature lets a test mark a frame drawn without
+# drawing one, which is what decides whether a save stores the editor's
+# settings or holds a document it could not read (#1757). Only the plugin's
+# dev-dependencies may enable it; the plugin and offline renderer the bundle
+# ships must resolve without it. Dev edges excluded, as a release build has none.
+ui_testing_guard() {
+  local package tree
+  for package in harmonigraph-plugin harmonigraph-offline; do
+    tree=$(cargo tree -p "$package" -e features,no-dev -i harmonigraph-ui)
+    if grep -q 'feature "testing"' <<<"$tree"; then
+      echo "✗ $package's shipping build enables harmonigraph-ui's testing feature" >&2
+      return 1
+    fi
+  done
+  echo "  ok — no shipping build enables it"
+}
+quick run ui_testing_guard
 # Guard the existing production performance scenarios at their exported
 # callbacks, and the CLAP configuration owner's allocation-free paths
 # (`configuration::tests`), which this is the only run of.

@@ -50,7 +50,7 @@ the version is read out of a struct that never parsed, so the check never runs.
 Raising the floor does nothing for a dropped variant at any value.
 
 What makes that acceptable is that the refusal is LOUD —
-`load_persist` returns whether it applied and writes the reason to the console, the offline renderer prints to stderr, and focused editor/offline tests hold refusal and defaulting.
+`install_document` returns whether it applied and writes the reason to the console, the offline renderer prints to stderr, and focused editor/offline tests hold refusal and defaulting.
 Keep the refusal audible when dropping a variant.
 
 ## Appearance and editor workspace have separate boundaries

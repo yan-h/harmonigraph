@@ -10,7 +10,7 @@ use harmonigraph_take::RenderProgress;
 fn opening_analyzer_settings_does_not_change_loaded_values() {
     let mut state = fresh();
     state.picture.appearance.spectrum.tilt = -2.0;
-    assert!(state.load_persist(&state.save_persist()));
+    assert!(state.install_document(&state.save_persist()));
     assert_eq!(state.picture.appearance.spectrum.tilt, -1.5);
     let before = ron::to_string(&state.picture.appearance.spectrum).unwrap();
     let tab = panes::Tab::AnalyzerSettings;

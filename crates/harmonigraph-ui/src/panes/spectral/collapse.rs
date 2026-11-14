@@ -55,6 +55,12 @@ impl Regions {
         self.restore = true;
     }
 
+    /// Re-take the spectrum hold from the saved geometry on the next unfolded
+    /// frame, as a load does: a new window lays the Analyzer out afresh.
+    pub fn relayout(&mut self) {
+        self.restore = true;
+    }
+
     /// Visibility lands with the resize, never on the click's old geometry.
     pub fn begin_frame(&mut self) {
         if let Some(collapsed) = self.landing.take() {

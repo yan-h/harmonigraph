@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
+use std::time::Duration;
 
 use crossbeam::atomic::AtomicCell;
-use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
-use super::shared::EditorShared;
+use super::lock::{EditorLock, Inbox};
 
 /// Window size persistence, modeled on nih_plug_egui's `EguiState`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,9 +65,9 @@ impl EguiState {
     /// Record that the window has opened or closed.
     ///
     /// Named rather than stored inline because it is not only the host's
-    /// business: [`crate::background`] reads it to decide whether to adopt a
-    /// restored blob and do a shut window's duties, and how often to poll, so
-    /// the two transitions are a seam between threads and not just a bit.
+    /// business: [`crate::background`] reads it to decide whether to do a shut
+    /// window's duties, and how often to poll, so the two transitions are a
+    /// seam between threads and not just a bit.
     pub(crate) fn set_open(&self, open: bool) {
         self.open.store(open, Ordering::Release);
     }
@@ -88,7 +88,7 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<Egui
 }
 
 /// How long a host's state save waits for the editor's state lock before it
-/// settles for the blob the last close wrote.
+/// settles for the inbox's fallback.
 ///
 /// Short, because on macOS and Windows the host saves on the same thread the
 /// frames run on, so a frame holding the lock there is one that is itself
@@ -100,117 +100,69 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<Egui
 /// frame mid-run, for a few milliseconds. Bounded rather than a plain `lock`
 /// so the re-entrant case costs the save its freshness and not the host a
 /// hang — the kind issue #296 is about.
-const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
+pub(crate) const SAVE_WAIT: Duration = Duration::from_millis(20);
 
-/// The editor's saved settings: the `ui-state` blob the host stores with the
-/// project, plus a way to serialize them live while a window is open.
+/// The editor's saved settings, the `ui-state` field the host stores with the
+/// project: an input into the live state and an output out of it, never a
+/// copy that is read back (#1757).
 ///
-/// The blob is written by the host's restore and by the editor window's
-/// `Drop`, and nothing else. A save that only read it would store the settings
-/// of the last CLOSE, so with a window open, [`PersistentField::map`](nice_plug::params::persist::PersistentField::map) — which is the
-/// one thing a host save calls — serializes what the window is showing
-/// instead. The blob itself is left alone: the input worker adopts it
-/// whenever it changes with the window shut, and that has to keep meaning a
-/// host restore or a close (see [`crate::background`]).
+/// A restore (`set`) goes to the [`Inbox`], which the next holder of the
+/// editor lock installs from — a frame, the input worker, the window's build
+/// or close, or a save. A save (`map`, the one thing a host save calls)
+/// takes that lock, window open or shut, and stores what
+/// [`SharedState::save_answer`](harmonigraph_ui::SharedState::save_answer)
+/// says: the live settings, `""` for an editor nobody has opened, or a
+/// document this build could not fully read, verbatim until a frame has shown
+/// why. Both arrive on the host's main thread.
 ///
-/// A restore also marks the blob `pending`, which is how one reaches a window
-/// that is already open (issue #1329): the input worker adopts nothing under an
-/// open window, and `Opening` has already run. The window's next frame applies
-/// it ([`apply_restore`](Self::apply_restore)), and until then a save stores the
-/// blob, since the window is still showing what the restore replaced.
-///
-/// **Threads.** A restore, a save and the window's close all arrive on the
-/// host's main thread, so they never interleave with one another. The window's
-/// build and frames run on that thread too on macOS and Windows, and on an
-/// editor thread of their own on X11. So the one real race is a frame or a
-/// build against a restore or a save, and it is settled by a single rule:
-/// `pending` is only ever CLEARED with the editor-state lock held, in the same
-/// hold that applies the blob to the state, and a save reads it under that
-/// lock too. A save then sees either the flag still set (the state does not
-/// hold the restore yet, so it stores the blob) or the state with the restore
-/// in it. A restore needs no lock: it writes the blob and only then sets the
-/// flag, and a reader clears the flag and only then reads the blob, so a
-/// restore landing between the two leaves the flag set and costs at most one
-/// redundant re-apply on the next frame, never a lost restore. Two restores
-/// before a frame are just the second overwriting the first.
+/// The one limit: a save the host makes from inside a callback the editor
+/// makes under its lock — a parameter gesture's flush, a camera move's — cannot
+/// take the lock, and returns the fallback: the newest of the last restore,
+/// close or successful save (#1301).
 pub struct UiState {
-    blob: Arc<RwLock<String>>,
-    /// Set by a host restore of a non-empty blob, cleared by whichever of the
-    /// window's build, its frame or its close next applies the blob — always
-    /// under the editor-state lock (see the type's docs on why that matters).
-    /// Set whether or not a window is open: one being built on X11 reads the
-    /// blob on its own thread, and a restore landing with the window half
-    /// built would otherwise reach nothing.
-    pending: AtomicBool,
+    inbox: Arc<Inbox>,
     /// Weak, so this field never keeps `EditorShared` alive: the plugin orders
     /// where that drop happens deliberately (see `Harmonigraph::_input_worker`),
     /// and these params are shared beyond the plugin (the editor holds them).
-    live: OnceLock<(Weak<Mutex<EditorShared>>, Arc<EguiState>)>,
+    live: OnceLock<Weak<EditorLock>>,
 }
 
 impl UiState {
-    /// An empty blob, which is what a project whose editor has never been
-    /// open carries, and nothing live yet.
+    /// An empty inbox, and nothing live yet.
     pub fn new() -> UiState {
-        UiState {
-            blob: Arc::new(RwLock::new(String::new())),
-            pending: AtomicBool::new(false),
-            live: OnceLock::new(),
-        }
+        UiState { inbox: Arc::default(), live: OnceLock::new() }
     }
 
-    /// The stored blob: the last host restore or window close.
-    pub fn blob(&self) -> &Arc<RwLock<String>> {
-        &self.blob
+    /// Where a restore waits; the editor lock is built around it.
+    pub(crate) fn inbox(&self) -> Arc<Inbox> {
+        self.inbox.clone()
     }
 
-    /// Give the save the editor state to serialize while `window` says a
-    /// window is open. Once per plugin; the params exist before the state
-    /// does, hence the two steps.
-    pub(crate) fn attach(&self, shared: &Arc<Mutex<EditorShared>>, window: Arc<EguiState>) {
-        if self.live.set((Arc::downgrade(shared), window)).is_err() {
+    /// Give the save the editor state to serialize. Once per plugin; the
+    /// params exist before the state does, hence the two steps.
+    pub(crate) fn attach(&self, lock: &Arc<EditorLock>) {
+        if self.live.set(Arc::downgrade(lock)).is_err() {
             unreachable!("the editor state is attached once, by the plugin that owns both");
         }
     }
 
-    /// The blob a window being built opens with, which also answers any
-    /// restore pending against it.
-    ///
-    /// Call with the editor-state lock held, and apply the result in the same
-    /// hold: clearing the flag is a claim that the state is about to hold the
-    /// blob, and a save on another thread reads the flag under that lock.
-    pub(crate) fn opening_blob(&self) -> String {
-        // Cleared BEFORE the read, so a restore landing in between leaves the
-        // flag set rather than being taken as read.
-        self.pending.swap(false, Ordering::Acquire);
-        self.blob.read().clone()
-    }
-
-    /// Apply a host restore the open window has not shown yet. Called by every
-    /// frame, so it is one atomic swap when there is none.
-    ///
-    /// Taking the state as `&mut` is what keeps the flag's rule: the only way
-    /// to one outside a test is through the editor-state lock.
-    pub(crate) fn apply_restore(&self, ui: &mut harmonigraph_ui::SharedState) {
-        if self.pending.swap(false, Ordering::Acquire) {
-            let blob = self.blob.read().clone();
-            // A restore of an empty blob clears the flag rather than setting
-            // it, but one can still land between the swap and the read on X11.
-            if !blob.is_empty() {
-                ui.load_persist(&blob);
-            }
-        }
-    }
-
-    /// Store what a closing window leaves, for the save and the next open.
-    ///
-    /// A restore that landed after the window's last frame is applied first:
-    /// it is newer than anything the window showed, and writing the window's
-    /// state over it would lose it at the close instead of at the next save.
-    /// The blob written is then the restore's own round trip.
-    pub(crate) fn store_close(&self, ui: &mut harmonigraph_ui::SharedState) {
-        self.apply_restore(ui);
-        *self.blob.write() = harmonigraph_ui::shell::close(ui);
+    /// What a save stores, waiting at most `wait` for the editor lock.
+    pub(crate) fn save(&self, wait: Duration) -> Arc<str> {
+        let Some(lock) = self.live.get().and_then(Weak::upgrade) else {
+            return self.inbox.fallback();
+        };
+        let answer = lock.try_lock_for(wait).map(|shared| {
+            let answer = shared.ui.save_answer();
+            self.inbox.settle(answer.clone());
+            answer
+        });
+        answer.unwrap_or_else(|| {
+            nice_plug::nice_warn!(
+                "editor state busy for {wait:?}; saving the settings of the last restore, close \
+                 or save instead of the editor's"
+            );
+            self.inbox.fallback()
+        })
     }
 }
 
@@ -221,48 +173,19 @@ impl Default for UiState {
 }
 
 impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
-    /// Called when the host restores state, on its main thread.
-    ///
-    /// An EMPTY blob clears the flag instead of setting it: it is a project
-    /// with nothing saved, which the window and the input worker both
-    /// read as "keep what you have" rather than as a reset.
+    /// Called when the host restores state, on its main thread, under
+    /// nice-plug's configuration producer lock — which is why it only posts.
     fn set(&self, new_value: String) {
-        let pending = !new_value.is_empty();
-        *self.blob.write() = new_value;
-        // AFTER the write, with Release, so a frame that takes the flag reads
-        // this blob or a newer one.
-        self.pending.store(pending, Ordering::Release);
+        self.inbox.deliver(new_value.into());
     }
 
-    /// Called when the host saves state, on its main thread. One RON
-    /// serialization per save, which is what a window close already spends;
-    /// nothing per frame.
+    /// Called when the host saves state, on its main thread: one RON
+    /// serialization per save, window open or shut.
     fn map<F, R>(&self, f: F) -> R
     where
         F: Fn(&String) -> R,
     {
-        if let Some((shared, window)) = self.live.get() {
-            if let Some(shared) = shared.upgrade().filter(|_| window.is_open()) {
-                // `save_persist` rather than `shell::close`: this is a save
-                // of an editor that stays open, not the way out of one.
-                match shared.try_lock_for(SAVE_WAIT) {
-                    // Read under the lock, where it is cleared: a flag still
-                    // up means the state does not hold the latest restore
-                    // yet, and the blob is that restore.
-                    Some(_) if self.pending.load(Ordering::Acquire) => {}
-                    Some(shared) => {
-                        let live = shared.ui.save_persist();
-                        drop(shared);
-                        return f(&live);
-                    }
-                    None => nice_plug::nice_warn!(
-                        "editor state busy for {SAVE_WAIT:?}; saving the settings of the \
-                         last restore or editor close instead of the open window's"
-                    ),
-                }
-            }
-        }
-        f(&self.blob.read())
+        f(&self.save(SAVE_WAIT).to_string())
     }
 }
 

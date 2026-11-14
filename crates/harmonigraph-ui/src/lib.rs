@@ -31,6 +31,8 @@ mod spectrum;
 /// [`SharedState`] and the blob it saves itself into.
 mod state;
 pub mod tape;
+#[cfg(feature = "testing")]
+pub mod testing;
 /// The Video pane's settings, which the appearance document carries.
 mod video;
 pub use runtime::VisualRuntime;
@@ -66,7 +68,7 @@ pub use spectrum::{
 };
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
-    SharedState, SurfaceState, TakeState,
+    SaveSource, SharedState, SurfaceState, TakeState,
 };
 pub use text::use_renderer_font_texture;
 pub use video::{
@@ -233,7 +235,7 @@ pub(crate) fn gesture_open(ctx: &egui::Context) -> bool {
 /// the standalone harness the same via its `App::ui` hook).
 ///
 /// The rest of the sequence a shell runs around this — theming a new context,
-/// releasing the old one's textures, the fold floor, the saved layout, and
+/// releasing the old one's textures, the fold floor, the window session, and
 /// spending what a fold leaves the window needing — is [`shell`], which both
 /// shells call rather than keep in step by hand.
 ///
@@ -258,6 +260,11 @@ pub fn root_ui(
     now: f64,
     build_tag: &str,
 ) {
+    // A frame the closing window still runs (on X11, one can follow the
+    // close) draws nothing: the session it would draw has ended.
+    if state.closing() {
+        return;
+    }
     // Loading frames still receive notes and automation from the shell.
     begin_frame(&mut state.picture, params, now);
     // The skin before anything paints, the loading screen included: every
@@ -268,6 +275,11 @@ pub fn root_ui(
     if startup::draw(ui, state) {
         return;
     }
+    // Past the loading screen, the editor is on screen: a save stores what it
+    // shows from here, a refusal's Console line included. Whatever the frame
+    // goes on to draw, since even one with no area can edit saved settings
+    // (the Tab toggle below, the look's undo, the camera).
+    state.seen();
     if state.picture.runtime.tracker.history_missing() {
         ui.colored_label(
             theme::armed(),

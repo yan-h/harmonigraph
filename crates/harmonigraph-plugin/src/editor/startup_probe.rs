@@ -37,7 +37,6 @@ struct Host {
     observations: Arc<Observations>,
     child: Option<WindowHandle>,
     opening: usize,
-    persist: Option<String>,
     started: Instant,
 }
 
@@ -58,7 +57,6 @@ pub fn run() {
             observations: host_observations,
             child: None,
             opening: 0,
-            persist: None,
             started: Instant::now(),
         },
     );
@@ -84,7 +82,8 @@ impl WindowHandler for Host {
         }
         if self.child.is_some() {
             if self.observations.completed.load(Ordering::Relaxed) > self.opening {
-                self.persist = Some(harmonigraph_ui::shell::close(&self.shared.lock()));
+                // As the plugin's close does, so a frame after it draws nothing.
+                self.shared.lock().end_window_session();
                 self.child.take().unwrap().close();
                 self.opening += 1;
             }
@@ -126,7 +125,6 @@ impl WindowHandler for Host {
                 base(adapter)
             });
         }
-        let persist = self.persist.clone();
         self.child = Some(EguiWindow::open_parented(
             window,
             EguiWindowSettings::new()
@@ -144,12 +142,7 @@ impl WindowHandler for Host {
             },
             move |ctx, _, probe: &mut Probe| {
                 harmonigraph_ui::use_renderer_font_texture(ctx);
-                harmonigraph_ui::shell::Opening {
-                    ctx,
-                    state: &mut probe.shared.lock(),
-                    persist: persist.as_deref(),
-                }
-                .open();
+                harmonigraph_ui::shell::Opening { ctx, state: &mut probe.shared.lock() }.open();
                 harmonigraph_ui::begin_editor_loading(ctx);
             },
             |ui, queue, probe: &mut Probe| {

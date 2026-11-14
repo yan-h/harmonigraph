@@ -7,6 +7,7 @@
 mod clock;
 mod frame;
 pub(crate) mod input;
+mod lock;
 mod persist;
 mod pop_out;
 mod shared;
@@ -14,6 +15,8 @@ mod shared;
 pub(crate) mod startup_probe;
 mod window;
 
+pub(crate) use lock::open_window_session;
+pub use lock::EditorLock;
 pub use persist::{EguiState, UiState};
 pub use shared::EditorShared;
 pub use window::create;
