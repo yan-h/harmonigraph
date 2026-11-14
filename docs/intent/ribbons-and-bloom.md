@@ -73,3 +73,7 @@ These settle the open questions from the first trial above.
 ## 2026-11-02 (drift audit, #1635)
 
 - At the shipped look (Fill lightness 25, Tint fade 3) a rest between fast repeats of one key reads about 0.53 of the body, and that still counts as the visible gap of 2026-10-03: the tint stays in the gaps. The gap test runs at the fresh defaults with a bar to match. #1635 Roll Q1, #1630
+
+## 2026-11-14 (premises audit, #1739)
+- A ribbon keeps its taper: Thickness can swell a ribbon along time under gain, pressure or timbre, for MPE controllers, rather than being one width per note. #1739 D7
+- Every lead is its own instance and history is clipped at the now-line, retiring the cap machinery #413 added and #1048 left as a clip guard; a test pins the now-line over the held-note seam. #1739, #1753

@@ -24,3 +24,6 @@
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
 - The five tuning axes stay host parameters behind the owned-parameter mailbox. Making them plugin settings would delete about 1,200 lines but drop their automation, modulation and controller mapping, which `adaptive-tuning.md` names as a requirement ("restoring state or automating tuning works with the editor never opened"); no defect argues for it. Delegated, declined. #1739 D5
+- One sample-indexed configuration timeline for every engine; `Owner.block` goes, Learn rides the next adopt, and a lost history falls back to the reducer's configuration under Adaptive. #1739, #1749
+- Check the policy fixtures' context assembly against production's before trusting them as the reference; if a fixture line moves, the context moves into core. #1739, #1750
+- Learn reads the Hub's rows and `ConfirmedPitches` goes, dropping its artificial 256-voice refusal. #1739, #1751
