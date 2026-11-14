@@ -554,6 +554,8 @@ pub(super) fn drag_zoom(
     // is also the Analyzer section's range bar, and rewriting it every frame would
     // put this function's rounding between that bar and the value it shows.
     let mut moved = false;
+    // This frame's pitch pan, in semitones down the range.
+    let mut pan = 0.0_f32;
 
     // Hovered rather than merely under the pointer: a popup over the far
     // region takes its own scrolls.
@@ -605,9 +607,12 @@ pub(super) fn drag_zoom(
     if response.drag_started() {
         ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
         ui.data_mut(|d| d.remove_temp::<f32>(cue_pan_id(surface)));
-        // A press over the song in Tape mode may be the click that cues it.
+        // A press over the song in Tape mode may be the click that cues it,
+        // where a cue can start (`tape::draw`).
         let press = ui.input(|i| i.pointer.press_origin());
-        if song.is_some() && press.is_some_and(|p| split < 1.0 && axes.depth_at(p) >= split) {
+        let tape = &state.runtime.tape;
+        let cues = song.is_some() && tape.enabled && !tape.rolling;
+        if cues && press.is_some_and(|p| split < 1.0 && axes.depth_at(p) >= split) {
             ui.data_mut(|d| d.insert_temp(cue_pan_id(surface), 0.0_f32));
         }
     }
@@ -684,13 +689,8 @@ pub(super) fn drag_zoom(
             // The pitch under the pointer travels with it, so the range moves
             // the opposite way.
             let along = delta.dot(axes.dir_pitch());
-            let pan = along / axes.pitch_len().max(1.0) * span;
+            pan = along / axes.pitch_len().max(1.0) * span;
             low -= pan;
-            ui.data_mut(|d| {
-                if let Some(panned) = d.get_temp::<f32>(cue_pan_id(surface)) {
-                    d.insert_temp(cue_pan_id(surface), panned + pan);
-                }
-            });
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             moved = true;
         }
@@ -704,8 +704,10 @@ pub(super) fn drag_zoom(
         // cue nudges the saved range. A wheel zoom made meanwhile stays.
         let panned = ui.data_mut(|d| d.remove_temp::<f32>(cue_pan_id(surface)));
         let click = ui.input(|i| i.pointer.could_any_button_be_click());
-        if let Some(panned) = panned.filter(|&p| click && p != 0.0) {
+        // This frame's own pan included: a release can carry the last move.
+        if let Some(panned) = panned.map(|p| p + pan).filter(|&p| click && p != 0.0) {
             low += panned;
+            pan = 0.0;
             moved = true;
         }
     }
@@ -719,6 +721,16 @@ pub(super) fn drag_zoom(
     // because at the full span the two ends meet, and float rounding is enough
     // to cross them — which `clamp` answers with a panic.
     let span = span.clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
-    cfg.low_midi = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
+    let clamped = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
+    // What a cue click will take back: the pan as far as the axis let it go.
+    if pan != 0.0 {
+        let applied = pan - (clamped - low);
+        ui.data_mut(|d| {
+            if let Some(panned) = d.get_temp::<f32>(cue_pan_id(surface)) {
+                d.insert_temp(cue_pan_id(surface), panned + applied);
+            }
+        });
+    }
+    cfg.low_midi = clamped;
     cfg.high_midi = cfg.low_midi + span;
 }

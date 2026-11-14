@@ -3391,6 +3391,15 @@ fn a_cue_click_that_wobbles_leaves_the_pitch_range_where_it_was() {
     assert!(matches!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(_))));
     let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
     assert_eq!(range, (cfg.low_midi, cfg.high_midi), "the cue nudged the pitch range");
+    // At the bottom of the axis, where the wobble's pan never moved it: the
+    // click takes back only what moved.
+    let mut state = on_tape();
+    let bottom = harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI;
+    let spectrum = &mut state.appearance.spectrum;
+    (spectrum.low_midi, spectrum.high_midi) = (bottom, bottom + 48.0);
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 2.0));
+    let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
+    assert_eq!(range, (bottom, bottom + 48.0), "the cue moved a range its wobble could not");
     // A drag past a click's reach still pans it, and so does a short one on
     // the spectrum's share, where a click cues nothing.
     let mut state = on_tape();
@@ -3470,6 +3479,32 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     overview_frames(&ctx, &mut state, drag(on_overview(20.0), on_overview(0.0)));
     assert_eq!(shown(&state).0, 0.0);
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
+}
+
+/// The pane's sideways scroll pans the song only as far as the strip's end,
+/// its width kept, as the overview's moves do (#1722's scroll had no end).
+#[test]
+fn a_sideways_scroll_in_tape_mode_stops_at_the_end_of_the_strip() {
+    let ctx = themed();
+    let mut state = on_tape();
+    // The box's late end pulled in to the middle, so there is room to pan.
+    overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(21.0)));
+    let (_, width) = shown(&state);
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.5 * (1.0 - split));
+    // A sideways scroll pans later by its share along the depth axis.
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(axes.dir_depth().x.signum() * 400.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let frames = (0..30).map(|_| vec![egui::Event::PointerMoved(at), wheel.clone()]).collect();
+    overview_frames(&ctx, &mut state, frames);
+    let (from, to) = shown(&state);
+    assert!((to - 42.0).abs() < 1e-6 && (to - from - width).abs() < 1e-6, "{from}..{to}");
 }
 
 #[test]

@@ -61,9 +61,10 @@ pub(crate) struct Window {
     from: f64,
     to: f64,
     zoomed: bool,
-    /// The overview strip's end, which no move carries the stretch past: on
-    /// the far side of it the box leaves the strip, where nothing shows the
-    /// stretch or can take hold of it. Set as each frame reads the window.
+    /// The overview strip's end, which no move carries the stretch past
+    /// unless it is wider than the strip, when it starts at the song's start:
+    /// past it the box leaves the strip, where nothing shows the stretch or
+    /// can take hold of it. Set as each frame reads the window.
     end: f64,
 }
 
@@ -106,7 +107,7 @@ impl Window {
     }
 
     /// The same width, centred on song seconds `at` as nearly as the song's
-    /// start allows.
+    /// start and the strip's end allow.
     fn centred(self, at: f64) -> Window {
         self.moved(at - 0.5 * self.seconds() - self.from)
     }
@@ -632,7 +633,8 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     {
         let at = seconds_at(at.x);
         moved = Some(match held.grip {
-            Grip::Move => held.start.moved(at - held.pressed),
+            // On the strip as it is now, which grows while recording.
+            Grip::Move => Window { end: whole.end, ..held.start }.moved(at - held.pressed),
             Grip::From => held.start.with_from(at),
             Grip::To => held.start.with_to(at),
         });
@@ -835,9 +837,11 @@ mod tests {
         let mut window = whole;
         window.zoom(4.0, 21.0);
         let width = window.seconds();
-        let moved = window.moved(1000.0);
-        assert_eq!((moved.from, moved.to), (42.0 - width, 42.0));
+        let mut window = window.moved(1000.0);
+        assert_eq!((window.from, window.to), (42.0 - width, 42.0));
+        // Zoomed out about a point near the end, whose share would carry the
+        // wider stretch past it.
         window.zoom(0.5, 41.0);
-        assert!(window.to <= 42.0, "zoomed past the strip to {}", window.to);
+        assert_eq!((window.from, window.to), (42.0 - 2.0 * width, 42.0));
     }
 }
