@@ -817,7 +817,7 @@ struct Sounding {
 /// the nearest end — the disc has no place for it, and drawing it at the rim
 /// would put a mark on a pitch nothing is playing.
 fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
-    let mut voices: Vec<&harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
+    let mut voices: Vec<harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
     voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
     // property of the view and the frame, and rebuilding it per voice would
