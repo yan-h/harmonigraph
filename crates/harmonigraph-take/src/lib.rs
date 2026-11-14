@@ -45,11 +45,14 @@
 //! the run that holds its stamp, keeps the pass asked for (the last by
 //! default), and translates each run by its one offset into song seconds,
 //! which is what a [`Take`] holds once read. A record in no run is dropped:
-//! the next run's opening snapshot restates what was sounding, and a voice it
-//! restates draws from that run's start. Parameters and configuration ride
-//! the same ring as `Run` and `RunEnd`, so their place between those lines is
-//! their stamp. Note history without a stamp has no place in such a file, and
-//! is refused.
+//! the next run's opening snapshot restates what was sounding. A voice it
+//! restates moves by the run its onset was played in, or, struck where no run
+//! recorded, by the first run after it and from no earlier than that run's
+//! start; the snapshot lifts to its latest voice. Parameters and
+//! configuration ride the same ring as `Run` and `RunEnd`, so their place
+//! between those lines is their stamp. Note history without a stamp has no
+//! place in such a file, nor a restated voice that is not accepted output
+//! (known by its lifetime, stamped at its onset), and either is refused.
 //!
 //! A file with no `Run` is one pass at offset zero, already in song time: the
 //! standalone's takes and in-memory fixtures, whose note history carries no
