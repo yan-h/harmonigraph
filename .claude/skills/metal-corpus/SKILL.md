@@ -57,10 +57,8 @@ Add `-f regenerate=true` to rebuild a corpus that passes, such as one still hold
 
 Read the failed check's log in the artifact's `shader-asset-logs/` first:
 a missing or rejected Metal asset is a stale corpus, and anything else is not one.
-A failed `verify` step (recorded compiler options this tooling no longer accepts, as after a `vendor/wgpu-hal` bump edits `compiler_flags`) is a stale corpus too, and generates the same way;
-its log is the step's own.
-The workflow does not classify that text: `Full CI` owns any catalog failure, and every build checks the corpus's hashes,
-while separate failing steps own corpus-versus-source goldens, generation and controls.
+The workflow does not classify that text: `Full CI` owns any catalog failure,
+and separate failing steps own hashes, compiler options, corpus-versus-source goldens, generation and controls.
 Then, with the pushed commit checked out, `python3 tools/shader-assets.py fetch` imports the corpus that commit's run generated;
 it refuses a run still going, a failed run or one that generated nothing, and keeps the download, logs included, under `target/ci-metal-assets/<run>/`.
 A PR's run built the commit merged with its base, so where the base changed a shader since the branch point the corpus is that merge's:

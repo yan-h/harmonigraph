@@ -48,5 +48,32 @@ class FetchTests(unittest.TestCase):
                         install.assert_not_called()
 
 
+class VerifyTests(unittest.TestCase):
+    def corpus(self, directory, hal):
+        options = {"schema": "1", "wgpu-hal": hal, "language": str(3 << 16 | 2), "fast_math": "true",
+                   "invariance": "true", "math_mode": "2", "math_functions": "0"}
+        files = {"00ab.metal": "kernel void k() {}", "00ab.metallib": "library",
+                 "00ab.options": "".join(f"{key}={value}\n" for key, value in options.items())}
+        for name, text in files.items():
+            (directory / name).write_text(text)
+        flags = assets.compiler_flags(options, any_hal=True)
+        digests = {name: assets.hashlib.sha256(text.encode()).hexdigest() for name, text in files.items()}
+        (directory / "manifest.json").write_text(json.dumps({"schema": 1, "flags": flags, "sha256": digests}))
+
+    def test_a_corpus_from_an_older_wgpu_hal_is_stale_for_the_catalog_not_corrupt(self):
+        # A hal bump edits WGPU_HAL, and the committed corpus still records the
+        # old one: `verify` on it has to pass, so the workflow reaches the
+        # catalog and generates the replacement rather than stopping first.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self.corpus(directory, "0.0.1")
+            assets.verify(directory, any_hal=True)
+            with self.assertRaises(AssertionError):
+                assets.verify(directory)
+            with patch.object(assets, "EMBEDDED", directory), \
+                    patch("sys.argv", ["shader-assets.py", "verify"]):
+                assets.main()
+
+
 if __name__ == "__main__":
     unittest.main()
