@@ -74,10 +74,10 @@ fn snapshot(id: u64, cut: u64, held: &[u8], epoch: u64, input: i64) -> Record {
 }
 
 fn gap(first: u64, from: StampRecord, to: StampRecord) -> Record {
-    let time = presentation(from.clock_epoch, from.input);
+    let time = |at: StampRecord| presentation(at.clock_epoch, at.input);
     Record::Canonical(CanonicalRecord::Gap(GapRecord {
-        t: time,
-        through: time,
+        t: time(from),
+        through: time(to),
         first,
         last: first,
         inputs: Some([from, to]),
@@ -178,10 +178,38 @@ fn the_last_pass_reads_unless_another_is_asked_for() {
     let missing = read(&records, Some(3)).unwrap_err();
     assert!(matches!(&missing, ReadError::NoPass { asked: 3, passes } if passes == &[1, 2]));
 
-    let unrouted = [delta(1, 60, true, 0, 0)];
-    assert_eq!(read(&unrouted, None).unwrap().events.len(), 1);
-    assert!(read(&unrouted, Some(1)).is_ok());
-    assert!(read(&unrouted, Some(2)).is_err());
+    // A file with no `Run` is one pass. The standalone's plain note reads; a
+    // stamped record was played where nothing recorded, an armed take whose
+    // transport never rolled, and is dropped.
+    let plain =
+        NoteRecord { t: 0.5, note: 64, kind: NoteKind::On { velocity: 0.8 }, ..Default::default() };
+    let unrouted = [Record::Note(plain), delta(1, 60, true, 0, 0)];
+    let take = read(&unrouted, None).unwrap();
+    assert_eq!((take.passes.as_slice(), take.pass), (&[1][..], Some(1)));
+    assert_eq!(take.notes().collect::<Vec<_>>(), [plain]);
+    let missing = read(&unrouted, Some(2)).unwrap_err();
+    assert!(matches!(&missing, ReadError::NoPass { asked: 2, passes } if passes == &[1]));
+}
+
+/// Note history without a stamp has no place in a file that routes by them,
+/// so it is refused rather than placed by guess.
+#[test]
+fn unstamped_history_beside_a_run_is_refused() {
+    let plain =
+        NoteRecord { t: 0.5, note: 64, kind: NoteKind::On { velocity: 0.8 }, ..Default::default() };
+    let unstamped = NoteEvent::on(0.5, SourceId::DIRECT, 0, 64, 0.8).into();
+    for (line, record) in [
+        Record::Note(plain),
+        Record::Canonical(CanonicalRecord::from_event(
+            harmonigraph_core::canonical::CanonicalEvent::Note(unstamped),
+        )),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let error = read(&[run(1, 0, 0, 0.0), record], None).unwrap_err();
+        assert!(matches!(error, ReadError::InvalidCanonical(3)), "case {line}: {error}");
+    }
 }
 
 /// A record played in the last D of a run sounds after it, past the next
@@ -254,6 +282,19 @@ fn a_gap_marks_only_the_passes_its_inputs_touch() {
     assert_eq!(marked(1), Some(9));
     assert_eq!(marked(2), Some(9));
     assert_eq!(marked(3), None, "the pause's gap touched no run");
+    // Each pass draws the gap only over its own runs, each end moved by the
+    // run it falls in: pass 1 does not grow into pass 2's time.
+    let span = |pass| {
+        let take = read(&records, Some(pass)).unwrap();
+        take.events.iter().find_map(|event| match event {
+            CanonicalRecord::Gap(gap) => Some((gap.t, gap.through)),
+            _ => None,
+        })
+    };
+    let (t, through) = span(1).unwrap();
+    assert!((t - 100.0 / RATE).abs() < 1e-9 && (through - 128.0 / RATE).abs() < 1e-9);
+    let (t, through) = span(2).unwrap();
+    assert!((t - 9.0).abs() < 1e-9 && (through - (9.0 + 10.0 / RATE)).abs() < 1e-9);
 }
 
 /// Parameters and configuration are written when they change, once per arm,

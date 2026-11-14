@@ -45,13 +45,16 @@
 //! the run that holds its stamp, keeps the pass asked for (the last by
 //! default), and translates each run by its one offset into song seconds,
 //! which is what a [`Take`] holds once read. A record in no run is dropped:
-//! the next run's opening snapshot restates what was sounding. Parameters and
-//! configuration ride the same ring as `Run` and `RunEnd`, so their place
-//! between those lines is their stamp; so is a record's written by hand
-//! without one.
+//! the next run's opening snapshot restates what was sounding, and a voice it
+//! restates draws from that run's start. Parameters and configuration ride
+//! the same ring as `Run` and `RunEnd`, so their place between those lines is
+//! their stamp. Note history without a stamp has no place in such a file, and
+//! is refused.
 //!
 //! A file with no `Run` is one pass at offset zero, already in song time: the
-//! standalone's takes and in-memory fixtures.
+//! standalone's takes and in-memory fixtures, whose note history carries no
+//! stamp. A stamped record in it was played where no run recorded, an armed
+//! take whose transport never rolled, and is dropped.
 //!
 //! Song times are deliberately NOT wall-clock or frame times: the whole point
 //! is that the replay chooses its own frame rate.
@@ -344,9 +347,9 @@ pub struct Take {
     /// and the muxed track would both sit at the wrong place by exactly
     /// however far in you started.
     pub audio_start: Option<f64>,
-    /// The passes the file holds, in order. Empty for a file with no `Run`.
+    /// The passes the file holds, in order: one for a file with no `Run`.
     pub passes: Vec<u32>,
-    /// The pass read, if the file holds any.
+    /// The pass read. `None` only for a take built in memory.
     pub pass: Option<u32>,
 }
 

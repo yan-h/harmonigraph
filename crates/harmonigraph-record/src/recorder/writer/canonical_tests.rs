@@ -24,6 +24,20 @@ fn armed(epoch: u64) -> publication::Span {
     publication::Span::at(CLOCK, 0, RecordIntent::armed(epoch))
 }
 
+/// The run a take that records from sample 0 on `CLOCK` opens with, at song 0.
+fn opened(recorder: &mut Recorder) {
+    recorder.run(1, 1, publication::Stamp { clock: CLOCK, input: 0 }, 0.0, 0.0);
+}
+
+/// An observed note as the Hub publishes one: timed where its input arrived,
+/// which is its stamp.
+fn stamped(event: NoteEvent) -> NoteDelta {
+    let input = (event.time * 48_000.0) as i64;
+    let timing =
+        EventTiming { clock: CLOCK, input, planned: None, sample: input, sample_rate: 48_000.0 };
+    NoteDelta { timing: Some(timing), ..event.into() }
+}
+
 fn accepted(event: NoteEvent, sequence: u64) -> NoteDelta {
     NoteDelta {
         assignment: None,
@@ -178,6 +192,7 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
     recorder.is_armed();
+    opened(&mut recorder);
     let file = path("full");
     let mut writer = testing::FileWriter::new(&capture, file.clone());
     let route = armed(1);
@@ -186,7 +201,7 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     for i in 0..publication::PUBLICATION_RING - 1 {
         recorder
             .publish_note(
-                NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                stamped(NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8)),
                 route,
             )
             .expect_both();
@@ -197,7 +212,7 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
         "the fixture must actually fill both lanes"
     );
     assert_eq!(
-        recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route),
+        recorder.publish_note(stamped(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60)), route),
         publication::Lanes::both(Err(publication::PublishError::Lost))
     );
     // Source and musical state never require this writer to acknowledge output.
@@ -272,6 +287,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
         wait_for(&fence.worker_after_empty.entered);
         control.start(48000.0, String::new());
         assert!(recorder.is_armed());
+        opened(&mut recorder);
         recorder.configuration(
             1,
             0.0,
@@ -284,14 +300,14 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
         for i in 0..publication::PUBLICATION_RING - 3 {
             recorder
                 .publish_note(
-                    NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+                    stamped(NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8)),
                     armed(1),
                 )
                 .expect_both();
         }
         assert_eq!(
             recorder
-                .publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), armed(1))
+                .publish_note(stamped(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60)), armed(1))
                 .take,
             Err(publication::PublishError::Lost)
         );
@@ -369,6 +385,7 @@ fn an_overflowed_take_finalises_and_launches_its_render() {
     let _resume_on_panic = WorkerPause(fence.clone());
     control.start(48000.0, String::new());
     assert!(recorder.is_armed());
+    opened(&mut recorder);
     let route = armed(1);
     recorder.configuration(
         1,
@@ -382,7 +399,7 @@ fn an_overflowed_take_finalises_and_launches_its_render() {
     let mut lost = false;
     for i in 0..publication::PUBLICATION_RING * 4 {
         let event = NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8);
-        match recorder.publish_note(event.into(), route).take {
+        match recorder.publish_note(stamped(event), route).take {
             Ok(()) => published += 1,
             Err(publication::PublishError::Lost) => {
                 lost = true;
@@ -448,6 +465,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let _resume_on_panic = WorkerPause(fence.clone());
     control.start(48000.0, String::new());
     assert!(recorder.is_armed());
+    opened(&mut recorder);
     recorder.configuration(
         1,
         0.0,
@@ -603,6 +621,7 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     wait_for(&fence.worker_after_empty.entered);
     control.start(48000.0, String::new());
     assert!(recorder.is_armed());
+    opened(&mut recorder);
     recorder.configuration(
         1,
         0.0,
@@ -661,7 +680,7 @@ fn an_armed_gap_with_no_file_open_waits_for_its_take() {
     let disarmed = publication::Span::default();
     let armed = armed(1);
     let sounding =
-        |i: usize| NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into();
+        |i: usize| stamped(NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8));
     for i in 0..publication::PUBLICATION_RING - 1 {
         publisher.note(sounding(i), disarmed).unwrap();
     }
@@ -693,7 +712,7 @@ fn an_armed_gap_with_no_file_open_waits_for_its_take() {
     );
 
     let status = Mutex::new(String::new());
-    let opened = Recording::create(
+    let mut recording = Recording::create(
         harmonigraph_take::Header::default(),
         file.clone(),
         1,
@@ -701,7 +720,10 @@ fn an_armed_gap_with_no_file_open_waits_for_its_take() {
         &status,
     )
     .unwrap();
-    let mut open = Some(opened);
+    // The run the lost armed history was played in.
+    let at = harmonigraph_take::StampRecord::new(CLOCK, 0);
+    recording.run(harmonigraph_take::RunRecord { pass: 1, at, ..Default::default() }).unwrap();
+    let mut open = Some(recording);
     fanout.drain(&mut consumer, &mut open, &fence, &failure);
     let sealed = open.take().unwrap().finish().unwrap();
     let take = harmonigraph_take::Take::read(&sealed).unwrap();
@@ -735,7 +757,7 @@ fn a_loss_before_the_arm_leaves_the_take_that_follows_whole() {
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
     let sounding =
-        |i: usize| NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8).into();
+        |i: usize| stamped(NoteEvent::on(i as f64 / 48000.0, SourceId::DIRECT, 0, 60, 0.8));
     // Only the take lane is under test, so only its outcome is asserted; the
     // editor's lane fills alongside it and is drained back to empty below.
     let mut displayed = control.take_display().expect("the display lane's consumer");
@@ -750,6 +772,7 @@ fn a_loss_before_the_arm_leaves_the_take_that_follows_whole() {
     displayed.drain(|_, _| true);
     control.start(48000.0, String::new());
     assert!(recorder.is_armed());
+    opened(&mut recorder);
     // Released into the drain that has no file, then into the poll that opens
     // one — in that order, because the pause is inside the arm that found no
     // command and the loop drains before it polls again. `recording to` is the

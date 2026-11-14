@@ -975,6 +975,7 @@ fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() 
     capture.arm();
     assert!(recorder.is_armed());
     let (epoch, _) = recorder.armed_pass().unwrap();
+    recorder.run(epoch, 1, Default::default(), 0.0, 0.0);
     let directory = std::env::temp_dir()
         .join(format!("harmonigraph-held-full-publication-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -992,7 +993,16 @@ fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() 
         } else {
             harmonigraph_core::NoteEvent::off(time, SourceId::DIRECT, 0, 60)
         };
-        recorder.publish_note(event.into(), route).expect_both();
+        let timing = harmonigraph_core::canonical::EventTiming {
+            clock: Default::default(),
+            input: i as i64,
+            planned: None,
+            sample: i as i64,
+            sample_rate: 48_000.0,
+        };
+        let delta =
+            harmonigraph_core::canonical::NoteDelta { timing: Some(timing), ..event.into() };
+        recorder.publish_note(delta, route).expect_both();
     }
     assert_eq!(recorder.publication_free(), publication::Lanes::both(0));
     recorder.publication_lost(4096.0 / 48000.0, route);

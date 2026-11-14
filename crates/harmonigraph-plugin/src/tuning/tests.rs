@@ -1231,6 +1231,44 @@ fn a_tune_backlog_past_one_batch_keeps_the_recorder_whole() {
     }
 }
 
+/// Armed with the transport stopped, a note played, and disarmed: nothing
+/// recorded, so the take draws nothing, though the note was played armed.
+#[test]
+fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-never-rolled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    let mut raw = 0;
+    let mut step = |hub: &Device, events: Vec<Input>| {
+        hub.run_callback(raw, events, (None, None), (512, false), Some(timeline(5.0, false)));
+        raw += 512;
+    };
+    for _ in 0..3 {
+        step(&hub, vec![]);
+    }
+    step(&hub, vec![note(1, 0, 60, 0, true), note(1, 0, 60, 100, false)]);
+    for _ in 0..3 {
+        step(&hub, vec![]);
+    }
+    capture.stop();
+    for _ in 0..4 {
+        step(&hub, vec![]);
+    }
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let sealed = writer.finished.clone().expect("the take seals");
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let notes: Vec<_> = take.notes().map(|n| (n.note, n.t)).collect();
+    assert!(notes.is_empty(), "an unrecorded note reaches the take: {notes:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A cut and joined destruction are where the last callback's end is proven,
 /// since nothing after them can be sequenced before it. A host reset mid-take
 /// keeps the take whole; a lagging Tune's record still in its ring fails only

@@ -460,19 +460,6 @@ impl CanonicalRecord {
             Self::Note(_) | Self::Gap(_) => None,
         }
     }
-    /// Move this record to `time` without moving what it states: a lifted
-    /// snapshot keeps its voices' onsets.
-    pub(crate) fn set_time(&mut self, time: f64) {
-        match self {
-            Self::Note(n) => n.t = time,
-            Self::Delta(d) => d.event.t = time,
-            Self::Baseline(b) => b.t = time,
-            Self::Gap(g) => {
-                g.through += time - g.t;
-                g.t = time;
-            }
-        }
-    }
     pub fn note(&self) -> Option<NoteRecord> {
         match self {
             Self::Note(n) => Some(*n),

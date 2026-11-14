@@ -59,17 +59,18 @@ impl Run {
 struct Floor(BTreeMap<u64, (f64, f64)>);
 
 impl Floor {
-    /// Lift `record` to the floor for `source`, and answer whether that broke
-    /// the bound.
-    fn lift(&mut self, source: u64, record: &mut CanonicalRecord, lateness: f64) -> bool {
-        let time = record.time();
+    /// Lift a record of `source` at `time` to the floor, and answer whether
+    /// that broke the bound. Only its time moves: a lifted snapshot keeps its
+    /// voices' onsets.
+    fn lift(&mut self, source: u64, time: &mut f64, lateness: f64) -> bool {
         match self.0.get(&source) {
-            Some(&(floor, bound)) if time < floor => {
-                record.set_time(floor);
-                floor - time > bound
+            Some(&(floor, bound)) if *time < floor => {
+                let breach = floor - *time > bound;
+                *time = floor;
+                breach
             }
             _ => {
-                self.0.insert(source, (time, lateness));
+                self.0.insert(source, (*time, lateness));
                 false
             }
         }
@@ -173,45 +174,54 @@ pub(crate) fn assemble(
                 None => {}
             },
             Record::Canonical(CanonicalRecord::Gap(mut gap)) => {
-                // A gap marks the passes its inputs touch. Without a range it
-                // could be anywhere, so it marks this one.
-                let touched = runs
-                    .iter()
-                    .filter(|run| run.pass == chosen)
-                    .find(|run| gap.inputs.is_none_or(|[from, to]| run.touches(from, to)));
-                if let Some(run) = touched {
-                    take.incomplete.get_or_insert(IncompleteRecord {
-                        first_publication: gap.first,
-                        last_publication: gap.last,
-                        reason: gap.reason,
-                    });
-                    gap.t += run.offset();
-                    gap.through += run.offset();
-                    events.push((CanonicalRecord::Gap(gap), line));
-                }
+                // A gap marks the passes its inputs touch, and no other.
+                let Some([from, to]) = gap.inputs else {
+                    return Err(ReadError::InvalidCanonical(line));
+                };
+                let mut touched =
+                    runs.iter().filter(|run| run.pass == chosen && run.touches(from, to));
+                let Some(first) = touched.next() else { continue };
+                let last = touched.last().unwrap_or(first);
+                take.incomplete.get_or_insert(IncompleteRecord {
+                    first_publication: gap.first,
+                    last_publication: gap.last,
+                    reason: gap.reason,
+                });
+                // Each end moves by the run it falls in, kept inside the runs
+                // it touched, so a gap reaching into another pass lengthens
+                // this one by nothing.
+                let t = gap.t.max(first.presentation);
+                let end = last.end.map_or(f64::INFINITY, |end| last.presentation(end, rate));
+                let through = gap.through.min(end).max(t);
+                gap.t = t + first.offset();
+                gap.through = (through + last.offset()).max(gap.t);
+                events.push((CanonicalRecord::Gap(gap), line));
             }
             Record::Canonical(mut record) => {
-                let Some(at) = record.stamp() else {
-                    // Nothing the recorder writes lacks a stamp. A record
-                    // written by hand without one is placed by its line, as
-                    // parameters are.
-                    if let Some(run) = run {
-                        record.translate(run.offset());
-                        events.push((record, line));
-                    }
-                    continue;
-                };
+                // Nothing the recorder writes lacks a stamp, and in a file that
+                // routes by them a record without one has no place.
+                let at = record.stamp().ok_or(ReadError::InvalidCanonical(line))?;
                 let Some(run) = runs.iter().find(|run| run.pass == chosen && run.holds(at)) else {
                     continue;
                 };
                 let lateness = record.time() - run.presentation(at.input, rate);
                 record.translate(run.offset());
-                let source = match &record {
-                    CanonicalRecord::Delta(d) => d.event.source,
-                    CanonicalRecord::Baseline(b) => b.source,
-                    _ => continue,
+                let start = run.presentation + run.offset();
+                let (source, time) = match &mut record {
+                    CanonicalRecord::Delta(d) => (d.event.source, &mut d.event.t),
+                    CanonicalRecord::Baseline(b) => {
+                        // A voice struck where nothing recorded, in a pause or
+                        // before the arm, is restated here; it draws from the
+                        // run's start, not from a song time the run never had.
+                        for voice in &mut b.voices {
+                            voice.actual_onset = voice.actual_onset.max(start);
+                            voice.input_onset = voice.input_onset.max(start);
+                        }
+                        (b.source, &mut b.t)
+                    }
+                    CanonicalRecord::Note(_) | CanonicalRecord::Gap(_) => continue,
                 };
-                if floor.lift(source, &mut record, lateness) {
+                if floor.lift(source, time, lateness) {
                     take.incomplete.get_or_insert(IncompleteRecord {
                         reason: GapReasonRecord::InvalidRecord,
                         ..IncompleteRecord::default()
@@ -219,13 +229,9 @@ pub(crate) fn assemble(
                 }
                 events.push((record, line));
             }
-            // The standalone's plain note, placed by its line.
-            Record::Note(mut note) => {
-                if let Some(run) = run {
-                    note.t += run.offset();
-                    events.push((CanonicalRecord::Note(note), line));
-                }
-            }
+            // The standalone's plain note carries no stamp, so it reads only
+            // in a file with no run.
+            Record::Note(_) => return Err(ReadError::InvalidCanonical(line)),
             Record::RunEnd(_) | Record::Header(_) | Record::Incomplete(_) => {}
         }
     }
@@ -240,12 +246,20 @@ pub(crate) fn assemble(
     finish(take, events)
 }
 
-/// A file with no `Run`: one pass at offset zero, every record kept.
+/// A file with no `Run`: one pass at offset zero. What carries a stamp was
+/// played where no run recorded, an armed take whose transport never rolled,
+/// and is dropped like any record in no run; the standalone's unstamped
+/// history reads as written.
 fn unrouted(mut take: Take, records: Vec<(usize, Record)>) -> Result<Take, ReadError> {
+    take.passes = vec![1];
+    take.pass = Some(1);
     let mut events = Vec::new();
     for (line, record) in records {
         match record {
             Record::Note(note) => events.push((CanonicalRecord::Note(note), line)),
+            Record::Canonical(record)
+                if record.stamp().is_some()
+                    || matches!(&record, CanonicalRecord::Gap(gap) if gap.inputs.is_some()) => {}
             Record::Canonical(record) => {
                 if let CanonicalRecord::Gap(gap) = &record {
                     take.incomplete.get_or_insert(IncompleteRecord {

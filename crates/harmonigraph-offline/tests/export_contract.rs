@@ -1,5 +1,8 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
-use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RunRecord, WavWriter, Writer};
+use harmonigraph_take::canonical::{DeltaRecord, TimingRecord};
+use harmonigraph_take::{
+    CanonicalRecord, Header, NoteKind, NoteRecord, Record, RunRecord, WavWriter, Writer,
+};
 use harmonigraph_ui::RenderTrigger;
 use std::path::Path;
 use std::process::Command;
@@ -26,15 +29,14 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
         ..Default::default()
     }))
     .unwrap();
+    // Each note played at the input it sounds at, which is its stamp.
     for (t, kind) in [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)] {
-        take.write(&Record::Note(NoteRecord {
-            t,
-            kind,
-            note: 60,
-            source: 1,
-            ..Default::default()
-        }))
-        .unwrap();
+        let input = (t * 48_000.0) as i64;
+        let timing =
+            TimingRecord { input, sample: input, sample_rate: 48_000.0, ..Default::default() };
+        let event = NoteRecord { t, kind, note: 60, ..Default::default() };
+        let note = DeltaRecord { event, timing: Some(timing), ..Default::default() };
+        take.write(&Record::Canonical(CanonicalRecord::Delta(note))).unwrap();
     }
     take.flush().unwrap();
 }

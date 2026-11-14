@@ -1146,6 +1146,7 @@ mod tests {
     /// note comes before its audio, so the two clocks differ.
     #[test]
     fn an_export_sounds_the_takes_audio_at_the_take_time_it_was_recorded() {
+        use harmonigraph_take::canonical::{DeltaRecord, TimingRecord};
         use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RunRecord};
         let Some(ffmpeg) = real_ffmpeg() else { return };
         let dir =
@@ -1163,14 +1164,24 @@ mod tests {
             audio_file: Some("click.wav".into()),
             ..Default::default()
         };
-        let note = NoteRecord {
-            source: 1,
-            t: 0.25,
-            channel: 0,
-            note: 60,
-            kind: NoteKind::On { velocity: 0.8 },
+        // Played at the input it sounds at, at offset zero in the run.
+        let note = DeltaRecord {
+            event: NoteRecord {
+                t: 0.25,
+                note: 60,
+                kind: NoteKind::On { velocity: 0.8 },
+                ..Default::default()
+            },
+            timing: Some(TimingRecord {
+                input: 12_000,
+                sample: 12_000,
+                sample_rate: 48_000.0,
+                ..Default::default()
+            }),
+            ..Default::default()
         };
-        let take = [Record::Header(Header::default()), Record::Run(run), Record::Note(note)]
+        let note = Record::Canonical(harmonigraph_take::CanonicalRecord::Delta(note));
+        let take = [Record::Header(Header::default()), Record::Run(run), note]
             .iter()
             .map(|record| ron::to_string(record).unwrap())
             .collect::<Vec<_>>()
