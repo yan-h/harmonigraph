@@ -37,21 +37,33 @@ A missing editor version defaults to 0 and is refused by the version floor.
 The offline renderer's `Layout` and `Placement`, and the standalone view picker `Pane`, are runtime types with no serde derive;
 the captured lattice placement and split persist in `RenderFrame`.
 
-## The floor is no guard against a dropped variant
+## A dropped variant costs its key at the editor's door
 
 `UI_PERSIST_VERSION` refuses a blob below it whole rather than half-reading it.
-What survives an old blob otherwise is only what serde gives free:
-an unknown KEY is skipped, so retiring a field is safe.
-An unknown VARIANT is not —
-it fails the parse and drops the entire persist, layout and camera with it.
+What survives an old blob otherwise:
+an unknown KEY is skipped by serde, so retiring a field costs nothing;
+an unknown VARIANT is cut with the key that names it by the editor's per-key decode (`crates/harmonigraph-ui/src/persist_keys.rs`), so that key opens at its default and the rest of the document loads (#1757).
+A variant no key holds of its own, a bare element of a list or map, still refuses the document whole;
+none is persisted today.
 
-The floor does not help, though it is easy to assume otherwise:
-the version is read out of a struct that never parsed, so the check never runs.
-Raising the floor does nothing for a dropped variant at any value.
+The floor is no guard against a dropped variant, though it is easy to assume otherwise:
+a whole parse fails before the version is read, so raising the floor does nothing at any value.
 
-What makes that acceptable is that the refusal is LOUD —
-`install_document` returns whether it applied and writes the reason to the console, the offline renderer prints to stderr, and focused editor/offline tests hold refusal and defaulting.
-Keep the refusal audible when dropping a variant.
+What makes the loss acceptable is that it is LOUD and HELD —
+`install_document` writes each cut key to the Console and opens it, and a host save stores the document as it came until a frame has drawn the editor.
+`DROPPED_VARIANTS` in `crates/harmonigraph-ui/src/tests/persist.rs` holds both:
+retiring a variant adds a row there.
+
+The take and export door, `AppearanceDocument::parse`, keeps the strict parse (#1757 Q5):
+a take whose recorded look names a dropped variant refuses to export, and the offline renderer prints why to stderr.
+
+## The live editor state is the only copy
+
+A host restore installs into the editor state through `install_document`, and a host save serializes out of it through `save_answer`;
+nothing reads a saved document back, so a window opening or closing installs nothing (#1757).
+A restore therefore resets what it installs and nothing else, and a window session resets only what belongs to the window (`start_window_session`).
+A new persisted field needs no step at either:
+`UiPersist::capture` and `apply_persist` are its two sites.
 
 ## Appearance and editor workspace have separate boundaries
 

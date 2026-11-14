@@ -146,7 +146,9 @@ The value on screen must still be the value the file holds, so a change of range
 The tree carries **no compat shims at all**, and that is the invariant to hold:
 no `legacy_*` fields, migration passes or serde aliases for deleted variants.
 A rename is a rename, a dropped variant is dropped.
-A dropped enum variant fails the whole parse, which is still fine when the PR body says so.
+At the editor's door a dropped enum variant costs a saved project the key that names it, which opens at its default with a Console line;
+a recorded take whose look names one refuses to export, loudly.
+Either is fine when the PR body says so.
 Read the `persistence-contract` skill before changing a persisted shape.
 
 ## Fix what you find in this PR; an issue is for a substantial design decision

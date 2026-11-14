@@ -31,3 +31,6 @@ The display link and frame pacing decisions (#1551) are in `host-window-and-paci
 - Restoring an empty settings blob means the fresh look, not "keep what the editor shows". #1757 Q3
 - A save the host makes from inside a callback the editor makes under its lock (a parameter gesture's flush, a camera move) cannot take the lock, and stores the newest of the last restore, close or successful save rather than the live settings: the stated limit of #1301. #1757
 - A document this build could not fully read is saved verbatim until a frame draws the editor past its loading screen, whatever that frame draws; a frame with no area counts, an occluded window's frames count. Accepted without a fourth red-team round. #1757 QD
+- At the editor's door, a saved value naming an enum variant this build does not have costs only the key that holds it, which opens at its default with a Console line, rather than the whole layout, look, slots and presets. This supersedes the whole-parse rule `AGENTS.md` carried. #1757 Q4
+- At the take and export door the parse stays strict: a take whose recorded look names a dropped variant keeps refusing to export, loudly. #1757 Q5
+- The protocol and the per-key decode landed as one PR, so the per-key half cannot be reverted on its own. #1757 QA

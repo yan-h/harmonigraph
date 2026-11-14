@@ -547,8 +547,8 @@ impl Default for Instruments {
 /// recorded frame cannot depend on this. The standalone harness and the
 /// non-macOS shells draw when their windowing stack asks, whatever this says.
 ///
-/// Persisted in the editor blob, so dropping a variant fails the whole parse
-/// and drops layout and camera with it (see the persistence-contract skill).
+/// Persisted in the editor blob, so dropping a variant costs a project that
+/// saved it this key, with a Console line (see the persistence-contract skill).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FrameRate {
     #[default]
@@ -649,16 +649,17 @@ impl SharedState {
     ///
     /// The empty document is what an editor never opened saves, so it installs
     /// the fresh settings and leaves the save [`Untouched`](SaveSource::Untouched)
-    /// (#1757 Q3). Refused input leaves the current content intact, opens the
-    /// Console so its explanation is visible, reports why there, and holds the
-    /// document for saves until a frame has drawn that. Appearance
-    /// normalization is shared with recording/export; workspace restoration
-    /// remains editor-only.
+    /// (#1757 Q3). A value naming a variant this build does not have costs its
+    /// own key, which opens at its default (#1757 Q4); refused input leaves the
+    /// current content intact. Either loss opens the Console, says what was
+    /// lost there, and holds the document for saves until a frame has drawn
+    /// that. Appearance normalization is shared with recording/export;
+    /// workspace restoration remains editor-only.
     ///
     /// A restore discards the look slots' undo histories; a window closing and
     /// reopening does not (#1740).
     ///
-    /// Whether the document's settings were installed.
+    /// Whether the document's settings were installed, whole or in part.
     pub fn install_document(&mut self, serialized: &str) -> bool {
         if serialized.is_empty() {
             self.apply_persist(UiPersist::capture(
@@ -668,21 +669,18 @@ impl SharedState {
             self.save_source = SaveSource::Untouched;
             return true;
         }
-        let persist = match ron::from_str::<UiPersist>(serialized) {
-            Ok(persist) => persist,
+        let (persist, dropped) = match crate::persist_keys::decode::<UiPersist>(serialized) {
+            Ok(decoded) => decoded,
             // SAYING SO is the whole point of this arm. Nothing in the tree
-            // reads an older spelling any more, so a blob naming a variant
-            // this build has dropped — a retired orientation or sweep mode, or
-            // a selected tab that no longer exists — fails the parse HERE, and
-            // what falls out is the layout, the camera and every view setting
-            // reverting at once. A dropped KEY is the other case entirely and
-            // costs nothing: serde skips one it has no field for, which is how
-            // a blob still carrying the retired `dock` loads intact, tabs and
-            // all. The version floor cannot catch it: the version is read out of a
-            // value that never parsed. An accepted break, but not a silent
-            // one — a project opening at defaults with no explanation reads
-            // as data loss, and this is the difference between that and a
-            // break someone chose.
+            // reads an older spelling any more, so what fails here — a value
+            // that is not RON, or a dropped variant no key holds of its own —
+            // costs the layout, the camera and every view setting at once. A
+            // dropped variant under a key costs that key alone, and a dropped
+            // KEY nothing: serde skips one it has no field for, which is how a
+            // blob still carrying the retired `dock` loads intact. An accepted
+            // break, but not a silent one — a project opening at defaults with
+            // no explanation reads as data loss, and this is the difference
+            // between that and a break someone chose.
             Err(err) => {
                 return self.refuse_persist(serialized, format!("the blob did not parse ({err})"));
             }
@@ -700,7 +698,17 @@ impl SharedState {
             }
         };
         self.apply_persist(UiPersist { appearance, ..persist });
-        self.save_source = SaveSource::Live;
+        if dropped.is_empty() {
+            self.save_source = SaveSource::Live;
+            return true;
+        }
+        for lost in dropped {
+            self.log(format!(
+                "persist dropped {} — this build has no {}, so that setting opens at its default",
+                lost.key, lost.variant,
+            ));
+        }
+        self.hold_until_seen(serialized);
         true
     }
 
@@ -728,16 +736,22 @@ impl SharedState {
         }
     }
 
-    /// Reject a saved document loudly. The Console is the last settings tab,
-    /// a diagnostic rather than a page visited while playing, so refusal
-    /// selects it and unfolds the settings: the diagnostic is the only thing
-    /// that explains why the editor opened on fresh state.
+    /// Reject a saved document loudly, leaving the current content as it was.
     fn refuse_persist(&mut self, document: &str, reason: String) -> bool {
         self.log(format!("persist ignored — {reason}"));
+        self.hold_until_seen(document);
+        false
+    }
+
+    /// An install lost something from `document`. The Console is the last
+    /// settings tab, a diagnostic rather than a page visited while playing, so
+    /// this selects it and unfolds the settings: the diagnostic is the only
+    /// thing that explains why the editor opened on fresh settings. Until a
+    /// frame has drawn that, a save stores the document as it came.
+    fn hold_until_seen(&mut self, document: &str) {
         self.workspace.layout.select(panes::Tab::Console);
         self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
         self.save_source = SaveSource::Held(document.into());
-        false
     }
 
     /// Start drawing in a newly built window. The state outlives every window,

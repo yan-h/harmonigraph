@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use harmonigraph_ui::testing::{edit_look, mark_drawn, undo_depth};
-use harmonigraph_ui::SharedState;
+use harmonigraph_ui::{SharedState, SpectralOrientation};
 use nice_plug::params::persist::PersistentField;
 
 use super::{open_window_session, EditorLock};
@@ -38,6 +38,8 @@ const DEPTH: usize = 4;
 enum Kind {
     /// Installs whole.
     Clean,
+    /// Installs with a key cut: here, an orientation this build lacks.
+    Lossy,
     /// Refused whole: here, a version below the floor.
     Refused,
 }
@@ -64,8 +66,9 @@ enum Op {
     FrameReentrantSave,
 }
 
-const OPS: [Op; 14] = [
+const OPS: [Op; 15] = [
     Op::Restore(Kind::Clean),
+    Op::Restore(Kind::Lossy),
     Op::Restore(Kind::Refused),
     Op::RestoreEmpty,
     Op::Save,
@@ -86,10 +89,12 @@ const OPS: [Op; 14] = [
 struct Doc {
     /// 0 = fresh; otherwise the restore it was installed from.
     base: u8,
+    /// Installed with the restore's lossy key at its default.
+    partial: bool,
     edits: u8,
 }
 
-const FRESH: Doc = Doc { base: 0, edits: 0 };
+const FRESH: Doc = Doc { base: 0, partial: false, edits: 0 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Text {
@@ -144,9 +149,15 @@ impl Spec {
     fn prelude(&mut self) {
         match self.pending.take() {
             Some(Delivery::Blob(id, Kind::Clean)) => {
-                self.live = Doc { base: id, edits: 0 };
+                self.live = Doc { base: id, partial: false, edits: 0 };
                 self.history = 0;
                 self.hold = None;
+                self.touched = true;
+            }
+            Some(Delivery::Blob(id, Kind::Lossy)) => {
+                self.live = Doc { base: id, partial: true, edits: 0 };
+                self.history = 0;
+                self.hold = Some(id);
                 self.touched = true;
             }
             Some(Delivery::Blob(id, Kind::Refused)) => {
@@ -203,19 +214,34 @@ struct Fixtures {
     fresh_yaw: f32,
     fresh_attack: f32,
     clean: Vec<String>,
+    lossy: Vec<String>,
     refused: Vec<String>,
 }
+
+/// A restore's orientation, which its lossy twin names a variant this build
+/// lacks for: off the default, so the key cut shows.
+const RESTORED: SpectralOrientation = SpectralOrientation::Left;
 
 impl Fixtures {
     fn new() -> Fixtures {
         let fresh = SharedState::new(ASSUMED_SURFACE_FORMAT);
         let appearance = &fresh.picture.appearance;
         let (fresh_yaw, fresh_attack) = (appearance.camera.yaw, appearance.spectrum.attack);
+        assert_ne!(appearance.spectrum.orientation, RESTORED);
         let clean: Vec<String> = (0..4u8)
             .map(|id| {
                 let mut state = SharedState::new(ASSUMED_SURFACE_FORMAT);
                 state.picture.appearance.camera.yaw = fresh_yaw + f32::from(id) * 0.25;
+                state.picture.appearance.spectrum.orientation = RESTORED;
                 state.save_persist()
+            })
+            .collect();
+        let lossy = clean
+            .iter()
+            .map(|blob| {
+                let lossy = blob.replacen("orientation:Left,", "orientation:Diagonal,", 1);
+                assert_ne!(&lossy, blob);
+                lossy
             })
             .collect();
         let refused = clean
@@ -230,12 +256,13 @@ impl Fixtures {
                 )
             })
             .collect();
-        Fixtures { fresh_yaw, fresh_attack, clean, refused }
+        Fixtures { fresh_yaw, fresh_attack, clean, lossy, refused }
     }
 
     fn blob(&self, id: u8, kind: Kind) -> &str {
         match kind {
             Kind::Clean => &self.clean[id as usize],
+            Kind::Lossy => &self.lossy[id as usize],
             Kind::Refused => &self.refused[id as usize],
         }
     }
@@ -243,8 +270,9 @@ impl Fixtures {
     fn doc_of(&self, state: &SharedState) -> Doc {
         let appearance = &state.picture.appearance;
         let base = ((appearance.camera.yaw - self.fresh_yaw) / 0.25).round() as u8;
+        let partial = base > 0 && appearance.spectrum.orientation != RESTORED;
         let edits = ((appearance.spectrum.attack - self.fresh_attack) / 0.01).round() as u8;
-        Doc { base, edits }
+        Doc { base, partial, edits }
     }
 
     /// The settings a save stored, if it stored any this build reads whole.
@@ -299,6 +327,14 @@ impl Real {
 /// The shortest counterexample per check.
 type Failures = BTreeMap<&'static str, (Vec<Op>, String)>;
 
+/// A saved document, short enough for a report.
+fn brief(saved: &str) -> String {
+    match saved.char_indices().nth(40) {
+        Some((end, _)) => format!("{:?}… ({} bytes)", &saved[..end], saved.len()),
+        None => format!("{saved:?}"),
+    }
+}
+
 struct Run<'a> {
     fixtures: &'a Fixtures,
     saved: HashMap<String, Option<Doc>>,
@@ -322,7 +358,7 @@ impl Run<'_> {
                 if got == self.fixtures.blob(id, Kind::Clean) {
                     return true;
                 }
-                Text::Live(Doc { base: id, edits: 0 })
+                Text::Live(Doc { base: id, partial: false, edits: 0 })
             }
             want => want,
         };
@@ -374,7 +410,7 @@ impl Run<'_> {
                     self.note(
                         "a save stores the answer",
                         trace,
-                        format!("got {got:?}, want {want:?}"),
+                        format!("got {}, want {want:?}", brief(&got)),
                     );
                 }
             }
@@ -388,7 +424,7 @@ impl Run<'_> {
                         "a save that cannot take the lock is no older than the last restore, \
                          close or save",
                         trace,
-                        format!("got {got:?}, want {want:?}"),
+                        format!("got {}, want {want:?}", brief(&got)),
                     );
                 }
             }
@@ -432,7 +468,7 @@ impl Run<'_> {
                     self.note(
                         "a save re-entered from the close's callback holds the session",
                         trace,
-                        format!("got {got:?}, want {want:?}"),
+                        format!("got {}, want {want:?}", brief(&got)),
                     );
                 }
                 self.check_live(spec, real, trace, "close");
@@ -465,7 +501,7 @@ impl Run<'_> {
                     self.note(
                         "a save re-entered from a frame's callback returns the fallback as it stood",
                         trace,
-                        format!("got {got:?}, want {want:?}"),
+                        format!("got {}, want {want:?}", brief(&got)),
                     );
                 }
                 self.check_live(spec, real, trace, "frame with a re-entered save");

@@ -21,6 +21,8 @@ mod workspace;
 /// What the UI persists of the analyzer's display settings, and the serde
 /// defaults behind them.
 mod config;
+/// The editor door's per-key decode of a saved document.
+mod persist_keys;
 mod runtime;
 /// The spectrogram heatmap's texture-ring/cache machinery. The pane that
 /// draws it, `panes::spectral::spectrogram`, holds only the mesh and the

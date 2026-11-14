@@ -91,8 +91,9 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 /// The shape is what is tested, not the name. A number is skipped by any
 /// parser; a bare identifier (`Fibres`) is an enum token with no type left to
 /// parse it into, and a string, `NaN`, an `Option` and a nested struct are
-/// tokens of their own. Retiring a FIELD is safe for every one of them, where
-/// retiring a VARIANT is not — that is [`DROPPED_VARIANTS`].
+/// tokens of their own. Retiring a FIELD costs nothing for every one of them,
+/// where retiring a VARIANT costs the key that names it — that is
+/// [`DROPPED_VARIANTS`].
 ///
 /// So retiring a key adds no row (#1677 area 5 Q1): serde ignores it the way
 /// it ignores the row of its shape. A row is owed only by a shape none of
@@ -124,10 +125,10 @@ const RETIRED_KEYS: &[(&str, &str, bool)] = &[
 /// the rest of the document loads at the values it holds, and the key is gone
 /// on the next save.
 ///
-/// `install_document` takes the whole `UiPersist` or nothing, so a key that failed
-/// to parse would not degrade: it would discard the dock, the camera and the
-/// view with it. Every retirement rides on serde ignoring what it has no field
-/// for, and this is where that is held.
+/// `AppearanceDocument::parse` takes the whole appearance or nothing, so a key
+/// that failed to parse there would not degrade: it would refuse the take's
+/// export. Every retirement rides on serde ignoring what it has no field for,
+/// and this is where that is held.
 #[test]
 fn a_retired_key_is_ignored_and_the_rest_survives() {
     let state = dialled();
@@ -183,45 +184,58 @@ const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     ("window", "Fast", "Sweep", true),
 ];
 
-/// A dropped variant refuses the WHOLE document, and says so on the Console.
+/// A dropped variant costs the editor door the key that names it, and says so
+/// on the Console (#1757 Q4).
 ///
-/// serde cannot build a partial `UiPersist` around a variant it has no arm for,
-/// and the parse fails BEFORE the version is read, so the floor cannot catch it
-/// however high it is set. That is a break this build accepts rather than
-/// carries an alias for, and what makes it acceptable is that it is loud: the
-/// Console opens on the reason, and nothing else from the blob is applied.
+/// The key opens at its default and the rest of the document loads, which the
+/// version floor could never have arranged: a whole parse fails BEFORE the
+/// version is read. The loss is held as well as loud — the Console opens on
+/// it, and a save stores the document as it came until a frame has drawn
+/// that. The take and export door, `AppearanceDocument::parse`, still refuses
+/// such an appearance whole (#1757 Q5).
 #[test]
-fn a_dropped_variant_refuses_the_whole_document_and_says_so() {
+fn a_dropped_variant_costs_its_key_and_says_so() {
     let state = dialled();
     let saved = state.save_persist();
     let appearance = state.picture.appearance.serialize();
     for &(key, live, dropped, in_appearance) in DROPPED_VARIANTS {
-        let swap = |blob: &str| {
-            let (was, now) = (format!("{key}:{live}"), format!("{key}:{dropped}"));
+        let pair = |blob: &str| {
+            let was = format!("{key}:{live}");
             let at: Vec<_> = pair_starts(blob, key)
                 .into_iter()
                 .filter(|&i| blob[i..].starts_with(&was))
                 .collect();
             assert_eq!(at.len(), 1, "{was} must sit exactly once in {blob}");
-            format!("{}{now}{}", &blob[..at[0]], &blob[at[0] + was.len()..])
+            at[0] + key.len() + 1..at[0] + was.len()
+        };
+        let swap = |blob: &str| {
+            let value = pair(blob);
+            format!("{}{dropped}{}", &blob[..value.start], &blob[value.end..])
         };
 
         let mut restored = fresh();
-        let before = restored.save_persist();
-        assert!(!restored.install_document(&swap(&saved)), "{key}:{dropped} was applied");
-        assert!(!collapsed(&restored, panes::Tab::Console), "{dropped}: the refusal is hidden");
+        let swapped = swap(&saved);
+        assert!(restored.install_document(&swapped), "{key}:{dropped} sank the document");
+        assert_eq!(restored.save_answer().as_ref(), swapped, "{dropped}: the loss is not held");
+        assert!(!collapsed(&restored, panes::Tab::Console), "{dropped}: the loss is hidden");
         assert!(
             restored
                 .picture
                 .runtime
                 .console
                 .lines()
-                .any(|line| line.contains("did not parse") && line.contains(dropped)),
-            "{dropped}: the refusal does not name it; console holds {:?}",
+                .any(|line| line.contains(key) && line.contains(dropped)),
+            "{dropped}: the Console does not name it; it holds {:?}",
             restored.picture.runtime.console.lines().collect::<Vec<_>>(),
         );
+        // Everything but the key loaded: the live variant put back where its
+        // default now stands, the save is the one the document came from.
         set_console_collapsed(&mut restored, true);
-        assert_eq!(restored.save_persist(), before, "{dropped}: more than the report was applied");
+        let reloaded = restored.save_persist();
+        let start = pair(&saved).start;
+        let end = start + reloaded[start..].find([',', ')']).expect("the value ends");
+        let fixed = format!("{}{live}{}", &reloaded[..start], &reloaded[end..]);
+        assert_eq!(fixed, saved, "{dropped}: the rest of the document did not load");
 
         assert_eq!(!pair_starts(&appearance, key).is_empty(), in_appearance, "{key}: which doors");
         if in_appearance {
@@ -751,9 +765,9 @@ fn corrupt_persist_is_ignored() {
 /// A refused blob SAYS SO. A refusal costs the whole document — dock,
 /// camera, view, spectrum and render at once — and a project reopening at
 /// defaults with nothing written anywhere reads as data loss rather than as a
-/// break someone chose. The dropped-variant refusals are
-/// [`a_dropped_variant_refuses_the_whole_document_and_says_so`]; these are the
-/// version floor's and the appearance version's.
+/// break someone chose. A dropped variant costs only its key
+/// ([`a_dropped_variant_costs_its_key_and_says_so`]); these are the version
+/// floor's and the appearance version's refusals.
 #[test]
 fn a_refused_blob_says_why() {
     let saved = fresh().save_persist();
@@ -1395,10 +1409,11 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     let mut restored = fresh();
     assert!(restored.install_document(&state.save_persist()));
     assert_eq!(restored.picture.appearance.serialize(), appearance);
-    // An editor-only enum can make the enclosing save unreadable without
-    // affecting the separately captured appearance at all.
+    // An editor-only variant this build lacks costs the enclosing save its
+    // key, and the separately captured appearance nothing at all.
     let broken_workspace = state.save_persist().replace("Console", "RetiredConsole");
-    assert!(!restored.install_document(&broken_workspace));
+    assert!(restored.install_document(&broken_workspace));
+    assert_eq!(restored.picture.appearance.serialize(), appearance);
     assert_eq!(AppearanceDocument::parse(&appearance).unwrap().serialize(), appearance);
 }
 
