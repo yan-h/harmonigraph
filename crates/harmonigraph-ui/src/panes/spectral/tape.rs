@@ -480,43 +480,15 @@ fn ruler(
     labels
 }
 
-/// Live or Tape, on the Analyzer's header beside its tabs: chrome rather than
-/// a bar over the picture, so none of the tape is hidden under it and nothing
-/// it catches can reach the picture as a cue. With no far region it still
-/// shows, to say what would make room for the tape.
-pub(crate) fn switch(ui: &mut egui::Ui, state: &mut PictureState) {
+/// The audition's controls and its one line, on a row of their own along the
+/// pane's bottom, over the overview: the whole width, where the header shares
+/// its width with the tabs, and chrome rather than a bar over the picture, so
+/// none of the tape is hidden under it and nothing it catches can reach the
+/// picture as a cue. With no far region to draw the tape in, the line says
+/// what would make room for it.
+pub(super) fn controls(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState) {
     let room = room(&state.appearance.spectrum);
     let view = &mut state.runtime.tape;
-    // A rule apart from the tabs: the switch picks what the Analyzer shows,
-    // not another picture.
-    ui.add(egui::Separator::default().vertical().spacing(SWITCH_RULE_PT));
-    let live = ui.add(egui::Button::selectable(!view.showing || !room, "Live"));
-    if live.on_hover_text("The live picture.").clicked() {
-        view.showing = false;
-    }
-    let tape = ui.add_enabled(room, egui::Button::selectable(view.showing && room, "Tape"));
-    let hover = "What the tape holds along the song.";
-    let disabled = "Turn on the spectrogram or the roll to make room for the tape.";
-    if tape.on_hover_text(hover).on_disabled_hover_text(disabled).clicked() {
-        view.showing = true;
-    }
-}
-
-/// The width [`switch`] takes on the header, its rule and gaps included, so
-/// the tabs beside it can give way to it: there is a tape to switch to.
-pub(crate) fn switch_width(ui: &egui::Ui, state: &PictureState) -> Option<f32> {
-    let width = |label| crate::widgets::option_width(ui, label);
-    let gap = ui.spacing().item_spacing.x;
-    let rule = SWITCH_RULE_PT + 3.0 * gap;
-    state.runtime.tape.present.then(|| width("Live") + width("Tape") + rule)
-}
-
-/// The room the rule before the switch takes, in points.
-const SWITCH_RULE_PT: f32 = 8.0;
-
-/// The audition's controls and its one line, on a row of their own over the
-/// overview: the whole width, where the header shares its width with the tabs.
-pub(super) fn controls(ui: &mut egui::Ui, rect: Rect, view: &mut TapeView) {
     let ui_scale = theme::ui_scale(ui.ctx());
     ui.painter().rect_filled(rect, 0.0, theme::header());
     let inner = rect.shrink2(egui::vec2(theme::button_gap(ui_scale), 0.0));
@@ -551,7 +523,12 @@ pub(super) fn controls(ui: &mut egui::Ui, rect: Rect, view: &mut TapeView) {
         ui.label(format!("{} MiB", view.bytes >> 20))
             .on_hover_text("Memory the recording holds. It is never saved with the project.");
         ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-            let line = egui::RichText::new(readout(view)).small().color(theme::text_dim());
+            let line = if room {
+                readout(view)
+            } else {
+                "Turn on the spectrogram or the roll to make room for the tape.".to_owned()
+            };
+            let line = egui::RichText::new(line).small().color(theme::text_dim());
             ui.add(egui::Label::new(line).truncate());
         });
     });

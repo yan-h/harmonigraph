@@ -69,24 +69,25 @@ impl Regions {
         }
     }
 
-    /// The docked Analyzer: in Tape mode with the far region open, the
-    /// audition's controls and the tape's overview along the bottom, and the
-    /// picture over the rest.
+    /// The docked Analyzer: in Tape mode, the audition's controls along the
+    /// bottom, and with the far region open the tape's overview under them,
+    /// and the picture over the rest.
     pub fn draw(&mut self, ui: &mut egui::Ui, state: &mut PictureState, now: f64, frameless: bool) {
         let full = ui.available_rect_before_wrap();
         let (row, strip) = super::tape::rows(theme::ui_scale(ui.ctx()));
-        let below = row + strip;
-        let tape = super::tape::active(state, Navigation::Docked)
-            && !self.collapsed[1]
-            && full.height() > 3.0 * below;
-        if !tape {
+        let view = &state.runtime.tape;
+        let overview = super::tape::active(state, Navigation::Docked) && !self.collapsed[1];
+        let below = row + if overview { strip } else { 0.0 };
+        if !(view.present && view.showing) || full.height() <= 3.0 * below {
             return self.draw_picture(ui, state, now, frameless);
         }
         let (picture, bottom) = full.split_top_bottom_at_y(full.bottom() - below);
-        let (controls, overview) = bottom.split_top_bottom_at_y(bottom.top() + row);
+        let (controls, strip) = bottom.split_top_bottom_at_y(bottom.top() + row);
         // First, so a stretch moved on it is the one the picture draws.
-        super::tape::overview(ui, overview, state, DOCKED_SURFACE);
-        super::tape::controls(ui, controls, &mut state.runtime.tape);
+        if overview {
+            super::tape::overview(ui, strip, state, DOCKED_SURFACE);
+        }
+        super::tape::controls(ui, controls, state);
         ui.scope_builder(egui::UiBuilder::new().max_rect(picture), |ui| {
             self.draw_picture(ui, state, now, frameless);
         });

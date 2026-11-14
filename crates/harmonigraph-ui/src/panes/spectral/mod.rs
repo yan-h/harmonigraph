@@ -37,7 +37,6 @@ pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
 pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 pub(super) use settings::{analysis_section, ribbons_section, spectrogram_section, view_section};
-pub(crate) use tape::{switch as tape_switch, switch_width as tape_switch_width};
 
 use crate::{theme, PictureState};
 use axes::{
