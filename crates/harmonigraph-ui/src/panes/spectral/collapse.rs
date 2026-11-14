@@ -76,11 +76,16 @@ impl Regions {
         let full = ui.available_rect_before_wrap();
         let (row, strip) = super::tape::rows(theme::ui_scale(ui.ctx()));
         let view = &state.runtime.tape;
-        let overview = super::tape::active(state, Navigation::Docked) && !self.collapsed[1];
-        let below = row + if overview { strip } else { 0.0 };
-        if !(view.present && view.showing) || full.height() <= 3.0 * below {
+        if !(view.present && view.showing) || full.height() <= 3.0 * row {
             return self.draw_picture(ui, state, now, frameless);
         }
+        // Only over a far region with depth to show the tape in, and the
+        // first to go on a short pane: the controls hold Stop.
+        let overview = super::tape::active(state, Navigation::Docked)
+            && !self.collapsed[1]
+            && gestures::spectrum_split(state, DOCKED_SURFACE) < 1.0
+            && full.height() > 3.0 * (row + strip);
+        let below = row + if overview { strip } else { 0.0 };
         let (picture, bottom) = full.split_top_bottom_at_y(full.bottom() - below);
         let (controls, strip) = bottom.split_top_bottom_at_y(bottom.top() + row);
         // First, so a stretch moved on it is the one the picture draws.

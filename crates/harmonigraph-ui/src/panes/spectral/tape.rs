@@ -86,7 +86,7 @@ impl Window {
 
     /// This stretch moved by `seconds`, its width kept and its start no earlier
     /// than the song's.
-    fn moved(self, seconds: f64) -> Window {
+    pub(super) fn moved(self, seconds: f64) -> Window {
         let from = (self.from + seconds).max(0.0);
         Window { from, to: from + self.seconds(), zoomed: true }
     }
@@ -111,8 +111,14 @@ impl Window {
         Window { to, zoomed: true, ..self }
     }
 
-    pub(super) fn pan(&mut self, seconds: f64) {
-        *self = self.moved(seconds);
+    /// Pulled back to end by `end` where it runs past it, as far as the
+    /// song's start allows.
+    fn within(self, end: f64) -> Window {
+        if self.to <= end {
+            self
+        } else {
+            self.moved(end - self.to)
+        }
     }
 }
 
@@ -145,8 +151,8 @@ impl SongAxis {
         self.window.to - self.share(d) * self.window.seconds()
     }
 
-    /// Song seconds per point along the depth axis, the rate a drag or a
-    /// scroll pans by.
+    /// Song seconds per point along the depth axis, the rate a scroll pans
+    /// by.
     pub(super) fn seconds_per_point(&self) -> f64 {
         self.window.seconds() / f64::from(self.region_len.max(1.0))
     }
@@ -256,7 +262,7 @@ pub(super) fn draw(
 }
 
 /// What is recorded over `axis`: cold stretches dimmed, and a band along the
-/// low-pitch edge under the ruler's ticks, as the Tape tab's strip drew it.
+/// low-pitch edge under the ruler's ticks.
 fn coverage(painter: &egui::Painter, axes: &Axes, view: &TapeView, axis: &SongAxis) {
     let window = axis.window;
     for span in view.spans.iter().filter(|span| !span.warm) {
@@ -582,16 +588,20 @@ pub(super) fn overview_axes(rect: Rect, cfg: &crate::SpectrumConfig) -> Axes {
 pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, surface: usize) {
     let cfg = state.appearance.spectrum;
     let axes = overview_axes(rect, &cfg);
-    let axis = SongAxis::new(&axes, 0.0, Window::fit(&state.runtime.tape));
+    let whole = Window::fit(&state.runtime.tape);
+    let axis = SongAxis::new(&axes, 0.0, whole);
     let id = egui::Id::new(("tape-overview", surface));
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     let shown = window(ui, &state.runtime.tape, surface);
-    let seconds_at = |x: f32| axis.seconds_at(axes.depth_at(Pos2::new(x, rect.center().y)));
+    // Held to the strip: a drag carried past its end would otherwise take the
+    // box off the strip, where nothing shows it or can take hold of it.
+    let seconds_at =
+        |x: f32| axis.seconds_at(axes.depth_at(Pos2::new(x, rect.center().y))).clamp(0.0, whole.to);
     let grip_at = |x: f32| grip(&axes, &axis, shown, x);
 
     let mut moved = None;
     if response.double_clicked() {
-        moved = Some(Window::fit(&state.runtime.tape));
+        moved = Some(whole);
     } else if response.drag_started() {
         if let Some(press) = ui.input(|i| i.pointer.press_origin()) {
             let pressed = seconds_at(press.x);
@@ -623,6 +633,7 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     if response.drag_stopped() {
         ui.data_mut(|d| d.remove::<Held>(id));
     }
+    let moved = moved.map(|window| window.within(whole.to));
     let shown = moved.unwrap_or(shown);
     if let Some(window) = moved {
         ui.data_mut(|d| d.insert_temp(window_id(surface), window));
@@ -648,8 +659,7 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     coverage(&painter, &axes, view, &axis);
     marks(&painter, &axes, view, &axis);
     // The rest of the song dimmed, and the stretch shown outlined.
-    let (a, b) =
-        (axes.at(0.0, axis.depth_of(shown.from)).x, axes.at(0.0, axis.depth_of(shown.to)).x);
+    let (a, b) = span_x(&axes, &axis, shown);
     let (lo, hi) = (a.min(b).max(rect.left()), a.max(b).min(rect.right()));
     let dim = theme::picture().gamma_multiply(0.55);
     painter.rect_filled(Rect::from_x_y_ranges(rect.left()..=lo, rect.y_range()), 0.0, dim);
@@ -666,13 +676,19 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
     }
 }
 
+/// Where the stretch `shown` lies across the overview: its screen x at its
+/// start and at its end.
+fn span_x(axes: &Axes, axis: &SongAxis, shown: Window) -> (f32, f32) {
+    let x = |seconds| axes.at(0.0, axis.depth_of(seconds)).x;
+    (x(shown.from), x(shown.to))
+}
+
 /// What a press at `x` on the overview takes hold of: inside the box, the
 /// whole stretch, or an end within [`GRIP_PT`] of it; just outside the box,
 /// the end beside it. The ends only reach inside a box wide enough to leave
 /// it a middle to move by.
 fn grip(axes: &Axes, axis: &SongAxis, shown: Window, x: f32) -> Option<Grip> {
-    let (a, b) =
-        (axes.at(0.0, axis.depth_of(shown.from)).x, axes.at(0.0, axis.depth_of(shown.to)).x);
+    let (a, b) = span_x(axes, axis, shown);
     let ((lo, lo_grip), (hi, hi_grip)) =
         if a <= b { ((a, Grip::From), (b, Grip::To)) } else { ((b, Grip::To), (a, Grip::From)) };
     let inner = if hi - lo >= 3.0 * GRIP_PT { GRIP_PT } else { 0.0 };
@@ -690,7 +706,9 @@ fn grip(axes: &Axes, axis: &SongAxis, shown: Window, x: f32) -> Option<Grip> {
 /// The overview's own GPU grid, apart from the far region's, so moving the
 /// box re-uploads neither.
 fn overview_id(surface: usize) -> u64 {
-    u64::MAX - 1024 - surface as u64
+    // Below every `pane_id`, which counts down from the top one per surface.
+    const BELOW_PANES: u64 = 1 << 16;
+    u64::MAX - BELOW_PANES - surface as u64
 }
 
 /// The controls' one line (#1719 slice 4): why the tape cannot sound, or what

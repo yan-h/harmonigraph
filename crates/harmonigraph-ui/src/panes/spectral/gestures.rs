@@ -565,7 +565,7 @@ pub(super) fn drag_zoom(
                 // and the wheel zooms the pitch as it does in Live mode.
                 let along = delta.x * depth.x;
                 if along != 0.0 {
-                    song.pan(f64::from(along) * axis.seconds_per_point());
+                    *song = song.moved(f64::from(along) * axis.seconds_per_point());
                 }
                 Some((delta.y, 1.0))
             } else {

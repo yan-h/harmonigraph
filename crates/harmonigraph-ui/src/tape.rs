@@ -178,7 +178,7 @@ pub struct TapeView {
     pub meters: Vec<(f64, Meter)>,
     /// A click the plugin has not taken yet. A newer click replaces it.
     pub request: Option<TapeRequest>,
-    /// The speed Tape mode's bar asks for. A cue plays at the speed it
+    /// The speed Tape mode's controls ask for. A cue plays at the speed it
     /// started at, so the plugin cues again from the spot heard when this
     /// changes. Session-only, like the tape it plays.
     pub speed: Speed,
@@ -187,6 +187,8 @@ pub struct TapeView {
     pub spectrogram: spectrogram::TapeSpectrogram,
     /// The Analyzer draws the tape rather than the live picture. Never saved:
     /// the tape is not, so a reopened project would open on an empty picture.
+    /// Set only by the Analyzer's Tape tab, which clears it for any other
+    /// tab: the plugin analyzes the tape while it is set.
     pub showing: bool,
     /// The song seconds the Analyzer shows while [`showing`](Self::showing),
     /// which the worker analyzes first.

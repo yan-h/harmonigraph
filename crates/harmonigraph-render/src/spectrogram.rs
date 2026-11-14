@@ -261,8 +261,9 @@ struct SpectrogramUniforms {
 pub(crate) struct SpectrogramResources {
     pipelines: SpectrogramPipelines,
     /// Every spectrogram this renderer has drawn, by pane id, and never
-    /// swept, like the lattice's panes. An id is a surface, so the map
-    /// holds as many entries as there are surfaces, and it goes with the
+    /// swept, like the lattice's panes. An id is one spectrogram a surface
+    /// draws (the live one, and in the editor the tape's and its overview),
+    /// so the map holds a few entries per surface, and it goes with the
     /// `CallbackResources` it lives in when the editor window closes or the
     /// export ends. Until then a hidden tab or a closed preview keeps its grid
     /// copy and the cloud's targets, so switching back rebuilds nothing.

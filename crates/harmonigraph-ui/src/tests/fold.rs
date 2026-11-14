@@ -1186,6 +1186,10 @@ fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
 #[test]
 fn the_tape_is_a_tab_of_the_analyzer_and_lays_its_controls_and_overview_below() {
     let mut state = fresh();
+    // A narrow column, set here rather than inherited from the fresh layout:
+    // room for the three tabs and little more.
+    state.workspace.layout.position = Position::Right;
+    state.workspace.layout.right.analyzer = 200.0;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
@@ -1212,7 +1216,7 @@ fn the_tape_is_a_tab_of_the_analyzer_and_lays_its_controls_and_overview_below() 
     let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
     let out = h.frame(&mut state, vec![]);
     let tape = at(&out, "Tape", header).expect("the Tape tab is on the header");
-    assert!(at(&out, "Spiral", header).is_some(), "fixture is too narrow to list the tabs");
+    assert!(at(&out, "Spiral", header).is_some(), "the Tape tab pushed Spiral off the strip");
     assert!(at(&out, "Stop", section).is_none(), "the live picture has no audition controls");
     assert!(h.ctx.read_response(overview).is_none(), "the live picture has no overview");
 
@@ -1230,4 +1234,31 @@ fn the_tape_is_a_tab_of_the_analyzer_and_lays_its_controls_and_overview_below() 
     click_at(&mut h, &mut state, spiral);
     assert_eq!(state.workspace.layout.analyzer_tab, panes::Tab::Spiral);
     assert!(!state.picture.runtime.tape.showing, "Spiral left the analyzer in Tape mode");
+}
+
+/// A short Analyzer gives up the overview before the controls, which hold
+/// Stop.
+#[test]
+fn a_short_analyzer_keeps_the_tape_controls_and_drops_the_overview() {
+    let mut state = fresh();
+    state.workspace.layout.position = Position::Below;
+    state.workspace.layout.below.analyzer = 150.0;
+    state.picture.runtime.tape.present = true;
+    state.picture.runtime.tape.enabled = true;
+    state.picture.runtime.tape.showing = true;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let body = pane_body(&state, &panes::Tab::Spectral).expect("the Analyzer is drawn");
+    let (row, strip) = (theme::tab_bar_height(1.0), 1.5 * theme::tab_bar_height(1.0));
+    assert!(
+        body.height() > 3.0 * row && body.height() <= 3.0 * (row + strip),
+        "fixture misses the band between the two cutoffs: {body:?}"
+    );
+    let out = h.frame(&mut state, vec![]);
+    let stop = out.shapes.iter().any(|cs| {
+        matches!(&cs.shape, egui::Shape::Text(t) if t.galley.text() == "Stop" && body.contains(t.pos))
+    });
+    assert!(stop, "the controls went with the overview");
+    let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
+    assert!(h.ctx.read_response(overview).is_none(), "the overview stayed on a short pane");
 }

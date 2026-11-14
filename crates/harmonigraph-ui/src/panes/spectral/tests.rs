@@ -3403,6 +3403,16 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     overview_frames(&ctx, &mut state, drag(on_overview(10.0), on_overview(20.0)));
     let (from, to) = shown(&state);
     assert!((from - 10.0).abs() < 0.3 && (to - from - 21.0).abs() < 0.3, "moved to {from}..{to}");
+    // Its early end, 5 s later.
+    overview_frames(&ctx, &mut state, drag(on_overview(10.2), on_overview(15.0)));
+    let (from, to) = shown(&state);
+    assert!((from - 15.0).abs() < 0.3 && (to - 31.0).abs() < 0.3, "resized to {from}..{to}");
+    // Past the strip's late end, where the box stops at the end of the strip.
+    let later = (on_overview(41.0) - on_overview(1.0)).normalized();
+    let past = on_overview(41.0) + later * 200.0;
+    overview_frames(&ctx, &mut state, drag(on_overview(20.0), past));
+    let (_, to) = shown(&state);
+    assert!((to - 42.0).abs() < 1e-6, "the box ran off the strip to {to}");
     // And back past the song's start, where it stops.
     overview_frames(&ctx, &mut state, drag(on_overview(20.0), on_overview(0.0)));
     assert_eq!(shown(&state).0, 0.0);
@@ -3416,9 +3426,19 @@ fn a_click_on_the_overview_brings_the_box_there_and_a_double_click_shows_it_all(
     overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(21.0)));
     let click =
         |at: egui::Pos2| vec![egui::Event::PointerMoved(at), press(at, true), press(at, false)];
-    overview_frames(&ctx, &mut state, vec![click(on_overview(35.0))]);
+    overview_frames(&ctx, &mut state, vec![click(on_overview(30.0))]);
     let (from, to) = shown(&state);
-    assert!((from - 24.5).abs() < 0.3 && (to - from - 21.0).abs() < 0.3, "{from}..{to}");
+    assert!((from - 19.5).abs() < 0.3 && (to - from - 21.0).abs() < 0.3, "{from}..{to}");
+    // Near the end, it stops at the strip's end. Each click a second after
+    // the last, or egui counts them as one double-click.
+    let apart = |at: egui::Pos2| {
+        let mut frames = vec![vec![]; 60];
+        frames.push(click(at));
+        frames
+    };
+    overview_frames(&ctx, &mut state, apart(on_overview(5.0)));
+    overview_frames(&ctx, &mut state, apart(on_overview(38.0)));
+    assert_eq!(shown(&state), (21.0, 42.0));
     // A second of frames first, or egui counts the click above as the first
     // of three.
     let mut frames = vec![vec![]; 60];

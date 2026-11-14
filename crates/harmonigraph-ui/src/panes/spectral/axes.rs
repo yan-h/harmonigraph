@@ -484,6 +484,16 @@ pub(crate) struct PitchScale {
 }
 
 impl PitchScale {
+    /// The pitch range `cfg` asks for, never trusted to be ordered. A zero or
+    /// negative span divides by zero here and paints NaN geometry, which egui
+    /// panics on — and a panic takes the plugin's editor down inside the
+    /// host. The range bar can't produce one; a hand-edited state blob can.
+    pub(super) fn of(cfg: &crate::SpectrumConfig) -> PitchScale {
+        let min_midi = cfg.low_midi;
+        let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
+        PitchScale { min_midi, max_midi, span: max_midi - min_midi }
+    }
+
     /// MIDI pitch to axis fraction. Outside the zoom this runs past
     /// `0..1`; callers clip or skip.
     pub fn t_of(&self, midi: f32) -> f32 {
