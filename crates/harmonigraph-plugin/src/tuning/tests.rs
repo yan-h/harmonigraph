@@ -1269,6 +1269,50 @@ fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A flood past one batch every callback, across a Stop: the frontier still
+/// moves, to the earliest capture left in the rings, so the take seals once
+/// what it recorded is published rather than only once the flood ends.
+#[test]
+fn a_take_stopped_in_a_flood_seals_before_the_flood_ends() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let tunes: Vec<Device> = (0..3)
+        .map(|_| {
+            let mut tune = Device::new(true);
+            tune.activate();
+            tune
+        })
+        .collect();
+    capture.arm();
+    let mut sealed = None;
+    for step in 0..14 {
+        let raw = step * 512;
+        if step == 4 {
+            capture.stop();
+        }
+        hub.run_format(raw, vec![], None, None, 512);
+        for (index, tune) in tunes.iter().enumerate() {
+            let id = 10 + index as i32;
+            let bends = (0..761u32).map(|k| expression(id, f64::from(k % 7) * 0.01, 1 + k / 2));
+            let events = match step {
+                2 => {
+                    std::iter::once(note(id, 0, 60 + index as i16, 0, true)).chain(bends).collect()
+                }
+                3..=9 => std::iter::once(expression(id, 0.05, 0)).chain(bends).collect(),
+                10 => vec![note(id, 0, 60 + index as i16, 0, false)],
+                _ => vec![],
+            };
+            tune.run_format(raw, events, None, None, 512);
+        }
+        if sealed.is_none() && capture.drain_take_order().contains(&("epoch complete", Some(1))) {
+            sealed = Some(step);
+        }
+    }
+    let sealed = sealed.expect("the take seals");
+    assert!(sealed < 9, "sealed at step {sealed}, after the flood ended");
+}
+
 /// A cut and joined destruction are where the last callback's end is proven,
 /// since nothing after them can be sequenced before it. A host reset mid-take
 /// keeps the take whole; a lagging Tune's record still in its ring fails only

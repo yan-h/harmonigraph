@@ -318,9 +318,9 @@ pub struct Hub {
     /// The last recording run every row was told to open with a take-lane
     /// snapshot. See [`Hub::publish`].
     opened: Option<u64>,
-    /// This callback's collection filled the batch, so the rings may still hold
-    /// captures from before it began: the source frontier waits for them.
-    backlogged: bool,
+    /// The earliest input still in a ring after this callback's collection
+    /// filled the batch: the source frontier stops below it.
+    waiting: Option<i64>,
     status: u32,
     /// Which row the next collection starts from.
     rotation: usize,
@@ -353,7 +353,7 @@ impl Hub {
             clock: ClockId::default(),
             seconds: None,
             opened: None,
-            backlogged: false,
+            waiting: None,
             status: 0,
             rotation: 0,
             #[cfg(test)]
@@ -569,7 +569,8 @@ impl Hub {
         self.collect();
         // A full batch may have left captures in the rings, from inputs this
         // callback's frontier would otherwise claim were all published.
-        self.backlogged = self.batch.len() == BATCH_EVENTS;
+        self.waiting =
+            (self.batch.len() == BATCH_EVENTS).then(|| self.earliest_waiting()).flatten();
         if self.batch.is_empty() {
             return;
         }
@@ -709,6 +710,21 @@ impl Hub {
                 );
             }
         }
+    }
+
+    /// The earliest input of this epoch still in a ring, read without consuming:
+    /// each ring holds its captures in input order, so its first one counts.
+    fn earliest_waiting(&mut self) -> Option<i64> {
+        let direct = self.tune.peek_direct().filter(|c| c.epoch == self.tune.epoch());
+        let epoch = self.epoch;
+        let rows =
+            self.ends.iter_mut().flat_map(|ends| ends.iter_mut().flatten()).filter_map(|end| {
+                let slots = end.captures.slots();
+                let chunk = end.captures.read_chunk(slots).ok()?;
+                let (head, tail) = chunk.as_slices();
+                head.iter().chain(tail).find(|c| c.epoch == epoch).map(|c| c.sample)
+            });
+        direct.map(|c| c.sample).into_iter().chain(rows).min()
     }
 
     /// Bind in each source's input order, before the musical sort moves
@@ -1183,15 +1199,14 @@ impl Hub {
         self.flush(owner, recorder);
         let Some(callback) = self.callback else { return };
         self.snapshots(owner, recorder);
-        // Every record collected this callback has been published. Unless the
-        // batch filled, nothing still to come is scheduled before this callback
-        // began, so its start is a sound and monotone frontier without a
-        // coverage protocol behind it. A full batch may have left captures from
-        // before it in the rings, so the frontier waits where it was until a
-        // collection drains them.
-        if !self.backlogged
-            && owner.recording.source_frontier(self.clock, callback.steady_time).is_err()
-        {
+        // Every record collected this callback has been published, and nothing
+        // still to come is scheduled before this callback began, but what a full
+        // batch left in the rings: the frontier is this callback's start, or the
+        // earliest input still waiting if that is earlier. Sound and monotone,
+        // with no coverage protocol behind it, and it keeps moving through a
+        // flood rather than waiting for the flood to end.
+        let through = self.waiting.map_or(callback.steady_time, |w| w.min(callback.steady_time));
+        if owner.recording.source_frontier(self.clock, through).is_err() {
             recorder.fail_configuration();
         }
     }

@@ -113,6 +113,11 @@ impl Recording {
     /// input, and what was captured before still stamps earlier input the
     /// frontier has not yet passed.
     pub fn begin(&mut self, start: i64, intent: RecordIntent) {
+        self.note_intent(start, intent);
+    }
+
+    /// The captured intent from `start` on, for stamping.
+    fn note_intent(&mut self, start: i64, intent: RecordIntent) {
         self.captured_intent = intent;
         // A change the frontier passed stamps nothing any more once a later
         // one starts at or below it.
@@ -125,11 +130,18 @@ impl Recording {
             return;
         }
         if self.changes == INTENTS {
-            // Arm and disarm toggled faster than the frontier moved: the oldest
-            // change goes, and a record that old fails to stamp.
+            // Only a change the frontier passed is evicted above, so a full window
+            // means four changes since the earliest record still waiting. Starting
+            // a take waits for the last one to seal, which waits for the frontier
+            // to pass what it recorded, so this needs takes armed and disarmed
+            // without rolling, within the few callbacks a backlog lags. Then the
+            // oldest change goes, and a record older than the next one fails to
+            // stamp, which fails a take that could hold it.
             self.intents.copy_within(1.., 0);
             self.changes -= 1;
         }
+        let start =
+            self.changes.checked_sub(1).map_or(start, |last| start.max(self.intents[last].0));
         self.intents[self.changes] = (start, intent);
         self.changes += 1;
     }
@@ -257,7 +269,7 @@ impl Recording {
         if intent.is_armed() {
             return;
         }
-        self.captured_intent = intent;
+        self.note_intent(self.registered_through, intent);
         recorder.is_armed_at(intent);
         self.end_run(recorder, self.registered_through);
     }
