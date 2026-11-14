@@ -129,9 +129,9 @@ fn identity(voices: &[Voice]) -> Vec<(VoiceKey, Time, Option<u64>)> {
 }
 
 fn snap(tracker: &NoteTracker) -> Snap {
-    let voices: Vec<Voice> = tracker.voices().copied().collect();
+    let voices: Vec<Voice> = tracker.voices().collect();
     Snap {
-        held: tracker.held_voices().copied().collect(),
+        held: tracker.held_voices().collect(),
         released: voices.iter().filter(|v| v.state != VoiceState::Held).copied().collect(),
         drawn: voices
             .iter()

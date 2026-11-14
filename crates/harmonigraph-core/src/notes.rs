@@ -5,7 +5,7 @@
 //! harness generates them from a mock source. Either way, the GUI thread
 //! owns a [`NoteTracker`] and feeds every event into it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[cfg(test)]
 use crate::canonical::VoiceBaseline;
@@ -499,7 +499,9 @@ impl Envelope {
     }
 }
 
-/// One sounding (or recently sounding) note.
+/// One sounding (or recently sounding) note: a held or fading press of the
+/// [`NoteRoll`], read as what the lattice, the Spiral and the note band draw.
+/// A copy made on each read, so it is never out of step with the press.
 #[derive(Copy, Clone, Debug)]
 pub struct Voice {
     pub source: SourceId,
@@ -514,56 +516,14 @@ pub struct Voice {
     /// the host sends one.
     pub expressions: Expressions,
     pub on_time: Time,
-    /// Presentation timestamp before a shell's moving clock offset.
-    original_onset: Time,
-    /// Whether this voice's source was visible at its FACTUAL release —
-    /// the single question a released voice is asked, and the answer to both
-    /// halves of it. [`voices`](NoteTracker::voices) draws the released tail
-    /// on this and [`prune`](NoteTracker::prune) records on it, so a voice
-    /// that was on screen when it let go finishes its fade AND lands in the
-    /// history, and one that was not does neither.
-    ///
-    /// Stamped once, at the release, so neither answer depends on the frame
-    /// or prune cadence that happens to follow it.
-    ///
-    /// Meaningless while a voice is held, and never read there: the held half
-    /// of `voices()` filters on the CURRENT `hidden_sources` instead, so
-    /// hiding a source still clears everything it has DOWN from the screen at
-    /// once. This decides only what happens to a voice on its way out.
-    visible_at_release: bool,
     /// Canonical accepted lifetime, absent for ordinary direct observations.
     pub lifetime: Option<u64>,
     pub state: VoiceState,
 }
 
 impl Voice {
-    fn new(source: SourceId, channel: u8, note: u8, velocity: f32, on_time: Time) -> Voice {
-        let mut voice = Voice {
-            source,
-            channel,
-            note,
-            velocity,
-            pitch: 0.0,
-            pitch_class: PitchClass::from_cents(0.0),
-            expressions: Expressions::NEUTRAL,
-            on_time,
-            original_onset: on_time,
-            visible_at_release: true,
-            lifetime: None,
-            state: VoiceState::Held,
-        };
-        voice.set_pitch(f32::from(note));
-        voice
-    }
-
     pub fn key(&self) -> VoiceKey {
         VoiceKey { source: self.source, channel: self.channel, note: self.note }
-    }
-
-    /// Keep the sounding pitch and its pitch class in agreement on every bend.
-    fn set_pitch(&mut self, pitch: f32) {
-        self.pitch = pitch;
-        self.pitch_class = PitchClass::from_cents(pitch * 100.0);
     }
 
     /// What is left of this voice's RELEASE, `[0, 1]`: 1 for the whole of a
@@ -640,21 +600,18 @@ pub fn octave_start_midi(octave: i32) -> i32 {
     (octave + 2) * 12
 }
 
-/// Tracks held voices plus a tail of recently released ones (so releases can
-/// fade out instead of vanishing), and behind those a [`NoteHistory`] of
-/// every pitch that has finished fading and a [`NoteRoll`] of when each
-/// note sounded.
+/// Takes every note event into one [`NoteRoll`], which holds each press once
+/// (#1759) and is read here as held voices plus a tail of recently released
+/// ones (so releases can fade out instead of vanishing), and behind those a
+/// [`NoteHistory`] of every pitch that has finished fading.
 ///
 /// Held voices iterate in `(source, channel, note)` order. Batch releases
 /// preserve that order in the released tail and history as well.
 #[derive(Default)]
 pub struct NoteTracker {
-    held: BTreeMap<VoiceKey, Voice>,
-    released: Vec<Voice>,
-    history: NoteHistory,
     roll: NoteRoll,
+    history: NoteHistory,
     canonical: CanonicalOrder,
-    hidden_sources: BTreeSet<SourceId>,
     certainty: Certainty,
 }
 
@@ -764,21 +721,17 @@ impl NoteTracker {
                         | NoteEventKind::SessionReset
                 ) && delta.lifetime != 0
                     && self
-                        .held
-                        .get(&key)
-                        .is_some_and(|voice| voice.lifetime != Some(delta.lifetime))
+                        .roll
+                        .held_on(key)
+                        .is_some_and(|note| note.lifetime != Some(delta.lifetime))
                 {
                     return Ok(true);
                 }
                 self.handle_event(delta.display_event());
                 if matches!(delta.event.kind, NoteEventKind::On { .. }) {
-                    if let Some(voice) = self.held.get_mut(&key) {
-                        voice.lifetime = (delta.lifetime != 0).then_some(delta.lifetime);
-                        voice.original_onset = original_onset;
-                        if let Some(pitch) = delta.pitch_microcents {
-                            voice.set_pitch((pitch as f64 / 100_000_000.0) as f32);
-                            self.roll.bend(key, delta.event.time, voice.pitch);
-                        }
+                    if let Some(pitch) = delta.pitch_microcents {
+                        let pitch = (pitch as f64 / 100_000_000.0) as f32;
+                        self.roll.bend(key, delta.event.time, pitch);
                     }
                     self.roll.set_identity(
                         key,
@@ -795,16 +748,6 @@ impl NoteTracker {
                 gap.validate()?;
                 self.certainty.doubt(gap.source);
                 self.roll.gap(gap.source, gap.time);
-                // The same reach the roll's own gap has, and the same exit every
-                // other departure takes: what publication lost is no longer known
-                // to be held, so those voices leave with a release fade rather than being
-                // dropped between two frames. A stream-wide gap is the one
-                // production emits, and it takes every source with it, but
-                // not the tape's: what the tape plays is not published, and
-                // its player alone ends it.
-                self.release_held(gap.time, |key, _| {
-                    !key.source.is_tape() && gap.source.is_none_or(|source| key.source == source)
-                });
             }
         }
         Ok(true)
@@ -829,72 +772,9 @@ impl NoteTracker {
         if !self.canonical.baseline(frame.source, frame.id, frame.output_cut)? {
             return Ok(false);
         }
-        let voices = frame.voices();
-        if frame.shown {
-            self.hidden_sources.remove(&frame.source);
-        } else {
-            self.hidden_sources.insert(frame.source);
-        }
         self.roll.set_shown(frame.source, frame.shown);
-        self.roll.replace_source(frame.source, voices, mapped.time, offset);
-        self.held.retain(|key, voice| {
-            key.source != frame.source
-                || voices.iter().any(|row| {
-                    row.matches_voice(
-                        frame.source,
-                        voice.key(),
-                        voice.lifetime,
-                        voice.original_onset,
-                    )
-                })
-        });
-        // The same identity question asked of the released tail, and the reason
-        // it has to be asked there too is that a departure can be WITHDRAWN. A
-        // publication gap releases what it could not see, because what it
-        // cannot see may have ended and a fade is the guess the picture
-        // recovers from; this frame is the source saying the note never
-        // stopped. Leaving the copy in place would draw the note twice and
-        // then, at the end of a fade it is not having, hand a still-sounding
-        // pitch to [`NoteHistory`] — a trail mark on a node the music has not
-        // left (#936). A row this baseline does NOT list is a genuine
-        // departure and keeps its fade.
-        //
-        // KNOWN GAP, accepted deliberately: this only reaches a copy that is
-        // still IN the tail. A `prune` landing between the outage and this
-        // frame has already recorded the mark and dropped the voice, and there
-        // is nothing left to withdraw — at a `Fade` near 0 that is every time,
-        // since the release is over on the very next frame. What that costs is
-        // a trail mark arriving early on a node whose note is still sounding;
-        // `NoteHistory::record` is idempotent per cent-key and only the trail
-        // reads it, so the note's real release overwrites it. Closing it needs
-        // a third note-lifecycle state — released, and released-but-unconfirmed
-        // — which is not worth carrying for a source that has lost contact with
-        // the thing telling it what is playing (Yan's call, 2026-09-19).
-        self.released.retain(|voice| {
-            voice.source != frame.source
-                || !voices.iter().any(|row| {
-                    row.matches_voice(
-                        frame.source,
-                        voice.key(),
-                        voice.lifetime,
-                        voice.original_onset,
-                    )
-                })
-        });
-        for row in voices {
-            let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
-            let voice = self.held.entry(row.key(frame.source)).or_insert_with(|| {
-                let mut voice =
-                    Voice::new(frame.source, row.channel, row.note, row.velocity, onset);
-                voice.lifetime = (row.lifetime != 0).then_some(row.lifetime);
-                voice.original_onset = row.actual_onset;
-                voice
-            });
-            voice.set_pitch(row.pitch());
-            voice.expressions = row.expressions;
-        }
+        self.roll.replace_source(frame.source, frame.voices(), mapped.time, offset);
         self.certainty.restore(frame.source);
-
         Ok(true)
     }
 
@@ -925,60 +805,27 @@ impl NoteTracker {
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
+        let key = event.key();
         match event.kind {
             // Control event: applies regardless of the event's channel.
             NoteEventKind::SessionReset => self.session_notes_off(event.time),
             NoteEventKind::SourceReset => self.source_notes_off(event.source, event.time),
             NoteEventKind::On { velocity } => {
-                // A retrigger without an Off silently replaces the held
-                // voice (same key); the old voice gets no release fade.
-                let voice =
-                    Voice::new(event.source, event.channel, event.note, velocity, event.time);
-                self.roll.note_on(event.key(), velocity, voice.pitch, event.time);
-                self.held.insert(event.key(), voice);
+                self.roll.note_on(key, velocity, f32::from(event.note), event.time);
             }
-            NoteEventKind::Off => {
-                if let Some(voice) = self.held.remove(&event.key()) {
-                    self.release_voice(voice, event.time);
-                    self.roll.note_off(event.key(), event.time);
-                }
-            }
+            NoteEventKind::Off => self.roll.note_off(key, event.time),
+            // Octave indicators track the sounding pitch too.
             NoteEventKind::Tuning { semitones } => {
-                if let Some(voice) = self.held.get_mut(&event.key()) {
-                    // Octave indicators track the sounding pitch too.
-                    voice.set_pitch(f32::from(event.note) + semitones);
-                    self.roll.bend(event.key(), event.time, voice.pitch);
-                }
+                self.roll.bend(key, event.time, f32::from(event.note) + semitones);
             }
             NoteEventKind::Expression { expression, value } => {
-                if let Some(voice) = self.held.get_mut(&event.key()) {
-                    voice.expressions.set(expression, value);
-                    self.roll.express(event.key(), event.time, voice.expressions);
-                }
+                self.roll.set_expression(key, event.time, expression, value);
             }
         }
     }
 
-    /// Preserve the release time and the source visibility at that moment.
-    fn release_voice(&mut self, mut voice: Voice, at: Time) {
-        voice.state = VoiceState::Released { at };
-        voice.visible_at_release = !self.hides(voice.source);
-        self.released.push(voice);
-    }
-
-    /// Release matching voices in key order, preserving the released tail order.
-    fn release_held(&mut self, at: Time, leaving: impl Fn(&VoiceKey, &Voice) -> bool) {
-        for (key, voice) in std::mem::take(&mut self.held) {
-            if leaving(&key, &voice) {
-                self.release_voice(voice, at);
-            } else {
-                self.held.insert(key, voice);
-            }
-        }
-    }
-
-    /// Drop released voices whose fade has fully completed, folding each
-    /// into the history as it goes. Call once per frame before iterating.
+    /// End each fade that is over, folding the voice into the history as it
+    /// goes. Call once per frame before iterating.
     ///
     /// A voice becomes a memory in the step its Note fade ends, so the tracker
     /// never holds one note as a voice and a memory at once, and a trail
@@ -986,19 +833,12 @@ impl NoteTracker {
     /// can outlast it, with the Fade-out delay and the last slice's delay
     /// ahead of its Note fade, and the scene's departing-name reserve covers
     /// the part before the trail lands. Drawn and remembered are one
-    /// question here, asked once: [`Voice::visible_at_release`] decides both,
-    /// so a voice whose source was hidden when it let go is never drawn AND
-    /// never recorded, and one visible then finishes its fade on screen and
-    /// lands in the history even if its source is hidden mid-fade. (A
-    /// retrigger without an off replaces its voice outright — see
-    /// `handle_event` — so that voice is never recorded; the retrigger's own
-    /// release covers the pitch. A resuming baseline withdraws a release the
-    /// same way, see [`replace_source`](Self::replace_source): a note a
-    /// publication gap let go of and the source then says is still sounding
-    /// never reaches here at all, so the trail cannot mark a node the music
-    /// has not left — as far as this gets, which is only while the voice is
-    /// still in the tail for the baseline to find. `replace_source` carries
-    /// what that leaves open.)
+    /// question, asked once at the release ([`NoteRoll`]'s rule 4): a voice
+    /// whose source was hidden when it let go is never drawn AND never
+    /// recorded, and one visible then finishes its fade on screen and lands in
+    /// the history even if its source is hidden mid-fade. A retrigger without
+    /// an off, a held note a baseline omits, and a fade a baseline withdraws
+    /// never reach here: none of them is a departure the trail should mark.
     ///
     /// Asks the RELEASE rather than the full activation, because the question
     /// here is whether the fade is over and not whether anything is currently
@@ -1008,17 +848,8 @@ impl NoteTracker {
     /// release has not started at all — read that way, a zero-length note
     /// would be dropped before it ever drew.
     pub fn prune(&mut self, now: Time, env: &Envelope) {
-        self.roll.trim(now);
         let history = &mut self.history;
-        self.released.retain(|voice| {
-            if voice.release_level(now, env) > 0.0 {
-                return true;
-            }
-            if voice.visible_at_release {
-                history.record(voice, now);
-            }
-            false
-        });
+        self.roll.prune(now, env, |voice| history.record(voice, now));
     }
 
     /// Every pitch played so far, for the trail (see [`NoteHistory`]).
@@ -1036,28 +867,27 @@ impl NoteTracker {
         &self.roll
     }
 
-    /// Forget the played-note timeline. Independent of
-    /// [`clear_history`](Self::clear_history): the two answer different
+    /// Forget the played-note timeline, leaving the voices alone. Independent
+    /// of [`clear_history`](Self::clear_history): the two answer different
     /// questions and are cleared from different places in the UI.
     pub fn clear_roll(&mut self) {
         self.roll.clear();
     }
 
     /// All voices that should currently be visualized: held first, in
-    /// `(source, channel, note)` order, then the released ones in the order they
-    /// were let go.
-    ///
-    /// The order is part of the contract for callers choosing between voices.
+    /// `(source, channel, note)` order, then the released ones that sounded
+    /// in the order they were let go, then those released at or before their
+    /// onset in theirs.
     ///
     /// The two halves ask visibility of different state, and that is the
-    /// whole rule. A HELD voice is filtered on the CURRENT `hidden_sources`,
+    /// whole rule. A HELD voice is filtered on the CURRENT Show switch,
     /// so hiding a source takes everything it is holding off the screen in
-    /// that instant. A RELEASED one is filtered on
-    /// [`Voice::visible_at_release`], decided once when it left the held set
-    /// — the same flag [`prune`](Self::prune) records on, which is what makes
-    /// "drawn" and "remembered" one answer instead of two that can disagree
-    /// (#905). The visible cost is that hiding a source does not cut its
-    /// already-fading notes: they finish the fade they were drawing.
+    /// that instant. A RELEASED one was decided once when it left the held set
+    /// ([`NoteRoll`]'s rule 4), the same answer [`prune`](Self::prune) records
+    /// on, which is what makes "drawn" and "remembered" one answer instead of
+    /// two that can disagree (#905). The visible cost is that hiding a source
+    /// does not cut its already-fading notes: they finish the fade they were
+    /// drawing.
     ///
     /// One case looks like an exception to that and is really the two halves
     /// changing hands. A baseline that arrives with Show off and still
@@ -1069,27 +899,24 @@ impl NoteTracker {
     /// through [`prune`](Self::prune): the source says the note never stopped,
     /// and a note that never stopped is neither drawn as departing nor
     /// remembered as departed.
-    pub fn voices(&self) -> impl Iterator<Item = &Voice> {
-        self.held
-            .values()
-            .filter(|v| !self.hides(v.source))
-            .chain(self.released.iter().filter(|v| v.visible_at_release))
+    pub fn voices(&self) -> impl Iterator<Item = Voice> + '_ {
+        self.roll.voices()
     }
 
     /// The source's notes are hidden: its Show switch is off, or for a note
     /// the tape plays, the switch of the source that played it.
     pub fn hides(&self, source: SourceId) -> bool {
-        self.hidden_sources.contains(&source) || self.hidden_sources.contains(&source.off_tape())
+        self.roll.hides(source)
     }
 
     /// Every held voice, hidden sources' included: what is down now, for a
     /// recorder that must not depend on what is shown.
-    pub fn held_voices(&self) -> impl Iterator<Item = &Voice> {
-        self.held.values()
+    pub fn held_voices(&self) -> impl Iterator<Item = Voice> + '_ {
+        self.roll.held()
     }
 
     pub fn held_count(&self) -> usize {
-        self.held.values().filter(|v| !self.hides(v.source)).count()
+        self.roll.held().filter(|v| !self.hides(v.source)).count()
     }
 
     /// Every published source's notes off. The tape's stay: its player
@@ -1097,7 +924,6 @@ impl NoteTracker {
     pub fn session_notes_off(&mut self, now: Time) {
         self.certainty = Certainty::default();
         self.roll.published_off(now);
-        self.release_held(now, |key, _| !key.source.is_tape());
     }
 
     /// A source leaving/resetting cannot release another source's held set.
@@ -1105,7 +931,6 @@ impl NoteTracker {
     pub fn source_notes_off(&mut self, source: SourceId, now: Time) {
         self.certainty.restore(source);
         self.roll.source_off(source, now);
-        self.release_held(now, |key, _| key.source == source);
     }
 }
 
@@ -1152,8 +977,9 @@ mod tests {
                 ((4.5, 59.5), (5.0, 59.5)),
             ]
         );
-        let ends_a: Vec<_> =
+        let mut ends_a: Vec<_> =
             tracker.roll().notes().filter(|n| n.source == a).map(|n| (n.start, n.end)).collect();
+        ends_a.sort_by(|x, y| x.partial_cmp(y).unwrap());
         assert_eq!(ends_a, vec![(0.0, Some(1.0)), (2.0, Some(3.0)), (3.0, Some(4.0))]);
 
         tracker.handle_event(NoteEvent::on(5.0, a, 0, 60, 0.8));
@@ -1166,6 +992,22 @@ mod tests {
 
     fn on(time: Time, note: u8) -> NoteEvent {
         NoteEvent::on(time, crate::SourceId::DIRECT, 0, note, 0.8)
+    }
+
+    /// Middle C held from 0 at full velocity, untuned.
+    fn held_voice() -> Voice {
+        Voice {
+            source: SourceId::DIRECT,
+            channel: 0,
+            note: 60,
+            velocity: 1.0,
+            pitch: 60.0,
+            pitch_class: PitchClass::from_midi_note(0),
+            expressions: Expressions::NEUTRAL,
+            on_time: 0.0,
+            lifetime: None,
+            state: VoiceState::Held,
+        }
     }
 
     fn off(time: Time, note: u8) -> NoteEvent {
@@ -1209,8 +1051,8 @@ mod tests {
     }
 
     /// The same order has to survive the transport reset that turns every
-    /// held voice into a releasing one: `released` is a Vec, so whatever
-    /// order it is filled in is the order it keeps for the whole fade.
+    /// held voice into a releasing one: the fading presses are a Vec, so
+    /// whatever order it is filled in is the order it keeps for the whole fade.
     #[test]
     fn all_notes_off_releases_the_voices_in_that_same_order() {
         let mut tracker = NoteTracker::new();
@@ -1263,14 +1105,13 @@ mod tests {
         tracker.replace_source(&hide).unwrap();
         assert_eq!(tracker.voices().count(), 0, "a held voice cuts the instant its source hides");
         tracker.handle_event(off(2.0, 60));
-        // The fixture has to actually reach the released tail, or every
-        // assertion below passes on a voice that was dropped at the hide.
-        assert_eq!(tracker.released.len(), 1, "the off released the hidden voice, not dropped it");
-        assert!(!tracker.released[0].visible_at_release, "and stamped it invisible");
-        // The source rejoins with two thirds of the fade still to run.
+        assert_eq!(tracker.held_voices().count(), 0, "the off released the hidden voice");
+        // The source rejoins with two thirds of the fade still to run. The
+        // fixture has to actually reach a release, or every assertion below
+        // passes on a voice that was dropped at the hide.
         let rejoin = SourceBaseline::new(SourceId::DIRECT, 2, 2.3, 0, true, &[]).unwrap();
         tracker.replace_source(&rejoin).unwrap();
-        assert!(tracker.released[0].release_level(2.3, &env) > 0.0, "mid-fade at the rejoin");
+        assert_eq!(tracker.roll().notes().count(), 1, "released onto the timeline, not dropped");
         assert_eq!(tracker.voices().count(), 0, "a fade begun hidden is not handed back");
         tracker.prune(3.1, &env);
         assert!(tracker.history().is_empty(), "and what was never drawn is never remembered");
@@ -1350,7 +1191,7 @@ mod tests {
     fn activation_is_full_while_held_then_decays_over_the_fade() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
-        let held = *tracker.voices().next().unwrap();
+        let held = tracker.voices().next().unwrap();
         // Held voices read full intensity regardless of the fade time — with
         // no attack, which is what `fade` builds; the attack has its own
         // tests below.
@@ -1358,7 +1199,7 @@ mod tests {
         assert_eq!(held.activation(100.0, &fade(0.0)), 1.0);
 
         tracker.handle_event(off(10.0, 60));
-        let released = *tracker.voices().next().unwrap();
+        let released = tracker.voices().next().unwrap();
         assert_eq!(released.activation(10.0, &fade(2.0)), 1.0); // full at release
         assert!((released.activation(11.0, &fade(2.0)) - 0.5).abs() < 1e-6); // half-way
         assert_eq!(released.activation(12.0, &fade(2.0)), 0.0); // fully faded
@@ -1434,7 +1275,7 @@ mod tests {
     fn a_note_shorter_than_its_arrival_still_reaches_full() {
         // Both ends on one duration, the way `ViewConfig::envelope` builds it.
         let env = Envelope { attack_time: 0.2, fade_time: 0.2, shape: 0.0 };
-        let mut voice = Voice::new(SourceId::DIRECT, 0, 60, 1.0, 0.0);
+        let mut voice = held_voice();
         // A key up a quarter of the way in, which is where a multiplied
         // envelope would peak.
         voice.state = VoiceState::Released { at: 0.05 };
@@ -1464,13 +1305,13 @@ mod tests {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(0.0, 60));
-        let voice = *tracker.voices().next().unwrap();
+        let voice = tracker.voices().next().unwrap();
         assert_eq!(voice.activation(0.0, &env), 0.0, "nothing on screen at the instant itself");
         assert_eq!(voice.release_level(0.0, &env), 1.0, "but the release has not started");
 
         tracker.prune(0.0, &env);
         assert_eq!(tracker.voices().count(), 1, "so the note is still there to draw");
-        let voice = *tracker.voices().next().unwrap();
+        let voice = tracker.voices().next().unwrap();
         assert!(voice.activation(0.05, &env) > 0.0, "and it does draw, a frame later");
     }
 
@@ -1495,7 +1336,7 @@ mod tests {
     /// brightness that `prune` will never drop.
     #[test]
     fn a_non_finite_envelope_ends_rather_than_hangs() {
-        let mut voice = Voice::new(SourceId::DIRECT, 0, 60, 1.0, 0.0);
+        let mut voice = held_voice();
         voice.state = VoiceState::Released { at: 0.0 };
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let fades = Envelope { attack_time: 0.0, fade_time: bad, shape: 0.0 };
@@ -1678,7 +1519,7 @@ mod tests {
 
         assert_eq!(tracker.handle_canonical(gap(1.0, Some(a))), Ok(true));
         assert_eq!(tracker.held_count(), 1, "a gap still clears the lost source's held state");
-        let lost = *tracker.voices().find(|v| v.source == a).unwrap();
+        let lost = tracker.voices().find(|v| v.source == a).unwrap();
         assert_eq!(lost.state, VoiceState::Released { at: 1.0 }, "it fades rather than popping");
 
         // The whole-stream gap takes every source at once, through the same
@@ -1713,7 +1554,7 @@ mod tests {
         row.expressions.pressure = 0.8;
         assert_eq!(tracker.replace_source(&baseline(2, 3.2, row).unwrap()), Ok(true));
 
-        assert_eq!(tracker.held.values().next().unwrap().expressions.pressure, 0.8);
+        assert_eq!(tracker.held_voices().next().unwrap().expressions.pressure, 0.8);
         let note = tracker.roll().notes().next().unwrap();
         let points: Vec<_> = note.expressions().iter().map(|(t, e)| (*t, e.pressure)).collect();
         assert_eq!(points, vec![(2.0, 0.5), (3.2, 0.5), (3.2, 0.8)]);
@@ -1726,10 +1567,10 @@ mod tests {
     /// guesses the way the picture can recover from, releasing the voice into
     /// a fade. The baseline that follows is the source stating what it is
     /// sounding NOW, same lifetime, same onset, and that overrules the guess:
-    /// the note is held again, resumed out of the roll's past rather than
-    /// re-attacked. What must not survive that is the released COPY of it,
-    /// which would otherwise draw the note a second time and then, at the end
-    /// of a fade it is not having, hand a still-sounding pitch to the trail —
+    /// the note is held again, resumed out of its fade rather than
+    /// re-attacked. What must not survive that is the fade, which would
+    /// otherwise draw the note a second time and then, at the end of a fade it
+    /// is not having, hand a still-sounding pitch to the trail —
     /// [`NoteHistory`] marking a node the music has not left yet.
     ///
     /// The lifetime is what makes this fixture reach the resume at all: a
@@ -1737,10 +1578,10 @@ mod tests {
     /// fresh voice beside it instead of resuming this one, and every
     /// assertion below would pass on the wrong shape.
     ///
-    /// The repair arrives with the copy still FADING, which is the case
+    /// The repair arrives with the note still FADING, which is the case
     /// production actually takes — `tuning::Hub::flush` republishes within a
     /// callback or two of the outage. A prune landing in between instead is
-    /// the known gap `replace_source` documents, deliberately not covered.
+    /// the known gap `NoteRoll::replace_source` documents, deliberately not covered.
     #[test]
     fn a_resuming_baseline_takes_back_the_release_the_gap_handed_out() {
         let env = Envelope::default();
@@ -1752,14 +1593,14 @@ mod tests {
             Ok(true)
         );
         assert_eq!(
-            tracker.held.values().next().map(|voice| voice.lifetime),
+            tracker.held_voices().next().map(|voice| voice.lifetime),
             Some(Some(61)),
             "a published voice carries the lifetime the resume matches on"
         );
 
         assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
-        assert_eq!(tracker.released.len(), 1, "the outage released it rather than dropping it");
-        assert!(tracker.released[0].visible_at_release, "on screen when it went, so recordable");
+        let fading = tracker.voices().filter(|v| v.state == VoiceState::Released { at: 3.0 });
+        assert_eq!(fading.count(), 1, "the outage released it into a drawn fade, not dropped it");
 
         // The repair: `tuning::Hub` republishes every live row's baseline once
         // an outage sets its `repair` flag, and those rows keep the lifetime
@@ -1809,7 +1650,7 @@ mod tests {
             .replace_source(&SourceBaseline::new(source, 2, 3.1, 0, false, &[row]).unwrap())
             .unwrap();
         assert_eq!(tracker.voices().count(), 0, "cut, because it is held again and hidden");
-        assert_eq!(tracker.held.len(), 1, "held is where it went — not dropped");
+        assert_eq!(tracker.held_voices().count(), 1, "held is where it went — not dropped");
         assert_eq!(tracker.held_count(), 0, "just not counted while its source is hidden");
         tracker.prune(9.0, &instant);
         assert!(tracker.history().is_empty(), "a note that never stopped leaves no trail mark");
@@ -1908,7 +1749,6 @@ mod tests {
         let source = SourceId(3);
         tracker.handle_event(NoteEvent::on(1.0, source.on_tape(), 0, 60, 1.0));
         assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (1, 1));
-        tracker.hidden_sources.insert(source);
         tracker.roll.set_shown(source, false);
         assert_eq!((tracker.voices().count(), tracker.roll().notes().count()), (0, 0));
         assert!(!tracker.hides(SourceId(4).on_tape()), "another source's tape notes still show");

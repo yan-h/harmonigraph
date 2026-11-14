@@ -598,7 +598,7 @@ mod tests {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let mut replay = Replay::new(take_with(vec![on(0.5, 60), off(0.6, 60)], vec![]));
         replay.advance_to(&mut state.runtime, 1.0);
-        let voice = *state.runtime.tracker.voices().next().unwrap();
+        let voice = state.runtime.tracker.voices().next().unwrap();
         assert_eq!(voice.on_time, 0.5);
         // Released at 0.6 with a 1 s straight-line fade: 40% gone by t=1.0.
         // The envelope is spelled out rather than taken from the state's view
@@ -659,8 +659,9 @@ mod tests {
         assert!(replay.is_spent());
 
         for roll in [state.runtime.tracker.roll(), &roll_from_all_events(replay.take())] {
-            let notes: Vec<_> =
+            let mut notes: Vec<_> =
                 roll.notes().map(|n| (n.source, n.start, n.end, n.end_pitch())).collect();
+            notes.sort_by(|x, y| x.partial_cmp(y).unwrap());
             assert_eq!(
                 notes,
                 vec![
