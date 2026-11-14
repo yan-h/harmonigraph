@@ -204,31 +204,35 @@ pub(crate) fn assemble(
                     continue;
                 };
                 let lateness = record.time() - run.presentation(at.input, rate);
-                record.translate(run.offset());
                 let (source, time) = match &mut record {
-                    CanonicalRecord::Delta(d) => (d.event.source, &mut d.event.t),
+                    CanonicalRecord::Delta(d) => {
+                        d.event.t += run.offset();
+                        (d.event.source, &mut d.event.t)
+                    }
                     CanonicalRecord::Baseline(b) => {
+                        b.t += run.offset();
                         // A restated voice moves by the run that holds its own
-                        // onset, as its attack did. One struck where nothing of
-                        // this pass recorded (in a pause, before the arm, or in
-                        // the pass a loop wrapped from) draws from the start of
-                        // the first run after its onset, the pass's first when
-                        // it has no stamp: every restatement names that same
-                        // run, so a direct voice, known by its onset, held
-                        // through two pauses stays one note.
+                        // onset, as its attack did, so it lands on its attack
+                        // to the bit. One struck where nothing of this pass
+                        // recorded (in a pause, before the arm, or in the pass
+                        // a loop wrapped from) moves by the first run after its
+                        // onset, the pass's first when it has no stamp, and
+                        // starts no earlier than that run: every restatement
+                        // names the same run, so a direct voice, known by its
+                        // onset, held through two pauses stays one note.
                         for voice in &mut b.voices {
                             let struck = voice.onset.map(TimingRecord::stamp);
-                            if let Some(holder) = struck.and_then(|at| holding(&runs, chosen, at)) {
-                                let shift = holder.offset() - run.offset();
-                                voice.actual_onset += shift;
-                                voice.input_onset += shift;
-                            } else {
-                                let after = runs.iter().filter(|r| r.pass == chosen).find(|r| {
-                                    struck.is_none_or(|at| at.order() <= r.start.order())
-                                });
-                                let from = after.unwrap_or(run);
-                                voice.actual_onset = from.start_song();
-                                voice.input_onset = from.start_song();
+                            let holder = struck.and_then(|at| holding(&runs, chosen, at));
+                            let from = holder.unwrap_or_else(|| {
+                                let mut runs = runs.iter().filter(|r| r.pass == chosen);
+                                runs.find(|r| struck.is_none_or(|at| at.order() <= r.start.order()))
+                                    .unwrap_or(run)
+                            });
+                            voice.actual_onset += from.offset();
+                            voice.input_onset += from.offset();
+                            if holder.is_none() {
+                                voice.actual_onset = voice.actual_onset.max(from.start_song());
+                                voice.input_onset = voice.input_onset.max(from.start_song());
                             }
                         }
                         (b.source, &mut b.t)
@@ -243,7 +247,7 @@ pub(crate) fn assemble(
                 }
                 // No voice starts after the frame that says it is sounding, even when
                 // the attack that would have lifted the frame was lost. The
-                // assignment stays at the onset, where `translate` keeps it.
+                // assignment is at the onset, wherever the onset moved.
                 if let CanonicalRecord::Baseline(b) = &mut record {
                     for voice in &mut b.voices {
                         voice.actual_onset = voice.actual_onset.min(b.t);
