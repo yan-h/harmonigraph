@@ -3404,6 +3404,26 @@ fn tape_mode_rolls_no_note_later_than_the_stretch_shown() {
     assert_eq!(drawn, Some(1), "built a note past the stretch shown");
 }
 
+/// A click to cue that wobbles on its way down is still a click: it cues,
+/// and leaves the pitch range where it was, though the pane, sensing drags
+/// only, panned the pitch while the press was held.
+#[test]
+fn a_cue_click_that_wobbles_leaves_the_pitch_range_where_it_was() {
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.25 * (1.0 - split));
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 2.0));
+    assert!(matches!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(_))));
+    let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
+    assert_eq!(range, (cfg.low_midi, cfg.high_midi), "the cue nudged the pitch range");
+    // A drag past a click's reach still pans it.
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 30.0));
+    assert!(state.appearance.spectrum.low_midi < cfg.low_midi, "the drag did not pan");
+}
+
 fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     vec![
         vec![egui::Event::PointerMoved(from)],

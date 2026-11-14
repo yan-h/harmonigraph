@@ -516,6 +516,12 @@ fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::Spect
 /// leaves the drag free for a gesture of the tape's own. The wheel still zooms
 /// the pitch, in every layout, and the spectrum's share answers as it always
 /// does.
+/// The pitch range a Tape-mode press found, to put back if it lets go as a
+/// click.
+fn pressed_range_id(surface: usize) -> egui::Id {
+    egui::Id::new(("tape-pressed-range", surface))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drag_zoom(
     ui: &egui::Ui,
@@ -598,6 +604,9 @@ pub(super) fn drag_zoom(
     // `drag_stopped`, so its axis is still held; it is not this drag's.
     if response.drag_started() {
         ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
+        if song.is_some() {
+            ui.data_mut(|d| d.insert_temp(pressed_range_id(surface), (low, span)));
+        }
     }
 
     // Grab the picture. Per-frame deltas rather than the absolute tracking the
@@ -680,6 +689,16 @@ pub(super) fn drag_zoom(
 
     if response.drag_stopped() {
         ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
+        // In Tape mode a press let go of as a click cues the tape (see
+        // `tape::draw`), and the pane senses drags only, so it panned the
+        // pitch by however far the hand wobbled: put the range back, or every
+        // cue nudges the saved range.
+        let pressed = ui.data_mut(|d| d.remove_temp::<(f32, f32)>(pressed_range_id(surface)));
+        let click = ui.input(|i| i.pointer.could_any_button_be_click());
+        if let Some((at_press, span_at_press)) = pressed.filter(|_| song.is_some() && click) {
+            (low, span) = (at_press, span_at_press);
+            moved = true;
+        }
     }
 
     if !moved {
