@@ -9,58 +9,40 @@ use crate::SpectrumConfig;
 /// and the pane draws. See [`harmonigraph_core::spectrum::SPECTRUM_BINS`].
 pub(crate) type SpectrumBuckets = [f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
 
-/// Audio-derived pitch spectrum shown in the Spectral pane. The shell
-/// feeds samples every tick from wherever its audio comes from
-/// (plugin: selected main/sidechain input via a ring buffer; standalone: the
-/// mock synth). Analysis advances on the sample clock without drawing. Runtime-only.
+/// Audio-derived pitch spectrum shown in the Spectral pane: what the columns
+/// a feeder's [`SpectrumAnalysis`] makes become. Each shell owns the analysis
+/// over its own audio and dates it on its own clock (plugin: the selected
+/// main/sidechain input, through its input worker; standalone: the mock synth;
+/// offline: the take's soundtrack), and hands what it made here. Runtime-only.
 pub struct AudioSpectrum {
-    /// Samples to columns: the analyzer, its hop grid and its clock anchor.
-    /// `None` while [`lend`](Self::lend) has it out.
-    pub(crate) analysis: Option<SpectrumAnalysis>,
-    /// The analysis's [`lag`](SpectrumAnalysis::lag) when it was lent, which
-    /// [`column_lag`](Self::column_lag) answers with until it comes back:
-    /// the plugin's frame reads it while the input worker holds the analysis.
-    /// Set only by `lend`, and read only while the analysis is out.
-    lent_lag: f64,
     /// What the columns become: the curve, the history and their memos.
     pub(crate) store: SpectrumStore,
+    /// The analysis behind [`push_samples`](Self::push_samples), the test
+    /// shell's feeder. Production shells own theirs.
+    #[cfg(test)]
+    pub(crate) analysis: SpectrumAnalysis,
 }
 
-/// The analysis half of [`AudioSpectrum`]: samples in, raw columns out, on
-/// an exact grid of sample counts. It never reads what it has produced, so
-/// it can run where the store is not (#1559): see [`AudioSpectrum::lend`].
+/// Samples in, raw columns out, on an exact grid of sample counts, dated from
+/// the frame zero its feeder states. It never reads what it has produced, so
+/// it runs where the store is not (#1559): the plugin's input worker owns its
+/// own and analyzes off the editor's lock.
 pub struct SpectrumAnalysis {
     /// One analyzer per input channel, combined in the power domain — see
     /// [`ChannelBank`](harmonigraph_analysis::ChannelBank).
     pub(crate) analyzer: harmonigraph_analysis::ChannelBank,
-    /// FRAMES pushed since this analyzer was made, and the count at which the
+    /// FRAMES pushed since this run started, and the count at which the
     /// next FFT falls due. The column grid is a function of these two and
-    /// nothing else — see [`push_samples`](AudioSpectrum::push_samples).
+    /// nothing else — see [`feed_source`](Self::feed_source).
     ///
     /// Frames, not samples: a stereo stream carries two samples per instant, and
     /// a hop is an amount of TIME. Counting samples would halve the hop the
     /// moment the input went stereo.
     pub(crate) frames_seen: u64,
     pub(crate) next_hop: u64,
-    /// Shell time of sample 0: what turns a sample count into a timestamp.
-    ///
-    /// Arrival-dated input from [`push_samples`](AudioSpectrum::push_samples) smooths
-    /// this estimate rather than taking it fresh. A shell drains its
-    /// audio ring on frame boundaries but the ring fills in audio BLOCKS, so the
-    /// number of samples a frame brings swings by a block either way while `now`
-    /// advances by a frame — several ms of wobble in what any one batch implies
-    /// about where sample 0 was. Stamping columns from a fresh estimate would
-    /// pass that wobble straight into their spacing, which is what the sample
-    /// grid exists to remove: at an 8 ms hop, +-5 ms of it is enough to leave a
-    /// 12.8 ms slab empty. Smoothed, the grid is exactly even and still follows
-    /// the shell clock. The plugin instead supplies exact source timestamps
-    /// through [`feed_source`](SpectrumAnalysis::feed_source) on a
-    /// [`lend`](AudioSpectrum::lend), from its shared presentation-clock
-    /// mapping without this smoothing.
-    pub(crate) anchor: Option<f64>,
 }
 
-/// The store half of [`AudioSpectrum`]: the curve each column advances, the
+/// What [`AudioSpectrum`] keeps of the columns: the curve each column advances, the
 /// history it joins, and the memo of the curve's fold.
 pub(crate) struct SpectrumStore {
     /// Changed only when the smoothed grid changes. This identity lives beside
@@ -96,6 +78,13 @@ pub(crate) struct SpectrumStore {
     /// [`SpectrumHistory`] and
     /// [`SpectrumStore::push_history`].
     pub(crate) history: SpectrumHistory,
+    /// Columns that have joined the history: see
+    /// [`AudioSpectrum::columns_taken`].
+    columns_taken: u64,
+    /// The lag of the analysis as of the newest batch's arrival, which the
+    /// newest columns were made at unless a resolution change is still
+    /// refilling the window: see [`AudioSpectrum::column_lag`].
+    lag: f64,
 }
 
 /// The times of the newest columns that held anything above silence
@@ -115,25 +104,21 @@ pub(crate) struct Heard {
     pub(crate) curve: Option<f64>,
 }
 
-/// The analysis [`AudioSpectrum::lend`] took out, to run where the store is
-/// not, until [`AudioSpectrum::give_back`] returns it with what it made.
-pub struct LentAnalysis {
-    pub analysis: SpectrumAnalysis,
-    /// Which clear of the history it was lent under: a Clear before it comes
-    /// back must not have its columns put back.
-    epoch: u32,
-}
-
 /// What the analysis hands the store, in the order it happened: a source
 /// run starting over, a batch of audio arriving, or a column it produced.
-/// The plugin's input worker makes them off the editor's lock and applies
-/// them under it (#1559); the inline shells apply each as it is made.
+/// The plugin's input worker makes them off the editor's lock and gives
+/// them under it ([`AudioSpectrum::give`], #1559); the inline shells apply
+/// each as it is made ([`AudioSpectrum::apply`]). They carry everything the
+/// store learns from the analysis, so neither entry takes anything else from
+/// it.
 pub enum Delivery {
     /// The retained source run restarted: forget the curve, keep the history.
     Restart,
-    /// A batch arrived whose newest frame is at this shell time, which keeps
-    /// the curve live even while the analyzer refills and makes no column.
-    Arrival(f64),
+    /// A batch arrived, analyzed at a lag of `lag` seconds (see
+    /// [`AudioSpectrum::column_lag`]), whose newest frame is at the shell time
+    /// `newest`, which keeps the curve live even while the analyzer refills
+    /// and makes no column.
+    Arrival { newest: f64, lag: f64 },
     /// Boxed, because a block shorter than the 8 ms between columns delivers
     /// an arrival and seldom a column: at 64-frame blocks and 48 kHz six of
     /// seven deliveries are arrivals, and a list whose every slot was sized
@@ -142,7 +127,18 @@ pub enum Delivery {
     Column(Box<AnalyzedColumn>),
 }
 
+impl Delivery {
+    /// The column this delivers, if it is one.
+    pub fn column(&self) -> Option<&AnalyzedColumn> {
+        match self {
+            Delivery::Column(column) => Some(column),
+            _ => None,
+        }
+    }
+}
+
 /// One raw spectrum the analysis produced, for the store to take.
+#[derive(Clone)]
 pub struct AnalyzedColumn {
     /// Shell time its window listened at: its amplitude centroid, which is the
     /// column lag before the newest sample it read.
@@ -151,6 +147,18 @@ pub struct AnalyzedColumn {
     /// Seconds of audio since the column before, which the curve's time
     /// constants are converted at.
     pub(crate) step: f64,
+}
+
+impl AnalyzedColumn {
+    /// Shell time its window listened at.
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+
+    /// Raw power per pitch bucket, as analyzed.
+    pub fn power(&self) -> &[f32] {
+        &self.power
+    }
 }
 
 /// Every drawing surface's heatmap state, indexed by the surface id its copy of
@@ -216,16 +224,12 @@ pub(crate) struct SpectrogramSurface {
 /// floats of power, and why old ones are merged.
 pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 
-impl SpectrumAnalysis {
-    /// Private, as is building one: the only analysis is
-    /// [`AudioSpectrum`]'s, and anything that runs it borrows it through
-    /// [`lend`](AudioSpectrum::lend) (#1568).
-    fn new() -> Self {
+impl Default for SpectrumAnalysis {
+    fn default() -> Self {
         SpectrumAnalysis {
             analyzer: harmonigraph_analysis::ChannelBank::new(Default::default(), 1),
             frames_seen: 0,
             next_hop: 0,
-            anchor: None,
         }
     }
 }
@@ -233,8 +237,6 @@ impl SpectrumAnalysis {
 impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
-            analysis: Some(SpectrumAnalysis::new()),
-            lent_lag: 0.0,
             store: SpectrumStore {
                 display_revision: 0,
                 frame_fold: None,
@@ -244,100 +246,52 @@ impl Default for AudioSpectrum {
                 last_samples: None,
                 last_audible: Heard::default(),
                 history: SpectrumHistory::default(),
+                columns_taken: 0,
+                // A default analyzer's, until an analysis hands its own over.
+                lag: harmonigraph_analysis::AnalyzerConfig::default().column_lag(),
             },
+            #[cfg(test)]
+            analysis: SpectrumAnalysis::default(),
         }
     }
 }
 
 impl SpectrumAnalysis {
-    /// Analyze one logical batch, handing each column to `column` as it is
-    /// produced. See [`AudioSpectrum::push_sample_chunks`].
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn feed<E>(
-        &mut self,
-        batch: usize,
-        channels: usize,
-        sample_rate: f32,
-        now: f64,
-        config: &SpectrumConfig,
-        source_origin: Option<f64>,
-        consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
-        mut column: impl FnMut(AnalyzedColumn),
-    ) -> Result<(), E> {
-        // A changed rate empties the analyzers' rings, so nothing comes out
-        // until they have refilled; a changed frame carries what the new one
-        // can use, so only a longer one waits, for the rest of it. The hop grid
-        // keeps its phase across any gap rather than restarting on it.
-        self.analyzer.configure(config.analyzer(sample_rate), channels);
-
-        // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
-        // time. A partial frame at the end is left for the next batch, so the
-        // de-interleaving in `push_frames` can never slip a channel.
-        let channels = self.analyzer.channels();
-        if batch == 0 {
-            return Ok(());
-        }
-        let sr = f64::from(sample_rate.max(1.0));
-        let hop = ((AudioSpectrum::FFT_INTERVAL * sr).round() as u64).max(1);
-        // Columns fall on multiples of `hop` frames from the start of the
-        // stream. Left at zero the first boundary would be frame 1 and every one
-        // after it a frame early, which is harmless but makes the grid
-        // impossible to state (or to test) in whole hops.
-        if self.next_hop == 0 {
-            self.next_hop = hop;
-        }
-
-        // Re-anchor the frame count on the shell clock: the last frame of this
-        // batch is at `now`. Smoothed, so the columns below are evenly spaced;
-        // snapped when the estimate moves further than any wobble could, which
-        // is a stream that restarted — a transport jump, a sample-rate change
-        // (the count is re-divided by a different rate, so the anchor moves by
-        // minutes), or the first batch after the pane was switched on.
-        let total = self.frames_seen + batch as u64;
-        let candidate = now - total.saturating_sub(1) as f64 / sr;
-        let anchor = source_origin.unwrap_or_else(|| match self.anchor {
-            Some(prev) if (candidate - prev).abs() <= AudioSpectrum::ANCHOR_SNAP => {
-                prev + (candidate - prev) * AudioSpectrum::ANCHOR_SMOOTHING
-            }
-            _ => candidate,
-        });
-        self.anchor = Some(anchor);
-
-        consume(&mut |samples| {
-            let batch = samples.len() / channels;
-            let mut fed = 0usize; // frames
-            while fed < batch {
-                // Feed exactly up to the next hop boundary, so a spectrum is taken
-                // at every multiple of `hop` frames and nowhere else. `max(1)`
-                // keeps the loop moving if a sample-rate change ever leaves the
-                // boundary behind us; the next line puts the grid back on its feet.
-                let want = self.next_hop.saturating_sub(self.frames_seen).max(1) as usize;
-                let take = want.min(batch - fed);
-                self.analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
-                self.frames_seen += take as u64;
-                fed += take;
-                if self.frames_seen < self.next_hop {
-                    break; // The batch ran out before the boundary.
-                }
-                self.next_hop = self.frames_seen + hop;
-                let Some(fresh) = self.analyzer.power_sum() else { continue };
-
-                // Stamped where the window it measured is centred, not at the
-                // boundary itself — see `window_center_offset`. This is what lets a
-                // ridge sit under the note ribbon that made it, which is the entire
-                // point of drawing the two on one time axis. The boundary is where
-                // the newest frame fed so far sits on the anchored grid, so
-                // consecutive columns are exactly `hop` frames apart.
-                let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
-                let center = boundary - self.analyzer.window_center_offset();
-                column(AnalyzedColumn { time: center, power: fresh, step: hop as f64 / sr });
-            }
-        })
-    }
-
-    /// Source-dated input, for a [`lend`](AudioSpectrum::lend): the batch's
-    /// arrival, then each column it completes, to `deliver`, for
-    /// [`give_back`](AudioSpectrum::give_back) to apply.
+    /// Analyze interleaved samples, `channels` to a frame, one spectrum per
+    /// [`FFT_INTERVAL`](AudioSpectrum::FFT_INTERVAL) of audio in them, handing
+    /// `deliver` the batch's arrival and then each column it completes.
+    ///
+    /// `origin` is frame zero of this run on the shell clock, which the
+    /// feeder states from its own: the plugin maps its presentation clock
+    /// once per take, the offline renderer counts frames from the start of
+    /// the soundtrack, and the standalone synth counts the frames it rendered.
+    /// So a column's date is a function of the samples before it and nothing
+    /// else, and however the feeder chunks a run, the columns come out the
+    /// same. A feeder whose clock moves under the run restarts it
+    /// ([`restart`](Self::restart)) and states the new run's origin.
+    ///
+    /// The FFT runs here, on a grid of sample counts, rather than on a grid
+    /// of frames. That is the whole point:
+    /// the old gate (`now - last_fft >= FFT_INTERVAL`, evaluated once per UI
+    /// pass) could only fire ON a frame boundary, so a 20 ms interval on a 60 Hz
+    /// display fired every 33.3 ms — SLOWER than the 32 ms slabs the heatmap was
+    /// cutting the window into. Slabs went empty and were filled by duplicating
+    /// their neighbour (`JITTER_SLABS`), so a held column scrolled past about
+    /// once a second; the columns that did arrive sat at a phase inside their
+    /// slab that drifted with the frame clock; and capping the frame rate
+    /// coarsened the picture in proportion. Counting samples makes the column
+    /// grid exact, evenly spaced, and independent of how often — or how evenly —
+    /// the shell draws.
+    ///
+    /// One call therefore costs as many FFTs as the audio it is handed contains
+    /// hops. Normally that is a frame's worth (two or three), and the worst
+    /// case is a batch as large as the shell's audio ring — 1.37 s of stereo
+    /// at 48 kHz in the plugin, 170 columns, some 10 ms through Fast and 36
+    /// through Precise — reachable only by a drain starved for that long,
+    /// which then gets its heatmap back-filled with audio that really did
+    /// happen. The ring holds samples, not time, so a higher rate's fewer
+    /// columns cost what its longer frame adds back, and a lower rate's are
+    /// more: 54 ms through Precise at 32 kHz.
     pub fn feed_source(
         &mut self,
         samples: &[f32],
@@ -347,48 +301,84 @@ impl SpectrumAnalysis {
         config: &SpectrumConfig,
         mut deliver: impl FnMut(Delivery),
     ) {
-        let batch = samples.len() / channels.max(1);
+        // A changed rate empties the analyzers' rings, so nothing comes out
+        // until they have refilled; a changed frame carries what the new one
+        // can use, so only a longer one waits, for the rest of it. The hop grid
+        // keeps its phase across any gap rather than restarting on it.
+        self.analyzer.configure(config.analyzer(sample_rate), channels);
+
+        // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
+        // time. A partial frame at the end is left out, so the de-interleaving
+        // in `push_frames` can never slip a channel.
+        let channels = self.analyzer.channels();
+        let batch = samples.len() / channels;
         if batch == 0 {
             return;
         }
-        let newest = origin
-            + (self.frames_seen + batch as u64).saturating_sub(1) as f64
-                / f64::from(sample_rate.max(1.0));
-        deliver(Delivery::Arrival(newest));
-        self.feed(
-            batch,
-            channels,
-            sample_rate,
-            newest,
-            config,
-            Some(origin),
-            |feed| {
-                feed(samples);
-                Ok::<_, std::convert::Infallible>(())
-            },
-            |column| deliver(Delivery::Column(Box::new(column))),
-        )
-        .unwrap();
+        let sr = f64::from(sample_rate.max(1.0));
+        let newest = origin + (self.frames_seen + batch as u64 - 1) as f64 / sr;
+        deliver(Delivery::Arrival { newest, lag: self.lag() });
+        let hop = ((AudioSpectrum::FFT_INTERVAL * sr).round() as u64).max(1);
+        // Columns fall on multiples of `hop` frames from the start of the
+        // stream. Left at zero the first boundary would be frame 1 and every one
+        // after it a frame early, which is harmless but makes the grid
+        // impossible to state (or to test) in whole hops.
+        if self.next_hop == 0 {
+            self.next_hop = hop;
+        }
+
+        let mut fed = 0usize; // frames
+        while fed < batch {
+            // Feed exactly up to the next hop boundary, so a spectrum is taken
+            // at every multiple of `hop` frames and nowhere else. `max(1)`
+            // keeps the loop moving if a sample-rate change ever leaves the
+            // boundary behind us; the next line puts the grid back on its feet.
+            let want = self.next_hop.saturating_sub(self.frames_seen).max(1) as usize;
+            let take = want.min(batch - fed);
+            self.analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
+            self.frames_seen += take as u64;
+            fed += take;
+            if self.frames_seen < self.next_hop {
+                break; // The batch ran out before the boundary.
+            }
+            self.next_hop = self.frames_seen + hop;
+            let Some(fresh) = self.analyzer.power_sum() else { continue };
+
+            // Stamped where the window it measured is centred, not at the
+            // boundary itself — see `window_center_offset`. This is what lets a
+            // ridge sit under the note ribbon that made it, which is the entire
+            // point of drawing the two on one time axis. The boundary is where
+            // the newest frame fed so far sits on the run's grid, so
+            // consecutive columns are exactly `hop` frames apart.
+            let boundary = origin + self.frames_seen.saturating_sub(1) as f64 / sr;
+            let center = boundary - self.analyzer.window_center_offset();
+            let column = AnalyzedColumn { time: center, power: fresh, step: hop as f64 / sr };
+            deliver(Delivery::Column(Box::new(column)));
+        }
     }
 
-    /// The running analyzer's lag: see [`AudioSpectrum::column_lag`].
-    fn lag(&self) -> f64 {
+    /// The running analyzer's lag, which each [`Delivery::Arrival`] carries
+    /// to the store: see [`AudioSpectrum::column_lag`].
+    pub fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
 
-    /// Forget the retained run: the analyzer's window, the hop grid and the
-    /// anchor. The store's half is a [`Delivery::Restart`].
+    /// Forget the retained run: the analyzer's window and the hop grid. The
+    /// store's half is a [`Delivery::Restart`].
     pub fn restart(&mut self) {
         self.analyzer.restart();
         self.frames_seen = 0;
         self.next_hop = 0;
-        self.anchor = None;
     }
 }
 
 impl SpectrumStore {
     /// Advance the curve by one analyzed column and, if `keep`, keep it as
     /// history.
+    ///
+    /// The curve's attack and release run here, per column, for the reason the
+    /// FFT runs on a grid of sample counts ([`SpectrumAnalysis::feed_source`]):
+    /// on the frame clock their time constants would depend on the frame rate.
     pub(crate) fn take(&mut self, column: AnalyzedColumn, config: &SpectrumConfig, keep: bool) {
         // Two coefficients, chosen per bucket by which way it is moving.
         // Derived from the hop actually in use rather than set on the bar,
@@ -439,14 +429,14 @@ impl SpectrumStore {
     /// store until it ages past the cap.
     ///
     /// Dates must be strictly increasing, which the incremental heatmap
-    /// aggregation relies on. Today's callers deliver them so: the plugin's
-    /// source-dated path, whose mapper never rewinds its shown time; the
-    /// offline renderer, whose contiguous batches keep one arrival anchor; and
-    /// the standalone app's synth, whose anchor only drifts forward because
-    /// `Synth::render` never renders more samples than the time elapsed.
-    /// Arrival-dated input does not promise it in general: the anchor is
-    /// smoothed, so one batch can step it back by up to `ANCHOR_SMOOTHING` of
-    /// `ANCHOR_SNAP` (50 ms), more than the hop between two columns.
+    /// aggregation relies on. Every feeder dates a run from its stated frame
+    /// zero ([`SpectrumAnalysis::feed_source`]), so a run's columns step
+    /// forward by whole hops, and a new run starts after the old one: the
+    /// plugin's clock offset only grows and a restarted analyzer's first
+    /// column waits for a full frame; the offline renderer's one run is its
+    /// soundtrack; and the standalone synth, after a stall, starts a new run
+    /// whose first column dates after the last of the run before, however
+    /// its resolution changed.
     ///
     /// So the `debug_assert!` checks those callers, and nothing here enforces
     /// the order. The aggregator assumes it in release builds too: a backward
@@ -457,16 +447,20 @@ impl SpectrumStore {
             "history dates must strictly increase: {now} after {:?}",
             self.history.back().map(|c| c.time),
         );
+        self.columns_taken += 1;
         self.history.push(SpectrogramColumn::from_power(now, power));
         self.history.trim_older_than(now - AudioSpectrum::HISTORY_MAX_SECONDS);
     }
 
-    /// Apply one delivery, as [`AudioSpectrum::give_back`] describes.
+    /// Apply one delivery, as [`AudioSpectrum::give`] describes.
     /// `keep` false moves the curve without keeping the column as history.
     fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig, keep: bool) {
         match delivery {
             Delivery::Restart => self.restart(),
-            Delivery::Arrival(newest) => self.last_samples = Some(newest),
+            Delivery::Arrival { newest, lag } => {
+                self.last_samples = Some(newest);
+                self.lag = lag;
+            }
             Delivery::Column(column) => self.take(*column, config, keep),
         }
     }
@@ -522,7 +516,7 @@ pub(crate) fn hop_alpha(seconds: f32, dt: f64) -> f32 {
 impl AudioSpectrum {
     /// Seconds of AUDIO between FFTs (125 columns a second), measured in
     /// samples rather than on the shell clock — see
-    /// [`push_samples`](Self::push_samples).
+    /// [`feed_source`](SpectrumAnalysis::feed_source).
     ///
     /// A column costs the slab it lands in and nothing else (see
     /// `spectrogram::FoldedGrid`), so the rate buys smoothness at the newest edge
@@ -546,160 +540,60 @@ impl AudioSpectrum {
     pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
     pub(crate) const HOLD_SECONDS: f64 = 0.5;
-    /// Per-batch gain and restart threshold for the arrival-dated sample-count
-    /// anchor (see the field). Source-dated plugin audio bypasses both.
-    pub(crate) const ANCHOR_SMOOTHING: f64 = 0.05;
-    pub(crate) const ANCHOR_SNAP: f64 = 1.0;
 
-    /// Feed interleaved samples, `channels` to a frame, from the shell,
-    /// analyzing one spectrum per
-    /// [`FFT_INTERVAL`](Self::FFT_INTERVAL) of audio in them. `now` is the shell
-    /// clock also passed to [`root_ui`](crate::root_ui), and dates the NEWEST sample of the
-    /// batch — which is what a shell draining its audio ring at frame time
-    /// means by it.
+    /// Keep what an analysis made from audio taken when the history's
+    /// [`history_epoch`](Self::history_epoch) was `epoch`, in order; `config`
+    /// is the one it analyzed under. The plugin's input worker takes its
+    /// audio and analyzes it off the editor's lock, and gives the result
+    /// under it.
     ///
-    /// The FFT runs here, on a grid of sample counts, rather than in
-    /// [`display`](Self::display) on a grid of frames. That is the whole point:
-    /// the old gate (`now - last_fft >= FFT_INTERVAL`, evaluated once per UI
-    /// pass) could only fire ON a frame boundary, so a 20 ms interval on a 60 Hz
-    /// display fired every 33.3 ms — SLOWER than the 32 ms slabs the heatmap was
-    /// cutting the window into. Slabs went empty and were filled by duplicating
-    /// their neighbour (`JITTER_SLABS`), so a held column scrolled past about
-    /// once a second; the columns that did arrive sat at a phase inside their
-    /// slab that drifted with the frame clock; and capping the frame rate
-    /// coarsened the picture in proportion. Counting samples makes the column
-    /// grid exact, evenly spaced, and independent of how often — or how evenly —
-    /// the shell draws.
-    ///
-    /// The CURVE's attack/release smoothing moved here with it, for the same
-    /// reason: it is per-column, so leaving it on the frame clock would have
-    /// made its time constants frame-rate dependent.
-    ///
-    /// One call therefore costs as many FFTs as the audio it is handed contains
-    /// hops, where the old one cost exactly one. Normally that is a frame's
-    /// worth (two or three), and the worst case is a batch as large as the
-    /// shell's audio ring — 1.37 s of stereo at 48 kHz in the plugin, 170
-    /// columns, some 10 ms through Fast and 36 through Precise — reachable only
-    /// by a drain starved for that long, which then gets its heatmap
-    /// back-filled with audio that really did happen. The ring holds samples,
-    /// not time, so a higher rate's fewer columns cost what its longer frame
-    /// adds back, and a lower rate's are more: 54 ms through Precise at 32 kHz.
-    pub fn push_samples(
-        &mut self,
-        samples: &[f32],
-        channels: usize,
-        sample_rate: f32,
-        now: f64,
-        config: &SpectrumConfig,
-    ) {
-        if samples.is_empty() {
-            return;
-        }
-        self.push_sample_chunks(
-            samples.len() / channels.max(1),
-            channels,
-            sample_rate,
-            now,
-            config,
-            |feed| {
-                feed(samples);
-                Ok::<_, std::convert::Infallible>(())
-            },
-        )
-        .unwrap();
-    }
-
-    /// Feed complete source frames on an exact sample grid. `origin` is frame
-    /// zero of this retained run converted to the shell clock by its owner.
-    /// Unlike arrival-dated input, it needs no second clock estimate/smoothing.
-    /// The shell may update its conversion once per drain, shared with notes;
-    /// physical callback/chunk boundaries never influence that conversion.
-    ///
-    /// The plugin's [`lend`](Self::lend), feed and
-    /// [`give_back`](Self::give_back) in one call, for tests of that path.
-    #[cfg(test)]
-    pub(crate) fn push_source_samples(
-        &mut self,
-        samples: &[f32],
-        channels: usize,
-        sample_rate: f32,
-        origin: f64,
-        config: &SpectrumConfig,
-    ) {
-        let mut lent = self.lend().expect("an inline shell never lends its analysis");
-        let mut deliveries = Vec::new();
-        lent.analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
-            deliveries.push(delivery)
-        });
-        self.give_back(lent, deliveries, config);
-    }
-
-    /// Take the analysis out, to run where the store is not; `None` while it
-    /// is already out. The plugin's input worker analyzes off the editor's
-    /// lock and gives the result back under it.
-    pub fn lend(&mut self) -> Option<LentAnalysis> {
-        let analysis = self.analysis.take()?;
-        self.lent_lag = analysis.lag();
-        Some(LentAnalysis { analysis, epoch: self.store.history.clears() })
-    }
-
-    /// Return a [`lend`](Self::lend)'s analysis with what it delivered from a
-    /// source-dated feed, applied in order; `config` is the one it analyzed
-    /// under.
-    ///
-    /// If the history has been cleared since the lend, its columns still move
+    /// If the history has been cleared since `epoch`, its columns still move
     /// the curve but do not join the history, which the Clear was asked to
     /// empty of everything before it.
-    pub fn give_back(
+    pub fn give(
         &mut self,
-        lent: LentAnalysis,
+        epoch: u32,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
     ) {
-        debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
-        let keep = lent.epoch == self.store.history.clears();
+        let keep = epoch == self.history_epoch();
         for delivery in deliveries {
             self.store.apply(delivery, config, keep);
         }
-        self.analysis = Some(lent.analysis);
     }
 
-    /// Replace a lent analysis that will never be given back, as after a
-    /// panic between [`lend`](Self::lend) and [`give_back`](Self::give_back).
-    /// Whether one was lost: the fresh one starts no run, so its caller owes
-    /// the source a restart.
-    pub fn recover(&mut self) -> bool {
-        let lost = self.analysis.is_none();
-        if lost {
-            self.analysis = Some(SpectrumAnalysis::new());
-        }
-        lost
+    /// Keep one delivery as it is made: an inline shell's
+    /// [`feed_source`](SpectrumAnalysis::feed_source) delivers here, where
+    /// no Clear can come between the analysis and the store.
+    pub fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig) {
+        self.store.apply(delivery, config, true);
     }
 
-    /// Feed one logical batch through bounded physical chunks. Update the clock
-    /// anchor once from the complete batch's newest frame, exactly as
-    /// `push_samples` does: I/O boundaries must not add smoothing steps or move
-    /// column timestamps. The producer supplies exactly `batch` complete frames
-    /// in order; an error aborts its caller rather than using a partial render.
-    pub fn push_sample_chunks<E>(
+    /// A test shell's feed through its own analysis, dated as a shell that
+    /// heard the batch's newest frame at `now`, and the columns it made, as a
+    /// delivery tap.
+    #[cfg(test)]
+    pub(crate) fn push_samples(
         &mut self,
-        batch: usize,
+        samples: &[f32],
         channels: usize,
         sample_rate: f32,
         now: f64,
         config: &SpectrumConfig,
-        consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
-    ) -> Result<(), E> {
-        let AudioSpectrum { analysis, store, .. } = self;
-        let analysis = analysis.as_mut().expect("an inline shell never lends its analysis");
-        store.last_samples = Some(now);
-        analysis.feed(batch, channels, sample_rate, now, config, None, consume, |column| {
-            store.take(column, config, true)
-        })
+    ) -> Vec<AnalyzedColumn> {
+        let frames = self.analysis.frames_seen + (samples.len() / channels.max(1)) as u64;
+        let origin = now - frames.saturating_sub(1) as f64 / f64::from(sample_rate.max(1.0));
+        let mut columns = Vec::new();
+        let AudioSpectrum { store, analysis } = self;
+        analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
+            columns.extend(delivery.column().cloned());
+            store.apply(delivery, config, true)
+        });
+        columns
     }
 
     /// The curve to draw, or None while no audio is flowing. The levels are
-    /// maintained per column by [`push_samples`](Self::push_samples); this
+    /// maintained per column as each is delivered; this
     /// only decides whether they are still live.
     pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
         let store = &self.store;
@@ -755,10 +649,26 @@ impl AudioSpectrum {
     ///
     /// The heatmap allows for this delay when deciding whether columns are
     /// fresh enough to extend their newest color to the now-line. This also
-    /// reports the running analyzer's lag, rather than the requested config's
-    /// ([`SpectrumConfig::column_lag`]).
+    /// reports the lag of the analysis that made the newest columns, delivered
+    /// with their batch, rather than the requested config's
+    /// ([`SpectrumConfig::column_lag`]): the plugin's frame reads it while
+    /// its input worker analyzes, and after a crash there replaced the
+    /// analysis, until the next hand-over.
     pub fn column_lag(&self) -> f64 {
-        self.analysis.as_ref().map_or(self.lent_lag, SpectrumAnalysis::lag)
+        self.store.lag
+    }
+
+    /// How many columns have joined the history since the store was made: a
+    /// count that only grows, so neither ageing nor a Clear hides what a step
+    /// kept, and nothing has to read the store's columns to tell.
+    pub fn columns_taken(&self) -> u64 {
+        self.store.columns_taken
+    }
+
+    /// The date of the newest column the history holds, `None` while it is
+    /// empty.
+    pub fn newest_column(&self) -> Option<f64> {
+        self.store.history.back().map(|column| column.time)
     }
 
     /// When the spectrum last held anything above silence: see [`Heard`].
@@ -869,9 +779,11 @@ mod tests {
         }
         assert_eq!(spectrum.store.fold_measurements, 1, "a new frame is not a new measurement");
 
-        // A new column at a new frame time still invalidates it.
-        spectrum.push_samples(&tone(660.0), 1, 48_000.0, 1.2, &cfg);
-        let next = spectrum.folded(1.25, 2.0).unwrap().to_vec();
+        // A new column at a new frame time still invalidates it: the next
+        // batch of the run, which ends that much later.
+        let later = 1.0 + tone(660.0).len() as f64 / 48_000.0;
+        spectrum.push_samples(&tone(660.0), 1, 48_000.0, later, &cfg);
+        let next = spectrum.folded(later, 2.0).unwrap().to_vec();
         assert_ne!(next, first, "new audio must be measured");
         assert_eq!(spectrum.store.fold_measurements, 2);
     }

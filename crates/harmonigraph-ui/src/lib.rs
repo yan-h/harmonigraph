@@ -65,8 +65,7 @@ pub(crate) use config::{
 // declared in `video` beside the appearance document that carries them, so a
 // new one is one declaration and one name here, in this crate alone.
 pub use spectrum::{
-    AnalyzedColumn, AudioSpectrum, Delivery, LentAnalysis, SpectrogramColumn, SpectrumAnalysis,
-    SpectrumHistory,
+    AnalyzedColumn, AudioSpectrum, Delivery, SpectrogramColumn, SpectrumAnalysis, SpectrumHistory,
 };
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,

@@ -165,7 +165,7 @@ pub(crate) fn frame_input(screen: egui::Rect, now: f64, max_texture_side: usize)
 /// gets reported rather than swallowed for another thousand frames.
 pub fn render(
     replay: &mut Replay,
-    mut audio: Option<&mut Audio>,
+    audio: Option<&mut Audio>,
     settings: &Settings,
     appearance: AppearanceDocument,
     mut emit: impl FnMut(Vec<u8>) -> Result<Vec<u8>, String>,
@@ -225,9 +225,10 @@ pub fn render(
     // read sizes it, and after the first few the sink is handing back
     // buffers that are already the right size.
     let mut buffer = Vec::new();
+    let mut soundtrack = audio.map(Soundtrack::new);
     for frame in 0..frames {
         let drawing = Instant::now();
-        let now = prepare_frame(replay, &mut state, audio.as_deref_mut(), settings, frame)?;
+        let now = prepare_frame(replay, &mut state, soundtrack.as_mut(), settings, frame)?;
 
         // No panels and no dock: the layout owns the frame, and the
         // background is the render pass's clear color rather than a
@@ -282,6 +283,71 @@ fn hand_over(
     Ok(true)
 }
 
+/// The export's spectrum feeder: the soundtrack, and the analysis over it,
+/// whose one run starts at the first frame read and is dated by counting
+/// frames from there.
+struct Soundtrack<'a> {
+    audio: &'a mut Audio,
+    analysis: harmonigraph_ui::SpectrumAnalysis,
+    /// The run's frame zero on the render's clock, and the soundtrack frame
+    /// the next read must start at to continue it. `None` before the first.
+    run: Option<(f64, usize)>,
+    /// Every column the analysis made, as `(time, power)`: a delivery tap for
+    /// the tests, which ask what was analyzed rather than what the store kept.
+    #[cfg(test)]
+    columns: Vec<(f64, Vec<f32>)>,
+}
+
+impl<'a> Soundtrack<'a> {
+    fn new(audio: &'a mut Audio) -> Self {
+        Soundtrack {
+            audio,
+            analysis: Default::default(),
+            run: None,
+            #[cfg(test)]
+            columns: Vec::new(),
+        }
+    }
+
+    /// Analyze the soundtrack's frames in `range` into `spectrum`, as the
+    /// next stretch of the one run: `range` starts where the last ended, and
+    /// the run's frame zero is where the first started. `audio_start` is the
+    /// soundtrack's own frame zero on the render's clock.
+    ///
+    /// A range that does not meet the last is refused: the run's dates count
+    /// frames from its start, so a skipped or repeated frame would misdate
+    /// every column after it.
+    fn feed(
+        &mut self,
+        spectrum: &mut harmonigraph_ui::AudioSpectrum,
+        range: std::ops::Range<usize>,
+        audio_start: f64,
+        config: &harmonigraph_ui::SpectrumConfig,
+    ) -> Result<(), String> {
+        let Soundtrack { audio, analysis, .. } = self;
+        let (channels, rate) = (audio.channels, audio.sample_rate);
+        let (origin, next) = self
+            .run
+            .get_or_insert((audio_start + range.start as f64 / f64::from(rate), range.start));
+        if range.start != *next {
+            return Err(format!(
+                "the soundtrack read resumed at frame {} after ending at {next}",
+                range.start
+            ));
+        }
+        *next = range.end;
+        #[cfg(test)]
+        let columns = &mut self.columns;
+        audio.for_frames(range, |chunk| {
+            analysis.feed_source(chunk, channels, rate, *origin, config, |delivery| {
+                #[cfg(test)]
+                columns.extend(delivery.column().map(|c| (c.time(), c.power().to_vec())));
+                spectrum.apply(delivery, config)
+            })
+        })
+    }
+}
+
 /// Advance one export frame through the same replay/audio path the renderer
 /// draws, with the spectrum in step with the soundtrack.
 ///
@@ -300,7 +366,7 @@ fn hand_over(
 fn prepare_frame(
     replay: &mut Replay,
     state: &mut PictureState,
-    audio: Option<&mut Audio>,
+    soundtrack: Option<&mut Soundtrack>,
     settings: &Settings,
     frame: u64,
 ) -> Result<f64, String> {
@@ -308,7 +374,8 @@ fn prepare_frame(
     let step = 1.0 / settings.fps;
     let now = settings.start + frame as f64 * step;
     replay.advance_to(&mut state.runtime, now);
-    if let Some(audio) = audio {
+    if let Some(soundtrack) = soundtrack {
+        let audio = &soundtrack.audio;
         let config = state.appearance.spectrum;
         // The appearance is installed once per render, so this is the same
         // every frame and consecutive slices meet exactly.
@@ -322,16 +389,8 @@ fn prepare_frame(
         let range =
             audio.range_seconds(from - settings.audio_start, now + lead - settings.audio_start);
         if !range.is_empty() {
-            let end = range.end;
-            let newest = settings.audio_start + (end - 1) as f64 / f64::from(audio.sample_rate);
-            state.runtime.spectrum.push_sample_chunks(
-                range.len(),
-                audio.channels,
-                audio.sample_rate,
-                newest,
-                &config,
-                |feed| audio.for_frames(range, feed),
-            )?;
+            let spectrum = &mut state.runtime.spectrum;
+            soundtrack.feed(spectrum, range, settings.audio_start, &config)?;
         }
     }
     begin_frame(state, &replay.params, now);
@@ -474,7 +533,7 @@ mod tests {
         const HOP: usize = 384;
         let mut audio = transient_audio();
         for (origin, offset) in [(0.0, 0.0), (7.125, 0.0), (7.125, 0.41731), (7.125, -0.00713)] {
-            let mut previous_bins: Option<Vec<Vec<u8>>> = None;
+            let mut previous_bins: Option<Vec<Vec<f32>>> = None;
             for fps in [1.0, 4.0, 30.0, 60.0, 120.0, 30_000.0 / 1001.0] {
                 let settings = Settings {
                     fps,
@@ -484,6 +543,7 @@ mod tests {
                     ..settings()
                 };
                 let mut replay = Replay::new(transient_take(origin));
+                let mut soundtrack = Soundtrack::new(&mut audio);
                 let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
                 state.runtime.learn_active = false;
                 let window = state.appearance.spectrum.window.frame(SR as f32);
@@ -496,11 +556,16 @@ mod tests {
                 let first = ((start - frame_seconds - origin) * SR).round().max(0.0) as usize;
                 let mut partial_tail = false;
                 for frame in 0..settings.frame_count() {
-                    let before = state.runtime.spectrum.history().len();
-                    let now =
-                        prepare_frame(&mut replay, &mut state, Some(&mut audio), &settings, frame)
-                            .unwrap();
-                    let history = state.runtime.spectrum.history();
+                    let before = soundtrack.columns.len();
+                    let now = prepare_frame(
+                        &mut replay,
+                        &mut state,
+                        Some(&mut soundtrack),
+                        &settings,
+                        frame,
+                    )
+                    .unwrap();
+                    let history = &soundtrack.columns;
                     let (from, to) = match frame {
                         0 => (now - frame_seconds, now + lag),
                         _ => (start + (frame - 1) as f64 / fps + lag, now + lag),
@@ -523,7 +588,7 @@ mod tests {
                     // hop the grid needs past it, the newest column is centred
                     // on it to within a hop.
                     if now + lag - frame_seconds - origin >= HOP as f64 / SR && to <= audio_end {
-                        let newest = history.iter().last().expect("a column by now").time;
+                        let newest = history.last().expect("a column by now").0;
                         assert!(
                             now - newest <= (HOP + 1) as f64 / SR,
                             "the newest column is {:.1} ms behind the frame at {fps} fps, \
@@ -532,7 +597,7 @@ mod tests {
                         );
                     }
                     assert!(
-                        history.iter().all(|c| c.time <= now),
+                        history.iter().all(|(time, _)| *time <= now),
                         "future columns would evict visible history at {fps} fps"
                     );
                 }
@@ -544,20 +609,19 @@ mod tests {
                     .step_by(HOP)
                     .map(|fed| origin + (first + fed - 1) as f64 / SR - lag)
                     .collect();
-                let history = state.runtime.spectrum.history();
+                let history = &soundtrack.columns;
                 assert_eq!(history.len(), expected.len());
                 assert!(!expected.is_empty());
-                for (column, expected) in history.iter().zip(expected) {
+                for ((time, _), expected) in history.iter().zip(expected) {
                     assert!(
-                        (column.time - expected).abs() < 1e-9,
-                        "{fps} fps, start {offset}: {} instead of {expected}",
-                        column.time
+                        (time - expected).abs() < 1e-9,
+                        "{fps} fps, start {offset}: {time} instead of {expected}",
                     );
                 }
                 assert!((state.runtime.spectrum.column_lag() - lag).abs() < 1e-12);
-                let bins: Vec<_> = history.iter().map(|c| c.db().to_vec()).collect();
+                let bins: Vec<_> = history.iter().map(|(_, power)| power.clone()).collect();
                 if let Some(previous) = &previous_bins {
-                    assert_eq!(&bins, previous, "batching changed spectrum bytes at {fps} fps");
+                    assert!(&bins == previous, "batching changed the spectrum at {fps} fps");
                 }
                 previous_bins = Some(bins);
                 let note = state
@@ -566,15 +630,16 @@ mod tests {
                     .find(|n| n.source == harmonigraph_core::SourceId(0) && n.note == 69)
                     .expect("the MIDI event reached the replayed roll");
                 assert_eq!(note.start, origin + 0.8);
-                let energy = |c: &harmonigraph_ui::SpectrogramColumn| {
-                    c.db().iter().map(|&v| u64::from(v)).sum::<u64>()
+                let energy = |(_, power): &(f64, Vec<f32>)| {
+                    let quantize = harmonigraph_core::spectrogram::quantize;
+                    power.iter().map(|&p| u64::from(quantize(p))).sum::<u64>()
                 };
                 let peak = history.iter().map(energy).max().unwrap();
                 assert!(peak > 0, "anti-phase transient reached the analyzer");
                 // Quantized dB can make a short plateau around a symmetric
                 // impulse. Its midpoint dates the peak without favoring a side.
                 let peaks: Vec<_> =
-                    history.iter().filter(|c| energy(c) == peak).map(|c| c.time).collect();
+                    history.iter().filter(|c| energy(c) == peak).map(|c| c.0).collect();
                 let peak_time = (peaks[0] + peaks[peaks.len() - 1]) * 0.5;
                 assert!(
                     (peak_time - note.start).abs() <= (HOP + 1) as f64 / SR,
@@ -583,6 +648,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The soundtrack's run is dated by counting frames from its first read,
+    /// so a read that does not continue the last is refused rather than left
+    /// to misdate every column after it.
+    #[test]
+    fn a_soundtrack_read_that_does_not_continue_the_run_is_refused() {
+        let mut audio = transient_audio();
+        let mut soundtrack = Soundtrack::new(&mut audio);
+        let mut spectrum = harmonigraph_ui::AudioSpectrum::default();
+        let cfg = harmonigraph_ui::SpectrumConfig::default();
+        soundtrack.feed(&mut spectrum, 0..1000, 7.125, &cfg).unwrap();
+        soundtrack.feed(&mut spectrum, 1000..2000, 7.125, &cfg).unwrap();
+        assert!(soundtrack.feed(&mut spectrum, 2001..3000, 7.125, &cfg).is_err(), "skipped");
+        assert!(soundtrack.feed(&mut spectrum, 1999..3000, 7.125, &cfg).is_err(), "repeated");
     }
 
     #[test]

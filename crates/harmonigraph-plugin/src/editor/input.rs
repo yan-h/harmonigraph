@@ -24,6 +24,11 @@ pub(crate) struct LiveInput {
     /// The buffers the last [`Taken`] came back in, so a step allocates only
     /// when it needs more than any before it.
     pub(super) spare: TakenAudio,
+    /// The analysis over this input, dated from `audio_origin`: out with a
+    /// [`Taken`] between [`Self::take`] and [`Self::give`], and `None` while it
+    /// is, so a step that panicked in between leaves it for
+    /// [`Self::recover_analysis`] to replace.
+    pub(super) analysis: Option<harmonigraph_ui::SpectrumAnalysis>,
     /// What the display did to its voices, at presentation times, for the
     /// tape to place by song position; the input worker swaps it out each
     /// step. Bounded, so nothing grows where no worker runs.
@@ -31,11 +36,15 @@ pub(crate) struct LiveInput {
     pub(super) recorder: crate::tape::notes::Recorder,
 }
 
-/// The audio one [`LiveInput::take`] moved out of the ring, and
-/// `runtime.spectrum`'s analysis lent with it: what [`LiveInput::analyze`]
-/// runs without the lock.
+/// The audio one [`LiveInput::take`] moved out of the ring, and the analysis
+/// moved out with it: what [`LiveInput::analyze`] runs without the lock.
 pub(crate) struct Taken {
-    lent: harmonigraph_ui::LentAnalysis,
+    analysis: harmonigraph_ui::SpectrumAnalysis,
+    /// The history's epoch at take: a Clear before the give keeps this
+    /// step's columns out (see [`AudioSpectrum::give`]).
+    ///
+    /// [`AudioSpectrum::give`]: harmonigraph_ui::AudioSpectrum::give
+    epoch: u32,
     audio: TakenAudio,
 }
 
@@ -130,7 +139,7 @@ impl LiveInput {
         });
     }
     /// Move the audio ring's blocks out, mapped to the GUI clock with the
-    /// offset [`Self::drain_into_tracker`] has just observed, and lend the
+    /// offset [`Self::drain_into_tracker`] has just observed, and the
     /// analysis with them; `None` until a heartbeat has given that offset,
     /// leaving the audio in the ring as before.
     ///
@@ -171,27 +180,26 @@ impl LiveInput {
             self.spare = audio;
             return None;
         }
-        // A lend never given back, which no step leaves, would otherwise drop
-        // this audio and every take's after it. Healed as a panicking step is,
-        // with a fresh analysis starting a fresh run at this audio.
-        let lost = runtime.spectrum.recover();
-        debug_assert!(!lost, "the analysis was given back");
-        audio.blocks[0].restart |= lost;
-        let lent = runtime.spectrum.lend().expect("the analysis is home");
-        Some(Taken { lent, audio })
+        // An analysis never given back, which no step leaves, would otherwise
+        // drop this audio and every take's after it. Healed as a panicking
+        // step is, with a fresh analysis starting a fresh run at this audio.
+        debug_assert!(self.analysis.is_some(), "the analysis was given back");
+        audio.blocks[0].restart |= self.analysis.is_none();
+        let analysis = self.analysis.take().unwrap_or_default();
+        Some(Taken { analysis, epoch: runtime.spectrum.history_epoch(), audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {
-        let Taken { lent, audio } = taken;
+        let Taken { analysis, audio, .. } = taken;
         let mut start = 0;
         for block in &audio.blocks {
             if block.restart {
-                lent.analysis.restart();
+                analysis.restart();
                 audio.deliveries.push(harmonigraph_ui::Delivery::Restart);
             }
             let samples = &audio.samples[start..start + block.len];
             start += block.len;
-            lent.analysis.feed_source(
+            analysis.feed_source(
                 samples,
                 block.block.format.channels,
                 block.block.format.sample_rate,
@@ -202,18 +210,25 @@ impl LiveInput {
         }
     }
     /// Put a fresh analysis back if a panic between [`Self::take`] and
-    /// [`Self::give`] lost the lent one, and start the source run over, so the
+    /// [`Self::give`] lost the one taken, and start the source run over, so the
     /// next block re-anchors the fresh analyzer's grid instead of extending
     /// the interrupted run's.
-    pub(crate) fn recover_analysis(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime) {
-        if runtime.spectrum.recover() {
+    ///
+    /// The store keeps the lag the lost analysis last handed over, which is
+    /// the running resolution's, until the fresh one hands over its own.
+    pub(crate) fn recover_analysis(&mut self) {
+        if self.analysis.is_none() {
+            self.analysis = Some(Default::default());
             self.audio_position = None;
         }
     }
-    /// Hand what [`Self::analyze`] made to the store, and the analysis back.
+    /// Hand what [`Self::analyze`] made to the store, and put the analysis
+    /// back.
     pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
-        let Taken { lent, mut audio } = taken;
-        runtime.spectrum.give_back(lent, audio.deliveries.drain(..), &audio.config);
+        let Taken { analysis, epoch, mut audio } = taken;
+        runtime.spectrum.give(epoch, audio.deliveries.drain(..), &audio.config);
+        debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
+        self.analysis = Some(analysis);
         audio.samples.clear();
         audio.blocks.clear();
         self.spare = audio;
@@ -261,7 +276,7 @@ impl LiveInput {
         self.clock.now(wall_now)
     }
     /// The locked half of a step: the notes into the tracker, then the
-    /// audio out of its ring with the analysis lent alongside, for
+    /// audio out of its ring with the analysis alongside, for
     /// [`Self::analyze`] then [`Self::give`].
     /// Input feeding does not prune against stale parameters: callers advance
     /// time after observing their parameters, or retain the last mirrors while
@@ -290,6 +305,24 @@ impl LiveInput {
             self.give(runtime, taken);
         }
     }
+    /// [`Self::drain`] with a delivery tap: the columns its analysis made, as
+    /// `(time, power)`, whether or not the history kept them.
+    #[cfg(test)]
+    pub(crate) fn drain_columns(
+        &mut self,
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        appearance: &harmonigraph_ui::AppearanceDocument,
+        now: f64,
+    ) -> Vec<(f64, Vec<f32>)> {
+        let Some(mut taken) = self.take(runtime, appearance, now) else { return Vec::new() };
+        Self::analyze(&mut taken);
+        let columns = (taken.audio.deliveries.iter())
+            .filter_map(harmonigraph_ui::Delivery::column)
+            .map(|column| (column.time(), column.power().to_vec()))
+            .collect();
+        self.give(runtime, taken);
+        columns
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +348,11 @@ mod tests {
 
     fn drain_audio(shared: &mut EditorShared, now: f64) {
         shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
+    }
+
+    fn drain_columns(shared: &mut EditorShared, now: f64) -> Vec<(f64, Vec<f32>)> {
+        let picture = &mut shared.ui.picture;
+        shared.input.drain_columns(&mut picture.runtime, &picture.appearance, now)
     }
 
     /// Callbacks a 144 Hz display link ran late by these amounts — the spread
@@ -379,23 +417,13 @@ mod tests {
                 [x, -x]
             })
             .collect();
-        let columns = |shared: &EditorShared| {
-            shared
-                .ui
-                .picture
-                .runtime
-                .spectrum
-                .history()
-                .iter()
-                .map(|c| (c.time, c.db().clone()))
-                .collect::<Vec<_>>()
-        };
         let mut reference = None;
         for (callback, drain_every, delay) in
             [(frames, 1, 0.0), (127, 1, 0.0), (511, 7, 0.3), (4093, 99, 3.0)]
         {
             let (mut tx, mut shared) = audio_harness(crate::AUDIO_RING_CAPACITY);
             let mut count = 0;
+            let mut actual = Vec::new();
             for first in (0..frames).step_by(callback) {
                 let end = (first + callback).min(frames);
                 tx.publish(
@@ -412,11 +440,11 @@ mod tests {
                 );
                 count += 1;
                 if count % drain_every == 0 {
-                    drain_audio(&mut shared, 10.0 + end as f64 / 48_000.0 + delay);
+                    let now = 10.0 + end as f64 / 48_000.0 + delay;
+                    actual.extend(drain_columns(&mut shared, now));
                 }
             }
-            drain_audio(&mut shared, 15.0 + delay);
-            let actual = columns(&shared);
+            actual.extend(drain_columns(&mut shared, 15.0 + delay));
             assert!(actual.len() > 50, "fixture must fill the window and reach many FFT hops");
             if let Some(expected) = &reference {
                 assert_eq!(&actual, expected, "callback={callback}, drain_every={drain_every}");
@@ -479,6 +507,7 @@ mod tests {
                 sidechain: false,
             };
             let mut now = 0.0;
+            let mut columns = Vec::new();
             for batch in 0..16usize {
                 let start = batch as f64 * 0.25;
                 let end = start + 0.25;
@@ -498,19 +527,10 @@ mod tests {
                     )
                     .unwrap();
                 notes.observe_clock(end);
-                drain_audio(&mut shared, end / speed);
+                columns.extend(drain_columns(&mut shared, end / speed));
                 now = shared.input.display_now(end / speed);
                 shared.ui.picture.runtime.advance_time(now, &shared.ui.picture.appearance);
             }
-            let columns: Vec<_> = shared
-                .ui
-                .picture
-                .runtime
-                .spectrum
-                .history()
-                .iter()
-                .map(|c| (c.time, c.db().clone()))
-                .collect();
             let onsets: Vec<_> =
                 shared.ui.picture.runtime.tracker.roll().notes().map(|n| n.start).collect();
             assert!(columns.len() > 400, "fixture must retain four seconds of FFT hops");
@@ -551,7 +571,7 @@ mod tests {
             std::iter::repeat(-0.5),
         );
         drain_audio(&mut shared, 1.0);
-        let before = shared.ui.picture.runtime.spectrum.history().len();
+        let before = shared.ui.picture.runtime.spectrum.columns_taken();
         assert!(before > 0);
         // A gap cannot complete a window using the previous run's tail.
         tx.publish(
@@ -563,7 +583,7 @@ mod tests {
             std::iter::repeat(-0.5),
         );
         drain_audio(&mut shared, 2.0);
-        assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
+        assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
         // Queue old-format partial audio before a reset and new-format audio.
         tx.publish(
             window / 4,
@@ -586,8 +606,8 @@ mod tests {
             crate::audio_ingress::TapePlay::Idle,
             std::iter::repeat(0.0),
         );
-        drain_audio(&mut shared, 4.0);
-        assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
+        let mut refilled = drain_columns(&mut shared, 4.0);
+        assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
         for i in 1..=4 {
             tx.publish(
                 refill / 4,
@@ -597,14 +617,13 @@ mod tests {
                 crate::audio_ingress::TapePlay::Idle,
                 std::iter::repeat(0.0),
             );
-            drain_audio(&mut shared, 5.0);
+            refilled.extend(drain_columns(&mut shared, 5.0));
         }
-        let spectrum = &shared.ui.picture.runtime.spectrum;
-        assert!(spectrum.history().len() > before, "new format must refill and emit columns");
-        for column in spectrum.history().iter().skip(before) {
-            assert!(column.time > 4.0, "no window may straddle the reset");
+        assert!(!refilled.is_empty(), "new format must refill and emit columns");
+        for (time, power) in &refilled {
+            assert!(*time > 4.0, "no window may straddle the reset");
             assert!(
-                column.db().iter().all(|v| *v == 0),
+                power.iter().all(|p| harmonigraph_core::spectrogram::quantize(*p) == 0),
                 "no old-format energy may leak into silence"
             );
         }

@@ -102,7 +102,7 @@ use tuning::plugin::HarmonigraphTune;
 /// Doubled when the ring stopped carrying a mono mixdown and started carrying
 /// the channels themselves (see `process`), so the seconds it holds — which is
 /// what bounds the input worker's catch-up work after a stall, see
-/// `AudioSpectrum::push_samples` — stayed where it was.
+/// `SpectrumAnalysis::feed_source` — stayed where it was.
 ///
 /// It is also what paces [`background`], whose longest poll has to stay well
 /// inside the span this holds; see `SHUT_POLL` there.
@@ -1337,10 +1337,10 @@ mod tests {
     /// every wait ends in "not yet", and a thread the scheduler forgot looks
     /// exactly like a thread correctly holding off. Those assertions keep a
     /// fixed settle and are commented where they stand.
-    fn columns_after(plugin: &Harmonigraph, before: usize) -> Option<usize> {
+    fn columns_after(plugin: &Harmonigraph, before: u64) -> Option<u64> {
         let started = Instant::now();
         loop {
-            let columns = plugin.editor_shared.lock().ui.picture.runtime.spectrum.history().len();
+            let columns = plugin.editor_shared.lock().ui.picture.runtime.spectrum.columns_taken();
             if columns > before {
                 return Some(columns);
             }
@@ -2044,15 +2044,14 @@ mod tests {
             context.transport.pos_samples = position;
             plugin.process(&mut audio, &mut aux, &mut context);
         }
-        shared.input.drain(
+        let columns = shared.input.drain_columns(
             &mut shared.ui.picture.runtime,
             &shared.ui.picture.appearance,
             plugin.presentation_seconds,
         );
-        let spectrum = &shared.ui.picture.runtime.spectrum;
-        let before = spectrum.history().len();
-        assert!(before > 40, "all three callbacks must reach the analyzer");
-        let times: Vec<_> = spectrum.history().iter().map(|c| c.time).collect();
+        assert!(columns.len() > 40, "all three callbacks must reach the analyzer");
+        let before = shared.ui.picture.runtime.spectrum.columns_taken();
+        let times: Vec<_> = columns.iter().map(|(time, _)| *time).collect();
         for pair in times.windows(2) {
             assert!((pair[1] - pair[0] - 0.008).abs() < 1e-12, "transport moved the source grid");
         }
@@ -2068,7 +2067,7 @@ mod tests {
             &shared.ui.picture.appearance,
             plugin.presentation_seconds,
         );
-        assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
+        assert_eq!(shared.ui.picture.runtime.spectrum.columns_taken(), before);
     }
 
     /// A take's WAV is always stereo. A mono host input is DUPLICATED into both

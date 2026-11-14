@@ -380,8 +380,8 @@ pub(crate) fn spectral_pane(
         })
         .collect();
 
-    // Nothing to pump here: the analyzer runs off the samples the shell pushes
-    // (see `AudioSpectrum::push_samples`), so the spectrogram's columns arrive
+    // Nothing to pump here: the analyzer runs off the samples the shell feeds
+    // (see `SpectrumAnalysis::feed_source`), so the spectrogram's columns arrive
     // whether or not the curve is drawn — and whether or not this pane is.
     // The far share of the depth axis: a spectrogram heatmap of the audio
     // and/or the piano roll of what has been played, both on the same

@@ -236,7 +236,7 @@ thread_local! {
 /// most for a full ring's 170, reachable only after this thread was starved
 /// for 1.37 s. The FFTs between them, some 10 ms for that ring through Fast
 /// at 48 kHz and 36 through Precise (see
-/// [`AudioSpectrum::push_samples`](harmonigraph_ui::AudioSpectrum::push_samples)),
+/// [`SpectrumAnalysis::feed_source`](harmonigraph_ui::SpectrumAnalysis::feed_source)),
 /// hold nothing. The thread runs at the GUI's
 /// scheduling class on macOS (see [`InputWorker::spawn`]), so a frame waiting
 /// on one of those holds is not also waiting for this thread to be scheduled.
@@ -306,7 +306,7 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
 }
 
 /// A [`step`] that survives its own panic. One would otherwise end the
-/// thread with the analysis lent out and nothing draining either ring, which
+/// thread with the analysis out and nothing draining either ring, which
 /// freezes the picture and every shut-window duty for the session with
 /// nothing said. Handing the drain to the frames instead would only move the
 /// same panic onto the host's main thread. So the analysis is put back fresh,
@@ -325,7 +325,7 @@ fn guarded_step(
     if stepped.is_err() {
         let mut guard = shared.lock();
         let shared = &mut *guard;
-        shared.input.recover_analysis(&mut shared.ui.picture.runtime);
+        shared.input.recover_analysis();
         if !std::mem::replace(panicked, true) {
             shared
                 .ui
@@ -511,8 +511,8 @@ mod tests {
                 .expect("the ring is sized for this");
         }
 
-        fn columns(&self) -> usize {
-            self.shared.lock().ui.picture.runtime.spectrum.history().len()
+        fn columns(&self) -> u64 {
+            self.shared.lock().ui.picture.runtime.spectrum.columns_taken()
         }
 
         fn voices(&self) -> usize {
@@ -526,8 +526,8 @@ mod tests {
 
         /// The window the ANALYZER is actually running at, which is the claim
         /// worth making: the setting reaching the config and stopping there is
-        /// precisely the bug (see `AudioSpectrum::push_samples`, the one thing
-        /// that carries one to the other).
+        /// precisely the bug (see `SpectrumAnalysis::feed_source`, the one
+        /// thing that carries one to the other).
         fn analyzed_lag(&self) -> f64 {
             self.shared.lock().ui.picture.runtime.spectrum.column_lag()
         }
@@ -745,19 +745,26 @@ mod tests {
         assert!(h.columns() > 0, "audio after the Clear was not kept");
     }
 
-    /// A step that panics with the analysis lent out leaves the next one
+    /// A step that panics with the analysis out leaves the next one
     /// analyzing again, with its columns dated where they belong rather than
-    /// from the frame zero of the run the panic interrupted.
+    /// from the frame zero of the run the panic interrupted. Until then the
+    /// newest edge keeps the running resolution's lag, not a fresh analyzer's.
     #[test]
     fn a_panicking_step_leaves_the_next_one_analyzing() {
+        use harmonigraph_ui::SpectrumWindow;
+
         let mut h = harness();
+        // Not the resolution a fresh analyzer starts at, so the lag tells the
+        // two apart.
+        let window = SpectrumWindow::Fast;
+        assert_ne!(lag_of(window), harmonigraph_ui::SpectrumAnalysis::default().lag());
+        h.shared.lock().ui.picture.appearance.spectrum.window = window;
         h.push_audio(20_000);
         h.step();
         let before = h.columns();
         assert!(before > 0, "the first step analyzed nothing");
-        let newest = |h: &Harness| {
-            h.shared.lock().ui.picture.runtime.spectrum.history().back().unwrap().time
-        };
+        let newest =
+            |h: &Harness| h.shared.lock().ui.picture.runtime.spectrum.newest_column().unwrap();
         let first = newest(&h);
 
         h.push_audio(20_000);
@@ -766,6 +773,7 @@ mod tests {
         super::guarded_step(&h.shared, &h.editor_state, &mut h.tape, &mut panicked);
         BETWEEN_HOLDS.set(None);
         assert!(panicked, "the hook did not run");
+        assert!((h.analyzed_lag() - lag_of(window)).abs() < 1e-9, "the recovery reset the lag");
 
         h.push_audio(40_000);
         h.step();
@@ -782,7 +790,9 @@ mod tests {
     }
 
     /// A step analyzes under the settings it took the audio with, even if they
-    /// change while it analyzes, and the next step under the new ones.
+    /// change while it analyzes, and the next step under the new ones. While
+    /// it analyzes, a frame reads the lag of the columns it is drawing: the
+    /// running resolution's, not the one just picked.
     #[test]
     fn a_step_analyzes_under_the_settings_it_took() {
         use harmonigraph_ui::SpectrumWindow;
@@ -795,11 +805,19 @@ mod tests {
             SpectrumWindow::Precise
         };
         h.push_audio(40_000);
+        h.step();
+        h.push_audio(40_000);
+        let read = std::rc::Rc::new(std::cell::Cell::new(None));
+        let between = read.clone();
         BETWEEN_HOLDS.set(Some(Box::new(move |shared: &EditorLock, _| {
-            shared.lock().ui.picture.appearance.spectrum.window = second;
+            let mut shared = shared.lock();
+            shared.ui.picture.appearance.spectrum.window = second;
+            between.set(Some(shared.ui.picture.runtime.spectrum.column_lag()));
         })));
         h.step();
         BETWEEN_HOLDS.set(None);
+        let read = read.get().expect("the hook did not run");
+        assert!((read - lag_of(first)).abs() < 1e-9, "the edge read the new lag mid-step");
         assert!((h.analyzed_lag() - lag_of(first)).abs() < 1e-9, "analyzed under the edit");
 
         h.push_audio(40_000);
