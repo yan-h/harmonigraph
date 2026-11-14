@@ -73,6 +73,43 @@ fn snapshot(id: u64, cut: u64, held: &[u8], epoch: u64, input: i64) -> Record {
     Record::Canonical(CanonicalRecord::Baseline(Box::new(record)))
 }
 
+/// A DIRECT voice played at `input` on epoch 0, as a snapshot restates it.
+fn struck(note: u8, input: i64) -> VoiceBaseline {
+    VoiceBaseline {
+        note,
+        velocity: 0.8,
+        pitch_microcents: i64::from(note) * 100_000_000,
+        input_onset: presentation(0, input),
+        actual_onset: presentation(0, input + DELAY),
+        onset: Some(harmonigraph_core::canonical::EventTiming {
+            clock: harmonigraph_core::canonical::ClockId { runtime_session: 1, epoch: 0 },
+            input,
+            planned: None,
+            sample: input + DELAY,
+            sample_rate: RATE,
+        }),
+        ..Default::default()
+    }
+}
+
+/// A snapshot of the DIRECT row taken at `input` on epoch 0, restating `voices`.
+fn restating(id: u64, voices: &[VoiceBaseline], input: i64) -> Record {
+    let frame =
+        SourceBaseline::new(SourceId::DIRECT, id, presentation(0, input), 0, true, voices).unwrap();
+    let mut record = BaselineRecord::from(&frame);
+    record.at = Some(at(0, input));
+    Record::Canonical(CanonicalRecord::Baseline(Box::new(record)))
+}
+
+/// `(start, end)` of every note the pass's events draw for `key`.
+fn notes_of(take: &Take, key: u8) -> Vec<(f64, Option<f64>)> {
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for event in &take.events {
+        event.apply(&mut tracker).unwrap();
+    }
+    tracker.roll().notes().filter(|n| n.note == key).map(|n| (n.start, n.end)).collect()
+}
+
 fn gap(first: u64, from: StampRecord, to: StampRecord) -> Record {
     let time = |at: StampRecord| presentation(at.clock_epoch, at.input);
     Record::Canonical(CanonicalRecord::Gap(GapRecord {
@@ -242,48 +279,44 @@ fn a_snapshot_below_a_record_sounding_past_its_run_lifts_level_with_it() {
 /// so the snapshot is all that draws either note.
 #[test]
 fn a_restated_voice_draws_from_the_run_its_onset_was_played_in() {
-    let voice = |note: u8, input: i64| {
-        let onset = presentation(0, input + DELAY);
-        VoiceBaseline {
-            note,
-            velocity: 0.8,
-            pitch_microcents: i64::from(note) * 100_000_000,
-            input_onset: presentation(0, input),
-            actual_onset: onset,
-            onset: Some(harmonigraph_core::canonical::EventTiming {
-                clock: harmonigraph_core::canonical::ClockId { runtime_session: 1, epoch: 0 },
-                input,
-                planned: None,
-                sample: input + DELAY,
-                sample_rate: RATE,
-            }),
-            ..Default::default()
-        }
-    };
-    let time = presentation(0, 256);
-    let frame =
-        SourceBaseline::new(SourceId::DIRECT, 1, time, 0, true, &[voice(60, 10), voice(62, 160)])
-            .unwrap();
-    let mut restated = BaselineRecord::from(&frame);
-    restated.at = Some(at(0, 256));
     let resumed = 2.0 + 128.0 / RATE;
     let take = read(
         &[
             run(1, 0, 0, 2.0),
             end(0, 128),
             run(1, 0, 256, resumed),
-            Record::Canonical(CanonicalRecord::Baseline(Box::new(restated))),
+            restating(1, &[struck(60, 10), struck(62, 160)], 256),
         ],
         None,
     )
     .unwrap();
-    let mut tracker = harmonigraph_core::NoteTracker::new();
-    for event in &take.events {
-        event.apply(&mut tracker).unwrap();
-    }
-    let start = |key| tracker.roll().notes().find(|n| n.note == key).unwrap().start;
+    let start = |key| notes_of(&take, key)[0].0;
     assert!((start(60) - (2.0 + 74.0 / RATE)).abs() < 1e-9, "struck in run 1: {}", start(60));
     assert!((start(62) - resumed).abs() < 1e-9, "struck in the pause: {}", start(62));
+}
+
+/// A voice struck in a pause and held through the next one is one note: each
+/// resume restates it from the same place, the first run after its onset,
+/// so the second restatement continues what the first started.
+#[test]
+fn a_voice_held_through_two_pauses_is_one_note() {
+    let second = 2.0 + 128.0 / RATE;
+    let take = read(
+        &[
+            run(1, 0, 0, 2.0),
+            end(0, 128),
+            run(1, 0, 256, second),
+            restating(1, &[struck(62, 160)], 256),
+            end(0, 384),
+            run(1, 0, 512, 2.0 + 256.0 / RATE),
+            restating(2, &[struck(62, 160)], 512),
+        ],
+        None,
+    )
+    .unwrap();
+    let notes = notes_of(&take, 62);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!((notes[0].0 - second).abs() < 1e-9, "{notes:?}");
 }
 
 /// A record that would need more lift than its maximum's own lateness is a

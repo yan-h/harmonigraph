@@ -26,6 +26,12 @@ impl Run {
     fn offset(&self) -> f64 {
         self.song - self.presentation
     }
+    /// The run's first sample in song time, rounded as translating its own
+    /// opening snapshot rounds it, so a voice drawn from here is not a hair
+    /// later than that snapshot's frame.
+    fn start_song(&self) -> f64 {
+        self.presentation + self.offset()
+    }
     fn holds(&self, at: StampRecord) -> bool {
         at.clock() == self.start.clock()
             && self.start.input <= at.input
@@ -199,15 +205,17 @@ pub(crate) fn assemble(
                 };
                 let lateness = record.time() - run.presentation(at.input, rate);
                 record.translate(run.offset());
-                let start = run.presentation + run.offset();
                 let (source, time) = match &mut record {
                     CanonicalRecord::Delta(d) => (d.event.source, &mut d.event.t),
                     CanonicalRecord::Baseline(b) => {
                         // A restated voice moves by the run that holds its own
                         // onset, as its attack did. One struck where nothing of
                         // this pass recorded (in a pause, before the arm, or in
-                        // the pass a loop wrapped from) draws from this run's
-                        // start, not from a song time the run never had.
+                        // the pass a loop wrapped from) draws from the start of
+                        // the first run after its onset, the pass's first when
+                        // it has no stamp: every restatement names that same
+                        // run, so a direct voice, known by its onset, held
+                        // through two pauses stays one note.
                         for voice in &mut b.voices {
                             let struck = voice.onset.map(TimingRecord::stamp);
                             if let Some(holder) = struck.and_then(|at| holding(&runs, chosen, at)) {
@@ -215,8 +223,12 @@ pub(crate) fn assemble(
                                 voice.actual_onset += shift;
                                 voice.input_onset += shift;
                             } else {
-                                voice.actual_onset = voice.actual_onset.max(start);
-                                voice.input_onset = voice.input_onset.max(start);
+                                let after = runs.iter().filter(|r| r.pass == chosen).find(|r| {
+                                    struck.is_none_or(|at| at.order() <= r.start.order())
+                                });
+                                let from = after.unwrap_or(run);
+                                voice.actual_onset = from.start_song();
+                                voice.input_onset = from.start_song();
                             }
                         }
                         (b.source, &mut b.t)
