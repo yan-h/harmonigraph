@@ -207,10 +207,6 @@ thread_local! {
     /// Run between a step's two holds of the lock, just before its FFTs.
     #[allow(clippy::type_complexity)]
     static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
-    /// Run between two holds that give a step's columns, after each chunk
-    /// but the last.
-    #[allow(clippy::type_complexity)]
-    static BETWEEN_CHUNKS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock)>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// One step: take the notes and the audio under the lock, analyze the audio
@@ -235,12 +231,12 @@ thread_local! {
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
 /// frame or a window opening waits on this thread only for a take (a copy of
-/// what the ring holds) or a give (folding its columns into every level of
-/// the spectrogram's history, 11 µs a column): a few tens of microseconds for
-/// the two or three columns a step usually brings, and the give takes a hold
-/// per [`GIVE_CHUNK_COLUMNS`](crate::editor::input::GIVE_CHUNK_COLUMNS) of a
-/// catch-up's, reachable only after this thread was starved. The FFTs
-/// between them, some 10 ms for a full ring through Fast
+/// what the ring holds) or a give (folding its columns into every level of the
+/// spectrogram's history, 11 µs a column): a few tens of microseconds for the
+/// two or three columns a step usually brings, and a few milliseconds at most
+/// for a catch-up's (4 ms for a full mono ring's 371), reachable only after
+/// this thread was starved for 2.7 s, which may cost a frame. The FFTs
+/// between them, some 10 ms for a full stereo ring through Fast
 /// at 48 kHz and 36 through Precise (see
 /// [`SpectrumAnalysis::feed_source`](harmonigraph_ui::SpectrumAnalysis::feed_source)),
 /// hold nothing. The thread runs at the GUI's
@@ -289,22 +285,11 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     if taken.is_none() && editor_state.is_open() && tape.logs.is_empty() {
         return;
     }
-    let mut taken = taken;
-    // The columns go back a chunk per hold (see `GIVE_CHUNK_COLUMNS`), and
-    // the rest of the step rides on the hold that gives the last of them.
-    let mut guard = loop {
-        let mut guard = shared.lock();
-        let Some(given) = taken.as_mut() else { break guard };
-        let runtime = &mut guard.ui.picture.runtime;
-        if crate::editor::input::LiveInput::give_chunk(runtime, given) {
-            guard.input.put_back(taken.take().expect("the step took audio"));
-            break guard;
-        }
-        drop(guard);
-        #[cfg(test)]
-        BETWEEN_CHUNKS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared)));
-    };
+    let mut guard = shared.lock();
     let shared = &mut *guard;
+    if let Some(taken) = taken {
+        shared.input.give(&mut shared.ui.picture.runtime, taken);
+    }
     for line in tape.logs.drain(..) {
         shared.ui.picture.runtime.console.log(line);
     }
@@ -760,35 +745,6 @@ mod tests {
         h.push_audio(20_000);
         h.step();
         assert!(h.columns() > 0, "audio after the Clear was not kept");
-    }
-
-    /// A step gives a catch-up's columns back a chunk per hold of the lock,
-    /// so a frame waits for one chunk's folds rather than all of them; and a
-    /// Clear between two of those holds keeps the chunks after it out, as it
-    /// keeps out every column from audio taken before it.
-    #[test]
-    fn a_clear_between_chunks_of_a_hand_over_keeps_the_rest_out() {
-        use crate::editor::input::GIVE_CHUNK_COLUMNS;
-        let mut h = harness();
-        // Over two chunks' worth of columns, eight milliseconds apart.
-        h.push_audio(2 * GIVE_CHUNK_COLUMNS * 384 + 20_000);
-        let holds = std::rc::Rc::new(std::cell::Cell::new(0));
-        let between = holds.clone();
-        BETWEEN_CHUNKS.set(Some(Box::new(move |shared: &EditorLock| {
-            if between.replace(between.get() + 1) == 0 {
-                shared.lock().ui.picture.runtime.spectrum.clear_history();
-            }
-        })));
-        h.step();
-        BETWEEN_CHUNKS.set(None);
-        assert!(holds.get() >= 2, "the hand-over took {} holds", holds.get() + 1);
-        assert_eq!(h.columns(), GIVE_CHUNK_COLUMNS as u64, "the first chunk was not kept whole");
-        let shared = h.shared.lock();
-        assert_eq!(
-            shared.ui.picture.runtime.spectrum.newest_column(),
-            None,
-            "a chunk given after the Clear joined the history it emptied",
-        );
     }
 
     /// A step that panics with the analysis out leaves the next one
