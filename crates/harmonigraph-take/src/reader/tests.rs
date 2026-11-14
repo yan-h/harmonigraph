@@ -236,7 +236,8 @@ fn the_last_pass_reads_unless_another_is_asked_for() {
 /// Note history without a stamp has no place in a file that routes by them,
 /// so it is refused rather than placed by guess; so is a restated voice the
 /// recorder would not write: anything but accepted output, which carries a
-/// lifetime to be known by and the stamp of its onset.
+/// lifetime to be known by and the stamp of its onset. The file is refused
+/// whichever pass is read.
 #[test]
 fn unstamped_history_beside_a_run_is_refused() {
     let plain =
@@ -247,24 +248,20 @@ fn unstamped_history_beside_a_run_is_refused() {
         provenance: harmonigraph_core::confirmed::PitchProvenance::ObservedDirect,
         ..struck(64, 10)
     };
-    let unstamped_voice = VoiceBaseline {
-        onset: None,
-        provenance: harmonigraph_core::confirmed::PitchProvenance::ObservedDirect,
-        ..struck(64, 10)
-    };
     for (line, record) in [
         Record::Note(plain),
         Record::Canonical(CanonicalRecord::from_event(
             harmonigraph_core::canonical::CanonicalEvent::Note(unstamped),
         )),
         snapshot(1, 0, &[direct], 128),
-        snapshot(1, 0, &[unstamped_voice], 128),
     ]
     .into_iter()
     .enumerate()
     {
-        let error = read(&[run(1, 0, 0, 0.0), record], None).unwrap_err();
+        let error = read(&[run(1, 0, 0, 0.0), record.clone()], None).unwrap_err();
         assert!(matches!(error, ReadError::InvalidCanonical(3)), "case {line}: {error}");
+        let later = read(&[run(1, 0, 0, 0.0), record, run(2, 0, 256, 1.0)], Some(2));
+        assert!(matches!(later, Err(ReadError::InvalidCanonical(3))), "case {line}: {later:?}");
     }
 }
 

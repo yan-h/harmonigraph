@@ -194,6 +194,15 @@ pub(crate) fn assemble(
                 // Nothing the recorder writes lacks a stamp, and in a file that
                 // routes by them a record without one has no place.
                 let at = record.stamp().ok_or(ReadError::InvalidCanonical(line))?;
+                // The recorder restates only accepted output, which a consumer
+                // knows by its lifetime, and validation holds it to a stamped
+                // onset. A direct voice is known by its onset's song time,
+                // which moving runs apart cannot keep, so it has no place here.
+                if let CanonicalRecord::Baseline(b) = &record {
+                    if b.voices.iter().any(|v| v.provenance != ProvenanceRecord::AcceptedOutput) {
+                        return Err(ReadError::InvalidCanonical(line));
+                    }
+                }
                 let Some(run) = holding(&runs, chosen, at) else {
                     continue;
                 };
@@ -205,22 +214,18 @@ pub(crate) fn assemble(
                     }
                     CanonicalRecord::Baseline(b) => {
                         b.t += run.offset();
-                        // The recorder restates only accepted output, which a
-                        // consumer knows by its lifetime, and stamps its onset.
-                        // A direct voice is known by its onset's song time, which
-                        // moving runs apart cannot keep, so it has no place here.
-                        //
                         // A restated voice moves by the run that holds its own
                         // onset, as its attack did. One struck where nothing of
                         // this pass recorded (in a pause, before the arm, or in
                         // the pass a loop wrapped from) moves by the first run
-                        // after its onset, and starts no earlier than that run.
+                        // after its onset, and starts no earlier than that run's
+                        // song start. That can sit a rounding step above the
+                        // run's opening frame, translated as presentation plus
+                        // offset, and lift it by as much: harmless, since the
+                        // voice is known by its lifetime and the sort is stable.
                         for voice in &mut b.voices {
-                            let struck = voice
-                                .onset
-                                .filter(|_| voice.provenance == ProvenanceRecord::AcceptedOutput)
-                                .ok_or(ReadError::InvalidCanonical(line))?
-                                .stamp();
+                            let struck =
+                                voice.onset.ok_or(ReadError::InvalidCanonical(line))?.stamp();
                             let holder = holding(&runs, chosen, struck);
                             let from = holder.unwrap_or_else(|| {
                                 let mut runs = runs.iter().filter(|r| r.pass == chosen);
@@ -237,10 +242,11 @@ pub(crate) fn assemble(
                             }
                             // A frame saying a voice sounds is no earlier than
                             // its onset, which a voice played late in the run
-                            // before sounds past. Its attack lifts the frame
-                            // there through the floor; when that attack was
-                            // lost, the voice does. The lift counts as lateness,
-                            // so the floor still bounds what sounds below it.
+                            // before sounds past. The frame lifts to it here,
+                            // before the floor, whether or not its attack was
+                            // kept, and the lift counts as lateness: the floor
+                            // then bounds what sounds below the frame by the
+                            // frame's own lateness plus the lift.
                             if voice.actual_onset > b.t {
                                 lateness += voice.actual_onset - b.t;
                                 b.t = voice.actual_onset;
