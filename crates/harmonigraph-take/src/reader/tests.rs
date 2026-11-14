@@ -1,7 +1,7 @@
 use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
 use harmonigraph_core::{NoteEvent, SourceId};
 
-use crate::canonical::{BaselineRecord, DeltaRecord, GapRecord, TimingRecord};
+use crate::canonical::{BaselineRecord, DeltaRecord, GapRecord, ProvenanceRecord, TimingRecord};
 use crate::*;
 
 const RATE: f64 = 48_000.0;
@@ -32,9 +32,15 @@ fn end(epoch: u64, input: i64) -> Record {
     Record::RunEnd(RunEndRecord { at: at(epoch, input) })
 }
 
-/// A delta played at `input` on the DIRECT row, sounding `DELAY` later.
+/// A delta played at `input` on the DIRECT row, sounding `DELAY` later. Each
+/// fixture strikes a key once, so its lifetime is the key.
 fn delta(sequence: u64, key: u8, on: bool, epoch: u64, input: i64) -> Record {
-    let time = presentation(epoch, input + DELAY);
+    sounding(sequence, key, on, epoch, input, DELAY)
+}
+
+/// A delta played at `input` and sounding `delay` later.
+fn sounding(sequence: u64, key: u8, on: bool, epoch: u64, input: i64, delay: i64) -> Record {
+    let time = presentation(epoch, input + delay);
     let event = if on {
         NoteEvent::on(time, SourceId::DIRECT, 0, key, 0.8)
     } else {
@@ -42,61 +48,52 @@ fn delta(sequence: u64, key: u8, on: bool, epoch: u64, input: i64) -> Record {
     };
     let mut delta = DeltaRecord::from(harmonigraph_core::canonical::NoteDelta::from(event));
     delta.sequence = sequence;
+    delta.lifetime = u64::from(key);
+    delta.provenance = ProvenanceRecord::AcceptedOutput;
     delta.timing = Some(TimingRecord {
         runtime_session: 1,
         clock_epoch: epoch,
         input,
-        planned: Some(input + DELAY),
-        sample: input + DELAY,
+        planned: Some(input + delay),
+        sample: input + delay,
         sample_rate: RATE,
     });
     Record::Canonical(CanonicalRecord::Delta(delta))
 }
 
-/// A run's opening snapshot of the DIRECT row, taken at `input`, holding `held`.
-fn snapshot(id: u64, cut: u64, held: &[u8], epoch: u64, input: i64) -> Record {
-    let time = presentation(epoch, input);
-    let voices: Vec<_> = held
-        .iter()
-        .map(|&note| VoiceBaseline {
-            note,
-            velocity: 0.8,
-            pitch_microcents: i64::from(note) * 100_000_000,
-            input_onset: time,
-            actual_onset: time,
-            ..Default::default()
-        })
-        .collect();
-    let frame = SourceBaseline::new(SourceId::DIRECT, id, time, cut, true, &voices).unwrap();
-    let mut record = BaselineRecord::from(&frame);
-    record.at = Some(at(epoch, input));
-    Record::Canonical(CanonicalRecord::Baseline(Box::new(record)))
+/// A voice played at `input` on epoch 0, as a snapshot restates it: the
+/// recorder's, with a lifetime and the stamp of its onset.
+fn struck(note: u8, input: i64) -> VoiceBaseline {
+    struck_sounding(note, input, DELAY)
 }
 
-/// A DIRECT voice played at `input` on epoch 0, as a snapshot restates it.
-fn struck(note: u8, input: i64) -> VoiceBaseline {
+fn struck_sounding(note: u8, input: i64, delay: i64) -> VoiceBaseline {
     VoiceBaseline {
         note,
         velocity: 0.8,
         pitch_microcents: i64::from(note) * 100_000_000,
+        lifetime: u64::from(note),
+        provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
         input_onset: presentation(0, input),
-        actual_onset: presentation(0, input + DELAY),
+        actual_onset: presentation(0, input + delay),
         onset: Some(harmonigraph_core::canonical::EventTiming {
             clock: harmonigraph_core::canonical::ClockId { runtime_session: 1, epoch: 0 },
             input,
             planned: None,
-            sample: input + DELAY,
+            sample: input + delay,
             sample_rate: RATE,
         }),
         ..Default::default()
     }
 }
 
-/// A snapshot of the DIRECT row taken at `input` on epoch 0, restating `voices`,
-/// each with the configuration it was assigned at its onset.
-fn restating(id: u64, voices: &[VoiceBaseline], input: i64) -> Record {
+/// A snapshot of the DIRECT row taken at `input` on epoch 0, covering output
+/// through `cut` and restating `voices`, each with the configuration it was
+/// assigned at its onset.
+fn snapshot(id: u64, cut: u64, voices: &[VoiceBaseline], input: i64) -> Record {
     let frame =
-        SourceBaseline::new(SourceId::DIRECT, id, presentation(0, input), 0, true, voices).unwrap();
+        SourceBaseline::new(SourceId::DIRECT, id, presentation(0, input), cut, true, voices)
+            .unwrap();
     let mut record = BaselineRecord::from(&frame);
     record.at = Some(at(0, input));
     for voice in &mut record.voices {
@@ -168,9 +165,9 @@ fn a_pass_holds_its_runs_on_the_song_and_drops_its_pause() {
             delta(1, 60, true, 0, 10),
             end(0, 128),
             delta(2, 62, true, 0, 160),
-            snapshot(1, 2, &[60, 62], 0, 192),
+            snapshot(1, 2, &[struck(60, 10), struck(62, 160)], 240),
             run(1, 0, 256, 2.0 + paused),
-            snapshot(2, 2, &[60, 62], 0, 256),
+            snapshot(2, 2, &[struck(60, 10), struck(62, 160)], 256),
             delta(3, 60, false, 0, 300),
         ],
         None,
@@ -210,7 +207,7 @@ fn the_last_pass_reads_unless_another_is_asked_for() {
         delta(1, 60, true, 0, 0),
         end(0, 64),
         run(2, 0, 64, 1.0),
-        snapshot(1, 1, &[60], 0, 64),
+        snapshot(1, 1, &[struck(60, 0)], 64),
         delta(2, 60, false, 0, 100),
     ];
     let last = read(&records, None).unwrap();
@@ -237,17 +234,31 @@ fn the_last_pass_reads_unless_another_is_asked_for() {
 }
 
 /// Note history without a stamp has no place in a file that routes by them,
-/// so it is refused rather than placed by guess.
+/// so it is refused rather than placed by guess; so is a restated voice the
+/// recorder would not write: anything but accepted output, which carries a
+/// lifetime to be known by and the stamp of its onset.
 #[test]
 fn unstamped_history_beside_a_run_is_refused() {
     let plain =
         NoteRecord { t: 0.5, note: 64, kind: NoteKind::On { velocity: 0.8 }, ..Default::default() };
     let unstamped = NoteEvent::on(0.5, SourceId::DIRECT, 0, 64, 0.8).into();
+    let direct = VoiceBaseline {
+        lifetime: 0,
+        provenance: harmonigraph_core::confirmed::PitchProvenance::ObservedDirect,
+        ..struck(64, 10)
+    };
+    let unstamped_voice = VoiceBaseline {
+        onset: None,
+        provenance: harmonigraph_core::confirmed::PitchProvenance::ObservedDirect,
+        ..struck(64, 10)
+    };
     for (line, record) in [
         Record::Note(plain),
         Record::Canonical(CanonicalRecord::from_event(
             harmonigraph_core::canonical::CanonicalEvent::Note(unstamped),
         )),
+        snapshot(1, 0, &[direct], 128),
+        snapshot(1, 0, &[unstamped_voice], 128),
     ]
     .into_iter()
     .enumerate()
@@ -269,7 +280,7 @@ fn a_snapshot_below_a_record_sounding_past_its_run_lifts_level_with_it() {
     let records =
         [run(1, 0, 0, 2.0), delta(1, 60, true, 0, 0), delta(2, 60, false, 0, 124), end(0, 128)];
     let take = read(
-        &[records.as_slice(), &[resumed, snapshot(1, 2, &[], 0, 256), delta(3, 64, true, 0, 300)]]
+        &[records.as_slice(), &[resumed, snapshot(1, 2, &[], 256), delta(3, 64, true, 0, 300)]]
             .concat(),
         None,
     )
@@ -297,7 +308,7 @@ fn a_restated_voice_draws_from_the_run_its_onset_was_played_in() {
             run(1, 0, 0, 2.0),
             end(0, 128),
             run(1, 0, 256, resumed),
-            restating(1, &[struck(60, 10), struck(62, 160)], 256),
+            snapshot(1, 0, &[struck(60, 10), struck(62, 160)], 256),
         ],
         None,
     )
@@ -318,10 +329,10 @@ fn a_voice_held_through_two_pauses_is_one_note() {
             run(1, 0, 0, 2.0),
             end(0, 128),
             run(1, 0, 256, second),
-            restating(1, &[struck(62, 160)], 256),
+            snapshot(1, 0, &[struck(62, 160)], 256),
             end(0, 384),
             run(1, 0, 512, 2.0 + 256.0 / RATE),
-            restating(2, &[struck(62, 160)], 512),
+            snapshot(2, 0, &[struck(62, 160)], 512),
         ],
         None,
     )
@@ -344,7 +355,7 @@ fn a_restated_voice_starts_no_later_than_its_frame() {
             gap(1, at(0, 100), at(0, 100)),
             end(0, 128),
             run(1, 0, 256, resumed),
-            restating(1, &[struck(62, 100)], 256),
+            snapshot(1, 0, &[struck(62, 100)], 256),
         ],
         None,
     )
@@ -368,7 +379,7 @@ fn a_lift_past_its_bound_reads_and_warns() {
             delta(2, 60, false, 0, 124),
             end(0, 128),
             lagging,
-            snapshot(1, 2, &[], 0, 256),
+            snapshot(1, 2, &[], 256),
         ],
         None,
     )

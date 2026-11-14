@@ -7,7 +7,7 @@
 //! and the writer (#1760).
 use std::collections::BTreeMap;
 
-use crate::canonical::{GapReasonRecord, StampRecord, TimingRecord};
+use crate::canonical::{GapReasonRecord, ProvenanceRecord, StampRecord};
 use crate::{CanonicalRecord, Header, IncompleteRecord, ReadError, Record, Take};
 
 /// One run, as the file states it.
@@ -211,22 +211,26 @@ pub(crate) fn assemble(
                     }
                     CanonicalRecord::Baseline(b) => {
                         b.t += run.offset();
+                        // The recorder restates only accepted output, which a
+                        // consumer knows by its lifetime, and stamps its onset.
+                        // A direct voice is known by its onset's song time, which
+                        // moving runs apart cannot keep, so it has no place here.
+                        //
                         // A restated voice moves by the run that holds its own
-                        // onset, as its attack did, so it lands on its attack
-                        // to the bit. One struck where nothing of this pass
-                        // recorded (in a pause, before the arm, or in the pass
-                        // a loop wrapped from) moves by the first run after its
-                        // onset, the pass's first when it has no stamp, and
-                        // starts no earlier than that run: every restatement
-                        // names the same run, so a direct voice, known by its
-                        // onset, held through two pauses stays one note.
+                        // onset, as its attack did. One struck where nothing of
+                        // this pass recorded (in a pause, before the arm, or in
+                        // the pass a loop wrapped from) moves by the first run
+                        // after its onset, and starts no earlier than that run.
                         for voice in &mut b.voices {
-                            let struck = voice.onset.map(TimingRecord::stamp);
-                            let holder = struck.and_then(|at| holding(&runs, chosen, at));
+                            let struck = voice
+                                .onset
+                                .filter(|_| voice.provenance == ProvenanceRecord::AcceptedOutput)
+                                .ok_or(ReadError::InvalidCanonical(line))?
+                                .stamp();
+                            let holder = holding(&runs, chosen, struck);
                             let from = holder.unwrap_or_else(|| {
                                 let mut runs = runs.iter().filter(|r| r.pass == chosen);
-                                runs.find(|r| struck.is_none_or(|at| at.order() <= r.start.order()))
-                                    .unwrap_or(run)
+                                runs.find(|r| struck.order() <= r.start.order()).unwrap_or(run)
                             });
                             voice.actual_onset += from.offset();
                             voice.input_onset += from.offset();
