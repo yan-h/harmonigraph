@@ -311,7 +311,7 @@ impl RollNote {
     /// When this note stops: its release, or `now` while it is still
     /// sounding (a held note's segment reaches the present moment).
     pub fn stop(&self, now: Time) -> Time {
-        self.observed_until.or(self.end).unwrap_or(now).max(self.start)
+        self.departed().unwrap_or(now).max(self.start)
     }
 
     /// The note as straight-line segments `((t0, pitch0), (t1, pitch1))`,
