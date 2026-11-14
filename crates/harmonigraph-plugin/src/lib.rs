@@ -165,9 +165,12 @@ impl Drop for Harmonigraph {
     fn drop(&mut self) {
         // Window state can retain its own Arc during native teardown. Join the
         // graphics worker at plugin destruction, not only at the last Arc drop.
-        let graphics = self.editor_shared.lock().ui.picture.editor_graphics();
+        // One hold for both handles, and each joined with the lock free.
+        let (graphics, take) = {
+            let shared = self.editor_shared.lock();
+            (shared.ui.picture.editor_graphics(), shared.take.clone())
+        };
         graphics.shutdown_startup();
-        let take = self.editor_shared.lock().take.clone();
         take.shutdown_exports();
     }
 }
