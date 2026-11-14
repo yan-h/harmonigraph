@@ -1127,14 +1127,21 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
 // round a note voiced in one octave is that octave's colour rather than a
 // tenth of it under nine tenths of grey.
 //
-// The colour of a LIT slice is stated once, here, and the drawn ink is this
-// mixed toward the ground by however much of the node's presence this slot's
-// level does not account for.
+// The colour is [`oct_slot_colour`]'s, and the drawn ink is this mixed toward
+// the ground by however much of the node's presence this slot's level does
+// not account for.
 fn oct_slot_lit(cents: f32, octaves: vec3<u32>, slot: i32) -> vec4<f32> {
+    return vec4<f32>(oct_slot_colour(cents, slot), oct_slot_level(octaves, slot));
+}
+
+// The colour of slot `slot` LIT on a node whose pitch class is `cents`,
+// stated once, here: the slice wears it ([`oct_slot_lit`]), the mark extending
+// that slice wears it (`NodeInstance::melody_color` is the CPU's reading of
+// the same table), and the light reads both layers in it ([`ink_at`]).
+fn oct_slot_colour(cents: f32, slot: i32) -> vec3<f32> {
     // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
     // class for the glyph's true pitch.
-    let pitch = oct_slot_pitch(slot, cents);
-    return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(octaves, slot));
+    return pitch_lut_color(oct_slot_pitch(slot, cents));
 }
 
 // How far out slot `s`'s LIT slice reaches from the band's inner edge: its
@@ -2886,17 +2893,19 @@ fn ink_arc(r: f32) -> f32 {
 /// than from the node as drawn this frame: how much light each slot and each
 /// mark puts on it ([`LightRow`]), carried on the light's own clock on the
 /// CPU. Every layer that shines is read here through the SAME geometry that
-/// draws it (`outer_glyph`, on that layer's own radius) and in the SAME colour
-/// (`oct_slot_lit`'s pitch through the gradient), so a layer added to the node
-/// is lit by adding a term and a weight rather than by a case in a hue picker.
+/// draws it (`outer_glyph`, on that layer's own radius), to the SAME reach
+/// (`reach_at`), and in the SAME colour (`oct_slot_colour`), so a layer added
+/// to the node is lit by adding a term and a weight rather than by a case in a
+/// hue picker.
 ///
 /// **Linear in every weight**, which is what lets a carried light ease: the
 /// colours, the geometry and the widths come from the uniforms and `cents`
 /// alone, so stepping each weight toward its target is mixing the two readings
 /// by the same amount. Two places are not linear, and both are listed don't-
-/// cares (#1759): the swell cap's `min`, where a slice past the cap is weighed
-/// by its light rather than its reach, and the mark walk's per-angle max,
-/// where two marks crossing on one wedge's soft edge trade the direction.
+/// cares (#1759): the swell cap, past which a slice reaches no further and is
+/// weighed by its light rather than its thickness, and the mark walk's
+/// per-angle max, where two marks crossing on one wedge's soft edge trade the
+/// direction.
 /// `a_stepped_light_reads_as_its_two_readings_mixed` holds the rest.
 ///
 /// **The AUDIO RING is not one of them.** A node's light says something is
@@ -2961,19 +2970,21 @@ fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
             }
         }
         if cov > 0.0 && owner >= 0 && owner < i32(OCTAVE_SLOTS) {
-            // [`oct_slot_lit`]'s colour and not the drawn ink: what a slice is
-            // lit at is its own light, where the ink's opacity is the node's
+            // The slot's lit colour and not the drawn ink: what a slice is lit
+            // at is its own light, where the ink's opacity is the node's
             // PRESENCE — the ghost included, which is the backdrop and weighs
             // nothing. Over the width the lit slice is DRAWN, thinned or
-            // swelled (`slice_reach`): its light times its reach past the
-            // band's inner edge, which is `p` times the band's width up to the
-            // swell cap (`reach_at`), and `l` times the room under the cap
-            // past it.
+            // swelled: its light times its reach past the band's inner edge,
+            // at the thickness `p / l` carries, asked of `reach_at` as the
+            // slice itself asks it (`slice_reach`). Below the swell cap that
+            // is `p` times the band's width, which is what makes it linear.
             let s = u32(owner);
-            let cap = max(swell_cap(band_out), band_out) - band_in;
-            let w = cov * min((band_out - band_in) * row.p[s], cap * row.l[s]);
-            rgb = rgb + pitch_lut_color(oct_slot_pitch(owner, row.cents)) * w;
-            wsum = wsum + w;
+            let l = row.l[s];
+            if l > 0.0 {
+                let w = cov * l * (reach_at(row.p[s] / l, band_in, band_out) - band_in);
+                rgb = rgb + oct_slot_colour(row.cents, owner) * w;
+                wsum = wsum + w;
+            }
         }
     }
 
@@ -3019,7 +3030,7 @@ fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
         }
         if cov > 0.0 && mark_out > mark_in {
             let w = cov * (mark_out - mark_in);
-            rgb = rgb + pitch_lut_color(oct_slot_pitch(owner, row.cents)) * w;
+            rgb = rgb + oct_slot_colour(row.cents, owner) * w;
             wsum = wsum + w;
         }
     }

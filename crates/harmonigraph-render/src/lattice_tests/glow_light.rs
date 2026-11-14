@@ -49,14 +49,30 @@ fn row_of(rows: &[(LightRow, Vec<[f32; 4]>)], cents: f32, light: GlowLight) -> &
     texels
 }
 
-/// The thickness past which a slice reaches the swell cap on `scene`'s rings:
-/// `swell_cap` and `reach_at` in lattice.wgsl, from the uniforms they read.
-fn cap_thickness(scene: &Scene) -> f32 {
-    let (inner, outer) = (scene.outer_inner, scene.outer_outer);
-    let mark = scene.view.mark_thickness.max(0.0);
-    let room = if mark > 0.0 { (scene.mark_inner - outer).max(0.0) + mark } else { 0.0 };
-    let cap = 1.6 - 0.02 - room;
-    (cap.max(outer) - inner) / (outer - inner)
+/// A light lighting `slot` alone, at a level of 0.8 and `thickness` times the
+/// band's width.
+fn slice(slot: usize, thickness: f32) -> GlowLight {
+    let mut light = GlowLight::default();
+    light.l[slot] = 0.8;
+    light.p[slot] = 0.8 * thickness;
+    light
+}
+
+/// The light a row carries in all, summed round the turn.
+fn weight(texels: &[[f32; 4]]) -> f32 {
+    texels.iter().map(|texel| texel[3]).sum()
+}
+
+/// The thickness at which a slice on the [`fixture`]'s rings reaches the
+/// swell cap, as the shader draws it: a slice far past any cap, read against
+/// one at rest, rather than a copy of `swell_cap` and its constants.
+fn cap_thickness(shooter: &mut Shooter, slot: usize) -> f32 {
+    let (mut probe, _, cents) = fixture();
+    probe.nodes =
+        [1.0, 1000.0].iter().map(|&t| lit_node(&probe, t * 1e-3, slice(slot, t))).collect();
+    let rows = strip_rows(shooter, &probe);
+    weight(row_of(&rows, cents, slice(slot, 1000.0)))
+        / weight(row_of(&rows, cents, slice(slot, 1.0)))
 }
 
 /// One node lit by `light`, at `x`, on the band-and-marks fixture.
@@ -86,7 +102,7 @@ fn fixture() -> (Scene, std::ops::RangeInclusive<usize>, f32) {
 /// steps the colour, so the halo eases only because `ink_at` is linear in the
 /// weights. Random lights, the band thinned and swelled below the cap and the
 /// marks on slots no two of which are neighbours round the wheel (whose seam
-/// joins its two ends) — the two places it is not linear, the cap's `min` and
+/// joins its two ends) — the two places it is not linear, the swell cap and
 /// the per-angle max over marks, are the listed exceptions — each stepped by
 /// `GlowLight::step` itself, at a coefficient a 144 Hz frame takes, one a
 /// 60 Hz frame takes, and half.
@@ -98,7 +114,7 @@ fn a_stepped_light_reads_as_its_two_readings_mixed() {
     let (mut scene, slots, cents) = fixture();
     let low = *slots.start();
     assert!(slots.end() - low >= 6, "the wheel shows too few slots for three marks: {slots:?}");
-    let below_cap = 0.9 * cap_thickness(&scene);
+    let below_cap = 0.9 * cap_thickness(&mut shooter, low);
     assert!(below_cap > 1.2, "the fixture's cap leaves no room to swell: {below_cap}");
     let mut seed = 0x9e37_79b9_u32;
     let mut rand = move || {
@@ -159,27 +175,26 @@ fn a_stepped_light_reads_as_its_two_readings_mixed() {
 }
 
 /// A slice's light grows with its thickness up to the swell cap and no
-/// further — the cap's `min` in `ink_at`, which is where a swelled slice stops
-/// being drawn wider (`reach_at`).
+/// further — where a swelled slice stops being drawn wider (`reach_at`, which
+/// `ink_at` asks for the reach).
+///
+/// The cap is read off the shader (`cap_thickness`), so what is pinned is the
+/// shape: proportional below it, right up to it, and flat past it.
 #[test]
 fn a_slices_light_grows_with_its_thickness_up_to_the_cap() {
     let Some(mut shooter) = Shooter::new([64, 64]) else {
         return;
     };
     let (mut scene, slots, cents) = fixture();
-    let cap = cap_thickness(&scene);
     let slot = (*slots.start() + *slots.end()) / 2;
-    let at = |thickness: f32| {
-        let mut light = GlowLight::default();
-        light.l[slot] = 0.8;
-        light.p[slot] = 0.8 * thickness;
-        light
-    };
+    let cap = cap_thickness(&mut shooter, slot);
+    assert!(cap > 1.2, "the fixture's cap leaves no room to swell: {cap}");
+    let at = |thickness: f32| slice(slot, thickness);
     let thicknesses = [0.5, 1.0, cap * 0.9, cap * 1.5, cap * 4.0];
     scene.nodes =
         thicknesses.iter().enumerate().map(|(i, &t)| lit_node(&scene, i as f32, at(t))).collect();
     let rows = strip_rows(&mut shooter, &scene);
-    let weight = |t: f32| row_of(&rows, cents, at(t)).iter().map(|texel| texel[3]).sum::<f32>();
+    let weight = |t: f32| weight(row_of(&rows, cents, at(t)));
     let one = weight(1.0);
     assert!(one > 0.5, "the slice lit nothing: {one}");
     for t in [0.5, cap * 0.9] {
