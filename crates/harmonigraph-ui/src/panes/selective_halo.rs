@@ -223,10 +223,8 @@ mod tests {
         for node in outgoing {
             let old = previous.nodes.iter().find(|n| n.lattice_pos == node.lattice_pos).unwrap();
             assert!(old.glow.level > 0.0);
-            assert_eq!(
-                node.glow.incarnation, old.glow.incarnation,
-                "crossing the window restarted the light"
-            );
+            // A restarted light would attack from darkness again, far under
+            // where this one had got to.
             assert!(node.glow.level >= old.glow.level, "a held light must continue its attack");
         }
     }

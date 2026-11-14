@@ -76,7 +76,6 @@ pub(super) fn standalone_marker(
             true,
             0.0,
             false,
-            node as u32,
         )
     });
     one_marker(node, pos, radius, color, strength)
@@ -125,11 +124,11 @@ pub(super) fn parity_scene() -> Scene {
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
             bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
-            // A row per node in the order they are built, settled: the light's
-            // own clock is the shell's pass and no shell has run here, so this
-            // fixture is the picture with nothing carried — which is exactly
-            // what a still image of the draw paths wants.
-            glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: i },
+            // Lit and settled: the light's own clock is the shell's pass and
+            // no shell has run here, so this fixture is the picture with
+            // nothing carried — which is exactly what a still image of the
+            // draw paths wants.
+            glow: harmonigraph_scene::GlowStep { level: 1.0, light: None },
             // Cluster tightly so painter order and scaled off-sheet nodes
             // both contribute to the fixture.
             ..harmonigraph_scene::NodeInstance::at(
@@ -139,7 +138,6 @@ pub(super) fn parity_scene() -> Scene {
                 i % 2 == 0,
                 f * 190.0,
                 i == 1,
-                i,
             )
         });
     }
@@ -162,7 +160,6 @@ pub(super) fn parity_scene() -> Scene {
             0.4,
         ),
     ];
-    let glow_rows = nodes.len() as u32;
     Scene {
         view: harmonigraph_scene::ViewConfig {
             note_animation: harmonigraph_scene::NoteAnimationConfig::default(),
@@ -252,9 +249,7 @@ pub(super) fn parity_scene() -> Scene {
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.
         marker_unit: 0.34 * 1.8,
-        // A row per node, which is what the nodes above are built with.
-        glow_rows,
-        glow_timing: None,
+        glow_clock: None,
     }
 }
 
@@ -339,12 +334,10 @@ impl Shooter {
     /// The frame AFTER the last shot, on the same pane rather than a picture
     /// of its own.
     ///
-    /// One thing survives a frame here and it is a node's light: the ink strip
-    /// keeps each row's colour, and a row's next reading is mixed into what it
-    /// already held when `Scene::glow_timing` is set. That is exactly what
-    /// every other shot's fresh pane exists to keep out — a fixture is settled
-    /// unless it says otherwise — so a test that wants the carrying has to ask
-    /// for it.
+    /// What a pane keeps between frames — its targets, its ink strip, the
+    /// glow material's travel — is exactly what every other shot's fresh pane
+    /// exists to keep out, so a test about what one frame leaves the next has
+    /// to ask for it.
     pub(super) fn shot_again(&mut self, scene: &Scene) -> Vec<u8> {
         self.draw(scene, LatticeLabels::default())
     }
@@ -362,26 +355,6 @@ impl Shooter {
         labels: LatticeLabels,
         modify: impl FnOnce(&mut LatticeCallback),
     ) -> Vec<u8> {
-        // A lit node's ink-strip row is read back by IDENTITY, out of a strip
-        // `glow_rows` tall, so a row past the end is not a small error in a
-        // fixture: what an out-of-range `textureLoad` returns is the BACKEND's
-        // choice. Metal clamps, so the node silently reads row 0 and wears
-        // another node's colour while the test goes on passing; a backend that
-        // returns zero instead makes the same test vacuous, passing with the
-        // draw it is about deleted. Either way the fixture measures something
-        // other than what it says, and says nothing when it stops measuring at
-        // all — so the bookkeeping is asserted here, once, for every shot.
-        //
-        // `rows_per_node` is the helper that gets this right; a fixture that
-        // pushes a node by hand has to call it.
-        for (i, node) in scene.nodes.iter().enumerate() {
-            assert!(
-                node.glow.level <= 0.0 || node.glow.row < scene.glow_rows,
-                "node {i} claims ink-strip row {} of a strip {} tall — see `rows_per_node`",
-                node.glow.row,
-                scene.glow_rows,
-            );
-        }
         let size = self.size;
         let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
@@ -516,8 +489,8 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // which are the same color wherever the two name one sector.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
-        // Lit and settled on the strip's first row: one node, nothing carried.
-        glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 },
+        // Lit and settled: one node, nothing carried.
+        glow: harmonigraph_scene::GlowStep { level: 1.0, light: None },
         ..harmonigraph_scene::NodeInstance::at(
             LatticePos::ORIGIN,
             Vec3::ZERO,
@@ -525,7 +498,6 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
             true,
             0.0,
             false,
-            0,
         )
     }];
     // BLACK, which is the colour `Shooter::shot` clears to, so the pane and the
@@ -533,8 +505,6 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // is of the node's own ink or of the light around it, and a ground lifted
     // off black would sit under both.
     scene.background = Vec4::new(0.0, 0.0, 0.0, 1.0);
-    // One node, so one row — the strip follows the scene it is handed.
-    scene.glow_rows = 1;
     scene.pluses.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
@@ -545,25 +515,6 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // different world distances, one for a ring and one for a cross.
     scene.marker_unit = scene.node_radius * 1.8;
     scene
-}
-
-/// Hand every node in a scene its own row of the ink strip, and size the strip
-/// to them.
-///
-/// What the shell's own pass does with a map from node to row
-/// (`panes::glow_fade` in harmonigraph-ui), reduced to what a fixture needs: a
-/// scene assembled by hand is one frame with nothing carried, so a row per node
-/// in the list's own order is both unique and stable. It is [`derive_scene`]'s
-/// own answer, and the reason a fixture has to restate it is that replacing
-/// `scene.nodes` replaces the rows with copies of one.
-///
-/// A row is read back by identity, so two nodes sharing one is not a subtle
-/// wrong: both write it and both read whichever won.
-pub(super) fn rows_per_node(scene: &mut Scene) {
-    for (row, node) in scene.nodes.iter_mut().enumerate() {
-        node.glow.row = row as u32;
-    }
-    scene.glow_rows = scene.nodes.len() as u32;
 }
 
 /// The slot beside middle C's, as a mask — a second sector for the two ends to

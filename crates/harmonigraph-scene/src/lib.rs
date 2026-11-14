@@ -394,62 +394,95 @@ pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
 /// between the table and an ideal nothing draws.
 pub const PITCH_LUT_N: usize = 64;
 
-/// One node's state in the glow's own slow filter: what the light is doing at
-/// this node, and where its colour is being kept.
+/// The most nodes that can be lit at once, on one surface.
 ///
-/// Several numbers rather than one because the light is carried in two places
-/// at once. The LEVEL is stepped on the CPU, where the node's identity lives;
-/// the COLOUR is stepped on the GPU, where the node's ink is read (the ink
-/// strip in harmonigraph-render). Both follow [`GlowTiming`], measured from
-/// the last pass each consumer actually used. Layout passes can be discarded
-/// before the GPU sees them. Halo size is fixed by the view rather than carried per node.
+/// A ceiling on the light's TEXTURE rather than on the picture: the renderer
+/// reads every lit node's colour into one row of a strip, and a texture has a
+/// maximum dimension (8192 on every backend the plugin runs on), where
+/// [`MAX_DRAWN_NODES`] is 20480, so a fully zoomed-out lattice can light more
+/// nodes than a strip holds. Past this a node simply gets no light: its layers
+/// draw exactly as they do with the glow off, which is the graceful end of a
+/// halo nobody can pick out of four thousand others anyway. The shell's glow
+/// pass lights no more than this (`GlowFade` in harmonigraph-ui), and the
+/// renderer reads no more rows than this for a scene nothing has carried.
+pub const MAX_LIGHTS: usize = 4096;
+
+/// What a node's light is made of: how much light each of its layers puts on
+/// it, slot by slot, which the renderer reads round the node into the halo's
+/// colour (`ink_at` in lattice.wgsl).
+///
+/// **Weights, and only weights.** No colour is kept here: a layer's colour is
+/// its slot's pitch through the gradient, which the shader looks up in the
+/// uniforms, so a gradient, range or tuning change reaches a halo in the frame
+/// it reaches the notes (#1759, Q1). What a light CARRIES between frames is how
+/// much of each layer it holds, and the halo's colour is a sum of the slot
+/// colours weighted by these numbers — linear in each of them, save the two
+/// places `ink_at` names (the swell cap's `min` and the mark walk's per-angle
+/// max) — so stepping every weight toward its target eases the colour exactly
+/// as mixing the two readings would. That is the guarantee, and the renderer's
+/// `a_stepped_light_reads_as_its_two_readings_mixed` is what holds it.
+///
+/// A per-node input that is NOT a weight over the slot colours snaps rather
+/// than eases, because nothing steps it. The node's pitch class (`cents`) is
+/// the one such input, declared beside these rather than among them
+/// (`LightRow` in harmonigraph-render, whose size assertion names the rule).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GlowLight {
+    /// Each slot's light: its colour after the Opacity mapping
+    /// ([`NodeInstance::octaves`]), clamped to 0..=1.
+    pub l: [f32; OCTAVE_SLOTS],
+    /// Each slot's light times its thickness ([`NodeInstance::thickness`]):
+    /// how far out the lit slice reaches, which is the band's share of the
+    /// light below the swell cap. Past the cap `l` scales it instead.
+    pub p: [f32; OCTAVE_SLOTS],
+    /// The light of the mark standing on each slot: the melody's and the
+    /// bass's levels on their strongest slots, clamped, and the larger where
+    /// the two share one.
+    pub m: [f32; OCTAVE_SLOTS],
+}
+
+impl GlowLight {
+    /// How lit the node is, as far as its light is concerned: its most opaque
+    /// slot or mark (see [`NodeInstance::glow_target`]).
+    pub fn level(&self) -> f32 {
+        self.l.iter().chain(&self.m).copied().fold(0.0, f32::max).clamp(0.0, 1.0)
+    }
+
+    /// Move every weight `mix` of the way toward `target`'s: ONE walk over
+    /// every field, so a field added to the struct is stepped by adding it to
+    /// the pattern below, which the compiler insists on.
+    pub fn step(&mut self, target: &Self, mix: f32) {
+        let Self { l, p, m } = self;
+        for (weights, goal) in [l, p, m].into_iter().zip([&target.l, &target.p, &target.m]) {
+            for (weight, goal) in weights.iter_mut().zip(goal) {
+                *weight += (goal - *weight) * mix;
+            }
+        }
+    }
+}
+
+/// One node's state in the glow's own slow filter: how lit its light is, and
+/// what that light is made of.
+///
+/// Out of [`NodeMotion::step`] it is the node's own reading as it stands, which
+/// is what a stateless snapshot draws. The shell's glow pass (`GlowFade` in
+/// harmonigraph-ui) carries both on the Glow attack and release, with ONE
+/// coefficient for the two, so a halo's brightness and its colour cannot come
+/// to disagree about which way it is going (#1626). Nothing about a light is
+/// kept anywhere else: the renderer reads it afresh every frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct GlowStep {
-    /// Unique owner of this row while the light lives. The renderer compares
-    /// it with the owner whose ink it actually encoded, across discarded UI passes.
-    pub incarnation: u64,
     /// How lit this node's light is drawn. Out of [`NodeMotion::step`] it is
-    /// the node's [`glow_target`](NodeInstance::glow_target) itself, which is
-    /// what a stateless snapshot draws. The shell's glow pass (`GlowFade` in
-    /// harmonigraph-ui) then replaces it with where that target has got to on
-    /// the Glow attack and release, so it can be above zero on a node whose
-    /// every layer has gone silent — which is the whole of what makes a halo
-    /// linger.
+    /// the node's [`glow_target`](NodeInstance::glow_target) itself; the
+    /// shell's pass replaces it with where that target has got to on the Glow
+    /// attack and release, so it can be above zero on a node whose every layer
+    /// has gone silent — which is the whole of what makes a halo linger.
     pub level: f32,
-    /// Which row of this frame's ink strip holds this node's colour.
-    ///
-    /// It has to hold STILL while the node keeps glowing: the row is where last
-    /// frame's colour is read back from, so a node handed a different row each
-    /// frame would read a stranger's ink and morph toward that instead. The
-    /// instance list is sorted by depth and culled, so its own order is exactly
-    /// what cannot be used.
-    pub row: u32,
-}
-
-/// The glow clock at scene derivation. GPU history advances only when the
-/// renderer encodes that scene; UI layout passes may be discarded beforehand.
-#[derive(Clone, Copy, Debug)]
-pub struct GlowTiming {
-    pub now: f64,
-    pub attack: f32,
-    pub release: f32,
-}
-
-impl GlowTiming {
-    /// Attack and release coefficients since the last consumed scene.
-    pub fn coefficients(self, previous: Option<f64>) -> (f32, f32) {
-        let dt = previous.map_or(f64::INFINITY, |at| self.now - at);
-        let alpha = |seconds: f32| {
-            if dt.is_nan() || dt <= 0.0 {
-                0.0
-            } else if !seconds.is_finite() || seconds <= 0.0 {
-                1.0
-            } else {
-                1.0 - (-dt / f64::from(seconds)).exp() as f32
-            }
-        };
-        (alpha(self.attack), alpha(self.release))
-    }
+    /// What the light is made of as carried, or `None` where nothing carries
+    /// it, and the renderer reads the node's own
+    /// [`glow_light`](NodeInstance::glow_light) instead — a fixture, a golden
+    /// frame, a snapshot.
+    pub light: Option<GlowLight>,
 }
 
 /// One lattice node, ready for instanced rendering.
@@ -616,14 +649,12 @@ pub struct NodeInstance {
     /// mistaken for a bug.
     pub audio_ring: f32,
     /// The node's own light, as far as the light is concerned: how bright it
-    /// is, which row of the frame's ink strip is this node's, and how much of
-    /// this frame's reading the pair of them take (see [`GlowStep`]).
+    /// is, and what it is made of (see [`GlowStep`]).
     ///
-    /// [`NodeMotion::step`] seeds the current glow target on the snapshot row
-    /// assigned by [`derive_scene`]. The shell's pass
-    /// (`panes::glow_fade` in harmonigraph-ui) is what replaces it with a
-    /// level carried on the Glow attack and release, a row that holds still
-    /// while the node keeps glowing, and the coefficient that carried it.
+    /// [`NodeMotion::step`] writes the current glow target and no carried
+    /// light. The shell's pass (`panes::glow_fade` in harmonigraph-ui) is what
+    /// replaces both with where they have got to on the Glow attack and
+    /// release.
     pub glow: GlowStep,
     /// Whether the music is remembered here (see [`trail`]): 0 where it has
     /// never been, 1 where it has. A memory never fades, so those are the
@@ -641,7 +672,7 @@ pub struct NodeInstance {
 
 impl NodeInstance {
     /// Place an unlit node before spectral folding, motion, glow and trail
-    /// supply their channels. `row` is its stable row in the scene snapshot.
+    /// supply their channels.
     pub fn at(
         lattice_pos: LatticePos,
         world_pos: Vec3,
@@ -649,7 +680,6 @@ impl NodeInstance {
         on_home: bool,
         cents: f32,
         hovered: bool,
-        row: u32,
     ) -> Self {
         Self {
             lattice_pos,
@@ -672,7 +702,7 @@ impl NodeInstance {
             bass_color: Vec4::ZERO,
             // No audio has been measured, so nothing can be held back yet.
             audio_ring: 1.0,
-            glow: GlowStep { incarnation: 0, level: 0.0, row },
+            glow: GlowStep::default(),
             trail: 0.0,
         }
     }
@@ -811,15 +841,30 @@ impl NodeInstance {
     /// [`presence_with_opacity`](Self::presence_with_opacity), the presence
     /// that holds through a release.
     ///
-    /// Asked of the node rather than stored beside its light, so it cannot go
-    /// stale against the layers it reads: the stateless level
-    /// [`NodeMotion::step`] writes, the step `GlowFade` takes in
-    /// harmonigraph-ui and the ink strip's attack-or-release test
-    /// (`ink_history` in harmonigraph-render, shipped in the instance's
-    /// `params.w`) all ask this one, so brightness and colour cannot come to
-    /// disagree about which way a light is going (#1304, #1339).
+    /// Read off the node's [`glow_light`](Self::glow_light), so the level a
+    /// light heads for and the weights its colour is read from are one reading
+    /// and cannot disagree about what lit it (#1304, #1339).
     pub fn glow_target(&self) -> f32 {
-        self.drawn_level().max(self.melody_level).max(self.bass_level).clamp(0.0, 1.0)
+        self.glow_light().level()
+    }
+
+    /// What this node's light is made of as it stands: every slot's light, its
+    /// reach and its mark (see [`GlowLight`]). The one constructor of that
+    /// reading — the shell's glow pass steps toward it, and the renderer reads
+    /// it for a node nothing carries.
+    pub fn glow_light(&self) -> GlowLight {
+        let l = self.octaves.map(|level| level.clamp(0.0, 1.0));
+        let mut m = [0.0_f32; OCTAVE_SLOTS];
+        for (slots, level) in
+            [(self.melody_slots, self.melody_level), (self.bass_slots, self.bass_level)]
+        {
+            for (slot, mark) in m.iter_mut().enumerate() {
+                if slots & (1 << slot) != 0 {
+                    *mark = mark.max(level.clamp(0.0, 1.0));
+                }
+            }
+        }
+        GlowLight { l, p: std::array::from_fn(|i| l[i] * self.thickness[i].max(0.0)), m }
     }
 }
 
@@ -1018,20 +1063,12 @@ pub struct Scene {
     /// shader from carrying a second copy of the uv rule (see
     /// [`Scene::node_radius`], which is the same rule for a node).
     pub marker_unit: f32,
-    /// How many rows the frame's ink strip has to hold — the ceiling on every
-    /// [`GlowStep::row`] in `nodes`, plus one.
-    ///
-    /// A CAPACITY and not this frame's node count, which is the difference a
-    /// carried light makes: rows are handed out per node and held while that
-    /// node's light lasts, so the tallest row in use has nothing to do with how
-    /// many nodes are drawn. The renderer sizes the strip textures to it.
-    ///
-    /// `nodes.len()` out of [`derive_scene`], where every node has its own row
-    /// in the list's own order (see [`NodeInstance::glow`]).
-    pub glow_rows: u32,
-    /// Present for carried UI and offline scenes. Without a clock, the renderer
-    /// draws a stateless snapshot of the current ink.
-    pub glow_timing: Option<GlowTiming>,
+    /// The glow's clock, in seconds, where the shell's glow pass has stepped
+    /// this scene's lights (`panes::glow_fade` in harmonigraph-ui): what the
+    /// glow's material, texture and breathing travel by in the renderer.
+    /// `None` out of [`derive_scene`], a snapshot with no time in it, which
+    /// holds them where they are.
+    pub glow_clock: Option<f64>,
 }
 
 #[cfg(test)]

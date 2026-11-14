@@ -541,7 +541,7 @@ fn clearing_everything_empties_all_four_accumulations() {
         ),
     );
     // A surface's glow state, standing in for whatever a lit lattice pane
-    // would have handed a row by now — how it gets there is `glow_fade`'s
+    // be carrying by now — how it gets there is `glow_fade`'s
     // own business and tested there.
     state.picture.surfaces.glow_fade.insert(0, Default::default());
 

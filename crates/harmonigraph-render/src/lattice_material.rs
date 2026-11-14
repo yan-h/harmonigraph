@@ -418,9 +418,9 @@ pub(super) fn prepare(
     let layout = aspect
         .filter(|_| material.style == harmonigraph_scene::LatticeMaterial::Stars)
         .map(|aspect| crate::stars::star_layout(material.stars, aspect));
-    let motion = match callback.glow_timing {
+    let motion = match callback.glow_clock {
         Some(clock) => pane.material_travel.advance(
-            clock.now,
+            clock,
             crate::travel::Motion {
                 texture: f64::from(callback.texture_speed),
                 breath: f64::from(callback.breathing.speed),
@@ -541,8 +541,7 @@ mod tests {
                     scene.view.glow_reach = 2.88;
                     scene.view.glow_strength = 0.75;
                     scene.view.atmosphere = settings;
-                    scene.glow_timing =
-                        Some(harmonigraph_scene::GlowTiming { now, attack: 0.0, release: 0.0 });
+                    scene.glow_clock = Some(now);
                     let callback = LatticeCallback::from_scene(
                         &scene,
                         LatticeLabels::default(),

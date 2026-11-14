@@ -117,7 +117,6 @@ const CROSS_INK: glam::Vec4 = glam::Vec4::new(0.1, 0.1, 0.12, 1.0);
 fn crosses_on_ground(arms: &[(f32, f32)], arm: f32, shadow: f32, depth: f32) -> Scene {
     let mut scene = on_ground(shadow, depth);
     scene.nodes.clear();
-    scene.glow_rows = 0;
     scene.pluses = arms
         .iter()
         .map(|&(x, strength)| {
@@ -309,7 +308,6 @@ fn two_nodes_crossing_shadows_multiply_rather_than_take_the_deeper() {
             at.world_pos = glam::Vec3::new(x, 0.0, 0.0);
             scene.nodes.push(at);
         }
-        rows_per_node(&mut scene);
         scene
     };
     let scene = scene_of(&[-APART, APART]);
@@ -387,7 +385,6 @@ fn a_nearer_node_on_one_sheet_shadows_the_farther_and_not_the_reverse() {
             at.world_pos = glam::Vec3::new(0.0, y, 0.0);
             scene.nodes.push(at);
         }
-        rows_per_node(&mut scene);
         scene
     };
     let scene = scene_of(&[0.0, APART], 1.0);
@@ -1014,7 +1011,6 @@ fn a_swelled_node_arriving_from_outside_casts_its_whole_shadow() {
     // an exact ground value an adapter may read a code or two off.
     let mut empty = staged(0.0, 1.0, 1.0);
     empty.nodes.clear();
-    empty.glow_rows = 0;
     let row = on_screen(&empty, SIZE, glam::Vec3::ZERO).y.round() as u32;
     let bare = shooter.shot(&empty);
     let mut ink_edge = |scene: &Scene| -> (Vec<u8>, u32) {
