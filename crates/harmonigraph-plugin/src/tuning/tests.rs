@@ -1086,6 +1086,46 @@ fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The last armed callback's notes reach the take after a disarm. Both arrive
+/// a callback late, after the callback that observed the disarm: the Hub's own
+/// row, and a capture from a Tune the host runs after the Hub (#1760).
+#[test]
+fn the_last_armed_callbacks_notes_reach_the_take_after_a_disarm() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-last-armed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    for raw in [0, 512] {
+        hub.run_format(raw, vec![], None, None, 512);
+        tune.run_format(raw, vec![], None, None, 512);
+    }
+    let played = |id, key| vec![note(id, 0, key, 0, true), note(id, 0, key, 8, false)];
+    hub.run_format(1024, played(1, 60), None, None, 512);
+    tune.run_format(1024, played(2, 64), None, None, 512);
+    capture.stop();
+    for raw in [1536, 2048, 2560] {
+        hub.run_format(raw, vec![], None, None, 512);
+        tune.run_format(raw, vec![], None, None, 512);
+    }
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let take =
+        harmonigraph_take::Take::read(writer.finished.as_ref().expect("the take seals")).unwrap();
+    for key in [60, 64] {
+        let struck = take
+            .notes()
+            .any(|n| n.note == key && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
+        assert!(struck, "key {key} reaches the take");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A cut and joined destruction are where the last callback's end is proven,
 /// since nothing after them can be sequenced before it. A host reset mid-take
 /// keeps the take whole; a lagging Tune's record still in its ring fails only
