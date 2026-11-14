@@ -319,6 +319,30 @@ fn a_voice_held_through_two_pauses_is_one_note() {
     assert!((notes[0].0 - second).abs() < 1e-9, "{notes:?}");
 }
 
+/// A voice played just before a run ends sounds after it, so the resume's
+/// snapshot, which restates it, is earlier in the song than its onset. With
+/// the attack lost, nothing lifts that frame: the voice draws from the frame,
+/// and the gap marks the pass.
+#[test]
+fn a_restated_voice_starts_no_later_than_its_frame() {
+    let resumed = 2.0 + 128.0 / RATE;
+    let take = read(
+        &[
+            run(1, 0, 0, 2.0),
+            gap(1, at(0, 100), at(0, 100)),
+            end(0, 128),
+            run(1, 0, 256, resumed),
+            restating(1, &[struck(62, 100)], 256),
+        ],
+        None,
+    )
+    .unwrap();
+    assert!(take.incomplete.is_some());
+    let notes = notes_of(&take, 62);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!((notes[0].0 - resumed).abs() < 1e-9, "{notes:?}");
+}
+
 /// A record that would need more lift than its maximum's own lateness is a
 /// fault in the stamps: here the resume's song lags the audio, as the host's
 /// position did before the audio origin. It still reads, and the pass warns.
