@@ -109,15 +109,10 @@ impl Default for Recording {
     }
 }
 impl Recording {
-    /// A callback boundary: what is captured now stamps this callback's
-    /// input, and what was captured before still stamps earlier input the
-    /// frontier has not yet passed.
-    pub fn begin(&mut self, start: i64, intent: RecordIntent) {
-        self.note_intent(start, intent);
-    }
-
-    /// The captured intent from `start` on, for stamping.
-    fn note_intent(&mut self, start: i64, intent: RecordIntent) {
+    /// The captured intent from `start` on, for stamping: at each callback
+    /// boundary, and where a joined disarm is observed. What was captured
+    /// before still stamps earlier input the frontier has not yet passed.
+    pub fn note_intent(&mut self, start: i64, intent: RecordIntent) {
         self.captured_intent = intent;
         // A change the frontier passed stamps nothing any more once a later
         // one starts at or below it.
@@ -384,7 +379,7 @@ mod tests {
             ..Default::default()
         };
         recording.presentation = Presentation { anchor: Some((1000, 5.0)), rate: 48_000.0 };
-        recording.begin(1000, intent);
+        recording.note_intent(1000, intent);
         recording.record(&mut recorder, origin);
         recording.configuration(&mut recorder, 1000, ConfigReducer::default().resolved());
         recording.registered(1040);
@@ -403,7 +398,7 @@ mod tests {
 
         capture.stop();
         let disarmed = recorder.capture_recording_intent();
-        recording.begin(1040, disarmed);
+        recording.note_intent(1040, disarmed);
         recording.observe_joined_disarm(&mut recorder);
         recording.source_frontier(clock, 1024).unwrap();
         assert!(recording.owes_closure(&recorder, 1), "the source has not passed the run");

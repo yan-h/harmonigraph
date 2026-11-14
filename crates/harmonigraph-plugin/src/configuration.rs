@@ -220,7 +220,7 @@ impl Owner {
     ) {
         self.boundary = boundary;
         self.maps.begin(boundary);
-        self.recording.begin(boundary.steady_time, recorder.capture_recording_intent());
+        self.recording.note_intent(boundary.steady_time, recorder.capture_recording_intent());
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
         // The whole callback's input is applied and observed inside the same
