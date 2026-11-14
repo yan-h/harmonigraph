@@ -24,6 +24,7 @@ use harmonigraph_core::{Expressions, NoteRoll, Tuning, VoiceKey};
 use harmonigraph_ui::tape::Audition;
 
 use super::store::Store;
+use crate::audio_ingress::Heard;
 use crate::lattice_maps::MapSelection;
 
 /// What one held voice sounds like.
@@ -349,16 +350,16 @@ pub(crate) fn song_roll(store: &Store, passes: &BTreeMap<u64, PassNotes>) -> Not
 /// song it has got to.
 #[derive(Default)]
 pub(crate) struct Player {
-    /// The song frame the next block of tape should continue from.
-    cursor: Option<i64>,
-    /// The pass whose notes are sounding, read up to `cursor`.
+    /// The deck's serial for the cue the last block of tape belonged to.
+    cue: Option<u64>,
+    /// The pass whose notes are sounding, read up to the last block's end.
     owner: Option<(u64, Replay)>,
     /// The voices the tape holds in the tracker, by their recorded keys.
     sounding: BTreeMap<VoiceKey, Sounding>,
     /// The audition the notes belong to, for Tape mode.
     pub audition: Option<Audition>,
-    /// What the spot at the cursor was drawn with, while an audition is cued
-    /// or sounds.
+    /// What the spot heard last was drawn with, while an audition is cued or
+    /// sounds.
     pub drawn: Option<Drawn>,
 }
 
@@ -410,10 +411,6 @@ impl Out<'_> {
     }
 }
 
-/// Two song positions this close are one audition continuing: a block's
-/// rounding, never a new cue.
-const CONTINUES_FRAMES: i64 = 2;
-
 impl Player {
     /// Release everything the tape holds, at display time `time`.
     fn release(&mut self, out: &mut Out, time: f64) {
@@ -450,7 +447,7 @@ impl Player {
     pub(crate) fn silent(&mut self, tracker: &mut NoteTracker, time: f64, rolling: bool) {
         let mut out = Out { tracker };
         self.release(&mut out, time);
-        if self.cursor.take().is_some() {
+        if self.cue.take().is_some() {
             if let Some(audition) = &mut self.audition {
                 audition.until = Some(time);
             }
@@ -461,32 +458,28 @@ impl Player {
         }
     }
 
-    /// A block whose first `frames` frames carried tape from song seconds
-    /// `seconds`, each `speed` of a song frame, its first frame at display
-    /// time `clock`.
-    #[allow(clippy::too_many_arguments)]
+    /// A block that carried `heard`, its first frame at display time `clock`.
     pub(crate) fn heard(
         &mut self,
         tracker: &mut NoteTracker,
         store: &Store,
         passes: &BTreeMap<u64, PassNotes>,
-        seconds: f64,
-        frames: usize,
-        speed: f64,
+        heard: Heard,
         clock: f64,
     ) {
+        let Heard { cue, seconds, frames, speed } = heard;
         let rate = f64::from(store.rate);
         let first = (seconds * rate).round() as i64;
         let end = ((seconds + frames as f64 * speed / rate) * rate).round() as i64;
         // A slowed audition sounds a song frame later on the display's clock.
         let time = |frame: i64| clock + (frame - first) as f64 / (rate * speed);
         let mut out = Out { tracker };
-        let continues = self.cursor.is_some_and(|c| (c - first).abs() <= CONTINUES_FRAMES)
-            && self.audition.is_some_and(|a| a.speed == speed);
-        if !continues {
+        if self.cue != Some(cue) {
             // A new cue: what the last one held stops, and the spot's own
             // notes are struck, so a chord held across the cue is struck again
-            // as it would be by playing from there. A change of speed is one.
+            // as it would be by playing from there. That holds for a click on
+            // the spot already sounding, and for a change of speed, which cues
+            // again from the spot heard.
             self.release(&mut out, clock);
             self.audition = Some(Audition { clock, song: seconds, speed, until: None });
         }
@@ -536,7 +529,7 @@ impl Player {
             self.drawn = notes.drawn_at(until - 1);
             frame = until;
         }
-        self.cursor = Some(end);
+        self.cue = Some(cue);
     }
 }
 
@@ -678,7 +671,8 @@ mod tests {
         let (store, passes) = two_passes();
         let mut tracker = NoteTracker::new();
         let mut player = Player::default();
-        player.heard(&mut tracker, &store, &passes, 1.05, 200, 0.5, 60.0);
+        let heard = Heard { cue: 1, seconds: 1.05, frames: 200, speed: 0.5 };
+        player.heard(&mut tracker, &store, &passes, heard, 60.0);
         assert_eq!(tape_voices(&tracker), [(72, 60.1)]);
         let audition = player.audition.expect("an audition");
         assert_eq!(audition.speed, 0.5);
@@ -727,16 +721,19 @@ mod tests {
         let mut tracker = NoteTracker::new();
         let mut player = Player::default();
 
-        player.heard(&mut tracker, &store, &passes, 2.0, 100, 1.0, 50.0);
+        let heard = Heard { cue: 1, seconds: 2.0, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.0);
         assert_eq!(tape_voices(&tracker), [(60, 50.0)]);
         assert_eq!(player.drawn, Some(drawn(1)));
 
         // A new cue at 1.2 s: the old voices stop, pass 2's 72 is held there
         // and ends at 1.3 s, and from 1.5 s pass 1's 60 sounds.
-        player.heard(&mut tracker, &store, &passes, 1.2, 200, 1.0, 60.0);
+        let heard = Heard { cue: 3, seconds: 1.2, frames: 200, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 60.0);
         assert_eq!(tape_voices(&tracker), [], "the 72 ended and the seam is not reached");
         assert_eq!(player.drawn, Some(drawn(2)));
-        player.heard(&mut tracker, &store, &passes, 1.4, 200, 1.0, 60.2);
+        let heard = Heard { cue: 3, seconds: 1.4, frames: 200, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 60.2);
         assert_eq!(tape_voices(&tracker), [(60, 60.3)]);
         assert_eq!(
             player.audition,
@@ -748,6 +745,25 @@ mod tests {
         assert_eq!(tape_voices(&tracker), []);
         assert_eq!(player.drawn, None);
         assert_eq!(player.audition.and_then(|a| a.until), Some(61.0));
+    }
+
+    /// A cue strikes what is held at its spot, the spot already sounding
+    /// included: its blocks continue where the last left off, but under a new
+    /// serial, and the held 60 is struck again.
+    #[test]
+    fn a_cue_on_the_spot_sounding_strikes_its_notes_again() {
+        let (store, passes) = two_passes();
+        let mut tracker = NoteTracker::new();
+        let mut player = Player::default();
+        let heard = Heard { cue: 1, seconds: 2.0, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.0);
+        let heard = Heard { cue: 1, seconds: 2.1, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.1);
+        assert_eq!(tape_voices(&tracker), [(60, 50.0)], "one cue holds it");
+        let heard = Heard { cue: 3, seconds: 2.2, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.2);
+        assert_eq!(tape_voices(&tracker), [(60, 50.2)]);
+        assert_eq!(player.audition.map(|a| (a.clock, a.song)), Some((50.2, 2.2)));
     }
 
     /// A chase read from a checkpoint is the chase read from the start, and

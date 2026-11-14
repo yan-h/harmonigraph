@@ -12,7 +12,7 @@ use harmonigraph_record::transport;
 use harmonigraph_ui::tape::TapeRequest;
 
 use super::{Event, Piece, Reason, Shared, NO_REQUEST, STOP};
-use crate::audio_ingress::TapePlay;
+use crate::audio_ingress::{Heard, TapePlay};
 
 /// How long a cue may wait for its first audio, or a playing one go without,
 /// before it gives up: so a stalled or missing worker cannot hold the tape,
@@ -241,11 +241,13 @@ impl Deck {
         self.last = Some((position, duration));
 
         let from = self.cue_position + self.played;
+        // Before the mix, which bumps the serial when the cue ends in it.
+        let cue = self.serial;
         let frames = self.mix(planes, block.frames, duration);
         self.mixed = frames > 0;
         self.publish(Some(position), rolling);
         let play = if frames > 0 {
-            TapePlay::Heard { seconds: from, frames, speed: self.speed }
+            TapePlay::Heard(Heard { cue, seconds: from, frames, speed: self.speed })
         } else if self.sounding() {
             TapePlay::Waiting
         } else {

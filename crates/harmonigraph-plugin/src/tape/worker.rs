@@ -419,15 +419,9 @@ impl Worker {
         let tracker = &mut runtime.tracker;
         for (block, clock) in taken.clocked_blocks() {
             match (block.tape, &self.store) {
-                (TapePlay::Heard { seconds, frames, speed }, Some(store)) => self.player.heard(
-                    tracker,
-                    store,
-                    &self.book.passes,
-                    seconds,
-                    frames,
-                    speed,
-                    clock,
-                ),
+                (TapePlay::Heard(heard), Some(store)) => {
+                    self.player.heard(tracker, store, &self.book.passes, heard, clock)
+                }
                 // Cued, or starved for a block: the audition goes on, and
                 // what it holds stays held.
                 (TapePlay::Waiting, Some(_)) => {}
