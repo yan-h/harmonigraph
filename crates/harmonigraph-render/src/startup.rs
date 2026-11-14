@@ -490,23 +490,28 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(30))
             .expect("shutdown joined a worker it never told to stop");
 
-        // The build itself: told to stop during Lattice, it reports no stage
-        // after it and builds no pane program.
+        // The build itself, told to stop at the second Interface report: the
+        // lattice's last step is the first, and the second comes before the
+        // roll, the first pane. So it builds the roll, unwinds at the next
+        // pane's boundary and reports nothing after, which only the panes' own
+        // boundaries make it do.
         take_builds();
         let stop = AtomicBool::new(false);
         let seen = Mutex::new(Vec::new());
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             super::compile(&device, wgpu::TextureFormat::Bgra8Unorm, None, &stop, |stage| {
-                seen.lock().unwrap().push(stage);
-                if stage == Stage::Lattice {
+                let mut seen = seen.lock().unwrap();
+                seen.push(stage);
+                if seen.iter().filter(|&&s| s == Stage::Interface).count() == 2 {
                     stop.store(true, Ordering::Relaxed);
                 }
             })
         }));
         let stopped = built.err().expect("the build ran on past its stop");
         assert!(stopped.is::<super::Stopped>(), "it unwound with something else");
-        assert_eq!(seen.into_inner().unwrap().last(), Some(&Stage::Lattice));
-        assert_eq!(take_builds(), Vec::<&str>::new(), "panes built after the stop");
+        let interface = seen.into_inner().unwrap().into_iter().filter(|&s| s == Stage::Interface);
+        assert_eq!(interface.count(), 2, "it reported a stage after the stop");
+        assert_eq!(take_builds(), ["roll"], "it stopped at another boundary");
     }
 
     #[test]
