@@ -427,6 +427,7 @@ impl NoteRoll {
             if at > previous.start {
                 previous.end = Some(at);
                 self.retire(previous);
+                self.enforce_cap();
             }
         }
         self.live.insert(key, RollNote::new(key, velocity, at, at, pitch, Expressions::NEUTRAL));
@@ -467,6 +468,7 @@ impl NoteRoll {
         note.end = Some(at);
         note.off_timeline |= at <= note.start;
         self.release(note);
+        self.enforce_cap();
     }
 
     /// A press leaves the held set with a fade, its `end` or `observed_until`
@@ -525,7 +527,8 @@ impl NoteRoll {
     /// releases keep their arrival order.
     ///
     /// A note marked off the timeline is dropped instead: it was a voice and
-    /// nothing else.
+    /// nothing else. The cap is the caller's, once its whole change is made, so
+    /// a baseline's own retirements cannot evict a note a later row resumes.
     fn retire(&mut self, note: RollNote) {
         if note.off_timeline {
             return;
@@ -533,7 +536,6 @@ impl NoteRoll {
         let at = note.retired();
         let index = self.past.partition_point(|other| other.retired() <= at);
         self.past.insert(index, note);
-        self.enforce_cap();
     }
 
     /// Rule 3: what a gap could not see may have ended, so it is released into
@@ -553,6 +555,7 @@ impl NoteRoll {
             note.history_complete = false;
             self.release(note);
         }
+        self.enforce_cap();
     }
 
     pub(crate) fn set_shown(&mut self, source: SourceId, shown: bool) {
@@ -654,6 +657,7 @@ impl NoteRoll {
             note.history_complete = false;
             self.live.insert(key, note);
         }
+        self.enforce_cap();
     }
 
     /// Record a per-note tuning change on a sounding note. Unknown keys
@@ -702,6 +706,7 @@ impl NoteRoll {
             note.end = Some(at.max(note.start));
             self.release(note);
         }
+        self.enforce_cap();
     }
 
     pub(crate) fn published_off(&mut self, at: Time) {
@@ -754,6 +759,7 @@ impl NoteRoll {
             record(&note.voice());
             self.retire(note);
         }
+        self.enforce_cap();
         self.trim(now);
     }
 
