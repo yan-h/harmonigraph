@@ -3377,6 +3377,33 @@ fn a_sideways_scroll_in_tape_mode_stops_at_the_end_of_the_strip() {
     assert!(to <= 42.0 + 1e-6, "panned past the strip to {from}..{to}");
 }
 
+/// The roll builds no note later than the stretch shown: the live roll has
+/// none, but the tape's runs on past the window, and every note there would
+/// be laid out, sorted and uploaded only for the scissor to take it off.
+#[test]
+fn tape_mode_rolls_no_note_later_than_the_stretch_shown() {
+    use harmonigraph_core::notes::SourceId;
+    use harmonigraph_core::{NoteRoll, VoiceKey};
+    let ctx = themed();
+    let mut state = on_tape();
+    state.appearance.spectrum.show_roll = true;
+    let mut recorded = NoteRoll::uncapped();
+    let key = |note| VoiceKey { source: SourceId(1), channel: 0, note };
+    recorded.note_on(key(60), 1.0, 60.0, 1.0);
+    recorded.note_off(key(60), 2.0);
+    recorded.note_on(key(64), 1.0, 64.0, 20.0);
+    recorded.note_off(key(64), 30.0);
+    state.runtime.tape.notes = std::sync::Arc::new(recorded);
+    // The box's late end pulled in to 8 s.
+    overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(8.0)));
+    let (from, to) = shown(&state);
+    assert!(from == 0.0 && (to - 8.0).abs() < 0.3, "the fixture shows {from}..{to}");
+    super::roll::take_roll_draw_probe();
+    overview_frames(&ctx, &mut state, vec![vec![]]);
+    let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
+    assert_eq!(drawn, Some(1), "built a note past the stretch shown");
+}
+
 fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     vec![
         vec![egui::Event::PointerMoved(from)],
