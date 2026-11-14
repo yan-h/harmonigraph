@@ -348,7 +348,7 @@ fn a_held_voice_is_one_note_wherever_it_was_struck() {
     const KEY: u8 = 62;
     let start = |i: usize| 512 + 256 * (i as i64 - 1);
     let song = |i: usize| 2.0 + 128.0 * (i - 1) as f64 / RATE;
-    let (mut cases, mut lifted, mut raised) = (0, 0, 0);
+    let (mut cases, mut lifted, mut raised, mut raised_lost) = (0, 0, 0, 0);
     for runs in 1..=4 {
         let mut strikes = vec![Strike::PreviousPass, Strike::BeforeArm];
         for k in 1..=runs {
@@ -442,7 +442,7 @@ fn a_held_voice_is_one_note_wherever_it_was_struck() {
                 lifted += usize::from(drawn(&take).iter().any(|&(key, on, t)| {
                     key == KEY && on && attack == Attack::Lifted && t > unlifted + 1e-9
                 }));
-                raised += take
+                let frames = take
                     .events
                     .iter()
                     .filter(|e| match e {
@@ -453,10 +453,17 @@ fn a_held_voice_is_one_note_wherever_it_was_struck() {
                         _ => false,
                     })
                     .count();
+                raised += frames;
+                if attack == Attack::Lost {
+                    raised_lost += frames;
+                }
             }
         }
     }
-    assert!(lifted > 0 && raised > 0, "{cases} cases, {lifted} lifted, {raised} raised");
+    // What reaches each path, pinned so a fixture change cannot quietly stop
+    // reaching one: attacks the floor lifts, frames lifted to a voice, and of
+    // those the frames whose voice's attack was lost.
+    assert_eq!((cases, lifted, raised, raised_lost), (52, 6, 12, 6));
 
     // Two strikes of one key, each its own lifetime, the release between them
     // and the second attack lost: the resume restates the second, which is
