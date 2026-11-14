@@ -82,7 +82,7 @@ struct Playback {
 enum Source {
     /// The store, from this song frame on.
     Direct(i64),
-    /// The store through the stretcher, below full speed.
+    /// The store through the stretcher, at any speed but full.
     Stretched(Box<Stretched>),
 }
 
@@ -594,7 +594,7 @@ impl Worker {
                 Some(store) => {
                     let start = (position * f64::from(store.rate)).round() as i64;
                     // A cue where nothing is recorded ends at once either way.
-                    if speed < 1.0 && store.holding(start).is_some() {
+                    if speed != 1.0 && store.holding(start).is_some() {
                         Source::Stretched(Box::new(Stretched::new(store, start, speed)))
                     } else {
                         Source::Direct(start)

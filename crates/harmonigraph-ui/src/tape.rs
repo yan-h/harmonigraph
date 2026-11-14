@@ -17,9 +17,12 @@ pub enum TapeRequest {
 
 /// How fast an audition plays (#1719 slice 5), its pitch held at every
 /// speed. The stretcher sounds best near full speed: it is built for changes
-/// of about a quarter either way, so the slowest steps trade clarity for time.
+/// of about a quarter either way, so the steps furthest from it trade clarity
+/// for time.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Speed {
+    Double,
+    OneAndAHalf,
     #[default]
     Full,
     ThreeQuarters,
@@ -28,11 +31,20 @@ pub enum Speed {
 }
 
 impl Speed {
-    pub const ALL: [Speed; 4] = [Speed::Full, Speed::ThreeQuarters, Speed::Half, Speed::Quarter];
+    pub const ALL: [Speed; 6] = [
+        Speed::Double,
+        Speed::OneAndAHalf,
+        Speed::Full,
+        Speed::ThreeQuarters,
+        Speed::Half,
+        Speed::Quarter,
+    ];
 
     /// Song seconds per second heard.
     pub fn factor(self) -> f64 {
         match self {
+            Speed::Double => 2.0,
+            Speed::OneAndAHalf => 1.5,
             Speed::Full => 1.0,
             Speed::ThreeQuarters => 0.75,
             Speed::Half => 0.5,
@@ -42,6 +54,8 @@ impl Speed {
 
     pub fn label(self) -> &'static str {
         match self {
+            Speed::Double => "2×",
+            Speed::OneAndAHalf => "1.5×",
             Speed::Full => "1×",
             Speed::ThreeQuarters => "0.75×",
             Speed::Half => "0.5×",
@@ -109,7 +123,7 @@ pub struct Audition {
     pub clock: f64,
     /// The song seconds it started from.
     pub song: f64,
-    /// Song seconds per second heard: below 1 it is slowed.
+    /// Song seconds per second heard: below 1 it is slowed, above 1 sped up.
     pub speed: f64,
     /// The display-clock time it stopped sounding, once it has.
     pub until: Option<f64>,

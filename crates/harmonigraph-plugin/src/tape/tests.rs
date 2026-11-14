@@ -387,10 +387,11 @@ fn a_cue_during_an_audition_plays_the_new_spot_from_its_first_frame() {
     }
 }
 
-/// A slowed cue counts the song at its speed, so a block says how much of the
-/// song it played; a new speed while it sounds cues again from the spot heard.
+/// A slowed or sped-up cue counts the song at its speed, so a block says how
+/// much of the song it played; a new speed while it sounds cues again from the
+/// spot heard.
 #[test]
-fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
+fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let (mut deck, mut worker) = pair();
     let mut source = 0;
     record(&mut worker, &mut source, 0, 3000);
@@ -417,14 +418,16 @@ fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let (seconds, _, _) = heard(run(&mut deck, 0.0, false, true).1);
     assert!((seconds - 1.05).abs() < 1e-9, "100 frames heard are 50 of song: {seconds}");
 
-    view.speed = Speed::Full;
+    view.speed = Speed::Double;
     worker.exchange(&mut view, &SpectrumConfig::default(), true);
     run(&mut deck, 0.0, false, true);
     let (_, out) = run(&mut deck, 0.0, false, true);
     assert!(out.sounding);
     worker.play();
     let (seconds, frames, speed) = heard(run(&mut deck, 0.0, false, true).1);
-    assert!((seconds - 1.1).abs() < 1e-9 && frames == FRAMES && speed == 1.0, "{seconds}");
+    assert!((seconds - 1.1).abs() < 1e-9 && frames == FRAMES && speed == 2.0, "{seconds}");
+    let (seconds, _, _) = heard(run(&mut deck, 0.0, false, true).1);
+    assert!((seconds - 1.3).abs() < 1e-9, "100 frames heard are 200 of song: {seconds}");
     let lines = events(&mut worker);
     let recued = lines.iter().filter(|l| l.contains("audition from 1.000 s (")).count();
     assert_eq!(recued, 2, "{lines:?}");
