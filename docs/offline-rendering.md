@@ -190,6 +190,10 @@ Every pass stays in the one take file.
 The latest recorded pass renders,
 including a pass containing audio without MIDI;
 `--pass N` renders an earlier one.
+A take that failed warns on every pass it holds,
+an earlier whole pass included:
+its failure names no pass (#1766).
+A gap in the note history warns only on the passes it touched.
 Under *Transport stop* or *Loop end*,
 the take finishes before the jump and the automatic render's export row says “take ended before a forward transport seek”.
 You can immediately record another take.
