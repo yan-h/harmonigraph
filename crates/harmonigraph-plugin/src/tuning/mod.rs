@@ -40,9 +40,9 @@ pub const REPLY_RING: usize = 1024;
 /// Records the Hub orders in one pass across every source.
 pub const BATCH_EVENTS: usize = 2048;
 // The Hub drains its own direct queue first, into an empty batch, so a batch
-// that fills always leaves that queue empty: the source frontier
-// (`Hub::earliest_waiting`) and `Hub::prove_final_frontier` look only in the
-// rows' rings for what is still waiting.
+// that fills always leaves that queue empty, and the source frontier after
+// a full batch (`Hub::earliest_waiting`) looks only in the rows' rings for
+// what is still waiting.
 const _: () = assert!(CAPTURE_RING < BATCH_EVENTS);
 /// Note-offs and pedal neutralisations one cut may owe: every held voice, plus
 /// sustain, sostenuto and legato on each of sixteen channels. A cut does not
