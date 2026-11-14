@@ -17,7 +17,7 @@ The compiler version may change, so compare the new manifest rather than assumin
 
 These commands apply to probe commit `06d3f0a8`.
 The named `exercise.py` and `backend.py` tools were removed from the current tree;
-use the [production workflow](../../metal-shader-assets.md) for current code.
+the later [production workflow](https://github.com/yan-h/harmonigraph/blob/c423bf44/docs/metal-shader-assets.md) went with the corpus in #1746.
 
 Build the render test binary with the isolated backend configuration created by `backend.py prepare`, using the build procedure in `exercise.py` so the temporary path patch does not persist in `Cargo.lock`.
 Verify the downloaded or regenerated asset directory with `backend.py verify`.
