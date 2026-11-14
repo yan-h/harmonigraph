@@ -746,13 +746,6 @@ impl Tune {
             _ => None,
         }
     }
-    /// The Hub's own next capture, left where it is.
-    pub fn peek_direct(&self) -> Option<Capture> {
-        match &self.link {
-            Link::Direct { out, .. } => out.front(),
-            _ => None,
-        }
-    }
     pub fn reply_direct(&mut self, reply: Reply) {
         if let Link::Direct { back, .. } = &mut self.link {
             let _ = back.push(reply);

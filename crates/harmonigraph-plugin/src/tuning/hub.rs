@@ -712,19 +712,17 @@ impl Hub {
         }
     }
 
-    /// The earliest input of this epoch still in a ring, read without consuming:
-    /// each ring holds its captures in input order, so its first one counts.
+    /// The earliest input of this epoch still in a row's ring: each ring holds
+    /// its captures in input order, so its first one counts. The direct queue
+    /// is always empty here (`CAPTURE_RING < BATCH_EVENTS`).
     fn earliest_waiting(&mut self) -> Option<i64> {
-        let direct = self.tune.peek_direct().filter(|c| c.epoch == self.tune.epoch());
         let epoch = self.epoch;
-        let rows =
-            self.ends.iter_mut().flat_map(|ends| ends.iter_mut().flatten()).filter_map(|end| {
-                let slots = end.captures.slots();
-                let chunk = end.captures.read_chunk(slots).ok()?;
-                let (head, tail) = chunk.as_slices();
-                head.iter().chain(tail).find(|c| c.epoch == epoch).map(|c| c.sample)
-            });
-        direct.map(|c| c.sample).into_iter().chain(rows).min()
+        self.ends
+            .iter_mut()
+            .flat_map(|ends| ends.iter_mut().flatten())
+            .filter_map(|end| first_waiting(&mut end.captures, |c| c.epoch == epoch))
+            .map(|c| c.sample)
+            .min()
     }
 
     /// Bind in each source's input order, before the musical sort moves
@@ -1362,11 +1360,8 @@ impl Hub {
                     return true;
                 }
                 // Read without consuming: a cut's own epoch filter still owns them.
-                let slots = end.captures.slots();
-                end.captures.read_chunk(slots).is_ok_and(|chunk| {
-                    let (head, tail) = chunk.as_slices();
-                    head.iter().chain(tail).any(|c| c.epoch == epoch && recorded(c.sample))
-                })
+                first_waiting(&mut end.captures, |c| c.epoch == epoch && recorded(c.sample))
+                    .is_some()
             });
         if stranded || owner.recording.source_frontier(self.clock, through).is_err() {
             recorder.fail_configuration();
@@ -1463,6 +1458,17 @@ impl Hub {
         self.sequencer.memory.append(&mut context, self.sequencer.config.policy, self.rate);
         context.len()
     }
+}
+
+/// The first capture still in `captures` that `matches`, read without
+/// consuming it.
+fn first_waiting(
+    captures: &mut rtrb::Consumer<session::Capture>,
+    matches: impl Fn(&session::Capture) -> bool,
+) -> Option<session::Capture> {
+    let chunk = captures.read_chunk(captures.slots()).ok()?;
+    let (head, tail) = chunk.as_slices();
+    head.iter().chain(tail).find(|c| matches(c)).copied()
 }
 
 #[cfg(test)]
