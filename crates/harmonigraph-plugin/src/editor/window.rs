@@ -417,13 +417,11 @@ mod tests {
 
     /// What activation does (#1746): the device it makes is the one the
     /// window will reuse AND the one the job compiles on, and activating again
-    /// makes no second device and moves the job to none.
+    /// makes no second device and moves the job to none. Under hot reload,
+    /// which the workspace's test run turns on, the device half still holds;
+    /// only the job is missing, since that build initializes synchronously.
     #[test]
     fn activation_retains_the_device_its_job_compiles_on() {
-        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
-            eprintln!("hot reload initializes synchronously; no startup job");
-            return;
-        }
         if harmonigraph_render::test_gpu_adapter().is_none() {
             return;
         }
@@ -433,15 +431,17 @@ mod tests {
         let format = super::super::ASSUMED_SURFACE_FORMAT;
         super::start_graphics(&context, &cache, &config, format);
         let setup = context.existing().expect("activation retained no device");
-        let (instance, device) = cache.startup_device().expect("activation started no job");
-        assert!(instance == setup.instance, "the job runs on another instance");
-        assert!(device == setup.device, "the job compiles on another device");
-
         super::start_graphics(&context, &cache, &config, format);
         let again = context.existing().expect("the retained device went");
         assert!(again.device == setup.device, "a second activation made another device");
-        let (_, device) = cache.startup_device().expect("the job went");
-        assert!(device == setup.device, "a second activation moved the job");
+
+        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
+            eprintln!("hot reload initializes synchronously; no startup job to check");
+            return;
+        }
+        let (instance, device) = cache.startup_device().expect("activation started no job");
+        assert!(instance == setup.instance, "the job runs on another instance");
+        assert!(device == setup.device, "the job compiles on another device");
         cache.shutdown_startup();
     }
 }
