@@ -24,6 +24,7 @@ use harmonigraph_core::{Expressions, NoteRoll, Tuning, VoiceKey};
 use harmonigraph_ui::tape::Audition;
 
 use super::store::Store;
+use crate::audio_ingress::Heard;
 use crate::lattice_maps::MapSelection;
 
 /// What one held voice sounds like.
@@ -457,21 +458,16 @@ impl Player {
         }
     }
 
-    /// A block whose first `frames` frames carried cue `cue`'s tape from song
-    /// seconds `seconds`, each `speed` of a song frame, its first frame at
-    /// display time `clock`.
-    #[allow(clippy::too_many_arguments)]
+    /// A block that carried `heard`, its first frame at display time `clock`.
     pub(crate) fn heard(
         &mut self,
         tracker: &mut NoteTracker,
         store: &Store,
         passes: &BTreeMap<u64, PassNotes>,
-        cue: u64,
-        seconds: f64,
-        frames: usize,
-        speed: f64,
+        heard: Heard,
         clock: f64,
     ) {
+        let Heard { cue, seconds, frames, speed } = heard;
         let rate = f64::from(store.rate);
         let first = (seconds * rate).round() as i64;
         let end = ((seconds + frames as f64 * speed / rate) * rate).round() as i64;
@@ -675,7 +671,8 @@ mod tests {
         let (store, passes) = two_passes();
         let mut tracker = NoteTracker::new();
         let mut player = Player::default();
-        player.heard(&mut tracker, &store, &passes, 1, 1.05, 200, 0.5, 60.0);
+        let heard = Heard { cue: 1, seconds: 1.05, frames: 200, speed: 0.5 };
+        player.heard(&mut tracker, &store, &passes, heard, 60.0);
         assert_eq!(tape_voices(&tracker), [(72, 60.1)]);
         let audition = player.audition.expect("an audition");
         assert_eq!(audition.speed, 0.5);
@@ -724,16 +721,19 @@ mod tests {
         let mut tracker = NoteTracker::new();
         let mut player = Player::default();
 
-        player.heard(&mut tracker, &store, &passes, 1, 2.0, 100, 1.0, 50.0);
+        let heard = Heard { cue: 1, seconds: 2.0, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.0);
         assert_eq!(tape_voices(&tracker), [(60, 50.0)]);
         assert_eq!(player.drawn, Some(drawn(1)));
 
         // A new cue at 1.2 s: the old voices stop, pass 2's 72 is held there
         // and ends at 1.3 s, and from 1.5 s pass 1's 60 sounds.
-        player.heard(&mut tracker, &store, &passes, 3, 1.2, 200, 1.0, 60.0);
+        let heard = Heard { cue: 3, seconds: 1.2, frames: 200, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 60.0);
         assert_eq!(tape_voices(&tracker), [], "the 72 ended and the seam is not reached");
         assert_eq!(player.drawn, Some(drawn(2)));
-        player.heard(&mut tracker, &store, &passes, 3, 1.4, 200, 1.0, 60.2);
+        let heard = Heard { cue: 3, seconds: 1.4, frames: 200, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 60.2);
         assert_eq!(tape_voices(&tracker), [(60, 60.3)]);
         assert_eq!(
             player.audition,
@@ -755,10 +755,13 @@ mod tests {
         let (store, passes) = two_passes();
         let mut tracker = NoteTracker::new();
         let mut player = Player::default();
-        player.heard(&mut tracker, &store, &passes, 1, 2.0, 100, 1.0, 50.0);
-        player.heard(&mut tracker, &store, &passes, 1, 2.1, 100, 1.0, 50.1);
+        let heard = Heard { cue: 1, seconds: 2.0, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.0);
+        let heard = Heard { cue: 1, seconds: 2.1, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.1);
         assert_eq!(tape_voices(&tracker), [(60, 50.0)], "one cue holds it");
-        player.heard(&mut tracker, &store, &passes, 3, 2.2, 100, 1.0, 50.2);
+        let heard = Heard { cue: 3, seconds: 2.2, frames: 100, speed: 1.0 };
+        player.heard(&mut tracker, &store, &passes, heard, 50.2);
         assert_eq!(tape_voices(&tracker), [(60, 50.2)]);
         assert_eq!(player.audition.map(|a| (a.clock, a.song)), Some((50.2, 2.2)));
     }

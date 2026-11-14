@@ -52,12 +52,22 @@ pub(crate) enum TapePlay {
     /// An audition is cued or playing but added nothing to this block: a new
     /// cue waiting for its audio, or a starved one. A pause, not an end.
     Waiting,
-    /// The tape's audio from the block's first frame, song seconds `seconds`
-    /// on, for `frames` frames, each `speed` of a song frame: below 1 the
-    /// audition is slowed. `cue` is the deck's serial for the cue it belongs
-    /// to, which every cue changes, a click on the spot already sounding
-    /// included.
-    Heard { cue: u64, seconds: f64, frames: usize, speed: f64 },
+    /// The tape's audio from the block's first frame.
+    Heard(Heard),
+}
+
+/// What of the tape one block carried, from its first frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Heard {
+    /// The deck's serial for the cue the audio belongs to. Every cue changes
+    /// it, a click on the spot already sounding included, and a cue's blocks
+    /// follow on from one another in the song.
+    pub cue: u64,
+    /// Song seconds at the block's first frame.
+    pub seconds: f64,
+    pub frames: usize,
+    /// Song frames per frame heard: below 1 the audition is slowed.
+    pub speed: f64,
 }
 
 /// A rolling block's place in the song.

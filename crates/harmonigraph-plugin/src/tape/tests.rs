@@ -135,9 +135,10 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     worker.play();
     let (audio, out) = run(&mut deck, parked, false, true);
     assert!(out.sounding && out.song.is_none());
-    let crate::audio_ingress::TapePlay::Heard { seconds, frames, speed, .. } = out.play else {
+    let crate::audio_ingress::TapePlay::Heard(heard) = out.play else {
         panic!("{:?}", out.play);
     };
+    let crate::audio_ingress::Heard { seconds, frames, speed, .. } = heard;
     assert_eq!((seconds, frames, speed), (1.0, FRAMES, 1.0), "the block says what it played");
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
@@ -409,9 +410,7 @@ fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     assert!(out.sounding && out.play == crate::audio_ingress::TapePlay::Waiting);
     worker.play();
     let heard = |out: BlockOut| match out.play {
-        crate::audio_ingress::TapePlay::Heard { cue, seconds, frames, speed } => {
-            (cue, seconds, frames, speed)
-        }
+        crate::audio_ingress::TapePlay::Heard(h) => (h.cue, h.seconds, h.frames, h.speed),
         play => panic!("{play:?}"),
     };
     let (audio, out) = run(&mut deck, 0.0, false, true);
