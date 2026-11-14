@@ -53,16 +53,22 @@ pub struct WindowStartup(Arc<Mutex<Status>>);
 impl Default for WindowStartup {
     fn default() -> Self {
         // Development hot reload keeps its existing synchronous resource path.
-        let status = if cfg!(feature = "hot-reload") {
-            Status::Ready { built: false }
+        if cfg!(feature = "hot-reload") {
+            Self(Arc::new(Mutex::new(Status::Ready { built: false })))
         } else {
-            Status::Preparing(Stage::Graphics)
-        };
-        Self(Arc::new(Mutex::new(status)))
+            Self::preparing()
+        }
     }
 }
 
 impl WindowStartup {
+    /// Progress at its first stage whatever this build's features, so a test
+    /// reaches the loading screen even where `hot-reload` is unified in and
+    /// [`Default`] starts at `Ready`.
+    pub fn preparing() -> Self {
+        Self(Arc::new(Mutex::new(Status::Preparing(Stage::Graphics))))
+    }
+
     pub fn status(&self) -> Status {
         *self.0.lock().expect("startup status poisoned")
     }

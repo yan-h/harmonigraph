@@ -18,7 +18,14 @@ fn id() -> egui::Id {
 /// Opt this window into stage progress. Call after restoring its theme/state;
 /// offline rendering does not call this and keeps its synchronous first frame.
 pub fn begin_editor_loading(ctx: &egui::Context) {
-    ctx.data_mut(|data| data.insert_temp(id(), Loading::default()));
+    begin_editor_loading_with(ctx, WindowStartup::default());
+}
+
+/// [`begin_editor_loading`] from `progress`, which a test hands
+/// [`WindowStartup::preparing`] to reach the loading screen in a build whose
+/// default progress starts at `Ready`.
+pub(crate) fn begin_editor_loading_with(ctx: &egui::Context, progress: WindowStartup) {
+    ctx.data_mut(|data| data.insert_temp(id(), Loading { progress, finishing: false }));
 }
 
 /// Current opening phase for native-shell diagnostics; `None` after handoff.
@@ -110,10 +117,6 @@ mod tests {
 
     #[test]
     fn loading_frames_age_released_notes_without_pruning_live_voices() {
-        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
-            eprintln!("hot reload uses synchronous initialization; no loading frames");
-            return;
-        }
         let ctx = egui::Context::default();
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.workspace.layout = workspace::Layout::solo(Tab::Lattice);
@@ -142,7 +145,7 @@ mod tests {
             1.0,
         ));
         assert_eq!(state.picture.runtime.tracker.voices().count(), 3);
-        begin_editor_loading(&ctx);
+        begin_editor_loading_with(&ctx, WindowStartup::preparing());
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             crate::root_ui(ui, &mut state, &Defaults, 5.0, "test @0123456");
         });
@@ -167,15 +170,11 @@ mod tests {
 
     #[test]
     fn first_reveal_after_hidden_frames_uses_the_loading_path() {
-        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
-            eprintln!("hot reload uses synchronous initialization; no loading frames");
-            return;
-        }
         for tab in [Tab::Lattice, Tab::Video] {
             let ctx = egui::Context::default();
             let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
             state.workspace.layout = workspace::Layout::solo(Tab::Spectral);
-            begin_editor_loading(&ctx);
+            begin_editor_loading_with(&ctx, WindowStartup::preparing());
             let loading_text = |output: &egui::FullOutput| {
                 output.shapes.iter().any(|shape| {
                 matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Stage::Graphics.label())
