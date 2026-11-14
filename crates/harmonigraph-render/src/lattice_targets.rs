@@ -143,12 +143,16 @@ pub(super) struct InkStrip {
 /// keeps the two one.
 pub(super) const INK_STRIP_N: u32 = 64;
 
-/// What the strip is kept in: an f16 colour per angle, which is what the blur
+/// What the strip is kept in: an f32 colour per angle, which is what the blur
 /// hands the light. The format is explicit rather than inherited from the
 /// scene because a strip texel is a normalised colour beside a WEIGHT, and a
 /// weight is a layer's level times its width — small numbers that must not be
-/// quantized away if the scene format changes.
-pub(super) const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// quantized away if the scene format changes. Full precision because the
+/// colour is mixed in place, frame on frame (`fs_ink_strip`): at f16 a held
+/// halo eased toward its note's new colour stalled short of it, 6-8% at 60 Hz
+/// and more at 144 (#1759, Q2). Every read is a `textureLoad`, so f32 needs no
+/// filterable-float feature.
+pub(super) const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
 pub(super) struct OffscreenShared<'a> {
