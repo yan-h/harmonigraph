@@ -40,13 +40,20 @@ pub(crate) struct LiveInput {
 /// moved out with it: what [`LiveInput::analyze`] runs without the lock.
 pub(crate) struct Taken {
     analysis: harmonigraph_ui::SpectrumAnalysis,
-    /// The history's epoch at take: a Clear before the give keeps this
-    /// step's columns out (see [`AudioSpectrum::give`]).
+    /// The history's Clear count at take: a Clear before a chunk of the give
+    /// keeps that chunk's columns out (see [`AudioSpectrum::give`]).
     ///
     /// [`AudioSpectrum::give`]: harmonigraph_ui::AudioSpectrum::give
-    epoch: u32,
+    clears: u32,
     audio: TakenAudio,
 }
+
+/// Columns a hold of the editor lock gives the history: a step's hand-over
+/// takes as many holds as it needs, so a frame waiting on the lock waits for
+/// one chunk's folds (about 0.7 ms) rather than a whole catch-up's. A mono
+/// catch-up after a starved ring is 371 columns, 3.8 to 4.1 ms in one hold,
+/// more than half a 144 Hz frame.
+pub(crate) const GIVE_CHUNK_COLUMNS: usize = 64;
 
 /// [`Taken`]'s buffers, which outlive it in [`LiveInput::spare`].
 #[derive(Default)]
@@ -186,7 +193,7 @@ impl LiveInput {
         debug_assert!(self.analysis.is_some(), "the analysis was given back");
         audio.blocks[0].restart |= self.analysis.is_none();
         let analysis = self.analysis.take().unwrap_or_default();
-        Some(Taken { analysis, epoch: runtime.spectrum.history_epoch(), audio })
+        Some(Taken { analysis, clears: runtime.spectrum.clears(), audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {
@@ -224,9 +231,33 @@ impl LiveInput {
     }
     /// Hand what [`Self::analyze`] made to the store, and put the analysis
     /// back.
-    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
-        let Taken { analysis, epoch, mut audio } = taken;
-        runtime.spectrum.give(epoch, audio.deliveries.drain(..), &audio.config);
+    pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, mut taken: Taken) {
+        while !Self::give_chunk(runtime, &mut taken) {}
+        self.put_back(taken);
+    }
+    /// Give the store the next [`GIVE_CHUNK_COLUMNS`] columns of what
+    /// [`Self::analyze`] made, with the deliveries between them; whether that
+    /// was the last of them. The input worker holds the lock for one call.
+    pub(crate) fn give_chunk(
+        runtime: &mut harmonigraph_ui::VisualRuntime,
+        taken: &mut Taken,
+    ) -> bool {
+        let audio = &mut taken.audio;
+        let mut columns = 0;
+        let end = (audio.deliveries.iter())
+            .position(|delivery| {
+                columns += usize::from(delivery.column().is_some());
+                columns > GIVE_CHUNK_COLUMNS
+            })
+            .unwrap_or(audio.deliveries.len());
+        runtime.spectrum.give(taken.clears, audio.deliveries.drain(..end), &audio.config);
+        audio.deliveries.is_empty()
+    }
+    /// Put the analysis back once its hand-over is whole, and keep its
+    /// buffers for the next step.
+    pub(crate) fn put_back(&mut self, taken: Taken) {
+        let Taken { analysis, mut audio, .. } = taken;
+        debug_assert!(audio.deliveries.is_empty(), "put back before it was all given");
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         self.analysis = Some(analysis);
         audio.samples.clear();

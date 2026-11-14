@@ -41,10 +41,11 @@
 //! core (and estimated 0.7% at a 32 ms hop). The original 2026-08-09
 //! [#305](https://github.com/yan-h/harmonigraph/pull/305) measured 0.417 ms,
 //! about 5.2%. Neither is a current full-plugin or silent-input measurement.
-//! Memory remains bounded by [`SpectrumHistory`]'s ~54 MiB power sums;
-//! the history already outlives the window. A different hop is not the only
-//! possible cost reduction, and would need to preserve the store tiers,
-//! `live_slab` ladder on their shared `FFT_INTERVAL` grid.
+//! Folding each column into every level of the spectrogram's slab pyramid
+//! costs about 11 µs more (#1758), and the pyramid's memory, about 30 MB
+//! when full, is bounded by its rings. A different hop is not the only
+//! possible cost reduction, and would need to keep the pyramid's levels on
+//! the `live_slab` ladder of their shared `FFT_INTERVAL` grid.
 //!
 //! **With the window shut, a step also does the frame's other duties:** the
 //! ageing a frame gets from `begin_frame`
@@ -65,7 +66,6 @@
 //! is dated, so their join would scroll across the heatmap as a seam (#324).
 //!
 //! [`EditorShared::poll_take_end`]: crate::editor::EditorShared::poll_take_end
-//! [`SpectrumHistory`]: harmonigraph_core::SpectrumHistory
 //! [`SpectrumConfig::default`]: harmonigraph_ui::SpectrumConfig
 
 #[cfg(test)]
@@ -207,6 +207,10 @@ thread_local! {
     /// Run between a step's two holds of the lock, just before its FFTs.
     #[allow(clippy::type_complexity)]
     static BETWEEN_HOLDS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock, &crate::editor::input::Taken)>>> = const { std::cell::RefCell::new(None) };
+    /// Run between two holds that give a step's columns, after each chunk
+    /// but the last.
+    #[allow(clippy::type_complexity)]
+    static BETWEEN_CHUNKS: std::cell::RefCell<Option<Box<dyn FnMut(&EditorLock)>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// One step: take the notes and the audio under the lock, analyze the audio
@@ -231,10 +235,12 @@ thread_local! {
 /// **The lock is waited for, not tried**: this thread never runs on the
 /// host's main thread, so waiting out a frame costs the host nothing, and a
 /// frame or a window opening waits on this thread only for a take (a copy of
-/// what the ring holds) or a give (appending its columns): microseconds for
-/// the two or three columns a step usually brings, and a few milliseconds at
-/// most for a full ring's 170, reachable only after this thread was starved
-/// for 1.37 s. The FFTs between them, some 10 ms for that ring through Fast
+/// what the ring holds) or a give (folding its columns into every level of
+/// the spectrogram's history, 11 µs a column): a few tens of microseconds for
+/// the two or three columns a step usually brings, and the give takes a hold
+/// per [`GIVE_CHUNK_COLUMNS`](crate::editor::input::GIVE_CHUNK_COLUMNS) of a
+/// catch-up's, reachable only after this thread was starved. The FFTs
+/// between them, some 10 ms for a full ring through Fast
 /// at 48 kHz and 36 through Precise (see
 /// [`SpectrumAnalysis::feed_source`](harmonigraph_ui::SpectrumAnalysis::feed_source)),
 /// hold nothing. The thread runs at the GUI's
@@ -283,11 +289,22 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     if taken.is_none() && editor_state.is_open() && tape.logs.is_empty() {
         return;
     }
-    let mut guard = shared.lock();
+    let mut taken = taken;
+    // The columns go back a chunk per hold (see `GIVE_CHUNK_COLUMNS`), and
+    // the rest of the step rides on the hold that gives the last of them.
+    let mut guard = loop {
+        let mut guard = shared.lock();
+        let Some(given) = taken.as_mut() else { break guard };
+        let runtime = &mut guard.ui.picture.runtime;
+        if crate::editor::input::LiveInput::give_chunk(runtime, given) {
+            guard.input.put_back(taken.take().expect("the step took audio"));
+            break guard;
+        }
+        drop(guard);
+        #[cfg(test)]
+        BETWEEN_CHUNKS.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(shared)));
+    };
     let shared = &mut *guard;
-    if let Some(taken) = taken {
-        shared.input.give(&mut shared.ui.picture.runtime, taken);
-    }
     for line in tape.logs.drain(..) {
         shared.ui.picture.runtime.console.log(line);
     }
@@ -743,6 +760,35 @@ mod tests {
         h.push_audio(20_000);
         h.step();
         assert!(h.columns() > 0, "audio after the Clear was not kept");
+    }
+
+    /// A step gives a catch-up's columns back a chunk per hold of the lock,
+    /// so a frame waits for one chunk's folds rather than all of them; and a
+    /// Clear between two of those holds keeps the chunks after it out, as it
+    /// keeps out every column from audio taken before it.
+    #[test]
+    fn a_clear_between_chunks_of_a_hand_over_keeps_the_rest_out() {
+        use crate::editor::input::GIVE_CHUNK_COLUMNS;
+        let mut h = harness();
+        // Over two chunks' worth of columns, eight milliseconds apart.
+        h.push_audio(2 * GIVE_CHUNK_COLUMNS * 384 + 20_000);
+        let holds = std::rc::Rc::new(std::cell::Cell::new(0));
+        let between = holds.clone();
+        BETWEEN_CHUNKS.set(Some(Box::new(move |shared: &EditorLock| {
+            if between.replace(between.get() + 1) == 0 {
+                shared.lock().ui.picture.runtime.spectrum.clear_history();
+            }
+        })));
+        h.step();
+        BETWEEN_CHUNKS.set(None);
+        assert!(holds.get() >= 2, "the hand-over took {} holds", holds.get() + 1);
+        assert_eq!(h.columns(), GIVE_CHUNK_COLUMNS as u64, "the first chunk was not kept whole");
+        let shared = h.shared.lock();
+        assert_eq!(
+            shared.ui.picture.runtime.spectrum.newest_column(),
+            None,
+            "a chunk given after the Clear joined the history it emptied",
+        );
     }
 
     /// A step that panics with the analysis out leaves the next one
