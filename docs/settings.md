@@ -236,8 +236,8 @@ A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
 The histories last while the plugin is loaded, so closing and reopening the editor window keeps them,
 and a drag the close cuts off is one edit.
 Loading a project or preset, or undoing one in the host, replaces the settings and starts every history afresh,
-unless this build refuses the saved settings whole (below its version floor, or unreadable),
-which leaves the settings and histories as they were and says why in the Console.
+unless this build refuses the saved settings whole (below its version floor, or a document or look it cannot read),
+which leaves the settings and histories as they were and opens the Console to say why.
 A scroll or pinch anywhere in the window keeps a pending appearance edit open until the gesture settles,
 so appearance changes made during the same scroll join that edit.
 Scrolling a settings pane without changing an appearance creates no edit.

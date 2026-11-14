@@ -47,7 +47,8 @@ A variant no key holds of its own, a bare element of a list or map, still refuse
 none is persisted today.
 
 The floor is no guard against a dropped variant, though it is easy to assume otherwise:
-a whole parse fails before the version is read, so raising the floor does nothing at any value.
+it compares a document's version, not the variants it names, so a project an earlier build saved at the current version passes it,
+and raising it would refuse every older document whole rather than cost the one key.
 
 What makes the loss acceptable is that it is LOUD and HELD —
 `install_document` writes each cut key to the Console and opens it, and a host save stores the document as it came until a frame has drawn the editor.

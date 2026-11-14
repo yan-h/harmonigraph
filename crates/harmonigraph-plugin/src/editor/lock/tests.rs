@@ -115,7 +115,8 @@ enum Delivery {
 /// What the owner should observe. A lock-taking event first installs the
 /// newest restore not yet installed; a load that lost something is saved
 /// verbatim until a frame has drawn after it; a save that cannot take the
-/// lock returns the newest of the last restore, close and successful save;
+/// lock returns the newest of the last restore, close, successful save and
+/// first frame to draw the editor since it was fresh;
 /// the undo history survives everything but a restore that installs.
 #[derive(Clone)]
 struct Spec {

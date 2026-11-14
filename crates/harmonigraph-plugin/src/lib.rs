@@ -1622,8 +1622,8 @@ mod tests {
 
     /// A save that cannot take the editor lock — one the host makes from a
     /// callback the editor makes under it — returns at once rather than hang
-    /// the host (#296), with the newest of the last restore, close or
-    /// successful save (#1301).
+    /// the host (#296), with the newest of the last restore, close,
+    /// successful save or first frame to draw the editor (#1301).
     #[test]
     fn a_save_that_cannot_take_the_editor_lock_returns_the_fallback() {
         let plugin = Harmonigraph::default();

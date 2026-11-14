@@ -144,9 +144,12 @@ impl Inbox {
     /// fallback — unless a restore has arrived since that holder's delivery:
     /// the restore is newer, and the fallback must not predate it.
     ///
-    /// The guard defends a host that breaks the main-thread contract: a
-    /// restore and a save or close all arrive on the host's main thread, so
-    /// none can land inside another's hold, and no test reaches it.
+    /// A restore, a save and a close all arrive on the host's main thread, so
+    /// none lands inside another's hold. A frame need not: on X11 it runs on
+    /// the editor's own thread, so a restore can land inside the hold of the
+    /// first frame to draw the editor, between its delivery and the settle
+    /// [`frame`](Self::frame) makes. The guard is what keeps the fallback that
+    /// restore's then; no test reaches it.
     pub(crate) fn settle(&self, answer: Arc<str>) {
         let mut mail = self.0.lock();
         if mail.pending.is_none() {

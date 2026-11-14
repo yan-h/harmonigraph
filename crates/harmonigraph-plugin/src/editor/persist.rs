@@ -119,7 +119,9 @@ pub(crate) const SAVE_WAIT: Duration = Duration::from_millis(20);
 /// makes under its lock — a parameter gesture's flush, a camera move's — cannot
 /// take the lock, and returns the fallback: the newest of the last restore,
 /// close, successful save, or the first frame to draw the editor since it was
-/// fresh, so never `""` once a save that takes the lock would not be (#1301).
+/// fresh (#1301). So it is never `""` from the frame after that first one; a
+/// save re-entered during the first one itself still answers `""`, since that
+/// frame settles the fallback when it ends.
 pub struct UiState {
     inbox: Arc<Inbox>,
     /// Weak, so this field never keeps `EditorShared` alive: the plugin orders
@@ -159,8 +161,8 @@ impl UiState {
         });
         answer.unwrap_or_else(|| {
             nice_plug::nice_warn!(
-                "editor state busy for {wait:?}; saving the settings of the last restore, close \
-                 or save instead of the editor's"
+                "editor state busy for {wait:?}; saving the settings of the last restore, close, \
+                 save or first frame to draw the editor instead of the editor's"
             );
             self.inbox.fallback()
         })
