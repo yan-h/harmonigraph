@@ -889,9 +889,10 @@ mod tests {
     }
 
     /// Sounding notes reach the pane through `notes()`, and the transport
-    /// reset walks them into `past` — which then holds that order for as
-    /// long as it remembers them. Both have to be the music's order, not a
-    /// map's; see `NoteTracker::voices` and #135.
+    /// reset walks them into `fading` and, once the prune ends their fades,
+    /// into `past` — which then holds that order for as long as it remembers
+    /// them. All three have to be the music's order, not a map's; see
+    /// `NoteTracker::voices` and #135.
     ///
     /// Pressed high to low so only the key order can pass.
     #[test]
@@ -905,8 +906,12 @@ mod tests {
         assert_eq!(live, expected, "sounding notes must iterate in key order");
 
         tracker.session_notes_off(1.0);
+        let fading: Vec<u8> = tracker.roll().notes().map(|n| n.note).collect();
+        assert_eq!(fading, expected, "the fading tail must inherit key order");
+        tracker.prune(3.0, &Envelope::default());
+        assert_eq!(tracker.voices().count(), 0, "every fade has ended, so all are in the past");
         let past: Vec<u8> = tracker.roll().notes().map(|n| n.note).collect();
-        assert_eq!(past, expected, "the finished tail must inherit key order");
+        assert_eq!(past, expected, "the finished notes keep it");
     }
 
     #[test]
@@ -1258,15 +1263,17 @@ mod tests {
     }
 
     /// A whole recording's roll keeps the song's start however many notes
-    /// follow it.
+    /// follow it. Retriggers, because a retrigger is what files a note in
+    /// `past` where the cap reads, in a roll nothing prunes.
     #[test]
     fn an_uncapped_roll_keeps_every_note() {
         let mut roll = NoteRoll::uncapped();
         let key = VoiceKey { source: SourceId::DIRECT, channel: 0, note: 60 };
         for i in 0..NoteRoll::MAX_NOTES + 10 {
             roll.note_on(key, 1.0, 60.0, i as f64);
-            roll.note_off(key, i as f64 + 0.5);
         }
+        roll.all_off(NoteRoll::MAX_NOTES as f64 + 10.0);
         assert_eq!(roll.len(), NoteRoll::MAX_NOTES + 10);
+        assert_eq!(roll.notes().map(|n| n.start).reduce(f64::min), Some(0.0), "the song's start");
     }
 }
