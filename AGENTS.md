@@ -98,6 +98,9 @@ Markdown prose is laid out one clause per line instead of being wrapped to a wid
 A diff edits the lines that move rather than reprinting the file around them.
 Rewrite whole only where the file is short or most of it is genuinely moving.
 
+A change to what a field or function returns renames it, so the compiler lists every reader;
+#1686 did this for the two presence levels after a changed meaning had left one reader untraced (#1316).
+
 ## Two defects that actually ship here: cache keys and fixture reach
 
 Both are cheap to write, invisible to `ci.sh`, and each has landed more than once,

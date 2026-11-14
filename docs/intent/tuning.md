@@ -18,3 +18,9 @@
 
 - Retire the JavaScript adaptive-tuning model, its examples and its fixture exporter: a policy change is no longer designed there first. The Rust policy, with its committed fixtures in `crates/harmonigraph-core/src/policy/fixtures.txt`, is the reference. #1677 area 1 Q1
 - Restored host parameters are clamped by hand in `filter_state`, not in the vendored wrapper's restore loop: a patch there would have to be carried across every wrapper upgrade to replace nine arms. Declined. #1677 R11
+
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- The five tuning axes stay host parameters behind the owned-parameter mailbox. Making them plugin settings would delete about 1,200 lines but drop their automation, modulation and controller mapping, which `adaptive-tuning.md` names as a requirement ("restoring state or automating tuning works with the editor never opened"); no defect argues for it. Delegated, declined. #1739 D5

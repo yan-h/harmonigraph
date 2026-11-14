@@ -42,3 +42,9 @@ Yan’s decisions recorded for future drift audits.
 
 - The spectrum/history now-line stays at the 2 pt line width, deliberately heavier than the 1 pt spectrum outline (#1585): the two share a colour, not a weight. #1635 Spectrum Q1, #1631
 - Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631
+
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- Tape keeps its own note recorder joined by presentation time, for now: feeding it from the take lane is part of #1739's F3′, declined for now (see `video-export.md`). Delegated. #1739

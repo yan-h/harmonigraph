@@ -37,3 +37,9 @@
 - An export row lists each distinct warning the renderer printed, one per line, so a take's note-history gap no longer hides that the export ran through x264. A failed archive copy is one of those warnings rather than its own channel. #1677 area 4 Q1
 - An export row does not name the encoder the renderer opened: with every warning shown, the note that a Hardware export ran through x264 already reaches it, and naming it would make a line on the renderer's stderr a production contract. #1677 area 4 Q2
 - A take recorded to a loop's end honours the Tail like any other take. Its exemption dated from #1147, when the tail was a fixed 4 s; since #1465 Tail is a setting, 0 fresh, so the exemption only overrode a Tail you chose. #1677 area 9 Q1
+
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- Takes keep their pass routing on the audio thread for now, rather than recording on the display's clock and choosing passes at read time (#1739 F3′). Reshaped, it comes out about even in lines; the routing fix chain ended on 2026-09-27, and Tape has not been tried in Bitwig. Reopen if a take fails on a fixed capacity (`SEGMENTS`, `RECORD_PASSES`) or Tape's note join shows losses in use. Delegated, declined for now. #1739
