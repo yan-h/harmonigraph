@@ -31,6 +31,16 @@ with no per-node size envelope.
 
 ## Implemented: one renderer-owned ink clock
 
+Superseded by #1759 (F4′ piece 2):
+the colour is carried on the CPU beside the brightness,
+as weights over the slot colours stepped with the same coefficient (`GlowLight`),
+and the ink strip is rewritten whole every frame from a per-frame light table.
+With no colour kept on the GPU there is nothing for a discarded layout pass to consume,
+which was #730's reason for the renderer-owned clock,
+and nothing for a resize or a growing strip to wipe,
+which #422's resize handling and the growth reseed answered.
+The section below records the design it replaced.
+
 `GlowStep` carries only brightness,
 row identity and row index.
 The redundant scene `mix` input is removed.

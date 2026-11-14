@@ -316,20 +316,18 @@ pub(super) fn create_cell_pipelines(
 /// whatever the zoom, and the light's own draw reads two texels.
 ///
 /// **Why two.** A blur cannot read the target it is writing. The first pass
-/// lays the reading down over the instance buffer, one row per node; the second
-/// convolves each row with the Color smoothing bar's lobe.
+/// reads the frame's light table into the strip, one row per lit node; the
+/// second convolves each row with the Color smoothing bar's lobe.
 ///
-/// **Both are over the INSTANCES**, each drawing the one row its node was
-/// handed rather than a quad over the whole strip. A strip is as tall as the
-/// row map's capacity and a frame lights whatever share of it it lights, so a
-/// full-target quad would blur rows nothing wrote — and, worse for the reading
-/// pass, would have no instance to take a row and a mix off.
+/// **Both are one quad over the rows this frame lit**, the viewport cut to
+/// them (`encode_node_glow`): the table is this frame's lit instances in the
+/// order they ship, so those rows are exactly the ones anything reads, and a
+/// strip grown taller by an earlier frame keeps rows nobody writes or reads.
 ///
-/// **Timed scenes carry color**: a row averages current ink with the previous
-/// strip (`InkStrip::carried`). The renderer computes each instance's mix from
-/// the time since this pane last encoded an ink pass. This is deterministic
-/// for offline rendering too. Fresh strips seed on their first frame; untimed
-/// scenes always seed current ink as independent snapshots.
+/// **Nothing is carried.** Every row is read whole from the table each frame,
+/// so the strip is a pure function of the frame: a light's colour eases
+/// because the weights in its row were stepped on the CPU, beside its level
+/// (`GlowFade` in harmonigraph-ui), and a look change reaches it at once.
 ///
 /// **No blending on either.** Each writes the row it draws, and a strip texel
 /// is a colour and a weight rather than something to composite.
@@ -338,23 +336,26 @@ pub(super) fn create_ink_strip_pipelines(
     shader: &wgpu::ShaderModule,
     bind_group_layout: &wgpu::BindGroupLayout,
     strip_layout: &wgpu::BindGroupLayout,
+    light_layout: &wgpu::BindGroupLayout,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let build = |label: &str,
-                 entry_points: (&str, &str),
-                 layout: &wgpu::PipelineLayout,
-                 buffers: &[wgpu::VertexBufferLayout<'_>]| {
+    let build = |label: &str, fragment: &str, second: &wgpu::BindGroupLayout| {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(label),
+            bind_group_layouts: &[Some(bind_group_layout), Some(second)],
+            ..Default::default()
+        });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
-            layout: Some(layout),
+            layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: Some(entry_points.0),
+                entry_point: Some("vs_ink_rows"),
                 compilation_options: Default::default(),
-                buffers,
+                buffers: &[],
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: Some(entry_points.1),
+                entry_point: Some(fragment),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: INK_STRIP_FORMAT,
@@ -372,17 +373,11 @@ pub(super) fn create_ink_strip_pipelines(
             cache: None,
         })
     };
-    // One layout for the two: each takes the node instances and one strip — the
-    // reading takes the strip it is carrying from, the blur the strip that
-    // reading has just left.
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("lattice_ink_strip_pipeline_layout"),
-        bind_group_layouts: &[Some(bind_group_layout), Some(strip_layout)],
-        ..Default::default()
-    });
+    // The reading takes the light table, and the blur the strip the reading
+    // has just left.
     (
-        build("fs_ink_strip", ("vs_ink_strip", "fs_ink_strip"), &layout, &[GpuInstance::LAYOUT]),
-        build("fs_ink_blur", ("vs_ink_blur", "fs_ink_blur"), &layout, &[GpuInstance::LAYOUT]),
+        build("fs_ink_strip", "fs_ink_strip", light_layout),
+        build("fs_ink_blur", "fs_ink_blur", strip_layout),
     )
 }
 
@@ -557,6 +552,7 @@ pub(super) struct ShaderLayouts<'a> {
     pub(super) scene: SceneLayouts<'a>,
     pub(super) glyph: &'a wgpu::BindGroupLayout,
     pub(super) strip: &'a wgpu::BindGroupLayout,
+    pub(super) light: &'a wgpu::BindGroupLayout,
     pub(super) statistics: &'a wgpu::BindGroupLayout,
 }
 
@@ -580,8 +576,13 @@ impl ShaderPipelines {
             layouts.strip,
             layouts.statistics,
         );
-        let (ink_strip_pipeline, ink_blur_pipeline) =
-            create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
+        let (ink_strip_pipeline, ink_blur_pipeline) = create_ink_strip_pipelines(
+            device,
+            lattice,
+            layouts.scene.uniforms,
+            layouts.strip,
+            layouts.light,
+        );
         progress(startup::Stage::Lattice);
         let scenes =
             create_scene_pipelines(device, lattice, blit, glyph, layouts.scene, layouts.glyph);

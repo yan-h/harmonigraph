@@ -93,50 +93,52 @@ pub(super) struct GlowTarget {
     bind_group: wgpu::BindGroup,
 }
 
-/// A frame's ink strips: what every node is putting on itself, read round each
-/// of them at [`INK_STRIP_N`] angles and blurred there.
+/// A frame's light table and the ink strips read from it: what every lit node
+/// is putting on itself, read round each of them at [`INK_STRIP_N`] angles and
+/// blurred there.
 ///
-/// One row per assigned glow identity, indexed by the node's `strip_row`;
-/// instance order may change without changing that identity. Two raw textures
-/// carry history and a third holds its convolution: `raw` is
-/// `fs_ink_strip`'s reading, `blurred` is
-/// `fs_ink_blur`'s convolution of it plus, in one extra column, the same
-/// average at no concentration — the mean a node's middle eases toward.
+/// One row per lit instance, in this frame's order (see `LightRow`), and every
+/// row written whole every frame: `fs_ink_strip` reads each row of the table
+/// into `raw`, and `fs_ink_blur` convolves that into `blurred`, plus, in one
+/// extra column, the same average at no concentration — the mean a node's
+/// middle eases toward. Nothing in any of them is carried to the next frame, so
+/// a strip rebuilt taller loses nothing and a row has no owner to keep.
 ///
 /// Small: an f32 RGBA texel per angle per node ([`INK_STRIP_FORMAT`]), so a
-/// lattice of 400 lit nodes spends about 1.2 MiB on the three textures (400
-/// rows of 193 texels at 16 bytes), beside the much larger pane-sized
-/// half-float attachments. That is what the light costs in memory to stop
-/// costing a whole reading of the node per lit fragment.
+/// lattice of 400 lit nodes spends about 0.8 MiB on the two textures (400 rows
+/// of 129 texels at 16 bytes) and 54 KB on the table, beside the much larger
+/// pane-sized half-float attachments. That is what the light costs in memory
+/// to stop costing a whole reading of the node per lit fragment.
 pub(super) struct InkStrip {
-    pub(super) history: ink_history::InkHistory,
-    /// The raw reading, in a PAIR that ping-pongs: the frame writes one and
-    /// reads the other, which is what lets a row hold an average of this
-    /// frame's ink and the ink that same row already had (`fs_ink_strip`).
-    ///
-    /// A node's light is carried on a clock of its own, and the COLOUR half of
-    /// that is here — the ink is read in WGSL by the same functions that draw
-    /// each layer, so there is nowhere else it could be carried without
-    /// spelling every layer's colour a second time in Rust. Which is also why
-    /// the row a node writes has to be the row it wrote last frame: this is a
-    /// texture read back by identity, and the identity is the row
-    /// (`harmonigraph_scene::GlowStep::row`).
-    pub(super) raw_views: [wgpu::TextureView; 2],
-    /// Each of the two, as a texture to read: `[parity]` is what the blur takes
-    /// and `[parity ^ 1]` is last frame's, which the reading pass mixes into.
-    pub(super) raw_bind_groups: [wgpu::BindGroup; 2],
+    /// The light table, [`rows`](Self::rows) `LightRow`s long.
+    pub(super) lights: wgpu::Buffer,
+    /// The table, as the reading pass takes it.
+    pub(super) lights_bind_group: wgpu::BindGroup,
+    pub(super) raw_view: wgpu::TextureView,
+    /// The raw reading, as the blur takes it.
+    pub(super) raw_bind_group: wgpu::BindGroup,
     pub(super) blurred_view: wgpu::TextureView,
-    /// The blurred strip, as the light's own draw reads it. Not a pair: the
-    /// blur is a pure function of the raw strip that has just been written, so
-    /// there is nothing in it to carry.
+    /// The blurred strip, as the light's own draw reads it.
     pub(super) blurred_bind_group: wgpu::BindGroup,
-    /// How many rows the set was built for — the row map's capacity on the
-    /// frame that built it, which is what [`PaneBuffers::ensure_ink_history`] compares.
+    /// How many rows the set was built for: the most nodes one frame has lit
+    /// since the glow was last switched on, rounded up to a power of two
+    /// ([`PaneBuffers::ensure_ink_strip`]).
     pub(super) rows: u32,
-    /// Which of [`raw_views`](Self::raw_views) this frame writes. Flipped once
-    /// per frame, in `prepare`.
-    pub(super) parity: usize,
 }
+
+/// The two layouts an [`InkStrip`]'s bind groups are made against.
+#[derive(Clone, Copy)]
+pub(super) struct StripLayouts<'a> {
+    /// A strip, as the blur and the light's own draw read it.
+    pub(super) strip: &'a wgpu::BindGroupLayout,
+    /// The light table, as the reading pass reads it.
+    pub(super) light: &'a wgpu::BindGroupLayout,
+}
+
+/// The fewest rows a strip is built for, and the floor the doubling starts
+/// from: 64 rows is 132 KB of strip and 9 KB of table, and enough that an
+/// ordinary lattice never rebuilds them at all.
+pub(super) const FIRST_ROWS: u32 = 64;
 
 /// How many angles a node's ink is read at, and so how wide its strip is.
 /// Mirrors `INK_STRIP_N` in lattice.wgsl, which is where the number is argued;
@@ -148,11 +150,12 @@ pub(super) const INK_STRIP_N: u32 = 64;
 /// hands the light. The format is explicit rather than inherited from the
 /// scene because a strip texel is a normalised colour beside a WEIGHT, and a
 /// weight is a layer's level times its width — small numbers that must not be
-/// quantized away if the scene format changes. Full precision because the
-/// colour is mixed in place, frame on frame (`fs_ink_strip`): at f16 a held
-/// halo eased toward its note's new colour stalled short of it, 6-8% at 60 Hz
-/// and more at 144 (#1759, Q2). Every read is a `textureLoad`, so f32 needs no
-/// filterable-float feature.
+/// quantized away if the scene format changes. Full precision since the strip
+/// carried colour from frame to frame, where half precision stalled a held
+/// halo short of its note's new colour (#1759, Q2); the strip is now written
+/// whole every frame, and the format is kept because it costs a few hundred KB
+/// and a weight read at half precision would round every halo by a little.
+/// Every read is a `textureLoad`, so f32 needs no filterable-float feature.
 pub(super) const INK_STRIP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
@@ -274,7 +277,7 @@ impl Offscreen {
 
     /// Keyed only on enabled/disabled: sizes are fixed by this Offscreen's
     /// lifetime. A strength change within the enabled range updates uniforms
-    /// alone. Neither transition touches the main target or the ink history.
+    /// alone. Neither transition touches the main target or the ink strip.
     pub(super) fn ensure_bloom(
         &mut self,
         device: &wgpu::Device,
@@ -437,46 +440,59 @@ impl GlowTarget {
 }
 
 impl InkStrip {
-    /// The set, for a strip `rows` tall. `rows` is floored at one: a texture of
-    /// zero height is not a texture, and a spare row nothing draws into is
-    /// simply never sampled — the light's own draw is over the instances, each
-    /// of which reads the row it just wrote.
-    ///
-    /// A strip built here holds NOTHING, which is why the frame that builds one
-    /// seeds rather than mixing: its new history has no initialized rows,
-    /// whatever the last CPU layout pass supplied as its coefficient.
-    pub(super) fn new(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, rows: u32) -> Self {
+    /// The set, for at least `rows` lit nodes: the next power of two, floored
+    /// at [`FIRST_ROWS`]. Rows past the frame's lit nodes are neither written
+    /// nor read — every pass over the strip stops at the frame's own count.
+    pub(super) fn new(device: &wgpu::Device, layouts: StripLayouts<'_>, rows: u32) -> Self {
         #[cfg(test)]
         lattice_tests::INK_STRIP_CREATIONS.with(|count| count.set(count.get() + 1));
+        let rows = rows.next_power_of_two().max(FIRST_ROWS);
+        let lights = crate::gpu_memory::buffer(
+            device,
+            &wgpu::BufferDescriptor {
+                label: Some("lattice_light_table"),
+                size: u64::from(rows) * std::mem::size_of::<LightRow>() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+        );
+        let lights_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lattice_light_table_bind_group"),
+            layout: layouts.light,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: lights.as_entire_binding() }],
+        });
         let tex = |label: &str, width: u32| {
             crate::gpu_memory::texture(
                 device,
                 &wgpu::TextureDescriptor {
                     label: Some(label),
-                    size: wgpu::Extent3d { width, height: rows.max(1), depth_or_array_layers: 1 },
+                    size: wgpu::Extent3d { width, height: rows, depth_or_array_layers: 1 },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: INK_STRIP_FORMAT,
+                    // Read back by the tests, which check the reading itself.
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | if cfg!(test) {
+                            wgpu::TextureUsages::COPY_SRC
+                        } else {
+                            wgpu::TextureUsages::empty()
+                        },
                     view_formats: &[],
                 },
             )
             .create_view(&Default::default())
         };
-        // One column wider than the reading it blurs: the extra one holds the
-        // row's MEAN, which is the same convolution at no concentration and so
-        // falls out of the same loop (`fs_ink_blur`).
-        let raw_views = [
-            tex("lattice_ink_strip_raw_a", INK_STRIP_N),
-            tex("lattice_ink_strip_raw_b", INK_STRIP_N),
-        ];
+        // The blurred strip is one column wider than the reading it blurs: the
+        // extra one holds the row's MEAN, which is the same convolution at no
+        // concentration and so falls out of the same loop (`fs_ink_blur`).
+        let raw_view = tex("lattice_ink_strip_raw", INK_STRIP_N);
         let blurred_view = tex("lattice_ink_strip", INK_STRIP_N + 1);
         let bind = |label: &str, view: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
-                layout,
+                layout: layouts.strip,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(view),
@@ -484,32 +500,13 @@ impl InkStrip {
             })
         };
         InkStrip {
-            raw_bind_groups: [
-                bind("lattice_ink_strip_raw_a_bind_group", &raw_views[0]),
-                bind("lattice_ink_strip_raw_b_bind_group", &raw_views[1]),
-            ],
+            lights,
+            lights_bind_group,
+            raw_bind_group: bind("lattice_ink_strip_raw_bind_group", &raw_view),
             blurred_bind_group: bind("lattice_ink_strip_bind_group", &blurred_view),
-            raw_views,
+            raw_view,
             blurred_view,
             rows,
-            parity: 0,
-            history: ink_history::InkHistory::new(rows),
         }
-    }
-
-    /// The raw strip this frame writes...
-    pub(super) fn writing(&self) -> &wgpu::TextureView {
-        &self.raw_views[self.parity]
-    }
-
-    /// ...the one it wrote LAST frame, which is what a row's ink is carried
-    /// from...
-    pub(super) fn carried(&self) -> &wgpu::BindGroup {
-        &self.raw_bind_groups[self.parity ^ 1]
-    }
-
-    /// ...and the one it has just written, which the blur reads.
-    pub(super) fn written(&self) -> &wgpu::BindGroup {
-        &self.raw_bind_groups[self.parity]
     }
 }

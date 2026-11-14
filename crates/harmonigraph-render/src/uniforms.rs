@@ -146,15 +146,14 @@ uniform_group! {
         span: f32,
         curve: f32,
         wash: f32,
-        /// Allocated row capacity, independent of this frame's instance count.
-        row_capacity: f32,
         /// Whether this frame has any lit halo instances.
         lit: f32,
         accumulation: f32,
+        padding_end: f32,
     }
 }
 uniform_group! {
-    /// A shared texture modulates the completed glow, never the ink history.
+    /// A shared texture modulates the completed glow, never the ink strip.
     struct TextureParams {
         depth: f32,
         scale: f32,

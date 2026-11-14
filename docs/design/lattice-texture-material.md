@@ -56,7 +56,7 @@ The former per-node source roughness and its dedicated splat pipeline are remove
 Materials drift at constant screen direction using the spectrogram’s motion calculation;
 texture drift remains independent.
 All texture attenuation and material sampling preserve premultiplied RGBA and the existing brightness ceiling.
-No display modulation feeds back into ink history.
+No display modulation feeds back into the carried light.
 Watercolor’s Random brightness uses the shared signed glob field to vary linear RGB after refraction,
 leaving alpha unchanged.
 Equal brightening and dimming headroom preserves the expected average color and premultiplied ceiling;

@@ -69,9 +69,9 @@ struct GlowParams {
     span: f32,
     curve: f32,
     wash: f32,
-    row_capacity: f32,
     lit: f32,
     accumulation: f32,
+    padding_end: f32,
 };
 
 struct TextureParams {
@@ -174,13 +174,11 @@ const INK_STRIP_N: u32 = 64u;
 
 // A node's ink read round the node: one ROW per lit node, angle across it.
 //
-// Bound at THREE stages, and one declaration for all of them, the shape being
-// the same every time; which strip a draw is looking at is the bind group it
-// was recorded with:
+// Bound at TWO stages, and one declaration for both, the shape being the same
+// every time; which strip a draw is looking at is the bind group it was
+// recorded with:
 //
-//  - `fs_ink_strip` reads the raw strip IT wrote last frame, which is what a
-//    node's colour is carried from (the pair ping-pongs — see `InkStrip`).
-//  - `fs_ink_blur` reads the raw strip that pass has just written.
+//  - `fs_ink_blur` reads the raw strip `fs_ink_strip` has just written.
 //  - the light's own draw reads the blurred one.
 //
 // Group 1's one texture slot, shared with common.wgsl's `glow_tex`: no entry
@@ -188,6 +186,23 @@ const INK_STRIP_N: u32 = 64u;
 // the light is the node and marker draws' — so the node pipelines carry no
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
+
+// One lit node's row of the frame's light table (`LightRow` in lib.rs): what
+// its light is made of, slot by slot, and the pitch class its slot colours are
+// looked up at. `l` each slot's light, `p` that light times the slice's
+// thickness, `m` the light of the mark on each slot (`GlowLight` in
+// harmonigraph-scene, which argues why these are weights and nothing else).
+struct LightRow {
+    cents: f32,
+    l: array<f32, OCTAVE_SLOTS>,
+    p: array<f32, OCTAVE_SLOTS>,
+    m: array<f32, OCTAVE_SLOTS>,
+};
+
+// The frame's light table, read by `fs_ink_strip` alone: one row per lit node,
+// in the order the lit instances ship, which is the row each instance's
+// `glow.y` names. Group 1's slot again, in the reading pass's own layout.
+@group(1) @binding(0) var<storage, read> light_rows: array<LightRow>;
 
 // Glow-resolution statistics, read only by the resolve entry point.
 // Bindings overlap the ink strip's group in other entry points.
@@ -381,7 +396,7 @@ fn cell_reach(in: VsOut) -> f32 {
     if !EARLY_OUT || in.shadow_at.z >= 0.0 {
         return -1.0;
     }
-    return in.ink_carry + aa_width(in.strip_row, in.shadow_at.w);
+    return in.cell_spread + aa_width(in.cell_texel, in.shadow_at.w);
 }
 
 // Whether `bound`, a lower bound on a layer's signed distance, lies past
@@ -453,10 +468,8 @@ struct Instance {
     // (NodeInstance::presence_with_opacity). y/z: the melody and bass marks'
     // own levels, which follow the marked voice rather than this node's
     // presence — each ring eases in over the scene layer's attack when its
-    // note takes that end, and falls from the frame the key comes up. w is
-    // the CPU's (the glow's target, for the ink history) and is dropped on
-    // the way in.
-    @location(2) params: vec4<f32>,
+    // note takes that end, and falls from the frame the key comes up.
+    @location(2) params: vec3<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
     // — its reading is the audio ring's own channel (u.spectrum_color), a
@@ -495,21 +508,18 @@ struct Instance {
     // the colour one), so the ring's annulus is the layer's own off switch
     // and this is which NODES the layer is on at, and how far.
     @location(11) ring: f32,
-    // The node's own light: x how bright it is, y which ROW of the ink strip
-    // keeps its colour, z how much of this frame's reading the two of them
-    // take, and w display-only breathing. They are settled on the CPU, where a node has an identity that
-    // outlives a frame (`panes::glow_fade` in harmonigraph-ui).
+    // The node's own light: x how bright it is, y which ROW of this frame's
+    // ink strip holds its colour (`LightRow`), and z display-only breathing.
     //
     // The level is CARRIED and not the largest envelope on the node, which is
-    // the whole point of it: a light runs on a clock of its own, so it is above
-    // zero on a node whose every layer has gone silent, and such a node is
-    // shipped for exactly that reason. The mix is 1 where the row is new — a
-    // strip just built, or a row just handed over — and there is nothing to
-    // carry from.
+    // the whole point of it: a light runs on a clock of its own
+    // (`panes::glow_fade` in harmonigraph-ui), so it is above zero on a node
+    // whose every layer has gone silent, and such a node is shipped for exactly
+    // that reason.
     //
-    // Breathing modulates the halo after history interpolation; it must not
-    // alter either the carried brightness or the ink-history coefficient.
-    @location(12) glow: vec4<f32>,
+    // Breathing modulates the halo's coverage alone; it must not alter the
+    // carried brightness or anything the light is made of.
+    @location(12) glow: vec3<f32>,
 };
 
 // One node's cell of the shadow atlas, as a second instance-step vertex buffer
@@ -539,13 +549,10 @@ struct VsOut {
     @location(1) @interpolate(flat) thickness: vec3<u32>,
     @location(9) @interpolate(flat) motion: vec4<u32>,
     @location(4) @interpolate(flat) cents: f32,
-    // Which ROW of the ink strip is this node's — the row the light's own clock
-    // handed it, which it keeps for as long as its light lasts. NOT the index
-    // in the instance buffer, which is sorted by depth and culled and so moves
-    // under a node between frames; the row is where last frame's colour is read
-    // back from, so a row that moved would be a node taking on a stranger's
-    // ink.
-    @location(5) @interpolate(flat) strip_row: f32,
+    // On a SPREAD cell draw ([`vs_node_cell`]), one texel of the cell in this
+    // node's uv: the width every edge the cell is filled with is softened over
+    // (`spread_union`, `cell_reach`). Zero on every other draw.
+    @location(5) @interpolate(flat) cell_texel: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
@@ -560,13 +567,10 @@ struct VsOut {
     // How much of the audio ring this node wears (see Instance::ring), which
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
-    // How much of this frame's ink this node's ROW takes, against the ink that
-    // row already held (see Instance::glow z). The ink strip's reading pass is
-    // the one stage that reads it, and nothing else on the node does.
-    //
-    // Halo geometry uses its own GlowSplatOut; this node output carries only
-    // the coefficient needed by the ink-history pass.
-    @location(15) @interpolate(flat) ink_carry: f32,
+    // On a SPREAD cell draw, the shadow source's spread in this node's uv: how
+    // far past each layer's ink its grown coverage reaches. Zero on every
+    // other draw.
+    @location(15) @interpolate(flat) cell_spread: f32,
     // The atlas's two ends in one row, and a draw is only ever at one of them.
     // On a draw that FILLS a cell ([`vs_node_cell`]), that cell's own rect in
     // texels, which the fragment is clipped to. On a draw that READS the atlas
@@ -656,11 +660,10 @@ fn vs_node_cell(
     // The negative sign marks an analytic cell without consuming another
     // interpolator; unspread cells return above with the positive scale.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.cell_map.w);
-    // Cell-only readers: the ink strip is unused, so its fields carry the
-    // spread and the cell's texel in uv without another buffer binding. The
-    // ordinary cell above keeps its original rasterizer.
-    out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
-    out.ink_carry = box.who.w / max(uv_points, 1e-6);
+    // The spread and the cell's texel in uv, for this draw's readers alone.
+    // The ordinary cell above keeps its original rasterizer.
+    out.cell_texel = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
+    out.cell_spread = box.who.w / max(uv_points, 1e-6);
     return out;
 }
 
@@ -730,8 +733,6 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     out.thickness = inst.thickness;
     out.motion = inst.motion;
     out.cents = inst.cents;
-    out.strip_row = inst.glow.y;
-    out.ink_carry = inst.glow.z;
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
@@ -1034,9 +1035,9 @@ fn layer_coverage(layer: NodeLayer) -> f32 {
 // leaves `grown` as it was.
 fn spread_union(grown: f32, layer: NodeLayer, in: VsOut) -> f32 {
     if in.shadow_at.z < 0.0 {
-        let aa = aa_width(in.strip_row, in.shadow_at.w);
+        let aa = aa_width(in.cell_texel, in.shadow_at.w);
         let coverage = clamp(layer.level, 0.0, 1.0)
-            * aa_inside(in.ink_carry, layer.sd, aa);
+            * aa_inside(in.cell_spread, layer.sd, aa);
         return max(grown, coverage);
     }
     return grown;
@@ -1084,8 +1085,9 @@ fn glyph_band(d: f32, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer 
 // Its own function because the GLOW is lit out of the same reading: a band
 // slice lighting a halo in some second reading of "what colour is this octave"
 // is exactly the drift this file spends its comments on. What the light takes
-// is [`oct_slot_lit`] below — this without the ghost, since the ghost is a
-// backdrop rather than anything the octave is doing.
+// is [`oct_slot_colour`] below, weighed by the slot's own light — this
+// without the ghost, since the ghost is a backdrop rather than anything the
+// octave is doing.
 fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     let presence = in.params.x;
     let lit = oct_slot_lit(in.cents, in.octaves, slot);
@@ -1114,7 +1116,7 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     return vec4<f32>((lit.xyz * level + ground * ghost_rest) / opacity, opacity);
 }
 
-// The LIGHT one slice of the octave band gives off: `xyz` the colour it wears
+// What one slice of the octave band is LIT at: `xyz` the colour it wears
 // where it is lit, `w` how much of it is — this slot's own level, and nothing
 // of the node's presence.
 //
@@ -1126,14 +1128,21 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
 // round a note voiced in one octave is that octave's colour rather than a
 // tenth of it under nine tenths of grey.
 //
-// The colour of a LIT slice is stated once, here, and the drawn ink is this
-// mixed toward the ground by however much of the node's presence this slot's
-// level does not account for.
+// The colour is [`oct_slot_colour`]'s, and the drawn ink is this mixed toward
+// the ground by however much of the node's presence this slot's level does
+// not account for.
 fn oct_slot_lit(cents: f32, octaves: vec3<u32>, slot: i32) -> vec4<f32> {
+    return vec4<f32>(oct_slot_colour(cents, slot), oct_slot_level(octaves, slot));
+}
+
+// The colour of slot `slot` LIT on a node whose pitch class is `cents`,
+// stated once, here: the slice wears it ([`oct_slot_lit`]), the mark extending
+// that slice wears it (`NodeInstance::melody_color` is the CPU's reading of
+// the same table), and the light reads both layers in it ([`ink_at`]).
+fn oct_slot_colour(cents: f32, slot: i32) -> vec3<f32> {
     // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
     // class for the glyph's true pitch.
-    let pitch = oct_slot_pitch(slot, cents);
-    return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(octaves, slot));
+    return pitch_lut_color(oct_slot_pitch(slot, cents));
 }
 
 // How far out slot `s`'s LIT slice reaches from the band's inner edge: its
@@ -2881,13 +2890,24 @@ fn ink_arc(r: f32) -> f32 {
 /// weights summed. Not a colour on its own — [`fs_ink_blur`] is what
 /// normalises it.
 ///
-/// **A generalised reading of what is ON the node**, and that is the whole
-/// design. The light is not assembled out of a formula naming its sources, so
-/// there is no source to forget: every layer that shines states its colour here
-/// through the SAME function that draws it, sampled on that layer's own radius,
-/// and a layer added to the node is lit by adding a term rather than by a case
-/// in a hue picker. It also moves as the picture does — a slice a key lights, a
-/// mark arriving — because it is that picture, read.
+/// **A reading of what is ON the node**, taken from its light's row rather
+/// than from the node as drawn this frame: how much light each slot and each
+/// mark puts on it ([`LightRow`]), carried on the light's own clock on the
+/// CPU. Every layer that shines is read here through the SAME geometry that
+/// draws it (`outer_glyph`, on that layer's own radius), to the SAME reach
+/// (`reach_at`), and in the SAME colour (`oct_slot_colour`), so a layer added
+/// to the node is lit by adding a term and a weight rather than by a case in a
+/// hue picker.
+///
+/// **Linear in every weight**, which is what lets a carried light ease: the
+/// colours, the geometry and the widths come from the uniforms and `cents`
+/// alone, so stepping each weight toward its target is mixing the two readings
+/// by the same amount. Two places are not linear, and both are listed don't-
+/// cares (#1759): the swell cap, past which a slice reaches no further and is
+/// weighed by its light rather than its thickness, and the mark walk's
+/// per-angle max, where two marks crossing on one wedge's soft edge trade the
+/// direction.
+/// `a_stepped_light_reads_as_its_two_readings_mixed` holds the rest.
 ///
 /// **The AUDIO RING is not one of them.** A node's light says something is
 /// being PLAYED here, and the analyzer's ring says something is being heard in
@@ -2916,18 +2936,17 @@ fn ink_arc(r: f32) -> f32 {
 /// nothing is sounding on. That is the LATTICE's job — the markers say where
 /// the positions are and the rings say a node is there — and a halo is what
 /// says something is playing.
-fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
+fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
     let dir = vec2<f32>(cos(angle), sin(angle));
     var rgb = vec3<f32>(0.0);
     var wsum = 0.0;
 
-    // The octave band: whichever slice owns this direction, at the colour and
-    // opacity that slice paints — a lit slot's pitch, a silent one's ground, a
-    // fading one the two mixed. The same walk the layer itself makes, and the
-    // same `oct_slot_ink` at the end of it.
+    // The octave band: whichever slice owns this direction, in its pitch's
+    // colour, weighed by how much light it carries. The same walk the layer
+    // itself makes.
     let band_in = u.node.band_inner;
     let band_out = u.node.band_outer;
-    if band_out > band_in && in.params.x > 0.0 {
+    if band_out > band_in {
         let mid = 0.5 * (band_in + band_out);
         let p = dir * mid;
         let arc = ink_arc(mid);
@@ -2951,59 +2970,68 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
                 owner = slot;
             }
         }
-        if cov > 0.0 {
-            // [`oct_slot_lit`] and not the drawn ink: what a slice is lit at is
-            // its own level, where the ink's opacity is the node's PRESENCE —
-            // the ghost included, which is the backdrop and weighs nothing.
-            // Over the width the lit slice is DRAWN, thinned or swelled
-            // (`slice_reach`), which is the band's at rest.
-            let ink = oct_slot_lit(in.cents, in.octaves, owner);
-            let w = cov * ink.w * (slice_reach(in, owner, band_in, band_out) - band_in);
-            rgb = rgb + ink.xyz * w;
-            wsum = wsum + w;
+        if cov > 0.0 && owner >= 0 && owner < i32(OCTAVE_SLOTS) {
+            // The slot's lit colour and not the drawn ink: what a slice is lit
+            // at is its own light, where the ink's opacity is the node's
+            // PRESENCE — the ghost included, which is the backdrop and weighs
+            // nothing. Over the width the lit slice is DRAWN, thinned or
+            // swelled: its light times its reach past the band's inner edge,
+            // at the thickness `p / l` carries, asked of `reach_at` as the
+            // slice itself asks it (`slice_reach`). Below the swell cap that
+            // is `p` times the band's width, which is what makes it linear.
+            let s = u32(owner);
+            let l = row.l[s];
+            if l > 0.0 {
+                let w = cov * l * (reach_at(row.p[s] / l, band_in, band_out) - band_in);
+                rgb = rgb + oct_slot_colour(row.cents, owner) * w;
+                wsum = wsum + w;
+            }
         }
     }
 
-    // The melody/bass marks, in the strip past the outermost ring. One strip
-    // and two ends, so the stronger owns the direction exactly as it owns the
-    // pixel in `node_ink` — and the depth the strip is dialled to, capped at
-    // the quad the way the layer's own is, is what weighs it.
+    // The marks, in the strip past the outermost ring: each slot's mark at its
+    // own light, and the strongest owns the direction exactly as it owns the
+    // pixel in `node_ink`, in the colour of the sector it extends — the
+    // slot's own pitch, which is what `NodeInstance::melody_color` is on the
+    // CPU (`the_halos_mark_colour_is_its_slots`). The depth the strip is
+    // dialled to, capped at the quad the way the layer's own is, weighs it.
+    // Slots the ring has no room for are skipped, as `mark_extension` skips
+    // them: `oct_sector` has no angle to put one at.
     let mark_thick = u.node.mark_thickness;
-    if mark_thick > 0.0 && (in.marks.x | in.marks.y) != 0u {
+    if mark_thick > 0.0 {
         let lim = QUAD_MARGIN - 0.02;
         let mark_in = min(u.node.mark_inner, lim);
         let mark_out = min(mark_in + mark_thick, lim);
         let mid = 0.5 * (mark_in + mark_out);
         let p = dir * mid;
         let arc = ink_arc(mid);
-        let melody = layer_coverage(
-            mark_extension(
-                in.marks.x,
-                oct,
-                p,
-                NodeLayer(-EMPTY_DISTANCE, clamp(in.params.y, 0.0, 1.0), 1.0),
-                mark_in,
-                EMPTY_DISTANCE,
-                arc,
-                false,
-            ),
-        );
-        let bass = layer_coverage(
-            mark_extension(
-                in.marks.y,
-                oct,
-                p,
-                NodeLayer(-EMPTY_DISTANCE, clamp(in.params.z, 0.0, 1.0), 1.0),
-                mark_in,
-                EMPTY_DISTANCE,
-                arc,
-                false,
-            ),
-        );
-        let cov = max(melody, bass);
+        let top = oct.base + i32(oct_span()) - 1;
+        var cov = 0.0;
+        var owner = oct.base;
+        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+            let s = i32(i);
+            if row.m[i] <= 0.0 || s < oct.base || s > top {
+                continue;
+            }
+            let mark = layer_coverage(
+                outer_glyph(
+                    s,
+                    oct,
+                    p,
+                    NodeLayer(-EMPTY_DISTANCE, row.m[i], 1.0),
+                    mark_in,
+                    EMPTY_DISTANCE,
+                    arc,
+                ),
+            );
+            if mark > cov {
+                cov = mark;
+                owner = s;
+            }
+        }
         if cov > 0.0 && mark_out > mark_in {
             let w = cov * (mark_out - mark_in);
-            rgb = rgb + select(in.bass_color.rgb, in.melody_color.rgb, melody > bass) * w;
+            rgb = rgb + oct_slot_colour(row.cents, owner) * w;
             wsum = wsum + w;
         }
     }
@@ -3014,19 +3042,21 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 // A node's ink, read once per node per frame instead of once per lit fragment,
 // and blurred there rather than under every one of them.
 //
-// [`ink_at`] depends on the NODE and an angle and on nothing else about a
-// fragment — no uv, no field, no derivative — so evaluating it per fragment was
-// answering one question a node's worth of pixels over. Two passes settle it
-// instead, both of them pure functions of the frame's own instances and
+// [`ink_at`] depends on the node's light row and an angle and on nothing else
+// about a fragment — no uv, no field, no derivative — so evaluating it per
+// fragment was answering one question a node's worth of pixels over. Two passes
+// settle it instead, both of them pure functions of the frame's light table and
 // uniforms:
 //
 //  - `fs_ink_strip` lays the reading down, one ROW per lit node and
-//    [`INK_STRIP_N`] columns across the turn, mixed into what that row already
-//    held on the glow's own attack and release.
+//    [`INK_STRIP_N`] columns across the turn.
 //  - `fs_ink_blur` convolves each row with the von Mises lobe the Color
 //    smoothing bar asks for and normalises it, so what it leaves behind is the finished
 //    colour per angle. Its last column is the same average at no concentration
 //    at all — the mean, which [`glow_ink`] eases the middle of a node toward.
+//
+// Nothing in either is carried from one frame to the next: a light's colour
+// eases because the weights in its row do, on the CPU (`GlowLight`).
 //
 // The light's own draw then reads two texels. What that buys is exact rather
 // than approximate: the blur is a convolution of the whole turn, so it has no
@@ -3034,96 +3064,26 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
 // every node — one dip per tap, in the light and in nothing else on screen —
 // is gone by construction rather than pushed under a threshold.
 
-/// The strip's raw draw: one node's whole ring of ink, on a quad one row tall.
-///
-/// The instance's own vertex stage does everything but the geometry, so what a
-/// node carries into `ink_at` is spelled once and the strip cannot come to
-/// disagree with the billboard about it. What is replaced is the two things a
-/// row is not: where it sits — the row this node was handed, of `u.glow.row_capacity` —
-/// and its uv, which carries the ANGLE across the row rather than a position on
-/// a node. Column `i` therefore falls at `(i + 0.5)/N` of a turn, which is what
-/// [`glow_ink`] reads it back at.
+/// Both passes' quad: the whole viewport, which `encode_node_glow` cuts to the
+/// rows this frame lit and to the strip's width, so each fragment is one texel
+/// of one row and its position says which.
 @vertex
-fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
-    var out = node_vertex(vertex_index, inst);
+fn vs_ink_rows(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
     let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    let rows = max(u.glow.row_capacity, 1.0);
-    let v = (out.strip_row + corner.y) / rows;
-    out.clip_pos = vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
-    out.uv = vec2<f32>(corner.x, 0.0);
-    // A node with no light was handed no ROW either, and the two facts are one
-    // fact: `GlowFade` gives a row only to a node that has a light and hands
-    // everything else `GlowStep::default()`, whose level and row are both 0.
-    // Such a node is still SHIPPED whenever it draws anything at all — an audio
-    // ring is enough — so writing its ink here would settle it whole into the
-    // row belonging to whichever node lit first. Collapsed to a point instead,
-    // which rasterises nothing.
-    //
-    // The level is the right test rather than the row, because a row is only
-    // ever ITS OWN while the light is: the frame a light ends the node still
-    // carries its row, ships at a level of exactly 0, and has that row taken
-    // back the same frame — so there is nothing left in it to keep.
-    if inst.glow.x <= 0.0 {
-        out.clip_pos = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    return out;
+    return vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 
-/// The reading, mixed into the one this row already held.
+/// One lit node's light, read at one angle: row `pos.y` of the light table,
+/// column `pos.x` of the turn. Column `i` falls at `(i + 0.5)/N` of a turn,
+/// which is what [`glow_ink`] reads it back at.
 ///
-/// This is the COLOUR half of the glow's own clock, and the whole of it: the
-/// level is carried on the CPU, and the colour cannot be, because what a node
-/// is drawing is stated in WGSL by the same functions that draw it and a mirror
-/// of that in Rust is the one thing this design refuses. So it is carried
-/// where it lives — a row of the strip, read back from the strip this pass
-/// wrote last frame.
-///
-/// PREMULTIPLIED, which is what makes the mix a colour rather than a fade to
-/// black: `ink_at` returns each layer's colour times the weight it carries and
-/// those weights summed, so a node going silent takes both to zero together
-/// and their RATIO — the hue — is untouched on the way. `fs_ink_blur`
-/// normalises at the end, so what a fading node's light keeps is the colour it
-/// had at full, dimming. Mixing a normalised colour instead would drag the hue
-/// toward whatever the empty texel says, which is black.
-///
-/// A mix of 1 takes the reading whole and does not touch the other strip at
-/// all — a row just handed to this node holds a stranger's ink, and a strip
-/// just rebuilt holds nothing.
+/// PREMULTIPLIED: `ink_at` returns each layer's colour times the weight it
+/// carries and those weights summed, so a light whose weights all fall
+/// together keeps its hue as it dims, and `fs_ink_blur` normalises at the end.
 @fragment
-fn fs_ink_strip(in: VsOut) -> @location(0) vec4<f32> {
-    let ink = ink_at(in, oct_ring(in.cents), in.uv.x * TAU);
-    let carry = clamp(in.ink_carry, 0.0, 1.0);
-    if carry >= 1.0 {
-        return ink;
-    }
-    let held = textureLoad(
-        ink_strip, vec2<i32>(i32(in.clip_pos.x), i32(in.strip_row)), 0,
-    );
-    return mix(held, ink, carry);
-}
-
-/// The blur pass's quad: one node's row, exactly as the reading pass laid it
-/// out, one column wider (see [`fs_ink_blur`]).
-///
-/// Over the INSTANCES rather than over the whole target, because the strip is
-/// as tall as the row map's capacity and this frame lights whatever share of
-/// that it lights — the rows in between belong to nobody, and blurring them
-/// would be the one cost that grew with how many nodes have ever glowed at once
-/// rather than with how many are glowing.
-@vertex
-fn vs_ink_blur(
-    @builtin(vertex_index) vertex_index: u32,
-    inst: Instance,
-) -> @builtin(position) vec4<f32> {
-    // No light means no owned row, just as in vs_ink_strip. The pass still
-    // clears obsolete rows; an active owner computes its own row once.
-    if inst.glow.x <= 0.0 {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
-    let rows = max(u.glow.row_capacity, 1.0);
-    let v = (inst.glow.y + corner.y) / rows;
-    return vec4<f32>(corner.x * 2.0 - 1.0, 1.0 - 2.0 * v, 0.0, 1.0);
+fn fs_ink_strip(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let row = light_rows[u32(pos.y)];
+    return ink_at(row, oct_ring(row.cents), pos.x / f32(INK_STRIP_N) * TAU);
 }
 
 /// Each row of the raw strip, convolved with the Color smoothing bar's lobe and
@@ -3307,7 +3267,7 @@ fn vs_glow_splat(@builtin(vertex_index) vertex: u32, inst: Instance) -> GlowSpla
     var out: GlowSplatOut;
     out.position = vec4<f32>(2.0, 2.0, 0.0, 1.0);
     out.uv = vec2<f32>(0.0);
-    out.light = vec2<f32>(inst.glow.x * inst.glow.w, inst.glow.y);
+    out.light = vec2<f32>(inst.glow.x * inst.glow.z, inst.glow.y);
     if inst.glow.x <= 0.0 {
         return out;
     }

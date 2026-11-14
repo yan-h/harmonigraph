@@ -216,15 +216,15 @@ pub struct SurfaceState {
     /// is the one place that is hardest to notice and most expensive to get
     /// wrong.
     pub background: glam::Vec4,
-    /// Where every node's own light has got to, and which row of the ink strip
-    /// is keeping its colour, per lattice surface
-    /// ([`GlowFade`](crate::panes::glow_fade::GlowFade)). Runtime-only.
+    /// Where every node's own light has got to, and what it is made of, per
+    /// lattice surface ([`GlowFade`](crate::panes::glow_fade::GlowFade)).
+    /// Runtime-only.
     ///
     /// Here for the reason the two above it are: the offline renderer carries
     /// this struct between frames and nothing else, so a light kept anywhere
     /// else would linger live and not in an export. Keyed by the surface id
-    /// each lattice pane claims, because the strip it describes is that pane's
-    /// own texture.
+    /// each lattice pane claims, because each draws its own window and lights
+    /// the nodes in it.
     pub(crate) glow_fade: std::collections::HashMap<usize, crate::panes::glow_fade::GlowFade>,
     /// One entrance per visible node, independent of optional Glow. Runtime only.
     pub(crate) node_motion: std::collections::HashMap<usize, harmonigraph_scene::NodeMotion>,
