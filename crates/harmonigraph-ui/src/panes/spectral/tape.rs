@@ -190,6 +190,11 @@ pub(super) fn window(ui: &egui::Ui, view: &TapeView, surface: usize) -> Window {
     held.filter(|w| w.zoomed).unwrap_or_else(|| Window::fit(view))
 }
 
+/// `window` pulled back to end within the overview's strip.
+pub(super) fn on_strip(view: &TapeView, window: Window) -> Window {
+    window.within(Window::fit(view).to)
+}
+
 /// Keep the stretch shown for the next frame, and tell the worker which
 /// columns to analyze first.
 pub(super) fn keep_window(ui: &egui::Ui, surface: usize, window: Window, view: &mut TapeView) {

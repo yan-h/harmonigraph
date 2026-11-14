@@ -245,6 +245,10 @@ pub(crate) fn spectral_pane(
         drag_navigates,
         song.as_mut(),
     );
+    // Held to the overview's strip, as its own moves are: a scroll or a pinch
+    // carried past its end leaves the box off the strip, with nothing there to
+    // show the stretch or take hold of it.
+    let song = song.map(|window| tape::on_strip(&state.runtime.tape, window));
     // Re-snapshot: the two drags above just wrote `roll_fraction`, the pitch
     // range, the Span or the level ceiling, and everything below has to be this
     // frame's values, not the ones from before the drag. The ceiling is the
