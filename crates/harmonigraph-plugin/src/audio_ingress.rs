@@ -54,8 +54,10 @@ pub(crate) enum TapePlay {
     Waiting,
     /// The tape's audio from the block's first frame, song seconds `seconds`
     /// on, for `frames` frames, each `speed` of a song frame: below 1 the
-    /// audition is slowed.
-    Heard { seconds: f64, frames: usize, speed: f64 },
+    /// audition is slowed. `cue` is the deck's serial for the cue it belongs
+    /// to, which every cue changes, a click on the spot already sounding
+    /// included.
+    Heard { cue: u64, seconds: f64, frames: usize, speed: f64 },
 }
 
 /// A rolling block's place in the song.

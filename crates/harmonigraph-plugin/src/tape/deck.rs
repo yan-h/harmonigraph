@@ -241,11 +241,13 @@ impl Deck {
         self.last = Some((position, duration));
 
         let from = self.cue_position + self.played;
+        // Before the mix, which bumps the serial when the cue ends in it.
+        let cue = self.serial;
         let frames = self.mix(planes, block.frames, duration);
         self.mixed = frames > 0;
         self.publish(Some(position), rolling);
         let play = if frames > 0 {
-            TapePlay::Heard { seconds: from, frames, speed: self.speed }
+            TapePlay::Heard { cue, seconds: from, frames, speed: self.speed }
         } else if self.sounding() {
             TapePlay::Waiting
         } else {
