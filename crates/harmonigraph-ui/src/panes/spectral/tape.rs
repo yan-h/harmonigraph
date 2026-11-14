@@ -216,6 +216,18 @@ fn slab_seconds(level: usize) -> f64 {
     COLUMN_SECONDS * f64::from(1u32 << level)
 }
 
+/// This frame lets go of the click that cues the tape: over the song, where a
+/// cue can start. The pane senses drags only, so a drag takes hold on the
+/// press; a press let go of before it travelled far enough to be a drag is a
+/// click. `drag_zoom` reads the same, to take back what the press panned.
+pub(super) fn cues(response: &egui::Response, axes: &Axes, split: f32, view: &TapeView) -> bool {
+    response.drag_stopped()
+        && response.ctx.input(|i| i.pointer.could_any_button_be_click())
+        && view.enabled
+        && !view.rolling
+        && response.hover_pos().is_some_and(|p| axes.depth_at(p) >= split)
+}
+
 /// What the roll needs that the pane decides: the width it draws a note at,
 /// the preview's point scale, and the display clock.
 pub(super) struct RollFrame<'a> {
@@ -256,12 +268,7 @@ pub(super) fn draw(
                 Stroke::new(theme::GRID_WIDTH, theme::text()),
             );
         }
-        // The pane senses drags only, so a drag takes hold on the press; a
-        // press let go of before it travelled far enough to be a drag is a
-        // click.
-        let click = response.drag_stopped()
-            && response.ctx.input(|i| i.pointer.could_any_button_be_click());
-        if click && view.enabled && !view.rolling {
+        if cues(response, axes, split, view) {
             view.request = Some(TapeRequest::Cue(at));
         }
         response.clone().on_hover_text_at_pointer(describe(view, at));
@@ -632,11 +639,12 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
         (response.dragged(), held, response.interact_pointer_pos())
     {
         let at = seconds_at(at.x);
+        // On the strip as it is now, which grows while recording.
+        let start = Window { end: whole.end, ..held.start };
         moved = Some(match held.grip {
-            // On the strip as it is now, which grows while recording.
-            Grip::Move => Window { end: whole.end, ..held.start }.moved(at - held.pressed),
-            Grip::From => held.start.with_from(at),
-            Grip::To => held.start.with_to(at),
+            Grip::Move => start.moved(at - held.pressed),
+            Grip::From => start.with_from(at),
+            Grip::To => start.with_to(at),
         });
     }
     if response.drag_stopped() {

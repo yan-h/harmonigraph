@@ -94,9 +94,11 @@ jobs:
         if: ${{ !inputs.regenerate }}
         continue-on-error: true
         run: python3 tools/shader-assets.py catalog
+      # Only on a corpus that passed both checks: the controls step, which
+      # needs this one, verifies the committed corpus again.
       - name: Compare the committed corpus goldens with source
         id: goldens
-        if: ${{ steps.catalog.outcome == 'success' }}
+        if: ${{ steps.verify.outcome == 'success' && steps.catalog.outcome == 'success' }}
         run: python3 tools/shader-assets.py goldens
       - name: Ensure Apple's compiler is available
         run: |
