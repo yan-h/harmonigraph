@@ -101,7 +101,6 @@ What it changes, all of it the price of reading stdout through a pipe or of a Py
 
 What it does not log:
 doctests and `cargo test --examples` targets, whose binaries live outside `deps/`;
-the test binaries `tools/shader-assets.py` builds with `--no-run` and runs directly;
 and a Linux cloud session's failures, which land in a home directory discarded with the session.
 
 CI sets `HARMONIGRAPH_REQUIRE_GPU=1`,
@@ -237,10 +236,6 @@ harmonigraph-scene       Per-frame scene derivation, camera, styles, envelopes
                          and CPU picking.
 
 harmonigraph-render      wgpu lattice renderer used as an egui paint callback.
-
-harmonigraph-metal-assets  Immutable, verified precompiled Metal shader
-                         libraries embedded at build time; no GPU objects or
-                         graphics-stack dependency.
 
 harmonigraph-perf        Performance instrumentation and build-tag stamping;
                          the UI crate draws its overlay.

@@ -5,7 +5,6 @@ members = [
     "crates/harmonigraph-analysis",
     "crates/harmonigraph-scene",
     "crates/harmonigraph-render",
-    "crates/harmonigraph-metal-assets",
     "crates/harmonigraph-golden",
     "crates/harmonigraph-perf",
     "crates/harmonigraph-ui",
@@ -31,7 +30,6 @@ harmonigraph-core = { path = "crates/harmonigraph-core" }
 harmonigraph-analysis = { path = "crates/harmonigraph-analysis" }
 harmonigraph-scene = { path = "crates/harmonigraph-scene" }
 harmonigraph-render = { path = "crates/harmonigraph-render" }
-harmonigraph-metal-assets = { path = "crates/harmonigraph-metal-assets" }
 # Dev-only: the byte-exact frame gate, shared by every crate that keeps a set.
 harmonigraph-golden = { path = "crates/harmonigraph-golden" }
 harmonigraph-perf = { path = "crates/harmonigraph-perf" }

@@ -651,11 +651,6 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
-pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
-    drop(Resources::new(device, format));
-}
-
 /// A GPU-timer probe: what a frame of the Spiral's dot surround costs, over a
 /// control with no dots. `#[ignore]`d — it prints figures and asserts nothing.
 ///

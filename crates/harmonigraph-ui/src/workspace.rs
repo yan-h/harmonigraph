@@ -214,6 +214,7 @@ impl Layout {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn visible(&self, tab: Tab) -> bool {
         let section = Section::of(tab);
         !self.folded[section as usize] && self.tab(section) == tab

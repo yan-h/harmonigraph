@@ -474,7 +474,7 @@ pub(crate) fn spectral_pane(
         state.runtime.tempered,
     );
     if show_spectrum && split > 0.0 {
-        let mut voices: Vec<&harmonigraph_core::Voice> =
+        let mut voices: Vec<harmonigraph_core::Voice> =
             state.runtime.tracker.voices().filter(|v| !namer.shows_node(v.pitch_class)).collect();
         // Translucent bands accumulate where they overlap, so the paint
         // order is part of the picture. The tracker's own order is stable —

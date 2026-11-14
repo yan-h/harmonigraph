@@ -61,27 +61,6 @@ It skips `handoff` as well:
 the preserved artifact is the macOS `.dylib`, so on Linux `handoff` refuses after a successful build,
 and a Linux `.so` has no DAW to load it (#1425).
 
-## A shader-affecting edit owes a regenerated Metal corpus in the SAME commit
-
-`crates/harmonigraph-metal-assets/assets` is keyed on the generated MSL and compiler options, not the `.wgsl` text:
-a pipeline-layout change in Rust, a `vendor/wgpu-hal` bump or a `Cargo.lock` move invalidates it with no `.wgsl` in the diff, and a comment-only `.wgsl` edit does not.
-Tests, fmt and clippy all pass against a stale corpus;
-this gate does not, in about fifteen seconds:
-
-```
-HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
-  --features shader-assets-tools -- --ignored --exact \
-  shader_assets::catalog::production_metal_asset_catalog
-```
-
-It passes only with `1 passed`:
-the catalog compiles on macOS alone,
-so elsewhere it runs 0 tests and proves nothing.
-`Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
-Regenerate on the runner, never locally:
-on a PR, the `Metal shader assets` run that finds the corpus stale builds the replacement as its artifact,
-and the `metal-corpus` skill has the import, what to run off macOS, and why grepping the fallback notice is not a check (#947).
-
 ## House style: formatting is mechanical, and a diff edits what moves
 
 Run `cargo fmt --all`;
@@ -146,7 +125,9 @@ The value on screen must still be the value the file holds, so a change of range
 The tree carries **no compat shims at all**, and that is the invariant to hold:
 no `legacy_*` fields, migration passes or serde aliases for deleted variants.
 A rename is a rename, a dropped variant is dropped.
-A dropped enum variant fails the whole parse, which is still fine when the PR body says so.
+At the editor's door a dropped enum variant costs a saved project the key that names it, which opens at its default with a Console line;
+a recorded take whose look names one refuses to export, loudly.
+Either is fine when the PR body says so.
 Read the `persistence-contract` skill before changing a persisted shape.
 
 ## Fix what you find in this PR; an issue is for a substantial design decision

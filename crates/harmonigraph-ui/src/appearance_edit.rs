@@ -198,6 +198,33 @@ impl AppearanceEditor {
         Self { slots, ..Default::default() }
     }
 
+    /// A slot switch or save-to is spent by the frame that queues it, so one
+    /// left at a close is never carried into the next window.
+    pub(crate) fn start_window_session(&mut self) {
+        self.command = None;
+    }
+
+    /// An edit still open as the window closes, a drag the close cut off, is
+    /// one undo entry.
+    pub(crate) fn end_window_session(&mut self, appearance: &AppearanceDocument) {
+        self.history.finish(appearance);
+    }
+
+    #[cfg(feature = "testing")]
+    pub(crate) fn observe(
+        &mut self,
+        before: Look,
+        appearance: &AppearanceDocument,
+        dragging: bool,
+    ) {
+        self.history.observe(before, appearance, dragging);
+    }
+
+    #[cfg(feature = "testing")]
+    pub(crate) fn undo_depth(&self) -> usize {
+        self.history.undo.len()
+    }
+
     pub(crate) fn end_frame(
         &mut self,
         before: Look,
@@ -657,7 +684,7 @@ mod tests {
         editor.history.observe(original.clone(), &state.picture.appearance, false);
         editor.save_to(2, &state.picture.appearance);
         let blob = state.save_persist();
-        assert!(state.load_persist(&blob));
+        assert!(state.install_document(&blob));
         let editor = &mut state.workspace.interaction.appearance_editor;
         assert_eq!(editor.slots.active, 1);
         assert!(editor.slots.stored(1).is_none(), "the active slot is the live document");

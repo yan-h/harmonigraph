@@ -1261,7 +1261,7 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
 }
 /// The Stop the editor sends. Each fixture first aims the recorder at a
 /// renderer that does not exist, so a finished take launches no render.
-fn stop(shared: &std::sync::Arc<parking_lot::Mutex<crate::editor::EditorShared>>) {
+fn stop(shared: &std::sync::Arc<crate::editor::EditorLock>) {
     let shared = shared.lock();
     shared.take.stop();
 }

@@ -14,12 +14,11 @@ use super::ASSUMED_SURFACE_FORMAT;
 pub struct EditorShared {
     pub(crate) input: LiveInput,
     /// Crate-visible because [`crate::background`] shares this state with the
-    /// frame, and shares more of it than a drainer would need: it applies the
-    /// host's restored blob through this field WHOLE — dock, camera, view and
-    /// every setting, off the GUI thread, while the window is shut (see
-    /// [`crate::background`], and `Restore` there) — as well as logging a
-    /// failure to start into the same console. Its tests read back the history
-    /// it filled.
+    /// frame, and shares more of it than a drainer would need: its holds of
+    /// the editor lock install a host restore into this field WHOLE — dock,
+    /// camera, view and every setting, off the GUI thread (see
+    /// [`EditorLock`](super::EditorLock)) — and it logs a failure to start
+    /// into the same console. Its tests read back the history it filled.
     pub(crate) ui: SharedState,
     /// When the previous GUI update ran, if it was paced; used to detect
     /// event-loop stalls. See [`note_frame`](Self::note_frame).
@@ -46,6 +45,10 @@ pub struct EditorShared {
     /// The input worker could not be started, so the window's frames drain
     /// the rings themselves, as they did before it existed.
     pub(crate) frame_drains: bool,
+    /// The device every window of this editor opens on (#698). Here rather
+    /// than on the editor because activation creates it, before any window,
+    /// and starts compiling on it ([`super::start_graphics`]).
+    pub(crate) gpu_context: egui_baseview::SharedGpuContext,
 }
 
 impl EditorShared {
@@ -76,6 +79,7 @@ impl EditorShared {
             take_last_count: 0,
             take_still_since: None,
             frame_drains: false,
+            gpu_context: egui_baseview::SharedGpuContext::default(),
         }
     }
 

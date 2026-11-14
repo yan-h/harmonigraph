@@ -10,6 +10,12 @@ license.workspace = true
 # (#1181). Drop this with the first doc example that should run.
 doctest = false
 
+[features]
+# Hooks for the plugin's saved-state protocol tests (`testing` module). Only
+# the plugin's dev-dependencies enable it; `ci.sh quick` checks that no
+# shipping build does.
+testing = []
+
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-analysis = { workspace = true }

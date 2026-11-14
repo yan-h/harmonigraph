@@ -172,7 +172,7 @@ The maintained probe is `spectrogram::tests::timing::cloud_costs_by_style_and_di
 A synthetic baseline can be run without the private recording:
 
 ```sh
-HARMONIGRAPH_SHADER_ASSETS=source PROBE_CASE=stars PROBE_FRAMES=240 PROBE_FILLS=1 \
+PROBE_CASE=stars PROBE_FRAMES=240 PROBE_FILLS=1 \
   PROBE_SIZE=3840x2160 PROBE_PPP=4 \
   cargo test --release -p harmonigraph-render cloud_costs_by_style_and_dial \
   -- --ignored --nocapture --test-threads=1
@@ -214,7 +214,7 @@ fractional scale/origin,
 partial-region edges,
 and resolution changes.
 Sampling/layout changes must preserve color history when its identity is unchanged.
-Future shader changes still owe reviewed goldens and a runner-generated Metal corpus.
+Future shader changes still owe reviewed goldens.
 
 ## Frozen research archives
 

@@ -41,8 +41,9 @@ Reset effects restores the default Clouds settings.
 
 Existing documents missing the new `atmosphere.material` field default to Clouds without resetting other fields.
 Saved Clouds, Contours and Interference selections keep their values.
-Saves that explicitly name the removed Fibres or Liquid variants are rejected as whole documents by the existing parser, including their saved camera and layout;
-the editor reports this in its console and the offline renderer reports it before falling back to defaults.
+Saves that explicitly name the removed Fibres or Liquid variants were rejected as whole documents by the parser of the time, including their saved camera and layout;
+the editor reported this in its console and the offline renderer reported it before falling back to defaults.
+Since #1757 such a variant costs an editor save only its own key (see the persistence-contract skill).
 There are no aliases or migration passes.
 
 ## Verification

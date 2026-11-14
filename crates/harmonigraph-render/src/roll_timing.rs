@@ -198,5 +198,4 @@ fn a_frame_of_the_roll_costs_this_much() {
             p10 - control_p10,
         );
     }
-    eprintln!("METAL_TIMING_ASSETS {:?}", crate::shader_assets::statistics());
 }

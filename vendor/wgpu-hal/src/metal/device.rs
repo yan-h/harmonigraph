@@ -232,11 +232,13 @@ impl super::Device {
                     options.setPreserveInvariance(true);
                 }
 
-                let library = super::shader_library::load(
-                    &self.shared.device,
-                    &source,
-                    &options,
-                )
+                let library = self
+                    .shared
+                    .device
+                    .newLibraryWithSource_options_error(
+                        &NSString::from_str(&source),
+                        Some(&options),
+                    )
                     .map_err(|err| {
                         log::debug!("Naga generated shader:\n{source}");
                         crate::PipelineError::Linkage(stage_bit, format!("Metal: {err}"))

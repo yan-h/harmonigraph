@@ -1014,11 +1014,3 @@ impl SpectrogramHeadless {
 
 #[cfg(test)]
 pub(crate) mod tests;
-
-#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
-pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
-    let resources = SpectrogramResources::new(device, format);
-    // Runtime creation stays lazy, but the strict Metal catalog must cover
-    // every production route before the first enabled atmospheric frame.
-    drop(atmosphere::Pipelines::new(device, format, &resources.pipelines.layout));
-}

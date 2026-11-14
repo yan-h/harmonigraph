@@ -18,14 +18,10 @@ use harmonigraph_core::LatticePos;
 /// oversight. A menu entry names a look and may be renamed whenever the look
 /// is better described; a field names the thing the arithmetic builds.
 ///
-/// Renaming either is allowed and neither is free, but do not read that as the
-/// two costing the same. They are not symmetric, and the cheap-looking one is
-/// the expensive one: renaming a FIELD drops a key, which the container-level
-/// `serde(default)` absorbs, so that one field resets and nothing else moves.
-/// Renaming a VARIANT fails the parse and takes the whole persist with it --
-/// layout and camera included -- because `UI_PERSIST_VERSION` is a floor and a
-/// floor cannot guard a variant. #913 renamed these two and said so in its PR
-/// body with the measured refusal, which is the bar for doing it again.
+/// Renaming either is allowed and neither is free: what a renamed FIELD or
+/// VARIANT costs a saved editor document, and a recorded take's look, is set
+/// out in the persistence-contract skill. #913 renamed these two and said so
+/// in its PR body with the measured cost, which is the bar for doing it again.
 ///
 /// [`CloudStyle::Stars`] is the odd one out: it does not displace the picture's
 /// levels at all but REPLACES the picture — pinpoint stars in depth, each one
