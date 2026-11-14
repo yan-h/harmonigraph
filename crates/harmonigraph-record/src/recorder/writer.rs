@@ -490,9 +490,6 @@ impl CanonicalFanout {
                     // (#712): it marks the passes it touched, and the export
                     // warns.
                     let mut record = harmonigraph_take::CanonicalRecord::from_event(event);
-                    let stamp = |at: publication::Stamp| {
-                        harmonigraph_take::StampRecord::new(at.clock, at.input)
-                    };
                     match &mut record {
                         harmonigraph_take::CanonicalRecord::Baseline(frame) => {
                             frame.at = Some(stamp(span.first));
@@ -756,6 +753,11 @@ impl Recording {
     }
 }
 
+/// A stamp as the take file writes it.
+fn stamp(at: publication::Stamp) -> harmonigraph_take::StampRecord {
+    harmonigraph_take::StampRecord::new(at.clock, at.input)
+}
+
 fn finish_ready(
     open: &mut Option<Recording>,
     epoch: u64,
@@ -852,8 +854,6 @@ fn drain_records(
             }
             continue;
         };
-        let stamp =
-            |at: publication::Stamp| harmonigraph_take::StampRecord::new(at.clock, at.input);
         let written = match entry {
             Entry::Run { pass, at, song, presentation, .. } => {
                 recording.run(harmonigraph_take::RunRecord {

@@ -181,7 +181,7 @@ pub(crate) fn assemble(
                 let mut touched =
                     runs.iter().filter(|run| run.pass == chosen && run.touches(from, to));
                 let Some(first) = touched.next() else { continue };
-                let last = touched.last().unwrap_or(first);
+                let last = touched.next_back().unwrap_or(first);
                 take.incomplete.get_or_insert(IncompleteRecord {
                     first_publication: gap.first,
                     last_publication: gap.last,

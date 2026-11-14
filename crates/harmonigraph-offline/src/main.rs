@@ -255,7 +255,8 @@ fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -
 
 /// Where the video starts, in take time.
 ///
-/// Take times are the host's TRANSPORT position, so time zero is the song's
+/// Take times are song positions (a pass starts at the host's transport
+/// position and runs on with its own audio), so time zero is the song's
 /// start and not the record button's. A passage played from a minute into the
 /// arrangement was captured from 60-odd seconds, and rendering from zero opens
 /// the video with a minute of empty lattice — nothing was recorded there to
@@ -749,7 +750,7 @@ mod tests {
     }
 
     /// The render opens where the RECORDING did, wherever in the song that
-    /// falls — the bug being that take times are transport positions, so a
+    /// falls — the bug being that take times are song positions, so a
     /// passage played from a minute in used to open on a minute of empty
     /// lattice.
     #[test]

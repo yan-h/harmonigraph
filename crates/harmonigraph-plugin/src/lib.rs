@@ -889,7 +889,7 @@ impl Plugin for Harmonigraph {
                     // (`ends_at_rewind` is false for it). Asking afterwards
                     // would let a block that both pays the debt and crosses the
                     // bar open a fresh pass and finish it empty — and the
-                    // newest file is the one that renders. Latching completion
+                    // last pass is the one that renders. Latching completion
                     // here instead makes `observe_transport` return on its own
                     // guard, so no pass is opened at all.
                     let stopped = self.take.observe_bar(bar_position(transport));

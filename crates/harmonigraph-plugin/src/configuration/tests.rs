@@ -1409,12 +1409,13 @@ fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
 /// A take paused and resumed reads whole, every note drawn and on its
 /// soundtrack (#1760; on take v6 each case was refused or lost a note).
 ///
-/// The first three put a record in the last D of a recorded block, so it
-/// sounds past the run's end and after the resume's own opening snapshot,
-/// which the reader's floor lifts level with it. `parked-at-start` parks at
-/// the last played block's own position; `input-in-parked-block` plays into
-/// the first parked block, which still records; `release-in-parked-block`
-/// releases there, which lost the release silently (N4). `behind-retrigger`
+/// The first two put a bend in the last D of a recorded block, so it sounds
+/// past the run's end and after the resume's own opening snapshot, which the
+/// reader's floor lifts level with it: `parked-at-start` parks at the last
+/// played block's own position, and `input-in-parked-block` plays into the
+/// first parked block, which still records. `release-in-parked-block`
+/// releases in that block, which lost the release silently (N4); under the
+/// audio origin it needs no lift. `behind-retrigger`
 /// resumes inside playback's jitter behind the stop, which dropped a note
 /// silently (N1), and `snapback` plays its first block where it was parked,
 /// then snaps back before any forward motion under a one-file trigger, so its

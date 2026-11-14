@@ -91,9 +91,8 @@ struct Assigned {
 struct Published {
     source: u8,
     delta: NoteDelta,
-    /// The sample the input arrived at: the delta's stamp. The delta itself
-    /// carries the time it is scheduled to sound.
-    input: i64,
+    /// Where the input arrived, `timing.input`, is the delta's stamp; the delta
+    /// itself carries the time it is scheduled to sound.
     timing: EventTiming,
 }
 
@@ -1102,12 +1101,7 @@ impl Hub {
         let row = &mut self.rows[usize::from(record.source)];
         row.applied_time = Some(row.applied_time.map_or(time, |old| old.max(time)));
         if self.pending.len() < BATCH_EVENTS {
-            self.pending.push(Published {
-                source: record.source,
-                delta,
-                input: record.sample,
-                timing,
-            });
+            self.pending.push(Published { source: record.source, delta, timing });
         } else {
             let input = record.sample;
             self.pending_loss = Some(match self.pending_loss {
@@ -1130,7 +1124,8 @@ impl Hub {
         for position in 0..self.pending.len() {
             let item = self.pending[position];
             let index = usize::from(item.source);
-            let span = owner.recording.stamp_or_lose(recorder, item.timing.clock, item.input);
+            let span =
+                owner.recording.stamp_or_lose(recorder, item.timing.clock, item.timing.input);
             let outcome = recorder.publish_note(item.delta, span);
             for lane in publication::Lane::ALL {
                 if outcome[lane].is_err() {
