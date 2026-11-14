@@ -144,9 +144,8 @@ Toggling Retune copies nothing in either direction.
 No policy fixture makes the keyboard filter bind, so the fixtures say nothing about it;
 the Rust policy tests cover it on their own.
 
-One configuration-edit race remains:
-a policy edit from the pane sends the whole policy the editor last saw, keyboard included.
-One that lands just after Learn has changed the keyboard puts the old keyboard back until the held chord next changes and Learn fires again.
+A policy edit from the pane sends only the fields it changed (`PolicyEdit::changed`, `e8463e6a`),
+so one that lands just after Learn has changed the keyboard leaves Learn's keyboard in place.
 
 With a schismatic keyboard and radius three, C followed by the key four fifths above it cannot reach the Pythagorean E node.
 The fallback can choose the nearby 5/4 E, but cannot double C even at maximum pitch flexibility.

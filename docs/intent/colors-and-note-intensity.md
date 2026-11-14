@@ -9,7 +9,7 @@ One line per decision; the audit reads this before asking anything.
 
 ## 2026-10-02 (issue sweep)
 
-- Spiral note dots follow the Opacity mapping, including their bloom and shadows. Rim names retain their envelope-driven legibility. #1314 Colors Q2
+- Spiral note dots follow the Opacity mapping, including their bloom and shadows. Rim names retain their envelope-driven legibility. #1314 Colors Q2 (The dots wear the backdrop cut rather than a shadow since #1538; the Opacity mapping stands. #1739)
 
 ## 2026-11-03 (drift audit, #1635)
 
