@@ -119,6 +119,7 @@ impl LiveInput {
         let Some(offset) = self.clock.offset else { return };
         let tracker = &mut runtime.tracker;
         let (recorder, tape) = (&mut self.recorder, &mut self.tape_notes);
+        recorder.catch_up(tracker, tape);
         self.consumer.drain(|delivery, _| {
             if let harmonigraph_record::publication::Delivery::Event(event) = delivery {
                 let result = tracker.handle_canonical_mapped(event, offset);

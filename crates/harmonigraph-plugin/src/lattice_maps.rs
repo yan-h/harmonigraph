@@ -83,6 +83,55 @@ pub fn offset(params: &crate::HarmonigraphParams) -> LatticePos {
     offsets(params).total()
 }
 
+/// Which map is selected, and where it stands: the selection the lattice
+/// marks, which the tape samples beside the tuning (#1719). It is what the
+/// parameters ask for, which the audio thread adopts at its next attack, so
+/// it reproduces what the live lattice showed. The selection rather than the
+/// shape: a map edited since a recording marks its notes under the edit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MapSelection {
+    pub engine: TuningEngine,
+    pub slot: usize,
+    /// The lanes' offset, and where following has moved the map.
+    pub position: LatticePos,
+}
+
+impl MapSelection {
+    /// The selection the parameters ask for, at the lanes' offset alone.
+    fn requested(params: &crate::HarmonigraphParams) -> MapSelection {
+        MapSelection {
+            engine: TuningEngine::from_index(params.tuning_engine.value()),
+            slot: map_slot(params.map.value()),
+            position: offset(params),
+        }
+    }
+
+    /// Moved on by where following has taken the map.
+    fn followed_by(self, followed: LatticePos) -> MapSelection {
+        MapSelection { position: self.position + followed, ..self }
+    }
+
+    /// The document's map in this slot, standing here.
+    fn placed(self, document: &MapDocument) -> Option<LatticeMap> {
+        document.map(self.slot).map(|shape| translated(shape, self.position))
+    }
+}
+
+/// The selection the lattice marks now.
+pub(crate) fn selection(params: &crate::HarmonigraphParams) -> MapSelection {
+    MapSelection::requested(params).followed_by(followed(params))
+}
+
+/// A recorded `selection` as the lattice marks it: the map in that slot as
+/// the document holds it now, standing where it stood then.
+pub(crate) fn recorded(
+    params: &crate::HarmonigraphParams,
+    selection: MapSelection,
+) -> harmonigraph_ui::tape::RecordedMap {
+    let map = selection.placed(&params.maps.read());
+    harmonigraph_ui::tape::RecordedMap { engine: selection.engine, map }
+}
+
 fn translated(mut shape: LatticeMap, offset: LatticePos) -> LatticeMap {
     shape.position = offset;
     shape
@@ -101,24 +150,21 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
     if editor.translated.is_some_and(|(read, _)| read != lanes) {
         editor.translated = None;
     }
-    let selected = map_slot(params.map.value());
     let offsets = offsets(params);
-    let offset = offsets.total();
+    let requested = MapSelection::requested(params);
+    let selected = requested.slot;
     let playback = MapPlayback {
-        engine: TuningEngine::from_index(params.tuning_engine.value()),
+        engine: requested.engine,
         selected,
-        offset,
-        map: document.map(selected).map(|shape| translated(shape, offset)),
+        offset: requested.position,
+        map: requested.placed(&document),
         follow: Follow::from_index(params.map_follow.value()),
     };
     // Intent is compared before following is added: the Hub's own movement is
     // not host state waiting for audio to adopt it.
     let pending = playback != adopted;
     let followed = followed(params);
-    let shown = MapPlayback {
-        map: playback.map.map(|map| translated(map, map.position + followed)),
-        ..playback
-    };
+    let shown = MapPlayback { map: requested.followed_by(followed).placed(&document), ..playback };
     MapView {
         playback: shown,
         offsets,

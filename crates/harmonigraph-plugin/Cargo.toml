@@ -47,6 +47,10 @@ crossbeam = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { version = "1" }
+# The tape's audition speed (#1719 slice 5): pitch-preserving time-stretch,
+# a header-only C++ library built by `cc`, its bindings by `bindgen`
+# (libclang at build time). Runs on the input worker, never in `process`.
+signalsmith-stretch = "0.1.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }

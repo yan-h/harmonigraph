@@ -15,6 +15,41 @@ pub enum TapeRequest {
     Stop,
 }
 
+/// How fast an audition plays (#1719 slice 5), its pitch held at every
+/// speed. The stretcher sounds best near full speed: it is built for changes
+/// of about a quarter either way, so the slowest steps trade clarity for time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Speed {
+    #[default]
+    Full,
+    ThreeQuarters,
+    Half,
+    Quarter,
+}
+
+impl Speed {
+    pub const ALL: [Speed; 4] = [Speed::Full, Speed::ThreeQuarters, Speed::Half, Speed::Quarter];
+
+    /// Song seconds per second heard.
+    pub fn factor(self) -> f64 {
+        match self {
+            Speed::Full => 1.0,
+            Speed::ThreeQuarters => 0.75,
+            Speed::Half => 0.5,
+            Speed::Quarter => 0.25,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Speed::Full => "1×",
+            Speed::ThreeQuarters => "0.75×",
+            Speed::Half => "0.5×",
+            Speed::Quarter => "0.25×",
+        }
+    }
+}
+
 /// The host's bar and beat at one song position, for the ruler. Every field
 /// is the host's own: positions in quarter notes, bars numbered from 0. The
 /// plugin builds one only with a positive tempo and a meter, defaulting to
@@ -74,16 +109,29 @@ pub struct Audition {
     pub clock: f64,
     /// The song seconds it started from.
     pub song: f64,
+    /// Song seconds per second heard: below 1 it is slowed.
+    pub speed: f64,
     /// The display-clock time it stopped sounding, once it has.
     pub until: Option<f64>,
 }
 
 impl Audition {
-    /// The song seconds sounding at display-clock time `t`, had the audition
-    /// played on unbroken.
-    pub fn song_at(&self, t: f64) -> f64 {
-        self.song + (t - self.clock)
+    /// The display-clock time song seconds `song` sounded at, or would have,
+    /// had the audition played on unbroken: what places a note played over
+    /// it at the spot it sounded over.
+    pub fn clock_at(&self, song: f64) -> f64 {
+        self.clock + (song - self.song) / self.speed
     }
+}
+
+/// The lattice map the spot sounding now was recorded under: what the
+/// lattice marks during an audition, unless a map is being edited.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecordedMap {
+    pub engine: harmonigraph_core::lattice_map::TuningEngine,
+    /// The map in the recorded slot as the document holds it now, at the
+    /// recorded position; `None` where that slot is empty now.
+    pub map: Option<harmonigraph_core::lattice_map::LatticeMap>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -111,6 +159,10 @@ pub struct TapeView {
     /// host's, so a note lands where it was heard (see
     /// `VisualRuntime::observe_configuration`).
     pub tuning: Option<harmonigraph_core::Tuning>,
+    /// The lattice map selected where the spot sounding now was recorded,
+    /// while an audition is cued or plays: the lattice marks its nodes, where
+    /// the recorded notes were assigned.
+    pub map: Option<RecordedMap>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an
     /// audition would play. The worker's copy, shared; rebuilt when the
@@ -126,6 +178,10 @@ pub struct TapeView {
     pub meters: Vec<(f64, Meter)>,
     /// A click the plugin has not taken yet. A newer click replaces it.
     pub request: Option<TapeRequest>,
+    /// The speed Tape mode's bar asks for. A cue plays at the speed it
+    /// started at, so the plugin cues again from the spot heard when this
+    /// changes. Session-only, like the tape it plays.
+    pub speed: Speed,
     /// What the tape holds, as a spectrogram: the worker's copy, brought up to
     /// date in each step's first hold.
     pub spectrogram: spectrogram::TapeSpectrogram,

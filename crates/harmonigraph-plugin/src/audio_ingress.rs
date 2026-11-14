@@ -53,8 +53,9 @@ pub(crate) enum TapePlay {
     /// cue waiting for its audio, or a starved one. A pause, not an end.
     Waiting,
     /// The tape's audio from the block's first frame, song seconds `seconds`
-    /// on, for `frames` frames.
-    Heard { seconds: f64, frames: usize },
+    /// on, for `frames` frames, each `speed` of a song frame: below 1 the
+    /// audition is slowed.
+    Heard { seconds: f64, frames: usize, speed: f64 },
 }
 
 /// A rolling block's place in the song.

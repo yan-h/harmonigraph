@@ -31,7 +31,7 @@ use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
 use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
-use crate::tape::{TapeRequest, TapeView};
+use crate::tape::{Speed, TapeRequest, TapeView};
 use crate::{theme, PictureState};
 
 /// The narrowest stretch of song the region will zoom to, in seconds.
@@ -346,12 +346,13 @@ fn notes(
     let recorded = RollSource { roll: &view.notes, time: song, lead: false, live_during: None };
     let mut sources = vec![recorded];
     if let Some(audition) = view.audition {
-        // The display clock at the window's near edge, had the audition
-        // played on: what puts a note played over it at the spot it sounded.
-        let origin = window.to + audition.clock - audition.song;
+        // The display clock at the window's near edge, and how long that
+        // clock took to cross the window: longer for a slowed audition.
+        let origin = audition.clock_at(window.to);
+        let seconds = audition.clock_at(window.to) - audition.clock_at(window.from);
         sources.push(RollSource {
             roll: state.roll(),
-            time: TimeAxis { origin, now: frame.now, ..song },
+            time: TimeAxis { origin, window: seconds, now: frame.now, ..song },
             lead: false,
             live_during: Some((audition.clock, audition.until.unwrap_or(f64::INFINITY))),
         });
@@ -498,6 +499,17 @@ fn controls(ui: &mut egui::Ui, view: &mut TapeView, song: Option<&mut Window>, r
     if stop.on_hover_text("End the audition.").clicked() {
         view.request = Some(TapeRequest::Stop);
     }
+    let combo =
+        egui::ComboBox::from_id_salt("tape-speed").selected_text(view.speed.label()).width(0.0);
+    let speed = crate::widgets::selected_combo(ui, combo, |ui| {
+        for speed in Speed::ALL {
+            ui.selectable_value(&mut view.speed, speed, speed.label());
+        }
+    });
+    speed.response.on_hover_text(
+        "How fast the audition plays, its pitch held. Changing it while the tape plays \
+         starts again from the spot heard. The slowest speed blurs attacks.",
+    );
     let fit = ui.add_enabled(song.zoomed, egui::Button::new("Fit"));
     if fit.on_hover_text("Show the whole recording.").clicked() {
         *song = Window::fit(view);
@@ -521,7 +533,16 @@ fn readout(view: &TapeView) -> String {
         return "Nothing recorded yet. The song records as it plays.".to_owned();
     }
     match (view.heard, view.position) {
-        (Some(heard), _) => format!("Playing {} · {}", place(view, heard), held(view, heard)),
+        (Some(heard), _) => {
+            // The cue's own speed, which a new one reaches only once it cues
+            // again.
+            let sounding = view.audition.map_or(1.0, |audition| audition.speed);
+            let speed = Speed::ALL
+                .into_iter()
+                .find(|speed| speed.factor() == sounding && *speed != Speed::Full)
+                .map_or_else(String::new, |speed| format!(" at {}", speed.label()));
+            format!("Playing {}{speed} · {}", place(view, heard), held(view, heard))
+        }
         (None, Some(at)) => {
             format!("Stopped at {} · {} · Click to play.", place(view, at), held(view, at))
         }
@@ -586,6 +607,13 @@ mod tests {
         view.heard = Some(12.5);
         let playing = readout(&view);
         assert!(playing.starts_with("Playing 0:12.5 · cold"), "{playing}");
+        view.speed = Speed::Half;
+        let asked = readout(&view);
+        assert!(asked.starts_with("Playing 0:12.5 · cold"), "not yet cued again: {asked}");
+        let audition = crate::tape::Audition { clock: 0.0, song: 12.0, speed: 0.5, until: None };
+        view.audition = Some(audition);
+        let slowed = readout(&view);
+        assert!(slowed.starts_with("Playing 0:12.5 at 0.5× · cold"), "{slowed}");
         view.rolling = true;
         assert!(readout(&view).starts_with("Recording."), "{}", readout(&view));
     }

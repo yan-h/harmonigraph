@@ -360,6 +360,21 @@ pub(crate) fn draw_lattice(
     window
 }
 
+/// The lattice map the lattice marks, when its engine is the map: during an
+/// audition the one its spot was recorded under (#1719), where the recorded
+/// notes were assigned, and otherwise the live one. Editing a shape marks the
+/// live map, which is the one a click edits.
+fn marked_map(state: &PictureState) -> Option<Option<harmonigraph_core::lattice_map::LatticeMap>> {
+    use harmonigraph_core::lattice_map::TuningEngine;
+    let live = state.runtime.lattice_maps.as_ref();
+    let recorded = state.runtime.tape.map.filter(|_| !live.is_some_and(|m| m.editing()));
+    let (engine, map) = match recorded {
+        Some(recorded) => (recorded.engine, recorded.map),
+        None => live.map(|m| (m.playback.engine, m.playback.map))?,
+    };
+    (engine == TuningEngine::LatticeMap).then_some(map)
+}
+
 /// Resolve only ordinary, visible map destinations, using scene indices rather
 /// than window indices because sparse halo owners can precede ordinary nodes.
 /// Preview/export never carries these editor annotations.
@@ -369,16 +384,9 @@ fn map_assignments(
     window: &harmonigraph_scene::DrawnWindow,
     interactive: bool,
 ) -> Vec<usize> {
-    let map = state
-        .runtime
-        .lattice_maps
-        .as_ref()
-        .filter(|maps| {
-            interactive
-                && state.appearance.view.show_map_indicators
-                && maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-        })
-        .and_then(|maps| maps.playback.map);
+    let map = marked_map(state)
+        .filter(|_| interactive && state.appearance.view.show_map_indicators)
+        .flatten();
     let mut indices: Vec<_> = map
         .into_iter()
         .flat_map(|map| (0..12).map(move |midi| map.node(midi)))
@@ -431,33 +439,39 @@ fn draw_map_overlay(
             }
         }
     }
-    let label = if let Some(maps) = maps
-        .filter(|m| m.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
+    let key = |destination| {
+        let midi = harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
+        (midi, crate::lattice_maps::MIDI_LABELS[midi as usize])
+    };
+    let editing = maps.filter(|m| m.editing()).and_then(|m| m.playback.map);
+    let marked = marked_map(state).flatten();
+    let unavailable = maps.is_some_and(|m| {
+        m.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+            && m.playback.map.is_none()
+    });
+    let label = if let Some((destination, mut map)) = state.surfaces.hovered.zip(editing) {
+        let (midi, name) = key(destination);
+        let old = map.correction(midi, state.runtime.tuning);
+        map.replace(destination);
+        let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
+        format!(
+            "{name} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
+            cents - old as f64 / 1e6
+        )
+    } else if let Some((map, midi, name)) = state
+        .surfaces
+        .hovered
+        .zip(marked)
+        .map(|(destination, map)| (destination, map, key(destination)))
+        .filter(|&(destination, map, (midi, _))| map.node(midi) == destination)
+        .map(|(_, map, (midi, name))| (map, midi, name))
     {
-        let hovered = state.surfaces.hovered.zip(maps.playback.map).map(|(destination, map)| {
-            let midi = harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
-            (destination, map, midi, crate::lattice_maps::MIDI_LABELS[midi as usize])
-        });
-        if let Some((destination, mut map, midi, name)) = hovered.filter(|_| maps.editing()) {
-            let old = map.correction(midi, state.runtime.tuning);
-            map.replace(destination);
-            let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
-            format!(
-                "{name} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
-                cents - old as f64 / 1e6
-            )
-        } else if let Some((_, map, midi, name)) =
-            hovered.filter(|&(destination, map, midi, _)| map.node(midi) == destination)
-        {
-            // An assigned node names its key's full correction, so drift is
-            // read where the map is drawn. Only the assigned node: another
-            // node of the same key would claim a pitch it does not sound.
-            format!("{name} · {:+.2}¢", map.correction(midi, state.runtime.tuning) as f64 / 1e6)
-        } else if maps.playback.map.is_none() {
-            "Map unavailable · new attacks pass through".into()
-        } else {
-            String::new()
-        }
+        // An assigned node names its key's full correction, so drift is
+        // read where the map is drawn. Only the assigned node: another
+        // node of the same key would claim a pitch it does not sound.
+        format!("{name} · {:+.2}¢", map.correction(midi, state.runtime.tuning) as f64 / 1e6)
+    } else if unavailable {
+        "Map unavailable · new attacks pass through".into()
     } else {
         String::new()
     };
@@ -827,6 +841,47 @@ mod tests {
     };
     use harmonigraph_core::{NoteEvent, SourceId};
     use harmonigraph_scene::NoteNames;
+
+    /// An audition marks the nodes of the map its spot was recorded under,
+    /// where its notes were assigned; editing a shape marks the live map,
+    /// which a click edits.
+    #[test]
+    fn an_audition_marks_the_recorded_map_unless_a_shape_is_edited() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+        let mut state = fresh();
+        let live = LatticeMap::default();
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback {
+                engine: TuningEngine::LatticeMap,
+                map: Some(live),
+                selected: 0,
+                offset: harmonigraph_core::LatticePos::ORIGIN,
+                follow: Default::default(),
+            },
+            offsets: Default::default(),
+            followed: harmonigraph_core::LatticePos::ORIGIN,
+            pending: false,
+            names: Default::default(),
+            edit_shape: false,
+            can_undo: false,
+            full: false,
+        });
+        let marked = |state: &mut PictureState| {
+            let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
+            let scene = compose_scene(state, &window, 1.0, None, 0, 0.0);
+            map_assignments(state, &scene, &window, true)
+        };
+        let live_nodes = marked(&mut state);
+        assert!(!live_nodes.is_empty(), "fixture must mark visible nodes");
+        let recorded = LatticeMap { position: harmonigraph_core::LatticePos::new(1, 0, 0), ..live };
+        let engine = TuningEngine::LatticeMap;
+        state.runtime.tape.map = Some(crate::tape::RecordedMap { engine, map: Some(recorded) });
+        let during = marked(&mut state);
+        assert!(!during.is_empty() && during != live_nodes, "the recorded map is marked");
+        state.runtime.lattice_maps.as_mut().unwrap().edit_shape = true;
+        assert_eq!(marked(&mut state), live_nodes, "editing marks the map a click edits");
+    }
 
     #[test]
     fn lattice_map_destination_click_excludes_camera_drags_other_modes_and_export() {
