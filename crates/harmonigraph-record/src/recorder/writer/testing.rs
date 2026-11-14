@@ -41,6 +41,7 @@ pub struct Capture {
     displayed: publication::Consumer,
     fence: Arc<RecordFence>,
     latches: Arc<TakeLatches>,
+    end_at_rewind: Arc<AtomicBool>,
     _records: rtrb::Consumer<Entry>,
     audio: rtrb::Consumer<f32>,
 }
@@ -88,6 +89,11 @@ impl Capture {
     }
     pub fn arm(&self) {
         self.fence.arm(self.fence.epoch() + 1);
+    }
+    /// What the GUI publishes for every trigger but On disarm: a rewind after
+    /// forward motion ends the take rather than splitting it.
+    pub fn end_at_rewind(&self, on: bool) {
+        self.end_at_rewind.store(on, Ordering::Relaxed);
     }
     pub fn stop(&self) {
         self.fence.disarm();
@@ -188,6 +194,7 @@ pub fn channel() -> (Recorder, Capture) {
     let capture = Capture {
         fence: recorder.fence.clone(),
         latches: recorder.latches.clone(),
+        end_at_rewind: recorder.end_at_rewind.clone(),
         publications,
         displayed,
         _records: records,

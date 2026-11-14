@@ -1406,6 +1406,165 @@ fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A take paused and resumed reads whole, every note drawn and on its
+/// soundtrack (#1760; on take v6 each case was refused or lost a note).
+///
+/// The first three put a record in the last D of a recorded block, so it
+/// sounds past the run's end and after the resume's own opening snapshot,
+/// which the reader's floor lifts level with it. `parked-at-start` parks at
+/// the last played block's own position; `input-in-parked-block` plays into
+/// the first parked block, which still records; `release-in-parked-block`
+/// releases there, which lost the release silently (N4). `behind-retrigger`
+/// resumes inside playback's jitter behind the stop, which dropped a note
+/// silently (N1), and `snapback` plays its first block where it was parked,
+/// then snaps back before any forward motion under a one-file trigger, so its
+/// notes follow the audio rather than the host (D4).
+///
+/// A note the stop's own cut ended draws without an end: the release played
+/// after it addressed nothing, and the resume's snapshot says only that the
+/// note is gone.
+#[test]
+fn a_paused_take_reads_whole_with_every_note_drawn() {
+    let block = 64.0 / 48000.0;
+    let on = |id, key, t| note(id, key, t, CLAP_EVENT_NOTE_ON);
+    let off = |id, key, t| note(id, key, t, CLAP_EVENT_NOTE_OFF);
+    let bend = |id: i32, t: u32| {
+        Input::Tuning(clap_event_note_expression {
+            header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, t),
+            expression_id: CLAP_NOTE_EXPRESSION_TUNING,
+            note_id: id,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 0.5,
+        })
+    };
+    // (raw sample, events, transport position in blocks, playing)
+    type Step = (i64, Vec<Input>, f64, bool);
+    // Per key: the notes drawn, and whether each drew its release.
+    type Drawn = &'static [(u8, usize, bool)];
+    let park = |raw: i64, at: f64| -> Step { (raw, vec![], at, false) };
+    let play = |raw: i64, events: Vec<Input>, at: f64| -> Step { (raw, events, at, true) };
+    let snapback = std::iter::once(park(0, 750.0))
+        .chain([play(64, vec![on(10, 60, 10)], 750.0)])
+        .chain((0..12).map(|i| {
+            let events = match i {
+                1 => vec![off(10, 60, 5), on(20, 64, 6)],
+                3 => vec![off(20, 64, 7)],
+                5 => vec![on(30, 67, 1)],
+                8 => vec![off(30, 67, 1)],
+                _ => vec![],
+            };
+            play(128 + 64 * i, events, i as f64)
+        }))
+        .collect();
+    // (name, one-file trigger, steps, notes drawn)
+    let cases: [(&str, bool, Vec<Step>, Drawn); 5] = [
+        (
+            "parked-at-start",
+            false,
+            vec![
+                play(0, vec![on(10, 60, 10)], 0.0),
+                play(64, vec![bend(10, 60)], 1.0),
+                park(128, 1.0),
+                park(192, 1.0),
+                play(256, vec![], 2.0),
+                play(320, vec![], 3.0),
+                play(384, vec![off(10, 60, 0)], 4.0),
+            ],
+            &[(60, 1, false)],
+        ),
+        (
+            "input-in-parked-block",
+            false,
+            vec![
+                play(0, vec![on(10, 60, 10)], 0.0),
+                play(64, vec![], 1.0),
+                (128, vec![bend(10, 60)], 2.0, false),
+                park(192, 2.0),
+                park(256, 2.0),
+                play(320, vec![], 2.0),
+                play(384, vec![], 3.0),
+                play(448, vec![off(10, 60, 0)], 4.0),
+            ],
+            &[(60, 1, false)],
+        ),
+        (
+            "release-in-parked-block",
+            false,
+            vec![
+                play(0, vec![on(10, 60, 10)], 0.0),
+                play(64, vec![], 1.0),
+                (128, vec![off(10, 60, 60)], 2.0, false),
+                park(192, 2.0),
+                park(256, 2.0),
+                play(320, vec![on(12, 64, 2)], 2.0),
+                play(384, vec![off(12, 64, 2)], 3.0),
+                play(448, vec![], 4.0),
+            ],
+            &[(60, 1, true), (64, 1, true)],
+        ),
+        (
+            "behind-retrigger",
+            false,
+            vec![
+                play(0, vec![on(10, 60, 10)], 0.0),
+                play(64, vec![off(10, 60, 60)], 1.0),
+                park(128, 2.0),
+                park(192, 2.0),
+                play(256, vec![on(11, 60, 0)], 0.0),
+                play(320, vec![off(11, 60, 1)], 1.0),
+                play(384, vec![on(12, 60, 2)], 2.0),
+                play(448, vec![off(12, 60, 2)], 3.0),
+                play(512, vec![], 4.0),
+            ],
+            &[(60, 3, true)],
+        ),
+        ("snapback", true, snapback, &[(60, 1, true), (64, 1, true), (67, 1, true)]),
+    ];
+    for (name, one_file, steps, expected) in cases {
+        let _scope = crate::test_scope::enter();
+        let (mut device, mut capture) = recorded_device();
+        device.activate();
+        capture.end_at_rewind(one_file);
+        capture.arm();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-config-paused-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("record.take");
+        let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
+        let mut last = 0;
+        for (raw, events, at, playing) in steps {
+            let mut position = transport(at * block, 0);
+            if !playing {
+                position.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+            }
+            device.run_transport(raw, events, false, None, Some(position));
+            last = raw;
+        }
+        // Parked from here: the last release is sequenced and published, and
+        // the run ends.
+        device.finish_notes(last + 64, &[]);
+        writer.drain(&mut capture);
+        assert!(!writer.failed(), "{name}");
+        let take = harmonigraph_take::Take::read(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(take.passes, [1], "{name}: a pause is not a split");
+        assert!(take.incomplete.is_none(), "{name}: nothing was lost");
+        let soundtrack = take.audio_start.unwrap();
+        for &(key, count, released) in expected {
+            let notes = drawn(&take, key);
+            assert_eq!(notes.len(), count, "{name}: key {key}: {notes:?}");
+            assert!(
+                notes.iter().all(|&(start, end)| end.is_some() == released && start >= soundtrack),
+                "{name}: key {key} on the soundtrack from {soundtrack}: {notes:?}"
+            );
+        }
+        drop(writer);
+        drop(device);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// #1129 for every pass, not only the first: a note held across a loop wrap
 /// begins before the second pass does, so that pass holds nothing of it but
 /// its release unless the split opens it again.
