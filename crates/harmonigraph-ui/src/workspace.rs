@@ -710,15 +710,27 @@ fn section_ui(
             if response.on_hover_text(format!("Collapse {title}")).clicked() {
                 layout.folded[index] = true;
             }
-            let options: Vec<_> = section
+            // With a tape, the Analyzer's tabs hold its Tape mode too, beside
+            // the picture it is a mode of. Not a tab of its own: the mode is
+            // never saved, as the tape is not.
+            let tape = section == Section::Analyzer && viewer.state.runtime.tape.present;
+            let mut options: Vec<_> = section
                 .tabs()
                 .iter()
-                .map(|&choice| (choice, crate::panes::tab_title(&choice)))
+                .map(|&choice| ((choice, false), crate::panes::tab_title(&choice)))
                 .collect();
-            let mut selected = tab;
+            if tape {
+                let at = options.iter().position(|((choice, _), _)| *choice == Tab::Spectral);
+                options.insert(at.map_or(0, |at| at + 1), ((Tab::Spectral, true), "Tape"));
+            }
+            let current = (tab, tape && tab == Tab::Spectral && viewer.state.runtime.tape.showing);
+            let mut selected = current;
             crate::widgets::tab_strip(ui, "section tabs", &mut selected, &options);
-            if selected != tab {
-                layout.select(selected);
+            if selected != current {
+                layout.select(selected.0);
+                if tape {
+                    viewer.state.runtime.tape.showing = selected.1;
+                }
             }
         });
         top += rail;

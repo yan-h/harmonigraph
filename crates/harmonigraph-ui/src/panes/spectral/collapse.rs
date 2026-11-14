@@ -69,7 +69,43 @@ impl Regions {
         }
     }
 
+    /// The docked Analyzer: in Tape mode, the audition's controls along the
+    /// bottom, and with the far region open the tape's overview under them,
+    /// and the picture over the rest.
     pub fn draw(&mut self, ui: &mut egui::Ui, state: &mut PictureState, now: f64, frameless: bool) {
+        let full = ui.available_rect_before_wrap();
+        let (row, strip) = super::tape::rows(theme::ui_scale(ui.ctx()));
+        let view = &state.runtime.tape;
+        if !(view.present && view.showing) || full.height() <= 3.0 * row {
+            return self.draw_picture(ui, state, now, frameless);
+        }
+        // Only over a far region with depth to show the tape in, and the
+        // first to go on a short pane: the controls hold Stop.
+        let overview = super::tape::active(state, Navigation::Docked)
+            && !self.collapsed[1]
+            && gestures::spectrum_split(state, DOCKED_SURFACE) < 1.0
+            && full.height() > 3.0 * (row + strip);
+        let below = row + if overview { strip } else { 0.0 };
+        let (picture, bottom) = full.split_top_bottom_at_y(full.bottom() - below);
+        let (controls, strip) = bottom.split_top_bottom_at_y(bottom.top() + row);
+        // First, so a stretch moved on it is the one the picture draws.
+        if overview {
+            super::tape::overview(ui, strip, state, DOCKED_SURFACE);
+        }
+        super::tape::controls(ui, controls, state);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(picture), |ui| {
+            self.draw_picture(ui, state, now, frameless);
+        });
+        ui.allocate_rect(bottom, Sense::hover());
+    }
+
+    fn draw_picture(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut PictureState,
+        now: f64,
+        frameless: bool,
+    ) {
         let rect = ui.available_rect_before_wrap();
         let cfg = state.appearance.spectrum;
         let axes = Axes::new(rect, &cfg);

@@ -202,9 +202,10 @@ pub(crate) fn spectral_pane(
     // drag to the last widget registered over the pointer.
     //
     // Drags only, in Tape mode too, where a press let go of without travelling
-    // is the click that cues the tape: sensing clicks as well would hold every
-    // drag back until it had travelled far enough not to be one, and the
-    // picture would trail the hand by that much (see `tape::draw`).
+    // is the click that cues the tape: sensing clicks as well would hold the
+    // pitch and level drags back until they had travelled far enough not to
+    // be one, and the picture would trail the hand by that much (see
+    // `tape::draw`).
     let tape_mode = tape::active(state, navigation);
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
     if rect.width() < 10.0 || rect.height() < 10.0 {
@@ -262,13 +263,7 @@ pub(crate) fn spectral_pane(
     // frequency, so every octave gets equal room and every note draws at
     // its actual pitch. The displayed range is the Analyzer section's pitch
     // range, which is free to start anywhere — it is not snapped to C.
-    let min_midi = cfg.low_midi;
-    // Never trust the pair to be ordered. A zero or negative span divides by
-    // zero in PitchScale and paints NaN geometry, which egui panics on — and
-    // a panic here takes the plugin's editor down inside the host. The range
-    // bar can't produce one; a hand-edited state blob can.
-    let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
-    let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
+    let scale = PitchScale::of(&cfg);
     // Everything this pane sets text at, decided once from the range it just
     // settled on: the markings hold their size, the names follow the zoom.
     let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
@@ -697,11 +692,6 @@ pub(crate) fn spectral_pane(
     }
     if let Some(drag) = orientation_drag {
         drag.finish(&painter, rect, state);
-    }
-    // Over everything, so the switch is never under a picture.
-    // With no far region the switch still shows, to say what makes room.
-    if tape::editor(navigation) && state.runtime.tape.present && (show_history || split >= 1.0) {
-        tape::bar(ui, &axes, state, split, song.as_mut());
     }
     match song {
         Some(window) => tape::keep_window(ui, surface, window, &mut state.runtime.tape),
