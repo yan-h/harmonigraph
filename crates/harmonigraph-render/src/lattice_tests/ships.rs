@@ -104,9 +104,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         // wash under them, and emits nothing.
         let mut dark = scene.nodes[0];
         dark.glow.level = 0.0;
-        dark.glow.row = scene.glow_rows;
         dark.world_pos.x -= 0.9;
-        scene.glow_rows += 1;
         scene.nodes.push(dark);
         scene
     };
@@ -769,7 +767,7 @@ fn a_released_node_ships_for_its_light_alone() {
             node.glow.level = 0.0;
         }
         let node = &mut scene.nodes[0];
-        node.glow = harmonigraph_scene::GlowStep { incarnation: 1, level: 0.5, row: 0 };
+        node.glow = harmonigraph_scene::GlowStep { level: 0.5, light: None };
         if inked {
             node.presence_with_opacity = 1.0;
             node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
@@ -1009,7 +1007,6 @@ fn offscreen_halos_draw_only_where_their_footprint_reaches() {
         roamer.world_pos = glam::Vec3::new((centre_x - scale.0) / scale.1, 0.0, 0.0);
         roamer.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
         scene.nodes.push(roamer);
-        rows_per_node(&mut scene);
         scene
     };
     // The node's ink stops 41px out and its halo 81px, against a bound of 92:
@@ -1068,7 +1065,10 @@ fn a_frame_built_in_lent_vectors_is_the_frame_built_fresh() {
     assert!(reused.instances.capacity() >= left.0, "not built in the first frame's vectors");
     let bytes = |v: &[GpuInstance]| bytemuck::cast_slice::<_, u8>(v).to_vec();
     assert_eq!(bytes(&reused.instances), bytes(&fresh.instances));
-    assert_eq!(reused.glow_owners, fresh.glow_owners);
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&reused.lights),
+        bytemuck::cast_slice::<_, u8>(&fresh.lights)
+    );
     assert_eq!(reused.glyphs, fresh.glyphs);
     assert_eq!(reused.casters, fresh.casters);
     assert_eq!(reused.node_cells, fresh.node_cells);

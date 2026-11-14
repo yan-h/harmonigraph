@@ -597,7 +597,8 @@ pub(crate) struct Moving {
     /// A lattice node still moving after its voice was pruned
     /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
     /// departure's Fade-out delay, its stagger and the presence it holds for
-    /// them), or a node's Background glow still falling
+    /// them), or a node's Background glow still moving: its level falling, or
+    /// its colour still easing toward its reading
     /// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), which
     /// can outlast the slices by many seconds.
     releasing: bool,

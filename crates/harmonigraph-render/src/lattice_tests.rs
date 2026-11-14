@@ -8,6 +8,7 @@ mod contract;
 mod device;
 pub(super) mod fixtures;
 mod glow_colour;
+mod glow_light;
 mod glow_markers;
 mod glow_overlap;
 mod glow_reach;

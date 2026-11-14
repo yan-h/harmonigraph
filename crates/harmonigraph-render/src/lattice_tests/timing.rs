@@ -120,10 +120,9 @@ fn a_frame_of_audio_rings_costs_this_much() {
             let n = &mut scene.nodes[112];
             n.presence_with_opacity = 1.0;
             n.octaves.fill(1.0);
-            n.glow = harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 };
+            n.glow = harmonigraph_scene::GlowStep { level: 1.0, light: None };
         }
         scene.node_radius = 0.34;
-        scene.glow_rows = 1;
         scene.view.glow_reach = 0.8;
         scene.view.glow_strength = 1.5;
         time_a_frame_of_names(
@@ -186,11 +185,7 @@ fn atmosphere_costs_by_polyphony() {
                 None,
                 1.0,
             );
-            variant.glow_timing = Some(harmonigraph_scene::GlowTiming {
-                now: 1.0,
-                attack: view.glow_attack,
-                release: view.glow_release,
-            });
+            variant.glow_clock = Some(1.0);
             match case {
                 "off" => {
                     variant.view.atmosphere.texture_depth = 0.0;
@@ -368,8 +363,8 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         .then(|| std::sync::Arc::new(LatticeStats::default()));
     let mut preparation_samples = Vec::new();
     let timed = timer.time_frames(frames, |frame| {
-        if let Some(clock) = &mut scene.glow_timing {
-            clock.now = 1.0 + frame as f64 / 60.0;
+        if let Some(clock) = &mut scene.glow_clock {
+            *clock = 1.0 + frame as f64 / 60.0;
         }
         let labels = names(runs.clone());
         let callback_start = std::time::Instant::now();

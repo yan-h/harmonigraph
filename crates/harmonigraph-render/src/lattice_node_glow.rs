@@ -207,8 +207,8 @@ impl LatticeCallback {
 }
 
 /// Shared angular weights, keyed only by sanitized Color Blend. The strip
-/// resolution is a compile-time constant; camera, notes, time, target size,
-/// and row capacity do not affect this table or invalidate color history.
+/// resolution is a compile-time constant; camera, notes, time, target size and
+/// the strip's height do not affect this table.
 #[derive(Default)]
 pub(super) struct InkKernel {
     blend: Option<f32>,

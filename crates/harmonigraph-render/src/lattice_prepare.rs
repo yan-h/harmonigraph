@@ -120,10 +120,7 @@ impl CallbackTrait for LatticeCallback {
                 bloom: self.uniforms.composite.bloom_strength > 0.0,
                 glow: frame.glow,
                 shadow: frame.shadow_wanted,
-                // The strip's height is the row map's CAPACITY, which the
-                // light's own clock hands out and which has nothing to do with
-                // how many nodes this frame draws (`Scene::glow_rows`).
-                rows: self.uniforms.glow.row_capacity as u32,
+                rows: self.lights.len() as u32,
                 // At least one: an empty storage binding is a validation error,
                 // and a frame that packed nothing still binds the array for the
                 // pipeline's layout — one zeroed entry, which is a caster with
@@ -282,6 +279,7 @@ impl LatticeCallback {
                             },
                             glyph: &resources.compiled.glyph_layout,
                             strip: &resources.compiled.strip_layout,
+                            light: &resources.compiled.light_layout,
                             statistics: &resources.compiled.glow_statistics_layout,
                         },
                         |_| {},
@@ -325,40 +323,26 @@ impl LatticeCallback {
             );
         }
         pane.instance_count = self.instances.len() as u32;
-        if !self.instances.is_empty() {
-            // Only an encoded ink pass consumes its clock and row ownership.
-            // Layout callbacks discarded by egui never reach this point.
-            let encodes_ink = pane.offscreen.as_ref().is_some_and(|o| o.glow.is_some());
-            let mut mixes = None;
-            if encodes_ink {
-                let strip = pane.ink_history.as_mut().expect("glow target has pane history");
-                strip.parity ^= 1;
-                if let Some(timing) = self.glow_timing {
-                    mixes = Some(strip.history.encode(timing, &self.instances, &self.glow_owners));
-                } else {
-                    strip.history.clear();
-                }
-            }
-            if let Some(mixes) = mixes {
-                // Each instance with its history coefficient in place of the
-                // seed, and its light's breathing where it breathes, written
-                // straight into staging rather than into a patched copy of the
-                // frame. Only the ink pass reads the breathing, and a frame
-                // whose light breathes has a clock, so it always comes here.
-                let mixed =
-                    self.instances.iter().zip(mixes).enumerate().map(|(i, (&instance, &mix))| {
-                        let [level, row, _, breath] = instance.glow;
-                        let breath = match self.breathing_at.get(i) {
-                            Some(&at) if level > 0.0 => self.breathing.at(at, motion.breath),
-                            _ => breath,
-                        };
-                        GpuInstance { glow: [level, row, mix, breath], ..instance }
-                    });
-                let count = self.instances.len();
-                write_rows::<_, INSTANCE_BYTES>(queue, &pane.instance_buffer, count, mixed);
-            } else {
-                queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
-            }
+        if !self.breathing_at.is_empty() {
+            // Each instance with its light's breathing where it breathes,
+            // written straight into staging rather than into a patched copy of
+            // the frame.
+            let breathing =
+                self.instances.iter().zip(&self.breathing_at).map(|(&instance, &at)| {
+                    let [level, row, breath] = instance.glow;
+                    let breath =
+                        if level > 0.0 { self.breathing.at(at, motion.breath) } else { breath };
+                    GpuInstance { glow: [level, row, breath], ..instance }
+                });
+            let count = self.instances.len();
+            write_rows::<_, INSTANCE_BYTES>(queue, &pane.instance_buffer, count, breathing);
+        } else if !self.instances.is_empty() {
+            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
+        }
+        // The light table, beside the instances whose rows it holds. Only a
+        // pane drawing a glow target has a strip to read it into.
+        if let Some(strip) = pane.ink_strip.as_ref().filter(|_| !self.lights.is_empty()) {
+            queue.write_buffer(&strip.lights, 0, bytemuck::cast_slice(&self.lights));
         }
 
         if self.pluses.len() > pane.plus_capacity {
@@ -583,7 +567,9 @@ impl LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
-        let has_light = glow && self.instances.iter().any(|node| node.glow[0] > 0.0);
+        // Every lit instance has a row of the table, and only a frame whose
+        // glow draws fills one.
+        let has_light = !self.lights.is_empty();
         // Every caster's cell, packed for this frame (`shadow::pack_into`): the
         // Gaussian's one marker cross, one per node and one per name, each at
         // the resolution its own σ asks for. A caster whose group packs
@@ -698,27 +684,28 @@ impl LatticeCallback {
         // on screen. A lattice can be a frame of markers and labels with
         // every node culled, which is exactly that frame.
         if let Some(glow) = offscreen.glow.as_ref() {
-            let strip = pane.ink_history.as_ref().expect("glow target has pane history");
+            let strip = pane.ink_strip.as_ref().expect("a glow target has an ink strip");
             // What colour that light is, before any of it is laid down: the
-            // ink read round every node, then blurred (see [`InkStrip`]).
-            // Both are skipped with no instances to read — the light's own
-            // draws are too, so nothing samples what they would leave.
-            if pane.instance_count > 0 {
+            // light table read round every lit node, then blurred (see
+            // [`InkStrip`]). Both are skipped with nothing lit — the light's
+            // own draws are too, so nothing samples what they would leave.
+            //
+            // One quad each over the rows this frame lit, the viewport cut to
+            // them, which are the rows the table was uploaded to this same
+            // `prepare` and the only ones the light's draw reads.
+            let rows = self.lights.len() as u32;
+            debug_assert!(rows <= strip.rows, "{rows} lit nodes for a strip of {}", strip.rows);
+            let mut over_rows = |label, view, second: &wgpu::BindGroup, pipeline, width: u32| {
                 let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("lattice_ink_strip_pass"),
+                    label: Some(label),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: strip.writing(),
+                        view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
-                            // Cleared, though what the pass leaves behind
-                            // is not this frame's ink alone: every row a
-                            // node holds is written whole, and the rows in
-                            // between are ones no node has been handed. It
-                            // is what a row that has just been handed BACK
-                            // needs — the next node to take it seeds off
-                            // its own reading rather than off a stranger's
-                            // ink two frames old.
+                            // Every row the pass covers is written whole and
+                            // nothing reads the rest; a clear is free on a
+                            // tile-based GPU, where a load reads it all back.
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
                         },
@@ -728,36 +715,27 @@ impl LatticeCallback {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
+                pass.set_viewport(0.0, 0.0, width as f32, rows as f32, 0.0, 1.0);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
-                // The strip this same pass wrote last frame: what a node's
-                // light is carried FROM (see [`InkStrip`]).
-                pass.set_bind_group(1, strip.carried(), &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.set_pipeline(&compiled.shaders.ink_strip_pipeline);
-                pass.draw(0..4, 0..pane.instance_count);
-                drop(pass);
-
-                let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("lattice_ink_blur_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &strip.blurred_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_bind_group(0, &pane.bind_group, &[]);
-                pass.set_bind_group(1, strip.written(), &[]);
-                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.set_pipeline(&compiled.shaders.ink_blur_pipeline);
-                pass.draw(0..4, 0..pane.instance_count);
+                pass.set_bind_group(1, second, &[]);
+                pass.set_pipeline(pipeline);
+                pass.draw(0..4, 0..1);
+            };
+            if rows > 0 {
+                over_rows(
+                    "lattice_ink_strip_pass",
+                    &strip.raw_view,
+                    &strip.lights_bind_group,
+                    &compiled.shaders.ink_strip_pipeline,
+                    INK_STRIP_N,
+                );
+                over_rows(
+                    "lattice_ink_blur_pass",
+                    &strip.blurred_view,
+                    &strip.raw_bind_group,
+                    &compiled.shaders.ink_blur_pipeline,
+                    INK_STRIP_N + 1,
+                );
             }
 
             glow.draw(egui_encoder, compiled, pane, strip, has_lit_nodes);
