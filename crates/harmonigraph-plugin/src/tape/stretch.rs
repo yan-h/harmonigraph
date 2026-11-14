@@ -43,15 +43,18 @@ impl Stretched {
         let preroll = 3 * lead;
         let mut input = vec![0.0; preroll as usize * channels];
         let from = start + lead - preroll;
-        read(store, from, &mut input);
-        // Coverage that ends inside the look-ahead ends the cue there, and
-        // what lies past the gap is no part of it.
-        let mut ahead = vec![0.0; lead as usize * channels];
-        let covered = store.render(start, &mut ahead);
-        let end = covered.ended.then_some(start + covered.frames as i64);
-        if let Some(end) = end {
-            input[(end - from) as usize * channels..].fill(0.0);
+        // Only the unbroken coverage that holds the spot, silence around it:
+        // a recording on the far side of a gap is no part of this cue, and
+        // the stretcher's window would smear it into the first frames heard.
+        let mut first = store.holding(start).map_or(start, |chunk| chunk.start);
+        while first > from {
+            let Some(chunk) = store.holding(first - 1) else { break };
+            first = chunk.start;
         }
+        let first = first.max(from);
+        let covered = store.render(first, &mut input[(first - from) as usize * channels..]);
+        // Coverage that ends inside the look-ahead ends the cue there.
+        let end = covered.ended.then_some(first + covered.frames as i64);
         stretch.seek(&input, speed);
         Stretched {
             stretch,
@@ -103,21 +106,6 @@ impl Stretched {
         };
         out[..frames * ch].copy_from_slice(&self.output[skipped * ch..(skipped + frames) * ch]);
         Rendered { frames, ended }
-    }
-}
-
-/// Song frames `from..` into `out`, silent wherever nothing is recorded.
-fn read(store: &Store, from: i64, out: &mut [f32]) {
-    let ch = store.channels;
-    let end = from + (out.len() / ch) as i64;
-    let mut frame = from;
-    while frame < end {
-        let at = (frame - from) as usize * ch;
-        let rendered = store.render(frame, &mut out[at..]);
-        frame += rendered.frames as i64;
-        if rendered.ended {
-            frame = store.next_start(frame).map_or(end, |next| next.min(end));
-        }
     }
 }
 
@@ -192,22 +180,27 @@ mod tests {
     }
 
     /// Coverage that ends 20 ms after the spot, inside the stretcher's
-    /// look-ahead, ends the cue there; the recording past the gap is never
-    /// read into it.
+    /// look-ahead, ends the cue there, and coverage that starts at the spot
+    /// begins it from silence: neither neighbour across a gap is read in.
     #[test]
-    fn coverage_ending_inside_the_look_ahead_ends_the_cue_there() {
+    fn a_cue_hears_only_the_coverage_that_holds_its_spot() {
         let chunk = |start: f64, end: f64, pass, value: f32| {
             let (start, end) = ((start * RATE as f64) as i64, (end * RATE as f64) as i64);
             let stamp = Stamp { pass, when: std::time::Instant::now(), pass_start: start };
             let samples = vec![value; (end - start) as usize];
             Chunk { start, end, stamp, data_start: start, samples }
         };
+        let loudest = |heard: &[f32]| heard.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         let mut store = Store::new(RATE, 1);
         store.insert(chunk(0.0, 1.02, 1, 0.0));
         store.insert(chunk(1.03, 2.0, 2, 0.9));
-        let heard = heard(&store, 0.5);
-        assert!((heard.len() as f64 / f64::from(RATE) - 0.04).abs() < 1e-3, "{}", heard.len());
-        let loudest = heard.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        assert!(loudest < 1e-3, "the recording past the gap leaked in at {loudest}");
+        let cut = heard(&store, 0.5);
+        assert!((cut.len() as f64 / f64::from(RATE) - 0.04).abs() < 1e-3, "{}", cut.len());
+        assert!(loudest(&cut) < 1e-3, "the recording past the gap leaked in");
+
+        let mut store = Store::new(RATE, 1);
+        store.insert(chunk(0.0, 0.99, 1, 0.9));
+        store.insert(chunk(1.0, 2.0, 2, 0.0));
+        assert!(loudest(&heard(&store, 0.5)) < 1e-3, "the recording before the gap leaked in");
     }
 }

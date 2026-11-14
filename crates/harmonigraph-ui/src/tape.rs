@@ -116,10 +116,11 @@ pub struct Audition {
 }
 
 impl Audition {
-    /// The song seconds sounding at display-clock time `t`, had the audition
-    /// played on unbroken.
-    pub fn song_at(&self, t: f64) -> f64 {
-        self.song + (t - self.clock) * self.speed
+    /// The display-clock time song seconds `song` sounded at, or would have,
+    /// had the audition played on unbroken: what places a note played over
+    /// it at the spot it sounded over.
+    pub fn clock_at(&self, song: f64) -> f64 {
+        self.clock + (song - self.song) / self.speed
     }
 }
 

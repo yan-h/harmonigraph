@@ -451,7 +451,7 @@ fn a_pass_records_the_map_selection_where_it_changes() {
         worker.settle();
     }
     let slots: Vec<(i64, usize)> =
-        worker.passes()[&1].maps.iter().map(|(f, m)| (*f, m.slot)).collect();
+        worker.passes()[&1].drawn.iter().map(|(f, d)| (*f, d.map.slot)).collect();
     assert_eq!(slots, [(0, 2), (199, 3)]);
 }
 

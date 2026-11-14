@@ -346,11 +346,10 @@ fn notes(
     let recorded = RollSource { roll: &view.notes, time: song, lead: false, live_during: None };
     let mut sources = vec![recorded];
     if let Some(audition) = view.audition {
-        // The display clock at the window's near edge, had the audition
-        // played on: what puts a note played over it at the spot it sounded.
-        // A slowed audition took longer on that clock to cross the window.
-        let origin = audition.clock + (window.to - audition.song) / audition.speed;
-        let seconds = song.window / audition.speed;
+        // The display clock at the window's near edge, and how long that
+        // clock took to cross the window: longer for a slowed audition.
+        let origin = audition.clock_at(window.to);
+        let seconds = audition.clock_at(window.to) - audition.clock_at(window.from);
         sources.push(RollSource {
             roll: state.roll(),
             time: TimeAxis { origin, window: seconds, now: frame.now, ..song },
@@ -535,10 +534,13 @@ fn readout(view: &TapeView) -> String {
     }
     match (view.heard, view.position) {
         (Some(heard), _) => {
-            let speed = match view.speed {
-                Speed::Full => String::new(),
-                speed => format!(" at {}", speed.label()),
-            };
+            // The cue's own speed, which a new one reaches only once it cues
+            // again.
+            let sounding = view.audition.map_or(1.0, |audition| audition.speed);
+            let speed = Speed::ALL
+                .into_iter()
+                .find(|speed| speed.factor() == sounding && *speed != Speed::Full)
+                .map_or_else(String::new, |speed| format!(" at {}", speed.label()));
             format!("Playing {}{speed} · {}", place(view, heard), held(view, heard))
         }
         (None, Some(at)) => {
@@ -606,6 +608,10 @@ mod tests {
         let playing = readout(&view);
         assert!(playing.starts_with("Playing 0:12.5 · cold"), "{playing}");
         view.speed = Speed::Half;
+        let asked = readout(&view);
+        assert!(asked.starts_with("Playing 0:12.5 · cold"), "not yet cued again: {asked}");
+        let audition = crate::tape::Audition { clock: 0.0, song: 12.0, speed: 0.5, until: None };
+        view.audition = Some(audition);
         let slowed = readout(&view);
         assert!(slowed.starts_with("Playing 0:12.5 at 0.5× · cold"), "{slowed}");
         view.rolling = true;

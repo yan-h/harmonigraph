@@ -19,13 +19,12 @@ use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
 use crate::audio_ingress::{Block, TapePlay};
-use crate::lattice_maps::MapSelection;
 
-use super::notes::{Book, Mark, Player, NOTES};
+use super::notes::{Book, Drawn, Mark, Player, NOTES};
 use super::spectrum::{Spectrum, STEP_BUDGET};
 use super::store::{Chunk, Rendered, Stamp, Store};
 use super::stretch::Stretched;
-use super::{Event, Piece, Shared, STOP};
+use super::{Event, Piece, Shared, NO_REQUEST, STOP};
 
 /// Recent rolling blocks kept to place notes, which can arrive ahead of the
 /// audio they sound in: as many as one drain of the ring can bring, so a step
@@ -134,9 +133,8 @@ pub(crate) struct Worker {
     opened: VecDeque<(u64, f64, i64)>,
     /// The song frame the last rolling block reached, for a tuning change.
     last_song: Option<i64>,
-    /// The tuning axes last sampled, and the map selection.
-    tuning: Option<Tuning>,
-    map: Option<MapSelection>,
+    /// What the display drew with when last sampled.
+    drawn: Option<Drawn>,
     notes_dropped_reported: bool,
     book: Book,
     player: Player,
@@ -194,8 +192,7 @@ impl Worker {
             opening: VecDeque::new(),
             opened: VecDeque::with_capacity(OPENED),
             last_song: None,
-            tuning: None,
-            map: None,
+            drawn: None,
             notes_dropped_reported: false,
             book: Book::default(),
             player: Player::default(),
@@ -323,14 +320,9 @@ impl Worker {
 
     /// Open pass `pass` with the voices held now, and keep it a while for a
     /// mark that turns out to be older than its start.
-    fn open(
-        &mut self,
-        (pass, start, frame): (u64, f64, i64),
-        tuning: Option<Tuning>,
-        map: MapSelection,
-    ) {
-        self.book.open(pass, frame, tuning, Some(map));
-        self.map = Some(map);
+    fn open(&mut self, (pass, start, frame): (u64, f64, i64), drawn: Drawn) {
+        self.book.open(pass, frame, drawn);
+        self.drawn = Some(drawn);
         if self.opened.len() == OPENED {
             self.opened.pop_front();
         }
@@ -341,8 +333,9 @@ impl Worker {
     /// the song frames they sound at, open the passes that started with the
     /// voices held then, and record the tuning where it changed.
     pub(crate) fn settle(&mut self) {
-        let tuning = self.current_tuning();
-        let map = crate::lattice_maps::selection(&self.params);
+        // Until the configuration is published, the axes last seen.
+        let tuning = self.current_tuning().or(self.drawn.and_then(|d| d.tuning));
+        let drawn = Drawn { tuning, map: crate::lattice_maps::selection(&self.params) };
         // A full inbox is one the drain stopped recording into.
         let mut dropped = self.inbox.len() >= NOTES;
         self.pending.extend(self.inbox.drain(..));
@@ -366,7 +359,7 @@ impl Worker {
             }
             while self.opening.front().is_some_and(|&(_, start, _)| start <= time) {
                 let opening = self.opening.pop_front().expect("a pass to open");
-                self.open(opening, tuning.or(self.tuning), map);
+                self.open(opening, drawn);
             }
             mark.apply(&mut self.book.held);
             // Older than a pass that has already opened: that pass opened
@@ -403,24 +396,15 @@ impl Worker {
         }
         self.pending = waiting;
         while let Some(opening) = self.opening.pop_front() {
-            self.open(opening, tuning.or(self.tuning), map);
+            self.open(opening, drawn);
         }
-        let current = self.last_song.zip(self.pass).map(|(frame, pass)| (frame, pass.id));
-        if tuning.is_some() && self.tuning != tuning {
-            if let (Some((frame, pass)), Some(axes)) = (current, tuning) {
-                if let Some(notes) = self.book.passes.get_mut(&pass) {
-                    notes.tunings.push((frame, axes));
+        if self.drawn != Some(drawn) {
+            if let (Some(frame), Some(pass)) = (self.last_song, self.pass) {
+                if let Some(notes) = self.book.passes.get_mut(&pass.id) {
+                    notes.drawn.push((frame, drawn));
                 }
             }
-            self.tuning = tuning;
-        }
-        if self.map != Some(map) {
-            if let Some((frame, pass)) = current {
-                if let Some(notes) = self.book.passes.get_mut(&pass) {
-                    notes.maps.push((frame, map));
-                }
-            }
-            self.map = Some(map);
+            self.drawn = Some(drawn);
         }
     }
 
@@ -451,9 +435,10 @@ impl Worker {
             }
         }
         runtime.tape.audition = self.player.audition;
-        runtime.tape.tuning = self.player.tuning;
+        let drawn = self.player.drawn;
+        runtime.tape.tuning = drawn.and_then(|drawn| drawn.tuning);
         runtime.tape.map =
-            self.player.map.map(|map| crate::lattice_maps::recorded(&self.params, map));
+            drawn.map(|drawn| crate::lattice_maps::recorded(&self.params, drawn.map));
     }
 
     /// Commit the chunk being recorded, and set its meter over the stretch it
@@ -514,14 +499,17 @@ impl Worker {
         } else if view.speed != self.speed {
             // A speed is fixed for a cue, so one active now starts again at the
             // new speed: from the spot heard, or from its own spot while it still
-            // waits for audio. Not over a click, which cues at the new speed
-            // anyway.
+            // waits for audio. Never over a request the audio thread has not
+            // taken yet: a click there cues at the new speed anyway, and a Stop
+            // is a Stop.
             let heard = f64::from_bits(self.shared.heard.load(Ordering::Relaxed));
             let (serial, position) = self.cue();
             let at =
                 if heard.is_nan() { (serial & 1 == 1).then_some(position) } else { Some(heard) };
-            if let Some(at) = at {
-                self.request(TapeRequest::Cue(at));
+            if let Some(at) = at.filter(|at| at.is_finite()) {
+                let request = &self.shared.request;
+                let (taken, ordering) = (Ordering::AcqRel, Ordering::Relaxed);
+                let _ = request.compare_exchange(NO_REQUEST, at.to_bits(), taken, ordering);
             }
         }
         self.speed = view.speed;
