@@ -199,6 +199,23 @@ impl Spec {
         }
     }
 
+    /// A frame draws the editor: a hold ends, and the save answers live.
+    /// The first such frame since the state was fresh also leaves the live
+    /// settings as the fallback, so a save that cannot take the lock never
+    /// answers `""` once a save that can would not.
+    fn drawn(&mut self, edit: bool) {
+        let first = !self.touched;
+        self.hold = None;
+        self.touched = true;
+        if edit {
+            self.live.edits += 1;
+            self.history += 1;
+        }
+        if first {
+            self.fallback = self.answer();
+        }
+    }
+
     /// A new restore of `kind`, and its id.
     fn restore(&mut self, kind: Kind) -> u8 {
         self.kinds.push(kind);
@@ -315,12 +332,15 @@ impl Real {
         self.ui_state.save(Duration::ZERO).to_string()
     }
 
+    /// A frame that draws the editor, through the inbox as the plugin's are.
     fn frame(&self, edit: bool) {
         let mut shared = self.lock.lock();
-        mark_drawn(&mut shared.ui);
-        if edit {
-            edit_look(&mut shared.ui, false);
-        }
+        self.lock.inbox().frame(&mut shared.ui, |ui| {
+            mark_drawn(ui);
+            if edit {
+                edit_look(ui, false);
+            }
+        });
     }
 }
 
@@ -443,12 +463,7 @@ impl Run<'_> {
             }
             Op::Frame | Op::EditFrame => {
                 spec.prelude();
-                spec.hold = None;
-                spec.touched = true;
-                if op == Op::EditFrame {
-                    spec.live.edits += 1;
-                    spec.history += 1;
-                }
+                spec.drawn(op == Op::EditFrame);
                 real.frame(op == Op::EditFrame);
                 self.check_live(spec, real, trace, "frame");
             }
@@ -488,14 +503,14 @@ impl Run<'_> {
                 // stood, and the frame then draws and edits.
                 spec.prelude();
                 let want = spec.fallback;
-                spec.hold = None;
-                spec.touched = true;
-                spec.live.edits += 1;
-                spec.history += 1;
+                spec.drawn(true);
                 let mut shared = real.lock.lock();
-                let got = real.save_refused_the_lock();
-                mark_drawn(&mut shared.ui);
-                edit_look(&mut shared.ui, false);
+                let got = real.lock.inbox().frame(&mut shared.ui, |ui| {
+                    mark_drawn(ui);
+                    let got = real.save_refused_the_lock();
+                    edit_look(ui, false);
+                    got
+                });
                 drop(shared);
                 if !self.stores(&got, want, spec) {
                     self.note(

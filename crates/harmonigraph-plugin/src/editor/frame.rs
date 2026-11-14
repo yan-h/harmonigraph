@@ -120,15 +120,19 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
-    let ask = harmonigraph_ui::shell::Frame {
-        ui,
-        state: &mut shared.ui,
-        params: &backend,
-        now,
-        build_tag: crate::BUILD_TAG,
-        window_size: egui::vec2(window_width as f32, window_height as f32),
-    }
-    .draw();
+    // Through the inbox, which keeps the fallback a re-entered save answers
+    // with in step with the first frame to draw the editor.
+    let ask = state.shared.inbox().frame(&mut shared.ui, |drawn| {
+        harmonigraph_ui::shell::Frame {
+            ui,
+            state: drawn,
+            params: &backend,
+            now,
+            build_tag: crate::BUILD_TAG,
+            window_size: egui::vec2(window_width as f32, window_height as f32),
+        }
+        .draw()
+    });
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
