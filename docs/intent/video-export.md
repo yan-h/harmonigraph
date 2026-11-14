@@ -42,4 +42,4 @@
 
 Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
 
-- Takes keep their pass routing on the audio thread for now, rather than recording on the display's clock and choosing passes at read time (#1739 F3′). Reshaped, it comes out about even in lines; the routing fix chain ended on 2026-09-27, and Tape has not been tried in Bitwig. Reopen if a take fails on a fixed capacity (`SEGMENTS`, `RECORD_PASSES`) or Tape's note join shows losses in use. Delegated, declined for now. #1739
+- Takes are recorded on the display's clock and the offline reader chooses passes and song time (take v7; earlier passes come out through `--pass N` rather than separate files): the reason takes were stamped in song time, lining up with a separate audio bounce, is gone (#903, #972, #1196, #1342). To `propose-rework` as F3′'s take half; the Tape half waits until Tape has been used in Bitwig. First declined on delegation as quiet; reopened after a Fable review and answered by Yan. #1739 F3′
