@@ -318,36 +318,181 @@ fn a_restated_voice_draws_from_the_run_its_onset_was_played_in() {
     assert!((start(62) - resumed).abs() < 1e-9, "struck in the pause: {}", start(62));
 }
 
-/// A voice struck in a pause and held through the next one is one note: each
-/// resume restates it from the same place, the first run after its onset,
-/// so the second restatement continues what the first started.
+/// Where a held voice was struck, relative to the chosen pass's runs.
+#[derive(Clone, Copy, Debug)]
+enum Strike {
+    /// In the pass a loop wrapped from.
+    PreviousPass,
+    /// Armed, before the pass's first run.
+    BeforeArm,
+    /// Early in run `k`, sounding inside it.
+    Early(usize),
+    /// Late in run `k`, sounding after its `RunEnd`.
+    Late(usize),
+    /// In the pause after run `k`.
+    Pause(usize),
+}
+
+/// What became of the attack of a voice struck inside a run.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Attack {
+    Kept,
+    Lost,
+    /// Sounding below what the run before left sounding, as a row whose delay
+    /// shrank plays it, so the floor lifts it.
+    Lifted,
+}
+
+/// Every placement of one held voice across one to four runs reads, draws it
+/// as exactly one note, and warns exactly when something was lost. The
+/// converse: two strikes of one key, the release between them lost, stay two.
 #[test]
-fn a_voice_held_through_two_pauses_is_one_note() {
-    let second = 2.0 + 128.0 / RATE;
+fn a_held_voice_is_one_note_wherever_it_was_struck() {
+    const KEY: u8 = 62;
+    let start = |i: usize| 512 + 256 * (i as i64 - 1);
+    let song = |i: usize| 2.0 + 128.0 * (i - 1) as f64 / RATE;
+    let (mut cases, mut lifted, mut raised) = (0, 0, 0);
+    for runs in 1..=4 {
+        let mut strikes = vec![Strike::PreviousPass, Strike::BeforeArm];
+        for k in 1..=runs {
+            strikes.extend([Strike::Early(k), Strike::Late(k)]);
+            if k < runs {
+                strikes.push(Strike::Pause(k));
+            }
+        }
+        for strike in strikes {
+            let (input, k) = match strike {
+                Strike::PreviousPass => (50, None),
+                Strike::BeforeArm => (300, None),
+                Strike::Early(k) => (start(k) + 10, Some(k)),
+                Strike::Late(k) => (start(k) + 100, Some(k)),
+                Strike::Pause(k) => (start(k) + 168, None),
+            };
+            // Only an attack in a run of the pass can be lost or lifted; a lost
+            // one draws only if a later run restates it, and only an early one
+            // after another run sounds below what that run left sounding.
+            let mut attacks = vec![Attack::Kept];
+            if let Some(k) = k {
+                if k < runs {
+                    attacks.push(Attack::Lost);
+                }
+                if matches!(strike, Strike::Early(_)) && k > 1 {
+                    attacks.push(Attack::Lifted);
+                }
+            }
+            for attack in attacks {
+                cases += 1;
+                let delay = if attack == Attack::Lifted { 2 } else { DELAY };
+                let sequence = std::cell::Cell::new(0);
+                let next = || {
+                    sequence.set(sequence.get() + 1);
+                    sequence.get()
+                };
+                let mut records = vec![run(1, 0, 0, 1.0)];
+                let played = |records: &mut Vec<Record>, sequence: u64| {
+                    if attack == Attack::Lost {
+                        records.push(gap(sequence, at(0, input), at(0, input)));
+                    } else {
+                        records.push(sounding(sequence, KEY, true, 0, input, delay));
+                    }
+                };
+                if matches!(strike, Strike::PreviousPass) {
+                    played(&mut records, next());
+                }
+                records.push(end(0, 128));
+                if matches!(strike, Strike::BeforeArm) {
+                    played(&mut records, next());
+                }
+                for i in 1..=runs {
+                    let s = start(i);
+                    records.push(run(2, 0, s, song(i)));
+                    let held: Vec<_> = (input + delay <= s)
+                        .then(|| struck_sounding(KEY, input, delay))
+                        .into_iter()
+                        .collect();
+                    records.push(snapshot(i as u64, sequence.get(), &held, s));
+                    // A tap on a row whose delay shrank sounds soon after the
+                    // snapshot, below a voice it restates that sounds later;
+                    // the floor lifts it to that voice and warns of nothing.
+                    records.push(sounding(next(), 72, true, 0, s + 10, 2));
+                    records.push(sounding(next(), 72, false, 0, s + 20, 2));
+                    if attack == Attack::Lifted && k == Some(i + 1) {
+                        // A release played at the end of this run sounds after
+                        // the next one starts, past the lifted attack.
+                        records.push(delta(next(), 70, true, 0, s));
+                        records.push(delta(next(), 70, false, 0, s + 124));
+                    }
+                    if k == Some(i) {
+                        played(&mut records, next());
+                    }
+                    records.push(end(0, s + 128));
+                    if matches!(strike, Strike::Pause(p) if p == i) {
+                        played(&mut records, next());
+                    }
+                }
+                let take = read(&records, Some(2))
+                    .unwrap_or_else(|e| panic!("{runs} runs, {strike:?}, {attack:?}: {e}"));
+                let notes = notes_of(&take, KEY);
+                assert_eq!(notes.len(), 1, "{runs} runs, {strike:?}, {attack:?}: {notes:?}");
+                assert_eq!(
+                    take.incomplete.is_some(),
+                    attack == Attack::Lost,
+                    "{runs} runs, {strike:?}, {attack:?}: {:?}",
+                    take.incomplete
+                );
+                let k = k.unwrap_or(0);
+                let unlifted = song(k.max(1)) + (input + delay - start(k.max(1))) as f64 / RATE;
+                lifted += usize::from(drawn(&take).iter().any(|&(key, on, t)| {
+                    key == KEY && on && attack == Attack::Lifted && t > unlifted + 1e-9
+                }));
+                raised += take
+                    .events
+                    .iter()
+                    .filter(|e| match e {
+                        CanonicalRecord::Baseline(b) => b
+                            .voices
+                            .iter()
+                            .any(|v| v.actual_onset == b.t && b.t > song(b.id as usize) + 1e-9),
+                        _ => false,
+                    })
+                    .count();
+            }
+        }
+    }
+    assert!(lifted > 0 && raised > 0, "{cases} cases, {lifted} lifted, {raised} raised");
+
+    // Two strikes of one key, each its own lifetime, the release between them
+    // and the second attack lost: the resume restates the second, which is
+    // not the first even though the first was never seen to end.
+    let with_lifetime = |mut record: Record, lifetime: u64| {
+        if let Record::Canonical(CanonicalRecord::Delta(d)) = &mut record {
+            d.lifetime = lifetime;
+        }
+        record
+    };
+    let second = VoiceBaseline { lifetime: 2, ..struck(KEY, 60) };
     let take = read(
         &[
             run(1, 0, 0, 2.0),
+            with_lifetime(delta(1, KEY, true, 0, 10), 1),
+            gap(2, at(0, 40), at(0, 60)),
             end(0, 128),
-            run(1, 0, 256, second),
-            snapshot(1, 0, &[struck(62, 160)], 256),
-            end(0, 384),
-            run(1, 0, 512, 2.0 + 256.0 / RATE),
-            snapshot(2, 0, &[struck(62, 160)], 512),
+            run(1, 0, 256, 2.0 + 128.0 / RATE),
+            snapshot(1, 3, &[second], 256),
         ],
         None,
     )
     .unwrap();
-    let notes = notes_of(&take, 62);
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!((notes[0].0 - second).abs() < 1e-9, "{notes:?}");
+    assert_eq!(notes_of(&take, KEY).len(), 2, "{:?}", notes_of(&take, KEY));
+    assert!(take.incomplete.is_some());
 }
 
 /// A voice played just before a run ends sounds after it, so the resume's
 /// snapshot, which restates it, is earlier in the song than its onset. With
-/// the attack lost, nothing lifts that frame: the voice draws from the frame,
-/// and the gap marks the pass.
+/// the attack lost, nothing else lifts that frame: it lifts to the voice,
+/// which draws from where it sounded, and the gap marks the pass.
 #[test]
-fn a_restated_voice_starts_no_later_than_its_frame() {
+fn a_restated_voice_sounding_past_its_frame_lifts_the_frame() {
     let resumed = 2.0 + 128.0 / RATE;
     let take = read(
         &[
@@ -363,7 +508,13 @@ fn a_restated_voice_starts_no_later_than_its_frame() {
     assert!(take.incomplete.is_some());
     let notes = notes_of(&take, 62);
     assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!((notes[0].0 - resumed).abs() < 1e-9, "{notes:?}");
+    let sounded = 2.0 + 164.0 / RATE;
+    assert!((notes[0].0 - sounded).abs() < 1e-9, "{notes:?}");
+    let frame = take.events.iter().find_map(|e| match e {
+        CanonicalRecord::Baseline(b) => Some(b.t),
+        _ => None,
+    });
+    assert!(frame.is_some_and(|t| (t - sounded).abs() < 1e-9), "{frame:?}");
 }
 
 /// A record that would need more lift than its maximum's own lateness is a

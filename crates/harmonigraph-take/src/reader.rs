@@ -26,12 +26,6 @@ impl Run {
     fn offset(&self) -> f64 {
         self.song - self.presentation
     }
-    /// The run's first sample in song time, rounded as translating its own
-    /// opening snapshot rounds it, so a voice drawn from here is not a hair
-    /// later than that snapshot's frame.
-    fn start_song(&self) -> f64 {
-        self.presentation + self.offset()
-    }
     fn holds(&self, at: StampRecord) -> bool {
         at.clock() == self.start.clock()
             && self.start.input <= at.input
@@ -203,7 +197,7 @@ pub(crate) fn assemble(
                 let Some(run) = holding(&runs, chosen, at) else {
                     continue;
                 };
-                let lateness = record.time() - run.presentation(at.input, rate);
+                let mut lateness = record.time() - run.presentation(at.input, rate);
                 let (source, time) = match &mut record {
                     CanonicalRecord::Delta(d) => {
                         d.event.t += run.offset();
@@ -235,8 +229,21 @@ pub(crate) fn assemble(
                             voice.actual_onset += from.offset();
                             voice.input_onset += from.offset();
                             if holder.is_none() {
-                                voice.actual_onset = voice.actual_onset.max(from.start_song());
-                                voice.input_onset = voice.input_onset.max(from.start_song());
+                                voice.actual_onset = voice.actual_onset.max(from.song);
+                                voice.input_onset = voice.input_onset.max(from.song);
+                            }
+                            if let Some(assignment) = &mut voice.assignment {
+                                assignment.t = voice.actual_onset;
+                            }
+                            // A frame saying a voice sounds is no earlier than
+                            // its onset, which a voice played late in the run
+                            // before sounds past. Its attack lifts the frame
+                            // there through the floor; when that attack was
+                            // lost, the voice does. The lift counts as lateness,
+                            // so the floor still bounds what sounds below it.
+                            if voice.actual_onset > b.t {
+                                lateness += voice.actual_onset - b.t;
+                                b.t = voice.actual_onset;
                             }
                         }
                         (b.source, &mut b.t)
@@ -248,18 +255,6 @@ pub(crate) fn assemble(
                         reason: GapReasonRecord::InvalidRecord,
                         ..IncompleteRecord::default()
                     });
-                }
-                // No voice starts after the frame that says it is sounding, even when
-                // the attack that would have lifted the frame was lost. The
-                // assignment is at the onset, wherever the onset moved.
-                if let CanonicalRecord::Baseline(b) = &mut record {
-                    for voice in &mut b.voices {
-                        voice.actual_onset = voice.actual_onset.min(b.t);
-                        voice.input_onset = voice.input_onset.min(b.t);
-                        if let Some(assignment) = &mut voice.assignment {
-                            assignment.t = voice.actual_onset;
-                        }
-                    }
                 }
                 events.push((record, line));
             }
