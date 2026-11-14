@@ -62,6 +62,9 @@ pub(crate) fn start_graphics(
         None => {
             let egui_baseview::WgpuSetup::CreateNew(create) = &config.wgpu_options.wgpu_setup
             else {
+                eprintln!(
+                    "Harmonigraph: no graphics head start; the editor's setup creates no device"
+                );
                 return;
             };
             let instance =
@@ -71,13 +74,20 @@ pub(crate) fn start_graphics(
                 compatible_surface: None,
                 force_fallback_adapter: false,
             };
-            let Ok(adapter) = pollster::block_on(instance.request_adapter(&options)) else {
-                return;
+            let adapter = match pollster::block_on(instance.request_adapter(&options)) {
+                Ok(adapter) => adapter,
+                Err(error) => {
+                    eprintln!("Harmonigraph: no graphics head start; no adapter: {error}");
+                    return;
+                }
             };
             let descriptor = (create.device_descriptor)(&adapter);
-            let Ok((device, queue)) = pollster::block_on(adapter.request_device(&descriptor))
-            else {
-                return;
+            let (device, queue) = match pollster::block_on(adapter.request_device(&descriptor)) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    eprintln!("Harmonigraph: no graphics head start; no device: {error}");
+                    return;
+                }
             };
             let setup = egui_wgpu::WgpuSetupExisting { instance, adapter, device, queue };
             context.retain(setup.clone());
