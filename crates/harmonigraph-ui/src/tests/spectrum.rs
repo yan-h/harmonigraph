@@ -757,8 +757,8 @@ fn the_guard_drops_a_column_at_or_just_before_the_newest() {
 /// again, counted, and so does a correct column after one dated an hour
 /// ahead, which would otherwise have every correct column dropped for an
 /// hour. A reset is not a Clear: the rest of the hand-over it happened in
-/// still joins the history it started, where a Clear between two chunks of
-/// a hand-over keeps the second out.
+/// still joins the history it started, where a Clear between two
+/// hand-overs keeps the second out.
 #[test]
 fn the_guard_resets_on_a_long_step_back_and_keeps_the_rest_of_the_batch() {
     let cfg = SpectrumConfig::default();
@@ -780,7 +780,7 @@ fn the_guard_resets_on_a_long_step_back_and_keeps_the_rest_of_the_batch() {
     assert_eq!(spectrum.newest_column(), Some(101.016), "the batch after the reset was lost");
     assert_eq!(spectrum.pyramid().open_count(crate::spectrogram::LEVELS - 1), 3);
 
-    // A Clear between two chunks of one hand-over.
+    // A Clear between two hand-overs of audio taken before it.
     spectrum.give(clears, [delivered(101.024, 1.0)], &cfg);
     spectrum.clear_history();
     spectrum.give(clears, [delivered(101.032, 1.0)], &cfg);
@@ -822,8 +822,8 @@ fn a_crash_in_the_fold_resets_the_history_and_one_outside_it_does_not() {
 
 /// The costs the slab pyramid adds, for the numbers #1758 quotes: a column
 /// folded into all sixteen levels, a silent one on the fast path, and the
-/// longest hold of the editor lock a mono catch-up takes, 371 columns given
-/// in chunks of 64. Printed, not asserted; run in release with `--ignored
+/// hold of the editor lock a mono catch-up takes, 371 columns given at
+/// once. Printed, not asserted; run in release with `--ignored
 /// --nocapture`.
 #[test]
 #[ignore]
@@ -846,7 +846,7 @@ fn the_folds_timings() {
         let mut pyramid = crate::spectrogram::SlabPyramid::default();
         let start = Instant::now();
         for (k, power) in columns.iter().enumerate() {
-            pyramid.fold(90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL, power);
+            pyramid.push(90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL, power);
         }
         start.elapsed().as_secs_f64() / columns.len() as f64 * 1e6
     };
@@ -857,23 +857,17 @@ fn the_folds_timings() {
 
     let mut spectrum = AudioSpectrum::default();
     let clears = spectrum.clears();
-    let mut worst = 0.0f64;
-    let catch_up: Vec<_> = (0..371).map(|_| power()).collect();
-    for (chunk, powers) in catch_up.chunks(64).enumerate() {
-        let deliveries: Vec<_> = powers
-            .iter()
-            .enumerate()
-            .map(|(k, power)| {
-                Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
-                    time: 90.0 + (chunk * 64 + k) as f64 * AudioSpectrum::FFT_INTERVAL,
-                    power: *power,
-                    step: AudioSpectrum::FFT_INTERVAL,
-                }))
-            })
-            .collect();
-        let start = Instant::now();
-        spectrum.give(clears, deliveries, &cfg);
-        worst = worst.max(start.elapsed().as_secs_f64() * 1e3);
-    }
-    println!("the longest hold of a 371-column catch-up in chunks of 64: {worst:.3} ms");
+    let deliveries: Vec<_> = (0..371)
+        .map(|k| {
+            Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
+                time: 90.0 + k as f64 * AudioSpectrum::FFT_INTERVAL,
+                power: power(),
+                step: AudioSpectrum::FFT_INTERVAL,
+            }))
+        })
+        .collect();
+    let start = Instant::now();
+    spectrum.give(clears, deliveries, &cfg);
+    let hold = start.elapsed().as_secs_f64() * 1e3;
+    println!("the hold of a 371-column catch-up given at once: {hold:.3} ms");
 }

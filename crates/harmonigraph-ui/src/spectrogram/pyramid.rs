@@ -132,22 +132,19 @@ impl Level {
 
     /// Fold one sanitized column, `zero` if every bucket of it is +0 or -0.
     fn fold(&mut self, time: f64, power: &SpectrumBuckets, zero: bool, silence: &SpectrogramSlab) {
+        #[cfg(test)]
+        if FAIL_AT_LEVEL.get().is_some_and(|level| width(level) == self.width) {
+            panic!("a fault injected into the {} s level's fold", self.width);
+        }
         let key = (time / self.width).floor() as i64;
         match self.newest_key() {
-            // The guard admits only newer columns, so a key is never behind
-            // the open slab's.
+            // [`SlabPyramid::push`] folds only a column newer than the
+            // newest, so a key is never behind the open slab's.
             Some(open) if key <= open => {}
             Some(open) => {
                 self.finish();
                 let empty = key - open - 1;
-                let mut start = (open + 1).max(key - self.keep as i64 + 1);
-                if (key - open) as f64 * self.width > crate::AudioSpectrum::HISTORY_MAX_SECONDS {
-                    // A gap longer than the history reaches starts it again,
-                    // as a fresh history: nothing before it is drawn, and
-                    // the strip waits for a second slab as it does at
-                    // startup, rather than drawing ten minutes of silence.
-                    start = key;
-                }
+                let start = (open + 1).max(key - self.keep as i64 + 1);
                 if start > open + 1 {
                     // Everything held is older than the ring keeps.
                     self.slabs.clear();
@@ -219,8 +216,10 @@ impl Level {
     }
 }
 
-/// The run a surface draws: `len` slabs from `first_key` to the newest.
+/// The run a surface draws: `len` slabs from `first_key` to the newest, of
+/// the pyramid's `generation`.
 pub(crate) struct Run<'a> {
+    pub(crate) generation: u32,
     pub(crate) first_key: i64,
     pub(crate) slabs: std::collections::vec_deque::Iter<'a, SpectrogramSlab>,
 }
@@ -236,6 +235,12 @@ pub(crate) struct SlabPyramid {
     levels: Vec<Level>,
     /// The newest column folded, negative infinity while empty.
     newest: f64,
+    /// How many times the pyramid has been emptied — a Clear, the guard's
+    /// reset or a crash in the fold — and so which history a slab belongs
+    /// to: what the heatmap's colour memory and a surface's held run are
+    /// keyed on, since the newest slab's allocation does not tell two
+    /// histories apart when it is the shared silent slab.
+    generation: u32,
     /// The one silent slab every gap and every silent open slab shares. The
     /// pyramid's own handle keeps its count of owners at two or more, so a
     /// slab that has to change is always copied off it.
@@ -250,6 +255,7 @@ impl Default for SlabPyramid {
         SlabPyramid {
             levels: (0..LEVELS).map(Level::new).collect(),
             newest: f64::NEG_INFINITY,
+            generation: 0,
             silence: SpectrogramSlab::from([0; SPECTRUM_BINS]),
             scratch: Box::new([0.0; SPECTRUM_BINS]),
         }
@@ -270,39 +276,44 @@ impl SlabPyramid {
         self.newest.is_finite().then_some(self.newest)
     }
 
-    /// The newest column folded, negative infinity while empty: what
-    /// [`admit`] weighs a column against.
-    pub(crate) fn newest_or_never(&self) -> f64 {
-        self.newest
+    /// Which emptying of the pyramid this is: see the field.
+    pub(crate) fn generation(&self) -> u32 {
+        self.generation
     }
 
-    /// Fold a column the guard admitted into every level. Its power is
-    /// sanitized first: a non-finite bucket folds as 0, and a negative one as
-    /// 0 too, as the curve takes them.
-    pub(crate) fn fold(&mut self, time: f64, power: &SpectrumBuckets) {
+    /// The pyramid's one entry: the guard's verdict on a column dated `time`
+    /// ([`admit`]), and unless it drops the column, the column folded into
+    /// every level — after emptying them, on a reset. The caller counts the
+    /// verdict.
+    ///
+    /// Its power is sanitized first: a non-finite bucket folds as 0, and a
+    /// negative one as 0 too, as the curve takes them.
+    pub(crate) fn push(&mut self, time: f64, power: &SpectrumBuckets) -> Admit {
+        let verdict = admit(self.newest, time);
+        match verdict {
+            Admit::Drop => return verdict,
+            Admit::Reset => self.clear(),
+            Admit::Fold => {}
+        }
         let mut zero = true;
         for (out, &p) in self.scratch.iter_mut().zip(power) {
             *out = if p.is_finite() { p.max(0.0) } else { 0.0 };
             zero &= *out == 0.0;
         }
         self.newest = time;
-        for (n, level) in self.levels.iter_mut().enumerate() {
-            #[cfg(test)]
-            if FAIL_AT_LEVEL.get() == Some(n) {
-                panic!("a fault injected into level {n}'s fold");
-            }
-            #[cfg(not(test))]
-            let _ = n;
+        for level in &mut self.levels {
             level.fold(time, &self.scratch, zero, &self.silence);
         }
+        verdict
     }
 
-    /// Empty every level.
+    /// Empty every level, and move the generation on.
     pub(crate) fn clear(&mut self) {
         for level in &mut self.levels {
             level.clear();
         }
         self.newest = f64::NEG_INFINITY;
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// The run a surface drawing `level` reads for a window whose far edge is
@@ -324,7 +335,7 @@ impl SlabPyramid {
             return None;
         }
         let at = (first - level.first_key) as usize;
-        Some(Run { first_key: first, slabs: level.slabs.range(at..) })
+        Some(Run { generation: self.generation, first_key: first, slabs: level.slabs.range(at..) })
     }
 
     /// Bytes the pyramid holds in its slabs and sums, counting each slab once

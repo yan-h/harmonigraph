@@ -79,9 +79,6 @@ pub(crate) struct SpectrumStore {
     /// Clear display history presses, which decide whether a hand-over's
     /// columns join the history ([`AudioSpectrum::give`]).
     clears: u32,
-    /// Clears and resets: what the heatmap's colour memory is keyed on, since
-    /// either empties the picture ([`AudioSpectrum::history_epoch`]).
-    epoch: u32,
     /// Columns the guard dropped, and the times it or a crash in the fold
     /// reset the history: see [`AudioSpectrum::guard_counts`].
     drops: u32,
@@ -240,7 +237,6 @@ impl Default for AudioSpectrum {
                 pyramid: Default::default(),
                 columns_taken: 0,
                 clears: 0,
-                epoch: 0,
                 drops: 0,
                 resets: 0,
                 // A default analyzer's, until an analysis hands its own over.
@@ -401,23 +397,22 @@ impl SpectrumStore {
         // span-INDEPENDENT (see `keep`): shrinking the span and widening it
         // again must not lose the history in between.
         if keep {
+            let newest = self.pyramid.newest();
+            let verdict = self.keep(column.time, &column.power, column_heard);
             debug_assert!(
-                crate::spectrogram::admit(self.pyramid.newest_or_never(), column.time)
-                    == crate::spectrogram::Admit::Fold
-                    || backward_dates_expected(),
-                "history dates must strictly increase: {} after {:?}",
+                verdict == crate::spectrogram::Admit::Fold || backward_dates_expected(),
+                "history dates must strictly increase: {} after {newest:?}",
                 column.time,
-                self.pyramid.newest(),
             );
-            self.keep(column.time, &column.power, column_heard);
         }
     }
 
     /// Fold one raw spectrum into the history, through the guard at its one
-    /// entry ([`admit`](crate::spectrogram::admit)): a column up to a second
-    /// at or before the newest is dropped, and one further back resets the
-    /// history and starts it again. Either is counted for the overlay, and
-    /// `heard` stamps [`Heard::column`] only for a column that was folded.
+    /// entry ([`SlabPyramid::push`](crate::spectrogram::SlabPyramid::push)):
+    /// a column up to a second at or before the newest is dropped, and one
+    /// further back resets the history and starts it again. Either is counted
+    /// for the overlay, and `heard` stamps [`Heard::column`] only for a
+    /// column that was folded. The guard's verdict.
     ///
     /// Retention is deliberately NOT keyed to the current span: trimming to the
     /// live `roll_seconds` meant shrinking the span popped columns off the
@@ -440,19 +435,14 @@ impl SpectrumStore {
     /// write-once history would draw for as long as a level keeps its slabs,
     /// so it resets the history on the way out: the history is what cannot be
     /// trusted, and a crash anywhere else in the worker costs nothing.
-    pub(crate) fn keep(&mut self, time: f64, power: &SpectrumBuckets, heard: bool) {
+    pub(crate) fn keep(
+        &mut self,
+        time: f64,
+        power: &SpectrumBuckets,
+        heard: bool,
+    ) -> crate::spectrogram::Admit {
+        use crate::spectrogram::Admit;
         self.columns_taken += 1;
-        match crate::spectrogram::admit(self.pyramid.newest_or_never(), time) {
-            crate::spectrogram::Admit::Drop => {
-                self.drops = self.drops.saturating_add(1);
-                return;
-            }
-            crate::spectrogram::Admit::Reset => {
-                self.resets = self.resets.saturating_add(1);
-                self.reset();
-            }
-            crate::spectrogram::Admit::Fold => {}
-        }
         /// Resets the history if the fold it guards unwinds.
         struct ResetOnUnwind<'a>(&'a mut SpectrumStore);
         impl Drop for ResetOnUnwind<'_> {
@@ -464,19 +454,28 @@ impl SpectrumStore {
             }
         }
         let guard = ResetOnUnwind(self);
-        guard.0.pyramid.fold(time, power);
+        let verdict = guard.0.pyramid.push(time, power);
         drop(guard);
-        if heard {
+        match verdict {
+            Admit::Drop => self.drops = self.drops.saturating_add(1),
+            Admit::Reset => {
+                // The pyramid emptied itself before folding the column.
+                self.resets = self.resets.saturating_add(1);
+                self.last_audible.column = None;
+            }
+            Admit::Fold => {}
+        }
+        if heard && verdict != Admit::Drop {
             self.last_audible.column = Some(time);
         }
+        verdict
     }
 
-    /// Empty the history and move its epoch on: what a Clear, the guard's
-    /// reset and a crash in the fold all do. [`Heard::column`] goes with the
-    /// columns it dated.
+    /// Empty the history, which moves the pyramid's generation on: what a
+    /// Clear and a crash in the fold do, and the guard's reset does inside
+    /// the pyramid. [`Heard::column`] goes with the columns it dated.
     fn reset(&mut self) {
         self.pyramid.clear();
-        self.epoch = self.epoch.wrapping_add(1);
         self.last_audible.column = None;
     }
 
@@ -571,8 +570,7 @@ impl AudioSpectrum {
     /// Keep what an analysis made from audio taken when the history had been
     /// cleared [`clears`](Self::clears) times, in order; `config` is the one
     /// it analyzed under. The plugin's input worker takes its audio and
-    /// analyzes it off the editor's lock, and gives the result under it, a
-    /// chunk of columns per hold.
+    /// analyzes it off the editor's lock, and gives the result under it.
     ///
     /// If the history has been cleared since, its columns still move the curve
     /// but do not join the history, which the Clear was asked to empty of
@@ -642,7 +640,7 @@ impl AudioSpectrum {
     /// guard or by a crash in the fold — so the heatmap's colour memory can
     /// tell an emptied picture from one that scrolled on.
     pub fn history_epoch(&self) -> u32 {
-        self.store.epoch
+        self.store.pyramid.generation()
     }
 
     /// Columns the history's guard dropped, and the times the history reset,

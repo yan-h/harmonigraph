@@ -453,8 +453,8 @@ mod gap_tests {
             }
         }
 
-        // A gap (621 s) longer than the history reaches starts it again, and the
-        // cold pane keeps its startup rule: wait for two slabs.
+        // A pause longer than the history reaches (621 s) draws as silence
+        // like any shorter one: the far edge holds rather than regrowing.
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         state.appearance.spectrum.roll_seconds = 12.0;
         state.runtime.spectrum.push_history(1.0, &[1.0; SPECTRUM_BINS]);
@@ -465,6 +465,23 @@ mod gap_tests {
             ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
                 draw_spectrogram(ui.painter(), &axes, &scale, &mut state, 0.0, 622.0, 0);
             });
-        assert!(!output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))));
+        assert!(
+            output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))),
+            "the long pause regrew the strip from the now-line as at startup",
+        );
+        let time = TimeAxis::new(&state, 0.0, 622.0);
+        let cfg = state.appearance.spectrum;
+        let view = PaneView {
+            ppp: 1.0,
+            pitch_len: axes.pitch_len(),
+            depth_len: time.region_depth_len(&axes),
+            window: time.window(),
+            scale,
+            cfg,
+        };
+        let plan = Plan::new(&view, time.oldest(), None);
+        let spectrum = &mut state.runtime.spectrum;
+        let layout = run_for(spectrum.pyramid(), &mut state.surfaces.spectrogram, 0, &plan);
+        assert_eq!(time.depth_of(layout.unwrap().t_origin), 1.0, "the pause drew to the far edge");
     }
 }

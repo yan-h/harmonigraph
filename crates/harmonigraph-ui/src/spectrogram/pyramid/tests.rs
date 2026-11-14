@@ -102,8 +102,7 @@ fn every_level_folds_what_the_oracle_folds_over_what_it_keeps() {
     let mut pyramid = SlabPyramid::default();
     let checkpoints = [columns.len() / 7, columns.len() / 2, columns.len() - 1];
     for (i, (time, power)) in columns.iter().enumerate() {
-        assert_eq!(admit(pyramid.newest_or_never(), *time), Admit::Fold);
-        pyramid.fold(*time, power);
+        assert_eq!(pyramid.push(*time, power), Admit::Fold);
         if checkpoints.contains(&i) {
             matches_the_oracle(&mut pyramid, &columns[..=i], &format!("at column {i}"));
         }
@@ -126,7 +125,7 @@ fn level_six_holds_one_missed_slab_and_goes_silent_over_a_longer_gap() {
     // missed, slab 105 loud.
     for slab in [100.0, 102.0, 105.0] {
         for k in 0..4 {
-            pyramid.fold((slab + 0.1 + 0.2 * f64::from(k)) * w, &stream.power());
+            pyramid.push((slab + 0.1 + 0.2 * f64::from(k)) * w, &stream.power());
         }
     }
     let (first_key, slabs) = pyramid.level(6);
@@ -187,7 +186,7 @@ fn the_zero_column_fast_path_folds_what_the_oracle_folds() {
     let mut open: Vec<Option<(i64, bool)>> = vec![None; LEVELS];
     let mut silent_seen = [false; LEVELS];
     for (time, power) in &columns {
-        pyramid.fold(*time, power);
+        pyramid.push(*time, power);
         let all_zero = sanitized(power).iter().all(|&p| p == 0.0);
         for (n, open) in open.iter_mut().enumerate() {
             let key = (time / width(n)).floor() as i64;
@@ -246,7 +245,7 @@ fn the_full_retention_stays_under_31_mb() {
     let end = 5000.0;
     let mut t = end - width(LEVELS - 1) * (retention(LEVELS - 1) + 1) as f64;
     while t < end {
-        pyramid.fold(t, &stream.power());
+        pyramid.push(t, &stream.power());
         let behind = end - t;
         let level =
             (0..LEVELS).find(|&n| width(n) * retention(n) as f64 >= behind).unwrap_or(LEVELS - 1);

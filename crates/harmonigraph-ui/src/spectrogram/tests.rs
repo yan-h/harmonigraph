@@ -48,7 +48,7 @@ fn q(power: f32) -> BucketDb {
 fn pyramid_of(columns: impl IntoIterator<Item = Col>) -> SlabPyramid {
     let mut pyramid = SlabPyramid::default();
     for (time, power) in columns {
-        pyramid.fold(time, &power);
+        pyramid.push(time, &power);
     }
     pyramid
 }
@@ -517,7 +517,7 @@ fn scroll_the_window(algo: &str, lag: f64, pane: &str, cols: f64, span: f64) {
     let columns = ((span + 15.0) / interval) as usize;
     for i in 0..columns {
         let (t, power) = silent(i as f64 * interval);
-        pyramid.fold(t, &power);
+        pyramid.push(t, &power);
         // The shell clock: the newest column always lags it.
         let now = t + lag;
         // Exactly what `draw_spectrogram` asks for each frame.
@@ -561,7 +561,7 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
     let mut dragged = 0u32;
     for i in 0..frames {
         let (t, power) = silent(i as f64 * interval);
-        pyramid.fold(t, &power);
+        pyramid.push(t, &power);
         let now = t + lag;
         // Once the pyramid is deep enough, sweep the Span down and back up,
         // a frame at a time as a drag delivers it.
@@ -850,7 +850,7 @@ fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
         }
         let time = i as f64 * crate::AudioSpectrum::FFT_INTERVAL;
         let (t, power) = col(time, &[(5, 0.1 + (i % 7) as f32 * 0.1)]);
-        pyramid.fold(t, &power);
+        pyramid.push(t, &power);
         let Some(run) = pyramid.run(level, time - window) else { continue };
         let first_key = run.first_key;
         let run: Vec<_> = run.slabs.cloned().collect();

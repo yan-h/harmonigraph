@@ -278,6 +278,7 @@ pub(crate) struct FoldedGrid {
 }
 
 struct FoldedRun {
+    generation: u32,
     first_key: i64,
     capacity: usize,
     run: Arc<[SpectrogramSlab]>,
@@ -286,8 +287,12 @@ struct FoldedRun {
 
 impl FoldedGrid {
     /// Hold `run` and where it sits in time — or keep what is already held,
-    /// when it is the same run: the same level and first key, as long, and
-    /// ending in the same slab allocation. That is the whole test of whether
+    /// when it is the same run: of the same history (the pyramid's
+    /// generation), the same level and first key, as long, and ending in the
+    /// same slab allocation. The generation is in it because the newest
+    /// slab's allocation is not unique: it is the shared silent slab while
+    /// that slab has seen only silence, before a reset and after it alike.
+    /// That is the whole test of whether
     /// the snapshot is current, made before any run is built: a slab already
     /// handed out is never written in place (see the pyramid's `finish`), and
     /// the only slab that changes is the newest, so a still frame allocates
@@ -297,11 +302,12 @@ impl FoldedGrid {
     /// that moves no slab from reallocating and re-uploading the GPU's copy.
     /// It still fits: it was sized for this same run.
     fn accept(&mut self, run: pyramid::Run<'_>, capacity: usize, layout: TexLayout) -> TexLayout {
-        let first_key = run.first_key;
+        let (generation, first_key) = (run.generation, run.first_key);
         let len = run.len();
         let last = run.slabs.clone().next_back();
         if let Some(held) = self.run.as_ref().filter(|held| {
-            held.layout.bucket.to_bits() == layout.bucket.to_bits()
+            held.generation == generation
+                && held.layout.bucket.to_bits() == layout.bucket.to_bits()
                 && held.first_key == first_key
                 && held.run.len() == len
                 && held.run.last().zip(last).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
@@ -310,7 +316,7 @@ impl FoldedGrid {
         }
         let run: Arc<[SpectrogramSlab]> = run.slabs.cloned().collect();
         debug_assert!(run.len() <= capacity);
-        self.run = Some(FoldedRun { first_key, capacity, run, layout });
+        self.run = Some(FoldedRun { generation, first_key, capacity, run, layout });
         layout
     }
 
@@ -715,9 +721,9 @@ pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f
 }
 
 mod pyramid;
-pub(crate) use pyramid::{admit, Admit, SlabPyramid};
 #[cfg(test)]
 pub(crate) use pyramid::{width, FAIL_AT_LEVEL, LEVELS};
+pub(crate) use pyramid::{Admit, SlabPyramid};
 
 #[cfg(test)]
 mod oracle;
