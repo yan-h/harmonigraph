@@ -72,13 +72,20 @@ jobs:
           cache-targets: false
           shared-key: full-ci
           save-if: false
+      # A corpus whose recorded options this tooling no longer accepts is
+      # stale, as on a wgpu-hal bump that edits `compiler_flags`, so it goes on
+      # to generate the replacement like a failed catalog: stopping here left a
+      # PR nothing to import. Its hashes and file set are also checked by every
+      # build (the corpus crate's build.rs), so Full CI owns those.
       - name: Verify the committed corpus hashes and compiler options
+        id: verify
         if: ${{ !inputs.regenerate }}
+        continue-on-error: true
         run: python3 tools/shader-assets.py verify
       # Full CI runs this same catalog and owns its failing verdict. Keep going
       # here to generate the replacement in this run, without classifying the
-      # failure by its log text. Hashes, goldens, generation and controls have
-      # their own failing steps: Full CI does not run those checks.
+      # failure by its log text. Goldens, generation and controls have their
+      # own failing steps: Full CI does not run those checks.
       - name: Check the committed production catalog
         id: catalog
         if: ${{ !inputs.regenerate }}
@@ -94,7 +101,7 @@ jobs:
             xcodebuild -downloadComponent MetalToolchain
           fi
       - name: Generate and validate replacement embedded assets
-        if: ${{ inputs.regenerate || steps.catalog.outcome == 'failure' }}
+        if: ${{ inputs.regenerate || steps.verify.outcome == 'failure' || steps.catalog.outcome == 'failure' }}
         # Its own logs, so the check's logs that say why it failed survive.
         run: >-
           python3 tools/shader-assets.py generate target/generated-metal-assets
@@ -148,9 +155,9 @@ jobs:
       # The default success() condition means a replacement that failed to
       # generate or validate cannot be reported as ready to import.
       - name: Report the corpus the check rejected
-        if: ${{ steps.catalog.outcome == 'failure' }}
+        if: ${{ steps.verify.outcome == 'failure' || steps.catalog.outcome == 'failure' }}
         run: |
-          message="The committed corpus failed the strict catalog; Full CI's metal_corpus gate owns that failure. This run generated and validated a replacement. Read strict-catalog.log in the artifact before importing it with tools/shader-assets.py fetch, into the same commit as the change."
+          message="The committed corpus failed its verification or the strict catalog; Full CI's metal_corpus gate owns a stale corpus. This run generated and validated a replacement. Read the verify step's log and strict-catalog.log in the artifact before importing it with tools/shader-assets.py fetch, into the same commit as the change."
           echo "::warning title=Metal catalog failed::$message"
           echo "### Metal catalog failed" >> "$GITHUB_STEP_SUMMARY"
           echo "$message" >> "$GITHUB_STEP_SUMMARY"
