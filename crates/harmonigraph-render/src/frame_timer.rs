@@ -90,7 +90,6 @@ impl FrameTimer {
     /// `None`, having said why, when there is no adapter or it carries no
     /// timestamps.
     pub(crate) fn new(format: wgpu::TextureFormat) -> Option<Self> {
-        crate::shader_assets::initialize();
         let (_, adapter) = crate::test_gpu_adapter()?;
         eprintln!("adapter: {:?}", adapter.get_info());
         let descriptor = crate::device_descriptor(&adapter);

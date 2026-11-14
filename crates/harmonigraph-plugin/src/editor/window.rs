@@ -31,7 +31,6 @@ use super::MIN_SIZE;
 /// latency, bought with a missed refresh whenever a frame runs long. The
 /// choice is smoothness (#1551).
 pub(super) fn graphics_config() -> GraphicsConfig {
-    harmonigraph_render::shader_assets::initialize();
     use egui_baseview::WgpuSetup;
 
     let mut config = GraphicsConfig::default();

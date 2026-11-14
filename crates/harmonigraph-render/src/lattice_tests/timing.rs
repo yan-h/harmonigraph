@@ -311,7 +311,6 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let size = std::env::var("PROBE_SIZE")
         .map(|v| [v.parse::<u32>().expect("PROBE_SIZE is pixels"); 2])
         .unwrap_or(SIZE);
-    crate::shader_assets::initialize();
     if let Ok(value) = std::env::var("PROBE_OCTAVES") {
         let count = value.parse().expect("PROBE_OCTAVES is a count");
         scene.octave_layout = harmonigraph_scene::octave_layout(count, scene.octave_layout.center);
@@ -459,7 +458,6 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         size[1],
         samples.len(),
     );
-    eprintln!("METAL_TIMING_ASSETS {:?}", crate::shader_assets::statistics());
 }
 
 /// Device setup and pipeline compilation on successive fresh renderers.
@@ -469,7 +467,6 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
 #[test]
 #[ignore = "manual editor startup timing"]
 fn timing_editor_pipeline_startup() {
-    crate::shader_assets::initialize();
     for opening in 0..3 {
         let started = std::time::Instant::now();
         let (_, adapter) = crate::test_gpu_adapter().expect("startup timing requires a GPU");

@@ -43,7 +43,6 @@ struct Host {
 
 /// Open and close three real parented editors with one retained device.
 pub fn run() {
-    harmonigraph_render::shader_assets::initialize();
     let shared = Arc::new(Mutex::new(SharedState::new(super::ASSUMED_SURFACE_FORMAT)));
     let observations = Arc::new(Observations::default());
     let host_shared = shared.clone();
@@ -66,12 +65,7 @@ pub fn run() {
     assert_eq!(observations.completed.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.dropped.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.devices.load(Ordering::Relaxed), 1, "reopen recreated device");
-    let stats = harmonigraph_render::shader_assets::statistics();
-    if std::env::var("HARMONIGRAPH_SHADER_ASSETS").as_deref() == Ok("strict") {
-        assert!(stats.loaded > 0);
-        assert_eq!((stats.source, stats.load_failed, stats.rejected), (0, 0, 0));
-    }
-    eprintln!("NATIVE_LIFECYCLE openings={OPENINGS} devices=1 dropped={OPENINGS} {stats:?}");
+    eprintln!("NATIVE_LIFECYCLE openings={OPENINGS} devices=1 dropped={OPENINGS}");
 }
 
 impl WindowHandler for Host {

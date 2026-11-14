@@ -6,28 +6,20 @@ Keep this file current when bumping them.
 ## wgpu-hal — vendored at `vendor/wgpu-hal/`
 
 Based on the unmodified crates.io `wgpu-hal` 29.0.4 package, retaining its licenses and a standalone `[workspace]` table.
-The shader-library patch has three sites: `src/metal/mod.rs` exports `shader_library`, `src/metal/shader_library.rs` defines a generic immutable provider, and the normal Naga branch of `Device::load_shader` delegates only source-to-library creation to it.
-Normal specialization, MSL generation, entry-point lookup, bounds/reflection metadata and per-device resource ownership are unchanged.
-No filesystem, artifact manifest, application dependency or GPU-object cache belongs to the patch.
+It carries two sites, both in `src/metal/mod.rs` and both serving diagnostics:
 
-A fourth, separate site: `src/metal/mod.rs` gives `Buffer` a public `raw_handle()`, the twin of the one `Texture` already has upstream.
-The GPU memory record (`harmonigraph_render::gpu_memory`) reads each buffer's liveness and `allocatedSize` through it.
-It changes no generated MSL or compiler option, so the shader corpus does not depend on it.
+- `Buffer` gains a public `raw_handle()`, the twin of the one `Texture` already has upstream.
+  The GPU memory record (`harmonigraph_render::gpu_memory`), which feeds the perf overlay's GPU-memory row, reads each buffer's liveness and `allocatedSize` through it.
+- `set_present_observer` installs a process-wide hook `Queue::present` calls with the present's command buffer and drawable just before the commit (#1551).
+  egui-baseview's `frame-log` feature installs it to read `GPUStartTime`/`GPUEndTime` and the drawable's `presentedTime`, which no wgpu API reaches because the drawable is private to the hal.
+  With no observer installed it costs one `OnceLock` read per present.
 
-A fifth site, also separate: `src/metal/mod.rs` gains `set_present_observer`, a process-wide hook `Queue::present` calls with the present's command buffer and drawable just before the commit (#1551).
-egui-baseview's `frame-log` feature installs it to read `GPUStartTime`/`GPUEndTime` and the drawable's `presentedTime`, which no wgpu API reaches because the drawable is private to the hal.
-With no observer installed it costs one `OnceLock` read per present, and it changes no generated MSL or compiler option.
+Neither changes generated MSL or a compiler option.
+A third site, a provider that served precompiled Metal libraries from a committed corpus, went with that corpus (#1746):
+shaders now compile from source through Metal's own cache, and the editor's loading job starts at plugin activation to hide the cold compile.
 
-The provider is installed before device creation, so backend-internal shaders use the same path.
-Installation is unsafe because wgpu cannot validate arbitrary Metal bytecode; the application must establish exact source/options equivalence and artifact integrity.
-Harmonigraph does that with build-time hashes and exact immutable-input lookup.
-Unavailable native compiler-option APIs are guarded before access, and unsupported profiles retain source fallback.
-
-**Upgrade:** replace the upstream package, retain the workspace exclusion, and reapply only those five sites (dropping `Buffer::raw_handle` if upstream has gained it).
-Inspect all compiler options and changes around the normal reflection boundary, then regenerate the corpus through the real production constructors.
-Require strict catalog/real-path golden coverage, storage-binding behavior, native lifecycle checks and rendering-performance validation.
-The optional provider is a candidate upstream boundary, not a reason to accumulate renderer-specific logic in the backend.
-See [production assets](docs/metal-shader-assets.md) for generation, validation and fallback policy.
+**Upgrade:** replace the upstream package, retain the workspace exclusion, and reapply only those two sites (dropping `Buffer::raw_handle` if upstream has gained it).
+These two diagnostics are now the whole reason the crate stays vendored.
 
 ## nice-plug — vendored at `vendor/nice-plug/`
 
@@ -405,8 +397,7 @@ so do not mechanically reapply every numbered patch.
 The map records retained obligations,
 including pre-input host-size adoption,
 beyond this numbered inventory,
-and the toolchain,
-wgpu-hal and Metal-corpus costs of a future migration.
+and the toolchain and wgpu-hal costs of a future migration.
 - **Upstreaming**: declined (2026-07-19).
 Kept as local patches rather than proposed upstream.
 

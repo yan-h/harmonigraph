@@ -2732,12 +2732,3 @@ pub(crate) mod tests {
         }
     }
 }
-
-#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
-pub(super) fn asset_catalog(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    format: wgpu::TextureFormat,
-) {
-    drop(TextResources::new(device, queue, format));
-}
