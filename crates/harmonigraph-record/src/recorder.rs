@@ -444,14 +444,8 @@ impl Recorder {
     /// recorded is ahead of this on both lanes, so a later failure leaves it
     /// whole.
     ///
-    /// Not once the take has failed: its marker is written only after both
-    /// lanes settle, so it would land below this and leave a pass the failure
-    /// touched reading whole. A failure raised later than the pass's proof
-    /// then also warns on that pass, which is the conservative side.
+    /// The writer drops it once the take has failed (see its `PassClosed` arm).
     pub fn pass_closed(&mut self, epoch: u64, pass: u32, observation_time: f64) {
-        if self.fence.failed.load(Ordering::Acquire) {
-            return;
-        }
         if self.publication.pass_closed(epoch, pass, observation_time).is_err() {
             self.fence.fail();
         }

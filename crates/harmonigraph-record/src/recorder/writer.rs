@@ -441,8 +441,10 @@ impl CanonicalFanout {
             let recording = epoch.and_then(|epoch| open.as_mut().filter(|o| o.epoch == epoch));
             match delivery {
                 publication::Delivery::PassClosed { epoch, pass } => {
-                    // A failure's marker comes only once both lanes settle,
-                    // below this line, and must still reach this pass.
+                    // The one guard: a failure's marker comes only once both
+                    // lanes settle, below this line, and must still reach this
+                    // pass, whether the audio side or this thread raised it. A
+                    // failure raised after the pass's proof then warns on it too.
                     if failure.contains(epoch) || fence.failed.load(Ordering::Acquire) {
                         return true;
                     }
