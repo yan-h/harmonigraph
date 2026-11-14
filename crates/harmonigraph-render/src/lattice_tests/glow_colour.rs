@@ -880,21 +880,17 @@ fn ring_profile(shot: &[u8], size: [u32; 2], radius: f32) -> Vec<f64> {
 
 /// A node with no light of its own writes into no other node's colour.
 ///
-/// `GlowFade` hands a strip row only to a node that has a light. Everything
-/// else is given `GlowStep::default()` — and that default's row is 0, its mix
-/// 1.0. A node with no light is still SHIPPED whenever it draws anything at
-/// all (`paints`: an audio ring is enough), and `fs_ink_strip` draws for every
-/// instance without looking at the level, so such a node settles its own ink
-/// into row 0 at full weight and takes the colour of whichever node actually
-/// owns that row.
+/// A node with no light is still SHIPPED whenever it draws anything at all
+/// (`paints`: an audio ring is enough), interleaved in the instance list with
+/// the lit ones, while only a lit instance takes a row of the light table
+/// (`lattice_frame.rs`) and the halo's draw reads the row its instance names.
+/// So the numbering has to skip the unlit ones exactly: an unlit node given a
+/// row, or a lit one reading its neighbour's, wears another node's colour.
 ///
 /// Ordinary material reaches this, not a stress test: turn the audio ring on
 /// and every ringing node that is not itself lit — most of them, with the Gate
-/// low — writes over row 0. The node holding row 0 is the first node to have
-/// lit in the session, so what a listener sees is one node's halo wearing the
-/// wrong hue and flickering between wrong hues, since which of the several
-/// writers lands last is the rasteriser's business and not stable frame to
-/// frame.
+/// low — ships between the lit ones. It was a real defect once, when rows were
+/// handed out across frames and an unlit node wrote over row 0 at full weight.
 ///
 /// Two nodes, two layers, one colour each: the lit node draws the RED octave
 /// band and no mark, the unlit one draws the GREEN mark strip and nothing

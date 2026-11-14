@@ -1085,8 +1085,9 @@ fn glyph_band(d: f32, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer 
 // Its own function because the GLOW is lit out of the same reading: a band
 // slice lighting a halo in some second reading of "what colour is this octave"
 // is exactly the drift this file spends its comments on. What the light takes
-// is [`oct_slot_lit`] below — this without the ghost, since the ghost is a
-// backdrop rather than anything the octave is doing.
+// is [`oct_slot_colour`] below, weighed by the slot's own light — this
+// without the ghost, since the ghost is a backdrop rather than anything the
+// octave is doing.
 fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     let presence = in.params.x;
     let lit = oct_slot_lit(in.cents, in.octaves, slot);
@@ -1115,7 +1116,7 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     return vec4<f32>((lit.xyz * level + ground * ghost_rest) / opacity, opacity);
 }
 
-// The LIGHT one slice of the octave band gives off: `xyz` the colour it wears
+// What one slice of the octave band is LIT at: `xyz` the colour it wears
 // where it is lit, `w` how much of it is — this slot's own level, and nothing
 // of the node's presence.
 //
