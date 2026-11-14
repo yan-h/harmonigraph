@@ -381,8 +381,10 @@ impl Owner {
                 self.recording.configuration(recorder, sample, config);
             }
         }
+        // No closure here: this runs before the Hub publishes this callback's
+        // history, which the previous callback's armed intent can still own.
+        // `finish_recording_publication` closes after it.
         self.recording.registered(end);
-        self.recording.finish(recorder);
     }
 
     /// A Retune-enabled source reserves the lattice axes only while the engine

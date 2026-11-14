@@ -1148,3 +1148,35 @@ fn a_failure_after_a_pass_closed_leaves_that_pass_whole() {
     assert!(second.incomplete.is_some(), "pass 2 was open when it failed");
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
+
+/// An item of a take the writer already sealed played in no run its closure
+/// could prove — a pause's late input, say — so it is dropped. Held at the
+/// lane's head instead, it waited for a file that never opens and failed the
+/// next take at its first drain, until the plugin was reloaded.
+#[test]
+fn an_item_of_a_sealed_take_is_dropped_rather_than_failing_the_next() {
+    let file = path("after-seal");
+    let (mut recorder, mut capture) = testing::channel();
+    capture.arm();
+    assert!(recorder.is_armed());
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
+    let origin = recorder.observe_transport(0.0, true, 64.0 / 48_000.0).unwrap();
+    record_block(&mut recorder, 0, origin, 60, 0.25);
+    capture.stop();
+    assert!(!recorder.is_armed());
+    recorder.configuration_epoch_complete(1);
+    recorder.source_epoch_complete(1, 1.0);
+    writer.stop();
+    writer.drain(&mut capture);
+    assert_eq!(writer.finished.as_ref(), Some(&file), "take 1 sealed");
+    let late = accepted(NoteEvent::on(2.0, SourceId::DIRECT, 0, 64, 0.8), 3);
+    recorder.publish_note(late, armed(1)).expect_both();
+    writer.drain(&mut capture);
+    capture.arm();
+    assert!(recorder.is_armed());
+    let mut next = testing::FileWriter::new(&capture, path("after-seal-2"));
+    next.drain(&mut capture);
+    assert!(!next.failed(), "take 1's late item must not fail take 2");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(path("after-seal-2").parent().unwrap()).unwrap();
+}

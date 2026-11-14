@@ -198,6 +198,18 @@ fn transport(time: u32, tempo: f64) -> Input {
     event.tempo = tempo;
     Input::Transport(event)
 }
+/// A callback's own transport, at `seconds` on the timeline, which is what the
+/// take's lifecycle reads to decide whether a block records.
+fn timeline(seconds: f64, playing: bool) -> clap_event_transport {
+    let mut event: clap_event_transport = unsafe { std::mem::zeroed() };
+    event.header = header::<clap_event_transport>(CLAP_EVENT_TRANSPORT, 0);
+    event.flags = CLAP_TRANSPORT_HAS_TEMPO
+        | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+        | if playing { CLAP_TRANSPORT_IS_PLAYING } else { 0 };
+    event.tempo = 120.0;
+    event.song_pos_seconds = (seconds * 2_147_483_648.0) as i64;
+    event
+}
 unsafe extern "C" fn size(events: *const clap_input_events) -> u32 {
     unsafe { &*((*events).ctx.cast::<Vec<Input>>()) }.len() as u32
 }
@@ -1125,6 +1137,45 @@ fn the_last_armed_callbacks_notes_reach_the_take_after_a_disarm() {
         assert!(struck, "key {key} reaches the take");
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A take stopped in a pause closes its epoch only after the callback that
+/// observed the disarm has published what it sequenced. The late Tune's note
+/// from the last armed callback is stamped armed; behind the closure, a writer
+/// that sealed in between held it and failed the next take.
+#[test]
+fn a_take_stopped_in_a_pause_closes_after_its_last_armed_notes() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    capture.arm();
+    let (mut raw, mut position) = (0, 1.0);
+    let mut cycle = |playing: bool, played: Vec<Input>, stop: bool| {
+        if stop {
+            capture.stop();
+        }
+        let at = Some(timeline(position, playing));
+        hub.run_callback(raw, vec![], (None, None), (512, false), at);
+        tune.run_format(raw, played, None, None, 512);
+        raw += 512;
+        if playing {
+            position += 512.0 / 48_000.0;
+        }
+    };
+    for playing in [true, true, true, true, false, false, false, false] {
+        cycle(playing, vec![], false);
+    }
+    cycle(false, vec![note(7, 0, 67, 0, true), note(7, 0, 67, 64, false)], false);
+    cycle(false, vec![], true);
+    cycle(false, vec![], false);
+    let order = capture.drain_take_order();
+    let closed = order.iter().position(|item| *item == ("epoch complete", Some(1)));
+    let closed = closed.expect("the take closes");
+    let armed = |item: &&(&str, Option<u64>)| **item == ("history", Some(1));
+    assert!(order[..closed].iter().filter(armed).count() >= 2, "the note reaches the lane");
+    assert_eq!(order[closed..].iter().filter(armed).count(), 0, "{order:?}");
 }
 
 /// A cut and joined destruction are where the last callback's end is proven,

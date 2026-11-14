@@ -112,6 +112,23 @@ impl Capture {
         });
         events
     }
+    /// The take lane in order, as the writer meets it: each history item by the
+    /// epoch it was played armed under (`None` disarmed), and each closure by
+    /// the epoch it closes.
+    pub fn drain_take_order(&mut self) -> Vec<(&'static str, Option<u64>)> {
+        let mut order = Vec::new();
+        self.publications.drain(|delivery, span| {
+            order.push(match delivery {
+                publication::Delivery::Event(_) => {
+                    ("history", span.intent.is_armed().then(|| span.intent.epoch()))
+                }
+                publication::Delivery::PassClosed { epoch, .. } => ("pass closed", Some(epoch)),
+                publication::Delivery::EpochComplete(epoch) => ("epoch complete", Some(epoch)),
+            });
+            true
+        });
+        order
+    }
     pub fn drain_audio(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
         while let Ok(sample) = self.audio.pop() {

@@ -287,6 +287,7 @@ impl Pump {
         {
             self.pending_stop = None;
             if let Some(path) = finish_ready(&mut self.open, fence.epoch(), fence) {
+                self.fanout.sealed = fence.epoch();
                 // All admitted callbacks have retired. Capture their final
                 // reason before releasing finishing: the next Start clears
                 // these shared latches, but this render must retain its own.
@@ -397,6 +398,10 @@ impl FailureAccount {
 #[derive(Default)]
 struct CanonicalFanout {
     waiting_file: bool,
+    /// The last epoch whose take this writer sealed. Its closures proved every
+    /// recorded input published, so what still arrives for it played in no run
+    /// (a pause's late input) and is dropped rather than held.
+    sealed: u64,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
     order: harmonigraph_core::canonical::CanonicalOrder,
 }
@@ -422,6 +427,9 @@ impl CanonicalFanout {
                     span.intent.is_armed().then(|| span.intent.epoch())
                 }
             };
+            if epoch.is_some_and(|epoch| epoch <= self.sealed) {
+                return true;
+            }
             // An armed item can reach this lane before its `Start` command
             // has opened the take it belongs to. Retain its whole payload.
             if epoch.is_some_and(|epoch| {
