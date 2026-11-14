@@ -486,7 +486,11 @@ fn timing_editor_pipeline_startup() {
         {
             // Everything the loading stage adds beside the lattice.
             let started = std::time::Instant::now();
-            drop(crate::startup::PanePipelines::new(&device, wgpu::TextureFormat::Bgra8Unorm));
+            drop(crate::startup::PanePipelines::new(
+                &device,
+                wgpu::TextureFormat::Bgra8Unorm,
+                |_| {},
+            ));
             eprintln!("opening {opening}: every pane {:?}", started.elapsed());
         }
     }

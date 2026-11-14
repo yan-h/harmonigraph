@@ -1,6 +1,8 @@
 //! One initialization worker per retained editor cache. Only pipeline construction
 //! moves off the window thread; each window still owns fresh mutable resources.
 
+#[cfg(not(feature = "hot-reload"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{wgpu, CallbackResources, CallbackTrait, LatticePipelineCache, ScreenDescriptor};
@@ -148,7 +150,7 @@ impl Compiled {
         let lattice = super::CompiledLatticeResources::new_with_progress(device, format, &progress);
         // The lattice's last step reports Interface already, and these are
         // the interface's own panes, so they need no label of their own.
-        Self { lattice, panes: PanePipelines::new(device, format) }
+        Self { lattice, panes: PanePipelines::new(device, format, &progress) }
     }
 }
 
@@ -171,15 +173,26 @@ pub(super) struct PanePipelines {
 
 #[cfg(not(feature = "hot-reload"))]
 impl PanePipelines {
-    pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        Self {
-            roll: crate::roll::RollPipelines::new(device, format),
-            glow: crate::glow::GlowPipelines::new(device, format),
-            dots: crate::dot_surround::Pipelines::new(device, format),
-            text: crate::text::TextPipelines::new(device, format),
-            spectrogram: crate::spectrogram::SpectrogramPipelines::new(device, format)
-                .with_cloud(device),
-        }
+    /// Each pane reports Interface again before it builds: no new label, but a
+    /// boundary the worker can stop at, since the cloud alone measured 687 ms
+    /// cold (#1743).
+    pub(super) fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        progress: impl Fn(Stage),
+    ) -> Self {
+        progress(Stage::Interface);
+        let roll = crate::roll::RollPipelines::new(device, format);
+        progress(Stage::Interface);
+        let glow = crate::glow::GlowPipelines::new(device, format);
+        progress(Stage::Interface);
+        let dots = crate::dot_surround::Pipelines::new(device, format);
+        progress(Stage::Interface);
+        let text = crate::text::TextPipelines::new(device, format);
+        progress(Stage::Interface);
+        let spectrogram = crate::spectrogram::SpectrogramPipelines::new(device, format);
+        progress(Stage::Interface);
+        Self { roll, glow, dots, text, spectrogram: spectrogram.with_cloud(device) }
     }
 
     /// Give each pane these programs, unless it already holds its own.
@@ -264,6 +277,8 @@ impl LatticePipelineCache {
 
     /// Join initialization before unloading plugin code, even if a window still
     /// retains shared UI state. Closing just the editor must not call this.
+    /// The worker stops at its next stage boundary (`Job`'s drop), so a plugin
+    /// destroyed mid-compile waits out one stage rather than the whole build.
     pub fn shutdown_startup(&self) {
         #[cfg(not(feature = "hot-reload"))]
         {
@@ -434,6 +449,66 @@ mod tests {
         assert_eq!(worker(&cache), None, "a second activation started another compile");
     }
 
+    /// Plugin destruction stops the worker at its next stage rather than
+    /// waiting out the build: shutdown sets the stop before it joins, and the
+    /// build unwinds at the boundary after the one it was in, building none of
+    /// the stages behind it.
+    #[test]
+    fn plugin_shutdown_stops_the_worker_at_its_next_stage() {
+        let Some((instance, adapter)) = crate::test_gpu_adapter() else {
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
+                .unwrap();
+
+        // A worker that only ever ends when told to stop, as `compile` does.
+        let cache = LatticePipelineCache::default();
+        let stop = Arc::new(AtomicBool::new(false));
+        let waiting = stop.clone();
+        let worker = std::thread::spawn(move || -> super::Compiled {
+            while !waiting.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            std::panic::resume_unwind(Box::new(super::Stopped))
+        });
+        cache.startup.lock().unwrap().job = Some(Job {
+            instance,
+            device: device.clone(),
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            progress: Arc::new(Mutex::new(Stage::Graphics)),
+            stop,
+            worker: Some(worker),
+            failed: false,
+        });
+        let (finished, completion) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            cache.shutdown_startup();
+            finished.send(()).unwrap();
+        });
+        completion
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("shutdown joined a worker it never told to stop");
+
+        // The build itself: told to stop during Lattice, it reports no stage
+        // after it and builds no pane program.
+        take_builds();
+        let stop = AtomicBool::new(false);
+        let seen = Mutex::new(Vec::new());
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::compile(&device, wgpu::TextureFormat::Bgra8Unorm, None, &stop, |stage| {
+                seen.lock().unwrap().push(stage);
+                if stage == Stage::Lattice {
+                    stop.store(true, Ordering::Relaxed);
+                }
+            })
+        }));
+        let stopped = built.err().expect("the build ran on past its stop");
+        assert!(stopped.is::<super::Stopped>(), "it unwound with something else");
+        assert_eq!(seen.into_inner().unwrap().last(), Some(&Stage::Lattice));
+        assert_eq!(take_builds(), Vec::<&str>::new(), "panes built after the stop");
+    }
+
     #[test]
     fn plugin_shutdown_joins_the_worker_and_prevents_restart() {
         let Some((instance, adapter)) = crate::test_gpu_adapter() else {
@@ -456,6 +531,7 @@ mod tests {
             device: device.clone(),
             format: wgpu::TextureFormat::Bgra8Unorm,
             progress: Arc::new(Mutex::new(Stage::Graphics)),
+            stop: Arc::new(AtomicBool::new(false)),
             worker: Some(worker),
             failed: false,
         });
@@ -489,6 +565,8 @@ pub(super) struct Job {
     device: wgpu::Device,
     format: wgpu::TextureFormat,
     progress: Arc<Mutex<Stage>>,
+    /// Read by the worker at each stage boundary ([`compile`]).
+    stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<Compiled>>,
     failed: bool,
 }
@@ -499,10 +577,46 @@ impl Drop for Job {
         // The cache lives as long as the plugin instance. Join before its code
         // can be unloaded; dropping a window alone does not drop this job.
         // The worker owns device/queue handles, never the cache or an egui context.
+        // Stopping it first bounds the wait at one stage: since activation
+        // starts the job (#1746), a plugin deleted or a project closed soon
+        // after loading would otherwise block the host's main thread here for
+        // the rest of a cold compile, about 2.4 s, with no editor ever opened.
+        self.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
     }
+}
+
+/// What a stopped worker unwinds with. Never a failure anyone reads: only a
+/// dropped `Job` stops its worker, and that drop discards the join's result.
+#[cfg(not(feature = "hot-reload"))]
+struct Stopped;
+
+/// The worker's whole build, reporting each stage to `progress`. At every
+/// stage boundary it checks `stop` and, once that is set, unwinds out of the
+/// build with [`Stopped`]: through `resume_unwind`, which skips the panic
+/// hook, so nothing is printed. Unwinding rather than returning keeps the
+/// constructors' stage reports free of an early-return path apiece.
+#[cfg(not(feature = "hot-reload"))]
+fn compile(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    egui: Option<egui_wgpu::RendererOptions>,
+    stop: &AtomicBool,
+    progress: impl Fn(Stage),
+) -> Compiled {
+    let stage = |stage| {
+        if stop.load(Ordering::Relaxed) {
+            std::panic::resume_unwind(Box::new(Stopped));
+        }
+        progress(stage);
+    };
+    if let Some(options) = egui {
+        stage(Stage::Graphics);
+        drop(egui_wgpu::Renderer::new(device, format, options));
+    }
+    Compiled::new_with_progress(device, format, stage)
 }
 
 #[cfg(not(feature = "hot-reload"))]
@@ -568,15 +682,12 @@ impl LatticePipelineCache {
         }
 
         let progress = Arc::new(Mutex::new(Stage::Graphics));
-        let worker_progress = progress.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (worker_progress, worker_stop) = (progress.clone(), stop.clone());
         let worker_device = device.clone();
         let worker =
             std::thread::Builder::new().name("harmonigraph-graphics".into()).spawn(move || {
-                // egui's own program first, for `start` (see there).
-                if let Some(options) = egui {
-                    drop(egui_wgpu::Renderer::new(&worker_device, format, options));
-                }
-                Compiled::new_with_progress(&worker_device, format, |stage| {
+                compile(&worker_device, format, egui, &worker_stop, |stage| {
                     *worker_progress.lock().expect("startup stage poisoned") = stage;
                 })
             });
@@ -587,6 +698,7 @@ impl LatticePipelineCache {
                     device: device.clone(),
                     format,
                     progress,
+                    stop,
                     worker: Some(worker),
                     failed: false,
                 });
