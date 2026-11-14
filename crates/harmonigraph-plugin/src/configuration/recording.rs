@@ -66,10 +66,6 @@ pub(crate) struct Recording {
     /// The epoch whose take has opened a run since the clock was cut. Before
     /// its first run a take has recorded nothing, so it owes no proof.
     opened: Option<u64>,
-    /// The last run's end, `(epoch, pass, end)`, and the pass that ended
-    /// before the run open now, until both frontiers pass its end.
-    ended: Option<(u64, u32, i64)>,
-    closing: Option<(u64, u32, i64)>,
     /// The configuration last written, and the epoch and pass it was written
     /// in: a stable block writes nothing, a changed one writes once, and each
     /// pass opens with the configuration in force, so a pass reads alone.
@@ -97,8 +93,6 @@ impl Default for Recording {
             run: None,
             closed: None,
             opened: None,
-            ended: None,
-            closing: None,
             last: None,
             prefix: 0,
             block_start: 0,
@@ -209,7 +203,6 @@ impl Recording {
         let Some(run) = self.run.take() else { return };
         recorder.run_end(run.epoch, publication::Stamp { clock: self.clock, input: at });
         self.closed = Some((run.start, at));
-        self.ended = Some((run.epoch, run.pass, at));
     }
 
     /// Close or open this sub-block's run. It records when it has an origin
@@ -228,10 +221,6 @@ impl Recording {
             self.end_run(recorder, start);
         }
         if let (Some((epoch, pass)), None, Some(song)) = (recorded, self.run, origin) {
-            // A new pass ends the one before it, whose proof then closes it.
-            if let Some(ended) = self.ended.filter(|&(e, p, _)| e == epoch && p != pass) {
-                self.closing = Some(ended);
-            }
             self.opened = Some(epoch);
             let at = publication::Stamp { clock: self.clock, input: start };
             recorder.run(epoch, pass, at, song, self.presentation.at(start));
@@ -296,16 +285,12 @@ impl Recording {
         if self.recorded_through.is_some_and(|end| !self.proven(end)) {
             recorder.fail_configuration();
         }
-        self.close_pass(recorder);
         let Some(epoch) = self.clock.epoch.checked_add(1) else {
             recorder.fail_configuration();
             return;
         };
-        // The pass that ended is proven with everything else on the old
-        // clock, so a new pass after the cut may close it at once.
-        let ended = self.ended.map(|(epoch, pass, _)| (epoch, pass, i64::MIN));
         let clock = ClockId { epoch, ..self.clock };
-        *self = Self { clock, ended, ..Self::default() };
+        *self = Self { clock, ..Self::default() };
     }
 
     /// ONLY the canonical audio owner may supply this proof: every actual
@@ -332,17 +317,7 @@ impl Recording {
         (self.registered_through != i64::MIN).then_some(self.registered_through)
     }
 
-    fn close_pass(&mut self, recorder: &mut Recorder) {
-        if let Some((epoch, pass, end)) = self.closing {
-            if end == i64::MIN || self.proven(end) {
-                recorder.pass_closed(epoch, pass, self.observation_time);
-                self.closing = None;
-            }
-        }
-    }
-
     pub fn finish(&mut self, recorder: &mut Recorder) {
-        self.close_pass(recorder);
         // A concurrent GUI stop cannot close an epoch whose armed callback
         // may still open another run later in this same block.
         let epoch = self.captured_intent.epoch();

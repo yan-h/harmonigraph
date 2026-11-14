@@ -122,7 +122,6 @@ impl Capture {
                 publication::Delivery::Event(_) => {
                     ("history", span.intent.is_armed().then(|| span.intent.epoch()))
                 }
-                publication::Delivery::PassClosed { epoch, .. } => ("pass closed", Some(epoch)),
                 publication::Delivery::EpochComplete(epoch) => ("epoch complete", Some(epoch)),
             });
             true

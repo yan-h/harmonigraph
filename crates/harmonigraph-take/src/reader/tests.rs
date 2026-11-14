@@ -578,20 +578,19 @@ fn a_gap_marks_only_the_passes_its_inputs_touch() {
     assert!((t - 9.0).abs() < 1e-9 && (through - (9.0 + 10.0 / RATE)).abs() < 1e-9);
 }
 
-/// A failure below a pass's `PassClosed` line touched only the passes after
-/// it, so an earlier pass still renders without a warning.
+/// A failure marker names no pass, so it marks every pass of the take, an
+/// earlier whole one included (#1766): a failed take warns wherever it is read.
 #[test]
-fn a_failure_after_a_pass_closed_leaves_that_pass_whole() {
+fn a_failure_marks_every_pass() {
     let records = [
         run(1, 0, 0, 0.0),
         end(0, 64),
         run(2, 0, 64, 4.0),
-        Record::PassClosed(1),
         Record::Incomplete(IncompleteRecord {
             reason: canonical::GapReasonRecord::ProducerLost,
             ..Default::default()
         }),
     ];
-    assert!(read(&records, Some(1)).unwrap().incomplete.is_none());
+    assert!(read(&records, Some(1)).unwrap().incomplete.is_some());
     assert!(read(&records, Some(2)).unwrap().incomplete.is_some());
 }

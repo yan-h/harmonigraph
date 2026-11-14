@@ -141,12 +141,11 @@ pub(crate) fn assemble(
 
     let mut events = Vec::new();
     let mut floor = Floor::default();
-    let mut closed_through = 0;
     for ((line, record), placed) in records.into_iter().zip(placed) {
         let run = placed.map(|index| &runs[index]).filter(|run| run.pass == chosen);
         match record {
-            Record::PassClosed(pass) => closed_through = closed_through.max(pass),
-            Record::Incomplete(marker) if chosen > closed_through => {
+            // A failure names no pass, so it marks every one.
+            Record::Incomplete(marker) => {
                 take.incomplete.get_or_insert(marker);
             }
             // Each pass opens with every parameter and the configuration in
@@ -267,7 +266,7 @@ pub(crate) fn assemble(
             // The standalone's plain note carries no stamp, so it reads only
             // in a file with no run.
             Record::Note(_) => return Err(ReadError::InvalidCanonical(line)),
-            Record::RunEnd(_) | Record::Header(_) | Record::Incomplete(_) | Record::Run(_) => {}
+            Record::RunEnd(_) | Record::Header(_) | Record::Run(_) => {}
         }
     }
     finish(take, events)
@@ -302,7 +301,7 @@ fn unrouted(mut take: Take, records: Vec<(usize, Record)>) -> Result<Take, ReadE
             }
             Record::Param(param) => take.params.push(param),
             Record::Configuration(configuration) => take.configurations.push(configuration),
-            Record::Header(_) | Record::Run(_) | Record::RunEnd(_) | Record::PassClosed(_) => {}
+            Record::Header(_) | Record::Run(_) | Record::RunEnd(_) => {}
         }
     }
     finish(take, events)

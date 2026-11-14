@@ -165,10 +165,6 @@ enum Value {
     /// two FIFOs — no handle, generation or slot state.
     Snapshot,
     Gap(PublicationGap),
-    PassClosed {
-        epoch: u64,
-        pass: u32,
-    },
     EpochComplete(u64),
 }
 
@@ -225,12 +221,6 @@ pub enum PublishError {
 
 pub enum Delivery<'a> {
     Event(CanonicalEvent<'a>),
-    /// Both frontiers have passed this pass's last run: every record of it is
-    /// ahead of this on its lane.
-    PassClosed {
-        epoch: u64,
-        pass: u32,
-    },
     EpochComplete(u64),
 }
 
@@ -355,17 +345,7 @@ impl Publisher {
     }
 
     /// A closure carries no time of its own, so the caller's observation time
-    /// is what stamps the gap if the lane is full — the only use either of
-    /// these has for it.
-    pub fn pass_closed(
-        &mut self,
-        epoch: u64,
-        pass: u32,
-        observed: f64,
-    ) -> Result<(), PublishError> {
-        self.push(Value::PassClosed { epoch, pass }, observed, None)
-    }
-
+    /// is what stamps the gap if the lane is full — the only use it has for it.
     pub fn epoch_complete(&mut self, epoch: u64, observed: f64) -> Result<(), PublishError> {
         self.push(Value::EpochComplete(epoch), observed, None)
     }
@@ -395,9 +375,6 @@ impl Consumer {
                     consume(Delivery::Event(CanonicalEvent::Note(note)), item.span)
                 }
                 Value::Gap(gap) => consume(Delivery::Event(CanonicalEvent::Gap(gap)), item.span),
-                Value::PassClosed { epoch, pass } => {
-                    consume(Delivery::PassClosed { epoch, pass }, item.span)
-                }
                 Value::EpochComplete(epoch) => consume(Delivery::EpochComplete(epoch), item.span),
                 Value::Snapshot => {
                     let Some(frame) = self.held.take().or_else(|| self.snapshots.pop().ok()) else {
@@ -506,7 +483,7 @@ mod tests {
 
     /// A closure lost in an outage was played at no input, so it must not
     /// widen the range of inputs the gap names: merged as one at sample 0, it
-    /// marked every earlier, closed pass incomplete.
+    /// marked every earlier pass incomplete.
     #[test]
     fn a_lost_closure_leaves_the_outage_s_inputs_where_they_were() {
         let (mut publisher, mut consumer) = channel();
@@ -514,7 +491,7 @@ mod tests {
         fill(&mut publisher);
         let release = |time| NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
         assert_eq!(publisher.note(release(9000.0), armed(300)), Err(PublishError::Lost));
-        assert_eq!(publisher.pass_closed(1, 1, 9050.0), Err(PublishError::Lost));
+        assert_eq!(publisher.epoch_complete(1, 9050.0), Err(PublishError::Lost));
         assert_eq!(publisher.note(release(9100.0), armed(400)), Err(PublishError::Lost));
         consumer.drain(|_, _| true);
         publisher.note(release(9200.0), Span::default()).unwrap();

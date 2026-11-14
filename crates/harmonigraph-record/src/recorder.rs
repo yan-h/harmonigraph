@@ -416,8 +416,7 @@ impl Recorder {
     /// into the file as an `IncompleteRecord`. Refusal is left to failures
     /// that are actually fatal to the recording — audio, ownership and I/O,
     /// which reach the fence through [`Recorder::fail_configuration`], the
-    /// closures' own [`Recorder::pass_closed`] /
-    /// [`Recorder::source_epoch_complete`], and the writer's paths — plus
+    /// closure's own [`Recorder::source_epoch_complete`], and the writer's paths — plus
     /// `Invalid` here, which is the one publication outcome with NO gap to
     /// describe it and so the one that would otherwise leave a silent hole.
     fn publication_result(
@@ -439,17 +438,6 @@ impl Recorder {
         }
     }
 
-    /// Both complete audio-owned frontiers, not a GUI, source-retention or
-    /// disk acknowledgement, have passed `pass`'s last run: everything it
-    /// recorded is ahead of this on both lanes, so a later failure leaves it
-    /// whole.
-    ///
-    /// The writer drops it once the take has failed (see its `PassClosed` arm).
-    pub fn pass_closed(&mut self, epoch: u64, pass: u32, observation_time: f64) {
-        if self.publication.pass_closed(epoch, pass, observation_time).is_err() {
-            self.fence.fail();
-        }
-    }
     pub fn source_epoch_complete(&mut self, epoch: u64, observation_time: f64) {
         if epoch != 0 && epoch > self.fence.source_closed.load(Ordering::Acquire) {
             if self.publication.epoch_complete(epoch, observation_time).is_err() {
