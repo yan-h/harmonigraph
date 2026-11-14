@@ -15,14 +15,15 @@ use std::time::{Duration, Instant};
 use harmonigraph_core::{NoteRoll, Tuning};
 
 use harmonigraph_record::transport;
-use harmonigraph_ui::tape::{Meter, TapeRequest, TapeSpan, TapeView};
+use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
 use crate::audio_ingress::{Block, TapePlay};
 
 use super::notes::{Book, Mark, Player, NOTES};
 use super::spectrum::{Spectrum, STEP_BUDGET};
-use super::store::{Chunk, Stamp, Store};
+use super::store::{Chunk, Rendered, Stamp, Store};
+use super::stretch::Stretched;
 use super::{Event, Piece, Shared, STOP};
 
 /// Recent rolling blocks kept to place notes, which can arrive ahead of the
@@ -66,12 +67,23 @@ struct Pass {
     next_song: i64,
 }
 
-#[derive(Clone, Copy, Debug)]
 struct Playback {
     serial: u64,
-    start: i64,
-    cursor: i64,
+    /// Frames sent so far, for the fade in.
+    sent: i64,
     done: bool,
+    /// Song frames per frame heard, fixed for the cue: a change of speed
+    /// cues again ([`Worker::exchange`]).
+    speed: f64,
+    source: Source,
+}
+
+/// Where a cue's audio comes from.
+enum Source {
+    /// The store, from this song frame on.
+    Direct(i64),
+    /// The store through the stretcher, below full speed.
+    Stretched(Box<Stretched>),
 }
 
 pub(crate) struct Worker {
@@ -97,6 +109,8 @@ pub(crate) struct Worker {
     generation: u64,
     shown: Option<u64>,
     playback: Option<Playback>,
+    /// The speed Tape mode asks for, which the next cue plays at.
+    speed: Speed,
     scratch: Vec<f32>,
     spectrum: Spectrum,
     /// Console lines for the step's second hold.
@@ -165,6 +179,7 @@ impl Worker {
             generation: 0,
             shown: None,
             playback: None,
+            speed: Speed::default(),
             scratch: Vec::new(),
             spectrum: Spectrum::default(),
             logs: Vec::new(),
@@ -401,9 +416,15 @@ impl Worker {
         let tracker = &mut runtime.tracker;
         for (block, clock) in taken.clocked_blocks() {
             match (block.tape, &self.store) {
-                (TapePlay::Heard { seconds, frames }, Some(store)) => {
-                    self.player.heard(tracker, store, &self.book.passes, seconds, frames, clock)
-                }
+                (TapePlay::Heard { seconds, frames, speed }, Some(store)) => self.player.heard(
+                    tracker,
+                    store,
+                    &self.book.passes,
+                    seconds,
+                    frames,
+                    speed,
+                    clock,
+                ),
                 // Cued, or starved for a block: the audition goes on, and
                 // what it holds stays held.
                 (TapePlay::Waiting, Some(_)) => {}
@@ -469,7 +490,20 @@ impl Worker {
     pub(crate) fn exchange(&mut self, view: &mut TapeView, settings: &SpectrumConfig, open: bool) {
         if let Some(request) = view.request.take() {
             self.request(request);
+        } else if view.speed != self.speed {
+            // A speed is fixed for a cue, so one active now starts again at the
+            // new speed: from the spot heard, or from its own spot while it still
+            // waits for audio. Not over a click, which cues at the new speed
+            // anyway.
+            let heard = f64::from_bits(self.shared.heard.load(Ordering::Relaxed));
+            let (serial, position) = self.cue();
+            let at =
+                if heard.is_nan() { (serial & 1 == 1).then_some(position) } else { Some(heard) };
+            if let Some(at) = at {
+                self.request(TapeRequest::Cue(at));
+            }
         }
+        self.speed = view.speed;
         self.spectrum.configure(settings, self.store.as_ref());
         self.spectrum.window = view.window.filter(|_| view.showing);
         self.spectrum.sync(&mut view.spectrogram);
@@ -545,22 +579,37 @@ impl Worker {
             self.playback = None;
             return;
         }
-        if self.playback.is_none_or(|p| p.serial != serial) {
-            let start = self
-                .store
-                .as_ref()
-                .map_or(0, |store| (position * f64::from(store.rate)).round() as i64);
-            self.playback = Some(Playback { serial, start, cursor: start, done: false });
+        if self.playback.as_ref().is_none_or(|p| p.serial != serial) {
+            let speed = self.speed.factor();
+            let source = match &self.store {
+                Some(store) => {
+                    let start = (position * f64::from(store.rate)).round() as i64;
+                    // A cue where nothing is recorded ends at once either way.
+                    if speed < 1.0 && store.holding(start).is_some() {
+                        Source::Stretched(Box::new(Stretched::new(store, start, speed)))
+                    } else {
+                        Source::Direct(start)
+                    }
+                }
+                None => Source::Direct(0),
+            };
+            let speed = if matches!(source, Source::Stretched(_)) { speed } else { 1.0 };
+            self.playback = Some(Playback { serial, sent: 0, done: false, speed, source });
         }
-        let mut playback = self.playback.expect("a playback");
+        let playback = self.playback.as_mut().expect("a playback");
         if playback.done || self.pieces.slots() == 0 {
             return;
         }
         let Some(store) = &self.store else {
             playback.done = true;
-            self.playback = Some(playback);
-            let _ =
-                self.pieces.push(Piece { serial, frames: 0, channels: 1, rate: 1.0, last: true });
+            let _ = self.pieces.push(Piece {
+                serial,
+                frames: 0,
+                channels: 1,
+                rate: 1.0,
+                speed: 1.0,
+                last: true,
+            });
             return;
         };
         let channels = store.channels;
@@ -572,10 +621,17 @@ impl Worker {
         let want = (lead - queued).min(self.samples.slots() / channels);
         self.scratch.clear();
         self.scratch.resize(want * channels, 0.0);
-        let rendered = store.render(playback.cursor, &mut self.scratch);
+        let rendered: Rendered = match &mut playback.source {
+            Source::Stretched(stretched) => stretched.render(store, &mut self.scratch),
+            Source::Direct(cursor) => {
+                let rendered = store.render(*cursor, &mut self.scratch);
+                *cursor += rendered.frames as i64;
+                rendered
+            }
+        };
         let fade = super::store::fade_frames(f64::from(store.rate)) as i64;
         for f in 0..rendered.frames {
-            let k = playback.cursor + f as i64 - playback.start;
+            let k = playback.sent + f as i64;
             if k >= fade {
                 break;
             }
@@ -595,11 +651,11 @@ impl Worker {
             frames: rendered.frames,
             channels,
             rate: store.rate,
+            speed: playback.speed,
             last: rendered.ended,
         });
-        playback.cursor += rendered.frames as i64;
+        playback.sent += rendered.frames as i64;
         playback.done = rendered.ended;
-        self.playback = Some(playback);
     }
 
     /// The audio thread's events as console lines.

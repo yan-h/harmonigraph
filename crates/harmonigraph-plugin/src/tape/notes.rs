@@ -429,7 +429,8 @@ impl Player {
     }
 
     /// A block whose first `frames` frames carried tape from song seconds
-    /// `seconds`, its first frame at display time `clock`.
+    /// `seconds`, each `speed` of a song frame, its first frame at display
+    /// time `clock`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn heard(
         &mut self,
@@ -438,20 +439,23 @@ impl Player {
         passes: &BTreeMap<u64, PassNotes>,
         seconds: f64,
         frames: usize,
+        speed: f64,
         clock: f64,
     ) {
         let rate = f64::from(store.rate);
         let first = (seconds * rate).round() as i64;
-        let end = first + frames as i64;
-        let time = |frame: i64| clock + (frame - first) as f64 / rate;
+        let end = ((seconds + frames as f64 * speed / rate) * rate).round() as i64;
+        // A slowed audition sounds a song frame later on the display's clock.
+        let time = |frame: i64| clock + (frame - first) as f64 / (rate * speed);
         let mut out = Out { tracker };
-        let continues = self.cursor.is_some_and(|c| (c - first).abs() <= CONTINUES_FRAMES);
+        let continues = self.cursor.is_some_and(|c| (c - first).abs() <= CONTINUES_FRAMES)
+            && self.audition.is_some_and(|a| a.speed == speed);
         if !continues {
             // A new cue: what the last one held stops, and the spot's own
             // notes are struck, so a chord held across the cue is struck again
-            // as it would be by playing from there.
+            // as it would be by playing from there. A change of speed is one.
             self.release(&mut out, clock);
-            self.audition = Some(Audition { clock, song: seconds, until: None });
+            self.audition = Some(Audition { clock, song: seconds, speed, until: None });
         }
         let mut frame = first;
         while frame < end {
@@ -628,6 +632,21 @@ mod tests {
         );
     }
 
+    /// A slowed audition sounds each song frame later on the display's
+    /// clock: pass 2's 72, 50 ms of song after a cue at 1.05 s, is struck
+    /// 100 ms in at half speed.
+    #[test]
+    fn a_slowed_audition_plays_its_notes_at_its_speed() {
+        let (store, passes) = two_passes();
+        let mut tracker = NoteTracker::new();
+        let mut player = Player::default();
+        player.heard(&mut tracker, &store, &passes, 1.05, 200, 0.5, 60.0);
+        assert_eq!(tape_voices(&tracker), [(72, 60.1)]);
+        let audition = player.audition.expect("an audition");
+        assert_eq!(audition.speed, 0.5);
+        assert!((audition.song_at(60.2) - 1.15).abs() < 1e-9);
+    }
+
     /// A step already holding [`NOTES`] marks has no room for a release. It
     /// was lost for good, and the tape held the note to the end of its pass;
     /// the next event with room records it, late.
@@ -668,18 +687,21 @@ mod tests {
         let mut tracker = NoteTracker::new();
         let mut player = Player::default();
 
-        player.heard(&mut tracker, &store, &passes, 2.0, 100, 50.0);
+        player.heard(&mut tracker, &store, &passes, 2.0, 100, 1.0, 50.0);
         assert_eq!(tape_voices(&tracker), [(60, 50.0)]);
         assert_eq!(player.tuning, Some(tuning(1)));
 
         // A new cue at 1.2 s: the old voices stop, pass 2's 72 is held there
         // and ends at 1.3 s, and from 1.5 s pass 1's 60 sounds.
-        player.heard(&mut tracker, &store, &passes, 1.2, 200, 60.0);
+        player.heard(&mut tracker, &store, &passes, 1.2, 200, 1.0, 60.0);
         assert_eq!(tape_voices(&tracker), [], "the 72 ended and the seam is not reached");
         assert_eq!(player.tuning, Some(tuning(2)));
-        player.heard(&mut tracker, &store, &passes, 1.4, 200, 60.2);
+        player.heard(&mut tracker, &store, &passes, 1.4, 200, 1.0, 60.2);
         assert_eq!(tape_voices(&tracker), [(60, 60.3)]);
-        assert_eq!(player.audition, Some(Audition { clock: 60.0, song: 1.2, until: None }));
+        assert_eq!(
+            player.audition,
+            Some(Audition { clock: 60.0, song: 1.2, speed: 1.0, until: None })
+        );
 
         // A block with no tape ends it.
         player.silent(&mut tracker, 61.0, false);

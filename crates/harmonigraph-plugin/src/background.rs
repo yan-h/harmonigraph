@@ -589,7 +589,7 @@ mod tests {
         /// the tape's audio from song seconds `heard`.
         fn push_placed(&mut self, frames: usize, song: Option<f64>, heard: Option<f64>) {
             let tape = heard.map_or(crate::audio_ingress::TapePlay::Idle, |seconds| {
-                crate::audio_ingress::TapePlay::Heard { seconds, frames }
+                crate::audio_ingress::TapePlay::Heard { seconds, frames, speed: 1.0 }
             });
             self.push_tape(frames, song, tape);
         }

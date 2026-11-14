@@ -73,7 +73,10 @@ pub(crate) struct Deck {
     /// assembled for; any other is stale and skipped.
     serial: u64,
     cue_position: f64,
+    /// Song seconds of the cue heard so far.
     played: f64,
+    /// Song frames per frame heard, from the cue's pieces.
+    speed: f64,
     /// The piece being mixed and the frames of it left.
     piece: Option<(Piece, usize)>,
     /// The previous block carried tape.
@@ -98,6 +101,7 @@ impl Deck {
             serial: 0,
             cue_position: 0.0,
             played: 0.0,
+            speed: 1.0,
             piece: None,
             mixed: false,
         }
@@ -241,7 +245,7 @@ impl Deck {
         self.mixed = frames > 0;
         self.publish(Some(position), rolling);
         let play = if frames > 0 {
-            TapePlay::Heard { seconds: from, frames }
+            TapePlay::Heard { seconds: from, frames, speed: self.speed }
         } else if self.sounding() {
             TapePlay::Waiting
         } else {
@@ -280,6 +284,7 @@ impl Deck {
                     continue;
                 }
                 self.piece = Some((piece, piece.frames));
+                self.speed = piece.speed;
             }
             let (piece, left) = self.piece.expect("a piece");
             if left == 0 {
@@ -317,7 +322,7 @@ impl Deck {
             chunk.commit_all();
             at += n;
             self.piece = Some((piece, left - n));
-            self.played += n as f64 / f64::from(piece.rate);
+            self.played += n as f64 * piece.speed / f64::from(piece.rate);
             match self.play {
                 Play::Cued { .. } => self.play = Play::Playing { starved: 0.0 },
                 Play::Fading { left: 0, reason, .. } => {

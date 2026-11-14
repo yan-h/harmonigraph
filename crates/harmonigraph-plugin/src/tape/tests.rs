@@ -2,7 +2,7 @@
 //! called by hand between blocks, which is what the input worker does on its
 //! own clock.
 
-use harmonigraph_ui::tape::{Meter, TapeRequest, TapeView};
+use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
 use super::deck::{BlockIn, BlockOut};
@@ -135,7 +135,7 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
     worker.play();
     let (audio, out) = run(&mut deck, parked, false, true);
     assert!(out.sounding && out.song.is_none());
-    let heard = crate::audio_ingress::TapePlay::Heard { seconds: 1.0, frames: FRAMES };
+    let heard = crate::audio_ingress::TapePlay::Heard { seconds: 1.0, frames: FRAMES, speed: 1.0 };
     assert_eq!(out.play, heard, "the block says what of the song it played");
     let fade = (FADE_SECONDS * RATE).ceil() as usize;
     for (i, (&l, &r)) in audio[0].iter().zip(&audio[1]).enumerate() {
@@ -385,6 +385,50 @@ fn a_cue_during_an_audition_plays_the_new_spot_from_its_first_frame() {
             "frame {i} after the second cue"
         );
     }
+}
+
+/// A slowed cue counts the song at its speed, so a block says how much of the
+/// song it played; a new speed while it sounds cues again from the spot heard.
+#[test]
+fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
+    let (mut deck, mut worker) = pair();
+    let mut source = 0;
+    record(&mut worker, &mut source, 0, 3000);
+    let mut view = TapeView::default();
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    cue(&mut deck, &mut worker, 0.0, 1.0);
+    // Assembled at full speed, and not yet heard: a new speed cues it again
+    // from its own spot.
+    worker.play();
+    view.speed = Speed::Half;
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let (_, out) = run(&mut deck, 0.0, false, true);
+    assert!(out.sounding && out.play == crate::audio_ingress::TapePlay::Waiting);
+    worker.play();
+    let heard = |out: BlockOut| match out.play {
+        crate::audio_ingress::TapePlay::Heard { seconds, frames, speed } => {
+            (seconds, frames, speed)
+        }
+        play => panic!("{play:?}"),
+    };
+    let (audio, out) = run(&mut deck, 0.0, false, true);
+    assert!(audio[0].iter().any(|&s| s != 0.0));
+    assert_eq!(heard(out), (1.0, FRAMES, 0.5));
+    let (seconds, _, _) = heard(run(&mut deck, 0.0, false, true).1);
+    assert!((seconds - 1.05).abs() < 1e-9, "100 frames heard are 50 of song: {seconds}");
+
+    view.speed = Speed::Full;
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    run(&mut deck, 0.0, false, true);
+    let (_, out) = run(&mut deck, 0.0, false, true);
+    assert!(out.sounding);
+    worker.play();
+    let (seconds, frames, speed) = heard(run(&mut deck, 0.0, false, true).1);
+    assert!((seconds - 1.1).abs() < 1e-9 && frames == FRAMES && speed == 1.0, "{seconds}");
+    let lines = events(&mut worker);
+    let recued = lines.iter().filter(|l| l.contains("audition from 1.000 s (")).count();
+    assert_eq!(recued, 2, "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("stopped after 0.10 s by another cue")), "{lines:?}");
 }
 
 /// Two cold passes over the same stretch: the one that started earlier has

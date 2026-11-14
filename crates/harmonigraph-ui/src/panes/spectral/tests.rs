@@ -3259,7 +3259,7 @@ fn tape_mode_rolls_the_recording_and_what_was_played_over_the_audition() {
     // An audition from 20 s of song, reaching the picture at display time
     // 98; the pane draws at 100.
     state.runtime.tape.audition =
-        Some(crate::tape::Audition { clock: 98.0, song: 20.0, until: None });
+        Some(crate::tape::Audition { clock: 98.0, song: 20.0, speed: 1.0, until: None });
     let tracker = &mut state.runtime.tracker;
     tracker.handle_event(NoteEvent::on(97.0, SourceId::DIRECT, 0, 62, 1.0));
     tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 64, 1.0));
