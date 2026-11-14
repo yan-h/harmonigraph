@@ -81,12 +81,14 @@ pub struct GlowFade {
     frame: u64,
     /// The clock the levels stand at, or `None` before the first step.
     at: Option<f64>,
-    /// When the largest falling light stops moving a pixel, as of the last
-    /// step: the clock at which its distance above its target times the glow
-    /// gain falls under [`VISIBLE_STEP`], at the Glow release the filter falls
-    /// at. `None` when no light is falling. What the frame loop stays awake
-    /// for (`releasing` in `lib.rs`); a surface that stops being drawn stops
-    /// moving it, and it lapses on its own.
+    /// When the last light still moving on its own stops moving a pixel, as of
+    /// the last step: for each light, the clock at which the larger of its
+    /// level's distance above its target and its colour's still to move
+    /// ([`Lit::easing`]), times the glow gain, falls under [`VISIBLE_STEP`] at
+    /// the time constant it is stepping on ([`Lit::seconds`]). `None` when no
+    /// light moves a pixel on its own. What the frame loop stays awake for
+    /// (`releasing` in `lib.rs`); a surface that stops being drawn stops moving
+    /// it, and it lapses on its own.
     visible_until: Option<f64>,
 }
 
@@ -106,6 +108,11 @@ struct Lit {
     /// stands from the node's reading ([`easing`]). Written and dropped as
     /// `target` is.
     easing: f32,
+    /// The time constant this step moved the light on: the Glow attack while
+    /// its level is visibly below its target, the release otherwise. What the
+    /// light is made of eases on it too, so it is what sizes how long the
+    /// frame loop stays awake for this light ([`GlowFade::visible_until`]).
+    seconds: f32,
     /// The step this node was last seen on (see [`GlowFade::frame`]).
     seen: u64,
 }
@@ -210,7 +217,13 @@ impl GlowFade {
             scene.nodes.iter().filter(|n| self.nodes.contains_key(&n.lattice_pos)).count();
         // Two coefficients for the whole frame: every node's light runs on the
         // same pair of times, and which of the two it takes is which way its
-        // level is going.
+        // level is going — RISING only while visibly below its target, by
+        // more than half a code value. A level attacking toward a target
+        // approaches it without landing, so a test of `target > level` alone
+        // would hand a held light's colour the attack for as long as it is
+        // held, and the release where an attack of 0 lands it exactly: which
+        // of the two a handoff under a steady light eases on would turn on how
+        // the level rounded. Below the half step it is invisible which.
         for node in &mut scene.nodes {
             // What puts LIGHT on this node: the MIDI layers, since a node
             // wearing a mark with no key down is still a node with something of
@@ -231,7 +244,9 @@ impl GlowFade {
                 Some(lit) => {
                     lit.seen = self.frame;
                     lit.target = target;
-                    let mix = if target > lit.level { up } else { down };
+                    let rising = target - lit.level > VISIBLE_STEP;
+                    let mix = if rising { up } else { down };
+                    lit.seconds = if rising { view.glow_attack } else { view.glow_release };
                     lit.level += (target - lit.level) * mix;
                     lit.light.step(&goal, mix);
                     lit.easing = easing(lit.level, &lit.light, &goal);
@@ -254,7 +269,14 @@ impl GlowFade {
                     lights += 1;
                     self.nodes.insert(
                         node.lattice_pos,
-                        Lit { level, light: goal, target, easing: 0.0, seen: self.frame },
+                        Lit {
+                            level,
+                            light: goal,
+                            target,
+                            easing: 0.0,
+                            seconds: view.glow_attack,
+                            seen: self.frame,
+                        },
                     );
                     GlowStep { level, light: Some(goal) }
                 }
@@ -264,24 +286,26 @@ impl GlowFade {
         // there is nothing to carry and nothing to draw.
         let frame = self.frame;
         self.nodes.retain(|_, lit| lit.seen == frame && (lit.level > 0.0 || lit.target > 0.0));
-        // Only a light above its target is moving on its own: one that is
-        // rising belongs to a note being played, and one at its target is
-        // still, so a mark held with no key down never keeps the loop awake.
-        // A level falls as `exp(-t / release)` toward its target, exactly, at
-        // whatever cadence the frames come — and so does what a light at its
-        // level is made of, still easing to a handoff, a swell or a release on
-        // the release's coefficient, which moves the halo's colour as visibly.
-        let falling = self
+        // What moves on its own is a level above its target, and a colour still
+        // easing toward its reading — a handoff, a swell, a look — at any
+        // level. A level rising belongs to a note being played, and a light
+        // settled at its reading is still, so a mark held with no key down
+        // never keeps the loop awake. Each moves as `exp(-t / seconds)`
+        // toward where it is heading, exactly, at whatever cadence the frames
+        // come, on the time constant its light stepped with.
+        let strength = scene.view.glow_strength;
+        self.visible_until = self
             .nodes
             .values()
-            .map(|lit| (lit.level - lit.target).max(lit.easing))
-            .fold(0.0, f32::max);
-        let seen = falling * scene.view.glow_strength;
-        self.visible_until = (seen > VISIBLE_STEP)
-            .then(|| now + f64::from(view.glow_release) * f64::from(seen / VISIBLE_STEP).ln());
+            .filter_map(|lit| {
+                let seen = (lit.level - lit.target).max(lit.easing) * strength;
+                (seen > VISIBLE_STEP)
+                    .then(|| now + f64::from(lit.seconds) * f64::from(seen / VISIBLE_STEP).ln())
+            })
+            .reduce(f64::max);
     }
 
-    /// Whether some node's light is still falling by a visible step at `now`.
+    /// Whether some node's light still moves by a visible step at `now`.
     pub(crate) fn fading_at(&self, now: f64) -> bool {
         self.visible_until.is_some_and(|until| until > now)
     }
@@ -560,6 +584,58 @@ mod tests {
         assert!(!level_at(&state, 6.0).1, "the colour arrived and the loop stayed awake");
     }
 
+    /// Under an attack slower than the release, a handoff on a held light
+    /// whose level has risen to just short of its target — as an attack
+    /// leaves it, never landing — keeps the loop awake until its colour has
+    /// arrived, and the colour eases on the release, as it would had the level
+    /// landed exactly.
+    #[test]
+    fn a_handoff_under_a_slow_attack_repaints_until_its_colour_arrives() {
+        const RELEASE: f64 = 0.25;
+        let mut state = lit(2.0, RELEASE as f32);
+        for note in [60, 72, 84] {
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+        }
+        let mut fade = GlowFade::default();
+        let mut step = |state: &PictureState, now: f64| {
+            let mut scene = scene_at(state, now);
+            fade.step(&mut scene, &state.appearance.view, now);
+            let node = node_at(&scene, LatticePos::ORIGIN);
+            let lit = fade.nodes[&LatticePos::ORIGIN];
+            (node.glow, node.glow_light(), lit.easing, fade.fading_at(now))
+        };
+        let mut held = None;
+        for k in 0..=200 {
+            held = Some(step(&state, f64::from(k) * 0.1));
+        }
+        let (glow, before, _, _) = held.unwrap();
+        assert!(glow.level < before.level(), "the fixture's level landed on its target");
+        // The top octave goes: the melody hands down to the middle one.
+        state.runtime.tracker.handle_event(NoteEvent::off(20.0, SourceId::DIRECT, 0, 84));
+        let strength = state.appearance.view.glow_strength;
+        let mut to = None;
+        for k in 1..=120 {
+            let now = 20.0 + f64::from(k) / 60.0;
+            let (glow, goal, easing, awake) = step(&state, now);
+            to.get_or_insert(goal);
+            assert!(
+                awake || easing * strength <= VISIBLE_STEP,
+                "at {now:.3}s the colour still had {easing} to move and the loop slept",
+            );
+            let share = 1.0 - (-(now - 20.0) / RELEASE).exp() as f32;
+            let carried = glow.light.expect("the node is lit");
+            let mut expected = before;
+            expected.step(&goal, share);
+            assert!(
+                (carried.m[6] - expected.m[6]).abs() < 1e-4,
+                "at {now:.3}s the handoff took {} of the way where the release takes {}",
+                carried.m[6],
+                expected.m[6],
+            );
+        }
+        assert!(to.unwrap().m[6] > 0.0, "the handoff never reached the middle octave");
+    }
+
     /// A surface lights at most `MAX_LIGHTS` nodes, and a light whose node has
     /// left the window holds no place against one arriving: every node of a
     /// window that has moved on entirely is lit again.
@@ -583,6 +659,16 @@ mod tests {
         let mut first = window(0);
         fade.step(&mut first, &state.appearance.view, 0.0);
         assert_eq!(lit(&first), MAX_LIGHTS, "one more node than a surface lights");
+        // Half a window on: newcomers first in scene order, then the lights
+        // still carried, which keep theirs, and the newcomers take only the
+        // places those leave.
+        let mut half = window(-2048);
+        fade.step(&mut half, &state.appearance.view, 0.05);
+        assert_eq!(lit(&half), MAX_LIGHTS, "newcomers ahead of carried lights overran the cap");
+        assert!(
+            half.nodes.iter().filter(|n| n.lattice_pos.threes >= 0).all(|n| n.glow.light.is_some()),
+            "a carried light lost its place to a newcomer",
+        );
         let mut moved = window(100_000);
         fade.step(&mut moved, &state.appearance.view, 0.1);
         assert_eq!(lit(&moved), MAX_LIGHTS, "lights that left the window held their places");

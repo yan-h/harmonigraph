@@ -417,7 +417,7 @@ pub const MAX_LIGHTS: usize = 4096;
 /// it reaches the notes (#1759, Q1). What a light CARRIES between frames is how
 /// much of each layer it holds, and the halo's colour is a sum of the slot
 /// colours weighted by these numbers — linear in each of them, save the two
-/// places `ink_at` names (the swell cap's `min` and the mark walk's per-angle
+/// places `ink_at` names (the swell cap and the mark walk's per-angle
 /// max) — so stepping every weight toward its target eases the colour exactly
 /// as mixing the two readings would. That is the guarantee, and the renderer's
 /// `a_stepped_light_reads_as_its_two_readings_mixed` is what holds it.
