@@ -155,6 +155,12 @@ run python3 -B .claude/tests/read-plugin-state.py
 
 # A generated Metal artifact must pass its run's validation before import.
 run python3 -B .claude/tests/shader-assets.py
+# The committed Metal corpus's hashes and recorded compiler options, which
+# `metal_corpus` below does not read. A corpus whose options this tooling no
+# longer accepts (a wgpu-hal bump, a changed flag mapping) is stale, and the
+# Metal shader assets run generates its replacement; this is the red check
+# until it is imported. Pure Python, so it gates off macOS too.
+run python3 -B tools/shader-assets.py verify
 
 # The frame-log summary must hold each frame to the divisor that paced it.
 run python3 -B .claude/tests/frame-log-summary.py

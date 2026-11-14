@@ -3350,6 +3350,68 @@ fn a_depth_drag_in_tape_mode_moves_neither_the_song_nor_the_span_nor_the_pitch()
     assert_eq!(state.runtime.tape.request, None, "a drag is not a click");
 }
 
+/// The roll builds no note later than the stretch shown: the live roll has
+/// none, but the tape's runs on past the window, and every note there would
+/// be laid out, sorted and uploaded only for the scissor to take it off.
+#[test]
+fn tape_mode_rolls_no_note_later_than_the_stretch_shown() {
+    use harmonigraph_core::notes::SourceId;
+    use harmonigraph_core::{NoteRoll, VoiceKey};
+    let ctx = themed();
+    let mut state = on_tape();
+    state.appearance.spectrum.show_roll = true;
+    let mut recorded = NoteRoll::uncapped();
+    let key = |note| VoiceKey { source: SourceId(1), channel: 0, note };
+    recorded.note_on(key(60), 1.0, 60.0, 1.0);
+    recorded.note_off(key(60), 2.0);
+    recorded.note_on(key(64), 1.0, 64.0, 20.0);
+    recorded.note_off(key(64), 30.0);
+    state.runtime.tape.notes = std::sync::Arc::new(recorded);
+    // The box's late end pulled in to 8 s.
+    overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(8.0)));
+    let (from, to) = shown(&state);
+    assert!(from == 0.0 && (to - 8.0).abs() < 0.3, "the fixture shows {from}..{to}");
+    super::roll::take_roll_draw_probe();
+    overview_frames(&ctx, &mut state, vec![vec![]]);
+    let drawn = super::roll::take_roll_draw_probe().map(|probe| probe.note_count);
+    assert_eq!(drawn, Some(1), "built a note past the stretch shown");
+}
+
+/// A click to cue that wobbles on its way down is still a click: it cues,
+/// and leaves the pitch range where it was, though the pane, sensing drags
+/// only, panned the pitch while the press was held.
+#[test]
+fn a_cue_click_that_wobbles_leaves_the_pitch_range_where_it_was() {
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.25 * (1.0 - split));
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 2.0));
+    assert!(matches!(state.runtime.tape.request, Some(crate::tape::TapeRequest::Cue(_))));
+    let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
+    assert_eq!(range, (cfg.low_midi, cfg.high_midi), "the cue nudged the pitch range");
+    // At the bottom of the axis, where the wobble's pan never moved it: the
+    // click takes back only what moved.
+    let mut state = on_tape();
+    let bottom = harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI;
+    let spectrum = &mut state.appearance.spectrum;
+    (spectrum.low_midi, spectrum.high_midi) = (bottom, bottom + 48.0);
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 2.0));
+    let range = (state.appearance.spectrum.low_midi, state.appearance.spectrum.high_midi);
+    assert_eq!(range, (bottom, bottom + 48.0), "the cue moved a range its wobble could not");
+    // A drag past a click's reach still pans it, and so does a short one on
+    // the spectrum's share, where a click cues nothing.
+    let mut state = on_tape();
+    tape_frames(&mut state, Navigation::Docked, drag(at, at + axes.dir_pitch() * 30.0));
+    assert!(state.appearance.spectrum.low_midi < cfg.low_midi, "the drag did not pan");
+    let on_spectrum = axes.at(0.5, in_spectrum(&cfg));
+    let mut state = on_tape();
+    let wobble = drag(on_spectrum, on_spectrum + axes.dir_pitch() * 2.0);
+    tape_frames(&mut state, Navigation::Docked, wobble);
+    assert!(state.appearance.spectrum.low_midi < cfg.low_midi, "the spectrum's pan was undone");
+}
+
 fn drag(from: egui::Pos2, to: egui::Pos2) -> Vec<Vec<egui::Event>> {
     vec![
         vec![egui::Event::PointerMoved(from)],
@@ -3417,6 +3479,32 @@ fn the_overview_box_moves_the_stretch_shown_and_its_ends_resize_it() {
     overview_frames(&ctx, &mut state, drag(on_overview(20.0), on_overview(0.0)));
     assert_eq!(shown(&state).0, 0.0);
     assert_eq!(state.runtime.tape.request, None, "a drag on the overview is not a cue");
+}
+
+/// The pane's sideways scroll pans the song only as far as the strip's end,
+/// its width kept, as the overview's moves do (#1722's scroll had no end).
+#[test]
+fn a_sideways_scroll_in_tape_mode_stops_at_the_end_of_the_strip() {
+    let ctx = themed();
+    let mut state = on_tape();
+    // The box's late end pulled in to the middle, so there is room to pan.
+    overview_frames(&ctx, &mut state, drag(on_overview(41.8), on_overview(21.0)));
+    let (_, width) = shown(&state);
+    let cfg = pinned();
+    let axes = Axes::new(WIDE, &cfg);
+    let split = spectrum_share(&cfg);
+    let at = axes.at(0.5, split + 0.5 * (1.0 - split));
+    // A sideways scroll pans later by its share along the depth axis.
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(axes.dir_depth().x.signum() * 400.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let frames = (0..30).map(|_| vec![egui::Event::PointerMoved(at), wheel.clone()]).collect();
+    overview_frames(&ctx, &mut state, frames);
+    let (from, to) = shown(&state);
+    assert!((to - 42.0).abs() < 1e-6 && (to - from - width).abs() < 1e-6, "{from}..{to}");
 }
 
 #[test]

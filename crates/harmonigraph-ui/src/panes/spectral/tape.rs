@@ -53,14 +53,19 @@ const COVERAGE_PT: f32 = 3.0;
 /// without the run-up its tails and bus state needed, so dimmed.
 const COLD_DIM: f32 = 0.5;
 
-/// The stretch of song the region shows. `zoomed` is set by any zoom or pan,
-/// until a double-click on the overview clears it; until then the region
-/// follows the recording's length.
+/// The stretch of song the region shows. `zoomed` is set by any zoom or pan
+/// that moves it, until a double-click on the overview clears it; until then
+/// the region follows the recording's length.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Window {
     from: f64,
     to: f64,
     zoomed: bool,
+    /// The overview strip's end, which no move carries the stretch past
+    /// unless it is wider than the strip, when it starts at the song's start:
+    /// past it the box leaves the strip, where nothing shows the stretch or
+    /// can take hold of it. Set as each frame reads the window.
+    end: f64,
 }
 
 impl Window {
@@ -68,7 +73,8 @@ impl Window {
     /// little room past the end.
     fn fit(view: &TapeView) -> Window {
         let end = [view.end(), view.position, view.heard].into_iter().flatten().fold(0.0, f64::max);
-        Window { from: 0.0, to: (end * 1.05).max(MIN_SECONDS * 4.0), zoomed: false }
+        let to = (end * 1.05).max(MIN_SECONDS * 4.0);
+        Window { from: 0.0, to, zoomed: false, end: to }
     }
 
     fn seconds(&self) -> f64 {
@@ -79,20 +85,29 @@ impl Window {
     pub(super) fn zoom(&mut self, factor: f64, at: f64) {
         let width = (self.seconds() / factor).clamp(MIN_SECONDS, MAX_SECONDS);
         let share = (at - self.from) / self.seconds();
-        self.from = (at - share * width).max(0.0);
+        self.from = self.on_strip(at - share * width, width);
         self.to = self.from + width;
         self.zoomed = true;
     }
 
-    /// This stretch moved by `seconds`, its width kept and its start no earlier
-    /// than the song's.
+    /// A start for a stretch `width` long, as near `from` as the song's start
+    /// and the strip's end allow.
+    fn on_strip(&self, from: f64, width: f64) -> f64 {
+        from.clamp(0.0, (self.end - width).max(0.0))
+    }
+
+    /// This stretch moved by `seconds`, its width kept, as far as the song's
+    /// start and the strip's end allow; itself where neither lets it move.
     pub(super) fn moved(self, seconds: f64) -> Window {
-        let from = (self.from + seconds).max(0.0);
-        Window { from, to: from + self.seconds(), zoomed: true }
+        let from = self.on_strip(self.from + seconds, self.seconds());
+        if from == self.from {
+            return self;
+        }
+        Window { from, to: from + self.seconds(), zoomed: true, ..self }
     }
 
     /// The same width, centred on song seconds `at` as nearly as the song's
-    /// start allows.
+    /// start and the strip's end allow.
     fn centred(self, at: f64) -> Window {
         self.moved(at - 0.5 * self.seconds() - self.from)
     }
@@ -109,16 +124,6 @@ impl Window {
     fn with_to(self, to: f64) -> Window {
         let to = to.clamp(self.from + MIN_SECONDS, self.from + MAX_SECONDS);
         Window { to, zoomed: true, ..self }
-    }
-
-    /// Pulled back to end by `end` where it runs past it, as far as the
-    /// song's start allows.
-    fn within(self, end: f64) -> Window {
-        if self.to <= end {
-            self
-        } else {
-            self.moved(end - self.to)
-        }
     }
 }
 
@@ -186,8 +191,11 @@ fn window_id(surface: usize) -> egui::Id {
 
 /// The stretch of song this frame starts from.
 pub(super) fn window(ui: &egui::Ui, view: &TapeView, surface: usize) -> Window {
+    let fit = Window::fit(view);
     let held = ui.data(|d| d.get_temp::<Window>(window_id(surface)));
-    held.filter(|w| w.zoomed).unwrap_or_else(|| Window::fit(view))
+    // Onto the strip as it is now, which shrinks where the reported position
+    // or what sounds falls back.
+    held.filter(|w| w.zoomed).map_or(fit, |w| Window { end: fit.end, ..w }.moved(0.0))
 }
 
 /// Keep the stretch shown for the next frame, and tell the worker which
@@ -206,6 +214,18 @@ fn pane_id(surface: usize) -> u64 {
 /// Seconds one slab of `level` spans.
 fn slab_seconds(level: usize) -> f64 {
     COLUMN_SECONDS * f64::from(1u32 << level)
+}
+
+/// This frame lets go of the click that cues the tape: over the song, where a
+/// cue can start. The pane senses drags only, so a drag takes hold on the
+/// press; a press let go of before it travelled far enough to be a drag is a
+/// click. `drag_zoom` reads the same, to take back what the press panned.
+pub(super) fn cues(response: &egui::Response, axes: &Axes, split: f32, view: &TapeView) -> bool {
+    response.drag_stopped()
+        && response.ctx.input(|i| i.pointer.could_any_button_be_click())
+        && view.enabled
+        && !view.rolling
+        && response.hover_pos().is_some_and(|p| axes.depth_at(p) >= split)
 }
 
 /// What the roll needs that the pane decides: the width it draws a note at,
@@ -248,12 +268,7 @@ pub(super) fn draw(
                 Stroke::new(theme::GRID_WIDTH, theme::text()),
             );
         }
-        // The pane senses drags only, so a drag takes hold on the press; a
-        // press let go of before it travelled far enough to be a drag is a
-        // click.
-        let click = response.drag_stopped()
-            && response.ctx.input(|i| i.pointer.could_any_button_be_click());
-        if click && view.enabled && !view.rolling {
+        if cues(response, axes, split, view) {
             view.request = Some(TapeRequest::Cue(at));
         }
         response.clone().on_hover_text_at_pointer(describe(view, at));
@@ -624,16 +639,17 @@ pub(super) fn overview(ui: &mut egui::Ui, rect: Rect, state: &mut PictureState, 
         (response.dragged(), held, response.interact_pointer_pos())
     {
         let at = seconds_at(at.x);
+        // On the strip as it is now, which grows while recording.
+        let start = Window { end: whole.end, ..held.start };
         moved = Some(match held.grip {
-            Grip::Move => held.start.moved(at - held.pressed),
-            Grip::From => held.start.with_from(at),
-            Grip::To => held.start.with_to(at),
+            Grip::Move => start.moved(at - held.pressed),
+            Grip::From => start.with_from(at),
+            Grip::To => start.with_to(at),
         });
     }
     if response.drag_stopped() {
         ui.data_mut(|d| d.remove::<Held>(id));
     }
-    let moved = moved.map(|window| window.within(whole.to));
     let shown = moved.unwrap_or(shown);
     if let Some(window) = moved {
         ui.data_mut(|d| d.insert_temp(window_id(surface), window));
@@ -812,10 +828,28 @@ mod tests {
 
     #[test]
     fn zooming_out_stops_where_the_widest_slabs_fill_a_live_window() {
-        let mut window = Window { from: 0.0, to: 60.0, zoomed: false };
+        let mut window = Window { from: 0.0, to: 60.0, zoomed: false, end: 60.0 };
         for _ in 0..100 {
             window.zoom(0.5, 30.0);
         }
         assert_eq!(window.seconds(), MAX_SECONDS);
+    }
+
+    /// A pan or a zoom stops at the strip's end with its width kept, as at
+    /// the song's start (#1722's scroll pan had no end), and one that cannot
+    /// move leaves a window following the recording.
+    #[test]
+    fn a_move_stops_at_the_end_of_the_strip_with_its_width_kept() {
+        let whole = Window { from: 0.0, to: 42.0, zoomed: false, end: 42.0 };
+        assert_eq!(whole.moved(100.0), whole, "a move that cannot move pinned the window");
+        let mut window = whole;
+        window.zoom(4.0, 21.0);
+        let width = window.seconds();
+        let mut window = window.moved(1000.0);
+        assert_eq!((window.from, window.to), (42.0 - width, 42.0));
+        // Zoomed out about a point near the end, whose share would carry the
+        // wider stretch past it.
+        window.zoom(0.5, 41.0);
+        assert_eq!((window.from, window.to), (42.0 - 2.0 * width, 42.0));
     }
 }

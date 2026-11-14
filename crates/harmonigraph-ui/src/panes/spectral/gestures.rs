@@ -38,6 +38,12 @@ fn lean_id(surface: usize) -> egui::Id {
     egui::Id::new(("spectral-lean", surface))
 }
 
+/// How far, in semitones, a Tape-mode press over the song has panned the
+/// pitch: what to take back if it lets go as the click that cues the tape.
+fn cue_pan_id(surface: usize) -> egui::Id {
+    egui::Id::new(("spectral-cue-pan", surface))
+}
+
 /// Whether this drag is a DEPTH gesture (a zoom) rather than a pitch one (a
 /// pan).
 ///
@@ -548,6 +554,10 @@ pub(super) fn drag_zoom(
     // is also the Analyzer section's range bar, and rewriting it every frame would
     // put this function's rounding between that bar and the value it shows.
     let mut moved = false;
+    // This frame's pitch pan, in semitones down the range, and where the
+    // range stood before it.
+    let mut pan = 0.0_f32;
+    let mut before_pan = low;
 
     // Hovered rather than merely under the pointer: a popup over the far
     // region takes its own scrolls.
@@ -598,6 +608,12 @@ pub(super) fn drag_zoom(
     // `drag_stopped`, so its axis is still held; it is not this drag's.
     if response.drag_started() {
         ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
+        ui.data_mut(|d| d.remove_temp::<f32>(cue_pan_id(surface)));
+        // In Tape mode any press may be the click that cues the tape, which
+        // its release decides.
+        if song.is_some() {
+            ui.data_mut(|d| d.insert_temp(cue_pan_id(surface), 0.0_f32));
+        }
     }
 
     // Grab the picture. Per-frame deltas rather than the absolute tracking the
@@ -672,7 +688,9 @@ pub(super) fn drag_zoom(
             // The pitch under the pointer travels with it, so the range moves
             // the opposite way.
             let along = delta.dot(axes.dir_pitch());
-            low -= along / axes.pitch_len().max(1.0) * span;
+            pan = along / axes.pitch_len().max(1.0) * span;
+            before_pan = low;
+            low -= pan;
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             moved = true;
         }
@@ -680,6 +698,18 @@ pub(super) fn drag_zoom(
 
     if response.drag_stopped() {
         ui.data_mut(|d| d.remove_temp::<Leg>(lean_id(surface)));
+        // A press over the song let go of as a click cues the tape (see
+        // `tape::draw`), and the pane senses drags only, so it panned the
+        // pitch by however far the hand wobbled: take that pan back, or every
+        // cue nudges the saved range. A wheel zoom made meanwhile stays.
+        let panned = ui.data_mut(|d| d.remove_temp::<f32>(cue_pan_id(surface)));
+        let cues = super::tape::cues(response, axes, split, &state.runtime.tape);
+        // This frame's own pan included: a release can carry the last move.
+        if let Some(panned) = panned.map(|p| p + pan).filter(|&p| cues && p != 0.0) {
+            low += panned;
+            pan = 0.0;
+            moved = true;
+        }
     }
 
     if !moved {
@@ -691,6 +721,19 @@ pub(super) fn drag_zoom(
     // because at the full span the two ends meet, and float rounding is enough
     // to cross them — which `clamp` answers with a panic.
     let span = span.clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
-    cfg.low_midi = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
+    let bound =
+        |low: f32| low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
+    let clamped = bound(low);
+    // What a cue click will take back: the pan as far as the axis let it go,
+    // apart from whatever the axis did to a zoom in the same frame.
+    if pan != 0.0 {
+        let applied = bound(before_pan) - clamped;
+        ui.data_mut(|d| {
+            if let Some(panned) = d.get_temp::<f32>(cue_pan_id(surface)) {
+                d.insert_temp(cue_pan_id(surface), panned + applied);
+            }
+        });
+    }
+    cfg.low_midi = clamped;
     cfg.high_midi = cfg.low_midi + span;
 }
