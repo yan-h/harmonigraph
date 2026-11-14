@@ -1107,6 +1107,39 @@ fn an_audio_only_last_pass_renders_after_a_pass_with_midi() {
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
+/// A writer stalled while a pass records more audio than its ring holds fails
+/// the take, and the pass that lost the audio says so.
+#[test]
+fn a_failure_inside_a_pass_marks_that_pass() {
+    let file = path("closed-failure");
+    let (mut recorder, mut capture) = testing::channel();
+    capture.arm();
+    assert!(recorder.is_armed());
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
+    let duration = 64.0 / 48_000.0;
+    let at = |input| publication::Stamp { clock: CLOCK, input };
+    let origin = recorder.observe_transport(0.0, true, duration).unwrap();
+    record_block(&mut recorder, 0, origin, 60, 0.25);
+    writer.drain(&mut capture);
+    // The writer stalls, and pass 1's next block is longer than the audio ring.
+    let origin = recorder.observe_transport(duration, true, duration).unwrap();
+    let (epoch, pass) = recorder.armed_pass().unwrap();
+    assert_eq!(pass, 1);
+    recorder.run(epoch, pass, at(64), origin, 64.0 / 48_000.0);
+    let samples = AUDIO_RING_CAPACITY + 256;
+    recorder.audio(&mut std::iter::repeat_n(0.5, samples), samples);
+    recorder.run_end(epoch, at(128));
+    // A forward seek opens pass 2.
+    let origin = recorder.observe_transport(10.0, true, duration).unwrap();
+    assert_eq!(recorder.armed_pass().unwrap().1, 2);
+    record_block(&mut recorder, 640, origin, 72, 0.75);
+    writer.drain(&mut capture);
+    assert!(writer.failed(), "the fixture must fail the take inside pass 1");
+    let first = harmonigraph_take::Take::read_pass(&file, Some(1)).unwrap();
+    assert!(first.incomplete.is_some(), "pass 1 lost audio and must say so");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
 /// A failure marker names no pass, so a failure in pass 2 marks pass 1 too,
 /// though everything pass 1 recorded reached the file (#1766).
 #[test]
