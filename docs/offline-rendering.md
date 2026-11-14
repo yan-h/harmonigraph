@@ -20,7 +20,7 @@ That is the whole idea:
                piece.mp4  (exact CFR, any size, audio muxed)
 ```
 
-Both are stamped on the host transport, so they line up with no offset to work out.
+The notes are placed on the take's own recorded audio, so they line up with no offset to work out.
 
 Nothing is captured from a screen, so nothing is limited by your monitor, your refresh rate, or whether a window was in front.
 
@@ -127,9 +127,10 @@ so arming part-way into a song still lines the sound up with the picture, in bot
 
 Three things to know:
 
-- **Nothing is recorded until the transport rolls.** Events are stamped
-with *transport position*, not a plugin-local clock, so the recorded notes and audio line up automatically —
-no offset to work out.
+- **Nothing is recorded until the transport rolls.** A pass starts at the *transport position*,
+and the notes after that follow the audio recorded with them,
+so notes and audio line up automatically —
+no offset to work out, across a pause too.
 While the transport is stopped the status line says so.
 - **The look is captured when you arm**, from what is on screen at that
 moment.
@@ -185,10 +186,12 @@ Playing hosts retain a 50 ms backward jitter allowance for loop detection.
 A forward jump more than 50 ms beyond the recorded audio's expected end also breaks continuity,
 including a seek made while stopped before playback resumes.
 Under *Manually* or *At bar*,
-the next recorded block starts a new pass with its own WAV anchor.
+the next recorded block starts a new pass with its own WAV:
+`take-….wav` for the first, then `take-…-2.wav` and on.
+Every pass stays in the one take file.
 The latest recorded pass renders,
 including a pass containing audio without MIDI;
-earlier passes remain on disk.
+`--pass N` renders an earlier one.
 Under *Transport stop* or *Loop end*,
 the take finishes before the jump and the automatic render's export row says “take ended before a forward transport seek”.
 You can immediately record another take.
@@ -305,13 +308,17 @@ The flags worth knowing (`--help` lists them all):
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
+| `--pass` | which pass of the take to render; the last by default |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note, the appearance's **Tail** by default |
 | `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, Hardware fresh; `--crf` applies to x264 only |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts
 
-Take times are the **host's transport position**, so time zero is the song's start, not the record button's.
+Take times are **song positions**: a pass starts at the host's transport position, and runs on with its own audio,
+so time zero is the song's start, not the record button's.
+After a pause the notes follow the audio rather than the playhead,
+so a `--start` or `--end` read off the DAW's timeline drifts by any parked block the take recorded.
 Play a passage from a minute into the arrangement and its first note lands at 60-odd seconds —
 so a render from zero opens with a minute of empty lattice, however little silence you heard before playing.
 
