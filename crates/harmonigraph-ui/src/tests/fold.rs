@@ -1178,3 +1178,49 @@ fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
         near(expand.size(), collapse.size());
     }
 }
+
+/// The tape's Live/Tape switch sits on the Analyzer's header beside its tabs,
+/// even in the narrow column the fresh layout gives it. Tape mode lays the
+/// audition's controls and the overview along the pane's bottom.
+#[test]
+fn the_tape_switch_rides_the_analyzer_header_and_tape_mode_adds_the_overview() {
+    let mut state = fresh();
+    state.picture.runtime.tape.present = true;
+    state.picture.runtime.tape.enabled = true;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
+    let header = egui::Rect::from_min_size(
+        section.min,
+        egui::vec2(section.width(), theme::tab_bar_height(1.0)),
+    );
+    let on_header = |out: &egui::FullOutput, name: &str| {
+        out.shapes
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) if t.galley.text() == name => {
+                    Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+                }
+                _ => None,
+            })
+            .filter(|at| header.contains(*at))
+    };
+    let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
+    let out = h.frame(&mut state, vec![]);
+    let tape = on_header(&out, "Tape").expect("the switch is on the header");
+    assert!(on_header(&out, "Stop").is_none(), "Live mode has no audition controls");
+    assert!(h.ctx.read_response(overview).is_none(), "Live mode has no overview");
+
+    click_at(&mut h, &mut state, tape);
+    assert!(state.picture.runtime.tape.showing, "the switch did not reach Tape mode");
+    let out = h.frame(&mut state, vec![]);
+    let below = |name: &str| {
+        out.shapes.iter().any(|cs| {
+            matches!(&cs.shape, egui::Shape::Text(t)
+                if t.galley.text() == name && t.pos.y > section.center().y && section.contains(t.pos))
+        })
+    };
+    assert!(below("Stop"), "Tape mode's controls are not along the pane's bottom");
+    let strip = h.ctx.read_response(overview).expect("Tape mode lays the overview").rect;
+    assert!((strip.bottom() - section.bottom()).abs() < 0.5, "{strip:?} in {section:?}");
+}

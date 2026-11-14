@@ -716,9 +716,20 @@ fn section_ui(
                 .map(|&choice| (choice, crate::panes::tab_title(&choice)))
                 .collect();
             let mut selected = tab;
-            crate::widgets::tab_strip(ui, "section tabs", &mut selected, &options);
+            // The tape's switch keeps its room beside the Analyzer's tabs,
+            // which give way to it as they give way to a narrow pane.
+            let switch = (tab == Tab::Spectral)
+                .then(|| crate::panes::spectral::tape_switch_width(ui, viewer.state))
+                .flatten();
+            let room = ui.available_width() - switch.unwrap_or(0.0);
+            ui.allocate_ui(vec2(room.max(0.0), rail), |ui| {
+                crate::widgets::tab_strip(ui, "section tabs", &mut selected, &options);
+            });
             if selected != tab {
                 layout.select(selected);
+            }
+            if switch.is_some() {
+                crate::panes::spectral::tape_switch(ui, viewer.state);
             }
         });
         top += rail;

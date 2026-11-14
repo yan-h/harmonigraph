@@ -37,6 +37,7 @@ pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
 pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 pub(super) use settings::{analysis_section, ribbons_section, spectrogram_section, view_section};
+pub(crate) use tape::{switch as tape_switch, switch_width as tape_switch_width};
 
 use crate::{theme, PictureState};
 use axes::{
@@ -697,11 +698,6 @@ pub(crate) fn spectral_pane(
     }
     if let Some(drag) = orientation_drag {
         drag.finish(&painter, rect, state);
-    }
-    // Over everything, so the switch is never under a picture.
-    // With no far region the switch still shows, to say what makes room.
-    if tape::editor(navigation) && state.runtime.tape.present && (show_history || split >= 1.0) {
-        tape::bar(ui, &axes, state, split, song.as_mut());
     }
     match song {
         Some(window) => tape::keep_window(ui, surface, window, &mut state.runtime.tape),

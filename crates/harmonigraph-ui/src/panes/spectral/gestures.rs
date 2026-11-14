@@ -510,10 +510,12 @@ fn orientation_at(frame: egui::Rect, pointer: egui::Pos2) -> Option<crate::Spect
 ///
 /// **In Tape mode** (`song` is the stretch of song shown) the far region holds
 /// song time rather than a Span anchored on now, so what moves it changes
-/// there: a depth drag pans the song, and so does a sideways scroll where time
-/// runs across the pane; a pinch or a Ctrl-scroll zooms it about the pointer.
-/// The wheel still zooms the pitch, in every layout, and the spectrum's share
-/// answers as it always does.
+/// there: a sideways scroll where time runs across the pane pans the song, and
+/// a pinch or a Ctrl-scroll zooms it about the pointer. A depth drag there
+/// moves nothing: the overview under the pane is what pans the song, which
+/// leaves the drag free for a gesture of the tape's own. The wheel still zooms
+/// the pitch, in every layout, and the spectrum's share answers as it always
+/// does.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drag_zoom(
     ui: &egui::Ui,
@@ -547,8 +549,8 @@ pub(super) fn drag_zoom(
     // put this function's rounding between that bar and the value it shows.
     let mut moved = false;
 
-    // Hovered rather than merely under the pointer: Tape mode's bar lies over
-    // the far region, and a scroll over it is not a pan.
+    // Hovered rather than merely under the pointer: a popup over the far
+    // region takes its own scrolls.
     let over_song = response.hover_pos().filter(|&p| split < 1.0 && axes.depth_at(p) >= split);
     let gesture = match (over_song, song.as_deref_mut()) {
         (Some(at), Some(song)) => {
@@ -568,7 +570,7 @@ pub(super) fn drag_zoom(
                 Some((delta.y, 1.0))
             } else {
                 // Time runs down the pane, where the wheel is the pitch zoom
-                // it is in Live mode, Shift and all; only a drag pans.
+                // it is in Live mode, Shift and all; only the overview pans.
                 zoom_gesture(ui, response).map(|(scroll, _)| (scroll, 1.0))
             }
         }
@@ -629,14 +631,10 @@ pub(super) fn drag_zoom(
         });
         if let Some(zoom) = zoom {
             let along = delta.dot(axes.dir_depth());
-            let panning = song.is_some() && matches!(zoom, DepthZoom::Span);
+            let inert = song.is_some() && matches!(zoom, DepthZoom::Span);
             match zoom {
-                DepthZoom::Span if song.is_some() => {
-                    // The song under the hand travels with it.
-                    let song = song.expect("matched above");
-                    let axis = super::tape::SongAxis::new(axes, split, *song);
-                    song.pan(f64::from(along) * axis.seconds_per_point());
-                }
+                // Song time has no Span to zoom, and the overview pans it.
+                DepthZoom::Span if inert => {}
                 DepthZoom::Span => {
                     // Dragging toward the past pulls the picture away from the
                     // now-line it is anchored on, spreading it — so the seconds it
@@ -667,11 +665,9 @@ pub(super) fn drag_zoom(
                         .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
                 }
             }
-            ui.ctx().set_cursor_icon(if panning {
-                egui::CursorIcon::Grabbing
-            } else {
-                axes.resize_cursor()
-            });
+            if !inert {
+                ui.ctx().set_cursor_icon(axes.resize_cursor());
+            }
         } else {
             // The pitch under the pointer travels with it, so the range moves
             // the opposite way.
