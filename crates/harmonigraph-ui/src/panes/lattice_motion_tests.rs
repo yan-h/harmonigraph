@@ -41,7 +41,14 @@ fn frame(state: &mut PictureState, now: f64, surface: usize, audio: bool) -> Sce
         // dates its columns backwards. These tests read the ring and never the
         // history, which asserts the order, so it is emptied.
         state.runtime.spectrum.clear_history();
-        state.runtime.spectrum.push_samples(&samples, 1, 48000.0, now, &state.appearance.spectrum);
+        crate::spectrum::heard_at(
+            &mut state.runtime.spectrum,
+            &samples,
+            1,
+            48000.0,
+            now,
+            &state.appearance.spectrum,
+        );
     }
     let window = state.appearance.view.reach();
     compose_scene(state, &window, 1.0, None, surface, now)

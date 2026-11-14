@@ -3,39 +3,40 @@ use crate::panes::spectral::DEPTH_ZOOM_PER_DRAG_POINT;
 use egui::Color32;
 use harmonigraph_core::spectrum::SPECTRUM_BINS;
 
-/// Group FFT-center point samples into fixed time slabs. Add linear power
-/// and represented counts, then divide once before quantizing. Coarse history
-/// contributes the same weight as the raw measurements it replaced.
-/// Pitch, level, style and palette remain independent downstream reads.
-fn aggregate_slabs<'a>(
-    columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
-    bucket: f64,
-) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
-    let mut grid = SlabGrid::default();
-    for col in columns {
-        grid.fold(col, bucket, None);
-    }
-    grid.finish();
-    (grid.centers, grid.power.into())
-}
-
-/// Slabs an aggregator is told to keep, where the test is about the values
-/// it produces rather than about what it retains: larger than any of these
-/// windows holds, so the trim never enters into it. The sweep and the drag
-/// test below pass the real, pane-sized retention instead.
-const KEEP: usize = 1 << 20;
-
-/// The pitch range the scroll sweeps hold fixed while they move time.
-const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+/// One column: its date and its raw power per bucket.
+type Col = (f64, Box<crate::spectrum::SpectrumBuckets>);
 
 /// A column at `time` with the given (bin, power) energy, rest silent.
-fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
-    let mut power = [0.0f32; SPECTRUM_BINS];
+fn col(time: f64, energy: &[(usize, f32)]) -> Col {
+    let mut power = Box::new([0.0f32; SPECTRUM_BINS]);
     for &(i, p) in energy {
         power[i] = p;
     }
-    crate::SpectrogramColumn::from_power(time, &power)
+    (time, power)
 }
+
+/// Group columns into fixed time slabs of `bucket` seconds: linear power
+/// summed and divided once before quantizing. Folded twice, by the oracle's
+/// grid and by one pyramid level at the same width, and held equal, so each
+/// test below holds both: `(centres, slabs)`.
+fn aggregate_slabs(columns: &[Col], bucket: f64) -> (Vec<f64>, Vec<SpectrogramSlab>) {
+    let mut grid = oracle::SlabGrid::default();
+    for (time, power) in columns {
+        grid.fold(*time, &power[..], 1, bucket, None);
+    }
+    grid.finish();
+    let (first_key, level) = pyramid::fold_one_level(bucket, 1 << 20, columns);
+    let keys = grid.centers.iter().map(|c| (c / bucket).floor() as i64);
+    assert_eq!(keys.clone().next(), Some(first_key), "the level starts at another slab");
+    assert_eq!(level.len(), grid.power.len(), "the level holds another number of slabs");
+    for (key, (a, b)) in keys.zip(grid.power.iter().zip(&level)) {
+        assert_eq!(a[..], b[..], "slab {key} differs between the oracle and the level");
+    }
+    (grid.centers, grid.power)
+}
+
+/// The pitch range the scroll sweeps hold fixed while they move time.
+const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
 
 /// The stored byte a power lands on — what the aggregation compares, and
 /// so what the aggregation tests below assert against.
@@ -43,132 +44,13 @@ fn q(power: f32) -> BucketDb {
     harmonigraph_core::spectrogram::quantize(power)
 }
 
-fn complete_first_slab(
-    history: &crate::SpectrumHistory,
-    first: usize,
-    bucket: f64,
-) -> impl Iterator<Item = &crate::SpectrogramColumn> {
-    let key = (history.get(first).unwrap().time / bucket).floor() as i64;
-    let start = history.partition_point(|c| ((c.time / bucket).floor() as i64) < key);
-    history.iter_from(start)
-}
-
-#[test]
-fn live_gap_folds_bound_work_and_capacity_before_serving_the_view() {
-    let keep = ring_slots(1024);
-    let bounded = |grid: &SlabGrid| {
-        assert!(grid.centers.len() <= keep + 1, "at most retention plus one seed");
-        assert_eq!(grid.power.len(), grid.centers.len());
-        assert!(grid.centers.capacity() <= 2 * (keep + 1));
-        assert!(grid.power.capacity() <= 2 * (keep + 1));
-    };
-    for span in [12.0, 180.0, 600.0] {
-        for gap in [1.0, 2.0, 60.0, 600.0, 620.0, 1_000_000.0] {
-            for entry in ["warm", "cold", "rung"] {
-                let mut history = crate::SpectrumHistory::default();
-                for i in 0..160 {
-                    history.push(col(100.0 + i as f64 * 0.008, &[(5, 1.0)]));
-                }
-                let before_gap = history.back().unwrap().time;
-                let mut agg = SpectrogramAgg::new();
-                let mut bucket = live_slab(span, 1024);
-                if entry != "cold" {
-                    agg.window(&history, 0, bucket, keep);
-                }
-                if entry == "rung" {
-                    bucket *= 2.0;
-                }
-                let resumed = before_gap + gap;
-                history.push(col(resumed, &[(5, 0.25)]));
-                let newest_key = (resumed / bucket).floor() as i64;
-                let floor = newest_key - keep as i64 + 1;
-
-                // Check each fold before view can hide a large intermediate
-                // fill. The batch driver gets no implicit live budget.
-                let mut probe = SlabGrid::default();
-                for c in history.iter() {
-                    probe.fold(c, bucket, Some(floor));
-                    bounded(&probe);
-                }
-                let first = history.partition_point(|c| c.time < resumed - span).saturating_sub(1);
-                let (centers, power) = agg.window(&history, first, bucket, keep);
-                bounded(&agg.grid);
-                assert!(agg.grid.centers.len() <= keep);
-                assert_eq!(agg.rebuilds, if entry == "rung" { 2 } else { 1 }, "{entry}");
-                let first_source_key = (history.get(first).unwrap().time / bucket).floor() as i64;
-                let expected_first = first_source_key.max(floor);
-                assert_eq!((centers[0] / bucket).floor() as i64, expected_first);
-                assert_eq!(centers.len() as i64, newest_key - expected_first + 1);
-                let newest_max = history
-                    .iter_from(first)
-                    .filter(|c| (c.time / bucket).floor() as i64 == newest_key)
-                    .map(|c| c.db()[5])
-                    .max()
-                    .unwrap();
-                assert_eq!(power[power.len() - 1][5], newest_max);
-                if gap <= 2.0 {
-                    let expected =
-                        aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
-                    assert_eq!((centers.clone(), power.clone()), expected, "{span}/{gap}/{entry}");
-                } else {
-                    let old_key = (before_gap / bucket).floor() as i64;
-                    for (j, center) in centers.iter().enumerate() {
-                        let key = (center / bucket).floor() as i64;
-                        if key > old_key && key < newest_key {
-                            assert!(
-                                power[j].iter().all(|&b| b == 0),
-                                "old audio leaked into gap {span}/{gap}/{entry}"
-                            );
-                        }
-                    }
-                }
-                // Retaining the pre-gap source column must not make every
-                // subsequent resume frame rebuild from coarser history.
-                let rebuilds = agg.rebuilds;
-                for n in 1..=3 {
-                    let now = resumed + n as f64 * bucket;
-                    history.push(col(now, &[(5, 0.5)]));
-                    let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                    agg.window(&history, first, bucket, keep);
-                    bounded(&agg.grid);
-                }
-                assert_eq!(
-                    agg.rebuilds, rebuilds,
-                    "resume repeatedly rebuilt {span}/{gap}/{entry}"
-                );
-            }
-        }
+/// A pyramid fed `columns` in order, as the store feeds it.
+fn pyramid_of(columns: impl IntoIterator<Item = Col>) -> SlabPyramid {
+    let mut pyramid = SlabPyramid::default();
+    for (time, power) in columns {
+        pyramid.fold(time, &power);
     }
-}
-
-#[test]
-fn bounded_retention_preserves_clipped_holds_and_releases_old_capacity() {
-    let mut history = crate::SpectrumHistory::default();
-    // Two columns in the predecessor slab: its full mean seeds the hold.
-    for (t, p) in [(0.1, 1.0), (0.8, 0.25), (2.1, 0.5)] {
-        history.push(col(t, &[(5, p)]));
-    }
-    let mut agg = SpectrogramAgg::new();
-    let (centers, power) = agg.window(&history, 0, 1.0, 2);
-    assert_eq!(centers, [1.5, 2.5]);
-    assert_eq!([power[0][5], power[1][5]], [q(0.625), q(0.5)]);
-
-    // A larger retained budget cannot invent the missing older coverage.
-    for key in 3..=10 {
-        history.push(col(key as f64 + 0.1, &[(5, 0.5)]));
-    }
-    agg.window(&history, 0, 1.0, 3);
-    let rebuilds = agg.rebuilds;
-    let (centers, _) = agg.window(&history, 0, 1.0, 5);
-    assert_eq!(centers, [6.5, 7.5, 8.5, 9.5, 10.5]);
-    assert_eq!(agg.rebuilds, rebuilds + 1);
-
-    agg.grid.centers.reserve(10_000);
-    agg.grid.power.reserve(10_000);
-    agg.window(&history, 0, 1.0, 3);
-    assert!(agg.grid.centers.capacity() <= 8);
-    assert!(agg.grid.power.capacity() <= 8);
-    assert_eq!(agg.grid.centers.len(), 3);
+    pyramid
 }
 
 #[test]
@@ -180,7 +62,7 @@ fn a_short_loud_column_contributes_its_linear_power_mean() {
         col(0.02, &[(5, 1.0)]), // the short note
         col(0.04, &[(5, 0.002)]),
     ];
-    let (centers, power) = aggregate_slabs(cols.iter(), 1.0);
+    let (centers, power) = aggregate_slabs(&cols, 1.0);
     assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
     assert_eq!(power[0][5], q((0.001 + 1.0 + 0.002) / 3.0), "mean power, not max or mean dB");
 }
@@ -197,7 +79,7 @@ fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
     // Two columns a second apart, in quarter-second slabs: four slabs of
     // silence between them.
     let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-    let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
+    let (centers, power) = aggregate_slabs(&cols, 0.25);
     assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
     let at = |slab: usize| power[slab][5];
     assert_eq!(at(0), q(1.0), "the column before the gap");
@@ -217,21 +99,10 @@ fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
 fn a_single_missed_slab_holds_instead_of_going_black() {
     // Columns half a second apart in quarter-second slabs: one slab empty.
     let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
-    let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
+    let (centers, power) = aggregate_slabs(&cols, 0.25);
     assert_eq!(centers.len(), 3, "the empty slab still gets its row");
     assert_eq!(power[1][5], q(1.0), "and holds the column before it");
     assert_eq!(power[2][5], q(0.5));
-}
-
-/// Time running backwards starts a fresh row rather
-/// than trying to fill a negative gap — which would be an enormous loop,
-/// or a silent no-row.
-#[test]
-fn columns_going_back_in_time_still_get_a_row() {
-    let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-    let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
-    assert_eq!(centers.len(), 2);
-    assert_eq!(power[1][5], q(0.5), "the rewound column landed in its own row");
 }
 
 #[test]
@@ -240,9 +111,9 @@ fn a_slab_is_anchored_to_absolute_time_not_ring_position() {
     // are present — otherwise scrolling would shift it and it would shimmer.
     // A note at t=2.6 sits in slab floor(2.6)=2.
     let with_old = [col(0.1, &[(0, 0.1)]), col(2.6, &[(0, 0.5)])];
-    let (c_full, _) = aggregate_slabs(with_old.iter(), 1.0);
+    let (c_full, _) = aggregate_slabs(&with_old, 1.0);
     let just_note = [col(2.6, &[(0, 0.5)])];
-    let (c_scrolled, _) = aggregate_slabs(just_note.iter(), 1.0);
+    let (c_scrolled, _) = aggregate_slabs(&just_note, 1.0);
     assert!(c_full.contains(&2.5), "slab center is 2.5 with old columns");
     assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
 }
@@ -442,319 +313,37 @@ fn a_gradient_draws_its_own_ends() {
     }
 }
 
-/// The incremental aggregator must produce EXACTLY what a from-scratch
-/// `aggregate_slabs` over the window would, at every step — otherwise the
-/// live spectrogram would drift from what the batch/offline path draws. This
-/// walks a column stream with same-slab clusters, a one-slab jitter gap
-/// (hold-previous), a multi-slab gap (zeros), steady scroll (so `first`
-/// advances and the front trims), a ring trim (so indices shift), and a
-/// bucket change (a forced rebuild), comparing byte-for-byte each step.
-#[test]
-fn incremental_aggregation_matches_batch_step_for_step() {
-    let bucket = 0.25;
-    let window_span = 1.0;
-    // Exercises: cluster (0.30, 0.31), 1-slab gap (0.55->0.80 is 1 apart;
-    // 0.80->1.60 is a multi-slab gap), then steady scroll.
-    let times: [f64; 14] =
-        [0.05, 0.10, 0.30, 0.31, 0.55, 0.80, 1.60, 1.62, 1.90, 2.15, 2.40, 2.65, 2.90, 3.15];
-
-    let mut agg = SpectrogramAgg::new();
-    let mut history = crate::SpectrumHistory::default();
-    for (i, &t) in times.iter().enumerate() {
-        // Per-column, per-bin energy, so a wrong slab or a stale hold surfaces
-        // as a value mismatch, not just a shape one.
-        let e = [(4, 0.1 * (i as f32 + 1.0)), (7, 0.05 * i as f32), (10, 1.0 - 0.03 * i as f32)];
-        history.push(col(t, &e));
-        // Trim the store, so `first` indices shift under the aggregator.
-        history.trim_older_than(t - (window_span + 0.5));
-        let oldest = t - window_span;
-        let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
-        let inc = agg.window(&history, first, bucket, KEEP);
-        let bat = aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
-        assert_eq!(inc, bat, "incremental != batch at step {i} (t={t})");
-    }
-
-    // A layout change (new bucket) must fall back to a rebuild — still exact.
-    let now = *times.last().unwrap();
-    let first = history.partition_point(|c| c.time < now - window_span).saturating_sub(1);
-    let inc = agg.window(&history, first, 0.4, KEEP);
-    let bat = aggregate_slabs(complete_first_slab(&history, first, 0.4), 0.4);
-    assert_eq!(inc, bat, "incremental != batch after a bucket change");
-}
-
-/// Unequal columns share the oldest slab, followed by a jitter copy. The
-/// fixture exceeds retention, then advances within and past that slab.
-#[test]
-fn completed_averages_and_jitter_holds_survive_oldest_column_changes() {
-    let bucket = 0.25;
-    let mut history = crate::SpectrumHistory::default();
-    let mut agg = SpectrogramAgg::new();
-    for (t, energy) in [(0.0, 1.0), (0.3, 0.8), (0.55, 0.7), (0.6, 0.6), (0.65, 0.1), (1.1, 0.5)] {
-        history.push(col(t, &[(4, energy)]));
-        agg.window(&history, 0, bucket, 3);
-    }
-    assert_eq!(agg.grid.centers.len(), 3, "retention must discard older slabs");
-    let expected = aggregate_slabs(history.iter_from(2), bucket);
-    assert_eq!(expected.1[0][4], q((0.7 + 0.6 + 0.1) / 3.0));
-    assert_eq!(expected.1[1][4], expected.1[0][4], "one-slab jitter copy");
-    for first in 2..=4 {
-        assert_eq!(agg.window(&history, first, bucket, 3), expected);
-        let mut fresh = SpectrogramAgg::new();
-        assert_eq!(fresh.window(&history, first, bucket, 3), expected);
-    }
-    let advanced = agg.window(&history, 5, bucket, 3);
-    assert_eq!(advanced.0, [1.125]);
-    assert_eq!(advanced.1[0][4], q(0.5));
-    assert_eq!(agg.rebuilds(), 1);
-}
-
-/// A Clear during playback keeps the columns before it out of the grid, as it
-/// keeps them out of the history. The first column after it lands in the slab
-/// the last one before it was folded into, where the open slab's running sum
-/// would otherwise carry the old power on: the slab is 0.25 s and the columns
-/// either side of the Clear 0.05 s apart.
+/// A Clear during playback empties the history, open slabs included. The
+/// first column after it lands in the slab the last one before it was folded
+/// into, where the open slab's running sum would otherwise carry the old
+/// power on: the finest slab is 16 ms and the columns either side of the
+/// Clear 4 ms apart.
 #[test]
 fn a_clear_keeps_the_open_slab_from_averaging_in_what_came_before() {
-    let bucket = 0.25;
-    let mut history = crate::SpectrumHistory::default();
-    let mut agg = SpectrogramAgg::new();
-    for t in [0.0, 0.05, 0.1] {
-        history.push(col(t, &[(4, 1.0)]));
+    let mut spectrum = crate::AudioSpectrum::default();
+    let loud = [1.0; SPECTRUM_BINS];
+    let mut quiet = [0.0; SPECTRUM_BINS];
+    quiet[4] = 0.2;
+    for t in [0.0, 0.004, 0.008] {
+        spectrum.push_history(t, &loud);
     }
-    agg.window(&history, 0, bucket, 8);
-    history.clear();
-    for (t, energy) in [(0.15, 0.2), (0.2, 0.2), (0.3, 0.5)] {
-        history.push(col(t, &[(4, energy)]));
+    spectrum.clear_history();
+    for t in [0.012, 0.014] {
+        spectrum.push_history(t, &quiet);
     }
-    let (centers, power) = agg.window(&history, 0, bucket, 8);
-    assert_eq!(centers, [0.125, 0.375], "the fixture keeps the slab open across the Clear");
-    assert_eq!(power[0][4], q(0.2), "the open slab averaged in power from before the Clear");
-    assert_eq!((centers, power), SpectrogramAgg::new().window(&history, 0, bucket, 8));
+    let (first_key, slabs) = spectrum.pyramid().level(0);
+    assert_eq!((first_key, slabs.len()), (0, 1), "the fixture keeps the slab open across it");
+    assert_eq!(slabs[0][4], q(0.2), "the open slab averaged in power from before the Clear");
+    assert_eq!(slabs[0][5], 0, "a bucket only the old columns lit");
 }
 
-/// Reaching back past a TIER MERGE — which the step-for-step test above
-/// never does, because it pushes 14 columns and tier 0 holds
-/// [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
-///
-/// Once tier 0 overflows, its two oldest columns are power-summed into one at
-/// their MIDPOINT time (`SpectrogramColumn::absorb`), which rewrites history
-/// the grid has ALREADY folded. Batch over the store AS IT NOW STANDS can
-/// therefore see something else entirely — the merged column falls in a slab
-/// neither original was folded into, carrying both originals' energy across
-/// a slab boundary the raw columns respected — so THAT is not the
-/// comparison to hold this to.
-///
-/// What it must equal is batch over the columns AS THEY ARRIVED, which is
-/// the finer answer, from raw, never-merged columns, including the oldest
-/// slab.
-#[test]
-fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
-    // Buckets 10 and 11 alternate between adjacent columns, so a merged
-    // pair holds both loud where each original held one — a slab refolded
-    // from the merged store reads differently from the slab the raw
-    // columns built. A constant bucket — 4, which never moves — would
-    // demonstrate nothing.
-    let bucket = 0.25;
-    let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
-
-    // Long enough that nothing scrolls out: the whole run stays in window,
-    // so any mismatch is the merge and not the front trim.
-    let window_span = 60.0;
-    let columns = crate::SpectrumHistory::FINE_COLUMNS + 64;
-
-    let mut agg = SpectrogramAgg::new();
-    let mut history = crate::SpectrumHistory::default();
-    // The same columns the store was given, kept unmerged as the reference.
-    let mut raw: Vec<crate::SpectrogramColumn> = Vec::new();
-    for i in 0..columns {
-        let t = i as f64 * interval;
-        // Adjacent buckets alternate, so the Lerp row's two inputs are never
-        // loud in the same column — exactly the case a per-bin MAX across a
-        // merge collapses into one loud pair.
-        let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
-        let energy = [(4, 0.5), (10, a), (11, b)];
-        history.push(col(t, &energy));
-        raw.push(col(t, &energy));
-
-        let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-        let inc = agg.window(&history, first, bucket, KEEP);
-        // Comparing every step would be O(columns^2); check often enough to
-        // catch the crossing itself, and either side of it.
-        let near_merge = i + 8 >= crate::SpectrumHistory::FINE_COLUMNS;
-        if near_merge || i % 256 == 0 || i + 1 == columns {
-            let t0 = history.get(first).map_or(0, |c| (c.time / bucket).floor() as i64);
-            let in_window = raw.iter().filter(|c| (c.time / bucket).floor() as i64 >= t0);
-            let want = aggregate_slabs(in_window, bucket);
-            assert_eq!(inc.0, want.0, "slab centers diverged at column {i} (t={t})");
-            assert_eq!(inc.1, want.1, "incremental != the raw columns at column {i} (t={t})",);
-        }
-    }
-    // And it did it WITHOUT falling back: the merging behind the window is
-    // exactly what used to force a rescan on every frame at long Spans.
-    assert_eq!(agg.rebuilds, 1, "a merge behind the window forced a rebuild");
-}
-
-#[test]
-fn a_full_refold_weights_mixed_tiers_by_original_sample_count() {
-    let mut history = crate::SpectrumHistory::default();
-    let n = crate::SpectrumHistory::FINE_COLUMNS * 4;
-    let mut sum = 0.0f64;
-    for i in 0..n {
-        let p = if i < n / 2 { 0.01 } else { 1.0 };
-        sum += p as f64;
-        history.push(col(i as f64 * 0.008, &[(5, p), (6, 1e-7)]));
-    }
-    assert!(history.front().unwrap().count >= 4);
-    assert_eq!(history.back().unwrap().count, 1);
-    let (centers, power) = aggregate_slabs(history.iter(), 100.0);
-    assert_eq!(centers.len(), 1);
-    assert_eq!(power[0][5], q((sum / n as f64) as f32));
-    assert_eq!(power[0][6], q(1e-7), "quiet content uses the same count");
-    assert_eq!(power[0][7], 0);
-}
-
-/// A refold split across threads must build the grid one thread builds,
-/// down to which rows share a held slab and the open slab's sums, which the
-/// incremental fold goes on adding to. Every run count up to one per
-/// column puts a seam at every slab step, so each kind of gap — a held
-/// slab, a silent stretch, one clipped at the retention bound — is crossed
-/// by a seam under some count.
-#[test]
-fn a_refold_split_into_runs_builds_the_grid_one_fold_builds() {
-    let times = [
-        1.1, 1.6, 3.2, 4.1, 4.5, 4.9, 7.3, 8.0, 8.5, 10.4, 11.5, 12.2, 12.7, 13.3, 15.6, 18.1,
-        19.4, 19.9, 20.5, 22.2,
-    ];
-    let column = |i: usize, t: f64| {
-        col(t, &[(i % 40, 1e-6 * (i + 1) as f32), ((i * 97) % SPECTRUM_BINS, 1e-3)])
-    };
-    let mut history = crate::SpectrumHistory::default();
-    for (i, &t) in times.iter().enumerate() {
-        history.push(column(i, t));
-    }
-    // Folded after the refold: one into its open slab, one past a held gap.
-    let later = [column(90, 22.8), column(91, 24.1)];
-    let bucket = 1.0;
-    let same = |a: &SlabGrid, b: &SlabGrid, at: &str| {
-        assert_eq!(a.centers, b.centers, "{at}: centers");
-        let bytes = |g: &SlabGrid| g.power.iter().map(|s| s.to_vec()).collect::<Vec<_>>();
-        assert_eq!(bytes(a), bytes(b), "{at}: bytes");
-        let held = |g: &SlabGrid| {
-            g.power.windows(2).map(|w| Arc::ptr_eq(&w[0], &w[1])).collect::<Vec<_>>()
-        };
-        assert_eq!(held(a), held(b), "{at}: held rows");
-        assert_eq!(a.cur_key, b.cur_key, "{at}: open slab");
-        assert_eq!(a.mean.sum[..], b.mean.sum[..], "{at}: open sums");
-        assert_eq!(a.mean.count, b.mean.count, "{at}: open count");
-    };
-    for min_key in [None, Some(2), Some(3), Some(9), Some(10), Some(17)] {
-        let columns = refold_columns(&history, bucket, min_key);
-        let mut one = SlabGrid::default();
-        for c in &columns {
-            one.fold(c, bucket, min_key);
-        }
-        one.finish();
-        let mut one_later = one.clone();
-        for c in &later {
-            one_later.fold(c, bucket, min_key);
-        }
-        one_later.finish();
-        for runs in 1..=columns.len() {
-            let at = format!("min_key {min_key:?}, {runs} runs");
-            let mut split = SlabGrid::fold_runs(&columns, bucket, min_key, runs);
-            same(&split, &one, &at);
-            for c in &later {
-                split.fold(c, bucket, min_key);
-            }
-            split.finish();
-            same(&split, &one_later, &format!("{at}, then folding on"));
-        }
-    }
-    // The fixture holds what the seams have to cross.
-    let one = SlabGrid::fold_runs(&refold_columns(&history, bucket, None), bucket, None, 1);
-    assert!(one.power.windows(2).any(|w| Arc::ptr_eq(&w[0], &w[1])), "a held slab");
-    assert!(one.power.iter().any(|s| s.iter().all(|&b| b == 0)), "a silent slab");
-}
-
-/// The bug this guards: a Span LONGER than the finest tier's ~16 s reach
-/// used to drop to a from-scratch rescan on every frame, for as long as the
-/// plugin stayed open — the fold is O(new columns), but the rescan is
-/// O(columns in window), which at a 30 s Span is thousands of columns times
-/// hundreds of rows, per frame. It survived every value assertion (a rescan
-/// is still correct) and showed up only as the analyzer dropping to 60 fps
-/// after half a minute of playback and never coming back.
-#[test]
-fn a_long_window_keeps_the_fast_path_once_the_store_starts_merging() {
-    let interval = 0.008;
-    // Past the finest tier's reach (FINE_COLUMNS * interval, ~16.4 s), which
-    // is the line the old guard broke at, and out to a Span the pane really
-    // offers (up to ROLL_SECONDS_MAX, 600 s).
-    let window_span = 30.0;
-    let bucket = window_span / LIVE_SLAB_CAP as f64;
-    // Long enough that the window is full AND the merging is continuous.
-    let columns = ((window_span + 20.0) / interval) as usize;
-
-    let mut agg = SpectrogramAgg::new();
-    let mut history = crate::SpectrumHistory::default();
-    for i in 0..columns {
-        let t = i as f64 * interval;
-        let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
-        history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
-        let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-        let (centers, power) = agg.window(&history, first, bucket, KEEP);
-        // The window it serves is still the right shape and length.
-        assert_eq!(power.len(), centers.len(), "grid shape at column {i}");
-        assert!(
-            centers.len() <= LIVE_SLAB_CAP as usize + 2,
-            "the served window grew past the Span at column {i}: {} slabs",
-            centers.len(),
-        );
-    }
-    assert_eq!(agg.rebuilds, 1, "a long Span fell back to a rescan");
-}
-
-/// The merge guard must not cost the fast path on the windows that use it.
-/// A Span SHORTER than the finest tier's reach sits entirely inside columns
-/// no merge has touched, so the merging going on behind it is none of its
-/// business and the incremental fold has to keep running. Only the rebuild
-/// count can tell: falling back is still CORRECT, so every assertion about
-/// values would pass just the same with the optimization switched off.
-#[test]
-fn a_short_window_keeps_the_fast_path_across_merges() {
-    let bucket = 0.25;
-    let interval = 0.008;
-    // Two seconds against the finest tier's ~16, so the window stays well
-    // inside it even once merging is continuous.
-    let window_span = 2.0;
-    let columns = crate::SpectrumHistory::FINE_COLUMNS + 256;
-
-    let mut agg = SpectrogramAgg::new();
-    let mut history = crate::SpectrumHistory::default();
-    for i in 0..columns {
-        let t = i as f64 * interval;
-        let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
-        history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
-
-        let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-        let inc = agg.window(&history, first, bucket, KEEP);
-        if i % 256 == 0 || i + 1 == columns {
-            let bat = aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
-            assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
-        }
-    }
-    // One to build the grid; the rest of the run rides the incremental path,
-    // merges and all. Anything more means the guard is firing on windows it
-    // has no reason to touch.
-    assert_eq!(agg.rebuilds, 1, "the fast path stopped carrying a short window");
-}
-
-/// The layout arithmetic every rebuild rides on, decided without a frame.
+/// The layout arithmetic every frame rides on, decided without a frame.
 ///
 /// This is where the pipeline's cliffs live — a slab against the analyzer's
-/// lag, a slab against the column rate, a slab count against the cap the
-/// store is sized for — and with [`Plan`] split out of the draw it is
-/// exercised without an `egui::Context` at all. Each assertion below is a
-/// bug this pane has actually had.
+/// lag, a slab against the column rate, a slab count against the ring a
+/// level keeps — and with [`Plan`] split out of the draw it is exercised
+/// without an `egui::Context` at all. Each assertion below is a bug this
+/// pane has actually had.
 #[test]
 fn the_plan_decides_the_layout_without_a_frame() {
     let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
@@ -766,8 +355,7 @@ fn the_plan_decides_the_layout_without_a_frame() {
         scale,
         cfg: SpectrumConfig::default(),
     };
-    let columns = Columns { first: 3, newest: 12.0 };
-    let plan = |v: &PaneView| Plan::new(v, &columns, None);
+    let plan = |v: &PaneView| Plan::new(v, 0.0, None);
 
     // Rows are PIXELS, not points: on a 2x screen the picture is read at
     // the density it will be drawn at, rather than upsampled from half of
@@ -800,76 +388,71 @@ fn the_plan_decides_the_layout_without_a_frame() {
     // period but not its phase.
     let floor = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
     let dense = plan(&view(2.0, 300.0, 4000.0, 1.0));
-    assert!(dense.bucket >= floor, "slab {} is finer than the data", dense.bucket);
-    // And it is always ON the ladder, so it lands on the store's own grid.
+    assert!(dense.bucket() >= floor, "slab {} is finer than the data", dense.bucket());
+    // And it is always ON the ladder, so it reads a level the pyramid keeps.
     for window in [1.0f64, 12.0, 30.0, 600.0] {
-        let steps = (plan(&view(2.0, 300.0, 4000.0, window)).bucket / floor).log2();
+        let steps = (plan(&view(2.0, 300.0, 4000.0, window)).bucket() / floor).log2();
         assert!((steps - steps.round()).abs() < 1e-9, "a {window} s Span fell off the ladder");
     }
 
-    // And the live image is never cut into more slabs than the store can
-    // keep up with — the cap `SpectrumHistory::COARSE_COLUMNS` is sized
-    // against.
+    // And the live image is never cut into more slabs than a level's ring
+    // holds.
     for window in [1.0f64, 12.0, 60.0, 600.0] {
         let p = plan(&view(2.0, 300.0, 4000.0, window));
-        let slabs = window / p.bucket;
+        let slabs = window / p.bucket();
         assert!(
             slabs <= LIVE_SLAB_CAP as f64 + 1.0,
             "a {window} s Span asks for {slabs} slabs, past the {LIVE_SLAB_CAP} cap",
         );
     }
     // A wider pane buys finer slabs, up to the cap — the pane's size is an
-    // INPUT to the grid, which is why resizing rebuilds it.
+    // INPUT to the level, which is why resizing can move it.
     let narrow = plan(&view(1.0, 300.0, 200.0, 30.0));
     let wide = plan(&view(1.0, 300.0, 900.0, 30.0));
-    assert!(wide.bucket < narrow.bucket, "a wider pane should resolve time more finely");
+    assert!(wide.bucket() < narrow.bucket(), "a wider pane should resolve time more finely");
 
-    // The slab width is the plan's one input to the FOLD: a density change
-    // that moves no slab boundary re-reads the run it already has, while one
-    // that crosses a ladder rung does not.
-    let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0)).bucket;
-    assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0)).bucket);
+    // The slab width is the plan's one input to which slabs are read: a
+    // density change that moves no slab boundary re-reads the run it already
+    // has, while one that crosses a ladder rung does not.
+    let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0)).level;
+    assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0)).level);
     assert_eq!(
         at_1x,
-        plan(&view(1.0, 900.0, 800.0, 12.0)).bucket,
-        "a taller pane reads the same slabs and must not refold",
+        plan(&view(1.0, 900.0, 800.0, 12.0)).level,
+        "a taller pane reads the same slabs and must not change level",
     );
     assert_ne!(
         at_1x,
-        plan(&view(1.0, 300.0, 200.0, 12.0)).bucket,
-        "a quarter of the depth pixels crosses a rung, which is a different fold",
+        plan(&view(1.0, 300.0, 200.0, 12.0)).level,
+        "a quarter of the depth pixels crosses a rung, which is another level",
     );
 }
 
-/// **Every cache layer must stay on its fast path across the whole REGIME
-/// GRID**, not just at the settings the pane opens on.
+/// A column of silence, which the pyramid folds on its fast path: what the
+/// sweeps below feed where only the run's shape is under test, not its bytes.
+fn silent(time: f64) -> Col {
+    (time, Box::new([0.0; SPECTRUM_BINS]))
+}
+
+/// **The ring's capacity must hold still across the whole REGIME GRID**, not
+/// just at the settings the pane opens on.
 ///
-/// Falling back is always CORRECT — a rescan and a reallocation both draw
-/// the right picture — so no value assertion anywhere in this file can see
-/// a layer that has quietly stopped working. What is left is to count the
-/// fallbacks, and to count them at settings the defaults never reach: both
-/// of the regressions this guards fired only past a Span the whole suite
-/// otherwise stayed below, and both then held until the plugin was reloaded.
+/// Reallocating is always CORRECT — it draws the right picture — so no value
+/// assertion anywhere in this file can see it happen every frame. What is
+/// left is to count the capacities, and to count them at settings the
+/// defaults never reach: the regression this guards fired only past a Span
+/// the whole suite otherwise stayed below, and then held until the plugin was
+/// reloaded.
 ///
-/// The grid is chosen where the cliffs are, and the cliffs are RATIOS
-/// between constants picked independently of each other:
+/// The cliff is a RATIO between constants picked independently of each
+/// other: a SLAB against the analyzer's LAG (half an analysis window), which
+/// decides whether the visible run reaches the far end of the window and so
+/// whether the buffer's capacity tracks it.
 ///
-/// - the window against the store's finest tier
-///   (`FINE_COLUMNS * FFT_INTERVAL`, ~16.4 s), which decides whether the
-///   aggregator's window holds merged columns; and
-/// - a SLAB against the analyzer's LAG (half an analysis window), which
-///   decides whether the visible run reaches the far end of the window and
-///   so whether the buffer's capacity tracks it.
-///
-/// The second moves with the FFT window AND with the pane's width, since a
-/// slab is `Span / depth pixels` — a narrow pane crosses it at a much
-/// shorter Span than a wide one. So the sweep is taken per (window, pane)
-/// pair, either side of that pair's own crossing.
-///
-/// The run key above these two is deliberately not counted: it holds the
-/// newest column's time, so it is MEANT to miss once per column. It is the
-/// aggregator and stable ring shape that keep those misses incremental.
-/// Actual upload behavior is checked by the headless renderer tests.
+/// It moves with the FFT window AND with the pane's width, since a slab is
+/// `Span / depth pixels` — a narrow pane crosses it at a much shorter Span
+/// than a wide one. So the sweep is taken per (window, pane) pair, either
+/// side of that pair's own crossing.
 #[test]
 fn no_cache_layer_falls_back_as_the_window_scrolls() {
     // Every window the pane offers, by the lag it gives a column.
@@ -886,28 +469,14 @@ fn no_cache_layer_falls_back_as_the_window_scrolls() {
     let panes = [("wide", LIVE_SLAB_CAP as f64), ("narrow", 384.0)];
 
     // A thread per grid point, because there is nothing between them to
-    // serialize: each case below builds its own [`SpectrogramAgg`],
-    // and [`crate::SpectrumHistory`], reads only the numbers it
-    // was handed, and checks folding and ring capacity. Threading them keeps
-    // every point — the grid here is the same grid, run eighteen ways at
-    // once instead of one after another. It is the run time that moves, and
-    // it is most of this crate's test wall clock.
+    // serialize: each case below builds its own pyramid and reads only the
+    // numbers it was handed.
     std::thread::scope(|scope| {
         let mut running = Vec::new();
         for (algo, lag) in windows {
             for (pane, cols) in panes {
                 // Where a slab is exactly the lag — the crossing this pair's
                 // ring behaviour turns on — plus a close-up to anchor it.
-                //
-                // The close-up is 12 s rather than the three-minute Span a
-                // fresh view opens on, and the two crossing-relative spans
-                // are why that costs no coverage: they land either side of
-                // the crossing for each window and pane, which is a longer
-                // Span than the default for some of those pairs and a
-                // shorter one for others. Driving the default outright would
-                // add 24,000 columns per pair (`scroll_the_window` runs
-                // `(span + 15) / interval` of them) to make a case these
-                // already bracket.
                 let crossing = lag * cols;
                 for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
                     running
@@ -918,10 +487,7 @@ fn no_cache_layer_falls_back_as_the_window_scrolls() {
         // Joined by hand rather than left to the scope's own join at the
         // end of this block, which panics with "a scoped thread panicked"
         // and leaves the `at` of the case that actually failed in captured
-        // output. Resuming the first failure's payload instead fails the
-        // test with that case's own message, as the serial sweep did — a
-        // sweep that will not say WHICH grid point broke is worse than a
-        // slow one.
+        // output.
         for case in running {
             if let Err(panic) = case.join() {
                 std::panic::resume_unwind(panic);
@@ -933,40 +499,31 @@ fn no_cache_layer_falls_back_as_the_window_scrolls() {
 /// One grid point of [`no_cache_layer_falls_back_as_the_window_scrolls`]:
 /// scroll a `span`-second window across a pane cut into `cols` depth
 /// pixels, fed by an analyzer that stamps each column `lag` behind the
-/// shell clock, and assert no cache layer fell back while it moved.
+/// shell clock, and assert the ring kept one capacity while it moved.
 ///
 /// Split out of the sweep so the sweep can hand it to a thread; `algo` and
 /// `pane` are carried only to name the case in an assertion.
 fn scroll_the_window(algo: &str, lag: f64, pane: &str, cols: f64, span: f64) {
     let interval = crate::AudioSpectrum::FFT_INTERVAL;
     let planned = ring_slots(cols as usize);
-    let bucket = live_slab(span, cols as usize);
+    let level = pyramid::level_of(live_slab(span, cols as usize));
     let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
 
-    let mut agg = SpectrogramAgg::new();
-    let mut history = crate::SpectrumHistory::default();
+    let mut pyramid = SlabPyramid::default();
     let mut caps = std::collections::BTreeSet::new();
 
     // Long enough to fill the window and then scroll a while inside it,
     // which is where the run starts breathing.
     let columns = ((span + 15.0) / interval) as usize;
     for i in 0..columns {
-        let t = i as f64 * interval;
-        history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+        let (t, power) = silent(i as f64 * interval);
+        pyramid.fold(t, &power);
         // The shell clock: the newest column always lags it.
         let now = t + lag;
-
         // Exactly what `draw_spectrogram` asks for each frame.
-        let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-        let (centers, _) = agg.window(&history, first, bucket, planned);
-        let visible = centers.len();
-        let capacity = ring_capacity(planned, visible);
-        caps.insert(capacity);
+        let Some(run) = pyramid.run(level, now - span) else { continue };
+        caps.insert(ring_capacity(planned, run.len()));
     }
-
-    // One of each to get started, and none after: from then on a frame folds
-    // one column and writes a slab or two.
-    assert_eq!(agg.rebuilds, 1, "the aggregator rescans the window: {at}");
     assert_eq!(caps.len(), 1, "the ring capacity changed while scrolling: {at}");
 }
 
@@ -974,12 +531,9 @@ fn scroll_the_window(algo: &str, lag: f64, pane: &str, cols: f64, span: f64) {
 ///
 /// This is what [`live_slab`]'s ladder is for. A slab width taken straight
 /// from the window moves whenever the window does, and a moved slab width
-/// re-lays the whole grid — so a drag would pay the full refold and a full
-/// upload, every frame, for as long as it lasted. On the ladder the width
-/// holds across a whole rung, the capacity is sized off the pane so it holds
-/// too, and the aggregator keeps what the GPU's copy keeps so a WIDENING
-/// Span finds its slabs already folded rather than asking for ones just
-/// trimmed.
+/// reads another level — so a drag would pay a full upload, every frame, for
+/// as long as it lasted. On the ladder the width holds across a whole rung,
+/// and the capacity is sized off the pane so it holds too.
 ///
 /// Swept in both directions: widening is the harder one, since it reaches
 /// back to slabs the window did not want a frame ago.
@@ -996,21 +550,20 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
     let rung = live_slab(30.0, cols);
     let (lo, hi) = (rung * 520.0, rung * 1010.0);
 
-    let mut agg = SpectrogramAgg::new();
-    let mut history = crate::SpectrumHistory::default();
+    let mut pyramid = SlabPyramid::default();
     let mut widths = std::collections::BTreeSet::new();
     let mut caps = std::collections::BTreeSet::new();
 
     // Fill past the widest Span in the sweep, so every frame of it is asking
-    // for a window the store can actually cover.
+    // for a window the pyramid can actually cover.
     let settled = hi + 10.0;
     let frames = ((settled + 40.0) / interval) as usize;
     let mut dragged = 0u32;
     for i in 0..frames {
-        let t = i as f64 * interval;
-        history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+        let (t, power) = silent(i as f64 * interval);
+        pyramid.fold(t, &power);
         let now = t + lag;
-        // Once the store is deep enough, sweep the Span down and back up,
+        // Once the pyramid is deep enough, sweep the Span down and back up,
         // a frame at a time as a drag delivers it.
         let span = if now < settled {
             hi
@@ -1026,10 +579,8 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
 
         let bucket = live_slab(span, cols);
         widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
-        let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-        let (centers, _) = agg.window(&history, first, bucket, planned);
-        let capacity = ring_capacity(planned, centers.len());
-        caps.insert(capacity);
+        let Some(run) = pyramid.run(pyramid::level_of(bucket), now - span) else { continue };
+        caps.insert(ring_capacity(planned, run.len()));
     }
 
     assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
@@ -1037,75 +588,46 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
         widths.len(),
         1,
         "the slab width took {} values inside one rung ({:?} us) — every one of them \
-             re-lays the grid and re-blanks the texture",
+             reads another level and re-uploads the texture",
         widths.len(),
         (widths.first(), widths.last()),
     );
-    assert_eq!(agg.rebuilds, 1, "the drag rescanned the window");
     // The opening upload and nothing else: the capacity is the pane's, so a
     // Span that moves inside its rung moves no slab into a different slot.
     assert_eq!(caps.len(), 1, "the drag resized the buffer: {caps:?} slabs");
 }
 
-/// A Span drag CROSSING ladder rungs refolds once per rung, not once per
-/// frame.
+/// A Span drag CROSSING ladder rungs changes level once per rung, not once
+/// per frame.
 ///
 /// [`dragging_the_span_holds_the_grid_between_ladder_steps`] stops just
 /// inside both ends of one rung, so the crossing itself is the regime it
 /// leaves out — and a crossing is the whole of what a horizontal zoom asks
-/// of the aggregator. A crossed rung moves `bucket`, and a moved `bucket`
-/// discards the grid and refolds the retention out of history
-/// ([`SpectrogramAgg::rebuild`]).
-///
-/// The count is the claim here: a rung crossing should refold once.
-/// A widening drag must not repeatedly rebuild flush to its window and
-/// request discarded history again on the very next frame.
+/// of the pyramid. A crossed rung reads another level, which re-uploads
+/// the run.
 ///
 /// Driven as the pane drives it. The Span is exponential in drag distance
 /// (`roll_seconds * (-along * DEPTH_ZOOM_PER_DRAG_POINT).exp()`) and the
 /// rungs are powers of two, so the crossings are EVENLY spaced along the
 /// drag — one every `ln 2 / DEPTH_ZOOM_PER_DRAG_POINT`, 116 points of
 /// travel.
-///
-/// The bound is on a drag that TRAVELS, and only on that. Distance is the
-/// whole of what limits the count here, so a Span that stops moving stops
-/// being bounded by anything this test says:
-/// [`a_span_dithering_across_a_rung_refolds_every_frame`] is the same
-/// aggregator, parked, refolding on every frame instead.
 #[test]
-fn a_span_drag_refolds_once_per_rung_crossed() {
-    let interval = crate::AudioSpectrum::FFT_INTERVAL;
+fn a_span_drag_changes_level_once_per_rung_crossed() {
     let cols = LIVE_SLAB_CAP as usize;
-    let planned = ring_slots(cols);
     // Two rungs of travel each way: 50 s sits in the 64 ms rung and 10 s on
     // the ladder's floor, so a drag between them crosses at 32.768 s and
     // 16.384 s. Below the floor the width cannot move at all, which is why
     // the low end is not pushed further.
     let (hi, lo) = (50.0f64, 10.0f64);
-
-    // Deep enough that the widest rung's retention is history rather than a
-    // store that simply ends: a rebuild reaches `planned` slabs back, which
-    // at this sweep's widest bucket is 66 s.
-    let mut history = crate::SpectrumHistory::default();
-    let settle = planned as f64 * live_slab(hi, cols) + hi;
-    for i in 0..(settle / interval) as usize {
-        history.push(col(i as f64 * interval, &[(4, 0.5), (10, 1.0)]));
-    }
-    let mut now = history.back().expect("filled").time;
-
-    let mut agg = SpectrogramAgg::new();
     let mut widths = std::collections::BTreeSet::new();
-    // A steady drag on a 144 Hz display: 1.5 points of travel per frame, so
-    // the whole 50 s -> 10 s sweep is 268 points and takes 1.2 s. A
-    // deliberate zoom rather than a flick — and a slower one only adds
+    // A steady drag: 1.5 points of travel per frame. A slower one only adds
     // frames, never crossings, which is the whole shape of the claim.
-    const FRAME: f64 = 1.0 / 144.0;
     let step = (-1.5f64 * DEPTH_ZOOM_PER_DRAG_POINT as f64).exp();
 
     let mut span = hi;
-    let mut frames = 0u32;
-    // Down the range and back up. Widening is the harder direction: it
-    // reaches back to slabs the window did not want a frame ago.
+    let (mut frames, mut moves) = (0u32, 0u32);
+    let mut held = None;
+    // Down the range and back up.
     for narrowing in [true, false] {
         loop {
             span = if narrowing { span * step } else { span / step };
@@ -1113,87 +635,54 @@ fn a_span_drag_refolds_once_per_rung_crossed() {
                 break;
             }
             frames += 1;
-            // Columns arrive on their own clock (125/s), not the frame's.
-            now += FRAME;
-            while history.back().is_none_or(|c| c.time + interval <= now) {
-                let t = history.back().map_or(0.0, |c| c.time) + interval;
-                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
-            }
-            let bucket = live_slab(span, cols);
+            let bucket = held_slab(span, cols, held);
             widths.insert((bucket * 1e6).round() as i64);
-            let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-            let _ = agg.window(&history, first, bucket, planned);
+            moves += u32::from(held.is_some_and(|b| b != bucket));
+            held = Some(bucket);
         }
     }
 
     assert_eq!(widths.len(), 3, "the sweep did not cross two rungs: {widths:?} us");
     assert!(frames > 300, "the sweep never ran: {frames} frames");
-    // The opening build, then one per crossing in each direction. Anything
-    // approaching `frames` is the cascade above.
-    assert_eq!(
-        agg.rebuilds, 5,
-        "a {frames}-frame Span drag across 2 rungs each way refolded {} times",
-        agg.rebuilds,
-    );
+    assert_eq!(moves, 4, "a {frames}-frame Span drag across 2 rungs each way moved {moves} times");
 }
 
 /// A Span sitting ON a rung boundary settles on one slab width instead of
 /// alternating, so the picture does not stop under a resting finger.
 ///
-/// [`a_span_drag_refolds_once_per_rung_crossed`] bounds a drag that TRAVELS.
-/// This is the other regime, and it is not a corner: the bare ladder
-/// re-decides the rung from the window alone on every frame, and one
+/// [`a_span_drag_changes_level_once_per_rung_crossed`] bounds a drag that
+/// TRAVELS. This is the other regime, and it is not a corner: the bare
+/// ladder re-decides the rung from the window alone on every frame, and one
 /// drag-point is 0.6% of the Span — which a resting finger clears on tremor
-/// alone. That is expensive rather than merely frequent: `bucket` is the
-/// aggregator's one layout input, so every frame pays a full refold and
-/// rewrites every slab it folded.
+/// alone. Every move reads another level and re-uploads the run.
 ///
 /// [`held_slab`] is what settles it, and the claim is the one the hysteresis
 /// exists to make: the tremor below straddles the boundary the whole way, so
-/// the ladder ALONE answers two widths and refolds on all 300 frames.
+/// the ladder ALONE answers two widths on all 300 frames.
 #[test]
 fn a_span_dithering_across_a_rung_settles_on_one_width() {
-    let interval = crate::AudioSpectrum::FFT_INTERVAL;
     let cols = LIVE_SLAB_CAP as usize;
-    let planned = ring_slots(cols);
     // The boundary between the 32 ms and 64 ms rungs: `live_slab` steps up
     // exactly where the window stops fitting in `cols` slabs.
     let boundary = 0.032 * cols as f64;
     let step = (-(DEPTH_ZOOM_PER_DRAG_POINT as f64)).exp();
 
-    let mut history = crate::SpectrumHistory::default();
-    let settle = planned as f64 * 0.064 + boundary;
-    for i in 0..(settle / interval) as usize {
-        history.push(col(i as f64 * interval, &[(4, 0.5), (10, 1.0)]));
-    }
-    let mut now = history.back().expect("filled").time;
-
-    let mut agg = SpectrogramAgg::new();
     let mut held: Option<f64> = None;
-    // How often the width MOVES, which is what a refold is paid for — the
+    // How often the width MOVES, which is what an upload is paid for — the
     // set of widths seen cannot tell one step up from three hundred.
     let (mut moves, mut bare_moves) = (0u32, 0u32);
     let mut bare_prev: Option<f64> = None;
-    const FRAME: f64 = 1.0 / 144.0;
     // One point of tremor either way, alternating: the hand is still and the
     // Span is not.
-    let mut frames = 0u32;
-    for i in 0..300 {
+    let frames = 300u32;
+    for i in 0..frames {
         let span = if i % 2 == 0 { boundary * step } else { boundary / step };
-        frames += 1;
-        now += FRAME;
-        while history.back().is_none_or(|c| c.time + interval <= now) {
-            let t = history.back().map_or(0.0, |c| c.time) + interval;
-            history.push(col(t, &[(4, 0.5), (10, 1.0)]));
-        }
         let raw = live_slab(span, cols);
         bare_moves += u32::from(bare_prev.is_some_and(|p| p != raw));
         bare_prev = Some(raw);
         let bucket = held_slab(span, cols, held);
         moves += u32::from(held.is_some_and(|p| p != bucket));
         held = Some(bucket);
-        let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
-        let _ = agg.window(&history, first, bucket, planned);
     }
 
     // The fixture reaches the thing it is about: without the hold this
@@ -1206,12 +695,6 @@ fn a_span_dithering_across_a_rung_settles_on_one_width() {
     // One step UP, at the first frame that does not fit the finer rung, and
     // nothing after it: the hold takes the boundary out of the tremor's reach.
     assert_eq!(moves, 1, "the width moved {moves} times under a still hand");
-    // The opening build, and the one refold that step costs.
-    assert_eq!(
-        agg.rebuilds, 2,
-        "a Span parked on a rung boundary refolded {} times in {frames} frames",
-        agg.rebuilds,
-    );
 }
 
 /// A slow drag with a hand's tremor on it crosses a rung ONCE, in either
@@ -1222,7 +705,7 @@ fn a_span_dithering_across_a_rung_settles_on_one_width() {
 /// the one [`RUNG_HOLD`]'s size is actually chosen against: a hand crossing
 /// a boundary at a fifth of a drag-point a frame spends tens of frames
 /// within tremor's reach of it, and every one of those the bare ladder
-/// answers differently is a full refold.
+/// answers differently reads another level and re-uploads the run.
 ///
 /// Two drag-points of tremor is 1.2% of the Span, against a margin of 5%.
 /// The `bare` count is what says the fixture is inside the boundary's reach
@@ -1265,11 +748,11 @@ fn a_slow_drag_with_tremor_crosses_a_rung_once() {
 }
 
 /// The hold reaches the pane through the SURFACE: a Span dithering on a
-/// boundary refolds twice, not once a frame.
+/// boundary changes level once, not once a frame.
 ///
 /// [`a_span_dithering_across_a_rung_settles_on_one_width`] is the same claim
 /// about [`held_slab`] alone. This one is about the wiring, which is the
-/// half that can be right in the ladder and wrong in the pane: the width a
+/// half that can be right in the ladder and wrong in the pane: the level a
 /// frame settles on has to be written back where the NEXT frame's plan
 /// reads it ([`run_for`]), and a plan built without it is the bare ladder
 /// with extra steps.
@@ -1299,29 +782,23 @@ fn the_held_width_survives_a_frame_through_the_surface() {
     let step = (-(DEPTH_ZOOM_PER_DRAG_POINT as f64)).exp();
 
     // One drag-point of tremor either way, which is the hand holding still.
-    let mut buckets = std::collections::BTreeSet::new();
+    let (mut levels, mut moves) = (std::collections::BTreeSet::new(), 0);
     for i in 0..200 {
         let window = if i % 2 == 0 { boundary * step } else { boundary / step };
         for _ in 0..2 {
             spectrum.push_history(clock, &bins);
             clock += interval;
         }
-        let view = view(window);
-        let hist = spectrum.history();
-        let columns = Columns {
-            first: hist.partition_point(|c| c.time < clock - window).saturating_sub(1),
-            newest: hist.back().map_or(clock, |c| c.time),
-        };
-        let held = surfaces.at(0).held_bucket;
-        let plan = Plan::new(&view, &columns, held);
-        buckets.insert((plan.bucket * 1e6).round() as i64);
-        run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
+        let held = surfaces.at(0).held_level;
+        let plan = Plan::new(&view(window), clock - window, held);
+        levels.insert(plan.level);
+        moves += u32::from(held.is_some_and(|level| level != plan.level));
+        run_for(spectrum.pyramid(), &mut surfaces, 0, &plan).expect("a run to draw");
     }
 
     // The opening frame's rung and the one it steps up to, and nothing after.
-    assert_eq!(buckets.len(), 2, "the pane saw more than one step: {buckets:?} us");
-    let refolds = surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
-    assert_eq!(refolds, 2, "a still hand on a rung boundary refolded {refolds} times in 200");
+    assert_eq!(levels.len(), 2, "the pane saw more than one step: {levels:?}");
+    assert_eq!(moves, 1, "a still hand on a rung boundary changed level {moves} times in 200");
 }
 
 #[test]
@@ -1340,15 +817,13 @@ fn unchanged_columns_reuse_the_folded_snapshot() {
         scale: SWEEP_SCALE,
         cfg: SpectrumConfig::default(),
     };
-    let cols = Columns { first: 0, newest: 91.99 };
-    let plan = Plan::new(&view, &cols, None);
-    let layout = run_for(spectrum.history(), &mut surfaces, 0, &plan).unwrap();
+    let plan = Plan::new(&view, 91.99 - 1.5, None);
+    let layout = run_for(spectrum.pyramid(), &mut surfaces, 0, &plan).unwrap();
     let original = surfaces.at(0).folded.grid().unwrap();
-    assert_eq!(Some(layout), run_for(spectrum.history(), &mut surfaces, 0, &plan));
+    assert_eq!(Some(layout), run_for(spectrum.pyramid(), &mut surfaces, 0, &plan));
     assert!(Arc::ptr_eq(&original.run, &surfaces.at(0).folded.grid().unwrap().run));
     spectrum.push_history(92.0, &bins);
-    let plan = Plan::new(&view, &Columns { first: 0, newest: 92.0 }, None);
-    run_for(spectrum.history(), &mut surfaces, 0, &plan).unwrap();
+    run_for(spectrum.pyramid(), &mut surfaces, 0, &plan).unwrap();
     assert!(!Arc::ptr_eq(&original.run, &surfaces.at(0).folded.grid().unwrap().run));
     assert_eq!(surfaces.at(0).folded.full_uploads(), 0, "folding is not an upload");
 }
@@ -1356,15 +831,16 @@ fn unchanged_columns_reuse_the_folded_snapshot() {
 /// What makes the renderer's comparison cheap: while audio streams in,
 /// consecutive snapshots share every slab but the one being filled and the
 /// one just opened, so all the rest compare by pointer. The fixture keeps
-/// a slab open across several frames, holds one missed slab, and trims
-/// the front at the retention bound, so each of those paths is taken.
+/// a slab open across several frames, holds one missed slab, and moves the
+/// window's far edge on, so each of those paths is taken.
 #[test]
 fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
-    let bucket = 4.0 * crate::AudioSpectrum::FFT_INTERVAL;
-    let keep = ring_slots(64);
-    let mut history = crate::SpectrumHistory::default();
-    let mut agg = SpectrogramAgg::new();
-    let mut previous: Option<(i64, Arc<[SpectrogramSlab]>)> = None;
+    // Level 1: 32 ms slabs, four columns each.
+    let (level, bucket) = (1, 4.0 * crate::AudioSpectrum::FFT_INTERVAL);
+    assert_eq!(pyramid::width(level), bucket);
+    let window = 64.0 * bucket;
+    let mut pyramid = SlabPyramid::default();
+    let mut previous: Option<(i64, Vec<SpectrogramSlab>)> = None;
     let (mut trimmed, mut held) = (false, false);
     for i in 0..1200 {
         // A slab and a half of missed columns, once: exactly one slab
@@ -1373,9 +849,11 @@ fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
             continue;
         }
         let time = i as f64 * crate::AudioSpectrum::FFT_INTERVAL;
-        history.push(col(time, &[(5, 0.1 + (i % 7) as f32 * 0.1)]));
-        let (centers, run) = agg.window(&history, 0, bucket, keep);
-        let first_key = (centers[0] / bucket).floor() as i64;
+        let (t, power) = col(time, &[(5, 0.1 + (i % 7) as f32 * 0.1)]);
+        pyramid.fold(t, &power);
+        let Some(run) = pyramid.run(level, time - window) else { continue };
+        let first_key = run.first_key;
+        let run: Vec<_> = run.slabs.cloned().collect();
         if let Some((was_first, was)) = &previous {
             trimmed |= first_key > *was_first;
             let moved = run
@@ -1393,11 +871,13 @@ fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
         held |= run.windows(2).any(|pair| Arc::ptr_eq(&pair[0], &pair[1]));
         previous = Some((first_key, run));
     }
-    assert!(trimmed, "the run never reached the retention bound");
+    assert!(trimmed, "the window's far edge never moved on");
     assert!(held, "no jitter hold shared its predecessor");
-    assert_eq!(agg.rebuilds(), 1, "the fixture left the incremental path");
 }
 
+/// The snapshot a surface holds changes only when the run does: a far edge
+/// moving inside its slab reads the same run, and one crossing into the
+/// next slab reads a new run of the same slabs, one shorter.
 #[test]
 fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
     let view = PaneView {
@@ -1409,22 +889,25 @@ fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
         cfg: SpectrumConfig::default(),
     };
     let bucket = live_slab(view.window, 256);
-    let mut history = crate::SpectrumHistory::default();
-    for (t, p) in [(0.0, 1.0), (0.2, 0.1), (0.4, 0.01), (2.2, 0.5), (3.2, 0.2)] {
-        history.push(col(t * bucket, &[(1000, p)]));
-    }
+    let mut pyramid = pyramid_of(
+        [(0.0, 1.0), (0.2, 0.1), (0.4, 0.01), (2.2, 0.5), (3.2, 0.2)]
+            .map(|(t, p)| col(t * bucket, &[(1000, p)])),
+    );
     let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-    let columns = Columns { first: 0, newest: history.back().unwrap().time };
-    let initial = Plan::new(&view, &columns, None);
-    let layout = run_for(&history, &mut surfaces, 0, &initial).unwrap();
+    // The far edge one slab in, so the run starts one slab before it, at the
+    // oldest slab.
+    let initial = Plan::new(&view, bucket, None);
+    assert_eq!(initial.bucket(), bucket);
+    let layout = run_for(&mut pyramid, &mut surfaces, 0, &initial).unwrap();
     let snapshot = surfaces.at(0).folded.grid().unwrap();
-    for first in 1..=2 {
-        let plan = Plan::new(&view, &Columns { first, ..columns }, None);
-        assert_eq!(run_for(&history, &mut surfaces, 0, &plan), Some(layout));
+    assert_eq!(snapshot.first_key, 0);
+    for edge in [1.25, 1.5, 1.75] {
+        let plan = Plan::new(&view, edge * bucket, None);
+        assert_eq!(run_for(&mut pyramid, &mut surfaces, 0, &plan), Some(layout));
         assert!(Arc::ptr_eq(&snapshot.run, &surfaces.at(0).folded.grid().unwrap().run));
     }
-    let next = Plan::new(&view, &Columns { first: 3, ..columns }, None);
-    let advanced = run_for(&history, &mut surfaces, 0, &next).unwrap();
+    let next = Plan::new(&view, 3.0 * bucket, None);
+    let advanced = run_for(&mut pyramid, &mut surfaces, 0, &next).unwrap();
     let grid = surfaces.at(0).folded.grid().unwrap();
     assert_eq!(grid.first_key, 2);
     assert_eq!(advanced.t_origin, 2.0 * bucket);
@@ -1433,169 +916,6 @@ fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
     // A new snapshot, and the same slabs: what the renderer compares by
     // pointer rather than by reading them.
     assert!(grid.run.iter().zip(&snapshot.run[2..]).all(|(a, b)| Arc::ptr_eq(a, b)));
-    assert_eq!(surfaces.at(0).agg.as_ref().unwrap().rebuilds(), 1);
-}
-
-#[test]
-fn a_larger_retention_recovers_a_cached_gap_without_new_columns() {
-    for (newest, span, bucket) in
-        [(10.0, 4.0, 0.016), (20.0, 8.0, 0.032), (1_000_000.0, 4.0, 0.016)]
-    {
-        let mut spectrum = crate::AudioSpectrum::default();
-        let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-        spectrum.store.history.push(col(0.0, &[(1000, 1.0)]));
-        spectrum.store.history.push(col(newest, &[(1000, 0.5)]));
-        let columns = Columns { first: 0, newest };
-        let mut view = PaneView {
-            ppp: 1.0,
-            pitch_len: 300.0,
-            depth_len: 256.0,
-            window: span,
-            scale: SWEEP_SCALE,
-            cfg: SpectrumConfig::default(),
-        };
-        let initial = Plan::new(&view, &columns, None);
-        assert_eq!((initial.bucket, initial.capacity), (bucket, 264));
-        // Docked pane and preview start on the same clipped run, but each
-        // must recover its own extent when it is resized.
-        for surface in 0..2 {
-            let old = run_for(spectrum.history(), &mut surfaces, surface, &initial).unwrap();
-            assert!(old.t_origin <= newest - span && old.t_origin > newest - 2.0 * span);
-        }
-        for surface in 0..2 {
-            view.depth_len = 512.0;
-            view.window = span;
-            let held = surfaces.at(surface).held_bucket;
-            let resize = Plan::new(&view, &columns, held);
-            assert_eq!(resize.bucket, initial.bucket, "the held rung, and no new column");
-            assert_eq!(resize.capacity, 520);
-            if bucket == 0.032 {
-                assert!(
-                    live_slab(span, 512) < resize.bucket,
-                    "hysteresis must hold a coarser rung"
-                );
-            }
-            let recovered = run_for(spectrum.history(), &mut surfaces, surface, &resize).unwrap();
-            assert!(recovered.t_origin <= newest - 2.0 * span, "retained extent stayed clipped");
-            if newest == 10.0 {
-                assert!((recovered.t_origin - 1.696).abs() < 1e-9);
-            }
-            let gpu = &surfaces.at(surface).folded;
-            let run = gpu.run.as_ref().unwrap().run.clone();
-            assert_eq!(gpu.run_slabs(), resize.capacity);
-
-            if surface == 0 {
-                assert_eq!(surfaces.at(1).folded.run_slabs(), initial.capacity);
-            }
-
-            // Span growth reuses this boundary; shrinking retention clips
-            // it, and re-expansion must recover the discarded coverage.
-            for (depth, window, capacity, rebuilds) in
-                [(512.0, 2.0 * span, 520, 2), (256.0, span, 264, 2), (512.0, 2.0 * span, 520, 3)]
-            {
-                view.depth_len = depth;
-                view.window = window;
-                let held = surfaces.at(surface).held_bucket;
-                let plan = Plan::new(&view, &columns, held);
-                assert_eq!(plan.bucket, initial.bucket, "the held rung, and no new column");
-                let layout = run_for(spectrum.history(), &mut surfaces, surface, &plan).unwrap();
-                let state = surfaces.at(surface);
-                let mut fresh = SpectrogramAgg::new();
-                let (centers, power) = fresh.window(spectrum.history(), 0, plan.bucket, capacity);
-                assert_eq!(layout.t_origin, centers[0] - plan.bucket * 0.5);
-                assert_eq!(state.folded.run.as_ref().unwrap().run, power);
-                assert_eq!(state.agg.as_ref().unwrap().rebuilds(), rebuilds);
-                assert_eq!(state.folded.full_uploads(), 0, "CPU folds never report uploads");
-                if depth == 512.0 && rebuilds == 2 {
-                    assert!(Arc::ptr_eq(&run, &state.folded.run.as_ref().unwrap().run));
-                }
-            }
-            // Compare to an explicit fresh fold of this final plan, with
-            // the million-second gap still bounded to the pane's budget.
-            let mut fresh = SpectrogramAgg::new();
-            let (centers, power) =
-                fresh.window(&spectrum.store.history, 0, resize.bucket, resize.capacity);
-            assert_eq!(recovered.t_origin, centers[0] - resize.bucket * 0.5);
-            assert_eq!(recovered.tex_span, centers.len() as f64 * resize.bucket);
-            assert_eq!(run, power);
-            assert_eq!(centers.len(), resize.capacity);
-            assert!(fresh.grid.power.capacity() <= 2 * (resize.capacity + 1));
-        }
-    }
-}
-
-#[test]
-fn retention_changes_reuse_a_run_that_already_covers_its_columns() {
-    let mut spectrum = crate::AudioSpectrum::default();
-    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-    for i in 0..=250 {
-        spectrum.store.history.push(col(i as f64 * 0.008, &[(1000, 0.5)]));
-    }
-    let columns = Columns { first: 0, newest: 2.0 };
-    let mut view = PaneView {
-        ppp: 1.0,
-        pitch_len: 300.0,
-        depth_len: 256.0,
-        window: 4.0,
-        scale: SWEEP_SCALE,
-        cfg: SpectrumConfig::default(),
-    };
-    let initial = Plan::new(&view, &columns, None);
-    for surface in 0..2 {
-        let layout = run_for(spectrum.history(), &mut surfaces, surface, &initial).unwrap();
-        let run = surfaces.at(surface).folded.run.as_ref().unwrap().run.clone();
-
-        // Cross the capacity boundary in both directions while the bucket
-        // stays held. Span, pitch, density and colour still only change
-        // how the same complete run is read.
-        for (depth, window, ppp) in [(257.0, 4.0, 1.0), (512.0, 8.0, 1.0), (128.0, 4.0, 2.0)] {
-            view.depth_len = depth;
-            view.window = window;
-            view.ppp = ppp;
-            view.pitch_len += 10.0;
-            view.scale.min_midi += 1.0;
-            view.scale.max_midi += 1.0;
-            view.cfg.spectrogram_gradient.hue_start += 10.0;
-            let held = surfaces.at(surface).held_bucket;
-            let plan = Plan::new(&view, &columns, held);
-            assert_eq!(plan.bucket, initial.bucket, "the held rung, and no new column");
-            assert_eq!(run_for(spectrum.history(), &mut surfaces, surface, &plan), Some(layout));
-            let state = surfaces.at(surface);
-            assert!(Arc::ptr_eq(&run, &state.folded.run.as_ref().unwrap().run));
-
-            assert_eq!(state.agg.as_ref().unwrap().rebuilds(), 1);
-        }
-    }
-}
-
-/// A smaller retention trims slabs off the grid's front while the window's
-/// first slab stays inside it: the slice's start moves and its run does not,
-/// so the memo must still hand back the run it served.
-#[test]
-fn a_smaller_retention_that_trims_only_the_slack_reuses_the_served_run() {
-    let bucket = 4.0 * crate::AudioSpectrum::FFT_INTERVAL;
-    let mut history = crate::SpectrumHistory::default();
-    // 100 slabs, keys 0..=99.
-    for i in 0..400 {
-        history.push(col(i as f64 * crate::AudioSpectrum::FFT_INTERVAL, &[(1000, 0.5)]));
-    }
-    // Slab 70: inside both 80 kept slabs (from 20) and 40 (from 60).
-    let first = 280;
-    let key = |center: f64| (center / bucket).floor() as i64;
-    let mut agg = SpectrogramAgg::new();
-
-    let (center, run) = agg.serve(&history, first, bucket, 80);
-    assert_eq!(key(center.unwrap()), 70);
-    let front = key(agg.grid.centers[0]);
-    let held = agg.grid.centers.len();
-    assert!(front < 60, "no slack in front of the admitted slab to trim: front {front}");
-
-    let (again, reused) = agg.serve(&history, first, bucket, 40);
-    assert_eq!(key(agg.grid.centers[0]), 60, "the smaller keep trimmed nothing");
-    assert!(agg.grid.centers.len() < held);
-    assert_eq!(again, center, "the admitted first slab moved");
-    assert!(Arc::ptr_eq(&run, &reused), "a trim of the slack alone re-served the run");
-    assert_eq!(agg.rebuilds(), 1);
 }
 
 /// The gradient table is keyed on what decides a texel of it, so two
@@ -1889,11 +1209,11 @@ fn the_shade_table_matches_the_mapping_it_replaces() {
 /// nothing about how they are read.
 ///
 /// Both directions again. An input that decides the run and does not reach
-/// the aggregator's memo draws a stale run — the picture stops at a column
-/// that has already scrolled past. One that decides nothing about the run
-/// re-folds the store on every frame of the drag that moves it, and every one
-/// of those is now a drag that moves a uniform: the zoom, the row count and
-/// the palette all read the same bytes a different way.
+/// the surface's memo draws a stale run — the picture stops at a column that
+/// has already scrolled past. One that decides nothing about the run
+/// re-uploads it on every frame of the drag that moves it, and every one of
+/// those is a drag that moves a uniform: the zoom, the row count and the
+/// palette all read the same bytes a different way.
 #[test]
 fn the_snapshot_follows_the_fold_and_not_the_read() {
     let interval = crate::AudioSpectrum::FFT_INTERVAL;
@@ -1909,34 +1229,37 @@ fn the_snapshot_follows_the_fold_and_not_the_read() {
     // Off the slab grid by a quarter interval, so columns 4 and 5 share a
     // slab at the two-interval rung this view settles on.
     let at = |i: usize| (i as f64 + 0.25) * interval;
-    let mut history = crate::SpectrumHistory::default();
+    let mut spectrum = crate::AudioSpectrum::default();
+    let power = |p: f32| {
+        let mut bins = [0.0; SPECTRUM_BINS];
+        bins[1000] = p;
+        bins
+    };
     for i in 0..599 {
-        history.push(col(at(i), &[(1000, 0.5)]));
+        spectrum.push_history(at(i), &power(0.5));
     }
-    let columns = Columns { first: 4, newest: history.back().unwrap().time };
+    let from = at(4);
     let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-    let base_plan = Plan::new(&base_view, &columns, None);
-    assert_eq!(base_plan.bucket, 2.0 * interval, "the fixture's slab width");
-    let mut draw = |history: &crate::SpectrumHistory, v: &PaneView, c: &Columns| {
-        run_for(history, &mut surfaces, 0, &Plan::new(v, c, None)).expect("a run to draw");
-        let state = surfaces.at(0);
-        (state.folded.grid().unwrap().run, state.agg.as_ref().unwrap().rebuilds())
+    let base_plan = Plan::new(&base_view, from, None);
+    assert_eq!(base_plan.bucket(), 2.0 * interval, "the fixture's slab width");
+    let mut draw = |spectrum: &mut crate::AudioSpectrum, v: &PaneView, from: f64| {
+        let plan = Plan::new(v, from, None);
+        run_for(spectrum.pyramid(), &mut surfaces, 0, &plan).expect("a run to draw");
+        surfaces.at(0).folded.grid().unwrap().run
     };
-    let (base, _) = draw(&history, &base_view, &columns);
-    let same = |(run, rebuilds): (Arc<[SpectrogramSlab]>, u32), what: &str| {
+    let base = draw(&mut spectrum, &base_view, from);
+    let same = |run: Arc<[SpectrogramSlab]>, what: &str| {
         assert!(Arc::ptr_eq(&base, &run), "{what} handed out a new run");
-        assert_eq!(rebuilds, 1, "{what} refolded the store");
     };
-    same(draw(&history, &base_view, &columns), "the same frame");
+    same(draw(&mut spectrum, &base_view, from), "the same frame");
 
-    // A raw column index inside the same first slab does not decide
-    // completed averages.
-    same(draw(&history, &base_view, &Columns { first: 5, ..columns }), "a column inside a slab");
+    // A far edge moving inside the same slab reads the same slabs.
+    same(draw(&mut spectrum, &base_view, at(5)), "a far edge inside a slab");
 
     // And everything that is a UNIFORM: the rows, the pitch range and every
     // colour input read the run rather than deciding it, so none of them may
-    // refold a thing.
-    let mut read_only = |v: PaneView| same(draw(&history, &v, &columns), "a uniform change");
+    // hand out another.
+    let mut read_only = |v: PaneView| same(draw(&mut spectrum, &v, from), "a uniform change");
     read_only(PaneView { pitch_len: 900.0, ..base_view });
     read_only(PaneView { ppp: 1.0, pitch_len: 600.0, ..base_view });
     read_only(PaneView {
@@ -1957,24 +1280,23 @@ fn the_snapshot_follows_the_fold_and_not_the_read() {
 
     // What decides the run reaches the one memo of it. A fresh column, into
     // the slab still open, so the run keeps its length:
-    history.push(col(at(599), &[(1000, 0.25)]));
-    let (fresh, rebuilds) = draw(&history, &base_view, &columns);
+    spectrum.push_history(at(599), &power(0.25));
+    let fresh = draw(&mut spectrum, &base_view, from);
     assert_eq!(fresh.len(), base.len(), "the fresh column opened a slab");
     assert!(!Arc::ptr_eq(&base, &fresh), "a new column reused the old run");
     assert_ne!(fresh.last(), base.last(), "the open slab kept its old average");
-    assert_eq!(rebuilds, 1, "a new column is folded in, not refolded");
-    // A Clear followed by a history of the same length and newest time, which
-    // only the aggregator's clear count can tell from the one before it.
-    history.clear();
+    // A Clear followed by a history of the same length and newest time,
+    // which only the slabs themselves tell from the one before it.
+    spectrum.clear_history();
     for i in 0..600 {
-        history.push(col(at(i), &[(1000, 0.125)]));
+        spectrum.push_history(at(i), &power(0.125));
     }
-    let (cleared, _) = draw(&history, &base_view, &columns);
+    let cleared = draw(&mut spectrum, &base_view, from);
     assert_eq!(cleared[100][1000], q(0.125), "a Clear served the run from before it");
     // And the slab width, through the ladder.
     let coarse_view = PaneView { depth_len: 200.0, ..base_view };
-    assert_ne!(Plan::new(&coarse_view, &columns, None).bucket, base_plan.bucket);
-    let (coarser, _) = draw(&history, &coarse_view, &columns);
+    assert_ne!(Plan::new(&coarse_view, from, None).level, base_plan.level);
+    let coarser = draw(&mut spectrum, &coarse_view, from);
     assert!(!Arc::ptr_eq(&cleared, &coarser), "a new rung reused the old run");
 }
 
@@ -2259,7 +1581,7 @@ mod gpu {
     /// A column whose whole spectrum is the one stored byte `db`, so a slab
     /// folded from it reads that byte at every row and a block of the frame is
     /// one number.
-    fn flat_column(time: f64, db: BucketDb) -> crate::SpectrogramColumn {
+    fn flat_column(time: f64, db: BucketDb) -> Col {
         let power = 10f32.powf(0.1 * harmonigraph_core::spectrogram::db_of(db));
         col(time, &(0..SPECTRUM_BINS).map(|b| (b, power)).collect::<Vec<_>>())
     }
@@ -2292,7 +1614,6 @@ mod gpu {
         reveals: u32,
         crossings: u32,
         rebuilds: u32,
-        backwards: u32,
         /// The previous frame's slab width and first key, which is what makes
         /// a crossing, a reveal and a boundary advance tellable apart.
         last: Option<(f64, i64)>,
@@ -2315,16 +1636,15 @@ mod gpu {
 
         // A moving peak over a low bed, so consecutive slabs differ and a slab
         // written into the wrong slot draws a different picture. Straight into
-        // the history, since the jump below dates columns backwards, which
-        // `push_history` asserts against in debug builds. Bypassing it is the
-        // point: this exercises the aggregator's release-build backstop, where
-        // that assert is compiled out.
+        // the history, below the assertion that no feeder dates a column
+        // backwards, since the jump below does: this exercises the guard that
+        // stands in for that assertion in release builds.
         let push = |t: &mut Tally, spectrum: &mut crate::AudioSpectrum, n: u32, gap: f64| {
             t.clock += gap;
             for _ in 0..n {
                 let mut bins = [0.02f32; SPECTRUM_BINS];
                 bins[400 + (t.pushed as usize * 13) % 3000] = 1.0;
-                spectrum.store.history.push(crate::SpectrogramColumn::from_power(t.clock, &bins));
+                spectrum.push_history(t.clock, &bins);
                 t.clock += interval;
                 t.pushed += 1;
             }
@@ -2336,32 +1656,24 @@ mod gpu {
                      headless: &mut SpectrogramHeadless,
                      view: &PaneView|
          -> (SpectrogramGrid, SpectrogramRead, Vec<u8>) {
-            let hist = spectrum.history();
-            let columns = Columns {
-                first: hist.partition_point(|c| c.time < t.clock - view.window).saturating_sub(1),
-                newest: hist.back().map_or(t.clock, |c| c.time),
-            };
-            let plan = Plan::new(view, &columns, None);
+            let plan = Plan::new(view, t.clock - view.window, None);
             let uploads = surfaces.at(0).folded.full_uploads();
-            let refolds = surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds());
             let held = surfaces.at(0).folded.grid().map(|grid| grid.run);
-            run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
+            run_for(spectrum.pyramid(), surfaces, 0, &plan).expect("a run to draw");
             let run = surfaces.at(0).folded.grid().expect("a run to draw").run;
             t.folds += u32::from(held.is_none_or(|held| !Arc::ptr_eq(&held, &run)));
-            t.backwards += u32::from(
-                refolds > 0 && surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds()) > refolds,
-            );
             let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
             let slabs = grid.run.len() as u32;
             let read = read_of(view, plan.rows);
             let vertices = run_quad(slabs, SIZE);
 
-            if let Some((bucket, first_key)) = t.last {
-                t.crossings += u32::from(bucket != plan.bucket);
-                t.reveals += u32::from(grid.first_key < first_key && bucket == plan.bucket);
-                t.advances += u32::from(grid.first_key > first_key && bucket == plan.bucket);
+            let bucket = plan.bucket();
+            if let Some((was, first_key)) = t.last {
+                t.crossings += u32::from(was != bucket);
+                t.reveals += u32::from(grid.first_key < first_key && was == bucket);
+                t.advances += u32::from(grid.first_key > first_key && was == bucket);
             }
-            t.last = Some((plan.bucket, grid.first_key));
+            t.last = Some((bucket, grid.first_key));
             // A HELD slab is a copy of the one before it, which is the only way
             // two neighbours can carry the same bytes under this fixture.
             t.holds += u32::from((1..slabs as usize).any(|j| grid.run[j - 1] == grid.run[j]));
@@ -2413,12 +1725,13 @@ mod gpu {
             frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(span));
             push(&mut tally, &mut spectrum, 4, 0.0);
         }
-        // One empty slab: a seam in the sample stream, which the aggregator
-        // fills by holding the column before it.
+        // One empty slab: a seam in the sample stream, which a level fills
+        // by holding the slab before it.
         push(&mut tally, &mut spectrum, 6, 0.024);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
-        // Dates stepping backwards, which no delta can describe.
-        tally.clock -= 0.4;
+        // Dates stepping backwards past the guard's second, which resets the
+        // history: no delta can describe that.
+        tally.clock -= 1.5;
         push(&mut tally, &mut spectrum, 40, 0.0);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
         push(&mut tally, &mut spectrum, 8, 0.0);
@@ -2437,7 +1750,7 @@ mod gpu {
             (tally.reveals, "slabs revealed by a widening window"),
             (tally.crossings, "ladder rungs crossed"),
             (tally.rebuilds, "full uploads"),
-            (tally.backwards, "backward jumps"),
+            (spectrum.guard_counts().1, "history resets"),
         ] {
             assert!(count > 0, "the sequence never reached any {what}");
         }
@@ -2481,24 +1794,23 @@ mod gpu {
         // inside a run.
         let mut spectrum = crate::AudioSpectrum::default();
         let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
-        let mut times = Vec::new();
-        for i in 0..238 {
+        let mut columns = (0..238).map(|i| {
             let time = -1.5 + i as f64 * interval;
             let key = (time / bucket).floor() as i64;
-            spectrum.store.history.push(flat_column(time, 60 + key.rem_euclid(190) as u8));
-            times.push(time);
-        }
+            flat_column(time, 60 + key.rem_euclid(190) as u8)
+        });
+        let mut next = columns.next();
 
         let (mut negative, mut wrapped) = (0u32, 0u32);
         let mut now = -1.2;
         while now < 0.4 {
-            let hist = spectrum.history();
-            let columns = Columns {
-                first: hist.partition_point(|c| c.time < now - view.window).saturating_sub(1),
-                newest: hist.back().map_or(now, |c| c.time),
-            };
-            let plan = Plan::new(&view, &columns, None);
-            run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
+            // As a live stream delivers them: every column up to the frame.
+            while let Some((time, power)) = next.take_if(|(time, _)| *time <= now) {
+                spectrum.push_history(time, &power);
+                next = columns.next();
+            }
+            let plan = Plan::new(&view, now - view.window, None);
+            run_for(spectrum.pyramid(), &mut surfaces, 0, &plan).expect("a run to draw");
             let (grid, _) = frame_data(&mut surfaces, 0, &cfg).expect("a grid to draw");
             let slabs = grid.run.len() as u32;
             let first_slot = grid.first_key.rem_euclid(i64::from(grid.capacity)) as u32;
@@ -3069,13 +2381,8 @@ mod gpu {
                 scale: whole_axis(),
                 cfg,
             };
-            let hist = spectrum.history();
-            let columns = Columns {
-                first: hist.partition_point(|c| c.time < *clock - window).saturating_sub(1),
-                newest: hist.back().map_or(*clock, |c| c.time),
-            };
-            let plan = Plan::new(&view, &columns, None);
-            run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
+            let plan = Plan::new(&view, *clock - window, None);
+            run_for(spectrum.pyramid(), surfaces, 0, &plan).expect("a run to draw");
             let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
             let slabs = grid.run.len() as u32;
             let read = read_of(&view, plan.rows);
@@ -3100,4 +2407,35 @@ mod gpu {
         // crosses three of them, `live_slab`'s own rungs a few more.
         assert!(sent <= 12, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");
     }
+}
+
+/// A stream that stops draws its columns on as they scroll away, then nothing
+/// once the window has passed the last of them, until columns resume.
+#[test]
+fn a_stopped_stream_draws_nothing_until_columns_resume() {
+    let mut spectrum = crate::AudioSpectrum::default();
+    let mut surfaces = crate::spectrum::SpectrogramSurfaces::default();
+    let bins = [0.5; SPECTRUM_BINS];
+    let view = PaneView {
+        ppp: 1.0,
+        pitch_len: 64.0,
+        depth_len: 256.0,
+        window: 4.0,
+        scale: SWEEP_SCALE,
+        cfg: SpectrumConfig::default(),
+    };
+    let mut draws = |spectrum: &mut crate::AudioSpectrum, now: f64| {
+        let plan = Plan::new(&view, now - view.window, None);
+        run_for(spectrum.pyramid(), &mut surfaces, 0, &plan).is_some()
+    };
+    for i in 0..500 {
+        spectrum.push_history(100.0 + i as f64 * 0.008, &bins);
+    }
+    assert!(draws(&mut spectrum, 104.0), "a streaming history drew nothing");
+    assert!(draws(&mut spectrum, 106.0), "the stopped stream's columns did not scroll on");
+    assert!(!draws(&mut spectrum, 108.1), "the window passed the last column and still drew");
+    for i in 0..3 {
+        spectrum.push_history(110.0 + i as f64 * 0.008, &bins);
+    }
+    assert!(draws(&mut spectrum, 110.03), "resumed columns drew nothing");
 }
