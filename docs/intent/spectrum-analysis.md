@@ -42,3 +42,11 @@ Yan’s decisions recorded for future drift audits.
 
 - The spectrum/history now-line stays at the 2 pt line width, deliberately heavier than the 1 pt spectrum outline (#1585): the two share a colour, not a weight. #1635 Spectrum Q1, #1631
 - Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631
+
+## 2026-11-14 (premises audit, #1739)
+
+Calls marked "delegated" were made by the audit session after Yan asked it to settle the decisions with an obvious answer; the reason is part of the line.
+
+- Tape keeps its own note recorder joined by presentation time, for now: feeding it from the take lane is part of #1739's F3′, declined for now (see `video-export.md`). Delegated. #1739
+- Under the slab pyramid, release builds drop a column not dated after the newest folded one, keeping the debug assertion and counting drops on the overlay. This reopens the 2026-11-02 line above (#1635 Q2): its reason still holds, but a backward column would misdraw a write-once pyramid for up to ten minutes. #1739 D10
+- The analyzer reads a frame on request; drawing at once after a longer-frame switch holds its first column until it dates after the newest (or relies on the guard above). Part of F2′. #1739

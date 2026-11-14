@@ -16,3 +16,6 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-10 (maintainability audit, #1677)
 
 - No capability record per spectrogram style: the separate style tests stay, since no further style is expected (#1677 area 7 Q1). Reopen only when a style is added. #1677 R7
+
+## 2026-11-14 (premises audit, #1739)
+- The live spectrogram history goes to `propose-rework` as one shared slab pyramid on the absolute grid (F2′): about half the memory, the same picture in the dock and the preview, the per-surface aggregator gone. #1739 F2′
