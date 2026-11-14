@@ -39,7 +39,7 @@ cargo build --release -p harmonigraph-offline
 
 ## Saved appearance
 
-Takes use format v6 and carry a version-1 appearance document captured when recording is armed.
+Takes use format v7 and carry a version-1 appearance document captured when recording is armed.
 It contains camera, view, spectrum and the whole video configuration;
 dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.
@@ -68,7 +68,11 @@ It replaces the recorded document completely;
 `--size` and other explicit output flags retain their precedence.
 
 Editor saves below version 7 are refused whole and a fresh instance opens at defaults, with a console message.
-Take formats v1–v5 are refused with a version error and must be recorded again.
+Take formats v1–v6 are refused with a version error and must be recorded again.
+A v7 take holding a `PassClosed(n)` line,
+which every take from the #1765 build (`3527f4bf`) that split into passes holds,
+is refused at that line since #1766 dropped the record;
+`grep -v '^PassClosed(' old.take > new.take` repairs it.
 An unreadable or unsupported selected appearance document refuses the export with an error on stderr.
 A valid replacement overrides the recorded document completely.
 A missing recorded appearance or missing settings groups use their normal defaults.
