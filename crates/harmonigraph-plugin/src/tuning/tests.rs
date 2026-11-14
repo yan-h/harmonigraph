@@ -1270,8 +1270,9 @@ fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
 }
 
 /// A flood past one batch every callback, across a Stop: the frontier still
-/// moves, to the earliest capture left in the rings, so the take seals once
-/// what it recorded is published rather than only once the flood ends.
+/// moves, to the earliest capture left in the rings and no further, so the
+/// take seals whole once what it recorded is published rather than only once
+/// the flood ends.
 #[test]
 fn a_take_stopped_in_a_flood_seals_before_the_flood_ends() {
     let _scope = crate::test_scope::enter();
@@ -1284,12 +1285,16 @@ fn a_take_stopped_in_a_flood_seals_before_the_flood_ends() {
             tune
         })
         .collect();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-flood-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
     capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
     let mut sealed = None;
     for step in 0..14 {
         let raw = step * 512;
         if step == 4 {
             capture.stop();
+            writer.stop();
         }
         hub.run_format(raw, vec![], None, None, 512);
         for (index, tune) in tunes.iter().enumerate() {
@@ -1305,12 +1310,17 @@ fn a_take_stopped_in_a_flood_seals_before_the_flood_ends() {
             };
             tune.run_format(raw, events, None, None, 512);
         }
-        if sealed.is_none() && capture.drain_take_order().contains(&("epoch complete", Some(1))) {
+        writer.drain(&mut capture);
+        assert!(!writer.failed(), "failed at step {step}");
+        if sealed.is_none() && writer.finished.is_some() {
             sealed = Some(step);
         }
     }
     let sealed = sealed.expect("the take seals");
     assert!(sealed < 9, "sealed at step {sealed}, after the flood ended");
+    let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
+    assert!(take.incomplete.is_none(), "{:?}", take.incomplete);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A cut and joined destruction are where the last callback's end is proven,
