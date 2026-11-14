@@ -384,14 +384,15 @@ macOS plays AV1 natively only on M3 and later.
 
 ## Recorded audio
 
-The renderer uses the WAV named in the take header, beside the `.take` file, for both spectrum analysis and the soundtrack.
-Keep the two files together when moving a take.
+The renderer uses the WAV the rendered pass names on its `Run` records, beside the `.take` file, for both spectrum analysis and the soundtrack.
+A looped take has one WAV per pass (`take-….wav`, `take-…-2.wav` and on);
+keep them all beside the `.take` file when moving a take.
 If the named WAV is missing, the renderer warns and exports without audio or spectrum.
 Separate-WAV replacement is no longer supported;
 `-a` and `--audio` are rejected as unknown options.
 
-The recording's first sample is stamped with its take time in the header, so sound and picture align without an offset to work out.
-An unstamped recording starts at zero; manual alignment overrides are no longer supported.
+The pass's first `Run` gives its WAV's first sample a song time, so sound and picture align without an offset to work out.
+A take with no `Run` starts at zero; manual alignment overrides are no longer supported.
 
 ## Layouts
 
