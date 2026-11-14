@@ -223,8 +223,6 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = held();
         Opening { ctx: &ctx, state: &mut state }.open();
-        // A layout that needs the lattice keeps the loading screen up.
-        state.workspace.layout = crate::workspace::Layout::solo(crate::panes::Tab::Lattice);
         crate::startup::begin_editor_loading_with(
             &ctx,
             harmonigraph_render::startup::WindowStartup::preparing(),

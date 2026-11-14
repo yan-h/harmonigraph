@@ -1,7 +1,8 @@
 # Production Metal asset validation
 
-The [production workflow](../../metal-shader-assets.md) owns the reproduction commands and interpretation.
-The embedded corpus is in `crates/harmonigraph-metal-assets/assets/` with its compiler provenance and hashes.
+The [production workflow](https://github.com/yan-h/harmonigraph/blob/c423bf44/docs/metal-shader-assets.md) owned the reproduction commands and interpretation.
+The embedded corpus was in `crates/harmonigraph-metal-assets/assets/` with its compiler provenance and hashes,
+until #1746 deleted both; they apply at commit `c423bf44`.
 This record uses the actual installed provider and embedded bytes, with no runtime sidecar override.
 
 `validation.txt` preserves test outcomes and raw-log hashes from the initial generator and expanded metadata/fallback run.

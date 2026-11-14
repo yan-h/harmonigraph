@@ -45,6 +45,10 @@ pub struct EditorShared {
     /// The input worker could not be started, so the window's frames drain
     /// the rings themselves, as they did before it existed.
     pub(crate) frame_drains: bool,
+    /// The device every window of this editor opens on (#698). Here rather
+    /// than on the editor because activation creates it, before any window,
+    /// and starts compiling on it ([`super::start_graphics`]).
+    pub(crate) gpu_context: egui_baseview::SharedGpuContext,
 }
 
 impl EditorShared {
@@ -75,6 +79,7 @@ impl EditorShared {
             take_last_count: 0,
             take_still_since: None,
             frame_drains: false,
+            gpu_context: egui_baseview::SharedGpuContext::default(),
         }
     }
 

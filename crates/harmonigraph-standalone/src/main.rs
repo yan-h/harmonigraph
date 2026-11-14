@@ -29,7 +29,6 @@ static ALLOCATOR: harmonigraph_perf::heap::Counting<std::alloc::System> =
     harmonigraph_perf::heap::Counting::new(std::alloc::System, &harmonigraph_perf::heap::RUST_HEAP);
 
 fn main() -> eframe::Result {
-    harmonigraph_render::shader_assets::initialize();
     // The device the plugin's editor asks for, as `graphics_config` does there.
     let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {

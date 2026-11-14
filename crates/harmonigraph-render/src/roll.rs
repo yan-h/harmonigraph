@@ -1343,11 +1343,6 @@ impl CallbackTrait for RollCallback {
 #[cfg(test)]
 pub(crate) mod tests;
 
-#[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]
-pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) {
-    drop(RollResources::new(device, format));
-}
-
 #[cfg(test)]
 #[path = "roll_timing.rs"]
 mod timing;

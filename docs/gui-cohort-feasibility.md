@@ -139,7 +139,7 @@ Actual local source diff versus checksum-published 0.3.0: egui-baseview src has 
 
 | Obligation | Disposition / published evidence |
 |---|---|
-| wgpu-hal generic Metal library provider | Adaptation to 30.0.1; no upstream provider. `src/metal/device.rs:162ff` still generates MSL then directly calls newLibraryWithSource_options_error around 280; no shader_library module. Keep three-site provider boundary; audit new Naga/MSL options and native compiler options before port. |
+| wgpu-hal generic Metal library provider | Adaptation to 30.0.1; no upstream provider. `src/metal/device.rs:162ff` still generates MSL then directly calls newLibraryWithSource_options_error around 280; no shader_library module. Kept the three-site provider boundary at the time; superseded by #1746, which deleted the provider, so nothing is left to port. |
 | nice-plug activation ordering | Still needed if moving to 0.4.2: wrapper marks is_activated inside activation loop (~1781), then drops activate_context only at 1807. |
 | nice-plug production CLAP ownership/configuration/performance/setup | Adaptation if moving; no corresponding custom seams or source modules in 0.4.2. Preserve shared host-input ownership, bounded output, setup/main-thread destruction contracts and exported-factory fixtures. |
 | nice-plug auxiliary descriptor bounds/storage sizing | Still needed if moving: clap/wrapper.rs:2065,2089 still use `>` rather than `>=`; util/buffer_management.rs:295 resizes inside input-present path. |
@@ -155,6 +155,7 @@ Sources: [published CLAP wrapper](https://docs.rs/crate/nice-plug/0.4.2/source/s
 - nice-plug upgrade is not mathematically required by egui-baseview. Current product implements its own Editor and does not depend on nice-plug-egui; current nice-plug baseview dependency is optional behind standalone. Retaining patched nice-plug 0.1.10 while implementing an explicit 0.6 parent-handle bridge is a possible narrower route, not proven by this prototype. Otherwise use current nice-plug 0.4.2/core cohort and rebase its separate audio obligations; do not silently replace the heavily patched audio framework merely to align version numbers.
 - wgpu 29 and 30 handles/callbacks cannot be passed across the boundary. Render crate gets wgpu through egui-wgpu; update offline, standalone, callbacks, native layer access and hot-reload naga together. Published textures_delta.set changed to lists per texture ID, so existing uploads/publication code needs adaptation.
 - A 29.0.4 patch package does not satisfy ^30: a manifest bump would bypass the vendored wgpu-hal provider unless it is ported. The provider includes package version in BACKEND_VERSION and hashes exact MSL/options; 30.0.1 must regenerate the Metal corpus through production constructors, then strict catalog, offline production paths, real-path goldens, storage bindings, lifecycle/reopen, and performance validation. No corpus was regenerated here. Existing provider cold-start/reopen evidence favors preserving it.
+  (Since #1746 there is no provider or corpus to port: the vendored wgpu-hal carries only `Buffer::raw_handle` and `set_present_observer`.)
 
 ## Runtime probe
 

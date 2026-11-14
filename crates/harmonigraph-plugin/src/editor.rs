@@ -20,6 +20,7 @@ pub use lock::EditorLock;
 pub use persist::{EguiState, UiState};
 pub use shared::EditorShared;
 pub use window::create;
+pub(crate) use window::{graphics_config, start_graphics};
 
 /// The surface format egui-baseview's wgpu backend will pick. It isn't
 /// exposed through its API, so we mirror the choice egui-wgpu makes: the

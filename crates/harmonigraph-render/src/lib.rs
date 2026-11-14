@@ -58,7 +58,6 @@ use lattice_pipelines::*;
 use lattice_targets::*;
 
 pub mod gpu_memory;
-pub mod shader_assets;
 /// Progress for interactive editor initialization; offline rendering remains synchronous.
 pub mod startup;
 
