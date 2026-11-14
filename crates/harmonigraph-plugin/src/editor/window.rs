@@ -40,6 +40,30 @@ pub(super) fn graphics_config() -> GraphicsConfig {
     config
 }
 
+/// Make the device the editor will open on and start compiling its programs
+/// on it, so the first open finds the loading job done or under way rather
+/// than starting it cold (#1746). Called at activation; a device already
+/// retained, by an earlier activation or a window, is reused, so a later call
+/// starts nothing new unless that device was lost.
+#[cfg(all(target_os = "macos", not(test)))]
+pub(crate) fn start_graphics(shared: &Mutex<EditorShared>) {
+    let (context, cache) = {
+        let shared = shared.lock();
+        (shared.gpu_context.clone(), shared.ui.picture.editor_graphics())
+    };
+    let setup = match context.existing() {
+        Some(setup) => setup,
+        None => {
+            let Some(setup) = harmonigraph_render::startup::editor_device() else {
+                return;
+            };
+            context.retain(setup.clone());
+            setup
+        }
+    };
+    cache.start(&setup.instance, &setup.device, super::ASSUMED_SURFACE_FORMAT);
+}
+
 pub fn create(
     params: Arc<HarmonigraphParams>,
     shared: Arc<Mutex<EditorShared>>,
@@ -50,7 +74,6 @@ pub fn create(
         params,
         shared,
         host,
-        gpu_context: egui_baseview::SharedGpuContext::default(),
         // On macOS the system reports scaling; elsewhere a host that never
         // calls set_scale_factor gets 1.0 (same policy as nih_plug_egui).
         #[cfg(target_os = "macos")]
@@ -66,7 +89,6 @@ pub(super) struct LatticeEditor {
     shared: Arc<Mutex<EditorShared>>,
     host: Option<Arc<dyn EditorHost>>,
     scaling_factor: AtomicCell<Option<f32>>,
-    gpu_context: egui_baseview::SharedGpuContext,
 }
 
 /// baseview uses a different raw-window-handle version than nih-plug, so
@@ -195,7 +217,7 @@ impl Editor for LatticeEditor {
         });
 
         let mut graphics = graphics_config();
-        graphics.shared_context = Some(self.gpu_context.clone());
+        graphics.shared_context = Some(self.shared.lock().gpu_context.clone());
         let closing_context = context.clone();
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),

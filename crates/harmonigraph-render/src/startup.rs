@@ -45,6 +45,24 @@ pub enum Status {
     Failed,
 }
 
+/// The instance, adapter and device an editor window would make for itself,
+/// made before there is a window: egui-baseview's instance, egui-wgpu's
+/// adapter preference and [`crate::device_descriptor`]. With no surface to
+/// ask about, the adapter is the preferred one, which on a Mac with one GPU is
+/// the window's too; a window whose surface it cannot serve makes its own.
+/// `None` when there is no adapter or device to be had.
+pub fn editor_device() -> Option<egui_wgpu::WgpuSetupExisting> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let options = wgpu::RequestAdapterOptions {
+        power_preference: egui_wgpu::WgpuSetupCreateNew::without_display_handle().power_preference,
+        ..Default::default()
+    };
+    let adapter = pollster::block_on(instance.request_adapter(&options)).ok()?;
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).ok()?;
+    Some(egui_wgpu::WgpuSetupExisting { instance, adapter, device, queue })
+}
+
 /// Window-local progress. The job itself belongs to the retained pipeline cache,
 /// so closing/reopening a window does not start another compilation worker.
 #[derive(Clone)]
@@ -221,6 +239,23 @@ pub(super) struct Initialization {
 }
 
 impl LatticePipelineCache {
+    /// Start compiling for `device` now, before any window asks: the plugin
+    /// calls this at activation (#1746), so the first open finds the job done
+    /// or under way on the device it reuses, rather than starting it cold.
+    /// The window's loading callback then polls this same job. Nothing more
+    /// happens when one is already running, or done, for this device.
+    pub fn start(
+        &self,
+        instance: &wgpu::Instance,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) {
+        #[cfg(not(feature = "hot-reload"))]
+        let _ = self.poll_startup(instance, device, format);
+        #[cfg(feature = "hot-reload")]
+        let _ = (instance, device, format);
+    }
+
     /// Join initialization before unloading plugin code, even if a window still
     /// retains shared UI state. Closing just the editor must not call this.
     pub fn shutdown_startup(&self) {
@@ -357,6 +392,42 @@ mod tests {
         assert_eq!(take_builds(), Vec::<&str>::new(), "the reopened window compiled these");
     }
 
+    /// The job activation starts (#1746) is the one a window opening on the
+    /// same device polls: every loading frame finds that worker still running,
+    /// or its finished build, and never starts a second. A second activation
+    /// starts nothing either.
+    #[test]
+    fn a_window_polls_the_job_activation_started() {
+        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+        let Some((instance, adapter)) = crate::test_gpu_adapter() else {
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter)))
+                .unwrap();
+        let cache = LatticePipelineCache::default();
+        let worker = |cache: &LatticePipelineCache| {
+            let startup = cache.startup.lock().unwrap();
+            startup.job.as_ref().and_then(|job| job.worker.as_ref()).map(|w| w.thread().id())
+        };
+        cache.start(&instance, &device, FORMAT);
+        let started = worker(&cache).expect("activation started no job");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            match cache.poll_startup(&instance, &device, FORMAT) {
+                Status::Preparing(_) => {
+                    assert_eq!(worker(&cache), Some(started), "the window started its own job");
+                    assert!(std::time::Instant::now() < deadline, "loading did not finish");
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Status::Ready { built: true } => break,
+                other => panic!("the window did not find activation's job: {other:?}"),
+            }
+        }
+        cache.start(&instance, &device, FORMAT);
+        assert_eq!(worker(&cache), None, "a second activation started another compile");
+    }
+
     #[test]
     fn plugin_shutdown_joins_the_worker_and_prevents_restart() {
         let Some((instance, adapter)) = crate::test_gpu_adapter() else {
@@ -484,6 +555,14 @@ impl LatticePipelineCache {
         let worker_device = device.clone();
         let worker =
             std::thread::Builder::new().name("harmonigraph-graphics".into()).spawn(move || {
+                // egui's own program first, and only to warm Metal's cache:
+                // each window builds its renderer on the host's main thread
+                // (egui-wgpu's `RenderState::create`), before any loading
+                // frame, so a job started at activation spares that thread a
+                // cold compile only by getting there first. The options are
+                // egui-baseview's defaults, which the editor keeps; dithering
+                // and filtering are uniforms, so they do not change the program.
+                drop(egui_wgpu::Renderer::new(&worker_device, format, Default::default()));
                 Compiled::new_with_progress(&worker_device, format, |stage| {
                     *worker_progress.lock().expect("startup stage poisoned") = stage;
                 })

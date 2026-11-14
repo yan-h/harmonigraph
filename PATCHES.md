@@ -329,7 +329,9 @@ Harmonigraph pairs this with its own cache of immutable lattice pipelines, keyed
 Measured on Metal:
 constructing the lattice resources took 2.58 s cold and 49 ms warm;
 reusing their compiled handles took 1.4 µs in the headless reopen test.
-The first open of a newly loaded instance still compiles, and hot-reload builds retain their existing rebuild behavior.
+`retain` and `existing` are public so the plugin can create that device at activation, before any window, and start compiling on it (#1746):
+the first open then finds the device retained and the compile done or under way.
+Hot-reload builds retain their existing rebuild behavior.
 - **Patch 16** (`src/translate.rs`, `src/window.rs`): take every modifier from the event that carries them.
 Mouse events wrote only Alt, Shift and `command` (from Ctrl, even on macOS), and Cmd and Ctrl were otherwise toggled per modifier key, which reaches the view only while it has the keyboard.
 A Cmd or Ctrl let go after Cmd-Tab, Cmd-Space, Ctrl-arrow or a Cmd-click on the host has its key-up delivered elsewhere, so `mac_cmd` or `ctrl` stayed held until the next whole press inside the editor.
