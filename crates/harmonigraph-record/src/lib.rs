@@ -52,12 +52,20 @@
 //!
 //! # Time
 //!
-//! Events are stamped with **transport position**, not a plugin-local
-//! clock, and only recorded while the transport is rolling. That means a
-//! take lines up with a bounce of the same song with no offset to work
-//! out — the two are measured from the same zero. It also means arming
-//! the toggle while stopped records nothing until you hit play, which is
-//! what the status line is for.
+//! Everything is recorded on the plugin's own presentation clock, the one
+//! the display draws on, with where each input arrived. Song time is chosen
+//! by the reader (`harmonigraph_take`), from `Run` records that say where
+//! each stretch the take recorded without a pause sits in the song: at a
+//! pass's first block that is the **transport position**, and after it, the
+//! end of the audio already recorded. So a take's notes share one time base
+//! with its own WAV, and a pause resumes them where the audio got to rather
+//! than where the host says it is (#1760). A take only records while the
+//! transport is rolling, so arming the toggle while stopped records nothing
+//! until you hit play, which is what the status line is for.
+//!
+//! Song time used to be the host's position per item, so that a take lined
+//! up with a separate bounce of the same song; the take's own WAV replaced
+//! that bounce (#903, #972, #1196, #1342).
 //!
 //! Hosts that report no transport fall back to a plugin-local sample
 //! count, so the standalone-style "just record what you play" case still

@@ -52,9 +52,12 @@ OPTIONS:
                            chunkier text relative to the frame.
                            [default: sized so the UI reads like the plugin]
         --fps <N>          Frames per second.  [default: 60]
+        --pass <N>         Which pass of the take to render. Under On disarm
+                           and At bar, a loop wrap or a jump starts the next.
+                           [default: the last]
         --start <SEC>      Skip to here, as a song position — take times are
-                           the host transport's, so 0 is the song's start, not
-                           the recording's.
+                           the pass's own audio position, so 0 is the song's
+                           start, not the recording's.
                            [default: where the recording begins, less --lead]
         --lead <SEC>       Extra empty frame before the recording starts. The
                            render already opens where the take was captured,
@@ -107,6 +110,8 @@ struct Args {
     size: Option<[u32; 2]>,
     scale: Option<f32>,
     fps: f64,
+    /// `None` means the take's last pass.
+    pass: Option<u32>,
     /// `None` means "start where the take's capture begins", backed off by
     /// whatever `--lead` asks for — see `start_of_render`. An explicit
     /// `--start 0` is NOT the same thing, which is why this is an Option
@@ -137,6 +142,7 @@ impl Default for Args {
             size: None,
             scale: None,
             fps: 60.0,
+            pass: None,
             start: None,
             lead: None,
             end: None,
@@ -183,6 +189,7 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "-s" | "--size" => args.size = Some(parse_size(&value("--size")?)?),
             "--scale" => args.scale = Some(parse_number("--scale", &value("--scale")?)?),
             "--fps" => args.fps = parse_number("--fps", &value("--fps")?)?,
+            "--pass" => args.pass = Some(parse_number("--pass", &value("--pass")?)?),
             "--start" => args.start = Some(parse_number("--start", &value("--start")?)?),
             "--lead" => args.lead = Some(parse_number("--lead", &value("--lead")?)?),
             "--end" => args.end = Some(parse_number("--end", &value("--end")?)?),
@@ -248,7 +255,8 @@ fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -
 
 /// Where the video starts, in take time.
 ///
-/// Take times are the host's TRANSPORT position, so time zero is the song's
+/// Take times are song positions (a pass starts at the host's transport
+/// position and runs on with its own audio), so time zero is the song's
 /// start and not the record button's. A passage played from a minute into the
 /// arrangement was captured from 60-odd seconds, and rendering from zero opens
 /// the video with a minute of empty lattice — nothing was recorded there to
@@ -356,7 +364,8 @@ fn export(args: Args) -> Result<(), String> {
     // the loop — everything between typing the command and having the file.
     let began = std::time::Instant::now();
     let take_path = args.take.ok_or("no take file given (--help for usage)")?;
-    let take = harmonigraph_take::Take::read(&take_path).map_err(|e| e.to_string())?;
+    let take =
+        harmonigraph_take::Take::read_pass(&take_path, args.pass).map_err(|e| e.to_string())?;
     let replacement = args
         .appearance
         .as_ref()
@@ -393,9 +402,8 @@ fn export(args: Args) -> Result<(), String> {
         );
     }
 
-    // The WAV the take recorded for itself, beside the take file, if any.
+    // The WAV the pass recorded for itself, beside the take file, if any.
     let audio_path = take
-        .header
         .audio_file
         .as_ref()
         .map(|name| {
@@ -406,17 +414,17 @@ fn export(args: Args) -> Result<(), String> {
         })
         .filter(|path| path.is_file());
 
-    if take.header.audio_file.is_some() && audio_path.is_none() {
+    if take.audio_file.is_some() && audio_path.is_none() {
         // A missing recording would otherwise produce a silent render with
         // no spectrum and no explanation.
         eprintln!(
             "warning: take names {:?} but it is not beside the take",
-            take.header.audio_file.as_deref().unwrap_or_default()
+            take.audio_file.as_deref().unwrap_or_default()
         );
     }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
-    let audio_start = take.header.audio_start.unwrap_or(0.0);
+    let audio_start = take.audio_start.unwrap_or(0.0);
 
     let end = end_of_render(
         args.end,
@@ -429,7 +437,7 @@ fn export(args: Args) -> Result<(), String> {
     // Where the recording begins: its first event, or the start of its own
     // audio if that came first (an audio part can be captured before anything
     // is played, and a take may carry no notes at all).
-    let capture_start = match (take.first_event(), take.header.audio_start) {
+    let capture_start = match (take.first_event(), take.audio_start) {
         (Some(event), Some(audio)) => Some(event.min(audio)),
         (only, None) => only,
         (None, only) => only,
@@ -742,7 +750,7 @@ mod tests {
     }
 
     /// The render opens where the RECORDING did, wherever in the song that
-    /// falls — the bug being that take times are transport positions, so a
+    /// falls — the bug being that take times are song positions, so a
     /// passage played from a minute in used to open on a minute of empty
     /// lattice.
     #[test]

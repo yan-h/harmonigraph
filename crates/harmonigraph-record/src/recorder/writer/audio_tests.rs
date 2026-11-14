@@ -61,7 +61,7 @@ impl Worker {
         let recorder = worker.recorder.as_mut().unwrap();
         assert_no_alloc(|| {
             assert!(recorder.is_armed());
-            recorder.mark_audio_start(0.25);
+            recorder.run(1, 1, Default::default(), 0.25, 0.0);
             recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
         });
         fence.worker_after_empty.enabled.store(false, Ordering::Release);
@@ -83,23 +83,18 @@ impl Worker {
         let control = self.control.as_ref().unwrap();
         testing::set_renderer_program(control, program);
         control.stop();
-        assert_no_alloc(|| self.close(1));
+        assert_no_alloc(|| self.close());
         // A failure may already be accounted before Stop. Wait for this
         // command's worker iteration too, so a render it could launch would have.
         wait_for("Stop processed", || self.fence.worker_stop_processed.load(Ordering::Acquire));
     }
 
     /// What the configuration owner and the Hub publish once a stopped take's
-    /// next callback observes the disarm: every lane closes over the first
-    /// `passes` passes of the one epoch these fixtures record.
-    fn close(&mut self, passes: u32) {
+    /// next callback observes the disarm: both lanes close the one epoch
+    /// these fixtures record.
+    fn close(&mut self) {
         let recorder = self.recorder.as_mut().unwrap();
         assert!(!recorder.is_armed());
-        for pass in 1..=passes {
-            let address = RecordAddress { epoch: 1, pass };
-            recorder.configuration_pass_complete(address);
-            recorder.source_pass_complete(address, 1.0);
-        }
         recorder.configuration_epoch_complete(1);
         recorder.source_epoch_complete(1, 1.0);
     }
@@ -177,11 +172,11 @@ fn queued_stop_preserves_the_audio_prefix() {
     let recorder = worker.recorder.as_mut().unwrap();
     assert_no_alloc(|| {
         assert!(recorder.is_armed());
-        recorder.mark_audio_start(0.25);
+        recorder.run(1, 1, Default::default(), 0.25, 0.0);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
     });
     worker.control.as_ref().unwrap().stop();
-    worker.close(1);
+    worker.close();
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
     wait_for("queued Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!(wav_samples(&worker.wav()), PREFIX);
@@ -194,12 +189,13 @@ fn queued_rollover_keeps_each_pass_audio() {
     let recorder = worker.recorder.as_mut().unwrap();
     assert_no_alloc(|| {
         assert!(recorder.is_armed());
-        assert!(recorder.observe_transport(1.0, true, 64.0 / 48_000.0));
-        recorder.mark_audio_start(1.0);
+        assert!(recorder.observe_transport(1.0, true, 64.0 / 48_000.0).is_some());
+        recorder.run(1, 1, Default::default(), 1.0, 0.0);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
         assert!(recorder.is_armed());
-        assert!(recorder.observe_transport(0.0, true, 64.0 / 48_000.0));
-        recorder.mark_audio_start(0.0);
+        assert!(recorder.observe_transport(0.0, true, 64.0 / 48_000.0).is_some());
+        recorder.run_end(1, Default::default());
+        recorder.run(1, 2, Default::default(), 0.0, 0.0);
         recorder.audio(&mut [0.75, -0.75].into_iter(), 2);
     });
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
@@ -207,7 +203,7 @@ fn queued_rollover_keeps_each_pass_audio() {
         first.with_file_name(format!("{}-2.wav", first.file_stem().unwrap().to_str().unwrap()));
     wait_for("loop audio written", || std::fs::metadata(&second).is_ok_and(|m| m.len() >= 52));
     worker.control.as_ref().unwrap().stop();
-    worker.close(2);
+    worker.close();
     wait_for("rollover Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!((wav_samples(&first), wav_samples(&second)), (PREFIX.to_vec(), vec![0.75, -0.75]));
 }
@@ -228,7 +224,7 @@ fn wav_limit_is_reported_and_never_renders_an_incomplete_take() {
         assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 16);
         worker.assert_prefix();
         let take = harmonigraph_take::Take::read(worker.wav().with_extension("take")).unwrap();
-        assert_eq!(take.header.audio_start, Some(0.25), "pending Start retains alignment too");
+        assert_eq!(take.audio_start, Some(0.25), "pending Start retains alignment too");
         assert_eq!(
             take.incomplete.map(|marker| marker.reason),
             Some(harmonigraph_take::canonical::GapReasonRecord::ProducerLost),
@@ -266,13 +262,13 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         let duration = 64.0 / 48_000.0;
         assert_no_alloc(|| {
             assert!(recorder.is_armed());
-            assert!(recorder.observe_transport(0.0, true, duration));
-            recorder.mark_audio_start(0.0);
+            assert!(recorder.observe_transport(0.0, true, duration).is_some());
+            recorder.run(1, 1, Default::default(), 0.0, 0.0);
             recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
             if paused {
-                assert!(!recorder.observe_transport(0.0, false, duration));
-                assert!(!recorder.observe_transport(10.0, false, duration));
-                assert!(!recorder.observe_transport(10.0, false, duration));
+                assert!(!recorder.observe_transport(0.0, false, duration).is_some());
+                assert!(!recorder.observe_transport(10.0, false, duration).is_some());
+                assert!(!recorder.observe_transport(10.0, false, duration).is_some());
             }
             // This callback was admitted before the GUI Stop. It owns its
             // transport observation even if the intent changes meanwhile.
@@ -283,15 +279,15 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
             control.stop();
         }
         assert_no_alloc(|| {
-            assert!(!recorder.observe_transport(10.0, true, duration));
-            assert!(recorder.configuration_address().is_none());
+            assert!(!recorder.observe_transport(10.0, true, duration).is_some());
+            assert!(recorder.armed_pass().is_none());
         });
         assert!(control.has_ended());
         assert_eq!(control.latches.end(), Some(End::ForwardSeek));
         if !stop_before_seek {
             control.stop();
         }
-        assert_no_alloc(|| worker.close(1));
+        assert_no_alloc(|| worker.close());
         worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
         let completed = || {
             let jobs = worker.control.as_ref().unwrap().export_jobs();
@@ -307,9 +303,9 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         let take_path = control.last_take().unwrap();
         let take = harmonigraph_take::Take::read(&take_path).unwrap();
         assert!(take.incomplete.is_none());
-        assert_eq!(take.header.audio_start, Some(0.0));
+        assert_eq!(take.audio_start, Some(0.0));
         assert_eq!(wav_samples(&take_path.with_extension("wav")), vec![0.25; 128]);
-        assert!(!Pass::path_for(&take_path, 2).exists());
+        assert_eq!(take.passes, [1], "one pass, ended at the seek");
         // Successful completion releases the ordinary Start gate. A gesture
         // must not leave a permanent failure requiring the plugin to reload.
         control.start(48_000.0, String::new());
@@ -317,15 +313,13 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         assert!(!control.has_ended());
         let recorder = worker.recorder.as_mut().unwrap();
         assert!(recorder.is_armed());
-        let next = recorder.configuration_address().unwrap();
+        let (next, _) = recorder.armed_pass().unwrap();
         testing::set_renderer_program(control, worker.directory.join("no-such-renderer"));
         control.stop();
         assert_no_alloc(|| {
             assert!(!recorder.is_armed());
-            recorder.configuration_pass_complete(next);
-            recorder.source_pass_complete(next, 12.0);
-            recorder.configuration_epoch_complete(next.epoch);
-            recorder.source_epoch_complete(next.epoch, 12.0);
+            recorder.configuration_epoch_complete(next);
+            recorder.source_epoch_complete(next, 12.0);
         });
         wait_for("second take finalized", || !worker.fence.finishing.load(Ordering::Acquire));
         assert!(!worker.fence.failed.load(Ordering::Acquire));

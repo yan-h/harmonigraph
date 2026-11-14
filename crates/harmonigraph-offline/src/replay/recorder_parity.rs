@@ -53,18 +53,17 @@ fn parity_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Deltas with no sequence, lifetime or timing, which is what a reset carries:
-/// the take lane's route translates them onto the take's clock, and both lanes
-/// draw the same roll.
+/// a take with no run holds them at offset zero, and both lanes draw the same
+/// roll.
 #[test]
 fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
-    use harmonigraph_record::configuration::RecordAddress;
-    use harmonigraph_record::publication::Route;
+    use harmonigraph_record::configuration::RecordIntent;
+    use harmonigraph_record::publication::Span;
     use harmonigraph_record::testing;
 
     const ORIGIN: f64 = 10.0;
-    let address = RecordAddress { epoch: 1, pass: 1 };
-    let route = Route { address: Some(address), time_offset: -ORIGIN };
+    let route = Span { intent: RecordIntent::armed(1), ..Span::default() };
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
     assert!(recorder.is_armed());
@@ -91,9 +90,7 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     assert_eq!(capture.display_into(&mut direct, |_, _| {}), live_events.len());
     capture.stop();
     assert!(!recorder.is_armed());
-    recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
-    recorder.source_pass_complete(address, ORIGIN + 1.0);
     recorder.source_epoch_complete(1, ORIGIN + 1.0);
     writer.stop();
     writer.drain(&mut capture);
@@ -106,13 +103,13 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     assert_eq!(take.events.len(), live_events.len());
     let mut replay = Replay::new(take);
     let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
-    replay.advance_to(&mut state.runtime, 1.0);
+    replay.advance_to(&mut state.runtime, ORIGIN + 1.0);
     assert!(replay.is_spent());
     assert_eq!(
         roll_snapshot(&direct, ORIGIN + 1.0, ORIGIN),
-        roll_snapshot(&state.runtime.tracker, 1.0, 0.0)
+        roll_snapshot(&state.runtime.tracker, ORIGIN + 1.0, ORIGIN)
     );
-    let actual = roll_snapshot(&state.runtime.tracker, 1.0, 0.0);
+    let actual = roll_snapshot(&state.runtime.tracker, ORIGIN + 1.0, ORIGIN);
     assert_eq!(
         actual,
         [
@@ -179,22 +176,26 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     use harmonigraph_core::canonical::{ClockId, EventTiming, SourceBaseline, VoiceBaseline};
     use harmonigraph_core::confirmed::PitchProvenance;
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
-    use harmonigraph_record::configuration::RecordAddress;
-    use harmonigraph_record::publication::{Lane, Route};
+    use harmonigraph_record::configuration::RecordIntent;
+    use harmonigraph_record::publication::{Lane, Span, Stamp};
     use harmonigraph_record::testing;
 
     const ORIGIN: f64 = 10.0;
     const LIFETIME: u64 = 61;
     let source = SourceId(1);
-    let address = RecordAddress { epoch: 1, pass: 1 };
-    let route = Route { address: Some(address), time_offset: -ORIGIN };
+    let clock = ClockId { runtime_session: 7, epoch: 3 };
+    // Stamped where its input arrived, which is where `accepted_exact` times it.
+    let at = |time: f64| Span::at(clock, (time * 48_000.0) as i64, RecordIntent::armed(1));
+    let route = at(ORIGIN);
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
     assert!(recorder.is_armed());
     let path = parity_path("canonical");
     let mut writer = testing::FileWriter::new(&capture, path.clone());
     let configuration = harmonigraph_core::configuration::ConfigReducer::default().resolved();
-    recorder.configuration_at(address, 0.0, configuration);
+    // One run from sample 0, whose presentation ORIGIN is song zero.
+    recorder.run(1, 1, Stamp { clock, input: 0 }, 0.0, ORIGIN);
+    recorder.configuration(1, ORIGIN, configuration);
 
     recorder
         .publish_note(
@@ -226,7 +227,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
             route,
         )
         .expect_both();
-    recorder.publication_lost(ORIGIN + 0.375, route);
+    recorder.publication_lost(ORIGIN + 0.375, at(ORIGIN + 0.375));
     let row = VoiceBaseline {
         note: 60,
         lifetime: LIFETIME,
@@ -246,7 +247,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         ..Default::default()
     };
     let repaired = SourceBaseline::new(source, 1, ORIGIN + 0.5, 2, true, &[row]).unwrap();
-    recorder.publish_baseline(Lane::Take, &repaired, route).unwrap();
+    recorder.publish_baseline(Lane::Take, &repaired, at(ORIGIN + 0.5)).unwrap();
     recorder.publish_baseline(Lane::Display, &repaired, route).unwrap();
     recorder
         .publish_note(
@@ -255,7 +256,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         )
         .expect_both();
     let empty = SourceBaseline::new(source, 2, ORIGIN + 0.75, 3, true, &[]).unwrap();
-    recorder.publish_baseline(Lane::Take, &empty, route).unwrap();
+    recorder.publish_baseline(Lane::Take, &empty, at(ORIGIN + 0.75)).unwrap();
     recorder.publish_baseline(Lane::Display, &empty, route).unwrap();
 
     let mut direct = NoteTracker::new();
@@ -266,12 +267,10 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_none(), "producer closure does not complete configuration/source");
-    recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_none(), "configuration closure does not complete the source");
-    recorder.source_pass_complete(address, ORIGIN + 0.75);
     recorder.source_epoch_complete(1, ORIGIN + 0.75);
     writer.drain(&mut capture);
     assert!(!writer.failed());

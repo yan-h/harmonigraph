@@ -163,6 +163,36 @@ mod tests {
         tracker.roll().clone()
     }
 
+    /// `records` as the recorder writes them: in one run from sample 0 on
+    /// `clock`, at offset zero, a snapshot stamped and a gap ranged at the
+    /// samples of their own times.
+    fn one_run(
+        clock: harmonigraph_core::canonical::ClockId,
+        records: impl IntoIterator<Item = harmonigraph_take::CanonicalRecord>,
+    ) -> String {
+        use harmonigraph_take::{CanonicalRecord, Record, RunRecord, StampRecord};
+        let at = |time: f64| StampRecord::new(clock, (time * 48_000.0) as i64);
+        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let run = RunRecord { pass: 1, at: at(0.0), ..Default::default() };
+        for record in std::iter::once(Record::Run(run)).chain(records.into_iter().map(|record| {
+            Record::Canonical(match record {
+                CanonicalRecord::Baseline(mut b) => {
+                    b.at = Some(at(b.t));
+                    CanonicalRecord::Baseline(b)
+                }
+                CanonicalRecord::Gap(mut g) => {
+                    g.inputs = Some([at(g.t), at(g.through)]);
+                    CanonicalRecord::Gap(g)
+                }
+                record => record,
+            })
+        })) {
+            text.push('\n');
+            text.push_str(&ron::to_string(&record).unwrap());
+        }
+        text
+    }
+
     fn take_with(notes: Vec<NoteRecord>, params: Vec<ParamRecord>) -> Take {
         Take {
             header: Header::default(),
@@ -171,6 +201,7 @@ mod tests {
             configurations: Vec::new(),
             truncated: false,
             incomplete: None,
+            ..Default::default()
         }
     }
 
@@ -239,7 +270,7 @@ mod tests {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::confirmed::PitchProvenance;
         use harmonigraph_core::{NoteEvent, SourceId};
-        use harmonigraph_take::{CanonicalRecord, Record};
+        use harmonigraph_take::CanonicalRecord;
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
@@ -260,23 +291,22 @@ mod tests {
             }))
         };
         let empty = SourceBaseline::new(source, 1, 5.0, 4, true, &[]).unwrap();
-        let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
-        for record in [
-            delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1),
-            CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
-                time: 2.0,
-                through: 3.0,
-                first: 2,
-                last: 3,
-                reason: GapReason::PublicationFull,
-            })),
-            delta(NoteEvent::off(4.0, source, 0, 60), 4),
-            CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)),
-        ] {
-            text.push('\n');
-            text.push_str(&ron::to_string(&Record::Canonical(record)).unwrap());
-        }
+        let text = one_run(
+            ClockId::default(),
+            [
+                delta(NoteEvent::on(1.0, source, 0, 60, 0.8), 1),
+                CanonicalRecord::from_event(CanonicalEvent::Gap(PublicationGap {
+                    source: Some(source),
+                    time: 2.0,
+                    through: 3.0,
+                    first: 2,
+                    last: 3,
+                    reason: GapReason::PublicationFull,
+                })),
+                delta(NoteEvent::off(4.0, source, 0, 60), 4),
+                CanonicalRecord::from_event(CanonicalEvent::Baseline(&empty)),
+            ],
+        );
         let take = Take::parse(std::io::Cursor::new(text)).unwrap();
         for cadence in [0.001, 1.0 / 24.0, 1.0 / 60.0] {
             let mut replay = Replay::new(take.clone());
@@ -353,7 +383,7 @@ mod tests {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::confirmed::PitchProvenance;
         use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
-        use harmonigraph_take::{CanonicalRecord, Record};
+        use harmonigraph_take::CanonicalRecord;
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
@@ -432,11 +462,7 @@ mod tests {
             CanonicalRecord::from_event(CanonicalEvent::Baseline(&recovered)),
             delta(NoteEvent::off(0.4, source, 0, 60), 9),
         ];
-        let mut encoded = ron::to_string(&Record::Header(Header::default())).unwrap();
-        for event in events {
-            encoded.push('\n');
-            encoded.push_str(&ron::to_string(&Record::Canonical(event)).unwrap());
-        }
+        let encoded = one_run(ClockId { runtime_session: 7, epoch: 3 }, events);
         let take = Take::parse(std::io::Cursor::new(encoded)).unwrap();
         assert!(take.incomplete.is_some());
         let roll_snapshot = |roll: &harmonigraph_core::NoteRoll| {

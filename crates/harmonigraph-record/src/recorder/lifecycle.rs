@@ -83,6 +83,11 @@ pub(super) struct Transition {
     pub state: State,
     pub history: History,
     pub action: Action,
+    /// Where a block that records sits in its pass's audio: the transport's
+    /// position at a pass's first block, and the end of the audio already
+    /// recorded after that, so a resume continues the WAV rather than the
+    /// host's position.
+    pub origin: Option<f64>,
 }
 
 /// One observation, entirely by value. Bar is observed before transport for
@@ -94,7 +99,7 @@ pub(super) fn transition(
     observation: Observation,
     policy: Policy,
 ) -> Transition {
-    let mut next = Transition { state, history, action: Action::None };
+    let mut next = Transition { state, history, action: Action::None, origin: None };
     if let Observation::Armed(armed) = observation {
         if !armed {
             next.state = State::Disarmed;
@@ -184,6 +189,7 @@ pub(super) fn transition(
                 };
                 next.history.recorded_end =
                     (duration.is_finite() && duration >= 0.0).then_some(audio_origin + duration);
+                next.origin = Some(audio_origin);
             } else if recording {
                 next.state = State::Recording { motion, deferred };
             }
