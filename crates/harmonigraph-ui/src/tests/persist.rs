@@ -93,7 +93,7 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 /// parse it into, and a string, `NaN`, an `Option` and a nested struct are
 /// tokens of their own. Retiring a FIELD costs nothing for every one of them,
 /// where retiring a VARIANT costs the key that names it — that is
-/// [`DROPPED_VARIANTS`].
+/// [`a_document_naming_any_one_unknown_variant_costs_that_key_alone`].
 ///
 /// So retiring a key adds no row (#1677 area 5 Q1): serde ignores it the way
 /// it ignores the row of its shape. A row is owed only by a shape none of
@@ -167,79 +167,118 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
     }
 }
 
-/// Every variant a retirement has dropped from a persisted enum, as `(key, a
-/// live variant, the dropped one, whether the key is part of the appearance)`.
-/// The last is `false` for editor-only state, which only the editor door reads.
-///
-/// Retiring another variant is a row here, not another test.
-const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
-    ("orientation", "Left", "Diagonal", true),
-    ("spectrogram", "Scrolling", "Playhead", true),
-    // The selected settings tab lives in the layout, so removing a tab is a
-    // variant break too.
-    ("settings_tab", "Tuning", "Display", false),
-    // The Mappings tab's variant, before it took the tab's title.
-    ("settings_tab", "Tuning", "Colors", false),
-    // The gliding frequency resolution (#1603).
-    ("window", "Fast", "Sweep", true),
-];
+/// [`dialled`], plus a camera preset and a look stored in slot 2: a document
+/// whose sweeps reach the structs inside a list, a tuple and a `Some`.
+fn filled() -> SharedState {
+    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
 
-/// A dropped variant costs the editor door the key that names it, and says so
-/// on the Console (#1757 Q4).
+    let mut state = dialled();
+    state.workspace.interaction.camera_presets.push(CameraPreset {
+        name: "reading".into(),
+        yaw: 0.7,
+        pitch: 0.2,
+    });
+    let mut stored = AppearanceDocument::default();
+    stored.spectrum.attack = 0.2;
+    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
+    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
+        .expect("a slot holding a look parses");
+    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
+    state
+}
+
+/// Every enum token a filled document holds, swapped in turn for a variant no
+/// build has, costs the editor door the key that holds it and nothing else
+/// (#1757 Q4): the key opens at its default, the Console opens on a line
+/// naming its path, a save stores the document as it came until a frame has
+/// drawn that, and the rest loads as the same document with that pair cut out
+/// would. The take and export door refuses an appearance naming it whole (Q5).
 ///
-/// The key opens at its default and the rest of the document loads, which the
-/// version floor could never have arranged: a whole parse fails BEFORE the
-/// version is read. The loss is held as well as loud — the Console opens on
-/// it, and a save stores the document as it came until a frame has drawn
-/// that. The take and export door, `AppearanceDocument::parse`, still refuses
-/// such an appearance whole (#1757 Q5).
+/// So retiring a variant owes no row here: the sweep reaches every variant a
+/// save writes, the version floor included, which a whole parse never could —
+/// it fails before the version is read.
 #[test]
-fn a_dropped_variant_costs_its_key_and_says_so() {
-    let state = dialled();
-    let saved = state.save_persist();
-    let appearance = state.picture.appearance.serialize();
-    for &(key, live, dropped, in_appearance) in DROPPED_VARIANTS {
-        let pair = |blob: &str| {
-            let was = format!("{key}:{live}");
-            let at: Vec<_> = pair_starts(blob, key)
-                .into_iter()
-                .filter(|&i| blob[i..].starts_with(&was))
-                .collect();
-            assert_eq!(at.len(), 1, "{was} must sit exactly once in {blob}");
-            at[0] + key.len() + 1..at[0] + was.len()
+fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
+    const UNKNOWN: &str = "NoSuchVariant";
+    let saved = filled().save_persist();
+    let appearance = filled().picture.appearance.serialize();
+    let pairs = nested_pairs(&saved);
+    let (_, nested) = pairs.iter().find(|(path, _)| path == "appearance").expect("an appearance");
+    let nested = nested.start + "appearance:".len()..nested.end;
+    assert_eq!(saved[nested.clone()], appearance, "the editor save nests the appearance as is");
+    let is_variant = |token: &str| {
+        token.starts_with(|c: char| c.is_ascii_uppercase())
+            && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !matches!(token, "None" | "NaN")
+    };
+    let variants: Vec<_> = nested_scalars(&saved)
+        .into_iter()
+        .filter(|(_, at)| is_variant(&saved[at.clone()]))
+        .collect();
+    // The fixture has to reach every kind of place a variant sits, or the
+    // sweep reads as coverage of what it never touches.
+    for deep in [
+        "layout.settings_tab",
+        "appearance.camera.projection",
+        "appearance.view.atmosphere.material_style",
+        "appearance.spectrum.orientation",
+        "look_slots.stored[1].spectrum.window",
+        "prefs.frame_rate",
+    ] {
+        assert!(variants.iter().any(|(path, _)| path == deep), "the sweep never reaches {deep}");
+    }
+
+    for (path, at) in &variants {
+        let swap = |blob: &str, at: std::ops::Range<usize>| {
+            format!("{}{UNKNOWN}{}", &blob[..at.start], &blob[at.end..])
         };
-        let swap = |blob: &str| {
-            let value = pair(blob);
-            format!("{}{dropped}{}", &blob[..value.start], &blob[value.end..])
-        };
+        let swapped = swap(&saved, at.clone());
+        // The pair whose value holds the token: a tuple's item is its pair's.
+        let mut owner = path.as_str();
+        while let Some(item) = owner.strip_suffix(']') {
+            owner = &item[..item.rfind('[').expect("an index opens")];
+        }
+        let (_, pair) = pairs.iter().find(|(p, _)| p == owner).expect("a pair holds every token");
+        let named: String = owner
+            .split('.')
+            .map(|key| &key[..key.find('[').unwrap_or(key.len())])
+            .collect::<Vec<_>>()
+            .join(".");
 
         let mut restored = fresh();
-        let swapped = swap(&saved);
-        assert!(restored.install_document(&swapped), "{key}:{dropped} sank the document");
-        assert_eq!(restored.save_answer().as_ref(), swapped, "{dropped}: the loss is not held");
-        assert!(!collapsed(&restored, panes::Tab::Console), "{dropped}: the loss is hidden");
         assert!(
-            restored
-                .picture
-                .runtime
-                .console
-                .lines()
-                .any(|line| line.contains(key) && line.contains(dropped)),
-            "{dropped}: the Console does not name it; it holds {:?}",
-            restored.picture.runtime.console.lines().collect::<Vec<_>>(),
+            restored.install_document(&swapped),
+            "{path}: an unknown variant sank the document"
         );
-        // Everything but the key loaded: the live variant put back where its
-        // default now stands, the save is the one the document came from.
-        set_console_collapsed(&mut restored, true);
-        let reloaded = restored.save_persist();
-        let start = pair(&saved).start;
-        let end = start + reloaded[start..].find([',', ')']).expect("the value ends");
-        let fixed = format!("{}{live}{}", &reloaded[..start], &reloaded[end..]);
-        assert_eq!(fixed, saved, "{dropped}: the rest of the document did not load");
+        assert_eq!(restored.save_answer().as_ref(), swapped, "{path}: the loss is not held");
+        assert!(!collapsed(&restored, panes::Tab::Console), "{path}: the loss is hidden");
+        let said = restored.picture.runtime.console.lines().find(|line| line.contains(UNKNOWN));
+        assert!(
+            said.is_some_and(|line| line.contains(&format!("dropped {named} "))),
+            "{path}: the Console does not name {named}: {said:?}",
+        );
 
-        assert_eq!(!pair_starts(&appearance, key).is_empty(), in_appearance, "{key}: which doors");
-        if in_appearance {
-            assert!(AppearanceDocument::parse(&swap(&appearance)).is_err(), "{dropped} parsed");
+        let cut = if saved[pair.end..].starts_with(',') {
+            pair.start..pair.end + 1
+        } else {
+            pair.start..pair.end
+        };
+        let mut without = fresh();
+        assert!(without.install_document(&format!("{}{}", &saved[..cut.start], &saved[cut.end..])));
+        set_console_collapsed(&mut restored, true);
+        set_console_collapsed(&mut without, true);
+        assert_eq!(
+            restored.save_persist(),
+            without.save_persist(),
+            "{path}: more than its key was lost, or less",
+        );
+
+        if nested.contains(&at.start) {
+            let inside = at.start - nested.start..at.end - nested.start;
+            assert!(
+                AppearanceDocument::parse(&swap(&appearance, inside)).is_err(),
+                "{path} parsed"
+            );
         }
     }
 }
@@ -766,7 +805,7 @@ fn corrupt_persist_is_ignored() {
 /// camera, view, spectrum and render at once — and a project reopening at
 /// defaults with nothing written anywhere reads as data loss rather than as a
 /// break someone chose. A dropped variant costs only its key
-/// ([`a_dropped_variant_costs_its_key_and_says_so`]); these are the version
+/// ([`a_document_naming_any_one_unknown_variant_costs_that_key_alone`]); these are the version
 /// floor's and the appearance version's refusals.
 #[test]
 fn a_refused_blob_says_why() {
@@ -1071,21 +1110,7 @@ fn nested_defaults() -> [(&'static str, String, &'static str); 10] {
 /// look, so the walk reaches the structs inside a list, a tuple and a `Some`.
 #[test]
 fn a_persist_blob_missing_any_one_key_at_any_depth_keeps_the_rest() {
-    use crate::appearance_edit::{AppearanceEditor, Look, Slots};
-
-    let mut state = dialled();
-    state.workspace.interaction.camera_presets.push(CameraPreset {
-        name: "reading".into(),
-        yaw: 0.7,
-        pitch: 0.2,
-    });
-    let mut stored = AppearanceDocument::default();
-    stored.spectrum.attack = 0.2;
-    let look = ron::to_string(&Look::capture(&stored)).expect("a look serializes");
-    let slots: Slots = ron::from_str(&format!("(stored:(None,Some({look}),None,None),active:0)"))
-        .expect("a slot holding a look parses");
-    state.workspace.interaction.appearance_editor = AppearanceEditor::restore(slots);
-    let saved = state.save_persist();
+    let saved = filled().save_persist();
     let pairs = nested_pairs(&saved);
     let fresh_save = fresh().save_persist();
     let fresh_pairs: std::collections::HashMap<_, _> = nested_pairs(&fresh_save)

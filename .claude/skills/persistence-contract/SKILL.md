@@ -51,8 +51,8 @@ a whole parse fails before the version is read, so raising the floor does nothin
 
 What makes the loss acceptable is that it is LOUD and HELD —
 `install_document` writes each cut key to the Console and opens it, and a host save stores the document as it came until a frame has drawn the editor.
-`DROPPED_VARIANTS` in `crates/harmonigraph-ui/src/tests/persist.rs` holds both:
-retiring a variant adds a row there.
+`a_document_naming_any_one_unknown_variant_costs_that_key_alone` in `crates/harmonigraph-ui/src/tests/persist.rs` holds both, for every variant a filled document writes,
+so retiring a variant owes that test nothing.
 
 The take and export door, `AppearanceDocument::parse`, keeps the strict parse (#1757 Q5):
 a take whose recorded look names a dropped variant refuses to export, and the offline renderer prints why to stderr.
