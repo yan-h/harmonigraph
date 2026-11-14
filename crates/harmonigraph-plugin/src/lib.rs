@@ -816,12 +816,21 @@ impl Plugin for Harmonigraph {
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
         self.offline = buffer_config.process_mode == ProcessMode::Offline;
         // The editor's device and its loading job, started here so a first
-        // open finds them (#1746). Not for an export pass, which draws no
-        // editor, nor under test, where every activation would start a GPU
-        // compile beside the tests timing themselves.
-        #[cfg(all(target_os = "macos", not(test)))]
-        if !self.offline {
-            editor::start_graphics(&self.editor_shared);
+        // open finds them (#1746). On macOS, the one platform that ships; not
+        // for an export pass, which draws no editor; nor under test, where
+        // every activation would start a GPU compile beside the tests timing
+        // themselves.
+        if cfg!(target_os = "macos") && !cfg!(test) && !self.offline {
+            let (context, cache, format) = {
+                let shared = self.editor_shared.lock();
+                let picture = &shared.ui.picture;
+                (
+                    shared.gpu_context.clone(),
+                    picture.editor_graphics(),
+                    picture.surfaces.target_format,
+                )
+            };
+            editor::start_graphics(&context, &cache, &editor::graphics_config(), format);
         }
         true
     }

@@ -45,24 +45,6 @@ pub enum Status {
     Failed,
 }
 
-/// The instance, adapter and device an editor window would make for itself,
-/// made before there is a window: egui-baseview's instance, egui-wgpu's
-/// adapter preference and [`crate::device_descriptor`]. With no surface to
-/// ask about, the adapter is the preferred one, which on a Mac with one GPU is
-/// the window's too; a window whose surface it cannot serve makes its own.
-/// `None` when there is no adapter or device to be had.
-pub fn editor_device() -> Option<egui_wgpu::WgpuSetupExisting> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let options = wgpu::RequestAdapterOptions {
-        power_preference: egui_wgpu::WgpuSetupCreateNew::without_display_handle().power_preference,
-        ..Default::default()
-    };
-    let adapter = pollster::block_on(instance.request_adapter(&options)).ok()?;
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&crate::device_descriptor(&adapter))).ok()?;
-    Some(egui_wgpu::WgpuSetupExisting { instance, adapter, device, queue })
-}
-
 /// Window-local progress. The job itself belongs to the retained pipeline cache,
 /// so closing/reopening a window does not start another compilation worker.
 #[derive(Clone)]
@@ -244,16 +226,40 @@ impl LatticePipelineCache {
     /// or under way on the device it reuses, rather than starting it cold.
     /// The window's loading callback then polls this same job. Nothing more
     /// happens when one is already running, or done, for this device.
+    ///
+    /// `egui` is the options the window will build its egui renderer with.
+    /// The job builds one first, only to warm Metal's cache: each window builds
+    /// its own on the host's main thread (egui-wgpu's `RenderState::create`)
+    /// before any loading frame, so a job spares that thread a cold compile
+    /// only by getting there first, which a job a window started cannot do.
     pub fn start(
         &self,
         instance: &wgpu::Instance,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
+        egui: egui_wgpu::RendererOptions,
     ) {
         #[cfg(not(feature = "hot-reload"))]
-        let _ = self.poll_startup(instance, device, format);
+        let _ = self.startup(instance, device, format, Some(egui));
         #[cfg(feature = "hot-reload")]
-        let _ = (instance, device, format);
+        let _ = (instance, device, format, egui);
+    }
+
+    /// The instance and device the startup job compiles for, or compiled for:
+    /// for another crate's test of who made that device.
+    #[cfg(feature = "test-support")]
+    pub fn startup_device(&self) -> Option<(wgpu::Instance, wgpu::Device)> {
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            let startup = self.startup.lock().expect("startup job poisoned");
+            if let Some(job) = &startup.job {
+                return Some((job.instance.clone(), job.device.clone()));
+            }
+            let compiled = self.compiled.lock().expect("lattice pipeline cache poisoned");
+            compiled.as_ref().map(|(instance, device, _)| (instance.clone(), device.clone()))
+        }
+        #[cfg(feature = "hot-reload")]
+        None
     }
 
     /// Join initialization before unloading plugin code, even if a window still
@@ -410,7 +416,7 @@ mod tests {
             let startup = cache.startup.lock().unwrap();
             startup.job.as_ref().and_then(|job| job.worker.as_ref()).map(|w| w.thread().id())
         };
-        cache.start(&instance, &device, FORMAT);
+        cache.start(&instance, &device, FORMAT, Default::default());
         let started = worker(&cache).expect("activation started no job");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
@@ -424,7 +430,7 @@ mod tests {
                 other => panic!("the window did not find activation's job: {other:?}"),
             }
         }
-        cache.start(&instance, &device, FORMAT);
+        cache.start(&instance, &device, FORMAT, Default::default());
         assert_eq!(worker(&cache), None, "a second activation started another compile");
     }
 
@@ -501,11 +507,22 @@ impl Drop for Job {
 
 #[cfg(not(feature = "hot-reload"))]
 impl LatticePipelineCache {
+    /// The window's poll: its egui renderer is already built.
     pub(super) fn poll_startup(
         &self,
         instance: &wgpu::Instance,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
+    ) -> Status {
+        self.startup(instance, device, format, None)
+    }
+
+    fn startup(
+        &self,
+        instance: &wgpu::Instance,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        egui: Option<egui_wgpu::RendererOptions>,
     ) -> Status {
         let mut startup = self.startup.lock().expect("startup job poisoned");
         if startup.stopped {
@@ -555,14 +572,10 @@ impl LatticePipelineCache {
         let worker_device = device.clone();
         let worker =
             std::thread::Builder::new().name("harmonigraph-graphics".into()).spawn(move || {
-                // egui's own program first, and only to warm Metal's cache:
-                // each window builds its renderer on the host's main thread
-                // (egui-wgpu's `RenderState::create`), before any loading
-                // frame, so a job started at activation spares that thread a
-                // cold compile only by getting there first. The options are
-                // egui-baseview's defaults, which the editor keeps; dithering
-                // and filtering are uniforms, so they do not change the program.
-                drop(egui_wgpu::Renderer::new(&worker_device, format, Default::default()));
+                // egui's own program first, for `start` (see there).
+                if let Some(options) = egui {
+                    drop(egui_wgpu::Renderer::new(&worker_device, format, options));
+                }
                 Compiled::new_with_progress(&worker_device, format, |stage| {
                     *worker_progress.lock().expect("startup stage poisoned") = stage;
                 })

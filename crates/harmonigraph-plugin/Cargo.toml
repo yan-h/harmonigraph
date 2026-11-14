@@ -19,7 +19,7 @@ doctest = false
 # diagnosing missed refreshes. A diagnostic build only; see
 # vendor/egui-baseview/src/frame_log.rs.
 frame-log = ["egui-baseview/frame-log"]
-startup-probe =["dep:egui-wgpu", "objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-app-kit/NSGraphicsContext"]
+startup-probe =["objc2-app-kit/NSApplication", "objc2-app-kit/NSEvent", "objc2-app-kit/NSGraphicsContext"]
 
 [[example]]
 name = "editor-startup"
@@ -37,7 +37,10 @@ harmonigraph-render = { workspace = true }
 
 nice-plug = { workspace = true }
 egui = { workspace = true }
-egui-wgpu = { workspace = true, optional = true }
+# The editor's device is made at activation, before any window, from the
+# window's own setup (`editor::start_graphics`).
+egui-wgpu = { workspace = true }
+pollster = "0.4"
 egui-baseview = { workspace = true }
 baseview = { workspace = true }
 raw-window-handle = { workspace = true }
@@ -65,3 +68,5 @@ clap-sys = "0.5.0"
 # The process fixture arms the real Recorder but captures into memory, so a
 # test can reach take audio without writing into ~/Music.
 harmonigraph-record = { workspace = true, features = ["test-support"] }
+# Which device the startup job compiles on, for the activation test.
+harmonigraph-render = { workspace = true, features = ["test-support"] }

@@ -48,7 +48,7 @@ pub struct EditorShared {
     pub(crate) frame_drains: bool,
     /// The device every window of this editor opens on (#698). Here rather
     /// than on the editor because activation creates it, before any window,
-    /// and starts compiling on it (`start_graphics`, in `window`).
+    /// and starts compiling on it ([`super::start_graphics`]).
     pub(crate) gpu_context: egui_baseview::SharedGpuContext,
 }
 

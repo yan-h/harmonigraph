@@ -30,7 +30,7 @@ use super::MIN_SIZE;
 /// the only other setting, `Some(1)`, gives two drawables: a frame less
 /// latency, bought with a missed refresh whenever a frame runs long. The
 /// choice is smoothness (#1551).
-pub(super) fn graphics_config() -> GraphicsConfig {
+pub(crate) fn graphics_config() -> GraphicsConfig {
     use egui_baseview::WgpuSetup;
 
     let mut config = GraphicsConfig::default();
@@ -40,28 +40,51 @@ pub(super) fn graphics_config() -> GraphicsConfig {
     config
 }
 
-/// Make the device the editor will open on and start compiling its programs
-/// on it, so the first open finds the loading job done or under way rather
-/// than starting it cold (#1746). Called at activation; a device already
-/// retained, by an earlier activation or a window, is reused, so a later call
-/// starts nothing new unless that device was lost.
-#[cfg(all(target_os = "macos", not(test)))]
-pub(crate) fn start_graphics(shared: &Mutex<EditorShared>) {
-    let (context, cache) = {
-        let shared = shared.lock();
-        (shared.gpu_context.clone(), shared.ui.picture.editor_graphics())
-    };
+/// Make the device the editor will open on, retain it in `context`, and start
+/// compiling `format`'s programs on it in `cache`, so the first open finds the
+/// loading job done or under way rather than starting it cold (#1746).
+///
+/// The device is made from `config`, the window's own setup, and on the
+/// instance egui-baseview's renderer makes when it has none retained, so the
+/// window reuses it rather than making another; a window whose surface this
+/// adapter cannot serve still makes its own. A device already retained, by an
+/// earlier call or a window, is reused, so a later call starts nothing new
+/// unless that device was lost.
+pub(crate) fn start_graphics(
+    context: &egui_baseview::SharedGpuContext,
+    cache: &harmonigraph_render::LatticePipelineCache,
+    config: &GraphicsConfig,
+    format: harmonigraph_render::wgpu::TextureFormat,
+) {
+    use harmonigraph_render::wgpu;
     let setup = match context.existing() {
         Some(setup) => setup,
         None => {
-            let Some(setup) = harmonigraph_render::startup::editor_device() else {
+            let egui_baseview::WgpuSetup::CreateNew(create) = &config.wgpu_options.wgpu_setup
+            else {
                 return;
             };
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let options = wgpu::RequestAdapterOptions {
+                power_preference: create.power_preference,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            };
+            let Ok(adapter) = pollster::block_on(instance.request_adapter(&options)) else {
+                return;
+            };
+            let descriptor = (create.device_descriptor)(&adapter);
+            let Ok((device, queue)) = pollster::block_on(adapter.request_device(&descriptor))
+            else {
+                return;
+            };
+            let setup = egui_wgpu::WgpuSetupExisting { instance, adapter, device, queue };
             context.retain(setup.clone());
             setup
         }
     };
-    cache.start(&setup.instance, &setup.device, super::ASSUMED_SURFACE_FORMAT);
+    cache.start(&setup.instance, &setup.device, format, config.renderer_options);
 }
 
 pub fn create(
@@ -375,5 +398,40 @@ impl Drop for LatticeEditorHandle {
         drop(shared);
         self.egui_state.set_open(false);
         self.window.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use harmonigraph_render::startup::{Status, WindowStartup};
+
+    /// What activation does (#1746): the device it makes is the one the
+    /// window will reuse AND the one the job compiles on, and activating again
+    /// makes no second device and moves the job to none.
+    #[test]
+    fn activation_retains_the_device_its_job_compiles_on() {
+        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
+            eprintln!("hot reload initializes synchronously; no startup job");
+            return;
+        }
+        if harmonigraph_render::test_gpu_adapter().is_none() {
+            return;
+        }
+        let context = egui_baseview::SharedGpuContext::default();
+        let cache = harmonigraph_render::LatticePipelineCache::default();
+        let config = super::graphics_config();
+        let format = super::super::ASSUMED_SURFACE_FORMAT;
+        super::start_graphics(&context, &cache, &config, format);
+        let setup = context.existing().expect("activation retained no device");
+        let (instance, device) = cache.startup_device().expect("activation started no job");
+        assert!(instance == setup.instance, "the job runs on another instance");
+        assert!(device == setup.device, "the job compiles on another device");
+
+        super::start_graphics(&context, &cache, &config, format);
+        let again = context.existing().expect("the retained device went");
+        assert!(again.device == setup.device, "a second activation made another device");
+        let (_, device) = cache.startup_device().expect("the job went");
+        assert!(device == setup.device, "a second activation moved the job");
+        cache.shutdown_startup();
     }
 }
