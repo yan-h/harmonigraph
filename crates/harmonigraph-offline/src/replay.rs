@@ -171,6 +171,7 @@ mod tests {
             configurations: Vec::new(),
             truncated: false,
             incomplete: None,
+            ..Default::default()
         }
     }
 

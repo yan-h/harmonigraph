@@ -297,6 +297,7 @@ impl Shot {
             configurations: Vec::new(),
             truncated: false,
             incomplete: None,
+            ..Default::default()
         }
     }
 
@@ -565,6 +566,7 @@ fn spectral_shadows_draw_the_frame_on_record() {
         configurations: Vec::new(),
         truncated: false,
         incomplete: None,
+        ..Default::default()
     };
     check_take("spectrogram-spectral-shadows", shot, take);
 }
@@ -631,6 +633,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
         configurations: Vec::new(),
         truncated: false,
         incomplete: None,
+        ..Default::default()
     };
     let mut layout = crate::frames::single_pane(harmonigraph_ui::Pane::Spectral);
     if drawn == Drawn::Sliver {

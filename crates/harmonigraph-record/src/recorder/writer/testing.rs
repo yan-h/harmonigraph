@@ -130,11 +130,9 @@ pub struct FileWriter {
     pub finished: Option<std::path::PathBuf>,
 }
 impl FileWriter {
-    pub fn retained_passes(&self) -> usize {
-        self.pump.open.as_ref().map_or(0, |o| o.retained.len())
-    }
-    pub fn current_pass(&self) -> Option<u32> {
-        self.pump.open.as_ref().map(|o| o.current.number)
+    /// The pass whose WAV the take is writing.
+    pub fn pass(&self) -> Option<u32> {
+        self.pump.open.as_ref().map(|o| o.pass)
     }
     /// Opens `path` and the WAV beside it, as every `Start` does.
     pub fn new(capture: &Capture, path: std::path::PathBuf) -> Self {
@@ -147,7 +145,7 @@ impl FileWriter {
             &status,
         )
         .unwrap();
-        assert!(open.current.audio.is_some(), "{}", status.lock());
+        assert!(open.audio.is_some(), "{}", status.lock());
         Self {
             pump: Pump { latches: capture.latches.clone(), open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),

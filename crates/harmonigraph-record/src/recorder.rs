@@ -23,7 +23,7 @@ pub use writer::channel;
 #[doc(hidden)]
 pub use writer::testing;
 
-use configuration::{RecordAddress, RecordFence, RecordIntent};
+use configuration::{RecordFence, RecordIntent};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
 /// Record-ring capacity. Expressive voices can produce several records per
@@ -78,13 +78,32 @@ pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usiz
 
 /// One recorded thing, in a form the audio thread can push without
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
+///
+/// Everything here is on the take's presentation clock. A `Run` says where
+/// that clock sits in the song, and the parameters and configuration that
+/// follow it on this ring belong to it until its `RunEnd`, so their place on
+/// the ring is their stamp.
 #[derive(Clone, Copy)]
 pub enum Entry {
-    ConfigurationAt {
-        address: RecordAddress,
+    /// A stretch of `pass` that records without a pause opens at `at`. `song`
+    /// is where that sample sits in the pass's audio, `presentation` where it
+    /// sits on the Hub's clock. The writer opens the pass's WAV at its first.
+    Run {
+        epoch: u64,
+        pass: u32,
+        at: publication::Stamp,
+        song: f64,
+        presentation: f64,
+    },
+    /// The open run's first sample that did not record.
+    RunEnd {
+        epoch: u64,
+        at: publication::Stamp,
+    },
+    Configuration {
+        epoch: u64,
         config: harmonigraph_take::ConfigurationRecord,
     },
-    ConfigurationPassComplete(RecordAddress),
     ConfigurationEpochComplete(u64),
     ProducerClosed(u64),
     /// Exactly this committed audio prefix belongs at this point in the stream.
@@ -96,15 +115,6 @@ pub enum Entry {
         key: usize,
         value: f32,
     },
-    /// The take time of the first audio sample about to be written.
-    /// Sent once per pass, before any audio, so the header can say where
-    /// the WAV sits relative to the notes.
-    AudioStart(f64),
-    /// The transport jumped: a loop wrapped, or the playhead was dragged.
-    /// Everything after this belongs to a different pass
-    /// through the song, so the writer starts a new file rather than
-    /// interleaving two performances at the same song positions.
-    NewPass,
 }
 
 // [`TAKE_RING_CAPACITY`] of these are allocated up front and stay resident for
@@ -114,10 +124,9 @@ pub enum Entry {
 // pinning where `publication.rs` pins its own cell — a variant that doubled it
 // would cost megabytes an instance with nothing on screen to say so.
 //
-// `ConfigurationAt` is the widest variant and the one that will move: a
-// 16-byte address beside an 80-byte `ConfigurationRecord`, which carries the
-// whole resolved configuration by value because the audio thread cannot
-// allocate a box for it.
+// `Configuration` is the widest variant and the one that will move: an epoch
+// beside an 80-byte `ConfigurationRecord`, which carries the whole resolved
+// configuration by value because the audio thread cannot allocate a box for it.
 const _: () = assert!(std::mem::size_of::<Entry>() <= 96);
 const _: () = assert!(std::mem::align_of::<Entry>() <= 8);
 
@@ -182,7 +191,7 @@ impl StopAtBar {
 /// gained (#895).
 #[derive(Default)]
 struct TakeLatches {
-    /// Notes that entered the current take through addressed publication. The
+    /// Notes played under the current take's arm once its first run opened. The
     /// status line reads this independently of transport progress: audio-only
     /// takes and delayed notes also roll.
     captured: AtomicU64,
@@ -258,8 +267,10 @@ pub struct Recorder {
     history: History,
     /// Published for the GUI: is the transport actually moving?
     rolling: Arc<AtomicBool>,
-    /// Whether this pass has already declared its audio start.
-    audio_started: bool,
+    /// The epoch whose take has opened a run, so its notes count from there:
+    /// the On transport stop countdown reads the count, and a note played
+    /// before playback must not start it.
+    run_opened: u64,
     /// Which unbroken run of recorded blocks the take is in. See
     /// [`Recorder::recording_run`].
     run: u64,
@@ -309,7 +320,7 @@ impl Recorder {
             lifecycle: State::Disarmed,
             history: History::default(),
             rolling: Arc::default(),
-            audio_started: false,
+            run_opened: 0,
             run: 0,
             run_live: false,
             end_at_rewind: Arc::default(),
@@ -326,11 +337,11 @@ impl Recorder {
     }
     /// Consume a real publication serial on both lanes. Each queues its own
     /// gap immediately, so an absent drainer cannot hide this missing cut.
-    pub fn publication_lost(&mut self, time: f64, route: publication::Route) {
-        self.publication.discarded(time, route);
-        self.display.discarded(time, publication::Route::default());
+    pub fn publication_lost(&mut self, time: f64, span: publication::Span) {
+        self.publication.discarded(time, span);
+        self.display.discarded(time, publication::Span::default());
         self.outage = publication::Lanes::both(true);
-        self.publication_result(Err(publication::PublishError::Lost), route);
+        self.publication_result(Err(publication::PublishError::Lost), span);
     }
     /// Read and clear the outage latches. A lane that reports one owes every
     /// source the caller knows about a fresh snapshot on that lane, because
@@ -348,23 +359,26 @@ impl Recorder {
     pub fn publish_note(
         &mut self,
         note: harmonigraph_core::canonical::NoteDelta,
-        route: publication::Route,
+        span: publication::Span,
     ) -> publication::Lanes<Result<(), publication::PublishError>> {
-        let take = self.publication.note(note, route);
+        let take = self.publication.note(note, span);
         // Only the take lane's own outcome accounts the take. A display lane
         // that overflowed still returns Err on its own half, so the caller
         // arms a snapshot there, but it must not touch the file.
-        self.publication_result(take, route);
-        // A route with an address is a note landing in a pass, and this is the
-        // only way one gets there. A reset is no note of the take's, whatever
-        // route it carries.
+        self.publication_result(take, span);
+        // A note played under this take's arm, once its first run has opened,
+        // and this is the only way one gets there. A reset is no note of the
+        // take's, whatever it is stamped with.
+        let epoch = span.intent.epoch();
         if take.is_ok()
-            && route.address.is_some()
+            && span.intent.is_armed()
+            && epoch == self.record_epoch
+            && epoch == self.run_opened
             && !matches!(note.event.kind, NoteEventKind::SourceReset | NoteEventKind::SessionReset)
         {
             self.latches.captured.fetch_add(1, Ordering::Relaxed);
         }
-        let display = self.display.note(note, publication::Route::default());
+        let display = self.display.note(note, publication::Span::default());
         self.outage.take |= take == Err(publication::PublishError::Lost);
         self.outage.display |= display == Err(publication::PublishError::Lost);
         publication::Lanes { take, display }
@@ -379,17 +393,17 @@ impl Recorder {
         &mut self,
         lane: publication::Lane,
         baseline: &harmonigraph_core::canonical::SourceBaseline,
-        route: publication::Route,
+        span: publication::Span,
     ) -> Result<(), publication::PublishError> {
         match lane {
             publication::Lane::Take => {
-                let result = self.publication.baseline(baseline, route);
-                self.publication_result(result, route);
+                let result = self.publication.baseline(baseline, span);
+                self.publication_result(result, span);
                 result
             }
-            // The display's copy addresses no file, so it carries no route.
+            // The display's copy belongs to no take, so it carries no stamp.
             publication::Lane::Display => {
-                self.display.baseline(baseline, publication::Route::default())
+                self.display.baseline(baseline, publication::Span::default())
             }
         }
     }
@@ -402,14 +416,14 @@ impl Recorder {
     /// into the file as an `IncompleteRecord`. Refusal is left to failures
     /// that are actually fatal to the recording — audio, ownership and I/O,
     /// which reach the fence through [`Recorder::fail_configuration`], the
-    /// closures' own [`Recorder::source_pass_complete`] /
+    /// closures' own [`Recorder::pass_closed`] /
     /// [`Recorder::source_epoch_complete`], and the writer's paths — plus
     /// `Invalid` here, which is the one publication outcome with NO gap to
     /// describe it and so the one that would otherwise leave a silent hole.
     fn publication_result(
         &self,
         result: Result<(), publication::PublishError>,
-        route: publication::Route,
+        span: publication::Span,
     ) {
         match result {
             Ok(()) | Err(publication::PublishError::Busy) => {}
@@ -418,17 +432,19 @@ impl Recorder {
             }
             Err(publication::PublishError::Invalid) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
-                if route.address.is_some() || self.fence.finishing.load(Ordering::Acquire) {
+                if span.intent.is_armed() || self.fence.finishing.load(Ordering::Acquire) {
                     self.fence.fail();
                 }
             }
         }
     }
 
-    /// A complete audio-owned publication frontier, not a configuration, GUI,
-    /// source-retention or disk acknowledgement, authorizes these closures.
-    pub fn source_pass_complete(&mut self, address: RecordAddress, observation_time: f64) {
-        if self.publication.pass_complete(address, observation_time).is_err() {
+    /// Both complete audio-owned frontiers, not a GUI, source-retention or
+    /// disk acknowledgement, have passed `pass`'s last run: everything it
+    /// recorded is ahead of this on both lanes, so a later failure leaves it
+    /// whole.
+    pub fn pass_closed(&mut self, epoch: u64, pass: u32, observation_time: f64) {
+        if self.publication.pass_closed(epoch, pass, observation_time).is_err() {
             self.fence.fail();
         }
     }
@@ -465,10 +481,11 @@ impl Recorder {
     }
 
     fn update_armed(&mut self, armed: bool) -> bool {
-        let action = self.advance(Observation::Armed(armed));
+        let (action, _) = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
+            // Per arm, not per pass: the reader opens a later pass with the
+            // values in force before it.
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
-            self.audio_started = false;
             // A take armed with no transport position records from here on
             // without a transport observation to start its run.
             self.run = self.run.wrapping_add(1);
@@ -504,15 +521,6 @@ impl Recorder {
     /// Every armed take records audio, until the take has failed.
     pub fn wants_audio(&self) -> bool {
         self.lifecycle.armed() && !self.fence.failed.load(Ordering::Acquire)
-    }
-
-    /// Declare where the audio about to be written sits in take time.
-    /// Idempotent per pass; the first call is the one that counts.
-    pub fn mark_audio_start(&mut self, t: f64) {
-        if !self.audio_started {
-            self.audio_started = true;
-            self.push(Entry::AudioStart(t));
-        }
     }
 
     /// Append one block of interleaved input samples.
@@ -555,9 +563,17 @@ impl Recorder {
     }
 
     /// Note where the transport is, and answer whether it is rolling —
-    /// i.e. whether this block's events belong in the take. Called once
-    /// per block with the block's song position, the host's own `playing`
-    /// flag, and this block's frame count divided by its sample rate.
+    /// i.e. whether this block's events belong in the take — with where the
+    /// block sits in its pass's audio. Called once per block with the block's
+    /// song position, the host's own `playing` flag, and this block's frame
+    /// count divided by its sample rate.
+    ///
+    /// The answer is the AUDIO's position, not the host's: the transport's
+    /// position at a pass's first block, and the end of the audio already
+    /// recorded after that. A resume from a pause then continues the WAV, and
+    /// so does a playing snapback before forward motion, which stays in its
+    /// pass; the host's position would put the notes after either beside a
+    /// soundtrack that does not have them there (#1760).
     ///
     /// A playing host records immediately. A stopped host records only when
     /// its position advances by the PREVIOUS callback's duration, within 50%
@@ -589,17 +605,19 @@ impl Recorder {
     /// the next block that records, so a playhead put back and left alone opens
     /// no pass at all, and one played away from opens its pass with the block
     /// that fills it.
-    pub fn observe_transport(&mut self, position: f64, playing: bool, duration: f64) -> bool {
-        let action = self.advance(Observation::Transport { position, playing, duration });
+    pub fn observe_transport(
+        &mut self,
+        position: f64,
+        playing: bool,
+        duration: f64,
+    ) -> Option<f64> {
+        let (action, origin) = self.advance(Observation::Transport { position, playing, duration });
         if action == Action::SplitAndRecord {
             if let Some(pass) = self.record_pass.checked_add(1) {
                 self.record_pass = pass;
             } else {
                 self.fence.fail();
             }
-            self.push(Entry::NewPass);
-            self.last_params = [f32::NAN; ParamKey::ALL.len()];
-            self.audio_started = false;
         }
         let rolling = matches!(action, Action::Record | Action::SplitAndRecord);
         if rolling && (!self.run_live || action == Action::SplitAndRecord) {
@@ -610,7 +628,7 @@ impl Recorder {
             self.latches.rolled.store(true, Ordering::Relaxed);
         }
         self.rolling.store(rolling, Ordering::Relaxed);
-        rolling
+        origin.filter(|_| rolling)
     }
 
     /// End the take if this block played THROUGH the stop bar, and answer
@@ -643,12 +661,12 @@ impl Recorder {
     /// it started and straddles the stop bar; it ends the take early, visibly
     /// (Record take switches off), and re-arming is the whole of the repair.
     pub fn observe_bar(&mut self, bar: Option<f64>) -> bool {
-        self.advance(Observation::Bar(bar)) == Action::Complete(End::Bar)
+        self.advance(Observation::Bar(bar)).0 == Action::Complete(End::Bar)
     }
 
     /// Snapshot shared policy and publish decisions outside the pure transition.
     /// Callback and configuration ownership are deliberately unaffected here.
-    fn advance(&mut self, observation: Observation) -> Action {
+    fn advance(&mut self, observation: Observation) -> (Action, Option<f64>) {
         let policy = Policy {
             end_at_rewind: self.end_at_rewind.load(Ordering::Relaxed),
             stop_bar: self.latches.stop_at_bar.get(),
@@ -660,7 +678,7 @@ impl Recorder {
             self.latches.end.store(end as u8, Ordering::Relaxed);
             self.rolling.store(false, Ordering::Relaxed);
         }
-        next.action
+        (next.action, next.origin)
     }
 
     /// Capture a callback boundary's arm/disarm intent. A Stop after it cannot
@@ -675,9 +693,11 @@ impl Recorder {
     pub fn recording_epoch(&self) -> u64 {
         self.fence.epoch()
     }
-    pub fn configuration_address(&self) -> Option<RecordAddress> {
+    /// The epoch and pass a recorded block would land in: from the arm until
+    /// the take completes or is disarmed.
+    pub fn armed_pass(&self) -> Option<(u64, u32)> {
         (self.lifecycle.armed() && self.lifecycle != State::Complete && self.record_epoch != 0)
-            .then_some(RecordAddress { epoch: self.record_epoch, pass: self.record_pass })
+            .then_some((self.record_epoch, self.record_pass))
     }
     pub fn fail_configuration(&self) {
         self.fence.fail();
@@ -693,19 +713,33 @@ impl Recorder {
         self.fence.retirement_hold.store(false, Ordering::Release);
         self._writer_lifetime = None;
     }
-    pub fn configuration_at(
+    /// Open a run of `pass`, whose first sample `at` sits at `song` in the
+    /// pass's audio and at `presentation` on the take's clock.
+    pub fn run(
         &mut self,
-        address: RecordAddress,
+        epoch: u64,
+        pass: u32,
+        at: publication::Stamp,
+        song: f64,
+        presentation: f64,
+    ) {
+        self.run_opened = epoch;
+        self.push(Entry::Run { epoch, pass, at, song, presentation });
+    }
+    /// Close the open run at its first sample that did not record.
+    pub fn run_end(&mut self, epoch: u64, at: publication::Stamp) {
+        self.push(Entry::RunEnd { epoch, at });
+    }
+    pub fn configuration(
+        &mut self,
+        epoch: u64,
         t: f64,
         resolved: harmonigraph_core::configuration::ResolvedConfig,
     ) {
-        self.push(Entry::ConfigurationAt {
-            address,
+        self.push(Entry::Configuration {
+            epoch,
             config: harmonigraph_take::ConfigurationRecord::new(t, resolved),
         });
-    }
-    pub fn configuration_pass_complete(&mut self, address: RecordAddress) {
-        self.push(Entry::ConfigurationPassComplete(address));
     }
     pub fn configuration_epoch_complete(&mut self, epoch: u64) {
         if epoch != 0 && epoch > self.fence.configuration_closed.load(Ordering::Acquire) {

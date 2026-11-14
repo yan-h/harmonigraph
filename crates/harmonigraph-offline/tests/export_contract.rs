@@ -1,5 +1,5 @@
 //! Exercise the executable boundary as well as the encoder's unit fixtures.
-use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, WavWriter, Writer};
+use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RunRecord, WavWriter, Writer};
 use harmonigraph_ui::RenderTrigger;
 use std::path::Path;
 use std::process::Command;
@@ -16,15 +16,15 @@ fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     wav.finish().unwrap();
     let mut take = Writer::create(
         path,
-        &Header {
-            appearance: Some(appearance.serialize()),
-            audio_file: Some(
-                path.with_extension("wav").file_name().unwrap().to_str().unwrap().into(),
-            ),
-            audio_start: Some(0.0),
-            ..Default::default()
-        },
+        &Header { appearance: Some(appearance.serialize()), ..Default::default() },
     )
+    .unwrap();
+    // One run at offset zero, naming the WAV beside the take.
+    take.write(&Record::Run(RunRecord {
+        pass: 1,
+        audio_file: Some(path.with_extension("wav").file_name().unwrap().to_str().unwrap().into()),
+        ..Default::default()
+    }))
     .unwrap();
     for (t, kind) in [(0.0, NoteKind::On { velocity: 0.8 }), (0.25, NoteKind::Off)] {
         take.write(&Record::Note(NoteRecord {

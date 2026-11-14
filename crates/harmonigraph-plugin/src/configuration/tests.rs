@@ -1306,8 +1306,8 @@ fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_some());
-    let first = harmonigraph_take::Take::read(&path).unwrap();
-    let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
+    let first = harmonigraph_take::Take::read_pass(&path, Some(1)).unwrap();
+    let second = harmonigraph_take::Take::read_pass(&path, Some(2)).unwrap();
     assert!(
         !first.configurations.iter().any(|c| c.axes[1] == 698_000_000),
         "nine at8 edits are adopted at the next boundary, never backdated into the old pass"
@@ -1390,7 +1390,11 @@ fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
     }
     writer.drain(&mut capture);
     assert!(!writer.failed());
-    assert!(!dir.join("record-2.take").exists(), "a resume is not a split");
+    assert_eq!(
+        harmonigraph_take::Take::read(&path).unwrap().passes,
+        [1],
+        "a resume is not a split"
+    );
     let take = harmonigraph_take::Take::read(&path).unwrap();
     assert!(!records_an_on(&take, 60), "the fixture must strike where nothing records");
     let notes = drawn(&take, 60);
@@ -1430,9 +1434,9 @@ fn a_pass_split_by_a_loop_opens_with_the_note_held_across_it() {
     }
     writer.drain(&mut capture);
     assert!(!writer.failed());
-    let first = harmonigraph_take::Take::read(&path).unwrap();
+    let first = harmonigraph_take::Take::read_pass(&path, Some(1)).unwrap();
     assert!(records_an_on(&first, 60), "the first pass saw the note begin");
-    let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
+    let second = harmonigraph_take::Take::read_pass(&path, Some(2)).unwrap();
     assert!(!records_an_on(&second, 60), "the fixture must hold the note across the wrap");
     let notes = drawn(&second, 60);
     assert_eq!(notes.len(), 1, "the second pass draws the held note: {notes:?}");
@@ -1473,7 +1477,7 @@ fn a_pass_opened_mid_callback_is_opened_in_that_callback() {
     }
     writer.drain(&mut capture);
     assert!(!writer.failed());
-    let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
+    let second = harmonigraph_take::Take::read_pass(&path, Some(2)).unwrap();
     assert!(!records_an_on(&second, 60), "the fixture must hold the note across the wrap");
     let notes = drawn(&second, 60);
     assert_eq!(notes.len(), 1, "the second pass draws the held note: {notes:?}");
@@ -1517,15 +1521,16 @@ fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_some(), "Stop must not wait on a pass that never rolled");
-    assert!(!dir.join("record-2.take").exists(), "an empty pass has nothing to split from");
+    let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
+    assert_eq!(take.passes, [1], "an empty pass has nothing to split from");
     drop(writer);
     device.finish_notes(256, &[(10, 60)]);
     drop(device);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// #839/#828: no rejected scrub segment may acquire a route, consume the
-/// unchanged configuration's sole snapshot, or contribute samples to the WAV.
+/// #839/#828: no rejected scrub may open a run, consume the unchanged
+/// configuration's sole record, or contribute samples to the WAV.
 #[test]
 fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origin() {
     use harmonigraph_record::Entry;
@@ -1550,26 +1555,22 @@ fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origi
         );
     }
     let entries = capture.drain_entries();
-    let mut parameters = 0;
-    let mut origins = Vec::new();
+    let mut parameters = Vec::new();
+    let mut runs = Vec::new();
     let mut configurations = Vec::new();
     let mut samples = 0;
     for entry in entries {
         match entry {
-            Entry::Param { t, .. } => {
-                assert_eq!(t, 5.0);
-                parameters += 1;
-            }
-            Entry::AudioStart(t) => origins.push(t),
-            Entry::ConfigurationAt { config, .. } => configurations.push(config.t),
+            Entry::Param { t, .. } => parameters.push(t),
+            Entry::Run { pass, song, presentation, .. } => runs.push((pass, song, presentation)),
+            Entry::Configuration { config, .. } => configurations.push(config.t),
             Entry::AudioSamples(n) => samples += n,
-            Entry::NewPass => panic!("scrubbing before play has nothing to split from"),
             _ => {}
         }
     }
-    assert_eq!(parameters, ParamKey::ALL.len());
-    assert_eq!(origins, [5.0]);
-    assert_eq!(configurations, [5.0], "one unchanged configuration at the accepted origin");
+    let [(1, 5.0, opened)] = runs[..] else { panic!("one run, at the accepted origin: {runs:?}") };
+    assert_eq!(parameters, [opened; ParamKey::ALL.len()]);
+    assert_eq!(configurations, [opened], "one unchanged configuration where the run opened");
     assert_eq!(samples, 3 * 64 * 2);
     assert_eq!(capture.drain_audio().len(), samples);
     capture.stop();
@@ -1670,18 +1671,14 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
             .collect();
         assert_eq!(paths.len(), 1);
         let take = harmonigraph_take::Take::read(&paths[0]).unwrap();
-        let actual_origin = take.header.audio_start.unwrap();
+        let actual_origin = take.audio_start.unwrap();
         assert!((actual_origin - origin).abs() < 1e-8);
         assert_eq!(take.configurations.len(), 1);
-        assert_eq!(take.configurations[0].t, actual_origin);
+        assert!((take.configurations[0].t - actual_origin).abs() < 1e-9);
         assert_eq!(take.params.len(), ParamKey::ALL.len());
-        assert!(take.params.iter().all(|p| p.t == actual_origin));
+        assert!(take.params.iter().all(|p| (p.t - actual_origin).abs() < 1e-9));
         let encoded = std::fs::read_to_string(&paths[0]).unwrap();
-        assert_eq!(
-            encoded.matches("audio_start:Some(").count(),
-            1,
-            "only one AudioStart rewrites the WAV alignment"
-        );
+        assert_eq!(encoded.matches("Run((").count(), 1, "only one run states the WAV alignment");
         let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
         assert_eq!(wav.len(), 44 + 64 * 2 * 4, "exactly one callback, no scrub or restore audio");
         if with_note {
@@ -1770,7 +1767,7 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
         assert_eq!(paths.len(), 1);
         let take = harmonigraph_take::Take::read(&paths[0]).unwrap();
         assert_eq!(take.incomplete.is_none(), complete);
-        assert_eq!(take.header.audio_start, Some(5.0));
+        assert_eq!(take.audio_start, Some(5.0));
         assert_eq!(take.configurations.len(), 1);
         let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
         let expected: Vec<u8> = left
@@ -1902,7 +1899,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         assert_eq!(probe.failed(), incomplete);
         let take = harmonigraph_take::Take::read(&path).unwrap();
         assert_eq!(take.incomplete.is_some(), incomplete);
-        assert_eq!(take.header.audio_start, Some(5.0));
+        assert_eq!(take.audio_start, Some(5.0));
         assert_eq!(take.configurations.len(), 1);
         let expected: Vec<u8> = left
             .iter()
@@ -2054,7 +2051,7 @@ fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
     let configs: Vec<_> = records
         .into_iter()
         .filter_map(|entry| match entry {
-            harmonigraph_record::Entry::ConfigurationAt { config, .. } => Some(config),
+            harmonigraph_record::Entry::Configuration { config, .. } => Some(config),
             _ => None,
         })
         .collect();
@@ -2155,21 +2152,21 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
         for _ in 0..SNAPSHOT_SLOTS {
-            publisher.baseline(&baseline, Route::default()).unwrap();
+            publisher.baseline(&baseline, Span::default()).unwrap();
         }
-        assert_eq!(publisher.baseline(&baseline, Route::default()), Err(PublishError::Busy));
+        assert_eq!(publisher.baseline(&baseline, Span::default()), Err(PublishError::Busy));
         for _ in SNAPSHOT_SLOTS..PUBLICATION_RING - 1 {
             publisher
                 .note(
                     harmonigraph_core::NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                    Route::default(),
+                    Span::default(),
                 )
                 .unwrap();
         }
         assert_eq!(
             publisher.note(
                 harmonigraph_core::NoteEvent::off(2.0, SourceId::DIRECT, 0, 60).into(),
-                Route::default()
+                Span::default()
             ),
             Err(PublishError::Lost)
         );
@@ -2181,7 +2178,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     // Consume outside the audio guard, then exercise payload reuse under it.
     consumer.drain(|_, _| true);
     nice_assert_no_alloc::assert_no_alloc(|| {
-        publisher.baseline(&baseline, Route::default()).unwrap()
+        publisher.baseline(&baseline, Span::default()).unwrap()
     });
     consumer.drain(|_, _| true);
     eprintln!("canonical guarded fill: {SNAPSHOT_SLOTS} complete 64-voice payloads + {} notes + Busy/Lost = {duration:?}; no allocation/deallocation", PUBLICATION_RING - 1 - SNAPSHOT_SLOTS);
@@ -2599,7 +2596,7 @@ fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
         .drain_entries()
         .into_iter()
         .filter_map(|entry| match entry {
-            harmonigraph_record::Entry::ConfigurationAt { config, .. } => Some(config),
+            harmonigraph_record::Entry::Configuration { config, .. } => Some(config),
             _ => None,
         })
         .collect();
@@ -2668,16 +2665,17 @@ fn camera_automation_is_captured_mid_song_and_rebased_for_each_pass() {
     }
     assert!(!probe.failed());
     assert!(probe.finished());
-    let mut takes: Vec<_> = std::fs::read_dir(&dir)
+    let path = std::fs::read_dir(&dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|e| e == "take"))
-        .map(|path| harmonigraph_take::Take::read(path).unwrap())
-        .collect();
-    assert_eq!(takes.len(), 2, "fixture must reach a real loop/pass boundary");
-    takes.sort_by(|a, b| a.header.audio_start.unwrap().total_cmp(&b.header.audio_start.unwrap()));
+        .find(|path| path.extension().is_some_and(|e| e == "take"))
+        .unwrap();
+    let mut takes: Vec<_> =
+        [1, 2].map(|pass| harmonigraph_take::Take::read_pass(&path, Some(pass)).unwrap()).into();
+    assert_eq!(takes[0].passes, [1, 2], "fixture must reach a real loop/pass boundary");
+    takes.sort_by(|a, b| a.audio_start.unwrap().total_cmp(&b.audio_start.unwrap()));
     for take in &takes {
-        let origin = take.header.audio_start.unwrap();
+        let origin = take.audio_start.unwrap();
         for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
             let record = take.params.iter().find(|p| p.id == key.id()).unwrap();
             let expected =

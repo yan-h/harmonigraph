@@ -724,8 +724,8 @@ fn initial_expressions_survive_unpaired_and_missed_reply_fallback() {
 
 /// #1127. A snapshot never covers history still waiting to publish. The Hub's
 /// first callback owes every row a snapshot, and here it also collects a late
-/// onset whose input sample no segment of this callback covers, so the delta
-/// waits for `end`'s forced flush while `publish` builds snapshots. Both lanes are
+/// onset, which `publish` puts on both lanes before it builds the snapshots
+/// that cover it. Both lanes are
 /// read on this thread by consumers that refuse history at or below a cut they
 /// have adopted: the display's tracker, and a tracker fed the take lane. That
 /// second one holds the take to the same rule the writer does (it fences on
@@ -1060,9 +1060,9 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
 }
 
 /// The same lag against the take: a Tune the host runs after the Hub is a
-/// callback behind, so its record routes through the segment the Hub's
-/// previous callback left open. Proving a callback's end complete as it ends
-/// would retire that segment under it and fail the recorder for the session.
+/// callback behind, so its record is stamped under the Hub's previous
+/// callback. Proving a callback's end complete as it ends would put that
+/// record below the proven frontier and fail the recorder for the session.
 #[test]
 fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
     let _scope = crate::test_scope::enter();
@@ -1086,9 +1086,10 @@ fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The last armed callback's notes reach the take after a disarm. Both arrive
-/// a callback late, after the callback that observed the disarm: the Hub's own
-/// row, and a capture from a Tune the host runs after the Hub (#1760).
+/// The last armed callback's notes reach the take after a disarm: a direct
+/// note on the Hub's own track, and a capture from a Tune the host runs after
+/// the Hub, which reaches the Hub only in the callback that observes the
+/// disarm and is stamped with the intent it was played under (#1760).
 #[test]
 fn the_last_armed_callbacks_notes_reach_the_take_after_a_disarm() {
     let _scope = crate::test_scope::enter();

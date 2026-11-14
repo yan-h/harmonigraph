@@ -17,9 +17,11 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:6,sample_rate:48000.0,...))
-//! Note((t:0.5,source:0,channel:0,note:60,kind:On(velocity:0.8)))
-//! Param((t:0.0,id:"pitch-class-fade",value:2.0))
+//! Header((version:7,sample_rate:48000.0,...))
+//! Run((pass:1,at:(runtime_session:1,clock_epoch:0,input:0),song:12.0,presentation:3.5,...))
+//! Param((t:3.5,id:"pitch-class-fade",value:2.0))
+//! Canonical(Delta((event:(t:3.51,...),timing:Some((input:512,...)),...)))
+//! RunEnd((at:(runtime_session:1,clock_epoch:0,input:96000)))
 //! ```
 //!
 //! Line-oriented rather than one big document for three reasons: the
@@ -29,16 +31,36 @@
 //! take is greppable and hand-editable, which matters a lot the first
 //! time a render comes out wrong.
 //!
-//! Times are **seconds of host transport position** — the song position,
-//! not a count from the record button — which is the same clock the plugin
-//! stamps its note events with. They are deliberately NOT wall-clock or
-//! frame times: the whole point is that the replay chooses its own frame
-//! rate.
+//! # Time and passes
+//!
+//! A file holds every pass of one armed take, on the clock the plugin's
+//! display runs on (presentation time). Each record also carries where its
+//! input arrived: the Hub's clock and sample, its *stamp*. A delta's stamp is
+//! its own `timing`; a snapshot and a gap carry theirs beside the payload.
+//!
+//! A `Run` record opens a stretch the take recorded without a pause, and says
+//! where that stretch sits in the song: `song` is the audio's own position at
+//! the run's first sample, so notes and the WAV share one time base. `RunEnd`
+//! closes it. The reader ([`Take::read_pass`]) routes every stamped record to
+//! the run that holds its stamp, keeps the pass asked for (the last by
+//! default), and translates each run by its one offset into song seconds,
+//! which is what a [`Take`] holds once read. A record in no run is dropped:
+//! the next run's opening snapshot restates what was sounding. Parameters and
+//! configuration ride the same ring as `Run` and `RunEnd`, so their place
+//! between those lines is their stamp; so is a record's written by hand
+//! without one.
+//!
+//! A file with no `Run` is one pass at offset zero, already in song time: the
+//! standalone's takes and in-memory fixtures.
+//!
+//! Song times are deliberately NOT wall-clock or frame times: the whole point
+//! is that the replay chooses its own frame rate.
 
 pub mod canonical;
-pub use canonical::{CanonicalRecord, IncompleteRecord};
+pub use canonical::{CanonicalRecord, IncompleteRecord, StampRecord};
 pub mod configuration;
 pub mod params;
+mod reader;
 pub use configuration::ConfigurationRecord;
 pub mod render;
 
@@ -57,8 +79,11 @@ use serde::{Deserialize, Serialize};
 /// Version 4 carried full editor persistence instead of dedicated appearance.
 /// Version 5 named a baseline's Show flag `participating`; read under the new
 /// key `shown` it defaults to false and hides every source, so the rename is a
-/// version rather than a silent blank render. There are no compatibility shims.
-pub const FORMAT_VERSION: u32 = 6;
+/// version rather than a silent blank render. Version 6 stamped song time on
+/// the audio thread and wrote one file per pass; version 7 records the
+/// display's presentation time with each record's stamp, and the reader
+/// chooses the pass and its song time (#1760). There are no compatibility shims.
+pub const FORMAT_VERSION: u32 = 7;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
@@ -75,17 +100,6 @@ pub struct Header {
     pub appearance: Option<String>,
     /// Free-form: which shell wrote this, and out of what.
     pub source: String,
-    /// File name (not path) of the audio recorded with this take, if
-    /// any. A sibling of the take file, so the pair can be moved
-    /// together. The renderer uses it for the spectrum and soundtrack.
-    pub audio_file: Option<String>,
-    /// Take time corresponding to the audio's first sample.
-    ///
-    /// Recording usually starts at song position 0, making this 0 — but
-    /// arming mid-song does not, and without it the spectrum and the
-    /// muxed track would both sit at the wrong place by exactly however
-    /// far in you started.
-    pub audio_start: Option<f64>,
 }
 
 impl Header {
@@ -120,8 +134,6 @@ impl Default for Header {
             sample_rate: 48_000.0,
             appearance: None,
             source: String::new(),
-            audio_file: None,
-            audio_start: None,
         }
     }
 }
@@ -185,7 +197,7 @@ impl From<ExpressionKind> for harmonigraph_core::Expression {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NoteRecord {
-    /// Seconds of host transport position (see the module doc).
+    /// Song seconds, once read (see the module doc).
     pub t: f64,
     /// Canonical stream identity, with 0 reserved for observed direct input.
     /// This is not a saved runtime session, epoch or source-incarnation token.
@@ -252,6 +264,35 @@ pub struct ParamRecord {
     pub value: f32,
 }
 
+/// Opens a stretch of one pass the take recorded without a pause.
+///
+/// `song - presentation` is the run's one offset: every record the run holds
+/// moves by it into song time.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RunRecord {
+    /// Counts from 1 at the arm; under On disarm and At bar, a loop wrap or a
+    /// jump starts the next.
+    pub pass: u32,
+    /// The run's first input sample.
+    pub at: StampRecord,
+    /// Song seconds of that sample: where the pass's audio has got to, so a
+    /// resume continues the WAV rather than the host's position.
+    pub song: f64,
+    /// Presentation seconds of that sample, on the Hub's own mapping.
+    pub presentation: f64,
+    /// File name (not path) of the pass's WAV, a sibling of the take file.
+    /// The renderer uses it for the spectrum and the soundtrack.
+    pub audio_file: Option<String>,
+}
+
+/// Closes the open run: `at` is the first sample it did not record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RunEndRecord {
+    pub at: StampRecord,
+}
+
 /// One line of a take.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Record {
@@ -260,7 +301,13 @@ pub enum Record {
     Param(ParamRecord),
     Configuration(ConfigurationRecord),
     Canonical(CanonicalRecord),
+    /// A failure that touched every pass not closed above this line.
     Incomplete(IncompleteRecord),
+    Run(RunRecord),
+    RunEnd(RunEndRecord),
+    /// Every record of this pass, and of every pass before it, is above this
+    /// line, so a failure below it leaves them whole.
+    PassClosed(u32),
 }
 
 /// A whole take, read into memory. Per-block expression records can make
@@ -280,17 +327,27 @@ pub struct Take {
     /// and usable; callers should say so rather than pretend the take is
     /// whole.
     pub truncated: bool,
-    /// The hole in the note history this take carries, if it has one: the
-    /// FIRST gap the file names, whether it named it as an `Incomplete` marker
-    /// or as a `Gap` among the events.
+    /// The hole in the note history the pass read carries, if it has one: the
+    /// FIRST the file names, whether as a `Gap` among the events that touches
+    /// one of the pass's runs, an `Incomplete` marker below no `PassClosed` for
+    /// it, or a record the reader had to lift past its bound.
     ///
-    /// First rather than last because that is the rule the WRITER already
-    /// applies — `Open::mark_incomplete` in `harmonigraph-record` writes its
-    /// marker once per recording and every later gap leaves it alone — and the
-    /// two have to agree. They did not: the reader took the last line, so a
-    /// take with two gaps was exported with a warning naming a different gap
-    /// from the one its own marker held (#895, correctness item 4).
+    /// First rather than last because a later gap adds nothing to the warning:
+    /// the reader took the last line once, so a take with two gaps exported
+    /// with a warning naming a different gap from its own marker (#895).
     pub incomplete: Option<IncompleteRecord>,
+    /// File name (not path) of the WAV recorded beside the pass read.
+    pub audio_file: Option<String>,
+    /// Song time of that WAV's first sample.
+    ///
+    /// Arming mid-song does not start at zero, and without it the spectrum
+    /// and the muxed track would both sit at the wrong place by exactly
+    /// however far in you started.
+    pub audio_start: Option<f64>,
+    /// The passes the file holds, in order. Empty for a file with no `Run`.
+    pub passes: Vec<u32>,
+    /// The pass read, if the file holds any.
+    pub pass: Option<u32>,
 }
 
 /// Why a take could not be read.
@@ -304,6 +361,11 @@ pub enum ReadError {
     /// Written in an unsupported older or newer format.
     Version(u32),
     InvalidCanonical(usize),
+    /// The file holds no such pass.
+    NoPass {
+        asked: u32,
+        passes: Vec<u32>,
+    },
 }
 
 impl std::fmt::Display for ReadError {
@@ -317,6 +379,9 @@ impl std::fmt::Display for ReadError {
             }
             ReadError::Version(v) => {
                 write!(f, "take is format version {v}, this build understands {FORMAT_VERSION}")
+            }
+            ReadError::NoPass { asked, passes } => {
+                write!(f, "take holds no pass {asked}; it holds {passes:?}")
             }
         }
     }
@@ -352,19 +417,32 @@ fn unfinished_ron(line: &str) -> bool {
 }
 
 impl Take {
+    /// The file's last pass.
     pub fn read(path: impl AsRef<std::path::Path>) -> Result<Take, ReadError> {
+        Take::read_pass(path, None)
+    }
+
+    /// Pass `pass` of the file, or its last with `None`.
+    pub fn read_pass(
+        path: impl AsRef<std::path::Path>,
+        pass: Option<u32>,
+    ) -> Result<Take, ReadError> {
         let file = std::fs::File::open(path)?;
-        Take::parse(std::io::BufReader::new(file))
+        Take::parse_pass(std::io::BufReader::new(file), pass)
     }
 
     pub fn parse(input: impl BufRead) -> Result<Take, ReadError> {
+        Take::parse_pass(input, None)
+    }
+
+    pub fn parse_pass(input: impl BufRead, pass: Option<u32>) -> Result<Take, ReadError> {
         // Keep one line of lookahead to recognize the physical last line: a
         // syntactically unfinished final record can be a half-written line.
         // A complete record with an invalid type/value is corruption even there.
         let mut lines = input.lines().enumerate().peekable();
-        let mut take = Take::default();
-        let mut have_header = false;
-        let mut event_lines = Vec::new();
+        let mut header = None;
+        let mut truncated = false;
+        let mut records = Vec::new();
         while let Some((i, line)) = lines.next() {
             let line = line?;
             let line = line.trim();
@@ -376,70 +454,36 @@ impl Take {
             let record = match ron::from_str::<Record>(line) {
                 Ok(record) => record,
                 Err(_) if lines.peek().is_none() && unfinished_ron(line) => {
-                    take.truncated = true;
+                    truncated = true;
                     break;
                 }
                 Err(e) => return Err(ReadError::Parse(i + 1, e)),
             };
             match record {
-                Record::Header(header) => {
-                    if header.version != FORMAT_VERSION {
-                        return Err(ReadError::Version(header.version));
+                Record::Header(read) => {
+                    if read.version != FORMAT_VERSION {
+                        return Err(ReadError::Version(read.version));
                     }
-                    take.header = header;
-                    have_header = true;
+                    header = Some(read);
                 }
                 Record::Note(note) => {
-                    let record = CanonicalRecord::Note(note);
-                    record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
-                    event_lines.push(i + 1);
-                    take.events.push(record);
+                    CanonicalRecord::Note(note)
+                        .validate()
+                        .map_err(|_| ReadError::InvalidCanonical(i + 1))?;
+                    records.push((i + 1, Record::Note(note)));
                 }
                 Record::Canonical(record) => {
                     record.validate().map_err(|_| ReadError::InvalidCanonical(i + 1))?;
-                    if let CanonicalRecord::Gap(gap) = &record {
-                        // First gap wins, like the writer's marker; see
-                        // [`Take::incomplete`].
-                        take.incomplete.get_or_insert(IncompleteRecord {
-                            first_publication: gap.first,
-                            last_publication: gap.last,
-                            reason: gap.reason,
-                        });
-                    }
-                    event_lines.push(i + 1);
-                    take.events.push(record);
+                    records.push((i + 1, Record::Canonical(record)));
                 }
-                Record::Incomplete(incomplete) => {
-                    take.incomplete.get_or_insert(incomplete);
-                }
-                Record::Param(param) => take.params.push(param),
-                Record::Configuration(config) => take.configurations.push(config),
+                record => records.push((i + 1, record)),
             }
         }
-        if !have_header {
-            return Err(ReadError::MissingHeader);
-        }
-        // Sort by time. Records are *written* in the order the audio
-        // thread saw them, which is time order only while the transport
-        // runs forward — a loop rollover or a jump makes the file
-        // non-monotonic, and a replay that walks it in file order would
-        // then stall on the first out-of-order record and deliver
-        // everything after it late. Stable, so simultaneous events keep
-        // the order they were played in (note-off before the note-on that
-        // replaces it, and so on).
-        let mut ordered: Vec<_> = take.events.drain(..).zip(event_lines).collect();
-        ordered.sort_by(|(a, _), (b, _)| a.time().total_cmp(&b.time()));
-        let mut validation = harmonigraph_core::canonical::CanonicalOrder::default();
-        for (record, line) in ordered {
-            record.check_order(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
-            take.events.push(record);
-        }
-        take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
-        take.configurations.sort_by(|a, b| a.t.total_cmp(&b.t));
-        Ok(take)
+        let header = header.ok_or(ReadError::MissingHeader)?;
+        reader::assemble(header, records, truncated, pass)
     }
 
-    /// The transport position of the last recorded event (a gap counts to
+    /// The song position of the last recorded event (a gap counts to
     /// where it runs through): the take's absolute end, not its length. Zero
     /// for a take with nothing in it.
     pub fn duration(&self) -> f64 {
@@ -467,7 +511,7 @@ impl Take {
     /// no notes to anchor to, and anchoring to notes would send it back to
     /// song zero and the empty opening this exists to remove.
     ///
-    /// Event times are the host's TRANSPORT position, so this is a song
+    /// Event times are SONG positions once read, so this is a song
     /// position, not a delay after the record button. A take of a passage
     /// starting a minute into the arrangement has its first event at 60-odd
     /// seconds, and everything before that is guaranteed empty — nothing was
@@ -609,12 +653,9 @@ mod tests {
     #[test]
     fn first_event_survives_a_take_with_no_notes() {
         let take = |notes: Vec<NoteRecord>, params: Vec<ParamRecord>| Take {
-            header: Header::default(),
             events: notes.into_iter().map(CanonicalRecord::Note).collect(),
             params,
-            configurations: Vec::new(),
-            truncated: false,
-            incomplete: None,
+            ..Take::default()
         };
         let note = |t| NoteRecord {
             source: 0,

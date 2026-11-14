@@ -826,7 +826,7 @@ impl Plugin for Harmonigraph {
                 hub.finish_stopped_recording(owner, &mut self.take, self.presentation_seconds);
                 hub.prove_final_frontier(owner, &self.take);
             }
-            owner.reset(&self.take);
+            owner.reset(&mut self.take);
             if let Some(hub) = &mut self.aggregation {
                 hub.stop();
             }
@@ -893,12 +893,14 @@ impl Plugin for Harmonigraph {
                     // here instead makes `observe_transport` return on its own
                     // guard, so no pass is opened at all.
                     let stopped = self.take.observe_bar(bar_position(transport));
-                    let rolling = self.take.observe_transport(
+                    // Where this block sits in its pass's AUDIO, not the
+                    // host's position: see `observe_transport`.
+                    let origin = self.take.observe_transport(
                         seconds,
                         transport.playing,
                         block_samples as f64 / self.sample_rate,
                     );
-                    (rolling && !stopped).then_some(seconds)
+                    origin.filter(|_| !stopped)
                 }
                 OriginSource::LocalClock(seconds) => Some(seconds),
             };
@@ -953,8 +955,11 @@ impl Plugin for Harmonigraph {
                 ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
             );
         }
-        if let Some(origin) = take_origin {
-            self.take.params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+        // A block that records, after the run it belongs to: parameters are
+        // timed on the take's own clock and placed by that run.
+        let recorded = self.configuration.as_ref().filter(|owner| owner.recording.recording());
+        if let Some(at) = recorded.map(|owner| owner.take_time()) {
+            self.take.params(at, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 
             // The take's own audio, when asked for: the selected analysis input
             // exactly as it arrives, so the render gets a spectrum and a
@@ -963,7 +968,6 @@ impl Plugin for Harmonigraph {
             // whatever arrives, which is what `take_right_channel` duplicates
             // a mono input for.
             if self.take.wants_audio() && channels > 0 {
-                self.take.mark_audio_start(origin);
                 let wanted = block_samples * TAKE_CHANNELS;
                 let mut interleaved =
                     (0..block_samples).flat_map(|frame| take_stereo_frame(analysis_input, frame));
