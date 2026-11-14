@@ -7,7 +7,7 @@
 //! and the writer (#1760).
 use std::collections::BTreeMap;
 
-use crate::canonical::{GapReasonRecord, StampRecord};
+use crate::canonical::{GapReasonRecord, StampRecord, TimingRecord};
 use crate::{CanonicalRecord, Header, IncompleteRecord, ReadError, Record, Take};
 
 /// One run, as the file states it.
@@ -40,6 +40,11 @@ impl Run {
     fn presentation(&self, input: i64, rate: f64) -> f64 {
         self.presentation + (input - self.start.input) as f64 / rate
     }
+}
+
+/// The run of `pass` that holds the input `at`.
+fn holding(runs: &[Run], pass: u32, at: StampRecord) -> Option<&Run> {
+    runs.iter().find(|run| run.pass == pass && run.holds(at))
 }
 
 /// The running maximum of one source's song times in one pass, in file order,
@@ -189,7 +194,7 @@ pub(crate) fn assemble(
                 // Nothing the recorder writes lacks a stamp, and in a file that
                 // routes by them a record without one has no place.
                 let at = record.stamp().ok_or(ReadError::InvalidCanonical(line))?;
-                let Some(run) = runs.iter().find(|run| run.pass == chosen && run.holds(at)) else {
+                let Some(run) = holding(&runs, chosen, at) else {
                     continue;
                 };
                 let lateness = record.time() - run.presentation(at.input, rate);
@@ -204,15 +209,8 @@ pub(crate) fn assemble(
                         // the pass a loop wrapped from) draws from this run's
                         // start, not from a song time the run never had.
                         for voice in &mut b.voices {
-                            let struck = voice.onset.map(|t| StampRecord {
-                                runtime_session: t.runtime_session,
-                                clock_epoch: t.clock_epoch,
-                                input: t.input,
-                            });
-                            let holder = struck.and_then(|at| {
-                                runs.iter().find(|r| r.pass == chosen && r.holds(at))
-                            });
-                            if let Some(holder) = holder {
+                            let struck = voice.onset.map(TimingRecord::stamp);
+                            if let Some(holder) = struck.and_then(|at| holding(&runs, chosen, at)) {
                                 let shift = holder.offset() - run.offset();
                                 voice.actual_onset += shift;
                                 voice.input_onset += shift;

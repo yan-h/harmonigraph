@@ -63,6 +63,16 @@ impl From<TimingRecord> for EventTiming {
         }
     }
 }
+impl TimingRecord {
+    /// Where the input arrived, which is what routes it to a run.
+    pub fn stamp(self) -> StampRecord {
+        StampRecord {
+            runtime_session: self.runtime_session,
+            clock_epoch: self.clock_epoch,
+            input: self.input,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProvenanceRecord {
@@ -451,11 +461,7 @@ impl CanonicalRecord {
     /// sample. A gap routes by its range instead.
     pub fn stamp(&self) -> Option<StampRecord> {
         match self {
-            Self::Delta(d) => d.timing.map(|t| StampRecord {
-                runtime_session: t.runtime_session,
-                clock_epoch: t.clock_epoch,
-                input: t.input,
-            }),
+            Self::Delta(d) => d.timing.map(TimingRecord::stamp),
             Self::Baseline(b) => b.at,
             Self::Note(_) | Self::Gap(_) => None,
         }
