@@ -32,20 +32,13 @@ pub fn editor_loading_status(ctx: &egui::Context) -> Option<Status> {
     })
 }
 
-fn needs_lattice(state: &SharedState) -> bool {
-    state.workspace.layout.visible(crate::panes::Tab::Lattice)
-        || state.workspace.layout.visible(crate::panes::Tab::Video)
-}
-
 pub(crate) fn draw(ui: &mut egui::Ui, state: &SharedState) -> bool {
     let Some(mut loading) = ui.ctx().data(|data| data.get_temp::<Loading>(id())) else {
         return false;
     };
-    // Stay dormant until a pane needs the lattice. Removing the opt-in here
-    // would make its first later reveal compile synchronously on the UI thread.
-    if !needs_lattice(state) {
-        return false;
-    }
+    // Every open, lattice or not: until the job is ready, each other pane's
+    // first frame would build its own programs on the host's main thread
+    // (#1743), and a lattice revealed later would compile there too.
     let status = loading.progress.status();
     let stage = match status {
         Status::Ready { built } if !built || loading.finishing => {
@@ -152,51 +145,45 @@ mod tests {
         assert_eq!(remaining, vec![67, 64], "only the expired release should be pruned");
     }
 
+    /// An open with no lattice in sight still loads, so every pane's programs
+    /// come from the worker rather than from its own first frame on the
+    /// host's main thread (#1743): a Spectral-only layout, and one whose
+    /// lattice section is folded.
     #[test]
-    fn hidden_lattice_tabs_do_not_trigger_graphics_preparation() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.workspace.layout = workspace::Layout::solo(Tab::Spectral);
-        assert!(!needs_lattice(&state));
-        state.workspace.layout.folded[0] = false;
-        assert!(needs_lattice(&state));
-        state.workspace.layout.folded[0] = true;
-        assert!(!needs_lattice(&state), "a folded lattice must stay cheap to open");
-        state.workspace.layout = workspace::Layout::solo(Tab::Video);
-        assert!(needs_lattice(&state), "the video preview also draws the lattice");
-    }
-
-    #[test]
-    fn first_reveal_after_hidden_frames_uses_the_loading_path() {
+    fn every_open_uses_the_loading_path() {
         if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
             eprintln!("hot reload uses synchronous initialization; no loading frames");
             return;
         }
-        for tab in [Tab::Lattice, Tab::Video] {
+        let spectral = workspace::Layout::solo(Tab::Spectral);
+        let mut folded = workspace::Layout::solo(Tab::Lattice);
+        folded.folded[workspace::Section::of(Tab::Lattice) as usize] = true;
+        for layout in [spectral, folded] {
             let ctx = egui::Context::default();
             let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-            state.workspace.layout = workspace::Layout::solo(Tab::Spectral);
+            state.workspace.layout = layout;
+            assert!(!state.workspace.layout.visible(Tab::Lattice), "the lattice shows");
             begin_editor_loading(&ctx);
-            let loading_text = |output: &egui::FullOutput| {
-                output.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == Stage::Graphics.label())
-            })
-            };
-            for _ in 0..3 {
-                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut frame = || {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
                     crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");
-                });
-                assert!(!loading_text(&output), "hidden panes do not request preparation");
-            }
-            assert!(editor_loading_status(&ctx).is_some(), "first-use opt-in survives");
-            state.workspace.layout.select(tab);
-            state.workspace.layout.folded[workspace::Section::of(tab) as usize] = false;
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");
-            });
-            assert!(loading_text(&output), "first reveal enters asynchronous preparation");
+                })
+            };
+            let loading = |output: &egui::FullOutput| {
+                output.shapes.iter().any(|shape| {
+                    matches!(
+                        &shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == Stage::Graphics.label()
+                    )
+                })
+            };
+            assert!(loading(&frame()), "the open skipped the loading screen");
             // The splash's own pace, which egui's predicted 1/60 s used to take
             // whole, repainting the splash on every refresh. A little under a
-            // 60 Hz refresh, for the pacing margin (#1707).
+            // 60 Hz refresh, for the pacing margin (#1707). From the second
+            // frame, since a fresh context asks to repaint at once.
+            let output = frame();
+            assert!(loading(&output), "the second frame left the loading screen");
             let delay = output.viewport_output.values().map(|v| v.repaint_delay).min().unwrap();
             assert_eq!(delay, std::time::Duration::from_millis(14), "the splash's poll");
             assert!(output

@@ -15,8 +15,6 @@ mod golden;
 mod labels;
 mod local_shadows;
 mod marks;
-#[cfg(target_os = "macos")]
-mod metal_assets;
 mod occlusion;
 mod octaves;
 mod quantization;

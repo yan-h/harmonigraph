@@ -31,7 +31,10 @@ struct RetainedGpu {
 }
 
 impl SharedGpuContext {
-    fn existing(&self) -> Option<egui_wgpu::WgpuSetupExisting> {
+    /// The retained setup a window would open on, or `None` once its device
+    /// is lost. Public so an application can start work on that device
+    /// before any window opens, rather than make a second one beside it.
+    pub fn existing(&self) -> Option<egui_wgpu::WgpuSetupExisting> {
         let cached = self.0.lock().expect("GPU context lock poisoned").clone()?;
         // Deliver any loss callback that became pending while no window was
         // polling. Never wait for GPU work on the editor-opening path.
@@ -50,7 +53,10 @@ impl SharedGpuContext {
         *self.0.lock().expect("GPU context lock poisoned") = None;
     }
 
-    fn retain(&self, setup: egui_wgpu::WgpuSetupExisting) {
+    /// Keep `setup` for the next window, as a window does with the one it
+    /// creates. Public so an application can create the device ahead of
+    /// any window and have that window open on it.
+    pub fn retain(&self, setup: egui_wgpu::WgpuSetupExisting) {
         let mut slot = self.0.lock().expect("GPU context lock poisoned");
         if slot.as_ref().is_some_and(|gpu| {
             gpu.setup.instance == setup.instance && gpu.setup.device == setup.device

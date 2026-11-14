@@ -1178,9 +1178,6 @@ pub enum OsType {
     VisionOs,
 }
 
-/// Optional compiled-library provider, preserving normal shader translation and reflection.
-pub mod shader_library;
-
 /// Called with each present's command buffer and drawable, before the commit.
 pub type PresentObserver =
     fn(&ProtocolObject<dyn MTLCommandBuffer>, &ProtocolObject<dyn MTLDrawable>);

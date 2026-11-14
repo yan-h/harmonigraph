@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use baseview::{Event, EventStatus, Window, WindowHandle, WindowHandler, WindowOpenOptions};
-use egui_baseview::{EguiWindow, EguiWindowSettings, SharedGpuContext, WgpuSetup};
+use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, SharedGpuContext, WgpuSetup};
 use harmonigraph_ui::{
     params::{ParamBackend, ParamKey},
     SharedState,
@@ -41,11 +41,37 @@ struct Host {
     started: Instant,
 }
 
-/// Open and close three real parented editors with one retained device.
+/// The editor's graphics setup, counting every device made from it.
+fn counted(observations: &Arc<Observations>) -> GraphicsConfig {
+    let mut graphics = super::graphics_config();
+    if let WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_options.wgpu_setup {
+        let base = setup.device_descriptor.clone();
+        let observations = observations.clone();
+        setup.device_descriptor = Arc::new(move |adapter| {
+            observations.devices.fetch_add(1, Ordering::Relaxed);
+            base(adapter)
+        });
+    }
+    graphics
+}
+
+/// Open and close three real parented editors with one retained device, made
+/// as activation makes it, before the first opens: the count of one says no
+/// window made another.
 pub fn run() {
-    harmonigraph_render::shader_assets::initialize();
     let shared = Arc::new(Mutex::new(SharedState::new(super::ASSUMED_SURFACE_FORMAT)));
     let observations = Arc::new(Observations::default());
+    let context = SharedGpuContext::default();
+    {
+        let state = shared.lock();
+        super::start_graphics(
+            &context,
+            &state.picture.editor_graphics(),
+            &counted(&observations),
+            state.picture.surfaces.target_format,
+        );
+    }
+    assert_eq!(observations.devices.load(Ordering::Relaxed), 1, "activation made no device");
     let host_shared = shared.clone();
     let host_observations = observations.clone();
     Window::open_blocking(
@@ -54,7 +80,7 @@ pub fn run() {
             .with_size(1000.0, 700.0),
         move |_| Host {
             shared: host_shared,
-            context: SharedGpuContext::default(),
+            context,
             observations: host_observations,
             child: None,
             opening: 0,
@@ -66,12 +92,7 @@ pub fn run() {
     assert_eq!(observations.completed.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.dropped.load(Ordering::Relaxed), OPENINGS);
     assert_eq!(observations.devices.load(Ordering::Relaxed), 1, "reopen recreated device");
-    let stats = harmonigraph_render::shader_assets::statistics();
-    if std::env::var("HARMONIGRAPH_SHADER_ASSETS").as_deref() == Ok("strict") {
-        assert!(stats.loaded > 0);
-        assert_eq!((stats.source, stats.load_failed, stats.rejected), (0, 0, 0));
-    }
-    eprintln!("NATIVE_LIFECYCLE openings={OPENINGS} devices=1 dropped={OPENINGS} {stats:?}");
+    eprintln!("NATIVE_LIFECYCLE openings={OPENINGS} devices=1 dropped={OPENINGS}");
 }
 
 impl WindowHandler for Host {
@@ -107,7 +128,7 @@ impl WindowHandler for Host {
             }
             return;
         }
-        let mut graphics = super::window::graphics_config();
+        let mut graphics = counted(&self.observations);
         if self.opening == 0 {
             // A command-line application can start behind another window.
             // Metal deliberately skips presentation while it is occluded.
@@ -118,14 +139,6 @@ impl WindowHandler for Host {
             app.activateIgnoringOtherApps(true);
         }
         graphics.shared_context = Some(self.context.clone());
-        if let WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_options.wgpu_setup {
-            let base = setup.device_descriptor.clone();
-            let observations = self.observations.clone();
-            setup.device_descriptor = Arc::new(move |adapter| {
-                observations.devices.fetch_add(1, Ordering::Relaxed);
-                base(adapter)
-            });
-        }
         let persist = self.persist.clone();
         self.child = Some(EguiWindow::open_parented(
             window,

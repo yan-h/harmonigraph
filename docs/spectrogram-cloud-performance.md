@@ -309,7 +309,7 @@ The hypothesis was register allocation sized for the worst path.
 Measured by building each pipeline twice in one probe run —
 once from the shipping source, once with both arms replaced by the tile read —
 and interleaving the two per frame,
-both compiled from source (`HARMONIGRAPH_SHADER_ASSETS=source`) so neither had the corpus's head start.
+both compiled from source so neither had the Metal corpus's head start (the corpus went in #1746).
 3840x2160 at 2 px/pt, fill 1, 10 s span, opening-begin to paint-end medians,
 four runs of 200 to 300 frames with the stub second in two and first in the other two:
 
@@ -356,7 +356,7 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 
 1. Yan selected `P = 40`; revisit only if its repetition becomes visible over real music.
 2. Does the drift-phase softening shimmer at `Fuzz` 0? If it does, bake at 1.5x texel density before reaching for anything cleverer.
-3. Resolved: fixed 40-cell tiles, with updated golden frames. The shader and pipeline layouts are unchanged; strict catalog validation checks the existing Metal corpus.
+3. Resolved: fixed 40-cell tiles, with updated golden frames. The shader and pipeline layouts are unchanged.
 4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk left the composite in #1100; no test holds the tile against an unwrapped walk since the Mosaic tile test left with Mosaic.
 5. ~~`Ragged`~~ RETIRED in the PR stacked on #991. It shipped at 1.0 and its wobble was one-sided, so the radius band was scaled by 1.15 (`WASH_RADIUS_MIN` 1.02 → 1.17, `WASH_RADIUS_MAX` 1.66 → 1.91) to keep the default globs their size. The reach bound stopped carrying `(1 + RAGGED)` and `RADIUS_MAX` now sits 1.91 against a bound of 2.217, so a band WIDER than 1.63:1 is available and deliberately untaken — a look change for Yan's eye (#992).
 6. The scrolling window above, only if 1 fails.
@@ -498,13 +498,11 @@ To repeat the timing cases after building each test executable separately,
 run each saved executable with:
 
 ```sh
-HARMONIGRAPH_REQUIRE_GPU=1 HARMONIGRAPH_SHADER_ASSETS=source \
+HARMONIGRAPH_REQUIRE_GPU=1 \
 PROBE_CASE=medium PROBE_SIZE=3840x2160 PROBE_PPP=4 \
 PROBE_FRAMES=240 PROBE_FILLS=1 ./renderer-test-binary \
 cloud_costs_by_style_and_dial --ignored --nocapture --test-threads=1
 ```
-
-Use `HARMONIGRAPH_SHADER_ASSETS=strict` to test the embedded corpus without source fallback.
 
 The [source results](evidence/spectrogram-stars/settings-access-fix-2026-09-29/source-results.json) and [strict results](evidence/spectrogram-stars/settings-access-fix-2026-09-29/strict-results.json) retain executable hashes and each run's readings;
 adjacent logs retain the complete probe output.
