@@ -123,6 +123,16 @@ impl Audition {
     }
 }
 
+/// The lattice map the spot sounding now was recorded under: what the
+/// lattice marks during an audition, unless a map is being edited.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecordedMap {
+    pub engine: harmonigraph_core::lattice_map::TuningEngine,
+    /// The map in the recorded slot as the document holds it now, at the
+    /// recorded position; `None` where that slot is empty now.
+    pub map: Option<harmonigraph_core::lattice_map::LatticeMap>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TapeView {
     /// A tape exists here: the plugin has one, other shells do not.
@@ -148,6 +158,10 @@ pub struct TapeView {
     /// host's, so a note lands where it was heard (see
     /// `VisualRuntime::observe_configuration`).
     pub tuning: Option<harmonigraph_core::Tuning>,
+    /// The lattice map selected where the spot sounding now was recorded,
+    /// while an audition is cued or plays: the lattice marks its nodes, where
+    /// the recorded notes were assigned.
+    pub map: Option<RecordedMap>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an
     /// audition would play. The worker's copy, shared; rebuilt when the

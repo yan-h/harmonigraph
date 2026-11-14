@@ -19,6 +19,7 @@ use harmonigraph_ui::tape::{Meter, Speed, TapeRequest, TapeSpan, TapeView};
 use harmonigraph_ui::SpectrumConfig;
 
 use crate::audio_ingress::{Block, TapePlay};
+use crate::lattice_maps::MapSelection;
 
 use super::notes::{Book, Mark, Player, NOTES};
 use super::spectrum::{Spectrum, STEP_BUDGET};
@@ -133,8 +134,9 @@ pub(crate) struct Worker {
     opened: VecDeque<(u64, f64, i64)>,
     /// The song frame the last rolling block reached, for a tuning change.
     last_song: Option<i64>,
-    /// The tuning axes last sampled.
+    /// The tuning axes last sampled, and the map selection.
     tuning: Option<Tuning>,
+    map: Option<MapSelection>,
     notes_dropped_reported: bool,
     book: Book,
     player: Player,
@@ -193,6 +195,7 @@ impl Worker {
             opened: VecDeque::with_capacity(OPENED),
             last_song: None,
             tuning: None,
+            map: None,
             notes_dropped_reported: false,
             book: Book::default(),
             player: Player::default(),
@@ -320,8 +323,14 @@ impl Worker {
 
     /// Open pass `pass` with the voices held now, and keep it a while for a
     /// mark that turns out to be older than its start.
-    fn open(&mut self, (pass, start, frame): (u64, f64, i64), tuning: Option<Tuning>) {
-        self.book.open(pass, frame, tuning);
+    fn open(
+        &mut self,
+        (pass, start, frame): (u64, f64, i64),
+        tuning: Option<Tuning>,
+        map: MapSelection,
+    ) {
+        self.book.open(pass, frame, tuning, Some(map));
+        self.map = Some(map);
         if self.opened.len() == OPENED {
             self.opened.pop_front();
         }
@@ -333,6 +342,7 @@ impl Worker {
     /// voices held then, and record the tuning where it changed.
     pub(crate) fn settle(&mut self) {
         let tuning = self.current_tuning();
+        let map = crate::lattice_maps::selection(&self.params);
         // A full inbox is one the drain stopped recording into.
         let mut dropped = self.inbox.len() >= NOTES;
         self.pending.extend(self.inbox.drain(..));
@@ -356,7 +366,7 @@ impl Worker {
             }
             while self.opening.front().is_some_and(|&(_, start, _)| start <= time) {
                 let opening = self.opening.pop_front().expect("a pass to open");
-                self.open(opening, tuning.or(self.tuning));
+                self.open(opening, tuning.or(self.tuning), map);
             }
             mark.apply(&mut self.book.held);
             // Older than a pass that has already opened: that pass opened
@@ -393,15 +403,24 @@ impl Worker {
         }
         self.pending = waiting;
         while let Some(opening) = self.opening.pop_front() {
-            self.open(opening, tuning.or(self.tuning));
+            self.open(opening, tuning.or(self.tuning), map);
         }
+        let current = self.last_song.zip(self.pass).map(|(frame, pass)| (frame, pass.id));
         if tuning.is_some() && self.tuning != tuning {
-            if let (Some(frame), Some(pass), Some(axes)) = (self.last_song, self.pass, tuning) {
-                if let Some(notes) = self.book.passes.get_mut(&pass.id) {
+            if let (Some((frame, pass)), Some(axes)) = (current, tuning) {
+                if let Some(notes) = self.book.passes.get_mut(&pass) {
                     notes.tunings.push((frame, axes));
                 }
             }
             self.tuning = tuning;
+        }
+        if self.map != Some(map) {
+            if let Some((frame, pass)) = current {
+                if let Some(notes) = self.book.passes.get_mut(&pass) {
+                    notes.maps.push((frame, map));
+                }
+            }
+            self.map = Some(map);
         }
     }
 
@@ -433,6 +452,8 @@ impl Worker {
         }
         runtime.tape.audition = self.player.audition;
         runtime.tape.tuning = self.player.tuning;
+        runtime.tape.map =
+            self.player.map.map(|map| crate::lattice_maps::recorded(&self.params, map));
     }
 
     /// Commit the chunk being recorded, and set its meter over the stretch it

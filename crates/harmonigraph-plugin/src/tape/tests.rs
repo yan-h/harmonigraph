@@ -431,6 +431,30 @@ fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     assert!(lines.iter().any(|l| l.contains("stopped after 0.10 s by another cue")), "{lines:?}");
 }
 
+/// A pass opens with the lattice map selected then and records a change of
+/// selection where it happens, as it does the tuning.
+#[test]
+fn a_pass_records_the_map_selection_where_it_changes() {
+    use nice_plug::params::InternalParamMut;
+    let params = Arc::new(crate::HarmonigraphParams::default());
+    // SAFETY: as the host wrapper sets a parameter, with the parameter object
+    // alive throughout.
+    let select = |slot| assert!(unsafe { params.map._internal_set_plain_value(slot) });
+    select(2);
+    let (_, mut worker) = channel(params.clone());
+    for (i, song) in [0, 100].into_iter().enumerate() {
+        if i == 1 {
+            select(3);
+        }
+        let (block, samples) = ring_block((i * FRAMES) as u64, Some(song), STEREO);
+        worker.capture(block, &samples);
+        worker.settle();
+    }
+    let slots: Vec<(i64, usize)> =
+        worker.passes()[&1].maps.iter().map(|(f, m)| (*f, m.slot)).collect();
+    assert_eq!(slots, [(0, 2), (199, 3)]);
+}
+
 /// Two cold passes over the same stretch: the one that started earlier has
 /// the longer run-up at every frame they share, so the later start only fills
 /// what the earlier one left.

@@ -83,6 +83,39 @@ pub fn offset(params: &crate::HarmonigraphParams) -> LatticePos {
     offsets(params).total()
 }
 
+/// Which map sounds, and where it stands: what the tape samples beside the
+/// tuning (#1719), so an audition marks the nodes its notes were assigned
+/// to. The selection rather than the shape: a map edited since the recording
+/// marks the recorded notes under the edit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MapSelection {
+    pub engine: TuningEngine,
+    pub slot: usize,
+    /// The lanes' offset and where following had moved the map.
+    pub position: LatticePos,
+}
+
+pub(crate) fn selection(params: &crate::HarmonigraphParams) -> MapSelection {
+    MapSelection {
+        engine: TuningEngine::from_index(params.tuning_engine.value()),
+        slot: map_slot(params.map.value()),
+        position: offset(params) + followed(params),
+    }
+}
+
+/// `selection` as the lattice marks it: the document's map in that slot
+/// now, standing where it stood then.
+pub(crate) fn recorded(
+    params: &crate::HarmonigraphParams,
+    selection: MapSelection,
+) -> harmonigraph_ui::tape::RecordedMap {
+    let map = params.maps.read().map(selection.slot);
+    harmonigraph_ui::tape::RecordedMap {
+        engine: selection.engine,
+        map: map.map(|shape| translated(shape, selection.position)),
+    }
+}
+
 fn translated(mut shape: LatticeMap, offset: LatticePos) -> LatticeMap {
     shape.position = offset;
     shape
