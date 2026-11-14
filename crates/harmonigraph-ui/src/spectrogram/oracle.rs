@@ -73,10 +73,8 @@ impl SlabGrid {
             // start a fresh row rather than fill a negative gap. Only the
             // backward case breaks the incremental invariant.
             //
-            // Not expected from today's callers, and `push_history` asserts
-            // as much in debug builds. If a backward column reaches this fold,
-            // `SpectrogramAgg::serve` rebuilds on the `false`; its admission
-            // search can skip an out-of-order column before it gets here.
+            // Not expected of the tests' fixtures, which feed it in time
+            // order as the pyramid's guard admits them.
             other => {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
