@@ -15,8 +15,12 @@ fn observe(next: Transition, observation: Observation, policy: Policy) -> Transi
 }
 
 fn fresh() -> Transition {
-    let next =
-        Transition { state: State::Disarmed, history: History::default(), action: Action::None };
+    let next = Transition {
+        state: State::Disarmed,
+        history: History::default(),
+        action: Action::None,
+        origin: None,
+    };
     let next = observe(next, Observation::Armed(true), Policy::default());
     assert_eq!(next.state, State::Waiting);
     assert_eq!(next.action, Action::Arm);

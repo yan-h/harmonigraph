@@ -37,3 +37,10 @@
 - An export row lists each distinct warning the renderer printed, one per line, so a take's note-history gap no longer hides that the export ran through x264. A failed archive copy is one of those warnings rather than its own channel. #1677 area 4 Q1
 - An export row does not name the encoder the renderer opened: with every warning shown, the note that a Hardware export ran through x264 already reaches it, and naming it would make a line on the renderer's stderr a production contract. #1677 area 4 Q2
 - A take recorded to a loop's end honours the Tail like any other take. Its exemption dated from #1147, when the tail was a fixed 4 s; since #1465 Tail is a setting, 0 fresh, so the exemption only overrode a Tail you chose. #1677 area 9 Q1
+
+## 2026-11-14 (F3′ take half, #1760)
+
+- Passes are stored as one take file per arm, with one WAV per pass beside it, and the offline reader chooses the pass and its song time from the file: the full rework, so the closure code is rewritten. #1760 Q1
+- A loss of note history that touched no recorded run does not mark a take incomplete: it warned about a hole the take did not have. #1760 Q2
+- Takes recorded before take v7, the 2026-11-04 one included, are not converted: they render only with a renderer from before the cut (`c423bf44`). #1760 Q3
+- Behaviour holds only at the end: the reader and the cut to v7 are one PR. #1760 Q4

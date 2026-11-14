@@ -336,12 +336,12 @@ mod tests {
         shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(48_000.0);
         assert!(shared.take.is_recording());
-        // One note captured, as the Hub publishes one into the take's first pass.
+        // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
-        let route = harmonigraph_record::publication::Route {
-            address: recorder.configuration_address(),
-            time_offset: 0.0,
-        };
+        let (epoch, pass) = recorder.armed_pass().unwrap();
+        recorder.run(epoch, pass, Default::default(), 0.0, 0.0);
+        let intent = harmonigraph_record::configuration::RecordIntent::armed(epoch);
+        let route = harmonigraph_record::publication::Span::at(Default::default(), 0, intent);
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = recorder.publish_note(on.into(), route);
         let first_still = 1.0;

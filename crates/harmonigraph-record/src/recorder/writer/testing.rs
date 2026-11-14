@@ -41,6 +41,7 @@ pub struct Capture {
     displayed: publication::Consumer,
     fence: Arc<RecordFence>,
     latches: Arc<TakeLatches>,
+    end_at_rewind: Arc<AtomicBool>,
     _records: rtrb::Consumer<Entry>,
     audio: rtrb::Consumer<f32>,
 }
@@ -89,6 +90,11 @@ impl Capture {
     pub fn arm(&self) {
         self.fence.arm(self.fence.epoch() + 1);
     }
+    /// What the GUI publishes for every trigger but On disarm: a rewind after
+    /// forward motion ends the take rather than splitting it.
+    pub fn end_at_rewind(&self, on: bool) {
+        self.end_at_rewind.store(on, Ordering::Relaxed);
+    }
     pub fn stop(&self) {
         self.fence.disarm();
         self.fence.finishing.store(true, Ordering::Release);
@@ -105,6 +111,23 @@ impl Capture {
             true
         });
         events
+    }
+    /// The take lane in order, as the writer meets it: each history item by the
+    /// epoch it was played armed under (`None` disarmed), and each closure by
+    /// the epoch it closes.
+    pub fn drain_take_order(&mut self) -> Vec<(&'static str, Option<u64>)> {
+        let mut order = Vec::new();
+        self.publications.drain(|delivery, span| {
+            order.push(match delivery {
+                publication::Delivery::Event(_) => {
+                    ("history", span.intent.is_armed().then(|| span.intent.epoch()))
+                }
+                publication::Delivery::PassClosed { epoch, .. } => ("pass closed", Some(epoch)),
+                publication::Delivery::EpochComplete(epoch) => ("epoch complete", Some(epoch)),
+            });
+            true
+        });
+        order
     }
     pub fn drain_audio(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
@@ -130,11 +153,9 @@ pub struct FileWriter {
     pub finished: Option<std::path::PathBuf>,
 }
 impl FileWriter {
-    pub fn retained_passes(&self) -> usize {
-        self.pump.open.as_ref().map_or(0, |o| o.retained.len())
-    }
-    pub fn current_pass(&self) -> Option<u32> {
-        self.pump.open.as_ref().map(|o| o.current.number)
+    /// The pass whose WAV the take is writing.
+    pub fn pass(&self) -> Option<u32> {
+        self.pump.open.as_ref().map(|o| o.pass)
     }
     /// Opens `path` and the WAV beside it, as every `Start` does.
     pub fn new(capture: &Capture, path: std::path::PathBuf) -> Self {
@@ -147,7 +168,7 @@ impl FileWriter {
             &status,
         )
         .unwrap();
-        assert!(open.current.audio.is_some(), "{}", status.lock());
+        assert!(open.audio.is_some(), "{}", status.lock());
         Self {
             pump: Pump { latches: capture.latches.clone(), open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),
@@ -190,6 +211,7 @@ pub fn channel() -> (Recorder, Capture) {
     let capture = Capture {
         fence: recorder.fence.clone(),
         latches: recorder.latches.clone(),
+        end_at_rewind: recorder.end_at_rewind.clone(),
         publications,
         displayed,
         _records: records,

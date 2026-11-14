@@ -688,13 +688,13 @@ mod tests {
             assert!(shared.take.is_recording(), "armed");
         }
         // Something captured — one note, as the Hub publishes it into the
-        // take's pass — and the transport since stopped: the two conditions
+        // take's run — and the transport since stopped: the two conditions
         // the debounce needs before it will end a take.
         h.recorder.is_armed();
-        let route = harmonigraph_record::publication::Route {
-            address: h.recorder.configuration_address(),
-            time_offset: 0.0,
-        };
+        let (epoch, pass) = h.recorder.armed_pass().unwrap();
+        h.recorder.run(epoch, pass, Default::default(), 0.0, 0.0);
+        let intent = harmonigraph_record::configuration::RecordIntent::armed(epoch);
+        let route = harmonigraph_record::publication::Span::at(Default::default(), 0, intent);
         let on = CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = h.recorder.publish_note(on.into(), route);
 

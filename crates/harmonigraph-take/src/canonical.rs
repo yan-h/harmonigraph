@@ -7,6 +7,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ConfigurationRecord, NoteRecord};
 
+/// Where an input arrived: the Hub's clock, and the sample on it. A take routes
+/// every record to the run that holds its stamp (see the crate's "Time and
+/// passes").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StampRecord {
+    pub runtime_session: u64,
+    pub clock_epoch: u64,
+    pub input: i64,
+}
+impl StampRecord {
+    pub fn new(clock: ClockId, input: i64) -> Self {
+        Self { runtime_session: clock.runtime_session, clock_epoch: clock.epoch, input }
+    }
+    pub fn clock(self) -> ClockId {
+        ClockId { runtime_session: self.runtime_session, epoch: self.clock_epoch }
+    }
+    /// The order a range is measured in: a clock cut starts a later epoch.
+    pub fn order(self) -> (u64, i64) {
+        (self.clock_epoch, self.input)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TimingRecord {
@@ -37,6 +60,16 @@ impl From<TimingRecord> for EventTiming {
             planned: t.planned,
             sample: t.sample,
             sample_rate: t.sample_rate,
+        }
+    }
+}
+impl TimingRecord {
+    /// Where the input arrived, which is what routes it to a run.
+    pub fn stamp(self) -> StampRecord {
+        StampRecord {
+            runtime_session: self.runtime_session,
+            clock_epoch: self.clock_epoch,
+            input: self.input,
         }
     }
 }
@@ -258,6 +291,8 @@ pub struct BaselineRecord {
     pub output_cut: u64,
     pub shown: bool,
     pub voices: Vec<VoiceRecord>,
+    /// The sub-block it was taken at. A delta's stamp is its `timing`.
+    pub at: Option<StampRecord>,
 }
 impl From<&SourceBaseline> for BaselineRecord {
     fn from(b: &SourceBaseline) -> Self {
@@ -268,6 +303,7 @@ impl From<&SourceBaseline> for BaselineRecord {
             output_cut: b.output_cut,
             shown: b.shown,
             voices: b.voices().iter().copied().map(Into::into).collect(),
+            at: None,
         }
     }
 }
@@ -308,6 +344,9 @@ pub struct GapRecord {
     pub first: u64,
     pub last: u64,
     pub reason: GapReasonRecord,
+    /// The inputs the lost records arrived at, first and last. The gap marks
+    /// every pass whose runs this range touches, and no other.
+    pub inputs: Option<[StampRecord; 2]>,
 }
 impl From<PublicationGap> for GapRecord {
     fn from(g: PublicationGap) -> Self {
@@ -322,6 +361,7 @@ impl From<PublicationGap> for GapRecord {
                 GapReason::InvalidRecord => GapReasonRecord::InvalidRecord,
                 GapReason::ProducerLost => GapReasonRecord::ProducerLost,
             },
+            inputs: None,
         }
     }
 }
@@ -397,24 +437,13 @@ impl CanonicalRecord {
             Self::Note(_) | Self::Gap(_) => Ok(true),
         }
     }
-    pub fn translate(&mut self, offset: f64) {
+    /// Where this record's input arrived, for a record that routes by one
+    /// sample. A gap routes by its range instead.
+    pub fn stamp(&self) -> Option<StampRecord> {
         match self {
-            Self::Note(n) => n.t += offset,
-            Self::Delta(d) => d.event.t += offset,
-            Self::Baseline(b) => {
-                b.t += offset;
-                for v in &mut b.voices {
-                    v.input_onset += offset;
-                    v.actual_onset += offset;
-                    if let Some(a) = &mut v.assignment {
-                        a.t += offset;
-                    }
-                }
-            }
-            Self::Gap(g) => {
-                g.t += offset;
-                g.through += offset;
-            }
+            Self::Delta(d) => d.timing.map(TimingRecord::stamp),
+            Self::Baseline(b) => b.at,
+            Self::Note(_) | Self::Gap(_) => None,
         }
     }
     pub fn note(&self) -> Option<NoteRecord> {
