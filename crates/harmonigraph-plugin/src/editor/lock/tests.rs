@@ -228,36 +228,66 @@ impl Spec {
 
 /// The documents a sequence restores, and how a saved one reads back.
 struct Fixtures {
-    fresh_yaw: f32,
-    fresh_attack: f32,
+    /// The fresh document's, which the fresh state reads back as.
+    fresh: Marks,
+    /// What each restore sets, by id: its own camera yaw, an attack that
+    /// edits move from, and an orientation its lossy twin names a variant
+    /// this build lacks for.
+    restored: [Marks; 4],
     clean: Vec<String>,
     lossy: Vec<String>,
     refused: Vec<String>,
 }
 
-/// A restore's orientation, which its lossy twin names a variant this build
-/// lacks for: off the default, so the key cut shows.
-const RESTORED: SpectralOrientation = SpectralOrientation::Left;
+/// The settings a fixture tells documents apart by.
+#[derive(Clone, Copy)]
+struct Marks {
+    yaw: f32,
+    attack: f32,
+    orientation: SpectralOrientation,
+}
+
+impl Marks {
+    fn of(state: &SharedState) -> Marks {
+        let appearance = &state.picture.appearance;
+        Marks {
+            yaw: appearance.camera.yaw,
+            attack: appearance.spectrum.attack,
+            orientation: appearance.spectrum.orientation,
+        }
+    }
+}
 
 impl Fixtures {
     fn new() -> Fixtures {
-        let fresh = SharedState::new(ASSUMED_SURFACE_FORMAT);
-        let appearance = &fresh.picture.appearance;
-        let (fresh_yaw, fresh_attack) = (appearance.camera.yaw, appearance.spectrum.attack);
-        assert_ne!(appearance.spectrum.orientation, RESTORED);
-        let clean: Vec<String> = (0..4u8)
-            .map(|id| {
+        let fresh = Marks::of(&SharedState::new(ASSUMED_SURFACE_FORMAT));
+        use SpectralOrientation::*;
+        // Set off the fresh document's own values, whatever they are, so a
+        // restore always reads apart from it and its cut key always shows.
+        let orientation = [Left, Right, Top, Bottom].into_iter().find(|&o| o != fresh.orientation);
+        let restored = std::array::from_fn(|id| Marks {
+            yaw: fresh.yaw + 0.25 * id as f32,
+            attack: 0.3,
+            orientation: orientation.expect("an orientation besides the fresh one"),
+        });
+        let clean: Vec<String> = restored
+            .iter()
+            .map(|marks: &Marks| {
                 let mut state = SharedState::new(ASSUMED_SURFACE_FORMAT);
-                state.picture.appearance.camera.yaw = fresh_yaw + f32::from(id) * 0.25;
-                state.picture.appearance.spectrum.orientation = RESTORED;
+                let appearance = &mut state.picture.appearance;
+                appearance.camera.yaw = marks.yaw;
+                appearance.spectrum.attack = marks.attack;
+                appearance.spectrum.orientation = marks.orientation;
                 state.save_persist()
             })
             .collect();
         let lossy = clean
             .iter()
-            .map(|blob| {
-                let lossy = blob.replacen("orientation:Left,", "orientation:Diagonal,", 1);
-                assert_ne!(&lossy, blob);
+            .zip(&restored)
+            .map(|(blob, marks)| {
+                let named = format!("orientation:{:?},", marks.orientation);
+                let lossy = blob.replacen(&named, "orientation:Diagonal,", 1);
+                assert_ne!(&lossy, blob, "{named} is not in the restore");
                 lossy
             })
             .collect();
@@ -273,7 +303,7 @@ impl Fixtures {
                 )
             })
             .collect();
-        Fixtures { fresh_yaw, fresh_attack, clean, lossy, refused }
+        Fixtures { fresh, restored, clean, lossy, refused }
     }
 
     fn blob(&self, id: u8, kind: Kind) -> &str {
@@ -285,10 +315,11 @@ impl Fixtures {
     }
 
     fn doc_of(&self, state: &SharedState) -> Doc {
-        let appearance = &state.picture.appearance;
-        let base = ((appearance.camera.yaw - self.fresh_yaw) / 0.25).round() as u8;
-        let partial = base > 0 && appearance.spectrum.orientation != RESTORED;
-        let edits = ((appearance.spectrum.attack - self.fresh_attack) / 0.01).round() as u8;
+        let marks = Marks::of(state);
+        let base = (1..4u8).find(|&id| self.restored[id as usize].yaw == marks.yaw).unwrap_or(0);
+        let from = if base == 0 { self.fresh } else { self.restored[base as usize] };
+        let partial = base > 0 && marks.orientation != from.orientation;
+        let edits = ((marks.attack - from.attack) / 0.01).round() as u8;
         Doc { base, partial, edits }
     }
 
