@@ -392,7 +392,7 @@ fn a_cue_during_an_audition_plays_the_new_spot_from_its_first_frame() {
 
 /// A slowed cue counts the song at its speed, so a block says how much of the
 /// song it played; a new speed while it sounds cues again from the spot heard,
-/// under a new serial though it continues where the last block ended.
+/// under a new serial though it starts where the slowed cue's audio ended.
 #[test]
 fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
     let (mut deck, mut worker) = pair();
@@ -423,7 +423,9 @@ fn a_slowed_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
 
     view.speed = Speed::Full;
     worker.exchange(&mut view, &SpectrumConfig::default(), true);
-    run(&mut deck, 0.0, false, true);
+    // The block the slowed cue fades out in, and ends in, is still that cue's.
+    let (faded, _, _, _) = heard(run(&mut deck, 0.0, false, true).1);
+    assert_eq!(faded, slowed, "a cue ending in a block reports its own serial");
     let (_, out) = run(&mut deck, 0.0, false, true);
     assert!(out.sounding);
     worker.play();
