@@ -242,11 +242,15 @@ pub(crate) fn assemble(
                     });
                 }
                 // No voice starts after the frame that says it is sounding, even when
-                // the attack that would have lifted the frame was lost.
+                // the attack that would have lifted the frame was lost. The
+                // assignment stays at the onset, where `translate` keeps it.
                 if let CanonicalRecord::Baseline(b) = &mut record {
                     for voice in &mut b.voices {
                         voice.actual_onset = voice.actual_onset.min(b.t);
                         voice.input_onset = voice.input_onset.min(b.t);
+                        if let Some(assignment) = &mut voice.assignment {
+                            assignment.t = voice.actual_onset;
+                        }
                     }
                 }
                 events.push((record, line));

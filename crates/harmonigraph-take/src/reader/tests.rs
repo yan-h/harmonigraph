@@ -92,19 +92,31 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
     }
 }
 
-/// A snapshot of the DIRECT row taken at `input` on epoch 0, restating `voices`.
+/// A snapshot of the DIRECT row taken at `input` on epoch 0, restating `voices`,
+/// each with the configuration it was assigned at its onset.
 fn restating(id: u64, voices: &[VoiceBaseline], input: i64) -> Record {
     let frame =
         SourceBaseline::new(SourceId::DIRECT, id, presentation(0, input), 0, true, voices).unwrap();
     let mut record = BaselineRecord::from(&frame);
     record.at = Some(at(0, input));
+    for voice in &mut record.voices {
+        voice.assignment =
+            Some(ConfigurationRecord { t: voice.actual_onset, ..ConfigurationRecord::default() });
+    }
     Record::Canonical(CanonicalRecord::Baseline(Box::new(record)))
 }
 
-/// `(start, end)` of every note the pass's events draw for `key`.
+/// `(start, end)` of every note the pass's events draw for `key`, after
+/// checking that each restated voice's assignment is still at its onset.
 fn notes_of(take: &Take, key: u8) -> Vec<(f64, Option<f64>)> {
     let mut tracker = harmonigraph_core::NoteTracker::new();
     for event in &take.events {
+        if let CanonicalRecord::Baseline(b) = event {
+            for voice in &b.voices {
+                let t = voice.assignment.map(|a| a.t);
+                assert!(t.is_none_or(|t| t == voice.actual_onset), "{t:?} {}", voice.actual_onset);
+            }
+        }
         event.apply(&mut tracker).unwrap();
     }
     tracker.roll().notes().filter(|n| n.note == key).map(|n| (n.start, n.end)).collect()
