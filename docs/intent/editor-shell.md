@@ -22,3 +22,15 @@ The display link and frame pacing decisions (#1551) are in `host-window-and-paci
 - One list of the appearance fields the host owns, `AppearanceDocument::copy_host_owned` beside `set_camera_movement`: a look resets them on capture and keeps the live document's on apply, and the state extractor's overlay is tested against it. #1677 R3
 - One call both takes an app shortcut and claims it from the host, so a shortcut is registered in one place each frame. #1675 Q2, built in #1690
 - The poison list in `tests/settings_ranges.rs` stays a hand list, not a walk of the serialized document: its completeness test already forces a row per float setting, and a walker would need its own list of the values that cannot be driven to ±1e6. Declined, not to be re-proposed unchanged. #1677 R6
+
+## 2026-11-14 (premises audit #1739, rework #1757)
+
+- The editor's live settings are the only copy: a host restore installs into them, a host save serializes them, and opening or closing the editor window reads nothing saved, so the look slots' undo histories survive a close (#1740). A restore still starts them afresh. #1757
+- A project saved with the editor shut is rewritten in this build's shape: keys this build does not know are dropped, missing keys are saved at today's defaults, and repaired values are saved repaired. #1757 Q1
+- An editor never opened keeps saving an empty settings blob, so its project follows later default captures. #1757 Q2
+- Restoring an empty settings blob means the fresh look, not "keep what the editor shows". #1757 Q3
+- A save the host makes from inside a callback the editor makes under its lock (a parameter gesture's flush, a camera move) cannot take the lock, and stores the newest of the last restore, close, successful save or first frame to draw the editor rather than the live settings: the stated limit of #1301. From the frame after the first one to draw the editor, it never stores the empty blob, since restoring that is the fresh look; a save re-entered during that first frame itself still can. #1757
+- A document this build could not fully read is saved verbatim until a frame draws the editor past its loading screen, whatever that frame draws; a frame with no area counts, an occluded window's frames count. Accepted without a fourth red-team round. #1757 QD
+- At the editor's door, a saved value naming an enum variant this build does not have costs only the key that holds it, which opens at its default with a Console line, rather than the whole layout, look, slots and presets. This supersedes the whole-parse rule `AGENTS.md` carried. #1757 Q4
+- At the take and export door the parse stays strict: a take whose recorded look names a dropped variant keeps refusing to export, loudly. #1757 Q5
+- The protocol and the per-key decode landed as one PR, so the per-key half cannot be reverted on its own. #1757 QA

@@ -12,7 +12,6 @@ use harmonigraph_record::TAKE_CHANNELS;
 use harmonigraph_ui::lattice_maps::{MapOffsetLane, EXTENSION_STEP, OFFSET_LIMIT};
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
-use parking_lot::Mutex;
 
 mod audio_ingress;
 mod background;
@@ -141,7 +140,7 @@ pub struct Harmonigraph {
     sample_rate_bits: Arc<AtomicU32>,
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
-    editor_shared: Arc<Mutex<editor::EditorShared>>,
+    editor_shared: Arc<editor::EditorLock>,
     /// The host's side of the editor, given before the editor is made, which
     /// its own window's close button tells.
     editor_host: Option<Arc<dyn nice_plug::wrapper::clap::EditorHost>>,
@@ -166,9 +165,12 @@ impl Drop for Harmonigraph {
     fn drop(&mut self) {
         // Window state can retain its own Arc during native teardown. Join the
         // graphics worker at plugin destruction, not only at the last Arc drop.
-        let graphics = self.editor_shared.lock().ui.picture.editor_graphics();
+        // One hold for both handles, and each joined with the lock free.
+        let (graphics, take) = {
+            let shared = self.editor_shared.lock();
+            (shared.ui.picture.editor_graphics(), shared.take.clone())
+        };
         graphics.shutdown_startup();
-        let take = self.editor_shared.lock().take.clone();
         take.shutdown_exports();
     }
 }
@@ -224,8 +226,8 @@ pub struct HarmonigraphParams {
     pub editor_state: Arc<editor::EguiState>,
 
     /// Serialized UI state (layout, camera, view settings), persisted with
-    /// the plugin state. See SharedState::save_persist, and `UiState` for why
-    /// a save with the editor open does not read the stored blob.
+    /// the plugin state: a restore installs into the editor state and a save
+    /// serializes out of it (see `UiState`).
     #[persist = "ui-state"]
     pub ui_state: editor::UiState,
 
@@ -691,28 +693,27 @@ impl Default for Harmonigraph {
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
         params.session.set(aggregation.shared.clone()).unwrap_or_else(|_| unreachable!());
-        let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
-            consumer,
-            audio_consumer,
-            sample_rate_bits.clone(),
-            take_control,
-        )));
+        let editor_shared = Arc::new(editor::EditorLock::new(
+            editor::EditorShared::new(
+                consumer,
+                audio_consumer,
+                sample_rate_bits.clone(),
+                take_control,
+            ),
+            params.ui_state.inbox(),
+        ));
         // From HERE, not from `initialize` or the editor: the point of the
         // thread is to cover the stretches nothing else does, and both of those
         // are stretches. `initialize` runs on activation, so a suspended plugin
-        // would go dark; the editor is the very thing being covered for.
-        //
-        // `ui_state` goes with it because the same argument covers the project's
-        // saved settings: the host restores them into that field at a moment of
-        // its own choosing, and nothing but this thread is there to read them
-        // before a window is built. See `background::Restore`.
+        // would go dark; the editor is the very thing being covered for. It
+        // also installs a project's saved settings before any window is built,
+        // through the lock both share (#324).
         let _input_worker = background::InputWorker::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
-            params.ui_state.blob().clone(),
             tape_worker,
         );
-        params.ui_state.attach(&editor_shared, params.editor_state.clone());
+        params.ui_state.attach(&editor_shared);
         Harmonigraph {
             configuration: None,
             aggregation: Some(aggregation),
@@ -1396,33 +1397,19 @@ mod tests {
     /// They are two clones of one `Arc<EguiState>` today — `Default` hands one
     /// to [`background::InputWorker::spawn`] and `editor` hands the same
     /// field to `editor::create`. The worker drains the rings either way
-    /// (#1559); what the flag decides is whether it applies a restored blob,
-    /// which under an open window would revert everything changed since the
-    /// window applied it. A second `EguiState` on either side compiles, passes
-    /// every other test, and leaves the worker adopting under an open window.
+    /// (#1559); what the flag decides is whether it also ages the picture,
+    /// which an open window's frames do. A second `EguiState` on either side
+    /// compiles, passes every other test, and leaves the worker ageing under
+    /// an open window, or never.
     ///
     /// Driven through the REAL spawned thread rather than by calling `step`,
     /// because the wiring is precisely what a direct call would bypass.
     #[test]
     fn the_input_worker_watches_the_flag_the_editor_sets() {
-        use harmonigraph_ui::SpectrumWindow;
-
-        let window = |plugin: &Harmonigraph| {
-            plugin.editor_shared.lock().ui.picture.appearance.spectrum.window
+        let voices = |plugin: &Harmonigraph| {
+            plugin.editor_shared.lock().ui.picture.runtime.tracker.voices().count()
         };
         let mut plugin = Harmonigraph::default();
-        let fresh = window(&plugin);
-        let restored = if fresh == SpectrumWindow::Precise {
-            SpectrumWindow::Fast
-        } else {
-            SpectrumWindow::Precise
-        };
-        let blob = {
-            let mut saved = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-            saved.picture.appearance.spectrum.window = restored;
-            harmonigraph_ui::shell::close(&saved)
-        };
-
         plugin.params.editor_state.set_open(true);
         // A completed step after the store: every step after it sees the flag.
         let rounds = plugin._input_worker.completed_rounds();
@@ -1430,46 +1417,63 @@ mod tests {
             a_round_after(&plugin, rounds),
             "no worker step in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
         );
-        *plugin.params.ui_state.blob().write() = blob;
-        // Audio still flows into the picture under an open window.
-        publish_test_audio(&mut plugin, 20_000);
-        let before = columns_after(&plugin, 0).unwrap_or_else(|| {
-            panic!(
-                "no column in {ANALYSIS_DEADLINE:?} with the window open: the worker left the ring"
-            )
-        });
-        assert!(before > 0);
+        {
+            // Under the lock, so one take gets all three. A note played and
+            // released far behind one still held, whose onset pins the batch's
+            // clock: a voice whose fade ended long ago, which only ageing
+            // removes.
+            let _batch = plugin.editor_shared.lock();
+            for event in [
+                CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0),
+                CoreNoteEvent::off(0.1, SourceId::DIRECT, 0, 60),
+                CoreNoteEvent::on(100.0, SourceId::DIRECT, 0, 64, 1.0),
+            ] {
+                plugin.take.publish_clock(event.time);
+                plugin.take.publish_note(event.into(), Default::default()).expect_both();
+            }
+        }
+        let started = Instant::now();
+        while voices(&plugin) < 2 {
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "no notes in {ANALYSIS_DEADLINE:?} with the window open: the worker left the ring",
+            );
+            std::thread::sleep(background::POLL);
+        }
+        let rounds = plugin._input_worker.completed_rounds();
+        assert!(
+            a_round_after(&plugin, rounds),
+            "no worker step in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+        );
         assert_eq!(
-            window(&plugin),
-            fresh,
-            "the worker applied a restored blob under an open window: it is not watching \
-             the EguiState the editor sets",
+            voices(&plugin),
+            2,
+            "the worker aged the picture under an open window: it is not watching the \
+             EguiState the editor sets",
         );
 
         plugin.params.editor_state.set_open(false);
-        let started = std::time::Instant::now();
-        while window(&plugin) != restored {
+        let started = Instant::now();
+        while voices(&plugin) != 1 {
             assert!(
                 started.elapsed() < ANALYSIS_DEADLINE,
-                "the blob never landed in {ANALYSIS_DEADLINE:?} after the editor announced \
-                 itself shut: either the worker is not watching the EguiState the editor \
-                 sets, or this runner never scheduled it",
+                "the released voice was never aged out in {ANALYSIS_DEADLINE:?} after the \
+                 editor announced itself shut: either the worker is not watching the \
+                 EguiState the editor sets, or this runner never scheduled it",
             );
             std::thread::sleep(background::POLL);
         }
     }
 
     /// The project's saved settings have to reach the analyzer with no editor
-    /// ever constructed, which is the whole of issue #324: `params.ui_state` is
-    /// where the host puts them, the editor's window-build closure is the only
-    /// other reader of that field, and the plugin analyzes audio from the moment
-    /// it is instantiated.
+    /// ever constructed, which is the whole of issue #324: the host restores
+    /// them at a moment of its own choosing, and the plugin analyzes audio from
+    /// the moment it is instantiated.
     ///
     /// Driven through the REAL spawned thread and the real `params` field —
     /// nothing here calls [`Plugin::editor`] — because that pairing IS the
-    /// claim. A `Restore` handed any other `RwLock<String>` satisfies every unit
-    /// test one file over and reaches nothing a host ever writes. Those cover
-    /// what the adopt decides; this covers that it is reachable at all.
+    /// claim: a restore waiting in an inbox no lock the worker takes delivers
+    /// from reaches nothing a host ever writes.
     #[test]
     fn a_projects_saved_window_reaches_the_analyzer_with_no_editor_built() {
         use harmonigraph_ui::SpectrumWindow;
@@ -1492,7 +1496,7 @@ mod tests {
         let mut plugin = Harmonigraph::default();
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
-        *plugin.params.ui_state.blob().write() = blob;
+        restore(&plugin, &blob);
         // A Precise frame is 24,576 samples; this is more than one frameful,
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
@@ -1517,76 +1521,44 @@ mod tests {
         );
     }
 
-    /// A host save with the editor open stores what the window shows, not the
-    /// blob the last close wrote (issue #1301).
-    ///
-    /// Through the derived `serialize_fields`, which is what a host save calls,
-    /// on the real plugin whose `Default` attaches the editor state: a
-    /// `UiState` attached by hand would pass here and reach nothing a host
-    /// saves.
-    #[test]
-    fn a_save_with_the_editor_open_stores_what_the_window_shows() {
-        let plugin = Harmonigraph::default();
-        // What the last close stored.
-        let mut closed = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-        closed.picture.appearance.camera.yaw = 0.5;
-        *plugin.params.ui_state.blob().write() = harmonigraph_ui::shell::close(&closed);
-        // Two completed rounds: the second one began after the write, so the
-        // input worker has adopted the blob and will not again. The
-        // live state is then turned elsewhere, so only the stored blob can
-        // answer 0.5.
-        let rounds = plugin._input_worker.completed_rounds();
-        assert!(
-            a_round_after(&plugin, rounds + 1),
-            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
-        );
-        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = 2.0;
-        assert_eq!(saved_yaw(&plugin), 0.5, "a shut window saves the stored blob");
-
-        // An open window the user has since turned the camera in. A completed
-        // round after the flag is what keeps the input worker's adopt
-        // of the stored blob from landing over the turn.
-        plugin.params.editor_state.set_open(true);
-        let rounds = plugin._input_worker.completed_rounds();
-        assert!(
-            a_round_after(&plugin, rounds),
-            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
-        );
-        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = 1.25;
-        assert_eq!(
-            saved_yaw(&plugin),
-            1.25,
-            "a save with the editor open stored the settings of the last close",
-        );
-        plugin.params.editor_state.set_open(false);
-    }
-
-    /// What a host save stores in `ui-state`, read back as the camera yaw:
-    /// through the derived `serialize_fields`, which is what a host save calls.
-    fn saved_yaw(plugin: &Harmonigraph) -> f32 {
+    /// What a host save stores in `ui-state`: through the derived
+    /// `serialize_fields`, which is what a host save calls, on the real plugin
+    /// whose `Default` attaches the editor state — a `UiState` attached by
+    /// hand would pass these tests and reach nothing a host saves.
+    fn saved(plugin: &Harmonigraph) -> String {
         use nice_plug::params::Params;
 
         let field = plugin.params.serialize_fields().remove("ui-state").expect("ui-state saved");
-        let blob: String = serde_json::from_str(&field).expect("the field is a JSON string");
+        serde_json::from_str(&field).expect("the field is a JSON string")
+    }
+
+    /// [`saved`], read back as the camera yaw.
+    fn saved_yaw(plugin: &Harmonigraph) -> f32 {
         let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-        assert!(state.load_persist(&blob), "the saved blob does not load");
+        assert!(state.install_document(&saved(plugin)), "the saved blob does not load");
         state.picture.appearance.camera.yaw
     }
 
-    /// A host restore of a project whose camera yaw is `yaw`: through the
-    /// derived `deserialize_fields`, which is what a host's state load calls,
-    /// so the restore reaches `UiState::set` the way a preset load does.
-    fn restore_yaw(plugin: &Harmonigraph, yaw: f32) {
+    /// A host restore of `blob`: through the derived `deserialize_fields`,
+    /// which is what a host's state load calls, so it reaches `UiState::set`
+    /// the way a project or preset load does.
+    fn restore(plugin: &Harmonigraph, blob: &str) {
         use nice_plug::params::Params;
 
-        let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-        state.picture.appearance.camera.yaw = yaw;
-        let blob = harmonigraph_ui::shell::close(&state);
-        let field = serde_json::to_string(&blob).expect("a string serializes");
+        let field = serde_json::to_string(blob).expect("a string serializes");
         plugin.params.deserialize_fields(&std::collections::BTreeMap::from([(
             "ui-state".to_string(),
             field,
         )]));
+    }
+
+    /// A host restore of a project whose camera yaw is `yaw`, and its blob.
+    fn restore_yaw(plugin: &Harmonigraph, yaw: f32) -> String {
+        let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+        state.picture.appearance.camera.yaw = yaw;
+        let blob = harmonigraph_ui::shell::close(&state);
+        restore(plugin, &blob);
+        blob
     }
 
     fn live_yaw(plugin: &Harmonigraph) -> f32 {
@@ -1597,116 +1569,123 @@ mod tests {
         plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = yaw;
     }
 
-    /// An editor window open on `plugin`, as far as anything but the window
-    /// itself can tell: the flag set, and an analyzer round completed after
-    /// it. The round is what makes the window the only party left that can
-    /// apply a blob — without it, a background adopt could land after this and
-    /// pass a test of the window's own path for the wrong reason.
-    fn open_window(plugin: &Harmonigraph) {
+    /// A host save stores what the editor holds, not what the host last
+    /// restored (#1301), window open or shut.
+    #[test]
+    fn a_save_stores_what_the_editor_holds() {
+        let plugin = Harmonigraph::default();
+        restore_yaw(&plugin, 0.5);
+        turn_live_yaw(&plugin, 1.25);
+        assert_eq!(saved_yaw(&plugin), 1.25, "a save stored the restore over the editor's edit");
+    }
+
+    /// A document this build wrote comes back from a save byte for byte, so a
+    /// project reopened and saved unedited is not rewritten.
+    #[test]
+    fn a_restored_document_saves_back_byte_for_byte() {
+        let plugin = Harmonigraph::default();
+        let blob = restore_yaw(&plugin, 0.5);
+        assert_eq!(saved(&plugin), blob);
+    }
+
+    /// A document this build refuses is saved as it came, window shut, so
+    /// nothing in it is lost before the editor has shown why.
+    #[test]
+    fn a_refused_restore_is_saved_as_it_came() {
+        let plugin = Harmonigraph::default();
+        restore(&plugin, "not a blob");
+        assert_eq!(saved(&plugin), "not a blob");
+    }
+
+    /// An editor never opened saves nothing, so its project keeps following
+    /// the fresh look of whichever build loads it (#1757 Q2).
+    #[test]
+    fn an_editor_never_opened_saves_nothing() {
+        let plugin = Harmonigraph::default();
+        assert_eq!(saved(&plugin), "");
+    }
+
+    /// An empty restore is what such a project carries, so it puts the fresh
+    /// look back and saves nothing again (#1757 Q3): undoing a preset load
+    /// whose preset came from an untouched editor goes back to the fresh look.
+    #[test]
+    fn an_empty_restore_is_the_fresh_look_and_saves_nothing() {
+        let plugin = Harmonigraph::default();
+        let fresh = live_yaw(&plugin);
+        restore_yaw(&plugin, fresh + 0.5);
+        assert_eq!(saved_yaw(&plugin), fresh + 0.5);
+
+        restore(&plugin, "");
+        assert_eq!(saved(&plugin), "");
+        assert_eq!(live_yaw(&plugin), fresh, "the editor kept the restore an empty one replaced");
+    }
+
+    /// A save that cannot take the editor lock — one the host makes from a
+    /// callback the editor makes under it — returns at once rather than hang
+    /// the host (#296), with the newest of the last restore, close,
+    /// successful save or first frame to draw the editor (#1301).
+    #[test]
+    fn a_save_that_cannot_take_the_editor_lock_returns_the_fallback() {
+        let plugin = Harmonigraph::default();
+        restore_yaw(&plugin, 0.5);
+        turn_live_yaw(&plugin, 1.25);
+        assert_eq!(saved_yaw(&plugin), 1.25);
+
+        let mut held = plugin.editor_shared.lock();
+        held.ui.picture.appearance.camera.yaw = 2.0;
+        assert_eq!(saved_yaw(&plugin), 1.25, "not the last successful save");
+        restore_yaw(&plugin, 0.75);
+        assert_eq!(saved_yaw(&plugin), 0.75, "older than a restore still waiting");
+        drop(held);
+    }
+
+    /// The close ends the window session and refreshes the fallback BEFORE it
+    /// ends the host's gestures. `end_set_parameter` is a host callback made
+    /// under the editor lock, and a save the host makes from inside it answers
+    /// with the fallback, which must already hold the session; a restore made
+    /// there is newer than the session, and survives the close.
+    #[test]
+    fn the_close_refreshes_the_fallback_before_ending_gestures() {
+        let plugin = Harmonigraph::default();
+        restore_yaw(&plugin, 0.5);
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
+        turn_live_yaw(&plugin, 1.25);
+
+        let mut reentered = None;
+        plugin.editor_shared.end_window_session(|_| {
+            reentered = Some(saved_yaw(&plugin));
+            restore_yaw(&plugin, 0.75);
+        });
+        assert_eq!(reentered, Some(1.25), "a save from the close's callback lost the session");
+        assert_eq!(saved_yaw(&plugin), 0.75, "the restore made from the close's callback was lost");
+    }
+
+    /// Issue #1740: closing and reopening the editor window keeps the look
+    /// slot's undo history, and an edit the close cut off mid-drag becomes one
+    /// entry of it. Through the plugin's own close, a round of the input
+    /// worker and the window build's state half: the last two each reloaded
+    /// the close's blob, and with it a fresh, empty history.
+    #[test]
+    fn undo_history_survives_closing_and_reopening_the_window() {
+        use harmonigraph_ui::testing::{edit_look, undo_depth};
+
+        let plugin = Harmonigraph::default();
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
         plugin.params.editor_state.set_open(true);
+        edit_look(&mut plugin.editor_shared.lock().ui, false);
+        edit_look(&mut plugin.editor_shared.lock().ui, true);
+        assert_eq!(undo_depth(&plugin.editor_shared.lock().ui), 1, "the drag is still open");
+
+        plugin.editor_shared.end_window_session(|_| {});
+        plugin.params.editor_state.set_open(false);
         let rounds = plugin._input_worker.completed_rounds();
         assert!(
-            a_round_after(plugin, rounds),
-            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+            a_round_after(&plugin, rounds + 1),
+            "no worker round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
         );
-    }
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
 
-    /// The step a frame starts with, under the frame's lock. The real `frame`
-    /// cannot run here: it needs a `Queue`, which exists only inside a running
-    /// window.
-    fn next_frame(plugin: &Harmonigraph) {
-        plugin.params.ui_state.apply_restore(&mut plugin.editor_shared.lock().ui);
-    }
-
-    /// Issue #1329: a host restore while the editor is open (a preset load, an
-    /// undo) reaches the window on its next frame — the last of two, if two
-    /// land first — and only on that frame.
-    #[test]
-    fn a_restore_into_an_open_window_reaches_its_next_frame() {
-        let plugin = Harmonigraph::default();
-        open_window(&plugin);
-        turn_live_yaw(&plugin, 2.0);
-
-        restore_yaw(&plugin, 0.5);
-        restore_yaw(&plugin, 0.75);
-        assert_eq!(
-            live_yaw(&plugin),
-            2.0,
-            "the state moved with no frame run: something other than the frame applied the \
-             restore, so this test no longer reaches the frame's path",
-        );
-
-        next_frame(&plugin);
-        assert_eq!(live_yaw(&plugin), 0.75, "the open window never took the host's restore");
-
-        // Once: the frames after it are the user's again.
-        turn_live_yaw(&plugin, 1.5);
-        next_frame(&plugin);
-        assert_eq!(live_yaw(&plugin), 1.5, "a later frame re-applied the restore over the user");
-        plugin.params.editor_state.set_open(false);
-    }
-
-    /// Until the window has drawn a restore it is still showing what the
-    /// restore replaced, so a save in between stores the restore.
-    #[test]
-    fn a_save_between_a_restore_and_the_next_frame_stores_the_restore() {
-        let plugin = Harmonigraph::default();
-        open_window(&plugin);
-        turn_live_yaw(&plugin, 2.0);
-
-        restore_yaw(&plugin, 0.5);
-        assert_eq!(
-            saved_yaw(&plugin),
-            0.5,
-            "a save before the window drew the restore stored the settings it replaced",
-        );
-
-        next_frame(&plugin);
-        turn_live_yaw(&plugin, 1.25);
-        assert_eq!(saved_yaw(&plugin), 1.25, "once drawn, a save no longer stores the window");
-        plugin.params.editor_state.set_open(false);
-    }
-
-    /// A restore that lands after the window's last frame is newer than
-    /// anything the window showed, so its close must not write over it.
-    #[test]
-    fn a_restore_no_frame_has_drawn_survives_the_window_closing() {
-        let plugin = Harmonigraph::default();
-        open_window(&plugin);
-        turn_live_yaw(&plugin, 2.0);
-
-        restore_yaw(&plugin, 0.5);
-        // What `LatticeEditorHandle`'s Drop does, which needs a real window.
-        plugin.params.ui_state.store_close(&mut plugin.editor_shared.lock().ui);
-        plugin.params.editor_state.set_open(false);
-
-        assert_eq!(saved_yaw(&plugin), 0.5, "the close wrote the window's settings over a restore");
-    }
-
-    /// The frame's side of `an_open_window_keeps_the_settings_it_is_being_used_to_change`:
-    /// a restore the window was BUILT with has been applied, and the frame must
-    /// not apply it again over what the user changes afterwards.
-    #[test]
-    fn a_restore_the_window_opened_with_is_not_applied_again() {
-        let plugin = Harmonigraph::default();
-        restore_yaw(&plugin, 0.5);
-        {
-            // What the window's build closure does, which needs a real window.
-            let mut shared = plugin.editor_shared.lock();
-            let blob = plugin.params.ui_state.opening_blob();
-            assert!(shared.ui.load_persist(&blob), "the restored blob does not load");
-        }
-        open_window(&plugin);
-        turn_live_yaw(&plugin, 2.0);
-
-        next_frame(&plugin);
-
-        assert_eq!(
-            live_yaw(&plugin),
-            2.0,
-            "the first frame re-applied the blob the window opened with, reverting the user",
-        );
-        plugin.params.editor_state.set_open(false);
+        assert_eq!(undo_depth(&plugin.editor_shared.lock().ui), 2, "closing the window lost undo");
     }
 
     /// `ParamKey::id` is what a recorded take names its automation by, and

@@ -111,7 +111,8 @@ pub(super) fn pitch_readout(midi: f32) -> String {
 }
 
 /// Fixed workspace destinations. The selected analyzer and settings tabs are
-/// persisted; retiring a variant still requires an audible parse refusal.
+/// persisted, so retiring a variant costs a project that saved it that
+/// selection, with a Console line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,

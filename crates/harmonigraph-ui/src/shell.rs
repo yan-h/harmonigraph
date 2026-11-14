@@ -5,15 +5,14 @@
 //! host's window, the dev harness on eframe in one of its own. What they can
 //! share is everything AROUND the drawing, which is the same steps in the same
 //! order: a freshly built context has to be themed and stripped of the last
-//! one's textures, the fold floor and the saved layout have to reach the state
-//! before the first frame, the state has to be drawn before the folds it
-//! settles can be spent on the window, and the blob goes back to whoever
-//! restores it on the way out.
+//! one's textures, the fold floor has to reach the state and the last
+//! window's leftovers have to leave it before the first frame, and the state
+//! has to be drawn before the folds it settles can be spent on the window.
 //!
 //! Kept by hand in two places that sequence is a doc comment, and a doc
 //! comment is what the next step gets added in front of. Here each phase is
 //! one call over a struct the shell fills in: what a shell states is its own
-//! DATA — its context, its saved blob, how wide its window is — and the steps
+//! DATA — its context, how wide its window is — and the steps
 //! run over that data in one place, so a shell cannot reorder them and a step
 //! it fails to account for is a missing field rather than a missing line.
 //!
@@ -56,20 +55,11 @@ pub struct Opening<'a> {
     /// The state that will be drawn in it — older than the context wherever a
     /// window can close and reopen.
     pub state: &'a mut SharedState,
-    /// The blob this shell saved when it last closed, from wherever it keeps
-    /// one: the host's plugin state, eframe's storage.
-    ///
-    /// `None` for a shell that has nothing saved, and so is `Some("")` — worth
-    /// stating once here rather than in each shell, because a plugin whose
-    /// editor has never been open carries an EMPTY `ui_state`, and reading
-    /// that as a blob would put a parse failure on the console of every first
-    /// open.
-    pub persist: Option<&'a str>,
 }
 
 impl Opening<'_> {
     /// Theme the context, drop what belonged to the previous one, tell the
-    /// layout its floor, then restore the saved blob.
+    /// layout its floor, then start the window session.
     ///
     /// All four every time a context is built, which is the part a hand-kept
     /// copy loses one of: skip the release and the new window draws through
@@ -77,17 +67,15 @@ impl Opening<'_> {
     /// vanishes for good), skip the floor and the first fold asks for a window
     /// narrower than the shell will ever grant.
     ///
-    /// The blob comes last because it is the only step that can fail, and
-    /// [`SharedState::load_persist`] says why on the console that the steps
-    /// before it just made drawable — so there is nothing for this to answer
-    /// with.
+    /// Nothing saved is read here. The state outlives every window, so it
+    /// already holds the settings the last window left; a saved document
+    /// reaches it only through [`SharedState::install_document`], at a host
+    /// restore or the standalone harness's start.
     pub fn open(self) {
         crate::theme::apply_theme(self.ctx);
         self.state.picture.release_context_resources();
         self.state.workspace.min_window_size = MIN_WINDOW_SIZE;
-        if let Some(persist) = self.persist.filter(|blob| !blob.is_empty()) {
-            self.state.load_persist(persist);
-        }
+        self.state.start_window_session();
     }
 }
 
@@ -120,15 +108,12 @@ impl Frame<'_> {
     }
 }
 
-/// The blob to hand back to whatever this shell restores from, on the way out.
+/// The blob the standalone harness hands eframe's `save` on the way out.
 ///
-/// Where "the way out" is differs and cannot be shared: the plugin writes it
-/// into `params.ui_state` from the editor handle's `Drop`; the harness answers
-/// eframe's `save`. What is shared is that this is the only writer of either —
-/// the take recorder serializes the same state mid-session so a render
-/// reproduces the look it was dialed in at, and that is a payload, not a save;
-/// and a plugin host save made with the window open calls
-/// [`SharedState::save_persist`] itself, writing neither.
+/// The plugin has no way out to write at: its state outlives every window, and
+/// a host save answers from [`SharedState::save_answer`], window open or shut.
+/// The take recorder serializes the same state mid-session so a render
+/// reproduces the look it was dialed in at, and that is a payload, not a save.
 #[must_use = "this IS the save; dropping it closes the shell without one"]
 pub fn close(state: &SharedState) -> String {
     state.save_persist()
@@ -138,6 +123,7 @@ pub fn close(state: &SharedState) -> String {
 mod tests {
     use super::*;
     use crate::tests::probe::{fresh, Defaults};
+    use crate::SaveSource;
 
     fn frame(ctx: &egui::Context, state: &mut SharedState, size: egui::Vec2) -> Option<egui::Vec2> {
         let mut ask = None;
@@ -160,34 +146,34 @@ mod tests {
         ask
     }
 
+    const SIZE: egui::Vec2 = egui::vec2(1000.0, 800.0);
+
+    /// A state whose save holds a document this build refused.
+    fn held() -> SharedState {
+        let mut state = fresh();
+        assert!(!state.install_document("not a blob"));
+        assert!(matches!(state.save_source(), SaveSource::Held(_)));
+        state
+    }
+
     #[test]
     fn requests_are_two_dimensional_floored_and_consumed_once() {
         let ctx = egui::Context::default();
         let mut state = fresh();
-        Opening { ctx: &ctx, state: &mut state, persist: None }.open();
+        Opening { ctx: &ctx, state: &mut state }.open();
         assert_eq!(state.workspace.min_window_size, MIN_WINDOW_SIZE);
-        let size = egui::vec2(1000.0, 800.0);
-        assert_eq!(frame(&ctx, &mut state, size), None);
+        assert_eq!(frame(&ctx, &mut state, SIZE), None);
         state.workspace.window_size_change = egui::vec2(-120.0, -220.0);
-        assert_eq!(frame(&ctx, &mut state, size), Some(egui::vec2(880.0, 580.0)));
-        assert_eq!(frame(&ctx, &mut state, size), None);
-        state.workspace.window_size_change = -size;
-        assert_eq!(frame(&ctx, &mut state, size), Some(MIN_WINDOW_SIZE));
+        assert_eq!(frame(&ctx, &mut state, SIZE), Some(egui::vec2(880.0, 580.0)));
+        assert_eq!(frame(&ctx, &mut state, SIZE), None);
+        state.workspace.window_size_change = -SIZE;
+        assert_eq!(frame(&ctx, &mut state, SIZE), Some(MIN_WINDOW_SIZE));
     }
 
+    /// The standalone harness's round trip: what it saves on the way out, its
+    /// next start installs before the window opens.
     #[test]
-    fn an_unsaved_shell_is_not_a_corrupt_one() {
-        let ctx = egui::Context::default();
-        let mut state = fresh();
-        Opening { ctx: &ctx, state: &mut state, persist: Some("") }.open();
-        assert_eq!(state.picture.runtime.console.lines().count(), 0);
-        Opening { ctx: &ctx, state: &mut state, persist: Some("not a blob") }.open();
-        assert!(state.picture.runtime.console.lines().any(|line| line.contains("persist ignored")));
-        assert!(state.workspace.layout.visible(crate::panes::Tab::Console));
-    }
-
-    #[test]
-    fn what_close_saves_is_what_the_next_opening_restores() {
+    fn what_close_saves_is_what_the_next_start_installs() {
         let ctx = egui::Context::default();
         let mut state = fresh();
         state.workspace.interaction.prefs.ui_scale = 1.25;
@@ -196,11 +182,68 @@ mod tests {
         state.workspace.layout.folded[0] = true;
         let saved = close(&state);
         let mut reopened = fresh();
-        Opening { ctx: &ctx, state: &mut reopened, persist: Some(&saved) }.open();
+        assert!(reopened.install_document(&saved));
+        Opening { ctx: &ctx, state: &mut reopened }.open();
         assert_eq!(reopened.workspace.interaction.prefs.ui_scale, 1.25);
         assert_eq!(reopened.workspace.interaction.prefs.skin_dials.accent_hue, 120.0);
         assert_eq!(reopened.workspace.layout.position, crate::workspace::Position::Below);
         assert!(reopened.workspace.layout.folded[0]);
         assert_eq!(reopened.workspace.min_window_size, MIN_WINDOW_SIZE);
+    }
+
+    /// A frame that draws the editor shows what a save will store, so it ends
+    /// both a fresh state's empty save and a hold on a refused document.
+    #[test]
+    fn a_frame_that_draws_the_editor_makes_the_save_live() {
+        for mut state in [fresh(), held()] {
+            let ctx = egui::Context::default();
+            Opening { ctx: &ctx, state: &mut state }.open();
+            assert_ne!(state.save_source(), &SaveSource::Live, "live before any frame");
+            let _ = frame(&ctx, &mut state, SIZE);
+            assert_eq!(state.save_source(), &SaveSource::Live);
+        }
+    }
+
+    /// A frame with no area still runs what edits saved settings — the Tab
+    /// toggle of hidden bars, the look's undo, the camera — so it counts as
+    /// drawn: a hold kept through it would throw those edits away.
+    #[test]
+    fn a_frame_with_no_area_still_makes_the_save_live() {
+        let ctx = egui::Context::default();
+        let mut state = held();
+        Opening { ctx: &ctx, state: &mut state }.open();
+        let _ = frame(&ctx, &mut state, egui::Vec2::ZERO);
+        assert_eq!(state.save_source(), &SaveSource::Live);
+    }
+
+    /// The loading screen draws nothing of the editor, the Console's reason
+    /// for the hold included, so the hold outlasts it.
+    #[test]
+    fn a_loading_frame_keeps_the_save_held() {
+        let ctx = egui::Context::default();
+        let mut state = held();
+        Opening { ctx: &ctx, state: &mut state }.open();
+        crate::startup::begin_editor_loading_with(
+            &ctx,
+            harmonigraph_render::startup::WindowStartup::preparing(),
+        );
+        let _ = frame(&ctx, &mut state, SIZE);
+        assert!(crate::editor_loading_status(&ctx).is_some(), "the frame was not a loading one");
+        assert!(matches!(state.save_source(), SaveSource::Held(_)));
+    }
+
+    /// A frame the closing window still runs draws nothing, until the next
+    /// window session starts.
+    #[test]
+    fn a_frame_after_the_window_session_ends_keeps_the_save_held() {
+        let ctx = egui::Context::default();
+        let mut state = held();
+        state.end_window_session();
+        let _ = frame(&ctx, &mut state, SIZE);
+        assert!(matches!(state.save_source(), SaveSource::Held(_)));
+
+        Opening { ctx: &ctx, state: &mut state }.open();
+        let _ = frame(&ctx, &mut state, SIZE);
+        assert_eq!(state.save_source(), &SaveSource::Live, "the next session's frame drew nothing");
     }
 }

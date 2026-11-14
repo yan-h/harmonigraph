@@ -3,13 +3,12 @@ use std::time::Instant;
 
 use egui_baseview::Queue;
 use nice_plug::prelude::{GuiContext, ParamSetter};
-use parking_lot::Mutex;
 
 use crate::{HarmonigraphParams, PluginParamBackend};
 
+use super::lock::EditorLock;
 use super::persist::EguiState;
 use super::pop_out::PopOut;
-use super::shared::EditorShared;
 
 /// The plugin's per-frame GUI work: take the frame's lock, close out the note
 /// frame, reconcile the take — and then hand the state the input worker has
@@ -39,21 +38,22 @@ pub(super) fn frame(
     let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
 
-    // One lock for the whole frame. The audio thread only ever touches the
-    // rtrb producers, and the editor-drop path runs on this same GUI thread.
-    // The other parties hold it briefly: the input worker, for its take and
-    // its give but never for its FFTs, and a host state save with the window
-    // open (`UiState`'s `map`), for one serialization on the host's main
-    // thread, which is this thread on macOS and Windows and a different one
-    // on X11.
+    // One lock for the whole frame, which also installs a host restore made
+    // since the last holder (a preset load, an undo; see `EditorLock`). The
+    // audio thread only ever touches the rtrb producers, and the editor-drop
+    // path runs on this same GUI thread. The other parties hold it briefly:
+    // the input worker, for its take and its give but never for its FFTs, and
+    // a host state save (`UiState`'s `map`), for one serialization on the
+    // host's main thread, which is this thread on macOS and Windows and a
+    // different one on X11.
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
-
-    // A host restore since the last frame (a preset load, an undo), which
-    // nothing else applies to an open window. The input worker's next take
-    // reads the settings it leaves, which decide how the samples taken then
-    // are analyzed.
-    state.params.ui_state.apply_restore(&mut shared.ui);
+    // A frame after the close (X11 can run one) would stamp the frame clock
+    // the close cleared, and the next open would log the gap as a stall.
+    // `root_ui` draws nothing then either.
+    if shared.ui.closing() {
+        return;
+    }
 
     // The display link's timing for this frame, or `None` for one it did not ask
     // for (the watchdog's, an occlusion repaint).
@@ -120,15 +120,19 @@ pub(super) fn frame(
     // Offered only where the shell can give the editor its own window, and
     // read back after the UI has had the chance to flip it.
     shared.ui.workspace.interaction.own_window = pop_out.offered().then(|| !egui_state.docked());
-    let ask = harmonigraph_ui::shell::Frame {
-        ui,
-        state: &mut shared.ui,
-        params: &backend,
-        now,
-        build_tag: crate::BUILD_TAG,
-        window_size: egui::vec2(window_width as f32, window_height as f32),
-    }
-    .draw();
+    // Through the inbox, which keeps the fallback a re-entered save answers
+    // with in step with the first frame to draw the editor.
+    let ask = state.shared.inbox().frame(&mut shared.ui, |drawn| {
+        harmonigraph_ui::shell::Frame {
+            ui,
+            state: drawn,
+            params: &backend,
+            now,
+            build_tag: crate::BUILD_TAG,
+            window_size: egui::vec2(window_width as f32, window_height as f32),
+        }
+        .draw()
+    });
     #[cfg(all(feature = "frame-log", target_os = "macos"))]
     state.logged.note(&shared.ui);
 
@@ -161,7 +165,7 @@ pub(super) fn frame(
 
 /// State handed to egui-baseview's run loop.
 pub(super) struct WindowState {
-    pub(super) shared: Arc<Mutex<EditorShared>>,
+    pub(super) shared: Arc<EditorLock>,
     pub(super) params: Arc<HarmonigraphParams>,
     pub(super) pop_out: Weak<PopOut>,
     /// What the frame log was last told the editor was doing.
@@ -171,7 +175,7 @@ pub(super) struct WindowState {
 
 impl WindowState {
     pub(super) fn new(
-        shared: Arc<Mutex<EditorShared>>,
+        shared: Arc<EditorLock>,
         params: Arc<HarmonigraphParams>,
         pop_out: Weak<PopOut>,
     ) -> Self {

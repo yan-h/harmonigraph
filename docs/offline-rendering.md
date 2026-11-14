@@ -82,11 +82,9 @@ and the appearance generator rejects new `spacing=` input.
 Camera,
 zoom and label controls remain available.
 The retired **Playhead** spectrogram mode and `--playhead` flag are no longer supported.
-An editor blob naming `Playhead` is refused whole with a console message, including its camera and layout;
-a fresh instance opens at defaults.
-An appearance naming it is also refused whole, and offline export reports the failure and refuses the export.
-This enum parse failure happens before the editor version-floor check.
-No older format is migrated or partially recovered.
+An editor blob naming `Playhead` loses that setting, as the persistence-contract skill sets out for a dropped variant.
+An appearance naming it is refused whole, and offline export reports the failure and refuses the export.
+No older format is migrated.
 
 ## Audio input memory
 

@@ -50,19 +50,18 @@ fn main() -> eframe::Result {
                 cc.wgpu_render_state.as_ref().expect("eframe was built with the wgpu backend");
             let mut app = App::new(render_state.target_format);
             // Everything a shell owes a context it has just built: theme, the
-            // release of the previous context's textures, the fold floor, and
-            // the layout saved last run (eframe's storage, where the plugin
-            // has the host's project). The release is a no-op in this harness,
+            // release of the previous context's textures, the fold floor and
+            // the window session. The release is a no-op in this harness,
             // whose state is built alongside the one context it will ever use
             // — but the day it grows a second window it stops being one, and
             // it is not this shell's call to make.
-            let persist = cc.storage.and_then(|s| s.get_string(UI_STATE_STORAGE_KEY));
-            harmonigraph_ui::shell::Opening {
-                ctx: &cc.egui_ctx,
-                state: &mut app.state,
-                persist: persist.as_deref(),
+            harmonigraph_ui::shell::Opening { ctx: &cc.egui_ctx, state: &mut app.state }.open();
+            // Then the layout saved last run (eframe's storage, where the
+            // plugin has the host's project), installed once, as a host
+            // restore is, onto a Console the steps above made drawable.
+            if let Some(persist) = cc.storage.and_then(|s| s.get_string(UI_STATE_STORAGE_KEY)) {
+                app.state.install_document(&persist);
             }
-            .open();
             app.recorder = Recorder::from_env(&app.state);
             Ok(Box::new(app))
         }),
@@ -426,7 +425,7 @@ impl App {
             log_events: true,
             self_shot: SelfShot::from_env(),
             // Needs the restored UI state in the header, so it is
-            // installed after load_persist rather than here.
+            // installed after install_document rather than here.
             recorder: None,
         }
     }
