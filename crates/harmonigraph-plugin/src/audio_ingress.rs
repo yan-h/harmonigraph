@@ -66,7 +66,8 @@ pub(crate) struct Heard {
     /// Song seconds at the block's first frame.
     pub seconds: f64,
     pub frames: usize,
-    /// Song frames per frame heard: below 1 the audition is slowed.
+    /// Song frames per frame heard: below 1 the audition is slowed, above 1
+    /// sped up.
     pub speed: f64,
 }
 
