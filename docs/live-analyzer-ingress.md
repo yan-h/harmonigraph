@@ -61,7 +61,7 @@ the incremental heatmap aggregation relies on strictly increasing dates, and no 
 Timestamps are neither clamped nor rewritten.
 No feeder dates its columns by when they arrive (#1758):
 the offline renderer counts frames from the first it reads of its soundtrack,
-and the standalone app's synth counts the frames it renders and starts a new run where it resumes after a stall over 200 ms,
+and the standalone app's synth counts the frames it renders and, after a stall over 200 ms, starts a new run whose first column dates after the last of the run before, however its resolution changed,
 so their dates only advance too.
 A build without the assert would meet a backward date in the heatmap aggregator,
 which rebuilds its grid on a date that steps back.

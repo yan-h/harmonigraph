@@ -81,8 +81,9 @@ pub(crate) struct SpectrumStore {
     /// Columns that have joined the history: see
     /// [`AudioSpectrum::columns_taken`].
     columns_taken: u64,
-    /// The lag of the analysis that made the newest columns, delivered with
-    /// their batch: see [`AudioSpectrum::column_lag`].
+    /// The lag of the analysis as of the newest batch's arrival, which the
+    /// newest columns were made at unless a resolution change is still
+    /// refilling the window: see [`AudioSpectrum::column_lag`].
     lag: f64,
 }
 
@@ -433,8 +434,9 @@ impl SpectrumStore {
     /// forward by whole hops, and a new run starts after the old one: the
     /// plugin's clock offset only grows and a restarted analyzer's first
     /// column waits for a full frame; the offline renderer's one run is its
-    /// soundtrack; and the standalone synth starts a new run where it resumes
-    /// after a stall.
+    /// soundtrack; and the standalone synth, after a stall, starts a new run
+    /// whose first column dates after the last of the run before, however
+    /// its resolution changed.
     ///
     /// So the `debug_assert!` checks those callers, and nothing here enforces
     /// the order. The aggregator assumes it in release builds too: a backward
