@@ -648,7 +648,9 @@ mod tests {
     ) {
         let origin = now - (samples.len() - 1) as f64 / f64::from(rate);
         let mut analysis = harmonigraph_ui::SpectrumAnalysis::default();
-        state.runtime.spectrum.feed(&mut analysis, samples, 1, rate, origin, cfg);
+        let spectrum = &mut state.runtime.spectrum;
+        analysis
+            .feed_source(samples, 1, rate, origin, cfg, |delivery| spectrum.apply(delivery, cfg));
     }
 
     fn sawtooth(midi: f32, rate: f32) -> Vec<f32> {

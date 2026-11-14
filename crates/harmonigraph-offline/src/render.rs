@@ -289,10 +289,9 @@ fn hand_over(
 struct Soundtrack<'a> {
     audio: &'a mut Audio,
     analysis: harmonigraph_ui::SpectrumAnalysis,
-    /// The run's frame zero on the render's clock, from the first range read.
-    origin: Option<f64>,
-    /// What a frame's reads delivered, given to the store once they are done.
-    deliveries: Vec<harmonigraph_ui::Delivery>,
+    /// The run's frame zero on the render's clock, and the soundtrack frame
+    /// the next read must start at to continue it. `None` before the first.
+    run: Option<(f64, usize)>,
     /// Every column the analysis made, as `(time, power)`: a delivery tap for
     /// the tests, which ask what was analyzed rather than what the store kept.
     #[cfg(test)]
@@ -304,17 +303,20 @@ impl<'a> Soundtrack<'a> {
         Soundtrack {
             audio,
             analysis: Default::default(),
-            origin: None,
-            deliveries: Vec::new(),
+            run: None,
             #[cfg(test)]
             columns: Vec::new(),
         }
     }
 
-    /// Analyze the soundtrack's frames in `range` into `spectrum`. Successive
-    /// ranges meet exactly, so they are one run, and the run's frame zero is
-    /// where the first one starts: `audio_start` is the soundtrack's own frame
-    /// zero on the render's clock.
+    /// Analyze the soundtrack's frames in `range` into `spectrum`, as the
+    /// next stretch of the one run: `range` starts where the last ended, and
+    /// the run's frame zero is where the first started. `audio_start` is the
+    /// soundtrack's own frame zero on the render's clock.
+    ///
+    /// A range that does not meet the last is refused: the run's dates count
+    /// frames from its start, so a skipped or repeated frame would misdate
+    /// every column after it.
     fn feed(
         &mut self,
         spectrum: &mut harmonigraph_ui::AudioSpectrum,
@@ -322,24 +324,27 @@ impl<'a> Soundtrack<'a> {
         audio_start: f64,
         config: &harmonigraph_ui::SpectrumConfig,
     ) -> Result<(), String> {
-        let Soundtrack { audio, analysis, deliveries, .. } = self;
+        let Soundtrack { audio, analysis, .. } = self;
         let (channels, rate) = (audio.channels, audio.sample_rate);
-        let origin = *self.origin.get_or_insert(audio_start + range.start as f64 / f64::from(rate));
-        audio.for_frames(range, |chunk| {
-            analysis.feed_source(chunk, channels, rate, origin, config, |delivery| {
-                deliveries.push(delivery)
-            })
-        })?;
+        let (origin, next) = self
+            .run
+            .get_or_insert((audio_start + range.start as f64 / f64::from(rate), range.start));
+        if range.start != *next {
+            return Err(format!(
+                "the soundtrack read resumed at frame {} after ending at {next}",
+                range.start
+            ));
+        }
+        *next = range.end;
         #[cfg(test)]
-        self.columns.extend(self.deliveries.iter().filter_map(|delivery| match delivery {
-            harmonigraph_ui::Delivery::Column(column) => {
-                Some((column.time(), column.power().to_vec()))
-            }
-            _ => None,
-        }));
-        let epoch = spectrum.history_epoch();
-        spectrum.give(epoch, self.analysis.lag(), self.deliveries.drain(..), config);
-        Ok(())
+        let columns = &mut self.columns;
+        audio.for_frames(range, |chunk| {
+            analysis.feed_source(chunk, channels, rate, *origin, config, |delivery| {
+                #[cfg(test)]
+                columns.extend(delivery.column().map(|c| (c.time(), c.power().to_vec())));
+                spectrum.apply(delivery, config)
+            })
+        })
     }
 }
 
@@ -643,6 +648,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The soundtrack's run is dated by counting frames from its first read,
+    /// so a read that does not continue the last is refused rather than left
+    /// to misdate every column after it.
+    #[test]
+    fn a_soundtrack_read_that_does_not_continue_the_run_is_refused() {
+        let mut audio = transient_audio();
+        let mut soundtrack = Soundtrack::new(&mut audio);
+        let mut spectrum = harmonigraph_ui::AudioSpectrum::default();
+        let cfg = harmonigraph_ui::SpectrumConfig::default();
+        soundtrack.feed(&mut spectrum, 0..1000, 7.125, &cfg).unwrap();
+        soundtrack.feed(&mut spectrum, 1000..2000, 7.125, &cfg).unwrap();
+        assert!(soundtrack.feed(&mut spectrum, 2001..3000, 7.125, &cfg).is_err(), "skipped");
+        assert!(soundtrack.feed(&mut spectrum, 1999..3000, 7.125, &cfg).is_err(), "repeated");
     }
 
     #[test]

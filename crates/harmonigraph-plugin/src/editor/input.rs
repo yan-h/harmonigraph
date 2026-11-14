@@ -222,12 +222,11 @@ impl LiveInput {
             self.audio_position = None;
         }
     }
-    /// Hand what [`Self::analyze`] made to the store, with the analysis's
-    /// lag, and put the analysis back.
+    /// Hand what [`Self::analyze`] made to the store, and put the analysis
+    /// back.
     pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
         let Taken { analysis, epoch, mut audio } = taken;
-        let deliveries = audio.deliveries.drain(..);
-        runtime.spectrum.give(epoch, analysis.lag(), deliveries, &audio.config);
+        runtime.spectrum.give(epoch, audio.deliveries.drain(..), &audio.config);
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         self.analysis = Some(analysis);
         audio.samples.clear();
@@ -318,12 +317,8 @@ impl LiveInput {
         let Some(mut taken) = self.take(runtime, appearance, now) else { return Vec::new() };
         Self::analyze(&mut taken);
         let columns = (taken.audio.deliveries.iter())
-            .filter_map(|delivery| match delivery {
-                harmonigraph_ui::Delivery::Column(column) => {
-                    Some((column.time(), column.power().to_vec()))
-                }
-                _ => None,
-            })
+            .filter_map(harmonigraph_ui::Delivery::column)
+            .map(|column| (column.time(), column.power().to_vec()))
             .collect();
         self.give(runtime, taken);
         columns

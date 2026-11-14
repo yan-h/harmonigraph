@@ -81,8 +81,8 @@ pub(crate) struct SpectrumStore {
     /// Columns that have joined the history: see
     /// [`AudioSpectrum::columns_taken`].
     columns_taken: u64,
-    /// The lag of the analysis that made the newest columns, handed over with
-    /// them: see [`AudioSpectrum::column_lag`].
+    /// The lag of the analysis that made the newest columns, delivered with
+    /// their batch: see [`AudioSpectrum::column_lag`].
     lag: f64,
 }
 
@@ -107,19 +107,33 @@ pub(crate) struct Heard {
 /// run starting over, a batch of audio arriving, or a column it produced.
 /// The plugin's input worker makes them off the editor's lock and gives
 /// them under it ([`AudioSpectrum::give`], #1559); the inline shells apply
-/// each as it is made ([`AudioSpectrum::feed`]).
+/// each as it is made ([`AudioSpectrum::apply`]). They carry everything the
+/// store learns from the analysis, so neither entry takes anything else from
+/// it.
 pub enum Delivery {
     /// The retained source run restarted: forget the curve, keep the history.
     Restart,
-    /// A batch arrived whose newest frame is at this shell time, which keeps
-    /// the curve live even while the analyzer refills and makes no column.
-    Arrival(f64),
+    /// A batch arrived, analyzed at a lag of `lag` seconds (see
+    /// [`AudioSpectrum::column_lag`]), whose newest frame is at the shell time
+    /// `newest`, which keeps the curve live even while the analyzer refills
+    /// and makes no column.
+    Arrival { newest: f64, lag: f64 },
     /// Boxed, because a block shorter than the 8 ms between columns delivers
     /// an arrival and seldom a column: at 64-frame blocks and 48 kHz six of
     /// seven deliveries are arrivals, and a list whose every slot was sized
     /// for a column (15.3 KB) kept 31 MB after one step that found the
     /// plugin's audio ring full.
     Column(Box<AnalyzedColumn>),
+}
+
+impl Delivery {
+    /// The column this delivers, if it is one.
+    pub fn column(&self) -> Option<&AnalyzedColumn> {
+        match self {
+            Delivery::Column(column) => Some(column),
+            _ => None,
+        }
+    }
 }
 
 /// One raw spectrum the analysis produced, for the store to take.
@@ -286,13 +300,6 @@ impl SpectrumAnalysis {
         config: &SpectrumConfig,
         mut deliver: impl FnMut(Delivery),
     ) {
-        let batch = samples.len() / channels.max(1);
-        if batch == 0 {
-            return;
-        }
-        let sr = f64::from(sample_rate.max(1.0));
-        deliver(Delivery::Arrival(origin + (self.frames_seen + batch as u64 - 1) as f64 / sr));
-
         // A changed rate empties the analyzers' rings, so nothing comes out
         // until they have refilled; a changed frame carries what the new one
         // can use, so only a longer one waits, for the rest of it. The hop grid
@@ -304,6 +311,12 @@ impl SpectrumAnalysis {
         // in `push_frames` can never slip a channel.
         let channels = self.analyzer.channels();
         let batch = samples.len() / channels;
+        if batch == 0 {
+            return;
+        }
+        let sr = f64::from(sample_rate.max(1.0));
+        let newest = origin + (self.frames_seen + batch as u64 - 1) as f64 / sr;
+        deliver(Delivery::Arrival { newest, lag: self.lag() });
         let hop = ((AudioSpectrum::FFT_INTERVAL * sr).round() as u64).max(1);
         // Columns fall on multiples of `hop` frames from the start of the
         // stream. Left at zero the first boundary would be frame 1 and every one
@@ -343,8 +356,8 @@ impl SpectrumAnalysis {
         }
     }
 
-    /// The running analyzer's lag, which a hand-over carries to the store:
-    /// see [`AudioSpectrum::column_lag`].
+    /// The running analyzer's lag, which each [`Delivery::Arrival`] carries
+    /// to the store: see [`AudioSpectrum::column_lag`].
     pub fn lag(&self) -> f64 {
         self.analyzer.window_center_offset()
     }
@@ -442,7 +455,10 @@ impl SpectrumStore {
     fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig, keep: bool) {
         match delivery {
             Delivery::Restart => self.restart(),
-            Delivery::Arrival(newest) => self.last_samples = Some(newest),
+            Delivery::Arrival { newest, lag } => {
+                self.last_samples = Some(newest);
+                self.lag = lag;
+            }
             Delivery::Column(column) => self.take(*column, config, keep),
         }
     }
@@ -524,10 +540,9 @@ impl AudioSpectrum {
     pub(crate) const HOLD_SECONDS: f64 = 0.5;
 
     /// Keep what an analysis made from audio taken when the history's
-    /// [`history_epoch`](Self::history_epoch) was `epoch`, in order, with
-    /// the analysis's [`lag`](SpectrumAnalysis::lag) after making it;
-    /// `config` is the one it analyzed under. The plugin's input worker takes
-    /// its audio and analyzes it off the editor's lock, and gives the result
+    /// [`history_epoch`](Self::history_epoch) was `epoch`, in order; `config`
+    /// is the one it analyzed under. The plugin's input worker takes its
+    /// audio and analyzes it off the editor's lock, and gives the result
     /// under it.
     ///
     /// If the history has been cleared since `epoch`, its columns still move
@@ -536,7 +551,6 @@ impl AudioSpectrum {
     pub fn give(
         &mut self,
         epoch: u32,
-        lag: f64,
         deliveries: impl IntoIterator<Item = Delivery>,
         config: &SpectrumConfig,
     ) {
@@ -544,31 +558,18 @@ impl AudioSpectrum {
         for delivery in deliveries {
             self.store.apply(delivery, config, keep);
         }
-        self.store.lag = lag;
     }
 
-    /// An inline shell's [`feed_source`](SpectrumAnalysis::feed_source):
-    /// the analysis it owns makes columns from `samples`, and each joins the
-    /// history as it is made.
-    pub fn feed(
-        &mut self,
-        analysis: &mut SpectrumAnalysis,
-        samples: &[f32],
-        channels: usize,
-        sample_rate: f32,
-        origin: f64,
-        config: &SpectrumConfig,
-    ) {
-        let store = &mut self.store;
-        analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
-            store.apply(delivery, config, true)
-        });
-        store.lag = analysis.lag();
+    /// Keep one delivery as it is made: an inline shell's
+    /// [`feed_source`](SpectrumAnalysis::feed_source) delivers here, where
+    /// no Clear can come between the analysis and the store.
+    pub fn apply(&mut self, delivery: Delivery, config: &SpectrumConfig) {
+        self.store.apply(delivery, config, true);
     }
 
-    /// A test shell's feed: [`feed`](Self::feed) through its own analysis,
-    /// dated as a shell that heard the batch's newest frame at `now`, and the
-    /// columns it made, as a delivery tap.
+    /// A test shell's feed through its own analysis, dated as a shell that
+    /// heard the batch's newest frame at `now`, and the columns it made, as a
+    /// delivery tap.
     #[cfg(test)]
     pub(crate) fn push_samples(
         &mut self,
@@ -583,12 +584,9 @@ impl AudioSpectrum {
         let mut columns = Vec::new();
         let AudioSpectrum { store, analysis } = self;
         analysis.feed_source(samples, channels, sample_rate, origin, config, |delivery| {
-            if let Delivery::Column(column) = &delivery {
-                columns.push((**column).clone());
-            }
+            columns.extend(delivery.column().cloned());
             store.apply(delivery, config, true)
         });
-        store.lag = analysis.lag();
         columns
     }
 
@@ -649,8 +647,8 @@ impl AudioSpectrum {
     ///
     /// The heatmap allows for this delay when deciding whether columns are
     /// fresh enough to extend their newest color to the now-line. This also
-    /// reports the lag of the analysis that made the newest columns, handed
-    /// over with them, rather than the requested config's
+    /// reports the lag of the analysis that made the newest columns, delivered
+    /// with their batch, rather than the requested config's
     /// ([`SpectrumConfig::column_lag`]): the plugin's frame reads it while
     /// its input worker analyzes, and after a crash there replaced the
     /// analysis, until the next hand-over.

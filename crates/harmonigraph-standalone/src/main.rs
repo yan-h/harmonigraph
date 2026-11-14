@@ -770,8 +770,7 @@ impl MockSynth {
             // The first frame, or one after a stall: only start the run.
             if self.run.replace((now, 0)).is_some() {
                 self.analysis.restart();
-                let restart = [harmonigraph_ui::Delivery::Restart];
-                spectrum.give(spectrum.history_epoch(), self.analysis.lag(), restart, config);
+                spectrum.apply(harmonigraph_ui::Delivery::Restart, config);
             }
             return;
         };
@@ -801,7 +800,9 @@ impl MockSynth {
         }
         self.run = Some((origin, rendered + n));
         let rate = SYNTH_RATE as f32;
-        spectrum.feed(&mut self.analysis, &self.samples, 1, rate, origin, config);
+        self.analysis.feed_source(&self.samples, 1, rate, origin, config, |delivery| {
+            spectrum.apply(delivery, config)
+        });
     }
 }
 

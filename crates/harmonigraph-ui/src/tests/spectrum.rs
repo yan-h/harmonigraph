@@ -252,9 +252,15 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     let mut analysis = SpectrumAnalysis::default();
     let sample_rate = 48_000.0;
     let origin = 5.0;
+    let feed =
+        |spectrum: &mut AudioSpectrum, analysis: &mut SpectrumAnalysis, samples: &[f32], config| {
+            analysis.feed_source(samples, 1, sample_rate, origin, config, |delivery| {
+                spectrum.apply(delivery, config)
+            });
+        };
     let config = SpectrumConfig::default();
     let initial = 9007; // Filled, and deliberately between hop boundaries.
-    spectrum.feed(&mut analysis, &vec![0.2; initial], 1, sample_rate, origin, &config);
+    feed(&mut spectrum, &mut analysis, &vec![0.2; initial], &config);
     let columns = spectrum.columns_taken();
     assert!(columns > 0);
     let last = spectrum.newest_column().unwrap();
@@ -266,10 +272,10 @@ fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
     let first_ready = (initial + config.window.frame(48_000.0) - carried).div_ceil(hop) * hop;
     let rest = vec![0.2; first_ready - initial - 1];
-    spectrum.feed(&mut analysis, &rest, 1, sample_rate, origin, &config);
+    feed(&mut spectrum, &mut analysis, &rest, &config);
     assert_eq!(spectrum.columns_taken(), columns);
     assert_eq!(spectrum.newest_column(), Some(last));
-    spectrum.feed(&mut analysis, &[0.2], 1, sample_rate, origin, &config);
+    feed(&mut spectrum, &mut analysis, &[0.2], &config);
     assert_eq!(spectrum.columns_taken(), columns + 1);
     let expected =
         origin + (first_ready - 1) as f64 / f64::from(sample_rate) - config.column_lag(sample_rate);
@@ -700,16 +706,11 @@ fn a_run_cut_into_any_chunks_makes_the_same_columns() {
     // Feed one call's worth, and say what it made, as `(time, power)`.
     let feed =
         |spectrum: &mut AudioSpectrum, analysis: &mut SpectrumAnalysis, input, sr, origin| {
-            let mut deliveries = Vec::new();
-            analysis.feed_source(input, 2, sr, origin, &cfg, |delivery| deliveries.push(delivery));
-            let columns: Vec<_> = deliveries
-                .iter()
-                .filter_map(|delivery| match delivery {
-                    Delivery::Column(column) => Some((column.time(), column.power().to_vec())),
-                    _ => None,
-                })
-                .collect();
-            spectrum.give(spectrum.history_epoch(), analysis.lag(), deliveries, &cfg);
+            let mut columns = Vec::new();
+            analysis.feed_source(input, 2, sr, origin, &cfg, |delivery| {
+                columns.extend(delivery.column().map(|c| (c.time(), c.power().to_vec())));
+                spectrum.apply(delivery, &cfg)
+            });
             columns
         };
     for sr in [48_000.0, 192_000.0] {
