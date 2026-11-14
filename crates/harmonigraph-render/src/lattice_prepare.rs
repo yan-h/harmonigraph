@@ -344,7 +344,6 @@ impl LatticeCallback {
         if let Some(strip) = pane.ink_strip.as_ref().filter(|_| !self.lights.is_empty()) {
             queue.write_buffer(&strip.lights, 0, bytemuck::cast_slice(&self.lights));
         }
-        pane.light_count = self.lights.len() as u32;
 
         if self.pluses.len() > pane.plus_capacity {
             pane.plus_capacity = self.pluses.len().next_power_of_two();
@@ -568,7 +567,9 @@ impl LatticeCallback {
         let offscreen_size = anything.then_some(size);
 
         let glow = self.glow_draws();
-        let has_light = glow && self.instances.iter().any(|node| node.glow[0] > 0.0);
+        // Every lit instance has a row of the table, and only a frame whose
+        // glow draws fills one.
+        let has_light = !self.lights.is_empty();
         // Every caster's cell, packed for this frame (`shadow::pack_into`): the
         // Gaussian's one marker cross, one per node and one per name, each at
         // the resolution its own σ asks for. A caster whose group packs
@@ -692,7 +693,7 @@ impl LatticeCallback {
             // One quad each over the rows this frame lit, the viewport cut to
             // them, which are the rows the table was uploaded to this same
             // `prepare` and the only ones the light's draw reads.
-            let rows = pane.light_count;
+            let rows = self.lights.len() as u32;
             debug_assert!(rows <= strip.rows, "{rows} lit nodes for a strip of {}", strip.rows);
             let mut over_rows = |label, view, second: &wgpu::BindGroup, pipeline, width: u32| {
                 let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -279,3 +279,48 @@ fn the_halos_mark_colour_is_its_slots() {
         }
     }
 }
+
+/// A frame lights at most `MAX_LIGHTS` nodes, the most a strip is built for:
+/// one more lit node with ink of its own ships unlit, drawing its layers and
+/// no halo, and one with nothing but its light does not ship at all.
+#[test]
+fn a_frame_lights_no_more_nodes_than_a_strip_holds() {
+    use harmonigraph_scene::MAX_LIGHTS;
+    let (mut scene, slots, _) = fixture();
+    let light = slice(*slots.start(), 1.0);
+    let template = scene.nodes[0];
+    let frame = |scene: &Scene| {
+        let points = egui::vec2(64.0, 64.0);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        LatticeCallback::from_scene(scene, LatticeLabels::default(), points, format, 1, None)
+    };
+    let lit = |inked: bool| -> Vec<harmonigraph_scene::NodeInstance> {
+        (0..=MAX_LIGHTS)
+            .map(|i| {
+                let mut node = template;
+                node.world_pos.x = i as f32 * 0.01;
+                node.glow = GlowStep { level: 1.0, light: Some(light) };
+                node.lattice_pos = harmonigraph_core::LatticePos::new(i as i32, 0, 0);
+                if !inked {
+                    node.octaves = [0.0; OCTAVE_SLOTS];
+                    node.presence_with_opacity = 0.0;
+                    node.melody_slots = 0;
+                    node.bass_slots = 0;
+                    node.melody_level = 0.0;
+                    node.bass_level = 0.0;
+                }
+                node
+            })
+            .collect()
+    };
+    scene.nodes = lit(true);
+    let inked = frame(&scene);
+    assert_eq!(inked.lights.len(), MAX_LIGHTS);
+    assert_eq!(inked.instances.len(), MAX_LIGHTS + 1, "every node with ink ships");
+    let dark = inked.instances.iter().filter(|g| g.glow[0] <= 0.0).count();
+    assert_eq!(dark, 1, "the node past the cap must ship with no light");
+    scene.nodes = lit(false);
+    let bare = frame(&scene);
+    assert_eq!(bare.lights.len(), MAX_LIGHTS);
+    assert_eq!(bare.instances.len(), MAX_LIGHTS, "a node lit past the cap shipped for nothing");
+}

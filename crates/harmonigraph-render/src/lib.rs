@@ -1231,9 +1231,6 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
-    /// How many rows of the ink strip's light table this frame wrote: its lit
-    /// instances, each reading the row its `glow[1]` names.
-    light_count: u32,
     plus_buffer: wgpu::Buffer,
     plus_capacity: usize,
     plus_count: u32,
@@ -1675,7 +1672,6 @@ impl LatticeResources {
                 ),
                 instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
-                light_count: 0,
                 plus_buffer: create_vertex_buffer::<GpuPlus>(
                     device,
                     "lattice_pluses",

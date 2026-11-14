@@ -40,7 +40,7 @@ pub(crate) struct FrameVecs {
 /// What [`LatticeCallback::from_scene_in`] works in and nothing reads after it.
 #[derive(Default)]
 pub(crate) struct Walk {
-    order: Vec<(f32, f32, usize, bool, bool)>,
+    order: Vec<(f32, f32, usize, bool, bool, bool)>,
     plus_of: Vec<Option<usize>>,
     glyphs_of: Vec<(u32, u32)>,
 }
@@ -246,14 +246,19 @@ impl LatticeCallback {
         // most of them. `sort_by` is stable, so the ones kept come out in the
         // order they held in the full sort. Whether a node ships, and whether
         // with ink or for its light alone, is asked here, once, of its packed
-        // instance.
+        // instance. So is whether it is LIT: past the most a strip holds
+        // (`MAX_LIGHTS`) a node has no light, as `GlowFade` leaves one, and
+        // ships only if it has ink.
         let mut order = emptied(order, 0);
+        let mut lit_count = 0;
         order.extend(scene.nodes.iter().enumerate().filter_map(|(i, n)| {
             let g = to_gpu(n);
             let inked = inked(&g);
-            let ships = inked || (lights_drawn && g.glow[0] > 0.0);
+            let lit = lights_drawn && g.glow[0] > 0.0 && lit_count < harmonigraph_scene::MAX_LIGHTS;
+            lit_count += usize::from(lit);
+            let ships = inked || lit;
             (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
-                .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked))
+                .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked, lit))
         }));
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
@@ -425,7 +430,7 @@ impl LatticeCallback {
         let mut draws = emptied(draws, order.len());
         let breathes = scene.glow_clock.is_some() && lights_drawn && atmosphere.breath_amount > 0.0;
         let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
-        for &(_, _, i, ships, inked) in &order {
+        for &(_, _, i, ships, inked, lit) in &order {
             let mut instance = to_gpu(&scene.nodes[i]);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
@@ -448,17 +453,15 @@ impl LatticeCallback {
                 // A lit node's row of the light table is the next one: the
                 // table is this frame's lit instances in the order they ship,
                 // which is the order the reading pass lays the strip down in
-                // and the halo's own draw reads it back. Past the most a strip
-                // holds a node has no light, as `GlowFade` leaves one.
-                if lights_drawn && instance.glow[0] > 0.0 {
-                    if lights.len() < harmonigraph_scene::MAX_LIGHTS {
-                        let node = &scene.nodes[i];
-                        instance.glow[1] = lights.len() as f32;
-                        let light = node.glow.light.unwrap_or_else(|| node.glow_light());
-                        lights.push(LightRow::new(node.cents, light));
-                    } else {
-                        instance.glow[0] = 0.0;
-                    }
+                // and the halo's own draw reads it back. One the cap left
+                // unlit draws no halo.
+                if lit {
+                    let node = &scene.nodes[i];
+                    instance.glow[1] = lights.len() as f32;
+                    let light = node.glow.light.unwrap_or_else(|| node.glow_light());
+                    lights.push(LightRow::new(node.cents, light));
+                } else if lights_drawn {
+                    instance.glow[0] = 0.0;
                 }
                 // Display modulation is separate from the carried level, and
                 // settled in prepare, where the pane's travel says how far the
