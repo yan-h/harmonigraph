@@ -68,17 +68,20 @@ impl Mark {
 type Voice = (VoiceKey, f64, Sounding);
 
 /// The live drain's half: the marks one tracker event made, read as the
-/// change in the held voices since the last event. The last event's reading
-/// is the baseline, so a change made to the tracker outside the drain is
-/// recorded at the next event rather than lost.
+/// change in the held voices since the last event. The baseline is what the
+/// marks so far say is held, so a change made to the tracker outside the drain
+/// is recorded at the next event rather than lost, and so is a change the
+/// [`NOTES`] bound held back.
 #[derive(Default)]
 pub(crate) struct Recorder {
     before: Vec<Voice>,
     after: Vec<Voice>,
+    next: Vec<Voice>,
 }
 
-/// Marks the live drain may hold for one step; past it, a step's notes are
-/// lost to the tape rather than to the picture. Swapped out every step.
+/// Marks the live drain may hold for one step; past it, a step's marks wait
+/// for the next event with room, so they are recorded late rather than lost.
+/// Swapped out every step.
 pub(crate) const NOTES: usize = 4096;
 
 impl Recorder {
@@ -93,47 +96,70 @@ impl Recorder {
 
     /// After the tracker applies an event: what changed, at presentation
     /// time `time`, into `out`.
+    ///
+    /// A voice whose marks do not fit keeps its old reading in the baseline,
+    /// so the next event's comparison makes them again. Moving the baseline
+    /// to what was seen instead lost a dropped Off for good, and the tape
+    /// held that note to the end of its pass on every playback.
     pub(crate) fn record(&mut self, tracker: &NoteTracker, time: f64, out: &mut Vec<(f64, Mark)>) {
         Self::held(tracker, &mut self.after);
-        let mut push = |mark| {
-            if out.len() < NOTES {
-                out.push((time, mark));
+        self.next.clear();
+        let next = &mut self.next;
+        // Every mark one voice needs, or none of them.
+        let mut push = |marks: &[Mark]| {
+            let fits = out.len() + marks.len() <= NOTES;
+            if fits {
+                out.extend(marks.iter().map(|&mark| (time, mark)));
             }
+            fits
         };
         // Both are in key order: the tracker's held map is a BTreeMap.
         let (mut a, mut b) = (self.before.iter().peekable(), self.after.iter().peekable());
         loop {
             match (a.peek(), b.peek()) {
                 (None, None) => break,
-                (Some(&&(key, _, _)), None) => {
-                    push(Mark::Off { key });
+                (Some(&&old @ (key, _, _)), None) => {
+                    if !push(&[Mark::Off { key }]) {
+                        next.push(old);
+                    }
                     a.next();
                 }
-                (None, Some(&&(key, _, sounding))) => {
-                    push(Mark::On { key, sounding });
+                (None, Some(&&new @ (key, _, sounding))) => {
+                    if push(&[Mark::On { key, sounding }]) {
+                        next.push(new);
+                    }
                     b.next();
                 }
-                (Some(&&(old, onset, was)), Some(&&(new, again, sounding))) => {
-                    if old < new {
-                        push(Mark::Off { key: old });
-                        a.next();
-                    } else if new < old {
-                        push(Mark::On { key: new, sounding });
-                        b.next();
-                    } else {
-                        if onset != again {
-                            push(Mark::Off { key: old });
-                            push(Mark::On { key: new, sounding });
-                        } else if was != sounding {
-                            push(Mark::Change { key: new, sounding });
+                (Some(&&old), Some(&&new)) => {
+                    let ((was_key, onset, was), (key, again, sounding)) = (old, new);
+                    if was_key < key {
+                        if !push(&[Mark::Off { key: was_key }]) {
+                            next.push(old);
                         }
                         a.next();
-                        b.next();
+                        continue;
                     }
+                    if key < was_key {
+                        if push(&[Mark::On { key, sounding }]) {
+                            next.push(new);
+                        }
+                        b.next();
+                        continue;
+                    }
+                    let recorded = if onset != again {
+                        push(&[Mark::Off { key }, Mark::On { key, sounding }])
+                    } else if was != sounding {
+                        push(&[Mark::Change { key, sounding }])
+                    } else {
+                        true
+                    };
+                    next.push(if recorded { new } else { old });
+                    a.next();
+                    b.next();
                 }
             }
         }
-        std::mem::swap(&mut self.before, &mut self.after);
+        std::mem::swap(&mut self.before, &mut self.next);
     }
 }
 
@@ -599,6 +625,35 @@ mod tests {
                 (1.5, Mark::On { key: k, sounding: sounding(60.0) }),
                 (2.0, Mark::Off { key: k }),
             ]
+        );
+    }
+
+    /// A step already holding [`NOTES`] marks has no room for a release. It
+    /// was lost for good, and the tape held the note to the end of its pass;
+    /// the next event with room records it, late.
+    #[test]
+    fn a_mark_the_bound_held_back_is_recorded_at_the_next_event() {
+        let mut tracker = NoteTracker::new();
+        let mut recorder = Recorder::default();
+        let mut marks = Vec::new();
+        let source = harmonigraph_core::SourceId(1);
+        for (time, note) in [(1.0, 60), (1.1, 62)] {
+            tracker.handle_event(NoteEvent::on(time, source, 0, note, 1.0));
+            recorder.record(&tracker, time, &mut marks);
+        }
+        let full = (0.0, Mark::Off { key: key(1, 0) });
+        marks = vec![full; NOTES];
+        tracker.handle_event(NoteEvent::off(2.0, source, 0, 60));
+        recorder.record(&tracker, 2.0, &mut marks);
+        assert_eq!(marks.len(), NOTES, "the full step took the release");
+
+        // The next step's drain starts empty.
+        marks.clear();
+        tracker.handle_event(NoteEvent::off(3.0, source, 0, 62));
+        recorder.record(&tracker, 3.0, &mut marks);
+        assert_eq!(
+            marks,
+            [(3.0, Mark::Off { key: key(1, 60) }), (3.0, Mark::Off { key: key(1, 62) })]
         );
     }
 

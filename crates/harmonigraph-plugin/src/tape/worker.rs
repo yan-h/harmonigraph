@@ -327,8 +327,8 @@ impl Worker {
         }
         if dropped && !std::mem::replace(&mut self.notes_dropped_reported, true) {
             self.logs.push(format!(
-                "tape: over {NOTES} notes in one step; some were not recorded, and the tape \
-                 may hold a note past its end"
+                "tape: over {NOTES} notes in one step; the rest are recorded late, and any still \
+                 waiting for their audio past that are lost, so the tape may hold a note past its end"
             ));
         }
         let mut waiting = VecDeque::new();
