@@ -433,7 +433,9 @@ impl CanonicalFanout {
             let recording = epoch.and_then(|epoch| open.as_mut().filter(|o| o.epoch == epoch));
             match delivery {
                 publication::Delivery::PassClosed { epoch, pass } => {
-                    if failure.contains(epoch) {
+                    // A failure's marker comes only once both lanes settle,
+                    // below this line, and must still reach this pass.
+                    if failure.contains(epoch) || fence.failed.load(Ordering::Acquire) {
                         return true;
                     }
                     match recording {
