@@ -8,10 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::canonical::{GapReasonRecord, StampRecord};
-use crate::{
-    CanonicalRecord, ConfigurationRecord, Header, IncompleteRecord, ParamRecord, ReadError, Record,
-    Take,
-};
+use crate::{CanonicalRecord, Header, IncompleteRecord, ReadError, Record, Take};
 
 /// One run, as the file states it.
 struct Run {
@@ -140,39 +137,27 @@ pub(crate) fn assemble(
     let mut events = Vec::new();
     let mut floor = Floor::default();
     let mut closed_through = 0;
-    let mut seed_params = BTreeMap::<String, ParamRecord>::new();
-    let mut seed_configuration: Option<ConfigurationRecord> = None;
-    let mut started = false;
-    let mut run_index = 0;
     for ((line, record), placed) in records.into_iter().zip(placed) {
         let run = placed.map(|index| &runs[index]).filter(|run| run.pass == chosen);
         match record {
-            Record::Run(_) => {
-                started |= run_index == first;
-                run_index += 1;
-            }
             Record::PassClosed(pass) => closed_through = closed_through.max(pass),
             Record::Incomplete(marker) if chosen > closed_through => {
                 take.incomplete.get_or_insert(marker);
             }
-            Record::Param(mut param) => match run {
-                Some(run) => {
+            // Each pass opens with every parameter and the configuration in
+            // force, so what is outside it says nothing about it.
+            Record::Param(mut param) => {
+                if let Some(run) = run {
                     param.t += run.offset();
                     take.params.push(param);
                 }
-                None if !started => {
-                    seed_params.insert(param.id.clone(), param);
-                }
-                None => {}
-            },
-            Record::Configuration(mut configuration) => match run {
-                Some(run) => {
+            }
+            Record::Configuration(mut configuration) => {
+                if let Some(run) = run {
                     configuration.t += run.offset();
                     take.configurations.push(configuration);
                 }
-                None if !started => seed_configuration = Some(configuration),
-                None => {}
-            },
+            }
             Record::Canonical(CanonicalRecord::Gap(mut gap)) => {
                 // A gap marks the passes its inputs touch, and no other.
                 let Some([from, to]) = gap.inputs else {
@@ -232,16 +217,8 @@ pub(crate) fn assemble(
             // The standalone's plain note carries no stamp, so it reads only
             // in a file with no run.
             Record::Note(_) => return Err(ReadError::InvalidCanonical(line)),
-            Record::RunEnd(_) | Record::Header(_) | Record::Incomplete(_) => {}
+            Record::RunEnd(_) | Record::Header(_) | Record::Incomplete(_) | Record::Run(_) => {}
         }
-    }
-    // A pass opens with what was in force before it: change detection runs per
-    // arm, so a later pass writes only what changed.
-    let start = runs[first].presentation + runs[first].offset();
-    let seeds = seed_params.into_values().map(|param| ParamRecord { t: start, ..param });
-    take.params.splice(0..0, seeds);
-    if let Some(configuration) = seed_configuration {
-        take.configurations.insert(0, ConfigurationRecord { t: start, ..configuration });
     }
     finish(take, events)
 }

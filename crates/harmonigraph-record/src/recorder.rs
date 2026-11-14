@@ -258,7 +258,7 @@ pub struct Recorder {
     audio: rtrb::Producer<f32>,
     dropped: Arc<AtomicU64>,
     /// Last value written per parameter, so only changes are recorded.
-    /// Reset to NaN on arm so the first block of a take always writes a
+    /// Reset to NaN on arm and at a split so the first block of a pass writes a
     /// full set — a take that inherited "no change since last time" would
     /// replay with default tuning.
     last_params: [f32; ParamKey::ALL.len()],
@@ -491,8 +491,6 @@ impl Recorder {
     fn update_armed(&mut self, armed: bool) -> bool {
         let (action, _) = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
-            // Per arm, not per pass: the reader opens a later pass with the
-            // values in force before it.
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             // A take armed with no transport position records from here on
             // without a transport observation to start its run.
@@ -514,8 +512,8 @@ impl Recorder {
     /// the take is armed, when it records again after any block it did not
     /// (a transport paused and resumed), and at every split.
     ///
-    /// Each change owes the take the notes already sounding, the way
-    /// `last_params` owes it a full parameter set: whatever began while
+    /// Each change owes the take the notes already sounding, as each pass is
+    /// owed a full parameter set (`last_params`): whatever began while
     /// nothing recorded — before arming, in a pause, in the pass before a
     /// loop wrapped — would otherwise reach it only as releases, and replay
     /// draws nothing for those (#1129). A caller remembers the run it last
@@ -626,6 +624,8 @@ impl Recorder {
             } else {
                 self.fence.fail();
             }
+            // A pass reads alone, so it opens with every parameter.
+            self.last_params = [f32::NAN; ParamKey::ALL.len()];
         }
         let rolling = matches!(action, Action::Record | Action::SplitAndRecord);
         if rolling && (!self.run_live || action == Action::SplitAndRecord) {

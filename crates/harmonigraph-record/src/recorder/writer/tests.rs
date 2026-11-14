@@ -1040,10 +1040,10 @@ fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
 }
 
 /// Only parameters that MOVED are recorded — a full set every block would
-/// bury the take — once per arm: a wrap writes nothing new, because the
-/// reader opens the next pass with the values in force before it.
+/// bury the take — and a wrap rewrites all of them, because each pass reads
+/// alone and would otherwise replay with no value for what did not move.
 #[test]
-fn params_record_only_changes_once_per_arm() {
+fn params_record_only_changes_and_a_wrap_rewrites_every_one() {
     let mut b = Bench::new();
     b.arm();
     let mut values = [0.0f32; ParamKey::ALL.len()];
@@ -1068,7 +1068,7 @@ fn params_record_only_changes_once_per_arm() {
     assert_eq!(b.pass(), 2, "the fixture has to cross into a new pass");
     b.rec.params(3.0, values);
     let after = b.pushed();
-    assert!(after.is_empty(), "the new pass is seeded on read, not rewritten: {after:?}");
+    assert_eq!(after.len(), ParamKey::ALL.len(), "a full set for the new pass: {after:?}");
 }
 
 /// The reserved samples actually reach the ring.

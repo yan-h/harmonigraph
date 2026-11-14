@@ -85,10 +85,6 @@ fn gap(first: u64, from: StampRecord, to: StampRecord) -> Record {
     }))
 }
 
-fn param(t: f64, value: f32) -> Record {
-    Record::Param(ParamRecord { t, id: "pitch-class-fade".into(), value })
-}
-
 fn read(records: &[Record], pass: Option<u32>) -> Result<Take, ReadError> {
     let mut text = ron::to_string(&Record::Header(Header::default())).unwrap();
     for record in records {
@@ -295,36 +291,6 @@ fn a_gap_marks_only_the_passes_its_inputs_touch() {
     assert!((t - 100.0 / RATE).abs() < 1e-9 && (through - 128.0 / RATE).abs() < 1e-9);
     let (t, through) = span(2).unwrap();
     assert!((t - 9.0).abs() < 1e-9 && (through - (9.0 + 10.0 / RATE)).abs() < 1e-9);
-}
-
-/// Parameters and configuration are written when they change, once per arm,
-/// so a later pass opens with the values in force before it.
-#[test]
-fn a_later_pass_opens_with_the_values_in_force_before_it() {
-    let configuration = |t, tolerance| {
-        let mut resolved = harmonigraph_core::configuration::ConfigReducer::default().resolved();
-        resolved.tuning.tolerance = tolerance;
-        Record::Configuration(ConfigurationRecord::new(t, resolved))
-    };
-    let take = read(
-        &[
-            run(1, 0, 0, 0.0),
-            param(presentation(0, 0), 1.0),
-            configuration(presentation(0, 0), 7),
-            end(0, 64),
-            run(2, 0, 64, 4.0),
-            param(presentation(0, 128), 2.0),
-        ],
-        None,
-    )
-    .unwrap();
-    let values: Vec<_> = take.params.iter().map(|p| (p.t, p.value)).collect();
-    assert_eq!(values.len(), 2, "{values:?}");
-    assert!((values[0].0 - 4.0).abs() < 1e-9 && values[0].1 == 1.0, "{values:?}");
-    assert!((values[1].0 - (4.0 + 64.0 / RATE)).abs() < 1e-9 && values[1].1 == 2.0);
-    let [seeded] = take.configurations.as_slice() else { panic!("{:?}", take.configurations) };
-    assert!((seeded.t - 4.0).abs() < 1e-9);
-    assert_eq!(seeded.resolved().tuning.tolerance, 7);
 }
 
 /// A failure below a pass's `PassClosed` line touched only the passes after

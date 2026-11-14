@@ -70,9 +70,10 @@ pub(crate) struct Recording {
     /// before the run open now, until both frontiers pass its end.
     ended: Option<(u64, u32, i64)>,
     closing: Option<(u64, u32, i64)>,
-    /// The configuration last written for this arm, so a stable block writes
-    /// nothing and a changed one writes once.
-    last: Option<(u64, ResolvedConfig)>,
+    /// The configuration last written, and the epoch and pass it was written
+    /// in: a stable block writes nothing, a changed one writes once, and each
+    /// pass opens with the configuration in force, so a pass reads alone.
+    last: Option<(u64, u32, ResolvedConfig)>,
     pub prefix: i64,
     pub block_start: i64,
     pub block_frames: u32,
@@ -224,10 +225,7 @@ impl Recording {
             if let Some(ended) = self.ended.filter(|&(e, p, _)| e == epoch && p != pass) {
                 self.closing = Some(ended);
             }
-            if self.opened != Some(epoch) {
-                self.opened = Some(epoch);
-                self.last = None;
-            }
+            self.opened = Some(epoch);
             let at = publication::Stamp { clock: self.clock, input: start };
             recorder.run(epoch, pass, at, song, self.presentation.at(start));
             self.run = Some(Run { epoch, pass, serial, start });
@@ -237,9 +235,9 @@ impl Recording {
     /// The configuration in force from `sample`, written when it changed.
     pub fn configuration(&mut self, recorder: &mut Recorder, sample: i64, config: ResolvedConfig) {
         let Some(run) = self.run else { return };
-        if self.last != Some((run.epoch, config)) {
+        if self.last != Some((run.epoch, run.pass, config)) {
             recorder.configuration(run.epoch, self.presentation.at(sample), config);
-            self.last = Some((run.epoch, config));
+            self.last = Some((run.epoch, run.pass, config));
         }
     }
 
