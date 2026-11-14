@@ -17,38 +17,60 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-/// A pair the decode cut: its key, and the variant this build lacks.
+/// A pair the decode cut: its key's path from the document's top, dotted
+/// (`appearance.spectrum.window`), and the variant this build lacks.
 pub(crate) struct Dropped {
     pub key: String,
     pub variant: String,
 }
 
+/// A document the decode refused whole: the first error it met, and the
+/// pairs it had already cut before giving up.
+pub(crate) struct Refusal {
+    first: Box<ron::error::SpannedError>,
+    cut: Vec<Dropped>,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.first)?;
+        if !self.cut.is_empty() {
+            let keys: Vec<&str> = self.cut.iter().map(|d| d.key.as_str()).collect();
+            write!(f, "; cutting {} did not leave a document", keys.join(", "))?;
+        }
+        Ok(())
+    }
+}
+
 /// Parse `text`, cutting each pair whose value names an unknown variant.
-/// Any other failure, or an unknown variant no key holds, is the error.
+/// Any other failure, or an unknown variant no key holds, refuses it whole.
 pub(crate) fn decode<T: serde::de::DeserializeOwned>(
     text: &str,
-) -> Result<(T, Vec<Dropped>), ron::error::SpannedError> {
+) -> Result<(T, Vec<Dropped>), Refusal> {
     let mut text = Cow::Borrowed(text);
-    let mut dropped = Vec::new();
+    let mut cut = Vec::new();
+    let mut first = None;
     loop {
         let err = match ron::from_str::<T>(&text) {
-            Ok(value) => return Ok((value, dropped)),
+            Ok(value) => return Ok((value, cut)),
             Err(err) => err,
         };
-        let ron::Error::NoSuchEnumVariant { found, .. } = &err.code else {
-            return Err(err);
+        let pair = match &err.code {
+            ron::Error::NoSuchEnumVariant { found, .. } => byte_offset(&text, err.span.start)
+                .filter(|&at| !found.is_empty() && text[at..].starts_with(found.as_str()))
+                .and_then(|at| pair_holding(&text, at))
+                .map(|pair| (pair, found.clone())),
+            _ => None,
         };
-        let pair = byte_offset(&text, err.span.start)
-            .filter(|&at| !found.is_empty() && text[at..].starts_with(found.as_str()))
-            .and_then(|at| pair_holding(&text, at));
-        let Some((key, cut)) = pair else {
-            return Err(err);
+        let first = first.get_or_insert(err);
+        let Some(((key, span), variant)) = pair else {
+            return Err(Refusal { first: Box::new(first.clone()), cut });
         };
-        dropped.push(Dropped { key: text[key].to_string(), variant: found.clone() });
-        let next = format!("{}{}", &text[..cut.start], &text[cut.end..]);
+        let next = format!("{}{}", &text[..span.start], &text[span.end..]);
+        cut.push(Dropped { key, variant });
         // Each cut is a non-empty pair, so this only guards the loop's end.
         if next.len() >= text.len() {
-            return Err(err);
+            return Err(Refusal { first: Box::new(first.clone()), cut });
         }
         text = Cow::Owned(next);
     }
@@ -65,12 +87,12 @@ fn byte_offset(text: &str, at: ron::error::Position) -> Option<usize> {
     Some(line_start + offset)
 }
 
-/// The pair whose value holds the token at byte `at`: its key, and the span
+/// The pair whose value holds the token at byte `at`: its key's path, and the span
 /// to cut — the key through the value and the comma after it. The value
 /// may sit inside unnamed parentheses, `Some(…)` or a tuple, which the walk
 /// out from `at` passes through; a list or map between it and its key ends
 /// the walk with nothing.
-fn pair_holding(text: &str, at: usize) -> Option<(Range<usize>, Range<usize>)> {
+fn pair_holding(text: &str, at: usize) -> Option<(String, Range<usize>)> {
     // Each open bracket, with the key its current value belongs to.
     let mut frames: Vec<(u8, Option<Range<usize>>)> = Vec::new();
     let mut tokens = Tokens { text: text.as_bytes(), next: 0 };
@@ -104,6 +126,9 @@ fn pair_holding(text: &str, at: usize) -> Option<(Range<usize>, Range<usize>)> {
     }
     let depth = frames.iter().rposition(|(bracket, key)| *bracket != b'(' || key.is_some())?;
     let (b'(', Some(key)) = frames[depth].clone() else { return None };
+    let path: Vec<&str> =
+        frames[..=depth].iter().filter_map(|(_, key)| key.clone()).map(|key| &text[key]).collect();
+    let path = path.join(".");
     // The value ends at a comma back at its pair's depth, or where the
     // struct around the pair closes.
     let mut open = frames.len() - depth - 1;
@@ -112,9 +137,9 @@ fn pair_holding(text: &str, at: usize) -> Option<(Range<usize>, Range<usize>)> {
         let (token, range) = tokens.next()?;
         match token {
             Token::Open(_) => open += 1,
-            Token::Close if open == 0 => return Some((key.clone(), key.start..range.start)),
+            Token::Close if open == 0 => return Some((path, key.start..range.start)),
             Token::Close => open -= 1,
-            Token::Comma if open == 0 => return Some((key.clone(), key.start..range.end)),
+            Token::Comma if open == 0 => return Some((path, key.start..range.end)),
             _ => {}
         }
     }
@@ -308,11 +333,11 @@ mod tests {
     }
 
     /// A variant this build lacks costs the key that holds it, at any depth,
-    /// and the pairs around it load.
+    /// named by its path, and the pairs around it load.
     #[test]
     fn an_unknown_variant_costs_its_own_key_at_any_depth() {
         let (outer, dropped) = cut("(mode:Gone,inner:(mode:Lost,count:3),count:7)");
-        assert_eq!(dropped, ["mode:Gone", "mode:Lost"]);
+        assert_eq!(dropped, ["mode:Gone", "inner.mode:Lost"]);
         assert_eq!(outer.mode, Mode::A);
         assert_eq!(outer.inner, Inner { mode: Mode::A, count: 3 });
         assert_eq!(outer.count, 7);
@@ -346,9 +371,15 @@ mod tests {
     }
 
     /// A bare element of a list has no key of its own: the document is
-    /// refused whole, as before.
+    /// refused whole, as before, and the refusal reports the first variant
+    /// met and the keys cut before it gave up, not the cut text's error.
     #[test]
     fn an_unknown_variant_in_a_list_still_refuses_the_document() {
         assert!(decode::<Outer>("(list:[A,Gone],mode:B)").is_err());
+        let Err(refusal) = decode::<Outer>("(mode:Lost,list:[A,Gone])") else {
+            panic!("a list's unknown variant was cut");
+        };
+        let said = refusal.to_string();
+        assert!(said.contains("Lost") && said.contains("cutting mode"), "{said}");
     }
 }
