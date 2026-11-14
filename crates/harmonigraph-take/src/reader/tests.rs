@@ -593,4 +593,13 @@ fn a_failure_marks_every_pass() {
     ];
     assert!(read(&records, Some(1)).unwrap().incomplete.is_some());
     assert!(read(&records, Some(2)).unwrap().incomplete.is_some());
+
+    // The `PassClosed` line that once exempted a pass is no record now: a
+    // file holding one is refused at that line, last line or not.
+    let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+    for tail in ["", "\n"] {
+        let text = format!("{header}\nPassClosed(1){tail}");
+        let error = Take::parse(std::io::Cursor::new(text)).unwrap_err();
+        assert!(matches!(error, ReadError::Parse(2, _)), "{error}");
+    }
 }
