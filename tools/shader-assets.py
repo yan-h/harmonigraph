@@ -15,18 +15,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 EMBEDDED = ROOT / "crates/harmonigraph-metal-assets/assets"
 
-WGPU_HAL = "29.0.4"
-
-
-def compiler_flags(settings, any_hal=False):
-    """The `metal` flags for recorded `settings`. `any_hal` accepts options
-    recorded under another wgpu-hal: the committed corpus a hal bump leaves
-    stale, which the strict catalog reports and `generate` replaces."""
+def compiler_flags(settings):
     assert set(settings) == {
         "schema", "wgpu-hal", "language", "fast_math", "invariance", "math_mode", "math_functions",
     }, f"unknown compiler options: {settings}"
-    assert settings["schema"] == "1"
-    assert any_hal or settings["wgpu-hal"] == WGPU_HAL, f"options recorded under wgpu-hal {settings['wgpu-hal']}"
+    assert settings["schema"] == "1" and settings["wgpu-hal"] == "29.0.4"
     language = int(settings["language"])
     version = (language >> 16, language & 0xffff)
     deployment_targets = {(3, 2): "15.0"}
@@ -44,12 +37,12 @@ def compiler_flags(settings, any_hal=False):
             *invariance_profiles[settings["invariance"]]]
 
 
-def source_flags(source, any_hal=False):
+def source_flags(source):
     settings = dict(line.split("=", 1) for line in source.with_suffix(".options").read_text().splitlines())
-    return compiler_flags(settings, any_hal)
+    return compiler_flags(settings)
 
 
-def verify(directory, any_hal=False):
+def verify(directory):
     manifest = json.loads((directory / "manifest.json").read_text())
     assert manifest["schema"] == 1
     files = {p.name for p in directory.iterdir() if p.suffix in (".metal", ".options", ".metallib")}
@@ -62,7 +55,7 @@ def verify(directory, any_hal=False):
     for source in sources:
         assert source.with_suffix(".options").is_file()
         assert source.with_suffix(".metallib").is_file()
-        assert source_flags(source, any_hal) == manifest["flags"], "compiler flags do not match recorded options"
+        assert source_flags(source) == manifest["flags"], "compiler flags do not match recorded options"
     print(f"Verified {len(sources)} libraries", flush=True)
 
 
@@ -131,7 +124,7 @@ def run(binary, arguments, mode, name, logs, export=None, failure=False, frames=
 
 
 def check(logs, assets=EMBEDDED):
-    verify(assets, any_hal=True)
+    verify(assets)
     catalog(logs, assets)
     goldens(logs, assets)
 
@@ -301,10 +294,7 @@ def main():
     elif args.action == "fetch":
         fetch(args.directory and args.directory.resolve())
     else:
-        # The committed corpus's own verdict: one recorded under an older
-        # wgpu-hal is a stale corpus, which the catalog reports and the
-        # workflow goes on to replace, not a corrupt one.
-        verify(directory, any_hal=directory == EMBEDDED)
+        verify(directory)
 
 
 if __name__ == "__main__":

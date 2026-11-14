@@ -39,14 +39,15 @@ That is an `eprintln!`, and libtest replays a test's captured output only when t
 a whole batch of sessions read that silence as a pass (#947).
 `cargo test -p harmonigraph-render golden -- --nocapture` is what makes it visible, and is worth reading once the gate is already red, because it names every key that run missed where the gate stops at the first.
 
-The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on a stale corpus —
-but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the corpus's recorded compiler flags and fallback controls, and still arrives as a separate workflow.
+The gate is in `ci.sh`'s `isolated` group, so `Full CI` fails on a stale corpus,
+as it does on one whose recorded compiler options `tools/shader-assets.py verify` rejects (a `vendor/wgpu-hal` bump, a changed flag mapping) —
+but `Metal shader assets` still runs what it does not, the offline renderer's own pipelines and the fallback controls, and still arrives as a separate workflow.
 So a branch honestly reported as "Full CI green" can still be `UNSTABLE` and unmergeable.
 
 Regenerate on the runner, not here.
 On a PR there is nothing to dispatch:
 the `Metal shader assets` run whose check fails goes on to generate and validate the replacement, and reports the stale corpus as a warning rather than failing;
-`Full CI`'s strict-catalog gate is the red one until the replacement is committed.
+`Full CI`'s strict-catalog or `verify` gate is the red one until the replacement is committed.
 Without a PR, dispatch it, and it does the same:
 
 ```
@@ -55,10 +56,10 @@ gh workflow run "Metal shader assets" --ref <branch>
 
 Add `-f regenerate=true` to rebuild a corpus that passes, such as one still holding a deleted shader's libraries.
 
-Read the failed check's log in the artifact's `shader-asset-logs/` first:
-a missing or rejected Metal asset is a stale corpus, and anything else is not one.
-The workflow does not classify that text: `Full CI` owns any catalog failure,
-and separate failing steps own hashes, compiler options, corpus-versus-source goldens, generation and controls.
+Read the failed check's log in the artifact's `shader-asset-logs/` first (`verify.log`, `strict-catalog.log`):
+a missing or rejected Metal asset, or recorded options the tooling no longer accepts, is a stale corpus, and anything else is not one.
+The workflow does not classify that text: `Full CI` owns any verify or catalog failure,
+and separate failing steps own corpus-versus-source goldens, generation and controls.
 Then, with the pushed commit checked out, `python3 tools/shader-assets.py fetch` imports the corpus that commit's run generated;
 it refuses a run still going, a failed run or one that generated nothing, and keeps the download, logs included, under `target/ci-metal-assets/<run>/`.
 A PR's run built the commit merged with its base, so where the base changed a shader since the branch point the corpus is that merge's:
