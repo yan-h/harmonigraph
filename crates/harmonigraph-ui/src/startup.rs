@@ -18,7 +18,14 @@ fn id() -> egui::Id {
 /// Opt this window into stage progress. Call after restoring its theme/state;
 /// offline rendering does not call this and keeps its synchronous first frame.
 pub fn begin_editor_loading(ctx: &egui::Context) {
-    ctx.data_mut(|data| data.insert_temp(id(), Loading::default()));
+    begin_editor_loading_with(ctx, WindowStartup::default());
+}
+
+/// [`begin_editor_loading`] from `progress`, which a test hands
+/// [`WindowStartup::preparing`] to reach the loading screen in a build whose
+/// default progress starts at `Ready`.
+pub(crate) fn begin_editor_loading_with(ctx: &egui::Context, progress: WindowStartup) {
+    ctx.data_mut(|data| data.insert_temp(id(), Loading { progress, finishing: false }));
 }
 
 /// Current opening phase for native-shell diagnostics; `None` after handoff.
@@ -103,10 +110,6 @@ mod tests {
 
     #[test]
     fn loading_frames_age_released_notes_without_pruning_live_voices() {
-        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
-            eprintln!("hot reload uses synchronous initialization; no loading frames");
-            return;
-        }
         let ctx = egui::Context::default();
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.workspace.layout = workspace::Layout::solo(Tab::Lattice);
@@ -135,7 +138,7 @@ mod tests {
             1.0,
         ));
         assert_eq!(state.picture.runtime.tracker.voices().count(), 3);
-        begin_editor_loading(&ctx);
+        begin_editor_loading_with(&ctx, WindowStartup::preparing());
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             crate::root_ui(ui, &mut state, &Defaults, 5.0, "test @0123456");
         });
@@ -151,10 +154,6 @@ mod tests {
     /// lattice section is folded.
     #[test]
     fn every_open_uses_the_loading_path() {
-        if matches!(WindowStartup::default().status(), Status::Ready { .. }) {
-            eprintln!("hot reload uses synchronous initialization; no loading frames");
-            return;
-        }
         let spectral = workspace::Layout::solo(Tab::Spectral);
         let mut folded = workspace::Layout::solo(Tab::Lattice);
         folded.folded[workspace::Section::of(Tab::Lattice) as usize] = true;
@@ -163,7 +162,7 @@ mod tests {
             let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
             state.workspace.layout = layout;
             assert!(!state.workspace.layout.visible(Tab::Lattice), "the lattice shows");
-            begin_editor_loading(&ctx);
+            begin_editor_loading_with(&ctx, WindowStartup::preparing());
             let mut frame = || {
                 ctx.run_ui(egui::RawInput::default(), |ui| {
                     crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");

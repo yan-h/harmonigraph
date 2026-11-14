@@ -80,7 +80,7 @@ fn saved_fold_sizes_survive_a_new_context_and_a_constrained_window() {
         h.collapse_click(&mut state, panes::Tab::Spectral);
         let saved = state.save_persist();
         let mut restored = fresh();
-        assert!(restored.load_persist(&saved));
+        assert!(restored.install_document(&saved));
         let mut reopened = DockHarness::at(h.screen.size().max(egui::vec2(900.0, 700.0)));
         reopened.settle(&mut restored);
         // The extra width/height on reopen is a host constraint, not a new dial.
@@ -458,7 +458,7 @@ fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
     assert!((state.workspace.layout.right.settings - saved.settings).abs() < 0.1);
     let saved_blob = state.save_persist();
     let mut reopened = fresh();
-    assert!(reopened.load_persist(&saved_blob));
+    assert!(reopened.install_document(&saved_blob));
     assert!((reopened.workspace.layout.right.settings - saved.settings).abs() < 0.1);
 }
 
@@ -693,7 +693,7 @@ fn analyzer_region_restore_survives_a_saved_project() {
     h.settle_folds(&mut state);
     let saved = state.save_persist();
     let mut reopened = fresh();
-    assert!(reopened.load_persist(&saved));
+    assert!(reopened.install_document(&saved));
     h.settle(&mut reopened);
     assert!(
         (pane_body(&reopened, &panes::Tab::Lattice).unwrap().width() - lattice).abs() < 1.0,
@@ -810,7 +810,7 @@ fn analyzer_region_restore_repays_its_width_after_orientation_changes() {
             // the picture is using a different axis from the original fold.
             let saved = state.save_persist();
             state = fresh();
-            assert!(state.load_persist(&saved));
+            assert!(state.install_document(&saved));
             h.settle(&mut state);
             if roundtrip {
                 state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
@@ -862,7 +862,7 @@ fn resetting_the_layout_restores_space_held_by_analyzer_regions() {
         assert!(h.screen.width() < unfolded - 1.0, "the folds held no space to restore");
         let saved = state.save_persist();
         state = fresh();
-        assert!(state.load_persist(&saved));
+        assert!(state.install_document(&saved));
         h.settle(&mut state);
         state.workspace.reset_layout();
         h.frame(&mut state, vec![]);
