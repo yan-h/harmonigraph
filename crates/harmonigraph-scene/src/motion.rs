@@ -484,7 +484,9 @@ impl NodeMotion {
     }
 
     /// Conservative pitch candidates for the same bounded history `step` replays.
-    /// This selects geometry only; `step` remains the sole event/envelope reader.
+    /// This selects geometry only, reading the voices and the roll for their
+    /// pitches; their onsets, releases and envelopes are read by `step` and,
+    /// for an audio-only pose, by `gates`.
     pub fn light_classes(
         tracker: &NoteTracker,
         view: &ViewConfig,
