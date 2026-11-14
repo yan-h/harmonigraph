@@ -2,6 +2,7 @@
 //! ink strip are independent of it and of the pane's size.
 
 use super::fixtures::*;
+use crate::lattice_targets::{FIRST_ROWS, GLOW_DIVISOR};
 use crate::*;
 
 fn target(shooter: &Shooter) -> &Offscreen {
@@ -69,11 +70,17 @@ fn bloom_and_size_changes_replace_only_their_own_targets() {
     );
     assert_eq!(bytes(&color, 8), 524_288);
     assert_eq!(bytes(&ink, 8), 524_288);
-    // The strip at its floor of 64 rows: the raw reading and its blur, one
-    // column wider, at RGBA32F, and the light table beside them.
+    // The strip at its floor: the raw reading and its blur, one column wider,
+    // and the light table beside them.
     let held = strip(&shooter);
-    assert_eq!(bytes(&held.raw_view, 16) + bytes(&held.blurred_view, 16), 132_096);
-    assert_eq!(held.lights.size(), 64 * 136);
+    let texel = u64::from(INK_STRIP_FORMAT.block_copy_size(None).unwrap());
+    let rows = u64::from(FIRST_ROWS);
+    assert_eq!(held.rows, FIRST_ROWS);
+    assert_eq!(
+        bytes(&held.raw_view, texel) + bytes(&held.blurred_view, texel),
+        u64::from(INK_STRIP_N + INK_STRIP_N + 1) * rows * texel,
+    );
+    assert_eq!(held.lights.size(), rows * std::mem::size_of::<LightRow>() as u64);
 
     // Changing strength while enabled must keep the same allocation.
     scene.view.note_bloom = 0.5;
@@ -98,16 +105,33 @@ fn bloom_and_size_changes_replace_only_their_own_targets() {
         assert_eq!(strip(&shooter).raw_view, raw);
     }
     // A native resize and a render-scale change replace the scene targets and
-    // keep the strip, including when the same frame turns bloom back on.
-    shooter.size = [256, 260];
-    for scale in [1.0, 2.0] {
+    // keep the strip, including when the same frame turns bloom back on. The
+    // odd sizes are the glow target's and its statistics' rounding up, a
+    // fraction of the scene's.
+    for (size, scale) in
+        [([256, 260], 1.0), ([257, 261], 1.0), ([257, 261], 1.5), ([256, 260], 2.0)]
+    {
+        shooter.size = size;
         scene.view.render_scale = scale;
         scene.view.note_bloom = 1.0;
         let resized = shooter.shot_again(&scene);
         assert!(total_light(&resized) > total_light(&plain) / 2);
         assert_eq!(strip(&shooter).raw_view, raw);
-        assert_ne!(target(&shooter).color_view, color);
-        assert_ne!(target(&shooter).ink_view, ink);
+        let offscreen = target(&shooter);
+        assert_ne!(offscreen.color_view, color);
+        assert_ne!(offscreen.ink_view, ink);
+        let expected = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
+        assert_ne!(
+            expected,
+            offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR / 2)),
+            "the fixture tells the divisor from half of it"
+        );
+        let glow = offscreen.glow.as_ref().unwrap();
+        for view in std::iter::once(&glow.view).chain(&glow.statistics) {
+            assert_eq!([view.texture().width(), view.texture().height()], expected);
+        }
+        let color = offscreen.color_view.texture();
+        assert_eq!([color.width(), color.height()], offscreen.size);
     }
     // Glow off drops the glow target, and on draws exactly the frame it drew
     // before. With ink on the node, which is what keeps a glow-off frame

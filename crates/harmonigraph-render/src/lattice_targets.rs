@@ -138,7 +138,7 @@ pub(super) struct StripLayouts<'a> {
 /// The fewest rows a strip is built for, and the floor the doubling starts
 /// from: 64 rows is 132 KB of strip and 9 KB of table, and enough that an
 /// ordinary lattice never rebuilds them at all.
-const FIRST_ROWS: u32 = 64;
+pub(super) const FIRST_ROWS: u32 = 64;
 
 /// How many angles a node's ink is read at, and so how wide its strip is.
 /// Mirrors `INK_STRIP_N` in lattice.wgsl, which is where the number is argued;
