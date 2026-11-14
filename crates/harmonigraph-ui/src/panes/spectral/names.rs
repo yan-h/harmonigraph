@@ -51,7 +51,7 @@ use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tempered, Tu
 use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
-use super::roll::Width;
+use super::roll::{RollSource, Width};
 use crate::marks;
 use crate::{theme, PictureState};
 
@@ -160,6 +160,17 @@ pub(crate) struct Thinning {
     layout: Option<ThinningLayout>,
 }
 
+#[cfg(test)]
+impl Thinning {
+    /// The notes named on the last frame, by voice and onset, in order.
+    pub(super) fn named(&self) -> Vec<(harmonigraph_core::VoiceKey, f64)> {
+        let mut named: Vec<_> =
+            self.visible.iter().map(|&(key, start)| (key, f64::from_bits(start))).collect();
+        named.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        named
+    }
+}
+
 #[derive(PartialEq)]
 struct ThinningLayout {
     size: egui::Vec2,
@@ -235,15 +246,20 @@ fn plan_with_thinning_for_test(
                 state.runtime.tempered,
             );
             let width = Width::of(state, axes, scale, 1.0);
-            result =
-                plan(painter, state, axes, scale, &width, split, now, scales, &mut namer, thinning);
+            let sources = [RollSource::live(state, split, now)];
+            result = plan(
+                painter, state, axes, scale, &width, &sources, now, scales, &mut namer, thinning,
+            );
         });
         result
     })
 }
 
-/// Every name this frame draws, already thinned to the ones that fit — empty
-/// when the setting is off or the pane has kept no roll region to draw in.
+/// Every name this frame draws over the notes of `sources`, already thinned
+/// to the ones that fit — empty when the setting is off or the pane has kept
+/// no roll region to draw in. The sources are the ones the roll draws: the
+/// live roll on the window ending `now`, or Tape mode's along the song, each
+/// on its own time axis. `now` is the display clock.
 ///
 /// The two scales it lays names out by part company at the pitch zoom — see
 /// [`NameScale`].
@@ -254,7 +270,7 @@ pub(super) fn plan(
     axes: &Axes,
     scale: &PitchScale,
     width: &Width,
-    split: f32,
+    sources: &[RollSource],
     now: f64,
     scales: NameScale,
     namer: &mut Namer,
@@ -271,27 +287,23 @@ pub(super) fn plan(
     // heatmap at whatever pitches notes happened to have — which is not the
     // same picture at all, and would come from a checkbox in the roll's own
     // section that appeared not to turn them off.
-    if !cfg.note_names || !cfg.show_roll || split >= 1.0 {
+    let first = sources.first().filter(|first| first.time.split < 1.0);
+    let Some(first) = first.filter(|_| cfg.note_names && cfg.show_roll) else {
         thinning.visible.clear();
         thinning.suppressed.clear();
         return Vec::new();
-    }
-    let time = TimeAxis::new(state, split, now);
+    };
     let anchor = Anchor::of(cfg);
-    let roll = state.roll();
 
-    // One point of the depth axis, in seconds of take. A name's reach is a
-    // length on the screen and the thinning measures in TIME, so this is the
-    // rate between them — one number, the time axis being linear across the
-    // region.
-    let seconds_per_point = time.seconds_per_point(axes);
     // Direction along the ribbon from its chosen anchor.
     let grow = if anchor == Anchor::Onset { -axes.dir_depth() } else { axes.dir_depth() };
     let layout = ThinningLayout {
         size: axes.rect.size(),
         pitch: [scale.min_midi, scale.max_midi],
-        seconds: cfg.roll_seconds,
-        split,
+        // The first source's span: the live roll's Span, or the stretch of
+        // song Tape mode shows. A zoom changes it; a pan or a scroll does not.
+        seconds: first.time.window as f32,
+        split: first.time.split,
         scale: [scales.label, scales.air],
         grow,
         depth: axes.dir_depth(),
@@ -305,17 +317,29 @@ pub(super) fn plan(
 
     // Include names whose anchor just left the frame but whose ink still
     // reaches it. Each candidate is culled again with its own spelling below.
-    let oldest = time.oldest();
     let mut widest = crate::text::TextBatch::default();
     draw_name(&mut widest, painter, egui::Pos2::ZERO, WIDEST_NAME, scales.label, grow);
     let reach = widest.bounds().size().dot(axes.dir_depth().abs())
         + 2.0 * LABEL_PAD * scales.label
         + LABEL_INSET * scales.air;
-    let sweep_from = oldest - f64::from(reach) * seconds_per_point;
-    let notes = roll
-        .notes()
-        .filter(|note| note.stop(now) >= sweep_from)
-        .map(|note| (note, anchor_edge(note, now, anchor)));
+    let shown = state.roll();
+    let notes = sources.iter().flat_map(|source| {
+        let time = source.time;
+        // One point of the depth axis, in seconds of take. A name's reach is a
+        // length on the screen and the thinning measures in TIME, so this is
+        // the rate between them — one number, the time axis being linear
+        // across the region.
+        let sweep_from = time.oldest() - f64::from(reach) * time.seconds_per_point(axes);
+        // Nor any note later than the near edge, which only Tape mode has:
+        // the near-edge clamp in `place` would stack its name on the edge.
+        let in_window =
+            move |note: &RollNote| note.stop(time.now) >= sweep_from && note.start <= time.origin;
+        source
+            .roll
+            .notes()
+            .filter(move |note| source.plays(shown, note) && in_window(note))
+            .map(move |note| (note, time, anchor_edge(note, time.now, anchor)))
+    });
 
     // Measure each pitch class once per frame. Font, scale and direction are
     // common to this pass; musical expression does not invalidate a cache.
@@ -334,7 +358,7 @@ pub(super) fn plan(
     // scrolls past the far edge. Only the near pane boundary can move it,
     // while a young ribbon is shorter than its name.
     let toward_near = grow.dot(axes.dir_depth()) < 0.0;
-    let place = |edge: &Edge, ink: egui::Rect| {
+    let place = |time: &TimeAxis, edge: &Edge, ink: egui::Rect| {
         let d = time.depth_of_unclamped(edge.time);
         let t = scale.t_of(edge.pitch);
         let lead = axes.at(t, d) + grow * (LABEL_INSET * scales.air);
@@ -362,13 +386,13 @@ pub(super) fn plan(
     // no longer makes this trade — there a name stays until its own box has
     // left (see `visible` below) — so the two edges now differ.
     let mut candidates = Vec::new();
-    for (note, edge) in notes {
+    for (note, time, edge) in notes {
         let (name, ink) = naming(edge.pitch, &mut names);
         let beyond = (scale.min_midi - edge.pitch).max(edge.pitch - scale.max_midi);
-        if !width.reaches(note, now, beyond) {
+        if !width.reaches(note, time.now, beyond) {
             continue;
         }
-        let (rect, lead) = place(&edge, ink);
+        let (rect, lead) = place(&time, &edge, ink);
         if !rect.intersects(axes.rect) {
             continue;
         }

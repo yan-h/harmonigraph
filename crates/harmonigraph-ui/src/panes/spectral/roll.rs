@@ -335,6 +335,16 @@ pub(super) struct RollSource<'a> {
 }
 
 impl<'a> RollSource<'a> {
+    /// This source draws `note`. A recording keeps every source's notes, so
+    /// the tracker's Show switches (`shown`) say which to draw, for Tape
+    /// mode's roll as for the live one.
+    pub(super) fn plays(&self, shown: &NoteRoll, note: &RollNote) -> bool {
+        !shown.hides(note.source)
+            && self.live_during.is_none_or(|(since, until)| {
+                (since..until).contains(&note.start) && !note.source.is_tape()
+            })
+    }
+
     /// The live roll: the tracker's notes on the window ending `now`.
     pub(super) fn live(state: &'a PictureState, split: f32, now: f64) -> Self {
         RollSource {
@@ -643,18 +653,9 @@ fn source_instances(
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
     let band = minimum + 2.0 * gap;
-    // A recording keeps every source's notes; the tracker's Show switches
-    // say which to draw, for Tape mode's roll as for the live one.
-    let shown = state.roll();
-    let played = |note: &&RollNote| {
-        !shown.hides(note.source)
-            && source.live_during.is_none_or(|(since, until)| {
-                (since..until).contains(&note.start) && !note.source.is_tape()
-            })
-    };
     let mut notes: Vec<&RollNote> = roll
         .notes()
-        .filter(played)
+        .filter(|note| source.plays(state.roll(), note))
         .filter(|note| {
             note.stop(now) >= edge - band || lead_alpha(note, now, cfg.roll_lead_release) > 0.0
         })
