@@ -24,11 +24,13 @@ pub(crate) struct Dropped {
     pub variant: String,
 }
 
-/// A document the decode refused whole: the first error it met, and the
-/// pairs it had already cut before giving up.
+/// A document the decode refused whole: the first error it met, with its
+/// position in the original text, the pairs it had already cut, and what
+/// sank the text those cuts left, whose position is in that text alone.
 pub(crate) struct Refusal {
     first: Box<ron::error::SpannedError>,
     cut: Vec<Dropped>,
+    last: Option<ron::Error>,
 }
 
 impl std::fmt::Display for Refusal {
@@ -37,6 +39,9 @@ impl std::fmt::Display for Refusal {
         if !self.cut.is_empty() {
             let keys: Vec<&str> = self.cut.iter().map(|d| d.key.as_str()).collect();
             write!(f, "; cutting {} did not leave a document", keys.join(", "))?;
+            if let Some(last) = &self.last {
+                write!(f, " ({last})")?;
+            }
         }
         Ok(())
     }
@@ -62,15 +67,16 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(
                 .map(|pair| (pair, found.clone())),
             _ => None,
         };
+        let last = (!cut.is_empty()).then(|| err.code.clone());
         let first = first.get_or_insert(err);
         let Some(((key, span), variant)) = pair else {
-            return Err(Refusal { first: Box::new(first.clone()), cut });
+            return Err(Refusal { first: Box::new(first.clone()), cut, last });
         };
         let next = format!("{}{}", &text[..span.start], &text[span.end..]);
         cut.push(Dropped { key, variant });
         // Each cut is a non-empty pair, so this only guards the loop's end.
         if next.len() >= text.len() {
-            return Err(Refusal { first: Box::new(first.clone()), cut });
+            return Err(Refusal { first: Box::new(first.clone()), cut, last: None });
         }
         text = Cow::Owned(next);
     }
@@ -381,5 +387,6 @@ mod tests {
         };
         let said = refusal.to_string();
         assert!(said.contains("Lost") && said.contains("cutting mode"), "{said}");
+        assert!(said.contains("Gone"), "what sank the cut text goes unnamed: {said}");
     }
 }

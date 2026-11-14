@@ -215,6 +215,25 @@ fn a_document_naming_any_one_unknown_variant_costs_that_key_alone() {
         .into_iter()
         .filter(|(_, at)| is_variant(&saved[at.clone()]))
         .collect();
+    // The walk sees a variant only as a scalar: one carrying a payload,
+    // `Name(…)`, it walks straight through. None is persisted today; the day
+    // one is, this sweep stops covering it, so it says so here.
+    let mut quoted = false;
+    let carried: Vec<&str> = saved
+        .char_indices()
+        .filter(|&(_, c)| {
+            quoted ^= c == '"';
+            c == '(' && !quoted
+        })
+        .filter_map(|(at, _)| {
+            let name = saved[..at].rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+            name.into_iter().next().filter(|name| !name.is_empty() && *name != "Some")
+        })
+        .collect();
+    assert!(
+        carried.is_empty(),
+        "variants carrying a payload, which the sweep cannot swap: {carried:?}"
+    );
     // The fixture has to reach every kind of place a variant sits, or the
     // sweep reads as coverage of what it never touches.
     for deep in [
