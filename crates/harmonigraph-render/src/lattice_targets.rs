@@ -103,8 +103,9 @@ pub(super) struct GlowTarget {
 /// `fs_ink_blur`'s convolution of it plus, in one extra column, the same
 /// average at no concentration — the mean a node's middle eases toward.
 ///
-/// Small: an f16 RGBA texel per angle per node, so a lattice of 400 lit nodes
-/// spends about 600 KiB on the three textures, beside the much larger pane-sized
+/// Small: an f32 RGBA texel per angle per node ([`INK_STRIP_FORMAT`]), so a
+/// lattice of 400 lit nodes spends about 1.2 MiB on the three textures (400
+/// rows of 193 texels at 16 bytes), beside the much larger pane-sized
 /// half-float attachments. That is what the light costs in memory to stop
 /// costing a whole reading of the node per lit fragment.
 pub(super) struct InkStrip {
