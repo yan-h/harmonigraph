@@ -196,7 +196,8 @@ pub struct Publisher {
     /// because an earlier gap still occupies it. It keeps growing until the
     /// drainer makes room; the earlier gap has already told the consumer to
     /// clear, so nothing downstream is waiting on this one.
-    outage: Option<(PublicationGap, Span)>,
+    /// The span is of the history lost; a lost closure covers no input.
+    outage: Option<(PublicationGap, Option<Span>)>,
 }
 
 pub struct Consumer {
@@ -266,15 +267,20 @@ impl Publisher {
     pub fn discarded(&mut self, time: f64, span: Span) {
         if let Some(serial) = self.serial.checked_add(1) {
             self.serial = serial;
-            self.lost(time, span);
+            self.lost(time, Some(span));
         }
     }
 
-    fn lost(&mut self, time: f64, span: Span) -> PublishError {
+    /// `span` is `None` for a closure: it was played at no input, and must not
+    /// widen the range of inputs the gap names.
+    fn lost(&mut self, time: f64, span: Option<Span>) -> PublishError {
         let (gap, span) = match self.outage {
             Some((old, covered)) => (
                 PublicationGap { last: self.serial, through: old.through.max(time), ..old },
-                covered.merge(span),
+                match (covered, span) {
+                    (Some(covered), Some(span)) => Some(covered.merge(span)),
+                    (covered, span) => covered.or(span),
+                },
             ),
             None => (
                 PublicationGap {
@@ -298,12 +304,12 @@ impl Publisher {
     /// the consumer everything this one would.
     fn flush_outage(&mut self) {
         let Some((gap, span)) = self.outage else { return };
-        if self.ring.push(Item { span, value: Value::Gap(gap) }).is_ok() {
+        if self.ring.push(Item { span: span.unwrap_or_default(), value: Value::Gap(gap) }).is_ok() {
             self.outage = None;
         }
     }
 
-    fn push(&mut self, value: Value, time: f64, span: Span) -> Result<(), PublishError> {
+    fn push(&mut self, value: Value, time: f64, span: Option<Span>) -> Result<(), PublishError> {
         let Some(serial) = self.serial.checked_add(1) else { return Err(PublishError::Invalid) };
         if !time.is_finite() {
             return Err(PublishError::Invalid);
@@ -314,7 +320,7 @@ impl Publisher {
         }
         self.flush_outage();
         self.serial = serial;
-        let _ = self.ring.push(Item { span, value });
+        let _ = self.ring.push(Item { span: span.unwrap_or_default(), value });
         Ok(())
     }
 
@@ -326,12 +332,12 @@ impl Publisher {
 
     pub fn note(&mut self, note: NoteDelta, span: Span) -> Result<(), PublishError> {
         note.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Note(note), note.event.time, span)
+        self.push(Value::Note(note), note.event.time, Some(span))
     }
 
     pub fn gap(&mut self, gap: PublicationGap, span: Span) -> Result<(), PublishError> {
         gap.validate().map_err(|_| PublishError::Invalid)?;
-        self.push(Value::Gap(gap), gap.time, span)
+        self.push(Value::Gap(gap), gap.time, Some(span))
     }
 
     /// What the source is sounding NOW. Published whole or not at all: both
@@ -343,7 +349,7 @@ impl Publisher {
             return Err(PublishError::Busy);
         }
         let _ = self.snapshots.push(*baseline);
-        let result = self.push(Value::Snapshot, baseline.time, span);
+        let result = self.push(Value::Snapshot, baseline.time, Some(span));
         debug_assert!(result.is_ok(), "capacity for both halves was checked together");
         result
     }
@@ -357,11 +363,11 @@ impl Publisher {
         pass: u32,
         observed: f64,
     ) -> Result<(), PublishError> {
-        self.push(Value::PassClosed { epoch, pass }, observed, Span::default())
+        self.push(Value::PassClosed { epoch, pass }, observed, None)
     }
 
     pub fn epoch_complete(&mut self, epoch: u64, observed: f64) -> Result<(), PublishError> {
-        self.push(Value::EpochComplete(epoch), observed, Span::default())
+        self.push(Value::EpochComplete(epoch), observed, None)
     }
 }
 
@@ -496,6 +502,30 @@ mod tests {
             assert_eq!((grown.time, grown.through), (9100.0, 9200.0));
             assert_eq!(span, merged, "{last:?}");
         }
+    }
+
+    /// A closure lost in an outage was played at no input, so it must not
+    /// widen the range of inputs the gap names: merged as one at sample 0, it
+    /// marked every earlier, closed pass incomplete.
+    #[test]
+    fn a_lost_closure_leaves_the_outage_s_inputs_where_they_were() {
+        let (mut publisher, mut consumer) = channel();
+        let armed = |input| Span::at(ClockId::default(), input, RecordIntent::armed(1));
+        fill(&mut publisher);
+        let release = |time| NoteEvent::off(time, SourceId::DIRECT, 0, 60).into();
+        assert_eq!(publisher.note(release(9000.0), armed(300)), Err(PublishError::Lost));
+        assert_eq!(publisher.pass_closed(1, 1, 9050.0), Err(PublishError::Lost));
+        assert_eq!(publisher.note(release(9100.0), armed(400)), Err(PublishError::Lost));
+        consumer.drain(|_, _| true);
+        publisher.note(release(9200.0), Span::default()).unwrap();
+        let mut spans = Vec::new();
+        consumer.drain(|delivery, span| {
+            if let Delivery::Event(CanonicalEvent::Gap(_)) = delivery {
+                spans.push((span.first.input, span.last.input));
+            }
+            true
+        });
+        assert_eq!(spans, [(400, 400)], "the held outage spans the note it lost, and no more");
     }
 
     #[test]
