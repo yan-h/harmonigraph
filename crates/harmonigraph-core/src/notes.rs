@@ -1655,6 +1655,41 @@ mod tests {
         assert!(tracker.history().is_empty(), "a note that never stopped leaves no trail mark");
     }
 
+    /// A baseline's own retirements cannot evict the note it resumes. With the
+    /// finished notes at the cap and the gap-closed note at their front, the
+    /// held note the baseline omits is filed first (rule 5); capped there, it
+    /// would push out the very note the next row resumes, which would then
+    /// open afresh and lose its line from before the gap.
+    #[test]
+    fn a_baseline_resumes_a_note_at_the_front_of_a_full_past() {
+        let source = SourceId(1);
+        let (a, b, c) = (published_voice(60, 61), published_voice(64, 62), published_voice(67, 63));
+        let baseline = |id, time, rows: &[VoiceBaseline]| {
+            SourceBaseline::new(source, id, time, 0, true, rows).unwrap()
+        };
+        let mut tracker = NoteTracker::new();
+        tracker.replace_source(&baseline(1, 2.0, &[a, b])).unwrap();
+        tracker.handle_canonical(gap(3.0, None)).unwrap();
+        // Released after the gap, so A and B sit at the front of the past.
+        for i in 0..NoteRoll::MAX_NOTES - 2 {
+            let t = 4.0 + i as Time * 0.005;
+            tracker.handle_event(on(t, 72));
+            tracker.handle_event(off(t + 0.001, 72));
+        }
+        tracker.prune(30.0, &Envelope::default());
+        assert_eq!(tracker.voices().count(), 0, "every fade has ended");
+        assert_eq!(tracker.roll().len(), NoteRoll::MAX_NOTES, "the past is exactly full");
+
+        tracker.replace_source(&baseline(3, 32.0, &[c])).unwrap();
+        tracker.replace_source(&baseline(4, 33.0, &[a])).unwrap();
+        let resumed = tracker.roll().notes().find(|n| n.note == 60 && n.is_live()).unwrap();
+        assert_eq!(
+            resumed.segments(34.0).collect::<Vec<_>>(),
+            [((2.0, 60.0), (3.0, 60.0)), ((33.0, 60.0), (34.0, 60.0))],
+            "resumed with its line from before the gap"
+        );
+    }
+
     /// Certainty is a DEFAULT and its exceptions, and the stream-wide gap is
     /// what makes that shape necessary rather than tidy: it puts sources this
     /// tracker has never heard from in doubt, so no set of the uncertain ones
