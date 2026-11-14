@@ -68,6 +68,7 @@ impl EditorShared {
                 audio_position: None,
                 audio_origin: 0.0,
                 spare: Default::default(),
+                analysis: Some(Default::default()),
                 tape_notes: Vec::new(),
                 recorder: Default::default(),
             },

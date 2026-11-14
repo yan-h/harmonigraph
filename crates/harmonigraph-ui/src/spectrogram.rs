@@ -147,10 +147,9 @@ fn held_slab(window: f64, target_cols: usize, held: Option<f64>) -> f64 {
 /// It used to absorb frame jitter, which was the common case: the FFT fired on
 /// frame boundaries, so one long frame left a slab with nothing in it. Columns
 /// now land on a sample grid finer than the narrowest live slab
-/// (see `AudioSpectrum::push_samples`), so an ordinary stream cannot skip one at
-/// all. What is left for this to cover is a real gap in the samples — a host
-/// dropout, the pane being switched on, an arrival-dated stream re-anchoring
-/// its grid.
+/// (see `SpectrumAnalysis::feed_source`), so an ordinary stream cannot skip
+/// one at all. What is left for this to cover is a real gap in the samples — a
+/// host dropout, the pane being switched on, a feeder restarting its run.
 /// A stall, by contrast — a sample-rate change empties the ring, and a longer
 /// frame leaves it unfilled for the extra samples, up to 341 ms at 48 kHz on
 /// Precise — is many slabs wide and genuinely was silence as far as the
