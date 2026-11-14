@@ -11,8 +11,8 @@
 //! With the roll on, the region also rolls the notes the recording holds,
 //! each stretch's from the pass whose audio won it, and the notes played live
 //! over the last audition at the song seconds they sounded over. Note names
-//! stay with the live roll: they follow ribbons out from the now-line, which
-//! the song has none of.
+//! label them by the live roll's rule (#1728): each note at the end that reads
+//! first, which in the default orientation is its start.
 //!
 //! The song runs from its start at the far edge toward the spectrum, so a
 //! recording made while the transport rolls grows toward the curve, the way
@@ -333,12 +333,30 @@ fn notes(
     surface: usize,
     frame: RollFrame,
 ) {
+    let sources = roll_sources(state, axis.split, axis.window, frame.now);
+    let options = RollDrawOptions {
+        split: axis.split,
+        now: frame.now,
+        surface,
+        point_scale: frame.point_scale,
+    };
+    roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources);
+}
+
+/// The rolls Tape mode draws and names over `window`: the recording's notes,
+/// and the notes played live over the last audition. `now` is the display
+/// clock.
+pub(super) fn roll_sources<'a>(
+    state: &'a PictureState,
+    split: f32,
+    window: Window,
+    now: f64,
+) -> Vec<RollSource<'a>> {
     let view = &state.runtime.tape;
-    let window = axis.window;
     // Every recorded note has ended: a stretch's notes close where it does.
     let song = TimeAxis {
-        split: axis.split,
-        depth_span: 1.0 - axis.split,
+        split,
+        depth_span: 1.0 - split,
         window: window.seconds(),
         origin: window.to,
         now: window.to,
@@ -352,18 +370,12 @@ fn notes(
         let seconds = audition.clock_at(window.to) - audition.clock_at(window.from);
         sources.push(RollSource {
             roll: state.roll(),
-            time: TimeAxis { origin, window: seconds, now: frame.now, ..song },
+            time: TimeAxis { origin, window: seconds, now, ..song },
             lead: false,
             live_during: Some((audition.clock, audition.until.unwrap_or(f64::INFINITY))),
         });
     }
-    let options = RollDrawOptions {
-        split: axis.split,
-        now: frame.now,
-        surface,
-        point_scale: frame.point_scale,
-    };
-    roll::draw_rolls(painter, axes, scale, frame.width, state, &options, &sources);
+    sources
 }
 
 /// Bars, or minutes and seconds with no meter from the host, ticked along the

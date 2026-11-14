@@ -51,7 +51,7 @@ use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tempered, Tu
 use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
-use super::roll::Width;
+use super::roll::{RollSource, Width};
 use crate::marks;
 use crate::{theme, PictureState};
 
@@ -160,6 +160,17 @@ pub(crate) struct Thinning {
     layout: Option<ThinningLayout>,
 }
 
+#[cfg(test)]
+impl Thinning {
+    /// The notes named on the last frame, by voice and onset, in order.
+    pub(super) fn named(&self) -> Vec<(harmonigraph_core::VoiceKey, f64)> {
+        let mut named: Vec<_> =
+            self.visible.iter().map(|&(key, start)| (key, f64::from_bits(start))).collect();
+        named.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        named
+    }
+}
+
 #[derive(PartialEq)]
 struct ThinningLayout {
     size: egui::Vec2,
@@ -223,6 +234,20 @@ fn plan_with_thinning_for_test(
     scales: NameScale,
     thinning: &mut Thinning,
 ) -> Vec<NoteLabel> {
+    let sources = [RollSource::live(state, split, now)];
+    plan_sources_for_test(state, axes, scale, &sources, now, scales, thinning)
+}
+
+#[cfg(test)]
+fn plan_sources_for_test(
+    state: &PictureState,
+    axes: &Axes,
+    scale: &PitchScale,
+    sources: &[RollSource],
+    now: f64,
+    scales: NameScale,
+    thinning: &mut Thinning,
+) -> Vec<NoteLabel> {
     thread_local! { static CONTEXT: egui::Context = crate::tests::probe::themed_at(2.0); }
     CONTEXT.with(|ctx| {
         let mut result = Vec::new();
@@ -235,15 +260,19 @@ fn plan_with_thinning_for_test(
                 state.runtime.tempered,
             );
             let width = Width::of(state, axes, scale, 1.0);
-            result =
-                plan(painter, state, axes, scale, &width, split, now, scales, &mut namer, thinning);
+            result = plan(
+                painter, state, axes, scale, &width, sources, now, scales, &mut namer, thinning,
+            );
         });
         result
     })
 }
 
-/// Every name this frame draws, already thinned to the ones that fit — empty
-/// when the setting is off or the pane has kept no roll region to draw in.
+/// Every name this frame draws over the notes of `sources`, already thinned
+/// to the ones that fit — empty when the setting is off or the pane has kept
+/// no roll region to draw in. The sources are the ones the roll draws: the
+/// live roll on the window ending `now`, or Tape mode's along the song, each
+/// on its own time axis. `now` is the display clock.
 ///
 /// The two scales it lays names out by part company at the pitch zoom — see
 /// [`NameScale`].
@@ -254,7 +283,7 @@ pub(super) fn plan(
     axes: &Axes,
     scale: &PitchScale,
     width: &Width,
-    split: f32,
+    sources: &[RollSource],
     now: f64,
     scales: NameScale,
     namer: &mut Namer,
@@ -271,27 +300,23 @@ pub(super) fn plan(
     // heatmap at whatever pitches notes happened to have — which is not the
     // same picture at all, and would come from a checkbox in the roll's own
     // section that appeared not to turn them off.
-    if !cfg.note_names || !cfg.show_roll || split >= 1.0 {
+    let first = sources.first().filter(|first| first.time.split < 1.0);
+    let Some(first) = first.filter(|_| cfg.note_names && cfg.show_roll) else {
         thinning.visible.clear();
         thinning.suppressed.clear();
         return Vec::new();
-    }
-    let time = TimeAxis::new(state, split, now);
+    };
     let anchor = Anchor::of(cfg);
-    let roll = state.roll();
 
-    // One point of the depth axis, in seconds of take. A name's reach is a
-    // length on the screen and the thinning measures in TIME, so this is the
-    // rate between them — one number, the time axis being linear across the
-    // region.
-    let seconds_per_point = time.seconds_per_point(axes);
     // Direction along the ribbon from its chosen anchor.
     let grow = if anchor == Anchor::Onset { -axes.dir_depth() } else { axes.dir_depth() };
     let layout = ThinningLayout {
         size: axes.rect.size(),
         pitch: [scale.min_midi, scale.max_midi],
-        seconds: cfg.roll_seconds,
-        split,
+        // The first source's span: the live roll's Span, or the stretch of
+        // song Tape mode shows. A zoom changes it; a pan or a scroll does not.
+        seconds: first.time.window as f32,
+        split: first.time.split,
         scale: [scales.label, scales.air],
         grow,
         depth: axes.dir_depth(),
@@ -305,17 +330,30 @@ pub(super) fn plan(
 
     // Include names whose anchor just left the frame but whose ink still
     // reaches it. Each candidate is culled again with its own spelling below.
-    let oldest = time.oldest();
     let mut widest = crate::text::TextBatch::default();
     draw_name(&mut widest, painter, egui::Pos2::ZERO, WIDEST_NAME, scales.label, grow);
     let reach = widest.bounds().size().dot(axes.dir_depth().abs())
         + 2.0 * LABEL_PAD * scales.label
         + LABEL_INSET * scales.air;
-    let sweep_from = oldest - f64::from(reach) * seconds_per_point;
-    let notes = roll
-        .notes()
-        .filter(|note| note.stop(now) >= sweep_from)
-        .map(|note| (note, anchor_edge(note, now, anchor)));
+    let shown = state.roll();
+    let notes = sources.iter().flat_map(|source| {
+        let time = source.time;
+        // One point of the depth axis, in seconds of take. A name's reach is a
+        // length on the screen and the thinning measures in TIME, so this is
+        // the rate between them — one number, the time axis being linear
+        // across the region.
+        let sweep_from = time.oldest() - f64::from(reach) * time.seconds_per_point(axes);
+        source
+            .roll
+            .notes()
+            .filter(move |note| source.plays(shown, note) && note.stop(time.now) >= sweep_from)
+            .map(move |note| (note, time, anchor_edge(note, &time, anchor)))
+            // Nor a note whose named end lies past the near edge, which only
+            // Tape mode's song has: that end is ink this window does not draw,
+            // so its name leaves with it, as a name leaves the far edge with
+            // its onset (#1728's pick).
+            .filter(move |(_, _, edge)| edge.time <= time.origin)
+    });
 
     // Measure each pitch class once per frame. Font, scale and direction are
     // common to this pass; musical expression does not invalidate a cache.
@@ -334,7 +372,7 @@ pub(super) fn plan(
     // scrolls past the far edge. Only the near pane boundary can move it,
     // while a young ribbon is shorter than its name.
     let toward_near = grow.dot(axes.dir_depth()) < 0.0;
-    let place = |edge: &Edge, ink: egui::Rect| {
+    let place = |time: &TimeAxis, edge: &Edge, ink: egui::Rect| {
         let d = time.depth_of_unclamped(edge.time);
         let t = scale.t_of(edge.pitch);
         let lead = axes.at(t, d) + grow * (LABEL_INSET * scales.air);
@@ -362,13 +400,13 @@ pub(super) fn plan(
     // no longer makes this trade — there a name stays until its own box has
     // left (see `visible` below) — so the two edges now differ.
     let mut candidates = Vec::new();
-    for (note, edge) in notes {
+    for (note, time, edge) in notes {
         let (name, ink) = naming(edge.pitch, &mut names);
         let beyond = (scale.min_midi - edge.pitch).max(edge.pitch - scale.max_midi);
-        if !width.reaches(note, now, beyond) {
+        if !width.reaches(note, time.now, beyond) {
             continue;
         }
-        let (rect, lead) = place(&edge, ink);
+        let (rect, lead) = place(&time, &edge, ink);
         if !rect.intersects(axes.rect) {
             continue;
         }
@@ -558,7 +596,7 @@ impl Anchor {
 ///
 /// Neither end is bounded here, and the pair is the true one however far off
 /// the picture it lies. [`plan`] lets a name leave with the end it names.
-fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
+fn anchor_edge(note: &RollNote, time: &TimeAxis, anchor: Anchor) -> Edge {
     match anchor {
         // The onset end, so the pitch the note SETTLED on rather than the key
         // it was pressed at — a retuned note reaches its real pitch a moment
@@ -569,7 +607,7 @@ fn anchor_edge(note: &RollNote, now: f64, anchor: Anchor) -> Edge {
         Anchor::Onset => Edge { time: note.start, pitch: note.settled_pitch() },
         // Live, time runs from the now-line outward, so the ribbon's leading
         // edge is where it most recently sounded.
-        Anchor::Leading => Edge { time: note.stop(now), pitch: note.end_pitch() },
+        Anchor::Leading => Edge { time: note.stop(time.now), pitch: note.end_pitch() },
     }
 }
 
@@ -978,6 +1016,53 @@ mod tests {
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
         plan_for_test(state, &axes, &scale, split, now, FLAT)
+    }
+
+    /// Tape mode's song runs on past the window's near edge, which the live
+    /// roll never does (#1728). A name stands at its note's named end only
+    /// while that end is in the window: a note sounding across the edge is
+    /// named at its onset, and not under the leading anchor, whose end has
+    /// left; a note later than the window is not named at all.
+    #[test]
+    fn a_tape_note_is_named_only_while_its_named_end_is_in_the_window() {
+        use harmonigraph_core::{NoteRoll, SourceId, VoiceKey};
+        let mut recorded = NoteRoll::uncapped();
+        let key = |note| VoiceKey { source: SourceId(1), channel: 0, note };
+        // Inside the window, across its near edge (42 s) by two seconds, and
+        // past it. The crossing note's end lands on the spectrum's share of
+        // the pane, where a name would draw over the curve.
+        recorded.note_on(key(67), 1.0, 67.0, 33.0);
+        recorded.note_off(key(67), 36.0);
+        recorded.note_on(key(62), 1.0, 62.0, 35.0);
+        recorded.note_off(key(62), 44.0);
+        recorded.note_on(key(57), 1.0, 57.0, 45.0);
+        recorded.note_off(key(57), 48.0);
+        for travel in [false, true] {
+            // Left-facing: the leading anchor, or the onset when travelling.
+            let mut state = state(24.0, 10.0);
+            state.appearance.spectrum.note_names_travel = travel;
+            state.appearance.spectrum.roll_fraction = 0.5;
+            let cfg = &state.appearance.spectrum;
+            let axes = Axes::new(PANE, cfg);
+            let scale = PitchScale { min_midi: 48.0, max_midi: 72.0, span: 24.0 };
+            let split = super::super::axes::spectrum_share(cfg);
+            // As Tape mode's: the window 32 to 42 s, every note ended.
+            let time =
+                TimeAxis { split, depth_span: 1.0 - split, window: 10.0, origin: 42.0, now: 42.0 };
+            let sources = [RollSource { roll: &recorded, time, lead: false, live_during: None }];
+            let mut thinning = Thinning::default();
+            let placed =
+                plan_sources_for_test(&state, &axes, &scale, &sources, 100.0, FLAT, &mut thinning);
+            let named: Vec<f32> = placed.iter().map(|label| label.pitch).collect();
+            let expected: &[f32] = if travel { &[67.0, 62.0] } else { &[67.0] };
+            assert_eq!(named, expected, "travel {travel}");
+            let near = axes.at(0.5, split);
+            for label in &placed {
+                let corners = [label.rect.left_top(), label.rect.right_bottom()];
+                let inside = corners.iter().all(|c| (*c - near).dot(axes.dir_depth()) >= -0.5);
+                assert!(inside, "travel {travel}: {:?} crosses the near edge", label.rect);
+            }
+        }
     }
 
     /// A phrase dense enough that its names have to compete for room: three

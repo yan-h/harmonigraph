@@ -640,15 +640,19 @@ pub(crate) fn spectral_pane(
             theme::picture(),
         );
     }
-    if show_history && song.is_none() {
+    if show_history {
         let mut thinning = state.surfaces.note_names.remove(&surface).unwrap_or_default();
+        let sources = match song {
+            Some(window) => tape::roll_sources(state, split, window, now),
+            None => vec![roll::RollSource::live(state, split, now)],
+        };
         let note_names = names::plan(
             &painter,
             state,
             &axes,
             &scale,
             &width,
-            split,
+            &sources,
             now,
             text.names,
             &mut namer,

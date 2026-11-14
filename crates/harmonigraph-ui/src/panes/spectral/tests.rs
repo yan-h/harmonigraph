@@ -3267,6 +3267,44 @@ fn tape_mode_rolls_the_recording_and_what_was_played_over_the_audition() {
     assert_eq!(drawn(&mut state), Some(2));
 }
 
+/// Tape mode names the notes it rolls (#1728): the recording's in the window,
+/// and those played live over the audition, but not those played before it
+/// nor the tape's own playback. Nor a note later than the window: the live
+/// roll has none, and its name would be clamped onto the near edge.
+#[test]
+fn tape_mode_names_the_notes_it_rolls() {
+    use harmonigraph_core::notes::{NoteEvent, SourceId};
+    use harmonigraph_core::{NoteRoll, VoiceKey};
+    let mut state = on_tape();
+    state.appearance.spectrum.show_roll = true;
+    state.appearance.spectrum.note_names = true;
+    let mut recorded = NoteRoll::uncapped();
+    let key = |note| VoiceKey { source: SourceId(1), channel: 0, note };
+    recorded.note_on(key(60), 1.0, 60.0, 10.0);
+    recorded.note_off(key(60), 12.0);
+    recorded.note_on(key(64), 1.0, 64.0, 20.0);
+    recorded.note_off(key(64), 30.0);
+    // Past the window, which fits the 40 s recorded.
+    recorded.note_on(key(67), 1.0, 67.0, 50.0);
+    recorded.note_off(key(67), 55.0);
+    state.runtime.tape.notes = std::sync::Arc::new(recorded);
+    let named = |state: &mut PictureState| {
+        tape_frames(state, Navigation::Docked, vec![vec![]]);
+        state.surfaces.note_names[&0].named()
+    };
+    assert_eq!(named(&mut state), [(key(60), 10.0), (key(64), 20.0)]);
+
+    // As the roll test's audition: 20 s of song reaching the picture at 98.
+    state.runtime.tape.audition =
+        Some(crate::tape::Audition { clock: 98.0, song: 20.0, speed: 1.0, until: None });
+    let tracker = &mut state.runtime.tracker;
+    tracker.handle_event(NoteEvent::on(97.0, SourceId::DIRECT, 0, 67, 1.0));
+    tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 72, 1.0));
+    tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT.on_tape(), 0, 76, 1.0));
+    let over = VoiceKey { source: SourceId::DIRECT, channel: 0, note: 72 };
+    assert_eq!(named(&mut state), [(key(60), 10.0), (key(64), 20.0), (over, 99.0)]);
+}
+
 #[test]
 fn a_click_in_tape_mode_cues_the_song_under_it_with_the_start_at_the_far_edge() {
     let cfg = pinned();
