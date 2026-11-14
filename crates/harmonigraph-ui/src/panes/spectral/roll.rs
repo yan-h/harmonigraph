@@ -653,12 +653,13 @@ fn source_instances(
     let minimum = f64::from(2.0 * min_half_depth) * per_point;
     let gap = density::GAP_PT * f64::from(point_scale.max(0.0)) * per_point;
     let band = minimum + 2.0 * gap;
-    // And at the near edge, for the tape's roll, which runs on past the
-    // stretch shown where the live roll ends at now. The same ink and band,
-    // mirrored: a note decides the ends of the one before it only by starting
-    // within a cut and a floored length of that one's stop, so one starting
-    // later changes nothing that is on the pane.
-    let near = time.origin + ink_seconds + band;
+    // And at the near edge where it is no now-line (Tape mode, where `lead`
+    // is off): the tape's roll runs on past the stretch shown, where the live
+    // roll ends at now. The same ink and band, mirrored: a note decides the
+    // ends of the one before it only by starting within a cut and a floored
+    // length of that one's stop, so one starting later changes nothing that
+    // is on the pane.
+    let near = if source.lead { f64::INFINITY } else { time.origin + ink_seconds + band };
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| source.plays(state.roll(), note))
