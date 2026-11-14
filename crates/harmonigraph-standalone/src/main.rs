@@ -743,18 +743,20 @@ struct MockSynth {
 }
 
 impl MockSynth {
-    /// The most one frame renders: a frame further behind than this has
-    /// stalled, and starts a new run where it resumes rather than
-    /// synthesizing seconds.
+    /// The most one frame renders of a run: a frame further behind than this
+    /// has stalled, and starts a new run rather than synthesizing seconds.
     const MAX_CHUNK: u64 = 9_600; // 200 ms
 
     /// Render the frames due by `now` and analyze them into `spectrum`.
     /// Phase comes from absolute time, so held notes stay continuous across
     /// frames without per-voice state.
     ///
-    /// After a stall the new run is dated from where it resumes, so the
-    /// stall draws as a gap in the heatmap rather than sliding the columns
-    /// after it back into line.
+    /// After a stall the new run is dated from where it starts, so the stall
+    /// draws as a gap in the heatmap rather than sliding the columns after
+    /// it back into line. It starts an analysis frame and [`Self::MAX_CHUNK`]
+    /// before `now`, so it fills the analyzer's window and makes columns in
+    /// the same call: frames that keep coming that late, below 5 fps, still
+    /// draw, at any resolution.
     fn feed(
         &mut self,
         tracker: &harmonigraph_core::NoteTracker,
@@ -765,14 +767,19 @@ impl MockSynth {
         // Frame k of the run sounds at `origin + k / SYNTH_RATE`, so those due
         // are the ones at or before `now`.
         let due = |(origin, _): (f64, u64)| ((now - origin) * SYNTH_RATE).floor() as u64 + 1;
-        let run = self.run.filter(|&run| due(run).saturating_sub(run.1) <= Self::MAX_CHUNK);
-        let Some((origin, rendered)) = run else {
-            // The first frame, or one after a stall: only start the run.
-            if self.run.replace((now, 0)).is_some() {
+        let (origin, rendered) = match self.run {
+            Some(run) if due(run).saturating_sub(run.1) <= Self::MAX_CHUNK => run,
+            Some(_) => {
                 self.analysis.restart();
                 spectrum.apply(harmonigraph_ui::Delivery::Restart, config);
+                let window = config.window.frame(SYNTH_RATE as f32) as u64;
+                (now - (window + Self::MAX_CHUNK - 1) as f64 / SYNTH_RATE, 0)
             }
-            return;
+            // The first frame: only start the run.
+            None => {
+                self.run = Some((now, 0));
+                return;
+            }
         };
         let n = due((origin, rendered)).saturating_sub(rendered);
 
@@ -1035,39 +1042,80 @@ mod tests {
         assert!(events.len() > offs, "and the new chord must start");
     }
 
-    /// A frame too late for the synth to render up to starts a new run where
-    /// it resumes, so the stall is a gap in the heatmap, not audio slid back
-    /// over it: the first column after it waits for a window of the new run.
+    /// Sixty 60 Hz frames of the mock synth at `now` on, with `tracker`'s
+    /// held voices, leaving `now` where the next frame falls.
+    fn synth_frames(
+        synth: &mut MockSynth,
+        tracker: &harmonigraph_core::NoteTracker,
+        spectrum: &mut harmonigraph_ui::AudioSpectrum,
+        config: &harmonigraph_ui::SpectrumConfig,
+        now: &mut f64,
+    ) {
+        for _ in 0..60 {
+            synth.feed(tracker, spectrum, *now, config);
+            *now += 1.0 / 60.0;
+        }
+    }
+
+    /// A frame too late for the synth to render up to starts a new run, so
+    /// the stall is a gap in the heatmap, not audio slid back over it: the
+    /// new run's columns start after the stall began and end at the frame,
+    /// and the curve starts over with them.
     #[test]
     fn a_stalled_synth_leaves_a_gap_where_it_stalled() {
-        let tracker = harmonigraph_core::NoteTracker::new();
-        let config = harmonigraph_ui::SpectrumConfig::default();
+        let mut tracker = harmonigraph_core::NoteTracker::new();
+        // No attack, and a release long enough that a curve carried over the
+        // stall would still stand well above silence after it.
+        let config =
+            harmonigraph_ui::SpectrumConfig { attack: 0.0, release: 2.0, ..Default::default() };
         let mut spectrum = harmonigraph_ui::AudioSpectrum::default();
         let mut synth = MockSynth::default();
         let mut now = 1.0;
-        let frames = |synth: &mut MockSynth, spectrum: &mut _, now: &mut f64, count| {
-            for _ in 0..count {
-                synth.feed(&tracker, spectrum, *now, &config);
-                *now += 1.0 / 60.0;
-            }
-        };
-        frames(&mut synth, &mut spectrum, &mut now, 60);
+        tracker.handle_event(NoteEvent::on(now, SourceId::DIRECT, 0, 69, 0.8));
+        synth_frames(&mut synth, &tracker, &mut spectrum, &config, &mut now);
         let before = spectrum.newest_column().expect("a second of frames filled the window");
+        assert!(spectrum.display(now).unwrap().iter().any(|p| *p > 1e-6), "the note drew");
 
-        // Under a second: past the 200 ms the synth renders in one frame.
+        // Released in the stall, so the run after it renders silence.
+        tracker.handle_event(NoteEvent::off(now, SourceId::DIRECT, 0, 69));
         now += 0.5;
-        let resumed = now;
         let taken = spectrum.columns_taken();
-        while spectrum.columns_taken() == taken {
-            assert!(now < resumed + 1.0, "the synth stopped after the stall");
-            frames(&mut synth, &mut spectrum, &mut now, 1);
-        }
-        // The frame that brought the first columns after it, a few hops' worth.
+        synth.feed(&tracker, &mut spectrum, now, &config);
+        let made = spectrum.columns_taken() - taken;
+        assert!(made > 1, "the frame after the stall analyzed nothing");
         let newest = spectrum.newest_column().unwrap();
+        let first = newest - (made - 1) as f64 * 0.008; // a run's columns are a hop apart
+        assert!(newest <= now, "a column at {newest} s is dated after its frame at {now} s");
+        assert!(first - before > 0.25, "the stall left no gap: {before} s, then {first} s");
         assert!(
-            newest > resumed,
-            "a column at {newest} s slid back into the stall before {resumed} s"
+            spectrum.display(now).unwrap().iter().all(|p| *p == 0.0),
+            "the curve carried the note across the restarted run"
         );
-        assert!(newest - before > 0.5, "the stall left no gap: {before} s, then {newest} s");
+    }
+
+    /// Frames that keep coming more than 200 ms apart each start a run, and
+    /// each still draws, at every resolution: a run starts a window early.
+    #[test]
+    fn a_synth_below_five_frames_a_second_still_draws() {
+        for window in
+            [harmonigraph_ui::SpectrumWindow::Fast, harmonigraph_ui::SpectrumWindow::Precise]
+        {
+            let tracker = harmonigraph_core::NoteTracker::new();
+            let config = harmonigraph_ui::SpectrumConfig { window, ..Default::default() };
+            let mut spectrum = harmonigraph_ui::AudioSpectrum::default();
+            let mut synth = MockSynth::default();
+            for frame in 0..8 {
+                let now = 1.0 + f64::from(frame) * 0.25;
+                let taken = spectrum.columns_taken();
+                synth.feed(&tracker, &mut spectrum, now, &config);
+                if frame > 0 {
+                    assert!(
+                        spectrum.columns_taken() > taken,
+                        "{window:?}: frame {frame} drew nothing"
+                    );
+                    assert!(spectrum.newest_column().unwrap() <= now);
+                }
+            }
+        }
     }
 }
