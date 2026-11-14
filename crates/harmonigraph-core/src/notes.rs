@@ -875,9 +875,8 @@ impl NoteTracker {
     }
 
     /// All voices that should currently be visualized: held first, in
-    /// `(source, channel, note)` order, then the released ones that sounded
-    /// in the order they were let go, then those released at or before their
-    /// onset in theirs.
+    /// `(source, channel, note)` order, then the released ones in the order
+    /// their releases arrived.
     ///
     /// The two halves ask visibility of different state, and that is the
     /// whole rule. A HELD voice is filtered on the CURRENT Show switch,
