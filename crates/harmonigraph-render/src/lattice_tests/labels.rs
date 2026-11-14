@@ -1200,7 +1200,6 @@ fn a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse() {
             at.world_pos = glam::Vec3::new(0.0, y, 0.0);
             scene.nodes.push(at);
         }
-        rows_per_node(&mut scene);
         scene
     };
     let scene = scene_of(&[0.0, APART]);
@@ -1577,6 +1576,5 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
     // Reuse the pane after removing the foreground node. The label row
     // has no shadow cell, but still must end its receiver link at zero.
     scene.nodes.remove(0);
-    rows_per_node(&mut scene);
     assert_eq!(shot(&scene, Some(0), 0.0, 1.0), shot(&scene, Some(0), 1.0, 1.0));
 }

@@ -227,8 +227,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         darkest_pitch,
         brightest_pitch,
         marker_unit,
-        glow_rows: _,
-        glow_timing,
+        glow_clock,
     } = scene;
     f.one("edge_softness_points", *edge_softness_points);
 
@@ -269,8 +268,13 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.vec4(&format!("nodes[{i}].melody_color"), *melody_color);
         f.vec4(&format!("nodes[{i}].bass_color"), *bass_color);
         f.one(format!("nodes[{i}].audio_ring"), *audio_ring);
-        let GlowStep { incarnation: _, level, row: _ } = glow;
+        let GlowStep { level, light } = glow;
         f.one(format!("nodes[{i}].glow.level"), *level);
+        if let Some(GlowLight { l, p, m }) = light {
+            f.many(&format!("nodes[{i}].glow.light.l"), *l);
+            f.many(&format!("nodes[{i}].glow.light.p"), *p);
+            f.many(&format!("nodes[{i}].glow.light.m"), *m);
+        }
         f.one(format!("nodes[{i}].trail"), *trail);
     }
 
@@ -333,18 +337,14 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("marker_unit", *marker_unit);
 
     // Nothing to walk here, and that is worth saying rather than leaving as a
-    // silent pass: `derive_scene` ships `glow_timing: None` unconditionally,
-    // the ballistics being the SHELL's glow pass to fill, so the view's
-    // `glow_attack` and `glow_release` reach the picture there and not through
-    // this function. Read as coverage of a `GlowTiming` the arm below would be
-    // a green light with nothing behind it. It stays for the one thing it does
-    // buy — a field added to `GlowTiming` breaks this build — and the test
-    // asserts the emptiness, so the day `derive_scene` starts filling it this
-    // comment goes red instead of going stale.
-    if let Some(GlowTiming { now, attack, release }) = glow_timing {
-        f.one("glow_timing.now", *now as f32);
-        f.one("glow_timing.attack", *attack);
-        f.one("glow_timing.release", *release);
+    // silent pass: `derive_scene` ships `glow_clock: None` unconditionally,
+    // the clock being the SHELL's glow pass to fill, as the carried lights
+    // above are. Read as coverage of the clock the arm below would be a green
+    // light with nothing behind it, so the test asserts the emptiness, and the
+    // day `derive_scene` starts filling it this comment goes red instead of
+    // going stale.
+    if let Some(clock) = glow_clock {
+        f.one("glow_clock", *clock as f32);
     }
 
     f
@@ -413,12 +413,11 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         .find(|n| !n.on_home)
         .expect("the fixture has sevens layers, so the sevens scale below has something to size")
         .scale;
-    // The emptiness the walk's `glow_timing` arm rests on, stated where it can
-    // go red: the ballistics are the shell's to fill, and nothing here covers
-    // a `GlowTiming`.
+    // The emptiness the walk's `glow_clock` arm rests on, stated where it can
+    // go red: the clock is the shell's to fill, and nothing here covers it.
     assert!(
-        scene.glow_timing.is_none(),
-        "`derive_scene` filled the glow timing, so the walk's empty arm is no longer honest",
+        scene.glow_clock.is_none(),
+        "`derive_scene` filled the glow clock, so the walk's empty arm is no longer honest",
     );
 
     let mut normalized = poisoned_view();

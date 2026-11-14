@@ -39,9 +39,9 @@ The 5 ms envelope boundaries remain defined by source time, including fractional
 - `WholeSong::precompute` owns the existing absolute hop grid, pre-roll and far-edge margin.
 A supplied feeder pushes each requested absolute range into the same `ChannelBank`, possibly in several physical chunks, before measurement occurs.
 The UI imports no offline WAV type.
-- Frame analysis updates its clock anchor once from the logical batch's full frame count and actual newest source frame.
-`AudioSpectrum::push_samples` and the chunked entry point share the same FFT, display smoothing and history loop.
-Physical I/O chunks do not add anchor smoothing steps.
+- Frame analysis dates its one run from the soundtrack frame it first reads,
+and counts frames from there (#1758),
+so each physical I/O chunk goes through `SpectrumAnalysis::feed_source` and the column dates do not depend on where the chunks fall.
 
 ffmpeg continues receiving the source path directly.
 Its input pass is independent of analysis.
@@ -189,7 +189,7 @@ Additional coverage crosses physical buffers within large ranges, within an alig
 Format checks cover PCM8/16/24/32 and float32, extensible headers, odd metadata padding and truncated channel frames.
 A file truncated after opening returns an I/O error.
 
-The logical-batch test compares every history timestamp, every column byte, displayed spectrum, anchor and frame count against `push_samples` over awkward chunk sizes, both ordinary and very large time origins.
+The chunking test (`a_run_cut_into_any_chunks_makes_the_same_columns`) compares every column's date and power, the displayed spectrum and the frame count of a run fed whole and in awkward chunk sizes, at both ordinary and very large time origins.
 The WholeSong feeder test checks contiguous bounded margins, empty windows, huge logical hops and exact column equivalence, plus error propagation.
 The fallback regression confirms the reused onset sequence gives exactly the direct MIDI alignment's offset and confidence.
 

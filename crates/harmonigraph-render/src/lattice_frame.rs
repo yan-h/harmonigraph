@@ -27,7 +27,7 @@ fn push_plus(draws: &mut Vec<Draw>, at: u32) {
 #[derive(Default)]
 pub(crate) struct FrameVecs {
     pub(super) instances: Vec<GpuInstance>,
-    pub(super) glow_owners: Vec<u64>,
+    pub(super) lights: Vec<LightRow>,
     pub(super) breathing_at: Vec<harmonigraph_core::LatticePos>,
     pub(super) glyphs: Vec<GlyphInstance>,
     pub(super) casters: Vec<shadow::Caster>,
@@ -40,7 +40,7 @@ pub(crate) struct FrameVecs {
 /// What [`LatticeCallback::from_scene_in`] works in and nothing reads after it.
 #[derive(Default)]
 pub(crate) struct Walk {
-    order: Vec<(f32, f32, usize, bool, bool)>,
+    order: Vec<(f32, f32, usize, bool, bool, bool)>,
     plus_of: Vec<Option<usize>>,
     glyphs_of: Vec<(u32, u32)>,
 }
@@ -78,7 +78,7 @@ impl LatticeCallback {
     ) -> Self {
         let FrameVecs {
             instances,
-            glow_owners,
+            lights,
             breathing_at,
             glyphs,
             casters,
@@ -126,7 +126,7 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            params: [n.presence_with_opacity, n.melody_level, n.bass_level, n.glow_target()],
+            params: [n.presence_with_opacity, n.melody_level, n.bass_level],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -145,9 +145,9 @@ impl LatticeCallback {
             bass_color: n.bass_color.to_array(),
             scale: n.scale,
             ring: n.audio_ring,
-            // Untimed snapshots seed current ink. Encoded timed frames replace
-            // the third value with the renderer's own history coefficient.
-            glow: [n.glow.level, n.glow.row as f32, 1.0, 1.0],
+            // The row is settled by the walk below, which numbers the lit
+            // instances in the order they ship; the breathing by `prepare`.
+            glow: [n.glow.level, 0.0, 1.0],
             thickness: pack_thickness(&n.thickness),
         };
 
@@ -197,7 +197,7 @@ impl LatticeCallback {
         // are all exactly nothing: the walk below gives it none of the three.
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
-        let lights = scene.view.glow_draws();
+        let lights_drawn = scene.view.glow_draws();
         let inked = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || g.params[0] > 0.0
@@ -246,14 +246,19 @@ impl LatticeCallback {
         // most of them. `sort_by` is stable, so the ones kept come out in the
         // order they held in the full sort. Whether a node ships, and whether
         // with ink or for its light alone, is asked here, once, of its packed
-        // instance.
+        // instance. So is whether it is LIT: past the most a strip holds
+        // (`MAX_LIGHTS`) a node has no light, as `GlowFade` leaves one, and
+        // ships only if it has ink.
         let mut order = emptied(order, 0);
+        let mut lit_count = 0;
         order.extend(scene.nodes.iter().enumerate().filter_map(|(i, n)| {
             let g = to_gpu(n);
             let inked = inked(&g);
-            let ships = inked || (lights && g.glow[0] > 0.0);
+            let lit = lights_drawn && g.glow[0] > 0.0 && lit_count < harmonigraph_scene::MAX_LIGHTS;
+            lit_count += usize::from(lit);
+            let ships = inked || lit;
             (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
-                .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked))
+                .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked, lit))
         }));
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
@@ -404,8 +409,7 @@ impl LatticeCallback {
             scene.pluses.first().map_or(0.0, |p| (p.radius * points_per_world).max(0.0));
 
         let mut instances = emptied(instances, order.len());
-        let mut glow_owners =
-            emptied(glow_owners, if scene.glow_timing.is_some() { order.len() } else { 0 });
+        let mut lights = emptied(lights, if lights_drawn { order.len() } else { 0 });
         let mut pluses = emptied(pluses, scene.pluses.len());
         let mut glyphs = emptied(glyphs, labels.glyphs.len());
         let mut casters = emptied(casters, 0);
@@ -424,10 +428,10 @@ impl LatticeCallback {
             });
         }
         let mut draws = emptied(draws, order.len());
-        let breathes = scene.glow_timing.is_some() && lights && atmosphere.breath_amount > 0.0;
+        let breathes = scene.glow_clock.is_some() && lights_drawn && atmosphere.breath_amount > 0.0;
         let mut breathing_at = emptied(breathing_at, if breathes { order.len() } else { 0 });
-        for &(_, _, i, ships, inked) in &order {
-            let instance = to_gpu(&scene.nodes[i]);
+        for &(_, _, i, ships, inked, lit) in &order {
+            let mut instance = to_gpu(&scene.nodes[i]);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
@@ -446,16 +450,26 @@ impl LatticeCallback {
                 // Every instance keeps its box, whether or not one is packed.
                 node_cells.push(casters.len() as u32);
                 casters.push(node_caster(&scene.nodes[i], &instance, inked));
-                // Display modulation is separate from the ink-history level and
-                // coefficient, and settled in prepare, where the pane's travel
-                // says how far the breathing has run.
+                // A lit node's row of the light table is the next one: the
+                // table is this frame's lit instances in the order they ship,
+                // which is the order the reading pass lays the strip down in
+                // and the halo's own draw reads it back. One the cap left
+                // unlit draws no halo.
+                if lit {
+                    let node = &scene.nodes[i];
+                    instance.glow[1] = lights.len() as f32;
+                    let light = node.glow.light.unwrap_or_else(|| node.glow_light());
+                    lights.push(LightRow::new(node.cents, light));
+                } else if lights_drawn {
+                    instance.glow[0] = 0.0;
+                }
+                // Display modulation is separate from the carried level, and
+                // settled in prepare, where the pane's travel says how far the
+                // breathing has run.
                 if breathes {
                     breathing_at.push(scene.nodes[i].lattice_pos);
                 }
                 instances.push(instance);
-                if scene.glow_timing.is_some() {
-                    glow_owners.push(scene.nodes[i].glow.incarnation);
-                }
             }
             // The name, immediately after the node it names — so what covers a
             // name is exactly what covers its node.
@@ -477,9 +491,9 @@ impl LatticeCallback {
         LatticeCallback {
             pipeline_cache: None,
             instances,
-            glow_owners,
-            glow_timing: scene.glow_timing,
-            glow_draws: lights,
+            lights,
+            glow_clock: scene.glow_clock,
+            glow_draws: lights_drawn,
             material: lattice_material::Material {
                 style: atmosphere.material_style,
                 amount: atmosphere.material_amount,
@@ -558,7 +572,7 @@ impl LatticeCallback {
                     range_cents: scene.spectral.range,
                     folded: f32::from(u8::from(scene.spectral.folded)),
                 },
-                glow: if lights {
+                glow: if lights_drawn {
                     GlowParams {
                         padding: 0.0,
                         strength: scene.view.glow_strength,
@@ -570,10 +584,10 @@ impl LatticeCallback {
                         ),
                         curve: scene.view.glow_curve.shape(),
                         wash: scene.view.glow_wash,
-                        row_capacity: scene.glow_rows.max(1) as f32,
                         // Prepare sets this when any shipped instance is lit.
                         lit: 0.0,
                         accumulation: scene.view.glow_accumulation,
+                        padding_end: 0.0,
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()

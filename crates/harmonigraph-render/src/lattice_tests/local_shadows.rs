@@ -117,7 +117,6 @@ fn foreground_ink_restores_local_shadow_transmittance() {
         // cover the rear shadow before the glyph-restoration path does.
         near.scale = 0.0;
         scene.nodes.push(near);
-        rows_per_node(&mut scene);
         let at = name_on_the_band(&scene);
         let centre = on_screen(&scene, SIZE, at);
         let foreground = [centre.x - 20.0, centre.y - 6.0, 40.0, 12.0];

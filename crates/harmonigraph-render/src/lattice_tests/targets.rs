@@ -1,7 +1,8 @@
-//! Optional bloom is a resource decision; release history is independent.
+//! Optional bloom is a resource decision, and the pane's other targets and its
+//! ink strip are independent of it and of the pane's size.
 
 use super::fixtures::*;
-use crate::lattice_targets::GLOW_DIVISOR;
+use crate::lattice_targets::{FIRST_ROWS, GLOW_DIVISOR};
 use crate::*;
 
 fn target(shooter: &Shooter) -> &Offscreen {
@@ -11,44 +12,47 @@ fn target(shooter: &Shooter) -> &Offscreen {
         .unwrap()
 }
 
-fn history(shooter: &Shooter) -> &InkStrip {
+fn strip(shooter: &Shooter) -> &InkStrip {
     shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
-        .ink_history
+        .ink_strip
         .as_ref()
         .unwrap()
 }
 
-/// A release has no current ink to reconstruct. Assert pixels as well as GPU
-/// identities, then cross the real row-capacity boundary separately: that
-/// baseline deliberately replaces and reseeds the strip.
+/// Bloom toggles replace the bloom chain and nothing else; a resize or a
+/// render-scale change replaces the scene targets and leaves the ink strip;
+/// silence keeps what is allocated, and nothing is allocated before a scene
+/// can write it.
+///
+/// Drawn on an inkless node lit by its carried light alone, so every frame's
+/// light is the light the strip reads from the table that frame.
 #[test]
-fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
+fn bloom_and_size_changes_replace_only_their_own_targets() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = single_marked_node(0, 0);
     scene.view.glow_reach = 0.8;
     scene.view.glow_strength = 1.5;
     scene.view.note_bloom = 1.0;
     scene.pitch_lut = [glam::Vec4::new(1.0, 0.1, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
-    scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
-    scene.nodes[0].presence_with_opacity = 1.0;
-    scene.nodes[0].audio_ring = 0.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
-    scene.nodes[0].glow.incarnation = 1;
-    shooter.shot(&scene);
-    // Nothing but the held GPU colour remains.
-    scene.nodes[0].presence_with_opacity = 0.0;
-    scene.nodes[0].octaves.fill(0.0);
-    let bloomed = shooter.shot_again(&scene);
-    assert!(total_light(&bloomed) > 64, "release fixture must emit visible light");
+    let node = &mut scene.nodes[0];
+    node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+    node.audio_ring = 0.0;
+    let light = node.glow_light();
+    node.octaves.fill(0.0);
+    node.presence_with_opacity = 0.0;
+    node.melody_slots = 0;
+    node.melody_level = 0.0;
+    node.glow = harmonigraph_scene::GlowStep { level: 0.8, light: Some(light) };
+    let bloomed = shooter.shot(&scene);
+    assert!(total_light(&bloomed) > 64, "the carried light must be visible");
     let color = target(&shooter).color_view.clone();
     let ink = target(&shooter).ink_view.clone();
     let glow = target(&shooter).glow.as_ref().unwrap().view.clone();
-    let raw = history(&shooter).raw_views.clone();
+    let raw = strip(&shooter).raw_view.clone();
     let initial_bloom = target(&shooter).bloom.as_ref().unwrap().input_view.clone();
-    let bytes = |view: &wgpu::TextureView| {
+    let bytes = |view: &wgpu::TextureView, texel: u64| {
         let tex = view.texture();
-        u64::from(tex.width()) * u64::from(tex.height()) * 8
+        u64::from(tex.width()) * u64::from(tex.height()) * texel
     };
     let bloom = target(&shooter).bloom.as_ref().unwrap();
     let bloom_bytes = [
@@ -58,14 +62,25 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
         &bloom.chain.quarter_b_view,
     ]
     .into_iter()
-    .map(bytes)
+    .map(|view| bytes(view, 8))
     .sum::<u64>();
     assert_eq!(
         bloom_bytes, 720_896,
         "256-square pane: bloom input plus half and two quarters, RGBA16F"
     );
-    assert_eq!(bytes(&color), 524_288);
-    assert_eq!(bytes(&ink), 524_288);
+    assert_eq!(bytes(&color, 8), 524_288);
+    assert_eq!(bytes(&ink, 8), 524_288);
+    // The strip at its floor: the raw reading and its blur, one column wider,
+    // and the light table beside them.
+    let held = strip(&shooter);
+    let texel = u64::from(INK_STRIP_FORMAT.block_copy_size(None).unwrap());
+    let rows = u64::from(FIRST_ROWS);
+    assert_eq!(held.rows, FIRST_ROWS);
+    assert_eq!(
+        bytes(&held.raw_view, texel) + bytes(&held.blurred_view, texel),
+        u64::from(INK_STRIP_N + INK_STRIP_N + 1) * rows * texel,
+    );
+    assert_eq!(held.lights.size(), rows * std::mem::size_of::<LightRow>() as u64);
 
     // Changing strength while enabled must keep the same allocation.
     scene.view.note_bloom = 0.5;
@@ -87,37 +102,43 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
         assert_eq!(held.color_view, color);
         assert_eq!(held.ink_view, ink);
         assert_eq!(held.glow.as_ref().unwrap().view, glow);
-        assert_eq!(history(&shooter).raw_views, raw);
+        assert_eq!(strip(&shooter).raw_view, raw);
     }
-    // Both a native resize and a render-scale change carry the same rows,
-    // including when the same frame turns bloom back on.
-    shooter.size = [256, 260];
-    for scale in [1.0, 2.0] {
+    // A native resize and a render-scale change replace the scene targets and
+    // keep the strip, including when the same frame turns bloom back on. The
+    // odd sizes are the glow target's and its statistics' rounding up, a
+    // fraction of the scene's.
+    for (size, scale) in
+        [([256, 260], 1.0), ([257, 261], 1.0), ([257, 261], 1.5), ([256, 260], 2.0)]
+    {
+        shooter.size = size;
         scene.view.render_scale = scale;
         scene.view.note_bloom = 1.0;
         let resized = shooter.shot_again(&scene);
         assert!(total_light(&resized) > total_light(&plain) / 2);
-        assert_eq!(history(&shooter).raw_views, raw);
-        assert_ne!(target(&shooter).color_view, color);
-        assert_ne!(target(&shooter).ink_view, ink);
+        assert_eq!(strip(&shooter).raw_view, raw);
+        let offscreen = target(&shooter);
+        assert_ne!(offscreen.color_view, color);
+        assert_ne!(offscreen.ink_view, ink);
+        let expected = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
+        assert_ne!(
+            expected,
+            offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR / 2)),
+            "the fixture tells the divisor from half of it"
+        );
+        let glow = offscreen.glow.as_ref().unwrap();
+        for view in std::iter::once(&glow.view).chain(&glow.statistics) {
+            assert_eq!([view.texture().width(), view.texture().height()], expected);
+        }
+        let color = offscreen.color_view.texture();
+        assert_eq!([color.width(), color.height()], offscreen.size);
     }
-    // Preserve the current growth/reseed contract, which does not carry an
-    // inkless release through growth. This really crosses capacity 1 -> 2.
-    scene.glow_rows = 2;
-    let grown = shooter.shot_again(&scene);
-    assert_eq!(history(&shooter).rows, 2);
-    assert_ne!(history(&shooter).raw_views, raw);
-    assert_eq!(total_light(&grown), 0, "growth reseeds from empty current ink");
-    // Reusing row zero seeds its new green owner instead of stale red.
-    scene.nodes[0].glow.incarnation = 2;
-    scene.nodes[0].presence_with_opacity = 1.0;
+    // Glow off drops the glow target, and on draws exactly the frame it drew
+    // before. With ink on the node, which is what keeps a glow-off frame
+    // drawable, and so target maintenance running.
     scene.nodes[0].octaves.fill(1.0);
-    scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-    let reused = shooter.shot_again(&scene);
+    scene.nodes[0].presence_with_opacity = 1.0;
     let fresh = shooter.shot(&scene);
-    assert_eq!(reused, fresh, "a reused row is a fresh owner's ink");
-    // Glow-off drops its history under the existing feature contract; on
-    // with current ink reseeds and draws exactly the fresh frame.
     scene.view.glow_reach = 0.0;
     shooter.shot_again(&scene);
     assert!(target(&shooter).glow.is_none());
@@ -144,379 +165,4 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     scene.view.note_bloom = 1.0;
     shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none(), "no allocation before a scene can write it");
-}
-
-fn history_scene() -> Scene {
-    let mut scene = single_marked_node(0, 0);
-    scene.view.glow_reach = 0.8;
-    scene.view.glow_strength = 1.5;
-    scene.view.note_bloom = 0.0;
-    scene.glow_rows = 64;
-    scene.pitch_lut.fill(glam::Vec4::new(1.0, 0.0, 0.0, 1.0));
-    scene.nodes[0].octaves.fill(1.0);
-    scene.nodes[0].audio_ring = 0.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
-    scene.nodes[0].glow.incarnation = 1;
-    scene
-}
-
-fn release(scene: &mut Scene) {
-    for node in &mut scene.nodes {
-        node.presence_with_opacity = 0.0;
-        node.octaves.fill(0.0);
-    }
-}
-
-/// Each resized release is compared byte-exact with a separate pane seeded
-/// at that viewport. A third pane carries a different colour and advances its
-/// own parity. Constructor counts include any temporary strip before adoption.
-/// The glow target and its statistics are a quarter of the scene, rounded up
-/// on odd panes, and a last step under a material checks its source is too.
-#[test]
-fn viewport_changes_keep_history_without_allocating_a_strip() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = history_scene();
-    shooter.pane = 10;
-    shooter.shot_again(&scene);
-    release(&mut scene);
-    let red = shooter.shot_again(&scene);
-    assert!(total_light(&red) > 64);
-    let raw = history(&shooter).raw_views.clone();
-    let bindings = history(&shooter).raw_bind_groups.clone();
-    let blurred = history(&shooter).blurred_view.clone();
-    let mut parity = history(&shooter).parity;
-    let mut color = target(&shooter).color_view.clone();
-    let mut light = target(&shooter).glow.as_ref().unwrap().view.clone();
-
-    let mut preview = history_scene();
-    preview.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-    shooter.pane = 20;
-    shooter.shot_again(&preview);
-    release(&mut preview);
-    let green = shooter.shot_again(&preview);
-    assert!(total_light(&green) > 64 && green != red);
-    let preview_raw = history(&shooter).raw_views.clone();
-    assert_ne!(preview_raw, raw);
-    let mut preview_parity = history(&shooter).parity;
-
-    for (i, (size, scale)) in
-        [([257, 261], 1.0), ([257, 261], 1.5), ([256, 256], 2.0), ([256, 256], 1.0)]
-            .into_iter()
-            .enumerate()
-    {
-        shooter.pane = 10;
-        shooter.size = size;
-        scene.view.render_scale = scale;
-        let creations = super::INK_STRIP_CREATIONS.get();
-        let resized = shooter.shot_again(&scene);
-        let offscreen = target(&shooter);
-        let expected = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
-        assert_ne!(
-            expected,
-            offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR / 2)),
-            "fixture tells the divisor from half of it"
-        );
-        let glow = offscreen.glow.as_ref().unwrap();
-        for view in std::iter::once(&glow.view).chain(&glow.statistics) {
-            assert_eq!([view.texture().width(), view.texture().height()], expected);
-        }
-        assert_eq!(
-            [offscreen.color_view.texture().width(), offscreen.color_view.texture().height()],
-            offscreen.size
-        );
-        assert_eq!(super::INK_STRIP_CREATIONS.get(), creations, "no temporary strip on resize");
-        assert_eq!(history(&shooter).raw_views, raw);
-        assert_eq!(history(&shooter).raw_bind_groups, bindings);
-        assert_eq!(history(&shooter).blurred_view, blurred);
-        assert_eq!(history(&shooter).parity, parity ^ 1);
-        parity ^= 1;
-        assert_ne!(target(&shooter).color_view, color);
-        assert_ne!(target(&shooter).glow.as_ref().unwrap().view, light);
-        color = target(&shooter).color_view.clone();
-        light = target(&shooter).glow.as_ref().unwrap().view.clone();
-        assert!(total_light(&resized) > 64, "positive glow has no current ink");
-
-        // Control: seed the same shader ink at the final viewport, then let
-        // it release. No CPU reconstruction and no resize in this pane.
-        shooter.pane = 100 + i as u64;
-        let mut control = history_scene();
-        control.view.render_scale = scale;
-        shooter.shot_again(&control);
-        release(&mut control);
-        assert_eq!(resized, shooter.shot_again(&control));
-
-        shooter.pane = 20;
-        shooter.size = [256, 256];
-        assert_eq!(green, shooter.shot_again(&preview));
-        assert_eq!(history(&shooter).raw_views, preview_raw);
-        assert_eq!(history(&shooter).parity, preview_parity ^ 1);
-        preview_parity ^= 1;
-        shooter.pane = 10;
-        assert_eq!(history(&shooter).parity, parity, "another pane cannot advance this one");
-    }
-
-    // Under a material that reads the light, its source is the glow
-    // target's quarter size too.
-    shooter.pane = 10;
-    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
-    shooter.shot_again(&scene);
-    let offscreen = target(&shooter);
-    let quarter = offscreen.size.map(|n| n.div_ceil(GLOW_DIVISOR));
-    let glow = offscreen.glow.as_ref().unwrap();
-    let source = glow.material_source.as_ref().expect("fixture reaches a material source");
-    assert_eq!([source.view.texture().width(), source.view.texture().height()], quarter);
-    assert_eq!(glow.size, quarter);
-    eprintln!("history viewport fixture: 4 target recreations at quarter-size glow, then a quarter-size material source; 0 strip creations; 4 byte-exact controls, independent red/green panes");
-}
-
-/// This directly supplies renderer inputs, not an execution of the CPU row
-/// allocator. Capacity really changes 64 -> 128 and a held node writes row 64,
-/// beyond the old texture. CPU mix is zero, as after a discarded layout pass;
-/// the GPU owner must seed both the new texture and a subsequently reused row.
-#[test]
-fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = history_scene();
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 2.0 });
-    scene.nodes[0].glow.incarnation = 1;
-    scene.node_radius = 0.6;
-    // Reordering here measures row identity, independently of the Gaussian
-    // shadow atlas repacking when the caster order changes.
-    for style in scene.view.shadow.groups_mut() {
-        style.depth = 0.0;
-    }
-    // Hide behind packs the node group's cells at Darkness 0 too.
-    scene.view.hide_behind = 0.0;
-    scene.nodes[0].world_pos.x = -1.2;
-    shooter.shot_again(&scene);
-    release(&mut scene);
-    assert!(total_light(&shooter.shot_again(&scene)) > 64);
-    let raw = history(&shooter).raw_views.clone();
-    let color = target(&shooter).color_view.clone();
-    let light = target(&shooter).glow.as_ref().unwrap().view.clone();
-    let mut held = scene.nodes[0];
-    held.world_pos.x = 1.2;
-    held.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);
-    held.glow.row = 64;
-    held.glow.incarnation = 2;
-    held.presence_with_opacity = 1.0;
-    held.octaves.fill(1.0);
-    scene.nodes.push(held);
-    scene.glow_rows = 128;
-    scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-    let creations = super::INK_STRIP_CREATIONS.get();
-    let grown = shooter.shot_again(&scene);
-    assert_eq!(super::INK_STRIP_CREATIONS.get(), creations + 1);
-    assert_eq!(history(&shooter).rows, 128);
-    assert_eq!(history(&shooter).raw_views[0].texture().height(), 128);
-    assert_ne!(history(&shooter).raw_views, raw);
-    assert_eq!(history(&shooter).parity, 1, "new history starts at parity zero, then advances");
-    assert_eq!(target(&shooter).color_view, color);
-    assert_eq!(target(&shooter).glow.as_ref().unwrap().view, light);
-    assert_eq!(
-        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane].instance_count,
-        2,
-        "the old release and the newly writable row must both reach the GPU"
-    );
-    assert_eq!(grown.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum::<u64>(), 0);
-    assert!(grown.as_chunks::<4>().0.iter().map(|p| u64::from(p[1])).sum::<u64>() > 64);
-    let pane = shooter.pane;
-    assert_eq!(grown, shooter.shot(&scene), "growth is exactly fresh current ink");
-    shooter.pane = pane;
-    let grown_raw = history(&shooter).raw_views.clone();
-    // Dropping row zero's old owner and changing draw order cannot reassign
-    // row 64. It now releases its green while zero seeds blue, never red.
-    scene.nodes.remove(0);
-    let mut reused = scene.nodes[0];
-    release(&mut scene);
-    reused.glow.row = 0;
-    reused.glow.incarnation = 3;
-    reused.world_pos.x = -1.2;
-    reused.lattice_pos = harmonigraph_core::LatticePos::new(-1, 0, 0);
-    scene.nodes.push(reused);
-    scene.pitch_lut.fill(glam::Vec4::new(0.0, 0.0, 1.0, 1.0));
-    let reused = shooter.shot_again(&scene);
-    assert_eq!(history(&shooter).raw_views, grown_raw);
-    assert_eq!(reused.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum::<u64>(), 0);
-    assert!(reused.as_chunks::<4>().0.iter().map(|p| u64::from(p[1])).sum::<u64>() > 64);
-    assert!(reused.as_chunks::<4>().0.iter().map(|p| u64::from(p[2])).sum::<u64>() > 64);
-    scene.nodes.swap(0, 1);
-    let reordered = shooter.shot_again(&scene);
-    // Half-float overlap blends round after each incoming halo. Reordering
-    // may change the last byte, but cannot move a row's green/blue identity.
-    let largest_change = reused.iter().zip(&reordered).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-    assert!(largest_change <= 1, "row identity changed on reorder: {largest_change}/255");
-    // An encoded pass clears absent rows. Even the same owner must seed when
-    // it returns after such a pass, because its previous pixels are gone.
-    let absent = scene.nodes.remove(0);
-    shooter.shot_again(&scene);
-    scene.nodes.push(absent);
-    let returned = shooter.shot_again(&scene);
-    assert!(returned.as_chunks::<4>().0.iter().map(|p| u64::from(p[2])).sum::<u64>() > 64);
-    eprintln!("history growth fixture: 64 -> 128, 2 GPU instances including row 64, 1 strip creation, 0 viewport recreations; release red lost, held green present, reuse byte-exact");
-}
-
-/// The colour takes the rate the node's glow target says, through the instance
-/// `to_gpu` packs: a release under a held presence at the release rate, then a
-/// re-strike while the light is still falling at the attack rate, then a mark
-/// alone at the attack rate. The readings a slot could carry instead each fail
-/// one frame: the presence (`presence_with_opacity`) the release, the stepped
-/// `glow.level` the re-strike, and the drawn colour (`drawn_level`) the mark.
-#[test]
-fn the_shipped_target_picks_the_colours_rate_through_a_release_and_restrike() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = history_scene();
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.1, release: 1.0 });
-    let mix = |shooter: &mut Shooter, scene: &Scene| {
-        shooter.shot_again(scene);
-        let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane];
-        pane.ink_history.as_ref().unwrap().history.mixes()[0]
-    };
-    // Every step below is 0.1 s on from the last.
-    let (up, down) = harmonigraph_scene::GlowTiming { now: 0.1, attack: 0.1, release: 1.0 }
-        .coefficients(Some(0.0));
-    assert!((up - down).abs() > 0.5, "the fixture tells the two rates apart: {up}, {down}");
-    scene.nodes[0].glow.level = 0.8;
-    mix(&mut shooter, &scene);
-    // Released: the colour has gone and the presence holds above the light.
-    scene.nodes[0].octaves.fill(0.0);
-    scene.nodes[0].presence_with_opacity = 1.0;
-    scene.nodes[0].glow.level = 0.7;
-    scene.glow_timing.as_mut().unwrap().now = 0.1;
-    let released = mix(&mut shooter, &scene);
-    assert!((released - down).abs() < 1e-6, "a release under a held presence: {released}");
-    // Struck again with the light still falling: the target is back at 1.
-    scene.nodes[0].octaves.fill(1.0);
-    scene.nodes[0].glow.level = 0.65;
-    scene.glow_timing.as_mut().unwrap().now = 0.2;
-    let restruck = mix(&mut shooter, &scene);
-    assert!((restruck - up).abs() < 1e-6, "a re-strike during the release: {restruck}");
-    // Lit by a mark alone: the target counts the marks, which the drawn
-    // colour (`drawn_level`) in the slot would leave out.
-    scene.nodes[0].octaves.fill(0.0);
-    scene.nodes[0].melody_level = 1.0;
-    scene.nodes[0].glow.level = 0.6;
-    scene.glow_timing.as_mut().unwrap().now = 0.3;
-    let marked = mix(&mut shooter, &scene);
-    assert!((marked - up).abs() < 1e-6, "a mark lighting a node with no colour: {marked}");
-}
-
-#[test]
-fn glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = history_scene();
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 1.0, release: 4.0 });
-    scene.nodes[0].glow.incarnation = 1;
-    scene.nodes[0].glow.level = 0.25;
-    for pane in [10, 20] {
-        shooter.pane = pane;
-        assert!(total_light(&shooter.shot_again(&scene)) > 64);
-    }
-    scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-    scene.nodes[0].glow.level = 1.0;
-    for now in [0.02, 0.05] {
-        scene.glow_timing.as_mut().unwrap().now = now;
-        drop(LatticeCallback::from_scene(
-            &scene,
-            LatticeLabels::default(),
-            egui::vec2(256.0, 256.0),
-            shooter.format,
-            10,
-            None,
-        ));
-    }
-    scene.glow_timing.as_mut().unwrap().now = 0.1;
-    shooter.pane = 10;
-    let delivered = shooter.shot_again(&scene);
-    let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&10];
-    let mix = pane.ink_history.as_ref().unwrap().history.mixes()[0];
-    assert!(
-        (mix - (1.0 - (-0.1f32).exp())).abs() < 1e-6,
-        "attack uses the last encoded level: {mix}"
-    );
-    assert!(delivered.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum::<u64>() > 64);
-    assert!(delivered.as_chunks::<4>().0.iter().map(|p| u64::from(p[1])).sum::<u64>() > 64);
-    shooter.pane = 20;
-    assert_eq!(delivered, shooter.shot_again(&scene), "discarded callbacks cannot spend GPU time");
-    assert_eq!(delivered, shooter.shot_again(&scene), "same-time passes do not advance ink");
-    release(&mut scene);
-    scene.nodes[0].glow.level = 0.9;
-    scene.glow_timing.as_mut().unwrap().now = 0.5;
-    assert!(total_light(&shooter.shot_again(&scene)) > 64);
-    let pane = &shooter.resources.get::<LatticeResources>().unwrap().panes[&20];
-    let mix = pane.ink_history.as_ref().unwrap().history.mixes()[0];
-    assert!(
-        (mix - (1.0 - (-0.4f32 / 4.0).exp())).abs() < 1e-6,
-        "falling targets use release: {mix}"
-    );
-}
-
-/// Empty geometry leaves history and parity untouched. Once drawable
-/// geometry returns, glow-off must discard both objects so an inkless release
-/// cannot resurrect a colour retained by the new history owner.
-#[test]
-fn glow_off_discards_history_when_target_maintenance_runs() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = history_scene();
-    shooter.shot_again(&scene);
-    release(&mut scene);
-    let red = shooter.shot_again(&scene);
-    assert!(total_light(&red) > 64);
-    let raw = history(&shooter).raw_views.clone();
-    let color = target(&shooter).color_view.clone();
-    let parity = history(&shooter).parity;
-    let nodes = std::mem::take(&mut scene.nodes);
-    scene.view.glow_reach = 0.0;
-    shooter.size = [256, 260];
-    let creations = super::INK_STRIP_CREATIONS.get();
-    for _ in 0..2 {
-        shooter.shot_again(&scene);
-        assert_eq!(history(&shooter).raw_views, raw);
-        assert_eq!(target(&shooter).color_view, color);
-        assert!(target(&shooter).glow.is_some());
-        assert_eq!(history(&shooter).parity, parity);
-    }
-    assert_eq!(super::INK_STRIP_CREATIONS.get(), creations);
-    scene.nodes = nodes;
-    // Inkless nodes at reach zero are culled, so restoring them alone would
-    // still leave this empty. A visible marker really reaches maintenance.
-    scene.pluses.push(standalone_marker(
-        &mut scene.nodes,
-        glam::Vec3::ZERO,
-        0.1,
-        glam::Vec4::ONE,
-        1.0,
-    ));
-    shooter.shot_again(&scene);
-    assert_eq!(
-        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane].plus_count,
-        1
-    );
-    assert!(target(&shooter).glow.is_none());
-    assert!(shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
-        .ink_history
-        .is_none());
-    scene.pluses.clear();
-    scene.view.glow_reach = 0.8;
-    let reset = shooter.shot_again(&scene);
-    assert_eq!(super::INK_STRIP_CREATIONS.get(), creations + 1);
-    assert_ne!(history(&shooter).raw_views, raw);
-    assert_eq!(total_light(&reset), 0, "glow on cannot resurrect the discarded red history");
-}
-
-/// Untimed scenes are independent snapshots even when a pane already has history.
-#[test]
-fn untimed_snapshots_seed_current_ink_on_a_reused_pane() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = history_scene();
-    let red = shooter.shot(&scene);
-    scene.glow_timing = None;
-    scene.pitch_lut.fill(glam::Vec4::new(0.0, 1.0, 0.0, 1.0));
-    let green = shooter.shot_again(&scene);
-    assert_ne!(red, green, "the fixture must change colour");
-    assert_eq!(green, shooter.shot(&scene), "untimed colour cannot carry old ink");
 }

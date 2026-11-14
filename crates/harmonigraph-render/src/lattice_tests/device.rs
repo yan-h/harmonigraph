@@ -52,8 +52,8 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let window = shooter.resources.get_mut::<LatticeResources>().unwrap();
     assert!(!window.panes.is_empty(), "the first window must actually draw");
     assert!(
-        window.panes.values().all(|pane| pane.ink_history.is_some()),
-        "the populated context must own temporal history"
+        window.panes.values().all(|pane| pane.ink_strip.is_some()),
+        "the populated context must own its ink strip"
     );
     let pipeline = window.compiled.shaders.scenes[0].draws.nodes.clone();
     let atlas = FontAtlas {

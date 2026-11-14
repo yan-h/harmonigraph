@@ -42,3 +42,7 @@ Yan’s decisions recorded for future drift audits.
 
 - The spectrum/history now-line stays at the 2 pt line width, deliberately heavier than the 1 pt spectrum outline (#1585): the two share a colour, not a weight. #1635 Spectrum Q1, #1631
 - Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631
+
+## 2026-11-14 (F2′ rework, #1758 PR A)
+
+- Each feeder owns its analysis and dates its columns from a frame zero it states: the plugin from its clock mapping, the offline renderer from the first soundtrack frame it reads, the standalone synth from the frames it renders. Nothing dates columns by when they arrive, so the smoothed arrival anchor is gone, and the standalone synth's stall over 200 ms draws as a gap rather than sliding its columns back into line. After the plugin's input worker recovers from a crash, the newest edge keeps the lag of the resolution that drew it. #1758, #1761

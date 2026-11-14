@@ -65,8 +65,7 @@ pub(crate) use config::{
 // declared in `video` beside the appearance document that carries them, so a
 // new one is one declaration and one name here, in this crate alone.
 pub use spectrum::{
-    AnalyzedColumn, AudioSpectrum, Delivery, LentAnalysis, SpectrogramColumn, SpectrumAnalysis,
-    SpectrumHistory,
+    AnalyzedColumn, AudioSpectrum, Delivery, SpectrogramColumn, SpectrumAnalysis, SpectrumHistory,
 };
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
@@ -598,7 +597,8 @@ pub(crate) struct Moving {
     /// A lattice node still moving after its voice was pruned
     /// ([`NodeMotion::moving`](harmonigraph_scene::NodeMotion::moving): a
     /// departure's Fade-out delay, its stagger and the presence it holds for
-    /// them), or a node's Background glow still falling
+    /// them), or a node's Background glow still moving: its level falling, or
+    /// its colour still easing toward its reading
     /// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), which
     /// can outlast the slices by many seconds.
     releasing: bool,

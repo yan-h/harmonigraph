@@ -999,7 +999,7 @@ impl NodeMotion {
             // each after its Opacity, as the bloom reads it, rather than the
             // presence that waits on the slices (`NodeInstance::glow_target`).
             // Stateless snapshots draw it as it stands; the shell's glow pass
-            // steps the level toward it.
+            // steps the level, and what the light is made of, toward it.
             node.glow.level = node.glow_target();
         }
         scene.pluses = crate::derive::derive_pluses(
