@@ -1,4 +1,4 @@
-//! A cue played slower than recorded, with its pitch held (#1719 slice 5):
+//! A cue played slower or faster than recorded, with its pitch held (#1719 slice 5):
 //! the store's audio through Signalsmith Stretch, on the input worker.
 //!
 //! Output frame `j` of a cue is song frame `start + j * speed`, the same
@@ -31,7 +31,7 @@ pub(crate) struct Stretched {
 }
 
 impl Stretched {
-    /// A cue from song frame `start` at `speed` (below 1).
+    /// A cue from song frame `start` at `speed` (any but 1).
     pub(crate) fn new(store: &Store, start: i64, speed: f64) -> Stretched {
         let channels = store.channels;
         let mut stretch = Stretch::preset_default(channels as u32, store.rate as u32);
@@ -154,12 +154,12 @@ mod tests {
     }
 
     #[test]
-    fn a_slowed_cue_starts_at_its_spot_holds_its_pitch_and_ends_with_coverage() {
+    fn a_stretched_cue_starts_at_its_spot_holds_its_pitch_and_ends_with_coverage() {
         let store = store();
-        for speed in [0.75, 0.5, 0.25] {
+        for speed in [2.0, 1.5, 0.75, 0.5, 0.25] {
             let heard = heard(&store, speed);
             let seconds = |frames: usize| frames as f64 / f64::from(RATE);
-            // The two seconds of song after the spot, slowed.
+            // The two seconds of song after the spot, at its speed.
             assert!((seconds(heard.len()) - 2.0 / speed).abs() < 1e-3, "{speed}: {}", heard.len());
             // Past a 2x stretch the library randomises phases, unseeded
             // (`maxCleanStretch` in signalsmith-stretch.h): over 30 runs at
@@ -170,12 +170,15 @@ mod tests {
             // primed and dropped, not heard as a delay.
             let onset = seconds(heard.iter().position(|s| s.abs() > 0.25).expect("the tone"));
             assert!((onset - 0.5 / speed).abs() < early, "{speed}: onset at {onset} s");
-            // A steady second of the tone, well clear of its onset and the
-            // fade at the end of coverage, still at 440 Hz.
-            let from = ((0.5 / speed + 0.25) * f64::from(RATE)) as usize;
-            let steady = &heard[from..from + RATE as usize];
+            // A steady stretch of the tone, well clear of its onset and the
+            // fade at the end of coverage, still at 440 Hz: a second of it,
+            // or half of one where a fast cue sounds too little to hold one.
+            let (from, len) = if speed > 1.0 { (0.1, 0.5) } else { (0.25, 1.0) };
+            let from = ((0.5 / speed + from) * f64::from(RATE)) as usize;
+            let steady = &heard[from..from + (len * f64::from(RATE)) as usize];
             let rises = steady.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
-            assert!(rises.abs_diff(440) <= off, "{speed}: {rises} Hz");
+            let hz = (rises as f64 / len).round() as usize;
+            assert!(hz.abs_diff(440) <= off, "{speed}: {hz} Hz");
         }
     }
 

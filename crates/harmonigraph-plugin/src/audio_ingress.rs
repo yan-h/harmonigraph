@@ -54,7 +54,7 @@ pub(crate) enum TapePlay {
     Waiting,
     /// The tape's audio from the block's first frame, song seconds `seconds`
     /// on, for `frames` frames, each `speed` of a song frame: below 1 the
-    /// audition is slowed.
+    /// audition is slowed, above 1 sped up.
     Heard { seconds: f64, frames: usize, speed: f64 },
 }
 
