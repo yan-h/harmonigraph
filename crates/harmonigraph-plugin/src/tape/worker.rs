@@ -499,13 +499,13 @@ impl Worker {
         } else if view.speed != self.speed {
             // A speed is fixed for a cue, so one active now starts again at the
             // new speed: from the spot heard, or from its own spot while it still
-            // waits for audio. Never over a request the audio thread has not
-            // taken yet: a click there cues at the new speed anyway, and a Stop
-            // is a Stop.
+            // waits for audio. Not while one fades, whose serial is inactive
+            // already: a Stop is a Stop, and a click waiting out the fade cues
+            // at the new speed anyway. Nor over a request the audio thread has
+            // not taken yet, for the same reasons.
             let heard = f64::from_bits(self.shared.heard.load(Ordering::Relaxed));
             let (serial, position) = self.cue();
-            let at =
-                if heard.is_nan() { (serial & 1 == 1).then_some(position) } else { Some(heard) };
+            let at = (serial & 1 == 1).then(|| if heard.is_nan() { position } else { heard });
             if let Some(at) = at.filter(|at| at.is_finite()) {
                 let request = &self.shared.request;
                 let (taken, ordering) = (Ordering::AcqRel, Ordering::Relaxed);

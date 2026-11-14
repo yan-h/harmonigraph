@@ -78,7 +78,10 @@ pub(crate) struct Recorder {
     before: Vec<Voice>,
     after: Vec<Voice>,
     next: Vec<Voice>,
-    /// The time of the event whose marks the bound held back, if any.
+    /// The time of the latest event whose marks the bound held back, if any.
+    /// The latest, so a held-back mark is never dated before one of the same
+    /// voice that fitted: a lone Off fits where an Off and On together did
+    /// not.
     behind: Option<f64>,
 }
 
@@ -115,7 +118,7 @@ impl Recorder {
             if fits {
                 out.extend(marks.iter().map(|&mark| (time, mark)));
             } else {
-                behind.get_or_insert(time);
+                *behind = Some(time);
             }
             fits
         };
@@ -169,7 +172,7 @@ impl Recorder {
     }
 
     /// At the start of a step's drain, with `out` empty again: the marks the
-    /// bound held back, at the time of the event that made them. Waiting for
+    /// bound held back, at the time of the last event that did. Waiting for
     /// the next event instead could wait past the end of the pass, and the
     /// note would still hang.
     pub(crate) fn catch_up(&mut self, tracker: &NoteTracker, out: &mut Vec<(f64, Mark)>) {
@@ -240,10 +243,14 @@ impl PassNotes {
     }
 
     /// What `frame` was drawn with: the last change at or before it, else
-    /// the first, which the pass's opening moments were drawn with too.
+    /// the first, which the pass's opening moments were drawn with too. A
+    /// pass that opened before the configuration was published takes the
+    /// first tuning axes it recorded for those moments, in the same way.
     pub(crate) fn drawn_at(&self, frame: i64) -> Option<Drawn> {
         let after = self.drawn.partition_point(|(f, _)| *f <= frame);
-        self.drawn.get(after.saturating_sub(1)).map(|(_, drawn)| *drawn)
+        let drawn = self.drawn.get(after.saturating_sub(1)).map(|(_, drawn)| *drawn)?;
+        let first = || self.drawn.iter().find_map(|(_, drawn)| drawn.tuning);
+        Some(Drawn { tuning: drawn.tuning.or_else(first), ..drawn })
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -693,16 +700,20 @@ mod tests {
         }
         let full = (0.0, Mark::Off { key: key(1, 0) });
         marks = vec![full; NOTES];
-        tracker.handle_event(NoteEvent::off(2.0, source, 0, 60));
-        recorder.record(&tracker, 2.0, &mut marks);
-        assert_eq!(marks.len(), NOTES, "the full step took the release");
+        for (time, note) in [(2.0, 60), (2.5, 62)] {
+            tracker.handle_event(NoteEvent::off(time, source, 0, note));
+            recorder.record(&tracker, time, &mut marks);
+        }
+        assert_eq!(marks.len(), NOTES, "the full step took the releases");
 
         // The next step's drain starts empty.
         marks.clear();
+        // Dated at the last held-back event, never before a mark that fitted.
         recorder.catch_up(&tracker, &mut marks);
-        assert_eq!(marks, [(2.0, Mark::Off { key: key(1, 60) })]);
+        let late = |note| (2.5, Mark::Off { key: key(1, note) });
+        assert_eq!(marks, [late(60), late(62)]);
         recorder.catch_up(&tracker, &mut marks);
-        assert_eq!(marks.len(), 1, "nothing left behind");
+        assert_eq!(marks.len(), 2, "nothing left behind");
     }
 
     /// The defect that kept notes out of #1720: a chunk cut by a newer pass
