@@ -692,8 +692,8 @@ impl Recording {
             && self.source_closed
     }
 
-    /// Write the take's failure marker, once. It touches every pass not
-    /// closed above it, which the reader works out from its place.
+    /// Write the take's failure marker, once. It names no pass, so it marks
+    /// every pass of the take (#1766).
     fn mark_incomplete(
         &mut self,
         record: harmonigraph_take::IncompleteRecord,

@@ -482,8 +482,9 @@ mod tests {
     }
 
     /// A closure lost in an outage was played at no input, so it must not
-    /// widen the range of inputs the gap names: merged as one at sample 0, it
-    /// marked every earlier pass incomplete.
+    /// widen the range of inputs the gap names: merged as one at sample 0, the
+    /// gap would be drawn over runs that lost nothing. (The lost closure fails
+    /// the take anyway; the gap's range is what a reader shows of the loss.)
     #[test]
     fn a_lost_closure_leaves_the_outage_s_inputs_where_they_were() {
         let (mut publisher, mut consumer) = channel();
