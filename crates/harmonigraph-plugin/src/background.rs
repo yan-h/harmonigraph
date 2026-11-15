@@ -253,32 +253,33 @@ thread_local! {
 /// lines wait for the second.
 ///
 /// **A still window is asked to draw what a step started**
-/// ([`EguiState::request_pass`]): voices in a tracker that had none, played
-/// or from the tape, and sound after a still stretch. A still window runs no
-/// pass until something asks, so without this the first note after silence
-/// was drawn at its next idle poll, up to about 56 ms at 144 Hz. Only the
-/// start asks: once voices sound or a picture shows the sound moving, the
-/// window draws every refresh until they stop. What else a step changes (the
-/// tape's view, a Console line) is drawn at the idle poll.
+/// ([`EguiState::request_pass`]): any note it struck, played or from the
+/// tape, and sound after a still stretch. A still window runs no pass until
+/// something asks, so without this the first note after silence was drawn at
+/// its next idle poll, up to about 56 ms at 144 Hz. Sound asks only as it
+/// starts: once a picture shows it moving, the window draws every refresh
+/// until it stops, and a picture that does not show it has nothing new to
+/// draw. What else a step changes (the tape's view, a Console line) is drawn
+/// at the idle poll.
 fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::Worker) {
-    let (taken, sounded) = {
+    let (taken, struck) = {
         let mut guard = shared.lock();
         let shared = &mut *guard;
         let now = shared.input.now();
         let open = editor_state.is_open();
         let settings = &shared.ui.picture.appearance.spectrum;
         tape.exchange(&mut shared.ui.picture.runtime.tape, settings, open);
-        let silent = shared.ui.picture.runtime.tracker.voices().next().is_none();
+        let onset = newest_onset(&shared.ui.picture.runtime);
         let taken =
             shared.input.take(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);
         std::mem::swap(&mut shared.input.tape_notes, &mut tape.inbox);
         if let Some(taken) = &taken {
             tape.feed(taken, &mut shared.ui.picture.runtime);
         }
-        (taken, silent && shared.ui.picture.runtime.tracker.voices().next().is_some())
+        (taken, newest_onset(&shared.ui.picture.runtime) > onset)
     };
     // Asked once the lock is let go, so the pass it runs does not wait on it.
-    if sounded {
+    if struck {
         editor_state.request_pass();
     }
     if let Some(taken) = &taken {
@@ -323,6 +324,13 @@ fn step(shared: &EditorLock, editor_state: &EguiState, tape: &mut crate::tape::W
     if resumed {
         editor_state.request_pass();
     }
+}
+
+/// When the newest voice the tracker draws was struck, `None` while it draws
+/// none: a step that moves it on struck a note, a retrigger of a held key
+/// included, since that starts a voice of its own.
+fn newest_onset(runtime: &harmonigraph_ui::VisualRuntime) -> Option<f64> {
+    runtime.tracker.voices().map(|voice| voice.on_time).reduce(f64::max)
 }
 
 /// A [`step`] that survives its own panic. One would otherwise end the
@@ -675,10 +683,10 @@ mod tests {
         assert_eq!(h.voices(), 1, "the worker left the notes to a frame");
     }
 
-    /// A step that starts something in a still picture asks the open window
-    /// to draw it on its next frame: the first note into a silent tracker,
-    /// and the first sound after silence. One that adds to what already
-    /// sounds asks nothing more, since that picture draws every refresh.
+    /// A step that starts something asks the open window to draw it on its
+    /// next frame: any note it strikes, a note joining a held one included,
+    /// and the first sound after silence. A release, and sound that goes on,
+    /// ask nothing.
     #[test]
     fn a_step_asks_the_window_to_draw_what_it_starts() {
         let mut h = harness();
@@ -689,7 +697,10 @@ mod tests {
         assert!(asked(&h), "the first note waited for the idle poll");
         h.push_note(1.5, 64);
         h.step();
-        assert!(!asked(&h), "a note beside a sounding one");
+        assert!(asked(&h), "a note joining a held one waited for the idle poll");
+        h.push_note_off(1.6, 64);
+        h.step();
+        assert!(!asked(&h), "a release");
         h.push_audio(20_000);
         h.step();
         assert!(asked(&h), "the first sound waited for the idle poll");
