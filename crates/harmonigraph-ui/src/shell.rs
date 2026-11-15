@@ -123,7 +123,6 @@ pub fn close(state: &SharedState) -> String {
 mod tests {
     use super::*;
     use crate::tests::probe::{fresh, Defaults};
-    use crate::SaveSource;
 
     fn frame(ctx: &egui::Context, state: &mut SharedState, size: egui::Vec2) -> Option<egui::Vec2> {
         let mut ask = None;
@@ -147,14 +146,6 @@ mod tests {
     }
 
     const SIZE: egui::Vec2 = egui::vec2(1000.0, 800.0);
-
-    /// A state whose save holds a document this build refused.
-    fn held() -> SharedState {
-        let mut state = fresh();
-        assert!(!state.install_document("not a blob"));
-        assert!(matches!(state.save_source(), SaveSource::Held(_)));
-        state
-    }
 
     #[test]
     fn requests_are_two_dimensional_floored_and_consumed_once() {
@@ -189,61 +180,5 @@ mod tests {
         assert_eq!(reopened.workspace.layout.position, crate::workspace::Position::Below);
         assert!(reopened.workspace.layout.folded[0]);
         assert_eq!(reopened.workspace.min_window_size, MIN_WINDOW_SIZE);
-    }
-
-    /// A frame that draws the editor shows what a save will store, so it ends
-    /// both a fresh state's empty save and a hold on a refused document.
-    #[test]
-    fn a_frame_that_draws_the_editor_makes_the_save_live() {
-        for mut state in [fresh(), held()] {
-            let ctx = egui::Context::default();
-            Opening { ctx: &ctx, state: &mut state }.open();
-            assert_ne!(state.save_source(), &SaveSource::Live, "live before any frame");
-            let _ = frame(&ctx, &mut state, SIZE);
-            assert_eq!(state.save_source(), &SaveSource::Live);
-        }
-    }
-
-    /// A frame with no area still runs what edits saved settings — the Tab
-    /// toggle of hidden bars, the look's undo, the camera — so it counts as
-    /// drawn: a hold kept through it would throw those edits away.
-    #[test]
-    fn a_frame_with_no_area_still_makes_the_save_live() {
-        let ctx = egui::Context::default();
-        let mut state = held();
-        Opening { ctx: &ctx, state: &mut state }.open();
-        let _ = frame(&ctx, &mut state, egui::Vec2::ZERO);
-        assert_eq!(state.save_source(), &SaveSource::Live);
-    }
-
-    /// The loading screen draws nothing of the editor, the Console's reason
-    /// for the hold included, so the hold outlasts it.
-    #[test]
-    fn a_loading_frame_keeps_the_save_held() {
-        let ctx = egui::Context::default();
-        let mut state = held();
-        Opening { ctx: &ctx, state: &mut state }.open();
-        crate::startup::begin_editor_loading_with(
-            &ctx,
-            harmonigraph_render::startup::WindowStartup::preparing(),
-        );
-        let _ = frame(&ctx, &mut state, SIZE);
-        assert!(crate::editor_loading_status(&ctx).is_some(), "the frame was not a loading one");
-        assert!(matches!(state.save_source(), SaveSource::Held(_)));
-    }
-
-    /// A frame the closing window still runs draws nothing, until the next
-    /// window session starts.
-    #[test]
-    fn a_frame_after_the_window_session_ends_keeps_the_save_held() {
-        let ctx = egui::Context::default();
-        let mut state = held();
-        state.end_window_session();
-        let _ = frame(&ctx, &mut state, SIZE);
-        assert!(matches!(state.save_source(), SaveSource::Held(_)));
-
-        Opening { ctx: &ctx, state: &mut state }.open();
-        let _ = frame(&ctx, &mut state, SIZE);
-        assert_eq!(state.save_source(), &SaveSource::Live, "the next session's frame drew nothing");
     }
 }

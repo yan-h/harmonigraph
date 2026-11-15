@@ -100,7 +100,7 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<Egui
 /// frame mid-run, for a few milliseconds. Bounded rather than a plain `lock`
 /// so the re-entrant case costs the save its freshness and not the host a
 /// hang — the kind issue #296 is about.
-pub(crate) const SAVE_WAIT: Duration = Duration::from_millis(20);
+const SAVE_WAIT: Duration = Duration::from_millis(20);
 
 /// The editor's saved settings, the `ui-state` field the host stores with the
 /// project: an input into the live state and an output out of it, never a
@@ -111,17 +111,13 @@ pub(crate) const SAVE_WAIT: Duration = Duration::from_millis(20);
 /// or close, or a save. A save (`map`, the one thing a host save calls)
 /// takes that lock, window open or shut, and stores what
 /// [`SharedState::save_answer`](harmonigraph_ui::SharedState::save_answer)
-/// says: the live settings, `""` for an editor nobody has opened, or a
-/// document this build could not fully read, verbatim until a frame has shown
-/// why. Both arrive on the host's main thread.
+/// says: the live settings, or `""` for an editor nobody has opened since it
+/// was fresh. Both arrive on the host's main thread.
 ///
 /// The one limit: a save the host makes from inside a callback the editor
 /// makes under its lock — a parameter gesture's flush, a camera move's — cannot
 /// take the lock, and returns the fallback: the newest of the last restore,
-/// close, successful save, or the first frame to draw the editor since it was
-/// fresh (#1301). So it is never `""` from the frame after that first one; a
-/// save re-entered during the first one itself still answers `""`, since that
-/// frame settles the fallback when it ends.
+/// close or successful save (#1301).
 pub struct UiState {
     inbox: Arc<Inbox>,
     /// Weak, so this field never keeps `EditorShared` alive: the plugin orders
@@ -149,20 +145,20 @@ impl UiState {
         }
     }
 
-    /// What a save stores, waiting at most `wait` for the editor lock.
-    pub(crate) fn save(&self, wait: Duration) -> Arc<str> {
+    /// What a save stores, waiting at most [`SAVE_WAIT`] for the editor lock.
+    fn save(&self) -> Arc<str> {
         let Some(lock) = self.live.get().and_then(Weak::upgrade) else {
             return self.inbox.fallback();
         };
-        let answer = lock.try_lock_for(wait).map(|shared| {
+        let answer = lock.try_lock_for(SAVE_WAIT).map(|shared| {
             let answer = shared.ui.save_answer();
             self.inbox.settle(answer.clone());
             answer
         });
         answer.unwrap_or_else(|| {
             nice_plug::nice_warn!(
-                "editor state busy for {wait:?}; saving the settings of the last restore, close, \
-                 save or first frame to draw the editor instead of the editor's"
+                "editor state busy for {SAVE_WAIT:?}; saving the settings of the last restore, \
+                 close or save instead of the editor's"
             );
             self.inbox.fallback()
         })
@@ -188,7 +184,7 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
     where
         F: Fn(&String) -> R,
     {
-        f(&self.save(SAVE_WAIT).to_string())
+        f(&self.save().to_string())
     }
 }
 

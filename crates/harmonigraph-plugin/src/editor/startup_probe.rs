@@ -103,8 +103,6 @@ impl WindowHandler for Host {
         }
         if self.child.is_some() {
             if self.observations.completed.load(Ordering::Relaxed) > self.opening {
-                // As the plugin's close does, so a frame after it draws nothing.
-                self.shared.lock().end_window_session();
                 self.child.take().unwrap().close();
                 self.opening += 1;
             }

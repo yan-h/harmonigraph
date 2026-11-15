@@ -1592,42 +1592,54 @@ mod tests {
         assert_eq!(saved(&plugin), blob);
     }
 
-    /// A document this build refuses is saved as it came, window shut, so
-    /// nothing in it is lost before the editor has shown why.
-    #[test]
-    fn a_refused_restore_is_saved_as_it_came() {
-        let plugin = Harmonigraph::default();
-        restore(&plugin, "not a blob");
-        assert_eq!(saved(&plugin), "not a blob");
-    }
-
     /// An editor never opened saves nothing, so its project keeps following
-    /// the fresh look of whichever build loads it (#1757 Q2).
+    /// the fresh look of whichever build loads it (#1757 Q2); once a window
+    /// has opened, a save stores the settings it showed.
     #[test]
     fn an_editor_never_opened_saves_nothing() {
         let plugin = Harmonigraph::default();
         assert_eq!(saved(&plugin), "");
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
+        let shown = plugin.editor_shared.lock().ui.save_persist();
+        assert_eq!(saved(&plugin), shown, "an opened editor saved nothing");
     }
 
-    /// An empty restore is what such a project carries, so it puts the fresh
-    /// look back and saves nothing again (#1757 Q3): undoing a preset load
-    /// whose preset came from an untouched editor goes back to the fresh look.
+    /// An empty restore into an open window (a host undo back to an untouched
+    /// preset) installs the fresh look, and the edits made after it are what
+    /// the next save stores, not `""`.
     #[test]
-    fn an_empty_restore_is_the_fresh_look_and_saves_nothing() {
+    fn an_empty_restore_into_an_open_window_keeps_saving_its_edits() {
+        let plugin = Harmonigraph::default();
+        editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
+        restore(&plugin, "");
+        turn_live_yaw(&plugin, 1.25);
+        assert_eq!(saved_yaw(&plugin), 1.25, "a save after the empty restore lost the edit");
+    }
+
+    /// An empty restore is what an untouched editor's project carries, so it
+    /// puts the fresh look back (#1757 Q3): undoing a preset load whose preset
+    /// came from an untouched editor goes back to the fresh look, and a save
+    /// then stores that look.
+    #[test]
+    fn an_empty_restore_is_the_fresh_look() {
         let plugin = Harmonigraph::default();
         let fresh = live_yaw(&plugin);
         restore_yaw(&plugin, fresh + 0.5);
         assert_eq!(saved_yaw(&plugin), fresh + 0.5);
 
         restore(&plugin, "");
-        assert_eq!(saved(&plugin), "");
         assert_eq!(live_yaw(&plugin), fresh, "the editor kept the restore an empty one replaced");
+        assert_eq!(
+            saved_yaw(&plugin),
+            fresh,
+            "a save after the empty restore is not the fresh look"
+        );
     }
 
     /// A save that cannot take the editor lock — one the host makes from a
     /// callback the editor makes under it — returns at once rather than hang
-    /// the host (#296), with the newest of the last restore, close,
-    /// successful save or first frame to draw the editor (#1301).
+    /// the host (#296), with the newest of the last restore, close or
+    /// successful save (#1301).
     #[test]
     fn a_save_that_cannot_take_the_editor_lock_returns_the_fallback() {
         let plugin = Harmonigraph::default();

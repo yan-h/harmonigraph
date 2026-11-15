@@ -102,32 +102,12 @@ pub enum ExportAction {
 pub struct SharedState {
     pub picture: PictureState,
     pub workspace: Workspace,
-    /// What a host save stores; see [`SaveSource`].
-    save_source: SaveSource,
-    /// Set from the end of a window session to the start of the next, so a
-    /// frame the closing window still runs draws nothing.
-    closing: bool,
-}
-
-/// What a host save of the editor's settings stores, decided by the last
-/// document installed and whether a frame has drawn the editor since.
-///
-/// The live state is the only copy of the settings: a restore installs into
-/// it, a save serializes out of it, and nothing reads a saved document back.
-/// This is what that save answers with.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SaveSource {
-    /// Fresh, and no frame has drawn the editor: the save stores `""`, so a
-    /// project whose editor was never opened keeps following the fresh look
-    /// of whichever build loads it (#1757 Q2).
-    Untouched,
-    /// The save serializes the live state.
-    Live,
-    /// The last document installed lost something, refused whole or with
-    /// keys dropped, and no frame has drawn the editor since. The save stores
-    /// that document verbatim, so nothing is lost before the Console has
-    /// shown why.
-    Held(std::sync::Arc<str>),
+    /// Nothing installed and no window opened since the state was fresh: a
+    /// host save stores `""`, so a project whose editor was never opened keeps
+    /// following the fresh look of whichever build loads it (#1757 Q2). An
+    /// empty restore leaves it as it was, so one into an editor that has held
+    /// settings never turns its later saves into `""`.
+    untouched: bool,
 }
 
 /// Shared live/offline picture. A picture pane cannot access the editor dock,
@@ -609,8 +589,7 @@ impl SharedState {
         Self {
             picture: PictureState::new(target_format),
             workspace: Workspace::default(),
-            save_source: SaveSource::Untouched,
-            closing: false,
+            untouched: true,
         }
     }
 
@@ -631,29 +610,28 @@ impl SharedState {
             .unwrap_or_default()
     }
 
-    /// What a host save stores: see [`SaveSource`].
+    /// What a host save stores: the live settings, serialized, or `""` for an
+    /// editor nobody has opened since it was fresh. The live state is the
+    /// only copy of the settings: a restore installs into it, a save
+    /// serializes out of it, and nothing reads a saved document back.
     pub fn save_answer(&self) -> std::sync::Arc<str> {
-        match &self.save_source {
-            SaveSource::Untouched => "".into(),
-            SaveSource::Live => self.save_persist().into(),
-            SaveSource::Held(document) => document.clone(),
+        if self.untouched {
+            "".into()
+        } else {
+            self.save_persist().into()
         }
     }
 
-    pub fn save_source(&self) -> &SaveSource {
-        &self.save_source
-    }
-
-    /// Install a saved editor document — a host restore, or the standalone
-    /// harness's last run — and set what a save stores from the outcome.
+    /// Install a saved editor document: a host restore, or the standalone
+    /// harness's last run.
     ///
     /// The empty document is what an editor never opened saves, so it installs
-    /// the fresh settings and leaves the save [`Untouched`](SaveSource::Untouched)
-    /// (#1757 Q3). A value naming a variant this build does not have costs its
+    /// the fresh settings (#1757 Q3); a save then stores `""` only if the
+    /// editor has held nothing else and no window has opened. A value naming a variant this build does not have costs its
     /// own key, which opens at its default (#1757 Q4); refused input leaves the
-    /// current content intact. Either loss opens the Console, says what was
-    /// lost there, and holds the document for saves until a frame has drawn
-    /// that. Appearance normalization is shared with recording/export;
+    /// current content intact. Either loss opens the Console and says there
+    /// what was lost; a save then stores the settings as they stand, like any
+    /// other. Appearance normalization is shared with recording/export;
     /// workspace restoration remains editor-only.
     ///
     /// A restore discards the look slots' undo histories; a window closing and
@@ -666,7 +644,6 @@ impl SharedState {
                 &Workspace::default(),
                 &crate::AppearanceDocument::default(),
             ));
-            self.save_source = SaveSource::Untouched;
             return true;
         }
         let (persist, dropped) = match crate::persist_keys::decode::<UiPersist>(serialized) {
@@ -682,24 +659,24 @@ impl SharedState {
             // no explanation reads as data loss, and this is the difference
             // between that and a break someone chose.
             Err(err) => {
-                return self.refuse_persist(serialized, format!("the blob did not parse ({err})"));
+                return self.refuse_persist(format!("the blob did not parse ({err})"));
             }
         };
         if persist.version < UI_PERSIST_VERSION {
-            return self.refuse_persist(
-                serialized,
-                format!("version {} is below the floor of {UI_PERSIST_VERSION}", persist.version),
-            );
+            return self.refuse_persist(format!(
+                "version {} is below the floor of {UI_PERSIST_VERSION}",
+                persist.version,
+            ));
         }
         let appearance = match persist.appearance.normalize() {
             Ok(appearance) => appearance,
             Err(err) => {
-                return self.refuse_persist(serialized, err);
+                return self.refuse_persist(err);
             }
         };
         self.apply_persist(UiPersist { appearance, ..persist });
+        self.untouched = false;
         if dropped.is_empty() {
-            self.save_source = SaveSource::Live;
             return true;
         }
         for lost in dropped {
@@ -708,7 +685,7 @@ impl SharedState {
                 lost.key, lost.variant,
             ));
         }
-        self.hold_until_seen(serialized);
+        self.reveal_console();
         true
     }
 
@@ -737,28 +714,27 @@ impl SharedState {
     }
 
     /// Reject a saved document loudly, leaving the current content as it was.
-    fn refuse_persist(&mut self, document: &str, reason: String) -> bool {
+    fn refuse_persist(&mut self, reason: String) -> bool {
         self.log(format!("persist ignored — {reason}"));
-        self.hold_until_seen(document);
+        self.reveal_console();
         false
     }
 
-    /// An install lost something from `document`. The Console is the last
-    /// settings tab, a diagnostic rather than a page visited while playing, so
-    /// this selects it and unfolds the settings: the diagnostic is the only
-    /// thing that explains why the editor opened on fresh settings. Until a
-    /// frame has drawn that, a save stores the document as it came.
-    fn hold_until_seen(&mut self, document: &str) {
+    /// An install lost something. The Console is the last settings tab, a
+    /// diagnostic rather than a page visited while playing, so this selects it
+    /// and unfolds the settings: the diagnostic is the only thing that
+    /// explains why the editor opened on fresh settings.
+    fn reveal_console(&mut self) {
         self.workspace.layout.select(panes::Tab::Console);
         self.workspace.layout.folded[workspace::Section::Settings as usize] = false;
-        self.save_source = SaveSource::Held(document.into());
     }
 
     /// Start drawing in a newly built window. The state outlives every window,
     /// so what a session carries is the settings, the look slots and their
     /// undo histories; what belongs to the window that closed is reset here.
+    /// From the first window on, a save stores the settings it shows.
     pub(crate) fn start_window_session(&mut self) {
-        self.closing = false;
+        self.untouched = false;
         self.workspace.layout_runtime = workspace::Runtime::default();
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.appearance_editor.start_window_session();
@@ -770,25 +746,10 @@ impl SharedState {
     }
 
     /// The window is closing: an appearance edit still open, a drag the close
-    /// cut off, becomes one undo entry, and no frame draws until the next
-    /// window session starts. The plugin's close calls this before it answers
-    /// a save, so the save holds the session.
+    /// cut off, becomes one undo entry. The plugin's close calls this before
+    /// it refreshes a save's fallback, so the fallback holds the session.
     pub fn end_window_session(&mut self) {
         self.workspace.interaction.appearance_editor.end_window_session(&self.picture.appearance);
-        self.closing = true;
-    }
-
-    /// Between [`end_window_session`](Self::end_window_session) and the next
-    /// window session's start.
-    pub fn closing(&self) -> bool {
-        self.closing
-    }
-
-    /// A frame has drawn the editor itself, past the loading screen: what it
-    /// shows is what a save stores from now on, the Console's reason for a
-    /// hold included. Set by [`crate::root_ui`] alone.
-    pub(crate) fn seen(&mut self) {
-        self.save_source = SaveSource::Live;
     }
 }
 
