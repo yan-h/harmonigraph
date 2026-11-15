@@ -708,7 +708,7 @@ mod tests {
         // The DAW's own lattice ground rather than the fixture's near-black, so
         // what the light lands on here is what it lands on there.
         state.set_background((24, 25, 29));
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         // The light's own clock off: one frame is the whole picture, and a
         // halo part way through its attack is a shot of the ballistics.
         state.appearance.view.glow_attack = 0.0;
@@ -771,7 +771,7 @@ mod tests {
         };
         let mut state = PictureState::new(FORMAT);
         state.set_background((24, 25, 29));
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         state.appearance.view.glow_attack = 0.0;
         state.appearance.view.glow_release = 0.0;
         state.appearance.view.glow_reach = 2.0;
@@ -866,7 +866,7 @@ mod tests {
             // the markers are a step above the panel and nothing else here says
             // how big a step that reads as.
             state.set_background((24, 25, 29));
-            state.runtime.frame_params.fade_time = 0.0;
+            state.appearance.view.fade_time = 0.0;
             if chord {
                 hold(&mut state, &CHORD);
             }
@@ -926,7 +926,7 @@ mod tests {
         let mut read = |extent: i32| -> (f64, f64) {
             let mut state = PictureState::new(FORMAT);
             state.set_background((24, 25, 29));
-            state.runtime.frame_params.fade_time = 0.0;
+            state.appearance.view.fade_time = 0.0;
             // Settle the light in one frame, then release it onto a long tail
             // for the measured frame. The note names are consequently gone
             // while the light remains, so the centre pixel isolates the glow
@@ -1046,7 +1046,7 @@ mod tests {
         state.appearance.spectrum.release = 0.0;
         // Fully lit at once: an envelope would put the MIDI half of the
         // picture part way through its arrival.
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         hold(&mut state, &[48]);
         let cfg = state.appearance.spectrum;
         analyze(&mut state, &sawtooth(48.0, RATE), RATE, NOW, &cfg);
@@ -1274,7 +1274,7 @@ mod tests {
         ] {
             let mut state = PictureState::new(FORMAT);
             state.set_background((24, 25, 29));
-            state.runtime.frame_params.fade_time = 0.0;
+            state.appearance.view.fade_time = 0.0;
             hold(&mut state, &CHORD);
             state.appearance.camera.projection = if tag == "cabinet" {
                 harmonigraph_scene::Projection::Cabinet

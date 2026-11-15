@@ -9,13 +9,7 @@ use harmonigraph_core::{NoteEvent, NoteTracker, PitchClass, SourceId, Tuning};
 #[test]
 fn camera_target_projects_to_viewport_center() {
     let camera = Camera::default();
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig::default(),
-        &plain_frame(),
-        0.0,
-    );
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &ViewConfig::default(), 0.0);
     let viewport = Vec2::new(800.0, 600.0);
     let p = scene.project(viewport, camera.target).unwrap();
     assert!((p.x - 400.0).abs() < 0.5, "x = {}", p.x);
@@ -26,13 +20,8 @@ fn camera_target_projects_to_viewport_center() {
 fn points_behind_the_camera_do_not_project() {
     for projection in [Projection::Perspective, Projection::Orthographic, Projection::Cabinet] {
         let camera = Camera { projection, ..Camera::default() };
-        let mut scene = scene_of(
-            &NoteTracker::new(),
-            &Tuning::default(),
-            &ViewConfig::default(),
-            &plain_frame(),
-            0.0,
-        );
+        let mut scene =
+            scene_of(&NoteTracker::new(), &Tuning::default(), &ViewConfig::default(), 0.0);
         scene.camera = camera;
         // Continue from the target through the eye and beyond it.
         let behind = camera.eye() + (camera.eye() - camera.target);
@@ -55,13 +44,7 @@ fn cabinet_faces_the_sheet_and_shears_sevens_uniformly() {
     };
     assert_eq!(camera.eye(), Vec3::new(0.0, 0.0, camera.distance));
 
-    let mut s = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig::default(),
-        &plain_frame(),
-        0.0,
-    );
+    let mut s = scene_of(&NoteTracker::new(), &Tuning::default(), &ViewConfig::default(), 0.0);
     s.camera = camera;
     let px = |w: Vec3| s.project(viewport, w).unwrap();
 
@@ -96,13 +79,7 @@ fn orthographic_matches_perspective_at_the_focus_plane_and_is_uniform() {
     let viewport = Vec2::new(800.0, 600.0);
     let perspective = Camera { projection: Projection::Perspective, ..Camera::default() };
     let ortho = Camera { projection: Projection::Orthographic, ..perspective };
-    let mut s = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig::default(),
-        &plain_frame(),
-        0.0,
-    );
+    let mut s = scene_of(&NoteTracker::new(), &Tuning::default(), &ViewConfig::default(), 0.0);
 
     // The target projects to the viewport center in both projections.
     s.camera = ortho;
@@ -134,13 +111,7 @@ fn orthographic_matches_perspective_at_the_focus_plane_and_is_uniform() {
 
 #[test]
 fn pick_selects_the_node_nearest_the_pointer() {
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig::default(),
-        &plain_frame(),
-        0.0,
-    );
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &ViewConfig::default(), 0.0);
     let viewport = Vec2::new(800.0, 600.0);
     // Pointer exactly on the projected origin node must pick it, not a
     // neighbor; a pointer far outside every node picks nothing. Its world
@@ -162,7 +133,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
     let tuning = Tuning::default();
     let viewport = Vec2::new(800.0, 600.0);
 
-    let idle = scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
+    let idle = scene_of(&NoteTracker::new(), &tuning, &view, 0.0);
     let off = *idle
         .nodes
         .iter()
@@ -184,7 +155,7 @@ fn idle_off_sheet_nodes_are_not_pickable() {
         .expect("some MIDI note lands on this node under 12-TET");
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
-    let lit = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
+    let lit = scene_of(&tracker, &tuning, &view, 0.0);
     let lit_off = lit.nodes.iter().find(|n| n.lattice_pos == off.lattice_pos).unwrap();
     assert!(lit_off.presence_with_opacity > 0.0, "the note should light this node");
     assert!(lit_off.is_visible());
@@ -211,7 +182,7 @@ fn a_held_note_off_the_sheet_is_visible_at_zero_opacity() {
     };
     let tuning = Tuning::default();
     let viewport = Vec2::new(800.0, 600.0);
-    let idle = scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
+    let idle = scene_of(&NoteTracker::new(), &tuning, &view, 0.0);
     let off = *idle.nodes.iter().find(|n| !n.on_home).expect("the view spans past the home sheet");
     let pc = tuning.pitch_class(off.lattice_pos);
     let note = (60u8..72)
@@ -219,7 +190,7 @@ fn a_held_note_off_the_sheet_is_visible_at_zero_opacity() {
         .expect("some MIDI note lands on this node under 12-TET");
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
-    let held = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
+    let held = scene_of(&tracker, &tuning, &view, 0.0);
     let node = held.nodes.iter().find(|n| n.lattice_pos == off.lattice_pos).unwrap();
     assert!(!node.on_home && node.trail == 0.0, "the fixture must be an untrailed off-sheet node");
     assert_eq!(node.presence_with_opacity, 0.0, "Opacity base 0 must draw the note at nothing");

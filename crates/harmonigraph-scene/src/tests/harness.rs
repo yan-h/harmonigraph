@@ -8,11 +8,9 @@ pub(super) fn scene_of(
     tracker: &NoteTracker,
     tuning: &Tuning,
     view: &ViewConfig,
-    frame: &FrameParams,
     now: f64,
 ) -> Scene {
-    let mut scene =
-        derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None);
+    let mut scene = derive_scene(tracker, tuning, view, &view.reach(), Camera::default(), None);
     // The post-passes use the same normalized view as production composition.
     let mut normalized = view.clone();
     normalized.sanitize();
@@ -22,18 +20,18 @@ pub(super) fn scene_of(
         tracker,
         tuning,
         view,
-        &view.envelope(frame),
+        &view.envelope(),
         &RingFade::default(),
         now,
     );
     scene
 }
 
-/// [`ViewConfig::default`] with the note envelope pinned flat: a straight-line
-/// curve, so half a duration in reads half way along, and no mark Delay, so a
-/// ring is part of the note's own arrival rather than a layer that answers
-/// later. Its other half is [`plain_frame`], which holds the duration. The
-/// slices move at once, too: an ordered animation stretches a departure to
+/// [`ViewConfig::default`] with the note envelope pinned flat: a duration of 0,
+/// so a note is fully lit on the frame it sounds and gone on the frame it is
+/// released; a straight-line curve, so half a duration in reads half way
+/// along; and no mark Delay, so a ring is part of the note's own arrival
+/// rather than a layer that answers later. The slices move at once, too: an ordered animation stretches a departure to
 /// `1 + stagger_spread` fades, so "the fade has run out" would move with the
 /// spread rather than with the duration these suites name.
 ///
@@ -49,23 +47,17 @@ pub(super) fn scene_of(
 /// retuned — which is a look, and looks move. The envelope is tested where it
 /// lives: the curve in `harmonigraph_core::notes`, and its reach into these
 /// layers in `a_fresh_mark_eases_in_with_the_octave_it_links_to`.
+///
+/// One duration drives both ends of the note ([`ViewConfig::envelope`]), so
+/// "no arrival" and "no fade" are the same number and neither can be pinned
+/// apart. A test that wants a fade to sample along says so by naming a
+/// `fade_time` of its own — and buys an arrival of that length with it, which
+/// is why several of them start their note before the window they measure.
 pub(super) fn plain_view() -> ViewConfig {
-    let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() };
+    let mut view =
+        ViewConfig { fade_time: 0.0, fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() };
     view.note_animation.stagger_spread = 0.0;
     view
-}
-
-/// The frame half of the flat fixture: an envelope duration of 0, so a note
-/// is fully lit on the frame it sounds and gone on the frame it is released.
-///
-/// One duration drives both ends ([`ViewConfig::envelope`]), so "no arrival"
-/// and "no fade" are the same number and neither can be pinned from the view
-/// side. A test that wants a fade to sample along says so by naming
-/// a `fade_time` of its own — and buys an arrival of that length with it,
-/// which is why several of them start their note before the window they
-/// measure.
-pub(super) fn plain_frame() -> FrameParams {
-    FrameParams { fade_time: 0.0, ..FrameParams::default() }
 }
 
 pub(super) fn origin_node(scene: &Scene) -> &NodeInstance {

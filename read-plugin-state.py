@@ -17,8 +17,8 @@ editor shows it, open window or not (`UiState` in
 crates/harmonigraph-plugin/src/editor/persist.rs). Builds before issue #1301
 wrote it only when the editor window CLOSED, so a project such a build saved
 with the window open holds whatever was there before: open it in a current
-build, save, and re-run. (Host-automatable params — tuning, fade, color
-range — were never affected; those live in the param system.) Camera movement
+build, save, and re-run. (Host-automatable params — tuning — were never
+affected; those live in the param system.) Camera movement
 now also belongs to host params. The camera in the UI blob can lag automation
 while the window is closed; all outputs below overlay those saved host values.
 
@@ -59,6 +59,16 @@ STATE_START = b'{"version"'
 # and tuning/plugin.rs); without the check another plugin read as an editor
 # "never open before a save", a warning a session acts on.
 OUR_PARAMS = {"camera-yaw", "tuning-engine", "tuning_delay"}
+
+# Host parameters a current build no longer declares, and the look field that
+# holds the setting now. A project saved before #1744 still carries their
+# values; the plugin ignores them on load, so they are labelled rather than
+# shown as live.
+RETIRED_PARAMS = {
+    "pitch-class-fade": "view.fade_time",
+    "darkest-pitch": "view.darkest_pitch",
+    "brightest-pitch": "view.brightest_pitch",
+}
 
 VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
 
@@ -299,7 +309,9 @@ def main() -> None:
             print(f"\n=== instance {n} ===")
         print("\n--- params (host-automatable; always current) ---")
         for k, v in sorted(st.get("params", {}).items()):
-            print(f"  {k}: {list(v.values())[0]}")
+            retired = RETIRED_PARAMS.get(k)
+            note = f"  (retired by #1744, ignored on load; the look's {retired} holds it)" if retired else ""
+            print(f"  {k}: {list(v.values())[0]}{note}")
         if not ui:
             # A Tune has no editor, so its missing ui-state is not the trap.
             if set(st.get("params", {})) == {"tuning_delay"}:

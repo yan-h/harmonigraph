@@ -2204,7 +2204,7 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         // in — a fraction of any real arrival. No envelope at all, so what is
         // counted is whether the flag is DRAWN rather than how far its note
         // has eased in.
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         if tuning_offset != 0.0 {
             state.runtime.tracker.handle_event(NoteEvent {
@@ -2268,7 +2268,7 @@ fn a_note_lit_on_the_lattice_is_not_flagged_off_it() {
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 55.0;
         state.appearance.spectrum.high_midi = 73.0;
-        state.runtime.frame_params.fade_time = 0.0;
+        state.appearance.view.fade_time = 0.0;
         state.surfaces.drawn = shown;
         // Bent onto that node's own pitch exactly, which is what a retuned
         // keyboard or an MPE part does and the only way to sound one.

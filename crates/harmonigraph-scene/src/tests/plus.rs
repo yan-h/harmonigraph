@@ -55,11 +55,11 @@ fn pluses_of(view: &ViewConfig) -> Vec<PlusInstance> {
 }
 
 fn pluses_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<PlusInstance> {
-    scene_of(tracker, &Tuning::default(), view, &plain_frame(), 0.0).pluses
+    scene_of(tracker, &Tuning::default(), view, 0.0).pluses
 }
 
 fn unit_of(view: &ViewConfig) -> f32 {
-    scene_of(&NoteTracker::new(), &Tuning::default(), view, &plain_frame(), 0.0).marker_unit
+    scene_of(&NoteTracker::new(), &Tuning::default(), view, 0.0).marker_unit
 }
 
 /// `marker_unit` converts the marker field between the world its draws are in
@@ -93,7 +93,7 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     // nowhere. Both halves, because a count alone passes on a field that has
     // drifted off the nodes entirely.
     let view = plus_view();
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     let home: Vec<&NodeInstance> = scene.nodes.iter().filter(|n| n.on_home).collect();
     assert!(!home.is_empty() && home.len() < scene.nodes.len(), "want both kinds in the window");
     assert_eq!(scene.pluses.len(), home.len(), "one marker per home position, and no others");
@@ -124,7 +124,7 @@ fn a_marker_stands_at_every_home_position_and_nowhere_else() {
     // Panning the window keeps the markers attached to the visible nodes (both
     // are derived in centered world space).
     let panned = ViewConfig { center_threes: 3, ..view };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &panned, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &panned, 0.0);
     for marker in &scene.pluses {
         let node = &scene.nodes[marker.node];
         assert!(node.on_home);
@@ -142,8 +142,7 @@ fn nothing_is_drawn_between_two_positions() {
     // A marker stands ON a node, so every one of them is at a position the
     // window holds — and a mark at the midpoint of two of them would be an
     // interval drawn, which is exactly what a mesh says and a field does not.
-    let scene =
-        scene_of(&NoteTracker::new(), &Tuning::default(), &plus_view(), &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &plus_view(), 0.0);
     for marker in &scene.pluses {
         assert!(
             scene.nodes.iter().any(|n| n.world_pos == marker.pos),
@@ -181,7 +180,7 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
     // what reaches the scene is a WORLD length — the conversion is spent once,
     // here, so nothing downstream carries a second copy of the convention.
     let view = ViewConfig { plus_arm: 0.5, ..plus_view() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     let want = scene.node_radius * 1.8 * 0.5;
     assert!(
         (scene.pluses[0].radius - want).abs() < 1e-5,
@@ -195,11 +194,10 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
 fn a_nonfinite_marker_arm_draws_the_sanitized_field() {
     for arm in [f32::NAN, f32::NEG_INFINITY] {
         let view = ViewConfig { plus_arm: arm, ..plus_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
         let mut normalized = view.clone();
         normalized.sanitize();
-        let expected =
-            scene_of(&NoteTracker::new(), &Tuning::default(), &normalized, &plain_frame(), 0.0);
+        let expected = scene_of(&NoteTracker::new(), &Tuning::default(), &normalized, 0.0);
         assert!(!scene.pluses.is_empty(), "the repaired arm must draw markers");
         assert!(scene.pluses.iter().all(|p| p.radius == expected.pluses[0].radius));
     }
@@ -213,8 +211,7 @@ fn the_label_scale_sets_the_cross_width() {
     let arm = ViewConfig::default().plus_arm;
     let half_at = |label_scale: f32| {
         let view = ViewConfig { plus_arm: arm, label_scale, ..plus_view() };
-        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
-            .plus_half_width
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0).plus_half_width
     };
     // At label scale 1 the whole width is the constant, halved and taken as a
     // share of the arm.
@@ -249,7 +246,7 @@ fn the_taper_reaches_the_scene_as_a_share_of_the_arm() {
         (0.0, 0.5, 0.999),
     ] {
         let view = ViewConfig { plus_arm: size, plus_taper: taper, ..plus_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
         assert!(
             (scene.plus_taper_start - want).abs() < 1e-5,
             "a {taper} taper on a {size} arm starts at {}, wanted {want}",
@@ -269,8 +266,8 @@ fn neither_proportion_moves_a_marker_or_changes_how_far_it_reaches() {
         ("a taper", ViewConfig { plus_taper: 0.2, ..plain.clone() }),
         ("a label scale", ViewConfig { label_scale: 2.0, ..plain.clone() }),
     ] {
-        let a = scene_of(&NoteTracker::new(), &Tuning::default(), &plain, &plain_frame(), 0.0);
-        let b = scene_of(&NoteTracker::new(), &Tuning::default(), &dialled, &plain_frame(), 0.0);
+        let a = scene_of(&NoteTracker::new(), &Tuning::default(), &plain, 0.0);
+        let b = scene_of(&NoteTracker::new(), &Tuning::default(), &dialled, 0.0);
         assert!(
             a.plus_taper_start != b.plus_taper_start || a.plus_half_width != b.plus_half_width,
             "{label} never reached the scene, so the rest of this proves nothing",
@@ -298,25 +295,25 @@ fn neither_proportion_moves_a_marker_or_changes_how_far_it_reaches() {
 /// marker at all, and one frame later a marker at 1.0. A hole, then a pop, once
 /// per note.
 ///
-/// A 2-second fade sampled along it, rather than at the ends, because the ends
-/// are exactly where both spellings agree.
+/// The longest fade on offer sampled along it, rather than at the ends,
+/// because the ends are exactly where both spellings agree.
 #[test]
 fn a_marker_takes_back_what_a_names_fade_gives_up() {
-    let view = ViewConfig { note_names: NoteNames::Played, ..plus_view() };
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let view =
+        ViewConfig { note_names: NoteNames::Played, fade_time: FADE_TIME_MAX, ..plus_view() };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker.handle_event(NoteEvent {
         source: SourceId::DIRECT,
-        time: 4.0,
+        time: 2.0,
         channel: 0,
         note: 60,
         kind: harmonigraph_core::NoteEventKind::Off,
     });
 
     let mut walk = vec![];
-    for now in [4.0f64, 5.0, 5.8, 5.98, 5.999, 6.0, 6.5] {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    for now in [2.0f64, 2.5, 2.9, 2.99, 2.9995, 3.0, 3.25] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, now);
         let node = origin_node(&scene);
         let ground = scene.lattice_ground.w;
         let standing =
@@ -383,7 +380,7 @@ fn a_resting_marker_is_the_grey_its_own_bar_names() {
 fn the_silent_ring_and_lattice_ground_are_one_grey() {
     for ground in [8.0f32, 20.0, 45.0] {
         let view = ViewConfig { lattice_ground: ground, ..plus_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
         let ring = crate::SpectralPaint::new(&view, crate::Gradient::default()).lut[0];
         let step = (ring.truncate() - scene.lattice_ground.truncate()).abs().max_element();
         assert!(
@@ -413,7 +410,6 @@ fn a_fresh_lattice_holds_its_markers_above_the_ring_ground() {
         &NoteTracker::new(),
         &Tuning::default(),
         &ViewConfig { extent_threes: 2, extent_fives: 2, ..fresh },
-        &plain_frame(),
         0.0,
     );
     let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
@@ -443,8 +439,7 @@ fn the_two_at_rest_bars_move_nothing_of_each_others() {
     for ground in [0.0f32, 64.0] {
         for ink in [0.0f32, 64.0] {
             let view = ViewConfig { lattice_ground: ground, marker_ink: ink, ..plus_view() };
-            let scene =
-                scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+            let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
             let marker = scene.pluses.first().expect("the home sheet draws a resting marker field");
             assert_eq!(
                 marker.color,
@@ -505,7 +500,7 @@ fn a_marker_that_survives_a_chord_is_painted_exactly_as_it_was() {
         assert_eq!(a.radius, b.radius, "a chord resized a marker: {b:?}");
     }
     // And every survivor keeps the marker field's own resting ink.
-    let scene = scene_of(&tracker, &tuning, &view, &plain_frame(), 0.0);
+    let scene = scene_of(&tracker, &tuning, &view, 0.0);
     for marker in &scene.pluses {
         assert_eq!(marker.color, crate::grey_of_lightness(view.marker_ink), "{marker:?}");
         assert_eq!(marker.strength, 1.0, "{marker:?}");
@@ -524,7 +519,7 @@ fn a_named_position_draws_no_marker() {
     // what counts as "named at rest" is the whole of what separates them.
     let view = ViewConfig { note_names: NoteNames::Past, ..plus_view() };
     let tracker = played_and_forgotten();
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 4.0);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, 4.0);
     let remembered: Vec<&NodeInstance> = scene.nodes.iter().filter(|n| n.trail > 0.0).collect();
     assert!(!remembered.is_empty(), "nothing was remembered, so nothing is named at rest");
     for node in &remembered {
@@ -553,7 +548,6 @@ fn a_named_position_draws_no_marker() {
         &tracker,
         &Tuning::default(),
         &ViewConfig { note_names: NoteNames::Played, ..view.clone() },
-        &plain_frame(),
         4.0,
     );
     let home = played.nodes.iter().filter(|n| n.on_home).count();
@@ -573,7 +567,6 @@ fn a_hovered_position_draws_no_marker() {
         &Tuning::default(),
         &view,
         &view.reach(),
-        &plain_frame(),
         crate::Camera::default(),
         Some(at),
     );
@@ -582,7 +575,7 @@ fn a_hovered_position_draws_no_marker() {
         &NoteTracker::new(),
         &Tuning::default(),
         &view,
-        &view.envelope(&plain_frame()),
+        &view.envelope(),
         &RingFade::default(),
         0.0,
     );
@@ -612,7 +605,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
     // class. The home node is C.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 68, 1.0));
-    let scene = scene_of(&tracker, &Tuning::default(), &view, &plain_frame(), 0.0);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, 0.0);
     assert!(
         scene.nodes.iter().any(|n| !n.on_home && n.presence_with_opacity > 0.0),
         "the off-sheet note has to be lit for this to mean anything",
@@ -648,7 +641,7 @@ fn an_off_sheet_note_leaves_the_marker_field_alone() {
 #[test]
 fn a_node_lit_by_no_key_keeps_its_cross_whole() {
     let view = plus_view();
-    let mut scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
+    let mut scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0);
     let lit = origin_node(&scene).lattice_pos;
     let dark = scene
         .nodes
@@ -717,13 +710,12 @@ fn a_node_lit_by_no_key_keeps_its_cross_whole() {
 /// exactly the share of the position its name has handed back.
 #[test]
 fn a_markers_shadow_fades_in_with_its_cross() {
-    let view = plus_view();
-    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let view = ViewConfig { fade_time: FADE_TIME_MAX, ..plus_view() };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     tracker.handle_event(NoteEvent {
         source: SourceId::DIRECT,
-        time: 4.0,
+        time: 2.0,
         channel: 0,
         note: 60,
         kind: harmonigraph_core::NoteEventKind::Off,
@@ -731,7 +723,7 @@ fn a_markers_shadow_fades_in_with_its_cross() {
 
     // The resting grey, off a position no note has been near: what a marker is
     // worth once the name over it is gone.
-    let whole = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &frame, 0.0)
+    let whole = scene_of(&NoteTracker::new(), &Tuning::default(), &view, 0.0)
         .pluses
         .first()
         .expect("an unplayed field draws its markers")
@@ -739,8 +731,8 @@ fn a_markers_shadow_fades_in_with_its_cross() {
     assert!(whole > 0.0, "the fixture must draw markers at all");
 
     let mut last = 0.0f32;
-    for now in [4.5f64, 5.0, 5.5, 6.0, 7.0] {
-        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+    for now in [2.25f64, 2.5, 2.75, 3.0, 3.5] {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, now);
         let node = *origin_node(&scene);
         let want = whole * (1.0 - node.name_level(&view));
         let held = scene
@@ -779,9 +771,8 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
         opacity_rest: 0.302_850_54,
         ..IntensitySettings::unrouted()
     };
-    let view = ViewConfig { note_names: NoteNames::Past, intensity, ..plus_view() };
-    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
-    let env = view.envelope(&frame);
+    let view = ViewConfig { note_names: NoteNames::Past, intensity, fade_time: 1.0, ..plus_view() };
+    let env = view.envelope();
     let tuning = Tuning::default();
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.05));
@@ -795,7 +786,7 @@ fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
         }
         tracker.prune(now, &env);
         let mut scene =
-            derive_scene(&tracker, &tuning, &view, &view.reach(), &frame, Camera::default(), None);
+            derive_scene(&tracker, &tuning, &view, &view.reach(), Camera::default(), None);
         motion.step(&mut scene, &tracker, &tuning, &view, &env, &RingFade::default(), now);
         let node = *origin_node(&scene);
         let name = node.name_level(&view);

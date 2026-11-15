@@ -29,22 +29,15 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 /// Run one frame of `panes` at `t`, each filling a pass of its own, as a shell
 /// draws them: what each picture says about when it stops moving is written by
 /// the draw, so a reason is only as fresh as the last frame drawn.
-///
-/// The host's Fade is the one the state already runs, so a test's Fade holds.
 fn draw_panes(ctx: &egui::Context, state: &mut SharedState, t: f64, panes: &[Pane]) {
-    struct Host(f32);
+    struct Host;
     impl ParamBackend for Host {
-        fn get(&self, key: params::ParamKey) -> f32 {
-            if key == params::ParamKey::Fade {
-                self.0
-            } else {
-                0.0
-            }
+        fn get(&self, _: params::ParamKey) -> f32 {
+            0.0
         }
         fn set(&self, _: params::ParamKey, _: f32) {}
     }
-    let host = Host(state.picture.runtime.frame_params.fade_time);
-    begin_frame(&mut state.picture, &host, t);
+    begin_frame(&mut state.picture, &Host, t);
     for &pane in panes {
         let _ = ctx.run_ui(
             egui::RawInput {
@@ -76,7 +69,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     // glow's own release.
     let fresh = || {
         let mut state = fresh();
-        state.picture.runtime.frame_params.fade_time = 0.0;
+        state.picture.appearance.view.fade_time = 0.0;
         state
     };
     let mut state = fresh();
@@ -85,7 +78,7 @@ fn a_background_glows_release_tail_keeps_repainting_with_the_roll_hidden() {
     let view = state.picture.appearance.view.clone();
     assert!(view.glow_draws(), "the fresh glow draws");
     let gain = view.glow_strength;
-    let span = view.note_animation.departure(state.picture.runtime.frame_params.fade_time);
+    let span = view.note_animation.departure(state.picture.appearance.view.fade_time);
     assert!(span < 2.0, "the note's own departure ({span} s) must be over 3 s after the off");
 
     let ctx = super::probe::themed();
@@ -182,7 +175,7 @@ fn a_released_note_keeps_repainting_through_its_staggered_departure() {
     let animation = &mut state.picture.appearance.view.note_animation;
     animation.stagger_spread = 0.5;
     animation.fade_out_delay = 0.4;
-    state.picture.runtime.frame_params.fade_time = 0.5;
+    state.picture.appearance.view.fade_time = 0.5;
     let ctx = super::probe::themed();
     state.picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
     let mut t = 0.0_f64;

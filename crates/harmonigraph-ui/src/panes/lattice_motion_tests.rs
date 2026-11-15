@@ -15,7 +15,7 @@ fn state() -> PictureState {
     view.spectral_ring_release = 0.0;
     view.min_sevens = -1;
     view.max_sevens = 1;
-    state.runtime.frame_params.fade_time = 1.0;
+    state.appearance.view.fade_time = 1.0;
     state
 }
 
@@ -29,7 +29,7 @@ fn event(state: &mut PictureState, now: f64, held: bool) {
 }
 
 fn frame(state: &mut PictureState, now: f64, surface: usize, audio: bool) -> Scene {
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let env = state.appearance.view.envelope();
     state.runtime.tracker.prune(now, &env);
     if audio {
         // A real C5 reaches a late slice; a fabricated ring

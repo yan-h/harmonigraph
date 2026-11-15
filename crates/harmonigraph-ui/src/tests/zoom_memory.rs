@@ -75,6 +75,9 @@ fn played() -> SharedState {
     let mut zero = state.picture.runtime.resolved_configuration();
     zero.tuning = harmonigraph_core::Tuning::from_axes([0; 5]);
     state.picture.runtime.replayed_configuration = Some(zero);
+    // No arrival: every name stands whole from the first frame, so the
+    // warm-up draws the labels the sweeps then reuse.
+    state.picture.appearance.view.fade_time = 0.0;
     for key in 48..72 {
         state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,

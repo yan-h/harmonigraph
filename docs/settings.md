@@ -69,7 +69,7 @@ drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and
 | --- | --- |
 | Ring threshold | The upper handle sets the opening threshold; the lower sets hysteresis. The white marker shows the effective closing threshold, including the small floor that prevents silent rings from staying latched. A zero opening threshold deliberately shows silent rings. |
 | Drift | Point the vector along the direction of travel and drag outward for speed. Stars use a direction compass and keep their per-layer speeds. |
-| Note fade | Move the endpoint horizontally for duration and the midpoint vertically for curve shape. Duration remains host-automatable. |
+| Note fade | Move the endpoint horizontally for duration and the midpoint vertically for curve shape. |
 | Cabinet depth axis | Point the endpoint along the depth axis; its distance from the origin sets the depth-step scale. |
 | Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
 | Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
@@ -227,6 +227,8 @@ each holds a look, edits land in the active slot,
 and an unused slot starts as a copy of the current look.
 **Save to** copies the current look into another slot.
 Camera movement, tuning and output stay as they are when a slot is chosen.
+Note fade and the Pitch color range are part of the look:
+a slot carries them, an edit to either undoes like any other, and an export from a chosen look uses that look's values.
 Each slot keeps its own undo history:
 Cmd-Z undoes the last edit and Cmd-Shift-Z redoes it (Ctrl on other systems).
 A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.

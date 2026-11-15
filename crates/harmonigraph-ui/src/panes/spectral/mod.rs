@@ -483,9 +483,9 @@ pub(crate) fn spectral_pane(
         voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
         let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
         // One envelope for the whole roll, as every other caller takes it: it
-        // is a property of the view and the frame, and rebuilding it per voice
+        // is a property of the view, and rebuilding it per voice
         // would read as if it could vary between them.
-        let env = state.appearance.view.envelope(&state.runtime.frame_params);
+        let env = state.appearance.view.envelope();
         for voice in voices {
             let strength = voice.activation(now, &env);
             if strength <= 0.0 || !scale.contains(voice.pitch) {

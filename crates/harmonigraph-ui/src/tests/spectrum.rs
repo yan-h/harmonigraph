@@ -629,36 +629,6 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     assert_eq!(spectrum.fold_measurements, 3);
 }
 
-#[test]
-fn frame_observes_a_longer_fade_before_pruning() {
-    use harmonigraph_core::{NoteEvent, SourceId};
-    struct Fade(f32);
-    impl ParamBackend for Fade {
-        fn get(&self, key: params::ParamKey) -> f32 {
-            if key == params::ParamKey::Fade {
-                self.0
-            } else {
-                0.0
-            }
-        }
-        fn set(&self, _: params::ParamKey, _: f32) {}
-    }
-    let mut picture = super::probe::fresh_picture();
-    picture.runtime.frame_params.fade_time = 0.1;
-    picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.8));
-    picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
-    begin_frame(&mut picture, &Fade(2.0), 1.0);
-    assert_eq!(
-        picture.runtime.tracker.voices().count(),
-        1,
-        "new fade must preserve the released voice"
-    );
-    // Arrival lasts two seconds too; release follows it, so five seconds
-    // is beyond both halves of the new envelope.
-    begin_frame(&mut picture, &Fade(2.0), 5.0);
-    assert_eq!(picture.runtime.tracker.voices().count(), 0);
-}
-
 /// A run's columns are a function of its samples and the frame zero its
 /// feeder states, not of how the feeder cuts the run into calls: the offline
 /// renderer hands a frame's audio over in bounded chunks, and the plugin a

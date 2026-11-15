@@ -608,12 +608,12 @@ fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() 
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.activate();
-    let events = (0..2048).map(|_| device.param(ParamKey::Fade, 0.2, 0)).collect();
+    let events = (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect();
     device.run(0, events, false);
     assert_eq!(shown(&device.settings()).view.status, 0);
     let (status, _) = device.run_status(
         64,
-        (0..2049).map(|_| device.param(ParamKey::Fade, 0.3, 0)).collect(),
+        (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
         false,
     );
     assert_eq!(status, CLAP_PROCESS_ERROR);
@@ -645,10 +645,14 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             assert!(shown(&settings).view.pending, "an accepted restore is still queued");
         } else {
             device.activate();
-            device.run(0, (0..2048).map(|_| device.param(ParamKey::Fade, 0.2, 0)).collect(), false);
+            device.run(
+                0,
+                (0..2048).map(|_| device.param(ParamKey::CameraDistance, 6.0, 0)).collect(),
+                false,
+            );
             let (status, _) = device.run_status(
                 64,
-                (0..2049).map(|_| device.param(ParamKey::Fade, 0.3, 0)).collect(),
+                (0..2049).map(|_| device.param(ParamKey::CameraDistance, 7.0, 0)).collect(),
                 false,
             );
             assert_eq!(status, CLAP_PROCESS_ERROR);
@@ -1820,7 +1824,7 @@ fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
     let mut parked = transport(0.0, 0);
     parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
     let mut events = vec![note(9, 48, 0, CLAP_EVENT_NOTE_ON), Input::Transport(transport(0.0, 32))];
-    events.extend((0..9).map(|i| device.param(ParamKey::Fade, 0.1 + 0.01 * i as f32, 40)));
+    events.extend((0..9).map(|i| device.param(ParamKey::CameraDistance, 6.0 + 0.1 * i as f32, 40)));
     events.push(note(10, 60, 40, CLAP_EVENT_NOTE_ON));
     capture.pause_boundary(true);
     std::thread::scope(|scope| {

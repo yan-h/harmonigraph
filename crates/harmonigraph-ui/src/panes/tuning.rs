@@ -694,7 +694,7 @@ fn instance_controls(
         .unwrap_or_default();
     sources.retain(|id, _| instances.iter().any(|row| row.id == *id));
     let now = ui.input(|input| input.time);
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let env = state.appearance.view.envelope();
     for row in instances {
         if sources.entry(row.id).or_default().step(&row.voices, now, &env) {
             ui.ctx().request_repaint();

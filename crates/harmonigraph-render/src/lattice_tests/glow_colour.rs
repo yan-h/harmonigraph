@@ -376,7 +376,7 @@ fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
     // on every other octave the wheel shows, where it is green.
     let c = harmonigraph_scene::MIDDLE_C_SLOT;
     let (low, high) = scene.octave_layout.slots(0.0);
-    let (dark, bright) = (scene.darkest_pitch, scene.brightest_pitch);
+    let (dark, bright) = (scene.view.darkest_pitch, scene.view.brightest_pitch);
     scene.pitch_lut = std::array::from_fn(|k| {
         let pitch =
             dark + (bright - dark) * k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
@@ -580,7 +580,7 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
         scene.lattice_ground = glam::Vec4::new(0.0, 1.0, 0.0, 1.0);
         // Split at the two slices' midpoint: one octave either side of it, so
         // each wears one end of the ramp whole and neither is a blend.
-        let (dark, bright) = (scene.darkest_pitch, scene.brightest_pitch);
+        let (dark, bright) = (scene.view.darkest_pitch, scene.view.brightest_pitch);
         let mid = (harmonigraph_scene::MIDDLE_C_SLOT + beside) as f32 * 6.0;
         let split = (mid - dark) / (bright - dark);
         scene.pitch_lut = std::array::from_fn(|k| {

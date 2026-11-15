@@ -21,12 +21,7 @@ pub(super) fn owners(
     if window.contains(bounds.min) && window.contains(bounds.max) {
         return Vec::new();
     }
-    let classes = NodeMotion::light_classes(
-        &state.runtime.tracker,
-        view,
-        &view.envelope(&state.runtime.frame_params),
-        now,
-    );
+    let classes = NodeMotion::light_classes(&state.runtime.tracker, view, &view.envelope(), now);
     let motion = state.surfaces.node_motion.get(&surface);
     let glow = state.surfaces.glow_fade.get(&surface);
     if classes.is_empty() && motion.is_none() && glow.is_none() {
@@ -104,7 +99,7 @@ mod tests {
         state.appearance.view.max_sevens = 0;
         state.appearance.view.glow_attack = 0.0;
         state.appearance.view.glow_release = 1.0;
-        state.runtime.frame_params.fade_time = 0.1;
+        state.appearance.view.fade_time = 0.1;
         state
     }
     fn notes(state: &mut crate::PictureState, now: f64, on: bool) {
@@ -117,7 +112,7 @@ mod tests {
         }
     }
     fn compose(state: &mut crate::PictureState, window: &DrawnWindow, now: f64) -> Scene {
-        let env = state.appearance.view.envelope(&state.runtime.frame_params);
+        let env = state.appearance.view.envelope();
         state.runtime.tracker.prune(now, &env);
         super::super::lattice::compose_scene(state, window, 1.0, None, 0, now)
     }
