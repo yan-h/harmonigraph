@@ -748,7 +748,12 @@ fn source_instances(
                 }
             }
         }
-        tongues.extend(tongue);
+        // Painted where its note's newest stretch of history is, among the
+        // tongues as that is among the history, so two overlapping held notes
+        // keep one order across the line.
+        if let Some(tongue) = tongue {
+            tongues.push((ribbon.paint_starts[ribbon.paint_starts.len() - 1].0, tongue));
+        }
         for ((t0, p0), (t1, p1)) in ribbon.segments(now) {
             // A segment wholly before the region is DROPPED, and the test has
             // to be made on its own end rather than on the clamped one — a
@@ -897,7 +902,11 @@ fn source_instances(
         }
     }
     painted.sort_by_key(|&(order, _)| order);
-    (painted.into_iter().map(|(_, instance)| instance).collect(), tongues)
+    tongues.sort_by_key(|&(order, _)| order);
+    (
+        painted.into_iter().map(|(_, instance)| instance).collect(),
+        tongues.into_iter().map(|(_, tongue)| tongue).collect(),
+    )
 }
 
 /// Uniform inset hatching inside one continuous silhouette. Absolute take
@@ -2712,6 +2721,37 @@ mod tests {
         // answer.
         state.appearance.spectrum.roll_lead_release = 0.0;
         assert!(at(&state, 4.0).is_none(), "a release of 0 kept the tongue");
+    }
+
+    /// Tongues paint in their notes' order, as the history does, so two held
+    /// notes keep one order across the now-line.
+    ///
+    /// A repeat that joins a dense run belongs to a ribbon begun before a note
+    /// of another key, so the ribbons' order and the notes' differ: the
+    /// repeat's history paints over the other note's, and its tongue must too.
+    #[test]
+    fn tongues_paint_in_their_notes_order() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_seconds = 10.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
+        state.appearance.spectrum.roll_lead = 0.05;
+        let on = |at, key| NoteEvent::on(at, SourceId::DIRECT, 0, key, 1.0);
+        state.runtime.tracker.handle_event(on(0.0, 60));
+        state.runtime.tracker.handle_event(on(0.02, 64));
+        state.runtime.tracker.handle_event(NoteEvent::off(0.03, SourceId::DIRECT, 0, 60));
+        state.runtime.tracker.handle_event(on(0.04, 60));
+        let (history, tongues) = instance_groups(&state, 0.1);
+        let color = |pitch| note_color(&state, pitch, 1.0).to_array();
+        assert_ne!(color(60.0), color(64.0), "the fixture's two notes are told apart by color");
+        assert_eq!(
+            history.last().map(|piece| piece.core),
+            Some(color(60.0)),
+            "the repeat's history does not paint last, so the orders do not differ",
+        );
+        let order: Vec<_> = tongues.iter().map(|tongue| tongue.core).collect();
+        assert_eq!(order, [color(64.0), color(60.0)], "the tongues paint in ribbon order");
     }
 
     #[test]
