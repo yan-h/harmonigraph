@@ -84,11 +84,9 @@ use serde::{Deserialize, Serialize};
 /// version rather than a silent blank render. Version 6 stamped song time on
 /// the audio thread and wrote one file per pass; version 7 routed each record
 /// by where its input arrived and held every pass in one file; version 8 places
-/// each record by when it sounds, in one take with one WAV (#1760); version 9
-/// drops the clock id and input sample from every timing (#1778), and every
-/// voice a snapshot restates names its press by a lifetime (#1771). There are
+/// each record by when it sounds, in one take with one WAV (#1760). There are
 /// no compatibility shims.
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";
