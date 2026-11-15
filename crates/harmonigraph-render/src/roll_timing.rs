@@ -63,7 +63,7 @@ const WORKLOADS: [Workload; 2] = [
     Workload { name: "dense 600 s", span_seconds: 600.0, notes: 3000, duration: (0.05, 0.4) },
 ];
 
-fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance> {
+fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
     let mut rng = Lcg(0x005e_ed0f_a011);
     let per_second = points[0] / work.span_seconds;
     let semitone = points[1] / SPAN_SEMITONES;
@@ -82,7 +82,6 @@ fn instances(work: &Workload, points: [f32; 2], reach: f32) -> Vec<RollInstance>
             lead: 0.0,
             lead_fade: 0.0,
             lead_alpha: 0.0,
-            cap_reach: reach,
             core: [230, 40 + shade / 2, 255 - shade, 255],
             aura: [0, 0, 0, 255],
             span: RollInstance::WHOLE,
@@ -146,7 +145,7 @@ fn a_frame_of_the_roll_costs_this_much() {
             rect,
             pane_size: rect.size(),
             instances,
-            clipped_tail: (u32::MAX, rect),
+            clip: RollClip::whole(rect),
             axes: AXES,
             bloom,
             cut,
@@ -188,7 +187,7 @@ fn a_frame_of_the_roll_costs_this_much() {
             continue;
         }
         let reach = cut.reach_points(1.0);
-        let notes = instances(work, points, reach);
+        let notes = instances(work, points);
         let count = notes.len();
         let (median, p10) = time(notes, cut);
         eprintln!(

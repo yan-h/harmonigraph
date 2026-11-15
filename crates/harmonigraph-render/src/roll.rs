@@ -91,29 +91,26 @@ pub struct RollInstance {
     /// non-zero for a glide, which makes the box a parallelogram rather than
     /// needing a second shape.
     pub shear: f32,
-    /// How much of this segment's LEADING end is a LEAD — a stretch of ribbon
-    /// the caller grew the box by, drawn as an extension of the note rather
-    /// than as part of it — in points, and 0 for the ordinary segment that is
-    /// all note.
+    /// Whether this box is a LEAD, and how long: a stretch of ribbon carried on
+    /// past where the note itself stops, drawn as its own instance beside the
+    /// note's box, in points, and 0 for an ordinary segment that is all note.
     ///
-    /// The leading end is the one at the low end of the depth axis, which is the
-    /// end nearest whatever the roll is drawn beside — for the spectral pane,
-    /// the now-line and the analyzer past it (see
+    /// The whole box is the lead. Its leading tip is the end at the low end of
+    /// the depth axis, which is the end nearest whatever the roll is drawn
+    /// beside — for the spectral pane, the analyzer past the now-line (see
     /// `panes::spectral::roll::lead`, which is also the only thing that sets
-    /// this).
+    /// this). [`lead_fade`](Self::lead_fade) and
+    /// [`lead_alpha`](Self::lead_alpha) decide how much of it is left, in
+    /// both layers and in the body holdout alike, which is why they ride here
+    /// rather than on [`fade`](Self::fade): the holdout leaves `fade` out, and
+    /// a tongue held out at its whole box would notch every neighbour's cut
+    /// along a tip that is not there.
     ///
-    /// It is what divides the two: past this distance from the tip the segment
-    /// is the note itself and is drawn solid, and inside it
-    /// [`lead_fade`](Self::lead_fade) and [`lead_alpha`](Self::lead_alpha)
-    /// decide what is left. Without it the two would have nothing to measure
-    /// against and would take the note's own body with them.
-    ///
-    /// This crate is told how long the lead is and nothing about why. It does
-    /// not grow the geometry to make room for one — the length is the caller's
-    /// already — and it invents no lead of its own.
+    /// This crate is told how long the lead is and nothing about why, and it
+    /// invents no lead of its own.
     pub lead: f32,
     /// How much of that lead is spent fading out at the tip, in points: 0 ends
-    /// it square, the whole lead fades it from the note's own end outward.
+    /// it square, the whole lead fades it from its far end outward.
     ///
     /// Both layers ride it: a lead that ends in a fade wears no surround cap
     /// either, or the tip would dissolve inside a hard ring of cut.
@@ -121,45 +118,7 @@ pub struct RollInstance {
     /// How much of the lead is still standing, 0..1 — the whole of it while the
     /// note is sounding, falling to nothing over whatever the caller counts as
     /// the note's release.
-    ///
-    /// It multiplies the LEAD alone and never the note, which is the reason
-    /// [`lead`](Self::lead) has to be carried here at all. So a lead on the way
-    /// out reads as a translucent extension of a solid ribbon, which is what it
-    /// is; the two meet at the note's own end, and at full opacity that join is
-    /// seamless.
     pub lead_alpha: f32,
-    /// How far the surround's cap at the NOTE's own leading end reaches, in
-    /// points — the cap standing where the note stops and the
-    /// [`lead`](Self::lead) carries on.
-    ///
-    /// The note's own end is INTERIOR to a box that carries a lead, and a box
-    /// has no edge in its middle for a surround to wrap, so without this the
-    /// note wears no cap there for as long as its box keeps the lead.
-    ///
-    /// Drawn in the surround layer, which goes down before ANY body, so a lead
-    /// standing over the cap covers it and a spent one (a
-    /// [`lead_alpha`](Self::lead_alpha) of 0) leaves it against the note's
-    /// end. The spectral pane hands over only those two: a sounding note's lead
-    /// stands whole, and a released note keeps a spent lead on its box only
-    /// while this reach is being metered, its fading tongue being a separate
-    /// instance with no cap of its own.
-    ///
-    /// A REACH rather than an opacity, and that is the whole of what this field
-    /// decides. The cap stands OUTSIDE the note's end, in the stretch the lead
-    /// was drawn over, and a caller may have somewhere the ribbon's ink may not
-    /// go — the spectral pane's now-line is that somewhere, the clip a lead
-    /// opens past it belonging to the lead and not to a cap. Shortening the
-    /// reach keeps the cap wholly on the near side of such a place, growing it
-    /// out of the note's end as the room opens; dimming it instead would still
-    /// put ink across it, just faintly, which is a weaker promise for the same
-    /// arithmetic.
-    ///
-    /// The cut's own reach is the ordinary answer and the one a caller with
-    /// nowhere to protect should give — more than that draws no more, the cap
-    /// being bounded by the surround it is part of, and a surround of no reach
-    /// wears no cap at all. Read only where there IS a lead: without one
-    /// the box ends at the note and its cap is the box's own surround.
-    pub cap_reach: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     /// The surround: the color its cut fills with, as straight (not
@@ -178,7 +137,7 @@ pub struct RollInstance {
     /// Pieces are how a note's opacity and thickness follow its playing
     /// along a segment: the caller hands over the segment's box once per
     /// piece, each with the same geometry and a span of its own, and the spans
-    /// tile the box. So the surround, the lead and the cap are the segment's,
+    /// tile the box. So the surround and the lead are the segment's,
     /// and no piece has an end of its own for a surround to wrap — exactly,
     /// while the width holds still, and near a cut to within what a piece can
     /// see of its neighbours when it does not (see
@@ -232,7 +191,7 @@ impl RollInstance {
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
             // Several to a slot, since a vertex takes sixteen at most.
-            4 => Float32x4, // lead, lead_fade, lead_alpha, cap_reach
+            4 => Float32x3, // lead, lead_fade, lead_alpha
             8 => Unorm8x4,  // core
             9 => Unorm8x4,  // aura
             14 => Float32x4, // span, ramp
@@ -256,6 +215,31 @@ pub struct RollAxes {
     pub depth_dir: [f32; 2],
 }
 
+/// Where a roll's instances may draw, inside the callback's rect: those
+/// before `tail_start` inside `head`, the rest inside `tail`. Every layer —
+/// the bodies, their holdout and the surround — draws each instance only
+/// inside its own region, while all of them keep one surround-before-body
+/// paint order.
+///
+/// The spectral pane's split: its scrolling history stops at the now-line
+/// and its leads stand past it, each instance cut at the one edge the two
+/// regions share. Two scissors on one coordinate round to the same pixel edge,
+/// so nothing is drawn twice and nothing is left between them but the pixel
+/// that edge passes through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RollClip {
+    pub head: egui::Rect,
+    pub tail_start: usize,
+    pub tail: egui::Rect,
+}
+
+impl RollClip {
+    /// Every instance anywhere in `rect`.
+    pub fn whole(rect: egui::Rect) -> Self {
+        RollClip { head: rect, tail_start: usize::MAX, tail: rect }
+    }
+}
+
 /// Draw `instances` into `rect`. `pane_id` is unique per roll drawing in the
 /// same frame and the same across frames for one live copy: each id keeps its
 /// own instance buffer, bloom chain and cut targets (the pipeline is shared),
@@ -264,22 +248,17 @@ pub struct RollAxes {
 /// `rect` is the roll's own region rather than the pane's — it is what the
 /// bloom's offscreen chain and the surround's targets cover, so a rect any
 /// larger would spend their resolution on somewhere the roll cannot draw. The
-/// surrounds stop at it; the caller's clip should too.
+/// surrounds stop at it; the caller's clip should too. `clip` divides it
+/// between the instances ([`RollClip`]).
 ///
 /// `bloom` is the strength the bloom runs at, applied to these notes through
 /// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
-///
-/// The instances from `clipped_start` onward are clipped to `tail_rect`
-/// while keeping one global surround-before-body paint order. This is for a
-/// roll whose leading extensions occupy a stricter region than its scrolling
-/// history.
 #[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback(
     rect: egui::Rect,
     pane_size: egui::Vec2,
     instances: Vec<RollInstance>,
-    clipped_start: usize,
-    tail_rect: egui::Rect,
+    clip: RollClip,
     axes: RollAxes,
     bloom: f32,
     cut: crate::SurroundCut,
@@ -294,7 +273,7 @@ pub fn roll_paint_callback(
             rect,
             pane_size,
             instances,
-            clipped_tail: (clipped_start as u32, tail_rect),
+            clip,
             axes,
             bloom,
             cut,
@@ -313,10 +292,8 @@ struct RollCallback {
     rect: egui::Rect,
     pane_size: egui::Vec2,
     instances: Vec<RollInstance>,
-    /// A trailing range whose sharp ink is clipped more tightly than `rect`.
-    /// Kept in the same callback so every surround still precedes every body.
-    /// A start at or past the instance count means no tail.
-    clipped_tail: (u32, egui::Rect),
+    /// Where each instance may draw ([`RollClip`]).
+    clip: RollClip,
     axes: RollAxes,
     bloom: f32,
     cut: crate::SurroundCut,
@@ -487,28 +464,25 @@ struct RollHoldout {
     size: [u32; 2],
 }
 
-/// The instances from `start` on, drawn only inside `scissor` (in the roll's
-/// own pixels), and not at all when that is `None`: the clipped tail, as a
-/// texture over the roll's rect sees it. A `start` at or past the instance
-/// count means no tail.
+/// A [`RollClip`] as a texture over the roll's rect sees it: each region as a
+/// scissor in that texture's own pixels, or `None` where the region leaves
+/// it no pixel, and the instances in it drawn not at all.
 #[derive(Clone, Copy)]
-struct TailClip {
-    start: u32,
-    scissor: Option<[u32; 4]>,
+struct TextureClip {
+    tail_start: u32,
+    head: Option<[u32; 4]>,
+    tail: Option<[u32; 4]>,
 }
 
-/// Every instance into a texture over the roll's rect, the clipped tail only
-/// as far as `paint` lets it draw. A tail starting at or past `count` is no
-/// tail, and everything draws.
-fn draw_clipped(pass: &mut wgpu::RenderPass<'_>, count: u32, tail: TailClip) {
-    if tail.start >= count {
-        pass.draw(0..4, 0..count);
-        return;
-    }
-    pass.draw(0..4, 0..tail.start);
-    if let Some([left, top, width, height]) = tail.scissor {
-        pass.set_scissor_rect(left, top, width, height);
-        pass.draw(0..4, tail.start..count);
+/// Every instance into a texture over the roll's rect, each only inside the
+/// region `clip` gives it.
+fn draw_clipped(pass: &mut wgpu::RenderPass<'_>, count: u32, clip: TextureClip) {
+    let start = clip.tail_start.min(count);
+    for (instances, scissor) in [(0..start, clip.head), (start..count, clip.tail)] {
+        if let (false, Some([left, top, width, height])) = (instances.is_empty(), scissor) {
+            pass.set_scissor_rect(left, top, width, height);
+            pass.draw(0..4, instances);
+        }
     }
 }
 
@@ -1170,12 +1144,11 @@ impl CallbackTrait for RollCallback {
                 RollHoldout::new(device, layout, holdout_layout, surround_composite, roll_size)
             });
             queue.write_buffer(&holdout.notes_uniform, 0, bytemuck::bytes_of(&roll_uniforms));
-            // A clipped tail holds out, and cuts, only where `paint` lets it
+            // Each instance holds out, and cuts, only where `paint` lets it
             // draw.
-            let tail = {
-                let (start, tail_rect) = self.clipped_tail;
+            let scissor = |region: egui::Rect| {
                 let clip = egui::epaint::ViewportInPixels::from_points(
-                    &tail_rect.intersect(self.rect),
+                    &region.intersect(self.rect),
                     ppp,
                     screen_descriptor.size_in_pixels,
                 );
@@ -1183,10 +1156,12 @@ impl CallbackTrait for RollCallback {
                 let top = (clip.top_px - viewport.top_px).max(0) as u32;
                 let width = (clip.width_px.max(0) as u32).min(roll_size[0].saturating_sub(left));
                 let height = (clip.height_px.max(0) as u32).min(roll_size[1].saturating_sub(top));
-                TailClip {
-                    start: start.min(pane.count),
-                    scissor: (width > 0 && height > 0).then_some([left, top, width, height]),
-                }
+                (width > 0 && height > 0).then_some([left, top, width, height])
+            };
+            let clip = TextureClip {
+                tail_start: self.clip.tail_start.min(pane.count as usize) as u32,
+                head: scissor(self.clip.head),
+                tail: scissor(self.clip.tail),
             };
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("roll_holdout"),
@@ -1207,14 +1182,14 @@ impl CallbackTrait for RollCallback {
             pass.set_pipeline(holdout_pipeline);
             pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-            draw_clipped(&mut pass, pane.count, tail);
+            draw_clipped(&mut pass, pane.count, clip);
             drop(pass);
 
             holdout.surround.draw(egui_encoder, surround_pipeline, |pass| {
                 pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
                 pass.set_bind_group(1, &holdout.read_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                draw_clipped(pass, pane.count, tail);
+                draw_clipped(pass, pane.count, clip);
             });
         }
 
@@ -1295,12 +1270,11 @@ impl CallbackTrait for RollCallback {
             }
         };
         render_pass.set_pipeline(&resources.pipelines.core_pipeline);
-        let (start, tail_rect) = self.clipped_tail;
-        let start = start.min(pane.count);
-        if start > 0 && set_clip(render_pass, info.clip_rect) {
+        let start = self.clip.tail_start.min(pane.count as usize) as u32;
+        if start > 0 && set_clip(render_pass, self.clip.head) {
             render_pass.draw(0..4, 0..start);
         }
-        if start < pane.count && set_clip(render_pass, tail_rect) {
+        if start < pane.count && set_clip(render_pass, self.clip.tail) {
             render_pass.draw(0..4, start..pane.count);
         }
 
