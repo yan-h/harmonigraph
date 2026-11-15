@@ -657,8 +657,8 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     device.run(500, vec![], false);
     assert_eq!(
         mailbox.visible().0.effective_sample,
-        564,
-        "an edit adopted at the boundary of [500,564) is effective at the next one"
+        500,
+        "an untimed flush bound to the boundary of [500,564) is effective there"
     );
     let first = mailbox
         .submit(packet(ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(390.0))))
@@ -678,12 +678,12 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     );
     let snapshot = mailbox.visible().0;
     assert_eq!(snapshot.applied_id, second);
-    assert_eq!(snapshot.effective_sample, 628, "at7 and at31 share this block's boundary");
+    assert_eq!(snapshot.effective_sample, 595, "the last automation is effective at its sample");
     assert!(!view(snapshot, false).resolved.modes.tempered.syntonic);
     device.flush(vec![device.param(ParamKey::Three, 697.0, 44)]);
-    assert_eq!(mailbox.visible().0.effective_sample, 628, "an untimed flush applies nothing yet");
+    assert_eq!(mailbox.visible().0.effective_sample, 595, "an untimed flush applies nothing yet");
     device.run(628, vec![], false);
-    assert_eq!(mailbox.visible().0.effective_sample, 692);
+    assert_eq!(mailbox.visible().0.effective_sample, 628, "bound to the next boundary");
     assert_eq!(mailbox.visible().0.raw[1], 697.0);
 }
 
@@ -2690,37 +2690,43 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
 }
 
 #[test]
-fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
+fn every_engine_records_shared_tuning_at_its_actual_sample_boundary() {
     let _scope = crate::test_scope::enter();
-    let (mut device, mut capture) = recorded_device();
-    device.activate();
-    let mut state = restored(&device, 696.0);
-    state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(2));
-    device.load(state, false);
-    device.run(0, vec![], false);
-    capture.arm();
-    // Two changes in one block, so the second is dated from a segment that
-    // does not start at the block's own start.
-    device.run(
-        64,
-        vec![device.param(ParamKey::Three, 690.0, 16), device.param(ParamKey::Three, 685.0, 40)],
-        false,
-    );
-    let configs: Vec<_> = capture
-        .drain_entries()
-        .into_iter()
-        .filter_map(|entry| match entry {
-            harmonigraph_record::Entry::Configuration(config) => Some(config),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(configs.len(), 3);
-    assert_eq!(configs[0].axes[1], 696_000_000);
-    assert_eq!(configs[1].axes[1], 690_000_000);
-    assert_eq!(configs[2].axes[1], 685_000_000);
-    assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
-    assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
-    assert!((configs[2].t - 104.0 / 48000.0).abs() < 1e-9);
+    // Pass through, Adaptive and Lattice Map.
+    for engine in 0..3 {
+        let (mut device, mut capture) = recorded_device();
+        device.activate();
+        let mut state = restored(&device, 696.0);
+        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(engine));
+        device.load(state, false);
+        device.run(0, vec![], false);
+        capture.arm();
+        // Two changes in one block, so the second is dated from a segment that
+        // does not start at the block's own start.
+        device.run(
+            64,
+            vec![
+                device.param(ParamKey::Three, 690.0, 16),
+                device.param(ParamKey::Three, 685.0, 40),
+            ],
+            false,
+        );
+        let configs: Vec<_> = capture
+            .drain_entries()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                harmonigraph_record::Entry::Configuration(config) => Some(config),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(configs.len(), 3, "engine {engine}");
+        assert_eq!(configs[0].axes[1], 696_000_000);
+        assert_eq!(configs[1].axes[1], 690_000_000);
+        assert_eq!(configs[2].axes[1], 685_000_000);
+        assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
+        assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
+        assert!((configs[2].t - 104.0 / 48000.0).abs() < 1e-9);
+    }
 }
 
 /// Real CLAP automation and project restoration with no editor constructed.

@@ -261,13 +261,13 @@ impl<P: ClapPlugin> Wrapper<P> {
         if !self.drain_configuration_commands(runtime, &mut plugin, boundary.steady_time) {
             return;
         }
-        // THE configuration boundary, once the captured command prefix has
-        // reduced: one value for every group this block starts.
+        // The block's first configuration, once the captured command prefix
+        // has reduced: what every group sees until automation changes it.
         plugin.clap_configuration_adopt();
         input.storage.bind_untimed(boundary.steady_time);
         // One walk, in input order, with each event's sample-precise timestamp
-        // preserved. Automation reduces where it arrives and becomes effective
-        // at the next boundary, exactly like a queued UI edit.
+        // preserved. Automation reduces where it arrives and is effective from
+        // its own sample.
         while let Some(event) = input.get(0) {
             if let InputValue::Parameter { id, value, modulation } = event.value {
                 if let Some(index) = runtime.hashes.iter().position(|hash| *hash == Some(id)) {

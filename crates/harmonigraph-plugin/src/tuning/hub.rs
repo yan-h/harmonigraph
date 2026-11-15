@@ -549,8 +549,6 @@ impl Hub {
             return;
         }
         self.batch.sort_unstable_by_key(|record| (record.sample, record.order()));
-        let config = owner.block_configuration();
-        self.sequencer.config = config.into();
         let mut index = 0;
         while index < self.batch.len() {
             let sample = self.batch[index].sample;
@@ -559,11 +557,6 @@ impl Hub {
                 end += 1;
             }
             if let Some(attack) = owner.maps.at(sample) {
-                let timed_config = if attack.playback.engine == TuningEngine::LatticeMap {
-                    attack.config
-                } else {
-                    config
-                };
                 if self.sequencer.engine_revision != attack.engine_revision {
                     self.sequencer.forget_history();
                     self.sequencer.context.fill(None);
@@ -572,34 +565,34 @@ impl Hub {
                 }
                 self.sequencer.map = attack.playback.map;
                 self.sequencer.follow = attack.playback.follow;
-                self.sequencer.config = timed_config.into();
+                self.sequencer.config = attack.config.into();
                 for position in index..end {
-                    self.apply(position, timed_config);
+                    self.apply(position, attack.config);
                 }
             } else {
-                // Outside retained/known configuration, which is routine rather
-                // than exotic: a record the ring holds over carries a sample
-                // from before this callback, and a backward locate clears the
-                // history out from under it.
+                // Outside retained configuration, which is routine rather than
+                // exotic: a record the ring holds over carries a sample from
+                // before this callback, and a steady-clock regression clears
+                // the history out from under it (a song-time locate does not).
                 //
-                // Only Lattice Map has per-sample state to be missing, and its
-                // refusal is the point — the map that sample ran under is
-                // exactly what was lost, and guessing at one would retune the
-                // onset to a shape nobody selected. Adaptive decides from the
-                // block configuration, which is still in hand, so the same
-                // refusal would uncorrect the onset and raise a fault for
-                // nothing. `at` is also what would have said which engine that
-                // sample ran under, so the live selection is the only one left
-                // to read; it is restored after the group either way, because
-                // adopting an engine is the `Some` arm's job.
+                // Lattice Map refuses, and the refusal is the point — the map
+                // that sample ran under is exactly what was lost, and guessing
+                // at one would retune the onset to a shape nobody selected.
+                // Adaptive assigns from the configuration the reducer holds
+                // now (#920), since the same refusal would uncorrect the onset
+                // and raise a fault for nothing. `at` is also what would have
+                // said which engine that sample ran under, so the live
+                // selection is the only one left to read; it is restored after
+                // the group either way, because adopting an engine is the
+                // `Some` arm's job.
+                let config = owner.reducer.resolved();
                 let restore = self.sequencer.engine;
                 self.sequencer.engine = owner.maps.playback.engine;
+                self.sequencer.config = config.into();
                 if self.sequencer.engine == TuningEngine::LatticeMap {
                     // Keep controller/release processing and publication truthful.
                     self.status |= session::POLICY;
                     self.sequencer.engine = TuningEngine::Off;
-                } else {
-                    self.sequencer.config = config.into();
                 }
                 for position in index..end {
                     self.apply(position, config);

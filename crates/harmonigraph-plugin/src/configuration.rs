@@ -171,9 +171,6 @@ pub struct Owner {
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
     pub(crate) reducer: ConfigReducer,
-    /// Adaptive's callback-boundary configuration. Lattice Map instead uses
-    /// `maps`' timestamped history, including shared tuning at each attack.
-    block: ResolvedConfig,
     pub(crate) confirmed: ConfirmedPitches,
     learning: LearningState,
     learned: Option<LearnedTuning>,
@@ -196,7 +193,6 @@ impl Owner {
 
         Self {
             maps: crate::lattice_maps::AudioMaps::new(params),
-            block: reducer.resolved(),
             reducer,
             recording: recording::Recording::default(),
             confirmed: ConfirmedPitches::default(),
@@ -225,17 +221,10 @@ impl Owner {
         self.recording.block_frames = boundary.frames;
     }
 
-    /// Seed the callback after all queued commands reduce. Adaptive keeps this
-    /// value for the block; Map history records later timestamped changes.
+    /// Seed the callback's history entry after all queued commands reduce.
+    /// Automation the walk reduces later lands in the history at its own sample.
     pub fn adopt(&mut self) {
-        self.block = self.reducer.resolved();
-        self.maps.adopt(self.block);
-    }
-
-    /// The one configuration for assignment groups started in this block. A
-    /// group that spans a boundary keeps the value it was handed here.
-    pub fn block_configuration(&self) -> ResolvedConfig {
-        self.block
+        self.maps.adopt(self.reducer.resolved());
     }
 
     pub fn reset(&mut self, recorder: &mut harmonigraph_record::Recorder) {
@@ -292,25 +281,30 @@ impl Owner {
                 }),
             }),
         };
-        // Reduce in arrival order. The per-block `block` config remains Adaptive's
-        // authority; Map records the same resolved value at the commit sample.
+        // Reduce in arrival order, and record the resolved value at the commit
+        // sample: the history is every engine's configuration. Learn is not
+        // pushed, because it applies at the block's start after the walk has
+        // pushed later samples; the next `adopt` carries it.
         if !self.reducer.apply(mutation) {
             self.fault();
             return None;
         }
         let resolved = self.reducer.resolved();
-        if command.edit.payload[0] != LEARN {
+        let learn = command.edit.payload[0] == LEARN;
+        if learn {
+            self.learned = None;
+        } else {
             self.maps.tuning_changed(commit.sample, resolved);
         }
-        if command.edit.payload[0] == LEARN {
-            self.learned = None;
-        }
+        self.snapshot.effective_sample = if learn {
+            self.boundary.steady_time.saturating_add(i64::from(self.boundary.frames))
+        } else {
+            commit.sample
+        };
         if command.id != 0 {
             self.snapshot.applied_id = command.id;
         }
         self.snapshot.revision = resolved.revision;
-        self.snapshot.effective_sample =
-            self.boundary.steady_time.saturating_add(i64::from(self.boundary.frames));
         self.snapshot.payload = payload(resolved);
         self.snapshot.raw = commit.raw;
         self.snapshot.unmodulated = commit.unmodulated;
@@ -340,23 +334,15 @@ impl Owner {
         let end = start + i64::from(self.recording.block_frames);
         recorder.record(self.take_time(), origin);
         if recorder.recording() {
-            // The block's own adopted configuration, and in Lattice Map each
-            // timed shared-tuning change at its own sample. There is no
-            // historical lookup: the value in force IS the value the Hub used
-            // for every group it started there.
-            let effective = |state: crate::lattice_maps::AttackState| {
-                if state.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-                {
-                    state.config
-                } else {
-                    self.block
-                }
-            };
-            let config = self.maps.at(start).map_or(self.block, effective);
-            self.recording.configuration(recorder, start, config);
+            // The history the Hub assigned from, at the segment's start and at
+            // each change inside it. An empty history at `start` means no
+            // callback has adopted since it was cleared, so nothing has been
+            // resolved since the take's last configuration record.
+            if let Some(state) = self.maps.at(start) {
+                self.recording.configuration(recorder, start, state.config);
+            }
             for (sample, state) in self.maps.changes(start, end) {
-                let config = effective(state);
-                self.recording.configuration(recorder, sample, config);
+                self.recording.configuration(recorder, sample, state.config);
             }
         }
         self.recording.registered(end);

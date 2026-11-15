@@ -7,10 +7,9 @@ use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, V
 
 /// What the tuner decided about one attack. It also named the configuration
 /// revision the decision was taken under, for reconstructing historical
-/// configuration from a note; #712 settled that configuration is adopted per
-/// block and captured when a group's assignment starts, so nothing
-/// reconstructs it and nothing ever read the number. The take's configuration
-/// timeline still carries every revision and when it applied.
+/// configuration from a note. Nothing ever read the number: the take's
+/// configuration timeline carries every revision at the sample it applied
+/// from, which is the configuration the attack was assigned under (#1749).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AssignmentMetadata {
     pub decision: u64,
