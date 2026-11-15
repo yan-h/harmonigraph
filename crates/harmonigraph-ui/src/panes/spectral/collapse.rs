@@ -13,6 +13,10 @@ pub(crate) struct Regions {
     /// Last fully open composition. Temporary expansion into a folded region
     /// never changes this snapshot or the appearance dial.
     geometry: Option<Geometry>,
+    /// Re-take the spectrum hold from `geometry` on the next fully open frame:
+    /// set by a load and by a new window, which lay the Analyzer out afresh.
+    /// An unfold needs none, since a fold no longer changes the pane's size and
+    /// the hold keeps the spectrum's points.
     #[serde(skip)]
     restore: bool,
 }
@@ -192,7 +196,6 @@ impl Regions {
             // already, and the next draws the new one.
             if control(ui, band, direction, closed, vertical, name, index) {
                 self.collapsed[index] = !closed;
-                self.restore = !self.collapsed.iter().any(|&c| c);
                 ui.ctx().request_repaint();
             }
         }
