@@ -1037,8 +1037,10 @@ mod tests {
     /// writer emitted them in — `coverage_start` after `t`, sixteen `channels`
     /// of 128 controllers after `voices`, `configuration_revision` first inside
     /// an assignment, `start_samples` after `sample_rate` and `window_points`
-    /// after `appearance` (#895 dropped those two). A hand-shortened stand-in
-    /// would prove nothing about the nested vector RON actually has to skip.
+    /// after `appearance` (#895 dropped those two), and `runtime_session`,
+    /// `clock_epoch` and `input` first inside a timing (#1778). A
+    /// hand-shortened stand-in would prove nothing about the nested vector RON
+    /// actually has to skip.
     ///
     /// The HEADER's two matter for a second reason the others do not have: the
     /// version check reads out of the header, so a header that failed to parse
@@ -1067,13 +1069,18 @@ mod tests {
             correction_microcents: 0,
             player_tuning: 0.0,
         });
+        delta.timing = Some(EventTiming { planned: None, sample: 144_000, sample_rate: 48_000.0 });
         let note = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Note(delta),
         )))
         .unwrap();
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
-        let current = Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}")))
-            .expect("the fixture has to parse before the aged one means anything");
+        // A run holding both records: a take reads nothing outside its runs.
+        let run = ron::to_string(&Record::Run(RunRecord::default())).unwrap();
+        let current =
+            Take::parse(std::io::Cursor::new(format!("{header}\n{run}\n{frame}\n{note}")))
+                .expect("the fixture has to parse before the aged one means anything");
+        assert_eq!(current.events.len(), 2, "and reach both records");
 
         // What the pre-prune writer put in the same two records.
         let channel = format!(
@@ -1084,8 +1091,9 @@ mod tests {
         let aged_frame = frame
             .replace("t:2.0,", "t:2.0,coverage_start:2.0,")
             .replace(")))", &format!("{channels})))"));
-        let aged_note =
-            note.replace("assignment:Some((", "assignment:Some((configuration_revision:9,");
+        let aged_note = note
+            .replace("assignment:Some((", "assignment:Some((configuration_revision:9,")
+            .replace("timing:Some((", "timing:Some((runtime_session:1,clock_epoch:0,input:143000,");
         let aged_header = header
             .replace("sample_rate:48000.0,", "sample_rate:48000.0,start_samples:Some(1024),")
             .replace("appearance:None,", "appearance:None,window_points:Some((1000.0,700.0)),");
@@ -1095,11 +1103,12 @@ mod tests {
         assert!(aged_frame.contains("coverage_start:2.0"), "{aged_frame}");
         assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
+        assert!(aged_note.contains("runtime_session:1,clock_epoch:0,input:143000"), "{aged_note}");
         assert!(aged_header.contains("start_samples:Some(1024)"), "{aged_header}");
         assert!(aged_header.contains("window_points:Some((1000.0,700.0))"), "{aged_header}");
-        let aged =
-            Take::parse(std::io::Cursor::new(format!("{aged_header}\n{aged_frame}\n{aged_note}")))
-                .expect("a take carrying pruned keys still opens");
+        let aged = format!("{aged_header}\n{run}\n{aged_frame}\n{aged_note}");
+        let aged = Take::parse(std::io::Cursor::new(aged))
+            .expect("a take carrying pruned keys still opens");
         assert_eq!(aged.events, current.events, "and draws exactly what it drew");
         assert_eq!(aged.header.version, current.header.version, "and its header still reads");
     }
