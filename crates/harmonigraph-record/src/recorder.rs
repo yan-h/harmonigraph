@@ -676,9 +676,11 @@ struct OpenRun {
 }
 
 /// A plugin destroyed mid-take fails it: nothing will close its run or
-/// publish what it still held. A disarmed take's run was closed when the
-/// plugin deactivated (`close_stopped`), which a host does before destroying
-/// it.
+/// publish what it still held. A take disarmed before the plugin deactivated
+/// had its run closed then (`close_stopped`), and a host deactivates before it
+/// destroys. One still armed at deactivate and disarmed while inactive keeps
+/// its run open, and the writer seals it with that run unterminated, which
+/// reads to the end of its records.
 impl Drop for Recorder {
     fn drop(&mut self) {
         if self.fence.intent().is_armed() {
