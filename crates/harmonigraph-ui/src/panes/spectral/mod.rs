@@ -412,7 +412,7 @@ pub(crate) fn spectral_pane(
     // at its actual pitch. Fundamentals line up with their notes' ribbons;
     // the harmonic series marches up the axis from each note.
     if show_spectrum && split > 0.0 {
-        let moving = state.runtime.spectrum.moving(now);
+        let moving = state.runtime.spectrum.moving(now, &state.appearance.spectrum);
         state.surfaces.moving_this_frame.audible(moving);
         if let Some(levels) = state.runtime.spectrum.display(now) {
             // Only the buckets inside the pitch range.

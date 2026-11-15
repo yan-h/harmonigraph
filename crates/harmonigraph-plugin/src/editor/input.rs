@@ -40,11 +40,6 @@ pub(crate) struct LiveInput {
 /// moved out with it: what [`LiveInput::analyze`] runs without the lock.
 pub(crate) struct Taken {
     analysis: harmonigraph_ui::SpectrumAnalysis,
-    /// The history's Clear count at take: a Clear before the give keeps this
-    /// step's columns out (see [`AudioSpectrum::give`]).
-    ///
-    /// [`AudioSpectrum::give`]: harmonigraph_ui::AudioSpectrum::give
-    clears: u32,
     audio: TakenAudio,
 }
 
@@ -146,11 +141,7 @@ impl LiveInput {
     /// spectrogram read this one analyzer, the curve is always drawn, and
     /// feeding it is also what drives smooth repaint while anything it heard
     /// is still on screen (`harmonigraph_ui::Animating::audible`).
-    fn take_audio(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        appearance: &harmonigraph_ui::AppearanceDocument,
-    ) -> Option<Taken> {
+    fn take_audio(&mut self, appearance: &harmonigraph_ui::AppearanceDocument) -> Option<Taken> {
         // One clock conversion per take, shared with note delivery and made
         // in the same hold, observed and then mapped as a frame's drain did.
         let offset = self.clock.offset?;
@@ -178,13 +169,11 @@ impl LiveInput {
             self.spare = audio;
             return None;
         }
-        // An analysis never given back, which no step leaves, would otherwise
-        // drop this audio and every take's after it. Healed as a panicking
-        // step is, with a fresh analysis starting a fresh run at this audio.
+        // Every step gives the analysis back, and a step that panicked with
+        // it out has it replaced by `recover_analysis` before the next.
         debug_assert!(self.analysis.is_some(), "the analysis was given back");
-        audio.blocks[0].restart |= self.analysis.is_none();
         let analysis = self.analysis.take().unwrap_or_default();
-        Some(Taken { analysis, clears: runtime.spectrum.clears(), audio })
+        Some(Taken { analysis, audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {
@@ -207,24 +196,27 @@ impl LiveInput {
             );
         }
     }
+    /// The lag the analysis runs at, which tells a test the resolution it
+    /// analyzes under; `None` while a step has it out.
+    #[cfg(test)]
+    pub(crate) fn analysis_lag(&self) -> Option<f64> {
+        self.analysis.as_ref().map(harmonigraph_ui::SpectrumAnalysis::lag)
+    }
     /// Put a fresh analysis back if a panic between [`Self::take`] and
     /// [`Self::give`] lost the one taken, and start the source run over, so the
     /// next block re-anchors the fresh analyzer's grid instead of extending
     /// the interrupted run's.
-    ///
-    /// The store keeps the lag the lost analysis last handed over, which is
-    /// the running resolution's, until the fresh one hands over its own.
     pub(crate) fn recover_analysis(&mut self) {
         if self.analysis.is_none() {
             self.analysis = Some(Default::default());
             self.audio_position = None;
         }
     }
-    /// Hand what [`Self::analyze`] made to the store, and put the analysis
+    /// Hand what [`Self::analyze`] made to the spectrum, and put the analysis
     /// back.
     pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
-        let Taken { analysis, clears, mut audio } = taken;
-        runtime.spectrum.give(clears, audio.deliveries.drain(..), &audio.config);
+        let Taken { analysis, mut audio } = taken;
+        runtime.spectrum.give(audio.deliveries.drain(..), &audio.config);
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         self.analysis = Some(analysis);
         audio.samples.clear();
@@ -286,7 +278,7 @@ impl LiveInput {
         now: f64,
     ) -> Option<Taken> {
         self.drain_into_tracker(runtime, now);
-        self.take_audio(runtime, appearance)
+        self.take_audio(appearance)
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in

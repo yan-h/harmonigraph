@@ -1452,7 +1452,7 @@ mod tests {
     fn a_projects_saved_window_reaches_the_analyzer_with_no_editor_built() {
         use harmonigraph_ui::SpectrumWindow;
 
-        // What `column_lag` reads back out of the analyzer, on the rate a
+        // What the analyzer's lag reads at the window it runs, on the rate a
         // plugin runs at until a host reports its own.
         let lag_of = |window: SpectrumWindow| {
             harmonigraph_ui::SpectrumConfig { window, ..Default::default() }
@@ -1481,8 +1481,16 @@ mod tests {
              analyzer",
         );
 
-        let shared = plugin.editor_shared.lock();
-        let lag = shared.ui.picture.runtime.spectrum.column_lag();
+        // The worker has the analysis out while it analyzes, so wait for a
+        // moment it has given it back.
+        let (shared, lag) = loop {
+            let shared = plugin.editor_shared.lock();
+            if let Some(lag) = shared.input.analysis_lag() {
+                break (shared, lag);
+            }
+            drop(shared);
+            std::thread::sleep(background::POLL);
+        };
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);
         assert_eq!(shared.ui.picture.appearance.view.max_sevens, 3);
         assert_eq!(shared.ui.picture.appearance.render.short_edge, 2160);

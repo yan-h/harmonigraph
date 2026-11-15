@@ -208,8 +208,8 @@ pub(super) fn strip_depths(
 /// Draw the spectrogram across the roll's depth region (`split..1`), sharing
 /// the roll's `depth_of` time mapping so its columns register with the notes.
 ///
-/// Folds the window into a run of slabs, hands that run and the scalars a row is
-/// read through to the GPU, and stretches a pair of quads over the region —
+/// Reads the window's run of slabs out of the already-folded pyramid, hands that
+/// run and the scalars a row is read through to the GPU, and stretches a pair of quads over the region —
 /// smooth in both axes, and opaque so the plane is a filled image rather than
 /// bright patches floating on the background.
 ///
@@ -230,8 +230,10 @@ pub(crate) fn draw_spectrogram(
     state: &mut PictureState,
     split: f32,
     now: f64,
-    // Which surface this is (0 the docked pane / offline render, 1 the Render
-    // preview) — two live spectrograms in a frame need their own grid.
+    // Which surface this is (0 the docked Spectral pane, 1 the Video pane's
+    // preview, offline the placement's index in the layout; see
+    // `SpectrogramSurfaces`) — two live spectrograms in a frame need their
+    // own grid.
     surface: usize,
 ) {
     // Small copies, so `state.runtime.spectrum` is then free to take mutably without
@@ -263,7 +265,7 @@ pub(crate) fn draw_spectrogram(
         return;
     };
 
-    let (d_near, d_far) = strip_depths(&time, split, &layout, newest, spectrum.column_lag());
+    let (d_near, d_far) = strip_depths(&time, split, &layout, newest, cfg.live_lag());
     let points_per_ms = time.region_depth_len(axes) / (time.window() as f32 * 1000.0);
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);

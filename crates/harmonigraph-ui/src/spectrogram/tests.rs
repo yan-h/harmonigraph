@@ -22,7 +22,7 @@ fn col(time: f64, energy: &[(usize, f32)]) -> Col {
 fn aggregate_slabs(columns: &[Col], bucket: f64) -> (Vec<f64>, Vec<SpectrogramSlab>) {
     let mut grid = oracle::SlabGrid::default();
     for (time, power) in columns {
-        grid.fold(*time, &power[..], 1, bucket, None);
+        grid.fold(*time, &power[..], bucket);
     }
     grid.finish();
     let (first_key, level) = pyramid::fold_one_level(bucket, 1 << 20, columns);
@@ -89,20 +89,6 @@ fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
     for pair in centers.windows(2) {
         assert!((pair[1] - pair[0] - 0.25).abs() < 1e-9, "slabs must stay uniform: {centers:?}");
     }
-}
-
-/// One missed slab is a long frame, not a stall, and holds the previous
-/// column. Painting it black would mean every stutter left a stripe of
-/// false silence scrolling across the display for the rest of the window
-/// — trading a rare artifact for a routine one.
-#[test]
-fn a_single_missed_slab_holds_instead_of_going_black() {
-    // Columns half a second apart in quarter-second slabs: one slab empty.
-    let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
-    let (centers, power) = aggregate_slabs(&cols, 0.25);
-    assert_eq!(centers.len(), 3, "the empty slab still gets its row");
-    assert_eq!(power[1][5], q(1.0), "and holds the column before it");
-    assert_eq!(power[2][5], q(0.5));
 }
 
 #[test]
@@ -428,112 +414,12 @@ fn the_plan_decides_the_layout_without_a_frame() {
     );
 }
 
-/// A column of silence, which the pyramid folds on its fast path: what the
-/// sweeps below feed where only the run's shape is under test, not its bytes.
-fn silent(time: f64) -> Col {
-    (time, Box::new([0.0; SPECTRUM_BINS]))
-}
-
-/// **The ring's capacity must hold still across the whole REGIME GRID**, not
-/// just at the settings the pane opens on.
-///
-/// Reallocating is always CORRECT — it draws the right picture — so no value
-/// assertion anywhere in this file can see it happen every frame. What is
-/// left is to count the capacities, and to count them at settings the
-/// defaults never reach: the regression this guards fired only past a Span
-/// the whole suite otherwise stayed below, and then held until the plugin was
-/// reloaded.
-///
-/// The cliff is a RATIO between constants picked independently of each
-/// other: a SLAB against the analyzer's LAG (half an analysis window), which
-/// decides whether the visible run reaches the far end of the window and so
-/// whether the buffer's capacity tracks it.
-///
-/// It moves with the FFT window AND with the pane's width, since a slab is
-/// `Span / depth pixels` — a narrow pane crosses it at a much shorter Span
-/// than a wide one. So the sweep is taken per (window, pane) pair, either
-/// side of that pair's own crossing.
-#[test]
-fn no_cache_layer_falls_back_as_the_window_scrolls() {
-    // Every window the pane offers, by the lag it gives a column.
-    let windows = [
-        ("Fast", crate::SpectrumWindow::Fast),
-        ("Balanced", crate::SpectrumWindow::Balanced),
-        ("Precise", crate::SpectrumWindow::Precise),
-    ]
-    .map(|(name, window)| {
-        (name, crate::SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0))
-    });
-    // Depth pixels the image is cut into: a full-width pane (which the cap
-    // holds at LIVE_SLAB_CAP) and a narrow one.
-    let panes = [("wide", LIVE_SLAB_CAP as f64), ("narrow", 384.0)];
-
-    // A thread per grid point, because there is nothing between them to
-    // serialize: each case below builds its own pyramid and reads only the
-    // numbers it was handed.
-    std::thread::scope(|scope| {
-        let mut running = Vec::new();
-        for (algo, lag) in windows {
-            for (pane, cols) in panes {
-                // Where a slab is exactly the lag — the crossing this pair's
-                // ring behaviour turns on — plus a close-up to anchor it.
-                let crossing = lag * cols;
-                for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
-                    running
-                        .push(scope.spawn(move || scroll_the_window(algo, lag, pane, cols, span)));
-                }
-            }
-        }
-        // Joined by hand rather than left to the scope's own join at the
-        // end of this block, which panics with "a scoped thread panicked"
-        // and leaves the `at` of the case that actually failed in captured
-        // output.
-        for case in running {
-            if let Err(panic) = case.join() {
-                std::panic::resume_unwind(panic);
-            }
-        }
-    });
-}
-
-/// One grid point of [`no_cache_layer_falls_back_as_the_window_scrolls`]:
-/// scroll a `span`-second window across a pane cut into `cols` depth
-/// pixels, fed by an analyzer that stamps each column `lag` behind the
-/// shell clock, and assert the ring kept one capacity while it moved.
-///
-/// Split out of the sweep so the sweep can hand it to a thread; `algo` and
-/// `pane` are carried only to name the case in an assertion.
-fn scroll_the_window(algo: &str, lag: f64, pane: &str, cols: f64, span: f64) {
-    let interval = crate::AudioSpectrum::FFT_INTERVAL;
-    let planned = ring_slots(cols as usize);
-    let level = pyramid::level_of(live_slab(span, cols as usize));
-    let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
-
-    let mut pyramid = SlabPyramid::default();
-    let mut caps = std::collections::BTreeSet::new();
-
-    // Long enough to fill the window and then scroll a while inside it,
-    // which is where the run starts breathing.
-    let columns = ((span + 15.0) / interval) as usize;
-    for i in 0..columns {
-        let (t, power) = silent(i as f64 * interval);
-        pyramid.push(t, &power);
-        // The shell clock: the newest column always lags it.
-        let now = t + lag;
-        // Exactly what `draw_spectrogram` asks for each frame.
-        let Some(run) = pyramid.run(level, now - span) else { continue };
-        caps.insert(ring_capacity(planned, run.len()));
-    }
-    assert_eq!(caps.len(), 1, "the ring capacity changed while scrolling: {at}");
-}
-
 /// Dragging the Span must not re-lay the grid on every frame of the drag.
 ///
 /// This is what [`live_slab`]'s ladder is for. A slab width taken straight
 /// from the window moves whenever the window does, and a moved slab width
 /// reads another level — so a drag would pay a full upload, every frame, for
-/// as long as it lasted. On the ladder the width holds across a whole rung,
-/// and the capacity is sized off the pane so it holds too.
+/// as long as it lasted. On the ladder the width holds across a whole rung.
 ///
 /// Swept in both directions: widening is the harder one, since it reaches
 /// back to slabs the window did not want a frame ago.
@@ -542,7 +428,6 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
     let interval = crate::AudioSpectrum::FFT_INTERVAL;
     let lag = 0.5 * 8192.0 / 48000.0;
     let cols = LIVE_SLAB_CAP as usize;
-    let planned = ring_slots(cols);
     // One rung, end to end: at the 1024-slab cap a width holds while the
     // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
     // 32.8 s. The sweep stops just inside both ends, since crossing a rung
@@ -550,20 +435,15 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
     let rung = live_slab(30.0, cols);
     let (lo, hi) = (rung * 520.0, rung * 1010.0);
 
-    let mut pyramid = SlabPyramid::default();
     let mut widths = std::collections::BTreeSet::new();
-    let mut caps = std::collections::BTreeSet::new();
 
-    // Fill past the widest Span in the sweep, so every frame of it is asking
-    // for a window the pyramid can actually cover.
+    // Hold the widest Span a while, then sweep.
     let settled = hi + 10.0;
     let frames = ((settled + 40.0) / interval) as usize;
     let mut dragged = 0u32;
     for i in 0..frames {
-        let (t, power) = silent(i as f64 * interval);
-        pyramid.push(t, &power);
-        let now = t + lag;
-        // Once the pyramid is deep enough, sweep the Span down and back up,
+        let now = i as f64 * interval + lag;
+        // Once the history is deep enough, sweep the Span down and back up,
         // a frame at a time as a drag delivers it.
         let span = if now < settled {
             hi
@@ -579,8 +459,6 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
 
         let bucket = live_slab(span, cols);
         widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
-        let Some(run) = pyramid.run(pyramid::level_of(bucket), now - span) else { continue };
-        caps.insert(ring_capacity(planned, run.len()));
     }
 
     assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
@@ -592,9 +470,6 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
         widths.len(),
         (widths.first(), widths.last()),
     );
-    // The opening upload and nothing else: the capacity is the pane's, so a
-    // Span that moves inside its rung moves no slab into a different slot.
-    assert_eq!(caps.len(), 1, "the drag resized the buffer: {caps:?} slabs");
 }
 
 /// A Span drag CROSSING ladder rungs changes level once per rung, not once
@@ -831,8 +706,9 @@ fn unchanged_columns_reuse_the_folded_snapshot() {
 /// What makes the renderer's comparison cheap: while audio streams in,
 /// consecutive snapshots share every slab but the one being filled and the
 /// one just opened, so all the rest compare by pointer. The fixture keeps
-/// a slab open across several frames, holds one missed slab, and moves the
-/// window's far edge on, so each of those paths is taken.
+/// a slab open across several frames, leaves one slab empty, which shares
+/// the pyramid's silent slab, and moves the window's far edge on, so each of
+/// those paths is taken.
 #[test]
 fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
     // Level 1: 32 ms slabs, four columns each.
@@ -841,10 +717,10 @@ fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
     let window = 64.0 * bucket;
     let mut pyramid = SlabPyramid::default();
     let mut previous: Option<(i64, Vec<SpectrogramSlab>)> = None;
-    let (mut trimmed, mut held) = (false, false);
+    let (mut trimmed, mut gap) = (false, false);
     for i in 0..1200 {
         // A slab and a half of missed columns, once: exactly one slab
-        // empty, which holds its predecessor.
+        // empty.
         if (600..606).contains(&i) {
             continue;
         }
@@ -868,11 +744,11 @@ fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
                 .count();
             assert!(moved <= 2, "column {i}: {moved} of {} slabs moved", run.len());
         }
-        held |= run.windows(2).any(|pair| Arc::ptr_eq(&pair[0], &pair[1]));
+        gap |= run.iter().any(|slab| Arc::ptr_eq(slab, pyramid.silence()));
         previous = Some((first_key, run));
     }
     assert!(trimmed, "the window's far edge never moved on");
-    assert!(held, "no jitter hold shared its predecessor");
+    assert!(gap, "no empty slab shared the silent one");
 }
 
 /// The snapshot a surface holds changes only when the run does: a far edge
@@ -1285,28 +1161,11 @@ fn the_snapshot_follows_the_fold_and_not_the_read() {
     assert_eq!(fresh.len(), base.len(), "the fresh column opened a slab");
     assert!(!Arc::ptr_eq(&base, &fresh), "a new column reused the old run");
     assert_ne!(fresh.last(), base.last(), "the open slab kept its old average");
-    // A Clear followed by a history of the same length and newest time,
-    // each ending in a slab of silence: its newest slab is the shared silent
-    // slab before the Clear and after it, so the first key, the length and
-    // the newest allocation all match, and only the pyramid's generation
-    // tells the two histories apart.
-    for i in [600, 601] {
-        spectrum.push_history(at(i), &power(0.0));
-    }
-    let before = draw(&mut spectrum, &base_view, from);
-    spectrum.clear_history();
-    for i in 0..602 {
-        spectrum.push_history(at(i), &power(if i < 600 { 0.125 } else { 0.0 }));
-    }
-    let cleared = draw(&mut spectrum, &base_view, from);
-    assert_eq!(cleared.len(), before.len(), "the fixture's runs are not alike");
-    assert!(Arc::ptr_eq(cleared.last().unwrap(), before.last().unwrap()), "a silent newest slab");
-    assert_eq!(cleared[100][1000], q(0.125), "a Clear served the run from before it");
     // And the slab width, through the ladder.
     let coarse_view = PaneView { depth_len: 200.0, ..base_view };
     assert_ne!(Plan::new(&coarse_view, from, None).level, base_plan.level);
     let coarser = draw(&mut spectrum, &coarse_view, from);
-    assert!(!Arc::ptr_eq(&cleared, &coarser), "a new rung reused the old run");
+    assert!(!Arc::ptr_eq(&fresh, &coarser), "a new rung reused the old run");
 }
 
 /// The strip is drawn out to the now-line, but the newest column is always
@@ -1619,7 +1478,6 @@ mod gpu {
         pushed: u32,
         folds: u32,
         advances: u32,
-        holds: u32,
         reveals: u32,
         crossings: u32,
         rebuilds: u32,
@@ -1644,10 +1502,7 @@ mod gpu {
         let mut tally = Tally { clock: 100.0, ..Tally::default() };
 
         // A moving peak over a low bed, so consecutive slabs differ and a slab
-        // written into the wrong slot draws a different picture. Straight into
-        // the history, below the assertion that no feeder dates a column
-        // backwards, since the jump below does: this exercises the guard that
-        // stands in for that assertion in release builds.
+        // written into the wrong slot draws a different picture.
         let push = |t: &mut Tally, spectrum: &mut crate::AudioSpectrum, n: u32, gap: f64| {
             t.clock += gap;
             for _ in 0..n {
@@ -1683,9 +1538,6 @@ mod gpu {
                 t.advances += u32::from(grid.first_key > first_key && was == bucket);
             }
             t.last = Some((bucket, grid.first_key));
-            // A HELD slab is a copy of the one before it, which is the only way
-            // two neighbours can carry the same bytes under this fixture.
-            t.holds += u32::from((1..slabs as usize).any(|j| grid.run[j - 1] == grid.run[j]));
 
             let delta = headless.frame(
                 0,
@@ -1734,13 +1586,13 @@ mod gpu {
             frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(span));
             push(&mut tally, &mut spectrum, 4, 0.0);
         }
-        // One empty slab: a seam in the sample stream, which a level fills
-        // by holding the slab before it.
+        // One empty slab: a gap in the sample stream, which a level fills
+        // with silence.
         push(&mut tally, &mut spectrum, 6, 0.024);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
-        // Dates stepping backwards past the guard's second, which resets the
-        // history: no delta can describe that.
-        tally.clock -= 1.5;
+        // Clear display history, and the history starting again after it:
+        // no delta can describe that.
+        spectrum.clear_history();
         push(&mut tally, &mut spectrum, 40, 0.0);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
         push(&mut tally, &mut spectrum, 8, 0.0);
@@ -1755,11 +1607,9 @@ mod gpu {
         for (count, what) in [
             (tally.folds, "folds"),
             (tally.advances, "oldest slab advances"),
-            (tally.holds, "held slabs"),
             (tally.reveals, "slabs revealed by a widening window"),
             (tally.crossings, "ladder rungs crossed"),
             (tally.rebuilds, "full uploads"),
-            (spectrum.guard_counts().1, "history resets"),
         ] {
             assert!(count > 0, "the sequence never reached any {what}");
         }
@@ -1775,7 +1625,7 @@ mod gpu {
     /// each slab where the shader reads it.
     ///
     /// Three readers work out a slot from a key and no compiler checks that
-    /// they agree: [`ring_capacity`] sizes the ring, the render crate scatters
+    /// they agree: [`RING_SLOTS`] sizes the ring, the render crate scatters
     /// a slab into `key mod capacity`, and the shader walks forward from the
     /// run's first slot with the same modulus. Two of the three are only ever
     /// exercised together at the two places the arithmetic is not the identity
@@ -2339,9 +2189,9 @@ mod gpu {
     /// capacity moves the whole mapping: the buffer is reallocated and
     /// every slab in it re-sent. Sized straight off the pane's pixels that
     /// is megabytes a frame for as long as a horizontal drag lasts, since
-    /// the depth axis moves by a pixel or more per frame of one.
-    /// [`ring_slots`] is the ladder that bounds the re-sends by the RUNGS a
-    /// drag crosses instead of by the frames it lasts.
+    /// the depth axis moves by a pixel or more per frame of one. The ring is
+    /// one size for every pane ([`RING_SLOTS`]), so what re-sends the grid
+    /// is [`live_slab`]'s rung stepping, once per rung the drag crosses.
     ///
     /// Count actual renderer writes; preparing CPU data alone cannot report them.
     #[test]
@@ -2412,9 +2262,9 @@ mod gpu {
             frame(&mut spectrum, &mut surfaces, &mut headless, &mut clock, &mut n, depth_len);
         }
         let sent = surfaces.at(0).folded.full_uploads() - was;
-        // Ten rungs reach from a two-slab ring to the cap and this travel
-        // crosses three of them, `live_slab`'s own rungs a few more.
-        assert!(sent <= 12, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");
+        // The ring is one size, so what re-sends is `live_slab` stepping: this
+        // travel crosses two of its rungs.
+        assert!(sent <= 2, "a {TRAVEL}-frame drag re-sent the whole grid {sent} times");
     }
 }
 

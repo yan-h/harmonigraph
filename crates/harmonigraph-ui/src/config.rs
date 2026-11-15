@@ -313,7 +313,7 @@ pub struct SpectrumConfig {
     /// different hop, and there is no way to tell from the bar whether it is
     /// smoothing over a fiftieth of a second or a fifth of one. A time is
     /// converted to its coefficient against the hop actually in use
-    /// (`SpectrumStore::take`), so what the bar says is what the
+    /// (`AudioSpectrum::take`), so what the bar says is what the
     /// analyzer does.
     pub attack: f32,
     /// How long it takes to FALL toward a quieter one, in seconds.
@@ -620,10 +620,23 @@ impl SpectrumConfig {
     /// How far before its newest sample a column analyzed under these settings
     /// belongs on a time axis, in seconds — see
     /// [`AnalyzerConfig::column_lag`](harmonigraph_analysis::AnalyzerConfig::column_lag).
-    /// For what a RUNNING analysis lags, which can be a step behind a setting
-    /// just changed, ask [`AudioSpectrum::column_lag`](crate::AudioSpectrum::column_lag).
     pub fn column_lag(&self, sample_rate: f32) -> f64 {
         self.analyzer(sample_rate).column_lag()
+    }
+
+    /// How far behind the now-line the newest live column sits even when
+    /// nothing is wrong: [`column_lag`](Self::column_lag) at 48 kHz, which a
+    /// frame reads for the heatmap's fresh edge and for how long the curve
+    /// still moves. A frame does not know its shell's rate, and needs none:
+    /// a resolution is a length of time, so the lag is the same at the studio
+    /// rates to within 9% (Precise's 172 ms is 187 at 44.1 kHz), inside the
+    /// edge's 120 ms allowance for delivery.
+    ///
+    /// Read from the settings, so for a frame or two after a switch to a
+    /// shorter resolution, while the columns still come from the longer one,
+    /// the strip's newest edge can stop short of the now-line (#1784 S3).
+    pub(crate) fn live_lag(&self) -> f64 {
+        self.column_lag(48_000.0)
     }
 
     /// Span the history over `seconds` — a render's own length, for
@@ -841,9 +854,9 @@ pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 /// How far the roll's time span may be taken, in seconds. Named because two
 /// controls now set it — the Analyzer section's History duration bar and the drag across the
 /// picture — and a gesture that clamped to its own idea of the limits would
-/// push the bar past its own ends. The maximum is also what
-/// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS)
-/// is sized to reach back to, so the heatmap can fill the widest span the axis
+/// push the bar past its own ends. The maximum is also
+/// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS),
+/// the history's reach, so the heatmap can fill the widest span the axis
 /// offers.
 pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;
 pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
