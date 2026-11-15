@@ -79,8 +79,8 @@ impl Capture {
     pub fn arm(&self) {
         self.fence.arm(self.fence.epoch() + 1);
     }
-    /// What the GUI publishes for every trigger but On disarm: a rewind after
-    /// forward motion ends the take rather than recording on.
+    /// What the GUI publishes for Loop end: a rewind after forward motion ends
+    /// the take rather than recording on.
     pub fn end_at_rewind(&self, on: bool) {
         self.end_at_rewind.store(on, Ordering::Relaxed);
     }

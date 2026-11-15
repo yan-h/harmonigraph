@@ -146,9 +146,8 @@ pub(super) fn transition(
             };
             if rolling {
                 // Host observation history includes parked scrubs. Audio does
-                // not: compare to the accepted prefix, including after a pause.
-                // Match playback's 50 ms jitter allowance, without accumulating
-                // an arbitrary missing interval in an otherwise successful WAV.
+                // not: the block continues the accepted prefix, including after
+                // a pause or a seek.
                 next.action = Action::Record;
                 next.state = State::Recording { motion };
                 let audio_origin = history.recorded_end.unwrap_or(position);

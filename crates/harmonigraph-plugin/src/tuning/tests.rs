@@ -1073,10 +1073,9 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
 
 /// The same lag against the take: a Tune the host runs after the Hub is a
 /// callback behind, so the Hub sequences its note a callback after it was
-/// played, and a take stopped then still has it. The Hub publishes what it
-/// collected before any later sub-block ends the run, and the writer counts
-/// the record ring before the publication lane, so the run's end is never
-/// drained ahead of a note that sounds before it.
+/// played, and a take stopped then still has it: the Hub publishes what it
+/// collected before a later callback ends the run. The writer's own count
+/// order is not exercised here; this harness drains everything at once.
 #[test]
 fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     let _scope = crate::test_scope::enter();

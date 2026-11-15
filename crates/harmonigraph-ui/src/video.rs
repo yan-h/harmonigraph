@@ -28,9 +28,9 @@ pub enum RenderTrigger {
     /// moment. A jump while playing, back or forward, records on: the video
     /// shows a jump where you jumped.
     ///
-    /// Falls back gracefully: if a host stops calling `process` the instant a
-    /// render finishes, no stillness is counted and the take simply waits for
-    /// you to disarm it.
+    /// Falls back gracefully: if a host stops calling `process` while the
+    /// transport rolls, no stillness is counted and the take records on until
+    /// you disarm it.
     #[default]
     OnTransportStop,
     /// When the arranger loop first repeats: exactly one loop is recorded, the

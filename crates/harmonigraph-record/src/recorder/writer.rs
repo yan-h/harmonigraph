@@ -69,7 +69,8 @@ pub fn channel() -> (Recorder, Control) {
             // was pending before the count, which so holds everything pushed
             // before it.
             let stop_counted = pump.pending_stop;
-            let counts = (consumer.slots(), publications.ready());
+            let records = consumer.slots();
+            let items = publications.ready();
             #[cfg(feature = "test-support")]
             thread_fence.worker_before_commands.reach();
             #[cfg(all(test, feature = "test-support"))]
@@ -100,7 +101,7 @@ pub fn channel() -> (Recorder, Control) {
                 &mut consumer,
                 &mut audio_consumer,
                 &mut publications,
-                counts,
+                (records, items),
                 stop_counted,
                 &thread_status,
                 &thread_fence,

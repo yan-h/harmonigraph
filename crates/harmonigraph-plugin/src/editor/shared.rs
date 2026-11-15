@@ -179,7 +179,7 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // One-file triggers finish at transport discontinuities.
+        // Loop end finishes at the wrap.
         let trigger = self.ui.picture.appearance.render.trigger;
         let ends_at_rewind = trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);

@@ -139,7 +139,7 @@ fn home_dir() -> std::path::PathBuf {
 }
 
 /// The stop bar requested by the GUI. Completion belongs to the take's
-/// single end-reason latch, just like a rewind or forward seek.
+/// single end-reason latch, just like a Loop end wrap.
 /// NaN represents off so bar zero remains a valid target.
 struct StopAtBar {
     bar: AtomicU64,
@@ -710,9 +710,8 @@ impl Control {
     }
 
     /// Tell the audio thread whether a backward jump ends the take rather than
-    /// recording on — true for every trigger but
-    /// `OnDisarm`, which is the
-    /// one that has to survive a looping transport. Called every GUI frame.
+    /// recording on — true only for `AtLoopEnd`, whose take is one loop.
+    /// Called every GUI frame.
     pub fn set_end_at_rewind(&self, on: bool) {
         self.end_at_rewind.store(on, Ordering::Relaxed);
     }

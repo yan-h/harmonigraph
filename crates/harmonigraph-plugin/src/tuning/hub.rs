@@ -1290,7 +1290,7 @@ impl Hub {
 
     /// Called only at a joined Hub lifecycle boundary, for a host that stops
     /// calling the audio thread after a Stop: the stopped take's run closes
-    /// here, and nothing still to come sounds before it.
+    /// here, so the writer can seal it.
     pub fn finish_stopped_recording(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         owner.recording.close_stopped(recorder);
     }

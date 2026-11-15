@@ -51,6 +51,7 @@
 Yan approved a search's three relaxations; each supersedes part of the entry above.
 
 - R1: a record is placed by when it sounds, not where its input arrived. It supersedes step 1′'s input-placement rule and the routing in #1760 Q1. A note or release within about one delay of a pause or the take's end is drawn where it sounds, or dropped when no audio was recorded there.
-- R2: the writer decides when a take is closed, behind one frontier the audio thread publishes each callback, rather than a proof on the audio thread. A flood of more than one batch in the callback that stops a take can lose its tail without a warning. A plugin destroyed mid-take fails the take.
+- R2: the writer decides when a take is closed, rather than a proof on the audio thread. A plugin destroyed mid-take fails the take. The frontier it first sealed behind, and its flood caveat, are superseded by Yan's answer on #1776: a stopped take seals when its run's end is written.
+- Seeks record on (Yan, on #1776): neither a forward seek nor, under Transport stop, a backward jump ends a take; Loop end still ends at the wrap, and Transport stop ends after 0.4 s of stillness.
 - R3: a take is one WAV with no passes. It supersedes `--pass N`: a looped take renders all its loops as one video, and `--start` picks out the last. #1766's failure-marks-every-pass rule becomes the plain rule that a failure marks the take.
 - Takes v7 and older stop loading, with no converter.

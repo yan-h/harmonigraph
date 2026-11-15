@@ -66,9 +66,10 @@ impl Recording {
         }
     }
 
-    /// Close or open this sub-block's run. It records when it has an origin,
-    /// which the transport observation gives only to an armed take that
-    /// rolls; `origin` is where it sits in the take's audio.
+    /// Close or open this sub-block's run. It records when it has an origin:
+    /// the transport observation gives one only to an armed take that rolls,
+    /// and a block with no transport position gives its local clock to any
+    /// armed take; `origin` is where it sits in the take's audio.
     pub fn record(&mut self, recorder: &mut Recorder, origin: Option<f64>) {
         let start = self.block_start;
         let serial = recorder.recording_run();
