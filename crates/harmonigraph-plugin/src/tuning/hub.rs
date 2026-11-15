@@ -1156,7 +1156,7 @@ impl Hub {
                 if !self.rows[index].repair[lane] || recorder.publication_free()[lane] < 2 {
                     continue;
                 }
-                let Some(id) = self.rows[index].baseline_id[lane].checked_add(1) else { continue };
+                let id = self.rows[index].baseline_id[lane] + 1;
                 let applied = self.rows[index].applied;
                 let Some(mut frame) = self.rows[index].state.baseline(identity, id, applied, at)
                 else {
@@ -1207,13 +1207,6 @@ impl Hub {
             direct_pending: self.tune.pending() as u64,
         });
         self.shared.request_main();
-    }
-
-    /// Called only at a joined Hub lifecycle boundary, for a host that stops
-    /// calling the audio thread after a Stop: the stopped take's run closes
-    /// here, so the writer can seal it.
-    pub fn finish_stopped_recording(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
-        owner.recording.close_stopped(recorder);
     }
 
     /// The one authority on what is sounding. There is no second copy to

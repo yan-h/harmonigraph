@@ -116,10 +116,6 @@ pub struct Row {
     /// writer; the Hub reads it for the time it reports each sequenced input
     /// was scheduled for, which is that Tune's own input plus D.
     pub delay: AtomicI64,
-    /// 0 outside a callback, MAX while acquiring its epoch, otherwise that
-    /// callback's epoch. Paired with the session cut in SeqCst order so a
-    /// joined Hub cannot overlook a late publisher from its recording epoch.
-    pub capture_epoch: AtomicU64,
     ends: Mutex<Ends>,
 }
 
@@ -139,7 +135,6 @@ impl Row {
             show: AtomicBool::new(true),
             owner: AtomicU64::new(0),
             delay: AtomicI64::new(0),
-            capture_epoch: AtomicU64::new(0),
             ends: Mutex::new(Ends::new()),
         }
     }
@@ -290,7 +285,6 @@ impl Session {
     pub fn test_reset(&self) {
         for row in &self.rows {
             row.owner.store(0, Ordering::Release);
-            row.capture_epoch.store(0, Ordering::SeqCst);
             row.delay.store(0, Ordering::Release);
             row.retune.store(1, Ordering::Release);
             row.show.store(true, Ordering::Release);

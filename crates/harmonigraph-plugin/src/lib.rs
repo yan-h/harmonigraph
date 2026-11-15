@@ -746,11 +746,9 @@ impl Plugin for Harmonigraph {
 
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
-            if let Some(hub) = &mut self.aggregation {
-                // Stop may arrive after activation but before start_processing
-                // resets this owner. Close its run before forgetting routes.
-                hub.finish_stopped_recording(owner, &mut self.take);
-            }
+            // Stop may arrive after activation but before start_processing
+            // resets this owner. Close its run before forgetting routes.
+            owner.recording.close_stopped(&mut self.take);
             owner.reset(&mut self.take);
             if let Some(hub) = &mut self.aggregation {
                 hub.stop();
@@ -912,11 +910,10 @@ impl ClapPlugin for Harmonigraph {
             .activate(f64::from(config.sample_rate), config.max_buffer_size);
         true
     }
+    /// For a host that stops calling the audio thread after a Stop: the
+    /// stopped take's run closes here, so the writer can seal it.
     fn clap_main_inactive(&mut self) {
-        self.aggregation
-            .as_mut()
-            .unwrap()
-            .finish_stopped_recording(self.configuration.as_mut().unwrap(), &mut self.take);
+        self.configuration.as_mut().unwrap().recording.close_stopped(&mut self.take);
     }
     /// Destruction gives the rings back. A take still recording fails, which
     /// the recorder's own drop decides: a Tune learns the Hub is gone from the

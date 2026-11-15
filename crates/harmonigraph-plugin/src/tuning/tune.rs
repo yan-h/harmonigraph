@@ -296,13 +296,7 @@ impl Tune {
         self.cursor = 0;
         self.emitted = 0;
         self.claim();
-        if let Link::Row(attached) = &self.link {
-            session::session().row(attached.slot).capture_epoch.store(u64::MAX, Ordering::SeqCst);
-        }
         self.adopt();
-        if let Link::Row(attached) = &self.link {
-            session::session().row(attached.slot).capture_epoch.store(self.epoch, Ordering::SeqCst);
-        }
         if callback.steady_time < 0 {
             self.status |= session::CLOCK;
         }
@@ -363,11 +357,8 @@ impl Tune {
         }
         let pending =
             Pending { due, serial, event, awaiting: false, correction: None, player: 0.0 };
-        if self.line.push(pending).is_err() {
-            self.status |= session::DROPPED;
-            self.dropped += 1;
-            return;
-        }
+        let pushed = self.line.push(pending);
+        debug_assert!(pushed.is_ok(), "the line's length was checked above");
         let position = self.line.position(self.line.len() - 1).unwrap();
         let asking = self.asking();
         let retune = self.shared.retuning();
@@ -571,11 +562,9 @@ impl Tune {
         tuning: Option<Event>,
         correction: i64,
     ) -> bool {
-        if !event.emittable() {
-            self.dropped += 1;
-            self.status |= session::DROPPED;
-            return true;
-        }
+        // Input admission checked every event the line holds, and the cut
+        // builds only Note-Offs and pedal controllers.
+        debug_assert!(event.emittable());
         // A refused note is the host's whole answer: nothing left, nothing is
         // tracked, and `schedule` keeps the line entry for a later callback.
         if !output.push(event.input(), time) {
@@ -590,7 +579,9 @@ impl Tune {
         // sound it twice.
         let mut accepted_tuning = None;
         if let Some(tuning) = tuning {
-            if tuning.emittable() && output.push(tuning.input(), time) {
+            // The player's finite tuning plus an integer correction.
+            debug_assert!(tuning.emittable());
+            if output.push(tuning.input(), time) {
                 self.emitted += 1;
                 accepted_tuning = Some(tuning);
             } else {
@@ -696,9 +687,6 @@ impl Tune {
 
     /// Finish this callback and report whether its diagnostics were published.
     pub fn end(&mut self) -> bool {
-        if let Link::Row(attached) = &self.link {
-            session::session().row(attached.slot).capture_epoch.store(0, Ordering::SeqCst);
-        }
         if let Some(callback) = self.callback.take() {
             self.shared.held.store(self.held() as u64, Ordering::Relaxed);
             self.publish_voices();
