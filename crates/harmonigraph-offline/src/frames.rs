@@ -1327,10 +1327,6 @@ mod tests {
         const RATE: f32 = 48_000.0;
 
         let Some(mut sheet) = ProbeSheet::new(A, 1.0) else { return };
-        // The export's font route: egui's own texture, shared. The fallback
-        // copy is rebuilt as the atlas grows, a transient that is the font's
-        // rather than a pane's.
-        harmonigraph_ui::use_renderer_font_texture(&sheet.context);
         let layout = harmonigraph_ui::Layout::split(harmonigraph_ui::LatticeSide::Left, 0.68);
         let mut state = PictureState::new(FORMAT);
         // Notes for the roll and a second of sound for the cloud, neither of

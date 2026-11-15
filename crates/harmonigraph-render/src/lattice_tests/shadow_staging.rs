@@ -6,7 +6,7 @@ use crate::*;
 const SIZE: [u32; 2] = [256, 256];
 const CELL_BYTES: usize = std::mem::size_of::<shadow::ShadowBox>();
 
-fn callback(nodes: usize, labels: usize, atlas: bool, pane: u64) -> LatticeCallback {
+fn callback(nodes: usize, labels: usize, pane: u64) -> LatticeCallback {
     let mut scene = parity_scene();
     scene.view.glow_strength = 0.0;
     scene.pluses.clear();
@@ -19,7 +19,7 @@ fn callback(nodes: usize, labels: usize, atlas: bool, pane: u64) -> LatticeCallb
             node
         })
         .collect();
-    let mut named = names(
+    let named = names(
         (0..labels)
             .map(|i| {
                 (
@@ -31,9 +31,6 @@ fn callback(nodes: usize, labels: usize, atlas: bool, pane: u64) -> LatticeCallb
             })
             .collect(),
     );
-    if !atlas {
-        named.atlas = None;
-    }
     let cb = LatticeCallback::from_scene(
         &scene,
         named,
@@ -113,8 +110,8 @@ fn picture(shooter: &Shooter, cb: &LatticeCallback) -> Vec<u8> {
 fn prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    // Missing font first: a later callback without a snapshot can still use
-    // the renderer's cached font. Both panes then grow and shrink independently.
+    // Missing font first, as before the shell has published egui's font
+    // texture. Both panes then grow and shrink independently.
     for (pane, nodes, labels, atlas, no_boxes) in [
         (101, 273, 15, false, false),
         (202, 6, 2, true, false),
@@ -125,7 +122,10 @@ fn prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes() {
         (101, 6, 2, true, false),
         (202, 273, 0, true, false),
     ] {
-        let mut cb = callback(nodes, labels, atlas, pane);
+        let mut cb = callback(nodes, labels, pane);
+        if atlas {
+            shooter.resources.insert(shooter.font.clone());
+        }
         if no_boxes {
             cb.casters.clear();
         }
