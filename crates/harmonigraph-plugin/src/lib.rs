@@ -1181,7 +1181,7 @@ impl ClapPlugin for Harmonigraph {
     ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationEdit> {
         let hub = self.aggregation.as_ref().unwrap();
         let owner = self.configuration.as_mut().unwrap();
-        let result = owner.group_end(hub.retuning(), |scratch| hub.learn_classes(scratch));
+        let result = owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
         self.params.configuration.get().unwrap().published.publish(owner.snapshot);
         result
     }

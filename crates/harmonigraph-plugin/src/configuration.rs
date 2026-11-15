@@ -170,7 +170,7 @@ pub struct Owner {
     /// Every edit reduces here the moment it arrives, in arrival order, so the
     /// reducer's own combined-edit/preset/unlock semantics are untouched.
     pub(crate) reducer: ConfigReducer,
-    learning: LearningState<{ crate::tuning::LEARN_CLASSES }>,
+    learning: LearningState<{ crate::tuning::HELD_VOICES }>,
     learned: Option<LearnedTuning>,
     pub snapshot: ConfigurationSnapshot,
     boundary: ConfigurationBoundary,
@@ -338,15 +338,13 @@ impl Owner {
     /// A Retune-enabled source reserves the lattice axes only while the engine
     /// actually retunes. Pass through learns the axes from unchanged input.
     ///
-    /// `classes` is the Hub's `learn_classes`, asked only while Learn is armed.
+    /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
     /// Status bit 1 reports this evaluation alone rather than latching, so it
     /// clears as soon as a departure or a Reset's cut makes the rows complete.
     pub fn group_end(
         &mut self,
         retuning: bool,
-        classes: impl FnOnce(
-            &mut [PitchClass; crate::tuning::LEARN_CLASSES],
-        ) -> Result<usize, Incomplete>,
+        classes: impl FnOnce(&mut [PitchClass; crate::tuning::HELD_VOICES]) -> Result<usize, Incomplete>,
     ) -> Option<ConfigurationEdit> {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;

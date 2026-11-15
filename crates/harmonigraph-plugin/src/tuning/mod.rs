@@ -26,8 +26,8 @@ pub const TUNERS: usize = 16;
 pub const DIRECT: u8 = TUNERS as u8;
 /// Voices one source may hold; a source's baseline is sized by it.
 pub use harmonigraph_core::canonical::HELD_PER_SOURCE;
-/// Distinct pitch classes Learn can hear at once: every voice every row holds.
-pub const LEARN_CLASSES: usize = (TUNERS + 1) * HELD_PER_SOURCE;
+/// Every voice every row can hold at once, which is every pitch Learn hears.
+pub const HELD_VOICES: usize = (TUNERS + 1) * HELD_PER_SOURCE;
 /// Steps on the Tuning delay parameter. Sixteen still reaches the 512 samples
 /// this delay used to be fixed at even from a 32-frame callback.
 pub const DELAY_MULTIPLIER_MAX: i32 = 16;

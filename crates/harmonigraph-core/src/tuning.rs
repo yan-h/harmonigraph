@@ -491,7 +491,7 @@ pub fn learn_sorted_classes(classes: &[PitchClass]) -> LearnedTuning {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Incomplete;
 
-/// Fixed scratch for `N` held classes and an exact class-set memo. Row order,
+/// Fixed scratch for `N` held pitches and an exact class-set memo. Row order,
 /// octave, provenance and unrelated configuration do not alter interval
 /// inference. Re-arming intentionally reopens the same chord. An empty chord
 /// is remembered without changing any axis; incomplete input is never learned.
@@ -508,19 +508,28 @@ impl<const N: usize> Default for LearningState<N> {
 }
 
 impl<const N: usize> LearningState<N> {
-    /// Learn from what `classes` writes into the scratch: the held classes,
-    /// sorted and distinct, and how many there are. It is asked only while
-    /// armed, and a class set already learned from yields `None`.
+    /// Learn from what `held` writes into the scratch: the class of every held
+    /// pitch, in any order and with repeats, and how many it wrote. It is
+    /// asked only while armed, and a class set already learned from yields
+    /// `None`.
     pub fn infer(
         &mut self,
         armed: bool,
-        classes: impl FnOnce(&mut [PitchClass; N]) -> Result<usize, Incomplete>,
+        held: impl FnOnce(&mut [PitchClass; N]) -> Result<usize, Incomplete>,
     ) -> Result<Option<LearnedTuning>, Incomplete> {
         if !armed {
             self.previous_len = None;
             return Ok(None);
         }
-        let count = classes(&mut self.scratch)?;
+        let held = held(&mut self.scratch)?;
+        self.scratch[..held].sort_unstable();
+        let mut count = 0;
+        for i in 0..held {
+            if count == 0 || self.scratch[i] != self.scratch[count - 1] {
+                self.scratch[count] = self.scratch[i];
+                count += 1;
+            }
+        }
         let classes = &self.scratch[..count];
         if self.previous_len == Some(count) && self.previous[..count] == *classes {
             return Ok(None);
@@ -835,16 +844,18 @@ mod tests {
     /// again is remembered rather than learned twice.
     #[test]
     fn learning_state_learns_a_class_set_once() {
-        let mut learning = LearningState::<256>::default();
-        let held = |scratch: &mut [PitchClass; 256]| {
+        // Each of 256 classes held twice, in descending order: the state
+        // sorts and deduplicates what it is handed.
+        let mut learning = LearningState::<512>::default();
+        let held = |scratch: &mut [PitchClass; 512]| {
             for (i, class) in scratch.iter_mut().enumerate() {
-                *class = PitchClass::from_microcents(i as i64 * 4_687_499);
+                *class = PitchClass::from_microcents((255 - i as i64 % 256) * 4_687_499);
             }
-            Ok(256)
+            Ok(512)
         };
         let result = learning.infer(true, held).unwrap().unwrap();
-        let mut classes = [PitchClass(0); 256];
-        assert_eq!(held(&mut classes), Ok(256));
+        let mut classes = [PitchClass(0); 512];
+        assert_eq!(held(&mut classes), Ok(512));
         assert_eq!(result, learn_tuning(&classes));
         assert_eq!(learning.infer(true, held).unwrap(), None);
     }

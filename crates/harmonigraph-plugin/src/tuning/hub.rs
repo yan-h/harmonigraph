@@ -23,7 +23,7 @@ use super::event::Event;
 use super::session::{self, HubEnds, Reply};
 use super::state::{Stamp, State};
 use super::tune::Tune;
-use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, LEARN_CLASSES, TUNERS};
+use super::{setup, BATCH_EVENTS, DIRECT, HELD_PER_SOURCE, HELD_VOICES, TUNERS};
 
 type Owner = crate::configuration::Owner;
 
@@ -389,7 +389,7 @@ impl Hub {
         // The Tune half runs first, because it is what turns an editor Reset
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
-        // Learn reads the rows as this leaves them (`learn_classes`), before
+        // Learn reads the rows as this leaves them (`held_classes`), before
         // this callback's input boundary moves them: a cut or departure
         // adopted here has already emptied what it ended.
         self.adopt();
@@ -1070,15 +1070,16 @@ impl Hub {
         }
     }
 
-    /// The pitch classes Learn reads, sorted and distinct, written into
-    /// `scratch` with their count: every voice every row holds, with its
-    /// adaptive correction taken back off (`State::learnable`), or
-    /// `Incomplete` while any row has lost an event. Learn hears every row,
-    /// Retune off included: Retune decides what the Hub corrects, and an
-    /// uncorrected note is the player's pitch Learn reads.
-    pub fn learn_classes(
+    /// What Learn reads, written into `scratch` with its count: the pitch
+    /// class of every voice every row holds, in row order and with repeats,
+    /// its adaptive correction taken back off (`State::learnable`); or
+    /// `Incomplete` while any row has lost an event. `LearningState` sorts and
+    /// deduplicates. Learn hears every row, Retune off included: Retune decides
+    /// what the Hub corrects, and an uncorrected note is the player's pitch
+    /// Learn reads.
+    pub fn held_classes(
         &self,
-        scratch: &mut [PitchClass; LEARN_CLASSES],
+        scratch: &mut [PitchClass; HELD_VOICES],
     ) -> Result<usize, Incomplete> {
         let mut count = 0;
         for row in self.rows.iter() {
@@ -1087,15 +1088,7 @@ impl Hub {
                 count += 1;
             }
         }
-        scratch[..count].sort_unstable();
-        let mut unique = 0;
-        for i in 0..count {
-            if unique == 0 || scratch[i] != scratch[unique - 1] {
-                scratch[unique] = scratch[i];
-                unique += 1;
-            }
-        }
-        Ok(unique)
+        Ok(count)
     }
 
     fn mapping(&self) -> crate::configuration::Presentation {

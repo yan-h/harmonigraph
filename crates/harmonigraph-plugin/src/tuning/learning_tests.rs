@@ -4,11 +4,12 @@ use super::*;
 use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::tuning::{Incomplete, PitchClass};
 
-/// How many distinct pitch classes Learn would read from the Hub's rows now.
+/// How many held pitches Learn would read from the Hub's rows now, repeats
+/// included: one per voice every row holds.
 fn heard(device: &Device) -> Result<usize, Incomplete> {
     hub_wrapper(device).test_inspect_plugin(|plugin| {
-        let mut scratch = [PitchClass::from_microcents(0); LEARN_CLASSES];
-        plugin.aggregation.as_ref().unwrap().learn_classes(&mut scratch)
+        let mut scratch = [PitchClass::from_microcents(0); HELD_VOICES];
+        plugin.aggregation.as_ref().unwrap().held_classes(&mut scratch)
     })
 }
 
@@ -43,7 +44,7 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     hub.run(64, vec![], None);
     let held: usize = (0..=DIRECT).map(|row| inspect_hub(&hub, |hub| hub.test_held(row))).sum();
     assert_eq!(held, 5 * HELD_PER_SOURCE, "the fixture never held 320 voices");
-    assert_eq!(heard(&hub), Ok(12), "64 keys fold into twelve classes");
+    assert_eq!(heard(&hub), Ok(320), "Learn reads every voice of every row");
     assert_eq!(fifth(), harmonigraph_core::tuning::microcents(700.0), "Learn learned");
     drop(tunes);
 }
@@ -69,7 +70,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         good.run(0, [60, 64, 67].map(|key| note(key, 0, key as i16, 0, true)).to_vec(), None);
         hub.run(0, vec![], None);
         hub.run(64, vec![], None);
-        assert_eq!(heard(&hub), Ok(12));
+        assert_eq!(heard(&hub), Ok(67));
         if overflow {
             // A plain 65th attack is refused by Tune admission. Lose a release
             // copy instead: Tune reserves its freed cell while Hub stays full.
