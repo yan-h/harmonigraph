@@ -323,12 +323,7 @@ fn a_heatmap_that_stops_being_drawn_holds_nothing_until_it_is_drawn_again() {
     assert!(hidden.iter().all(|&(_, on)| !on), "a hidden heatmap held the loop awake");
 
     // Long past the curve, well inside the Span: only the heatmap moves.
-    let curve = state
-        .picture
-        .runtime
-        .spectrum
-        .moving_until(&state.picture.appearance.spectrum)
-        .expect("a tone was heard");
+    let curve = state.picture.runtime.spectrum.moving_until().expect("a tone was heard");
     assert!(curve < t && t < stopped + 30.0, "the curve holds until {curve}, now {t}");
     let revealed = stream(&ctx, &mut state, &mut feed, &mut t, 0.1, false, &panes);
     assert!(revealed.iter().all(|&(_, on)| on), "a heatmap drawn again mid-tail idled");
@@ -360,9 +355,8 @@ fn with_the_heatmap_hidden_the_rings_release_alone_keeps_it_animating() {
     for _ in 0..200 {
         stream(&ctx, &mut state, &mut feed, &mut t, 0.1, false, &panes);
         let runtime = &state.picture.runtime;
-        ring_outlasted_the_display |=
-            !runtime.spectrum.moving(t, &state.picture.appearance.spectrum)
-                && (runtime.ring_levels.moving() || runtime.ring_fade.moving());
+        ring_outlasted_the_display |= !runtime.spectrum.moving(t)
+            && (runtime.ring_levels.moving() || runtime.ring_fade.moving());
         wedges_faded |= runtime.ring_fade.moving();
         let nodes =
             (format!("{:?}", state.picture.surfaces.spare_nodes), runtime.ring_levels.bytes());

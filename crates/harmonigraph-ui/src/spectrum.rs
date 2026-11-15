@@ -85,8 +85,11 @@ pub struct SpectrumAnalysis {
 pub(crate) struct Heard {
     /// The newest raw column the history folded: what the heatmap scrolls.
     pub(crate) column: Option<f64>,
-    /// The newest column after which the smoothed curve still stood above
-    /// silence: what the curve, the Spiral and the lattice ring draw.
+    /// The newest frame of the newest batch whose columns left the smoothed
+    /// curve above silence: what the curve, the Spiral and the lattice ring
+    /// draw. Dated by its batch's samples, which is what
+    /// [`display`](AudioSpectrum::display) holds the curve from, rather than
+    /// by the column, which sits a resolution's lag before them.
     pub(crate) curve: Option<f64>,
 }
 
@@ -365,8 +368,9 @@ impl AudioSpectrum {
             column_heard |= new > floor;
             curve_heard |= *shown > floor;
         }
+        // Every batch delivers its arrival before its columns.
         if curve_heard {
-            self.last_audible.curve = Some(column.time);
+            self.last_audible.curve = self.last_samples;
         }
         // Keep the RAW spectrum for the spectrogram (the smoothed
         // `display` would smear one column into the next).
@@ -554,24 +558,24 @@ impl AudioSpectrum {
     }
 
     /// When the smoothed display stops moving, which the curve, the Spiral and
-    /// the lattice ring all draw: a column moves it once it lands, a column
-    /// lag ([`SpectrumConfig::live_lag`]) after its own time, and nothing
-    /// draws it [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the samples stop.
-    /// The display's release is inside the stamp it starts from
-    /// ([`Heard::curve`]), so a curve still above silence counts as heard.
+    /// the lattice ring all draw: nothing draws it
+    /// [`HOLD_SECONDS`](Self::HOLD_SECONDS) after the samples it was last
+    /// heard in ([`Heard::curve`]), the same bound
+    /// [`display`](Self::display) hides it at. The display's release is
+    /// inside that stamp, so a curve still above silence counts as heard.
     /// `None` before anything has been.
     ///
-    /// A bound from the stamp each landing column writes, beside the constants
-    /// it is built from, rather than a second copy of them in the frame loop.
-    pub(crate) fn moving_until(&self, config: &SpectrumConfig) -> Option<f64> {
+    /// A bound from the stamp each landing column writes, beside the constant
+    /// it is built from, rather than a second copy of it in the frame loop.
+    pub(crate) fn moving_until(&self) -> Option<f64> {
         let heard = self.last_audible().curve?;
-        Some(heard + config.live_lag() + Self::HOLD_SECONDS)
+        Some(heard + Self::HOLD_SECONDS)
     }
 
     /// Whether the smoothed display is still moving at `now`: see
     /// [`moving_until`](Self::moving_until).
-    pub(crate) fn moving(&self, now: f64, config: &SpectrumConfig) -> bool {
-        self.moving_until(config).is_some_and(|until| until >= now)
+    pub(crate) fn moving(&self, now: f64) -> bool {
+        self.moving_until().is_some_and(|until| until >= now)
     }
 }
 

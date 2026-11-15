@@ -221,6 +221,31 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
     );
 }
 
+/// The frame loop stays awake for as long as the curve is drawn after its
+/// samples stop, whatever the shell's rate: at 44.1 kHz Precise lags 15 ms
+/// longer than the 48 kHz lag a frame reads from the settings, and a bound
+/// built on that lag let the loop idle on a curve still drawn.
+#[test]
+fn the_curve_moves_for_as_long_as_it_is_drawn_at_44_1_khz() {
+    let sr = 44_100.0;
+    let config =
+        SpectrumConfig { window: SpectrumWindow::Precise, release: 2.0, ..Default::default() };
+    let tone: Vec<f32> = (0..2 * config.window.frame(sr))
+        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin())
+        .collect();
+    let mut spectrum = AudioSpectrum::default();
+    let now = 5.0;
+    crate::spectrum::heard_at(&mut spectrum, &tone, 1, sr, now, &config);
+    let last_drawn = now + AudioSpectrum::HOLD_SECONDS - 1e-3;
+    assert!(spectrum.display(last_drawn).is_some(), "the fixture's curve hid early");
+    for ms in 0..1000 {
+        let t = now + f64::from(ms) * 1e-3;
+        if spectrum.display(t).is_some() {
+            assert!(spectrum.moving(t), "the curve is drawn at {t} s and idles");
+        }
+    }
+}
+
 #[test]
 fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
     let mut spectrum = AudioSpectrum::default();
