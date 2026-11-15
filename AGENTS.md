@@ -121,6 +121,7 @@ how often it occurs here, and what it costs when it does.
 
 **Use.** Yan alone, composing in Bitwig Studio on macOS 14 or later, on Apple silicon with a 144 Hz display,
 and exporting the pieces as videos.
+The pieces often carry tuning automation that moves the Lattice Map over time (Yan, 2026-11-14).
 One or two personal Bitwig projects hold saved state.
 Anyone else builds from source with rough edges promised (README), and no case is handled for their sake.
 Linux is only where cloud agent sessions build and test.
@@ -148,6 +149,21 @@ One that no producer writes is a `debug_assert` and not a release workaround (#1
 Neither gets a handler or a repair of its own.
 The per-type `sanitize` repairs stay for the one thing the next section asks of them:
 the value on screen is the value the file holds.
+
+**Cases the tape goes without** (PR #1789), each with its cost when it occurs:
+
+- More marks than one step holds (4,096): the rest are lost with a Console line, a lost release holds its note to the pass's end on playback, and a retrigger split at the cap can lose either half.
+- A very dense pass: a chase replays it from its start, about 4.6 ms under the editor lock for 30 minutes of MPE pressure, once per cue or seam.
+- A host block with no song position: a waiting cue still starts, the transport step reads the position before the gap, and play from there after an audition can print a false `LEAK?` line.
+- A fresh cue: the lattice marks the last spot's map, or the live one, until its first block of audio arrives, a few tens of milliseconds.
+- A song position past about 2.3 hours: zoomed fully out, the tape's heatmap draws more slabs than a live window holds.
+
+Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
+
+- A stalled input worker: a cue reads Playing and holds `KeepAlive` until the next click, Stop or play.
+- A whole-tape re-analysis: what is on screen fills in song order, about 15 s per 5 minutes of song.
+- A cue at a speed other than 1× within about 180 ms after a gap: the audio before the gap may smear into its first milliseconds.
+- A tempo change between passes: under a second of bar ticks past a short pass's end lands at its tempo.
 
 ## Backwards compatibility is not a constraint
 
