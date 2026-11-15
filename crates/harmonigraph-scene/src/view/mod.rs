@@ -971,8 +971,12 @@ impl ViewConfig {
     /// is written and argued.
     ///
     /// One assembly point for every envelope a NOTE runs on, so no caller can
-    /// pair a duration with the wrong shape. Both have already passed through
-    /// `sanitize`.
+    /// pair a duration with the wrong shape. Both have passed through
+    /// `sanitize` on every door a look arrives by — the editor's load, which
+    /// also repairs the stored slots, and `AppearanceDocument::parse` for a
+    /// take's or a file's look — and a bar cannot set either past its range.
+    /// A view built in code skips those doors, and `derive_scene` sanitizes
+    /// its own copy.
     ///
     /// The Note animation section's Note fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
