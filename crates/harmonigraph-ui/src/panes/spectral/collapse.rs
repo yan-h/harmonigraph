@@ -13,10 +13,6 @@ pub(crate) struct Regions {
     /// Last fully open composition. Temporary expansion into a folded region
     /// never changes this snapshot or the appearance dial.
     geometry: Option<Geometry>,
-    /// The folds a click asked for, applied once the click's pass has drawn
-    /// (see [`Self::apply`]).
-    #[serde(skip)]
-    pub request: Option<[bool; 2]>,
     #[serde(skip)]
     restore: bool,
 }
@@ -50,15 +46,6 @@ impl Regions {
     /// frame, as a load does: a new window lays the Analyzer out afresh.
     pub fn relayout(&mut self) {
         self.restore = true;
-    }
-
-    /// Take the folds a click asked for, once the click's frame has drawn its
-    /// old geometry, and say whether there were any.
-    pub fn apply(&mut self) -> bool {
-        let Some(collapsed) = self.request.take() else { return false };
-        self.collapsed = collapsed;
-        self.restore = !collapsed.iter().any(|&c| c);
-        true
     }
 
     /// The docked Analyzer: in Tape mode, the audition's controls along the
@@ -201,11 +188,12 @@ impl Regions {
                 continue;
             }
             let direction = axes.dir_depth() * if (index == 0) == closed { 1.0 } else { -1.0 };
-            if control(ui, band, direction, closed, vertical, name, index) && self.request.is_none()
-            {
-                let mut collapsed = self.collapsed;
-                collapsed[index] = !closed;
-                self.request = Some(collapsed);
+            // Toggled at the click: this frame has drawn the old geometry
+            // already, and the next draws the new one.
+            if control(ui, band, direction, closed, vertical, name, index) {
+                self.collapsed[index] = !closed;
+                self.restore = !self.collapsed.iter().any(|&c| c);
+                ui.ctx().request_repaint();
             }
         }
     }

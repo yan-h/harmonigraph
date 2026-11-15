@@ -464,11 +464,6 @@ pub(crate) fn show(
     let unchanged = (before.position, before.folded) == (layout.position, layout.folded);
     dividers(ui, layout, runtime, &drawn, unchanged, scale, floor);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
-    // A region fold keeps its space inside the Analyzer: the open region
-    // takes it, and the window is not asked to change.
-    if viewer.interaction.analyzer_regions.apply() {
-        ui.ctx().request_repaint();
-    }
     // A fold or a dock move reshapes the layout, starting from the layout as
     // drawn.
     let edited = (before.position, before.folded) != (layout.position, layout.folded);
