@@ -641,12 +641,6 @@ fn tape_meter(transport: &Transport) -> Option<harmonigraph_ui::tape::Meter> {
     host_meter(transport).filter(|meter| meter.tempo > 0.0)
 }
 
-/// Continuous presentation time for the display. The current block contributes
-/// sample offsets at its own rate; raw clock resets cannot retime queued history.
-fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
-    block_start + f64::from(timing) / sample_rate
-}
-
 /// Which input plane the take's right channel reads from. A take's WAV is
 /// always stereo, matching AUDIO_IO_LAYOUTS, so a mono input is duplicated
 /// rather than written as half a frame — which would desync every frame after
@@ -840,9 +834,8 @@ impl Plugin for Harmonigraph {
         if let Some(owner) = self.configuration.as_mut() {
             if let Some(hub) = &mut self.aggregation {
                 // Stop may arrive after activation but before start_processing
-                // resets this owner. Pay its closure before forgetting routes.
-                hub.finish_stopped_recording(owner, &mut self.take, self.presentation_seconds);
-                hub.prove_final_frontier(owner, &self.take);
+                // resets this owner. Close its run before forgetting routes.
+                hub.finish_stopped_recording(owner, &mut self.take);
             }
             owner.reset(&mut self.take);
             if let Some(hub) = &mut self.aggregation {
@@ -868,7 +861,6 @@ impl Plugin for Harmonigraph {
         self.take.publish_clock(self.presentation_seconds);
         let _ = self.take.publish_note(
             CoreNoteEvent::source_reset(self.presentation_seconds, SourceId::DIRECT).into(),
-            Default::default(),
         );
     }
 
@@ -894,24 +886,15 @@ impl Plugin for Harmonigraph {
             match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
                 OriginSource::Idle => None,
                 // observe_transport decides whether the transport is rolling (and
-                // splits the take on a loop wrap, or ends it at a backward
-                // jump under the one-file triggers). It is deliberately more
-                // permissive than the host's `playing` flag — see there.
+                // ends the take at a backward jump under the one-file
+                // triggers). It is deliberately more permissive than the
+                // host's `playing` flag — see there.
                 OriginSource::Transport(seconds) => {
-                    // The stop bar is asked FIRST, and the order is load-
-                    // bearing. A block at or past the bar belongs to no take,
-                    // so the cut lands on a block boundary at or before the bar
-                    // rather than one after it — but more than that,
-                    // `observe_transport` pays any split the take owes on the
-                    // first block that records, and an AtBar take owes splits
-                    // (`ends_at_rewind` is false for it). Asking afterwards
-                    // would let a block that both pays the debt and crosses the
-                    // bar open a fresh pass and finish it empty — and the
-                    // last pass is the one that renders. Latching completion
-                    // here instead makes `observe_transport` return on its own
-                    // guard, so no pass is opened at all.
+                    // The stop bar is asked FIRST: a block at or past the bar
+                    // belongs to no take, so the cut lands on a block
+                    // boundary at or before the bar rather than one after it.
                     let stopped = self.take.observe_bar(bar_position(transport));
-                    // Where this block sits in its pass's AUDIO, not the
+                    // Where this block sits in the take's AUDIO, not the
                     // host's position: see `observe_transport`.
                     let origin = self.take.observe_transport(
                         seconds,
@@ -924,7 +907,7 @@ impl Plugin for Harmonigraph {
             };
 
         if let Some(owner) = self.configuration.as_mut() {
-            owner.record(&mut self.take, take_origin, self.presentation_seconds);
+            owner.record(&mut self.take, take_origin);
         }
         // The selected input for the GUI's spectrum analyzer, INTERLEAVED:
         // it analyzes the channels separately and combines them in the power
@@ -968,10 +951,6 @@ impl Plugin for Harmonigraph {
 
         if let Some(owner) = self.configuration.as_mut() {
             self.aggregation.as_mut().unwrap().publish(owner, &mut self.take);
-            owner.finish_recording_publication(
-                &mut self.take,
-                ring_time(self.presentation_seconds, block_samples as u32, self.sample_rate),
-            );
         }
         // A block that records, after the run it belongs to: parameters are
         // timed on the take's own clock and placed by that run.
@@ -1029,26 +1008,20 @@ impl ClapPlugin for Harmonigraph {
         true
     }
     fn clap_main_inactive(&mut self) {
-        self.aggregation.as_mut().unwrap().finish_stopped_recording(
-            self.configuration.as_mut().unwrap(),
-            &mut self.take,
-            self.presentation_seconds,
-        );
+        self.aggregation
+            .as_mut()
+            .unwrap()
+            .finish_stopped_recording(self.configuration.as_mut().unwrap(), &mut self.take);
     }
-    fn clap_configuration_retire(&mut self, unfinished: bool) {
-        self.configuration.as_mut().unwrap().recording.retired_configuration = Some(unfinished);
-    }
-    /// Destruction gives the rings back and lets the recorder's own boundaries
-    /// close. There is nothing to settle and nobody to tell: a Tune learns the
-    /// Hub is gone from the same slot it learned the Hub was here.
+    fn clap_configuration_retire(&mut self, _unfinished: bool) {}
+    /// Destruction gives the rings back. A take still recording fails, which
+    /// the recorder's own drop decides: a Tune learns the Hub is gone from the
+    /// same slot it learned the Hub was here.
     fn clap_main_destroy(&mut self) {
         let mut hub = self.aggregation.take().unwrap();
-        let mut owner = self.configuration.take().unwrap();
-        let recorder = self.take.0.take().unwrap();
-        // Before `retire` gives the rings back, while they can still be read.
-        hub.prove_final_frontier(&mut owner, &recorder);
+        self.configuration.take();
+        self.take.0.take();
         hub.retire();
-        hub.retire_publication(owner, recorder, self.presentation_seconds);
     }
     fn clap_performance_stop(&mut self) {
         self.aggregation.as_mut().unwrap().stop();
@@ -1112,10 +1085,8 @@ impl ClapPlugin for Harmonigraph {
         _callback: nice_plug::wrapper::clap::performance::Callback,
         _summary: nice_plug::wrapper::clap::performance::Summary,
     ) {
-        let observation = self.presentation_seconds;
         if let Some(owner) = self.configuration.as_mut() {
             self.aggregation.as_mut().unwrap().end(owner, &mut self.take);
-            owner.finish_recording_publication(&mut self.take, observation);
         }
     }
     const CLAP_CONFIGURATION: bool = true;
@@ -1433,7 +1404,7 @@ mod tests {
                 CoreNoteEvent::on(100.0, SourceId::DIRECT, 0, 64, 1.0),
             ] {
                 plugin.take.publish_clock(event.time);
-                plugin.take.publish_note(event.into(), Default::default()).expect_both();
+                plugin.take.publish_note(event.into()).expect_both();
             }
         }
         let started = Instant::now();
@@ -2002,21 +1973,15 @@ mod tests {
         plugin.samples_processed = 48_000;
         plugin
             .take
-            .publish_note(
-                CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into(),
-                Default::default(),
-            )
+            .publish_note(CoreNoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into())
             .expect_both();
         plugin.reset();
         assert_eq!(plugin.samples_processed, 0);
         plugin.sample_rate = 96_000.0;
-        let next = ring_time(plugin.presentation_seconds, 48_000, plugin.sample_rate);
+        let next = plugin.presentation_seconds + 48_000.0 / plugin.sample_rate;
         plugin
             .take
-            .publish_note(
-                CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into(),
-                Default::default(),
-            )
+            .publish_note(CoreNoteEvent::on(next, SourceId::DIRECT, 0, 60, 0.8).into())
             .expect_both();
         plugin.take.publish_clock(12.0);
         let deadline = Instant::now() + ANALYSIS_DEADLINE;

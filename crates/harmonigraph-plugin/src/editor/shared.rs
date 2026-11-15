@@ -338,12 +338,9 @@ mod tests {
         assert!(shared.take.is_recording());
         // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
-        let (epoch, pass) = recorder.armed_pass().unwrap();
-        recorder.run(epoch, pass, Default::default(), 0.0, 0.0);
-        let intent = harmonigraph_record::configuration::RecordIntent::armed(epoch);
-        let route = harmonigraph_record::publication::Span::at(Default::default(), 0, intent);
+        recorder.run(0.0, 0.0);
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
-        let _ = recorder.publish_note(on.into(), route);
+        let _ = recorder.publish_note(on.into());
         let first_still = 1.0;
         let frame = 1.0 / 144.0;
         let mut now = first_still;

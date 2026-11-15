@@ -809,8 +809,8 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
 /// #1129: a take that starts between a note's input and the sample it is
 /// scheduled to sound at. The onset is sequenced 400 samples into a callback
 /// no take owns, so D = 512 schedules it 400 samples into the first callback
-/// the take records — its delta routes to no pass, and only a snapshot of what
-/// is already sounding can tell the take it exists.
+/// the take records: its delta sounds in the take, and the run's opening
+/// snapshot restates the same voice, which draws once.
 #[test]
 fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
     use harmonigraph_take::CanonicalRecord;
@@ -856,13 +856,6 @@ fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
         drawn[0].start
     );
     assert!(drawn[0].end.is_some(), "and its release, which the take did record");
-    assert!(
-        !take.events.iter().any(|record| matches!(
-            record.note(),
-            Some(n) if n.note == 60 && matches!(n.kind, harmonigraph_take::NoteKind::On { .. })
-        )),
-        "the fixture must put the onset itself in no pass, or a snapshot is not what drew it"
-    );
     assert!(take.events.iter().any(|record| matches!(
         record,
         CanonicalRecord::Baseline(frame) if frame.voices.iter().any(|voice| voice.note == 60)

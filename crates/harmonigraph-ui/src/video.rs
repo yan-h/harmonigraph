@@ -39,7 +39,7 @@ pub enum RenderTrigger {
     #[default]
     OnTransportStop,
     /// When the arranger loop first repeats: exactly one loop is recorded, the
-    /// take ends at the loop's end, and that pass renders — no catching the
+    /// take ends at the loop's end, and that loop renders — no catching the
     /// stop by hand. Meant for looped recording, where a manual stop is always
     /// a beat or two off.
     ///
@@ -59,28 +59,27 @@ pub enum RenderTrigger {
     /// Unlike the three others it does NOT end at a backward jump
     /// ([`ends_at_rewind`](Self::ends_at_rewind) is false), because it has an
     /// end of its own and does not need to guess at one. A rewind therefore
-    /// splits, as under [`OnDisarm`](Self::OnDisarm), and the pass that renders
-    /// is the one that reached the bar — play, scrub back, play again, and you
-    /// get the last run through the range.
+    /// records on, as under [`OnDisarm`](Self::OnDisarm), and the take holds
+    /// every run through the range up to the one that reached the bar.
     AtBar,
 }
 
 impl RenderTrigger {
-    /// Whether a transport discontinuity ends the take rather than splitting
-    /// it into another pass. Forward seeks finish the contiguous prefix and
+    /// Whether a transport discontinuity ends the take rather than recording
+    /// on. Forward seeks finish the contiguous prefix and
     /// report that cutoff with the automatic render; rewinds also need the
     /// accepted forward-motion evidence described below.
     ///
     /// [`OnDisarm`](Self::OnDisarm) is the one trigger that has to survive a
-    /// looping transport, so it keeps splitting. The other two want a single
-    /// file, and a backward jump is where it ends: the loop repeating for
+    /// looping transport, so it records on. The other two want one stretch of
+    /// the song, and a backward jump is where it ends: the loop repeating for
     /// [`AtLoopEnd`](Self::AtLoopEnd), and the host putting the playhead back
     /// for [`OnTransportStop`](Self::OnTransportStop) — which is what finishing
     /// an audio export looks like from inside the plugin, and arrives before a
     /// stop counted in seconds of stillness can be sure of it.
     pub fn ends_at_rewind(self) -> bool {
         match self {
-            // `AtBar` keeps splitting for the opposite reason to `OnDisarm`:
+            // `AtBar` records on for the opposite reason to `OnDisarm`:
             // not because it must survive a loop, but because it has its own
             // end and a backward jump is a restart rather than a finish.
             RenderTrigger::OnDisarm | RenderTrigger::AtBar => false,

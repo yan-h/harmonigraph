@@ -39,12 +39,6 @@ pub const CAPTURE_RING: usize = 1024;
 pub const REPLY_RING: usize = 1024;
 /// Records the Hub orders in one pass across every source.
 pub const BATCH_EVENTS: usize = 2048;
-// The Hub drains its own direct queue first, into an empty batch, so every
-// `collect` leaves that queue empty. Two proofs look only in the rows' rings
-// for what is still waiting and rely on it: the source frontier after a full
-// batch (`Hub::earliest_waiting`), and `Hub::prove_final_frontier`, which runs
-// after the last callback's `collect` and before anything refills the queue.
-const _: () = assert!(CAPTURE_RING < BATCH_EVENTS);
 /// Note-offs and pedal neutralisations one cut may owe: every held voice, plus
 /// sustain, sostenuto and legato on each of sixteen channels. A cut does not
 /// recentre the bend, because a Tune does not track one.
