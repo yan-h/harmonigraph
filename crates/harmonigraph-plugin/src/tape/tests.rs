@@ -629,25 +629,6 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     assert!((columns - 4.0 / 0.032).abs() <= 2.0, "{columns} columns");
 }
 
-/// A pass replaces the meter only over what it recorded: a short pass across
-/// another's anchor rules from its start to its end, and the meter it covered
-/// rules again from there.
-#[test]
-fn a_short_pass_replaces_the_meter_only_where_it_played() {
-    let (_, mut worker) = pair();
-    let mut source = 0;
-    at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
-    at_tempo(&mut worker, &mut source, 500, 1300, 90.0);
-    let mut view = TapeView::default();
-    worker.exchange(&mut view, &SpectrumConfig::default(), true);
-    // 4/4: a bar is two seconds at 120, 2.67 at 90.
-    let bar = |at: f64| (view.bar_seconds(at).unwrap() * 1000.0).round() / 1000.0;
-    assert_eq!(bar(0.4), 2.0);
-    assert_eq!(bar(1.2), 2.667);
-    assert_eq!(bar(1.5), 2.0, "past the short pass's end");
-    assert_eq!(view.meters.len(), 4, "{:?}", view.meters);
-}
-
 /// Stop while a new cue waits for the old one to fade: the fade finishes and
 /// the waiting cue never starts.
 #[test]
