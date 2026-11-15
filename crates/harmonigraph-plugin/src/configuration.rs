@@ -408,7 +408,6 @@ pub struct Owner {
     status: u32,
     /// A UI or Learn edit applied this callback.
     edited: bool,
-    boundary: ConfigurationBoundary,
     pub(crate) recording: recording::Recording,
 }
 impl Owner {
@@ -426,13 +425,6 @@ impl Owner {
             applied: 0,
             status: 0,
             edited: false,
-            boundary: ConfigurationBoundary {
-                steady_time: 0,
-                frames: 0,
-                sample_rate: 44100.0,
-                transport_seconds: None,
-                playing: false,
-            },
         }
     }
     fn publish(&self) {
@@ -451,9 +443,9 @@ impl Owner {
     pub fn begin(
         &mut self,
         boundary: ConfigurationBoundary,
+        seed: crate::lattice_maps::Seed,
         recorder: &harmonigraph_record::Recorder,
     ) {
-        self.boundary = boundary;
         self.maps.begin(boundary);
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
@@ -464,7 +456,7 @@ impl Owner {
             self.applied = command.id;
             self.edited |= matches!(command.mutation, ConfigMutation::Edit(_));
         }
-        self.maps.adopt(self.reducer.resolved());
+        self.maps.adopt(self.reducer.resolved(), seed);
     }
 
     /// The configuration, engine and map in force at `sample`: the history's
@@ -492,7 +484,7 @@ impl Owner {
         self.publish();
     }
     pub fn segment(&mut self, start: u32, frames: u32) {
-        self.recording.block_start = self.boundary.steady_time + i64::from(start);
+        self.recording.block_start = self.maps.boundary.steady_time + i64::from(start);
         self.recording.block_frames = frames;
     }
     pub fn recording_intent(&self) -> harmonigraph_record::configuration::RecordIntent {

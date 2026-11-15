@@ -1005,14 +1005,8 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
     ) {
-        let owner = self.configuration.as_mut().unwrap();
-        owner.maps.seed(
-            self.params.tuning_engine.value(),
-            self.params.map.unmodulated_plain_value(),
-            lattice_maps::offsets(&self.params),
-            self.params.map_follow.unmodulated_plain_value(),
-        );
-        owner.begin(boundary, &self.take);
+        let seed = lattice_maps::Seed::read(&self.params);
+        self.configuration.as_mut().unwrap().begin(boundary, seed, &self.take);
     }
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
         self.configuration.as_mut().unwrap().segment(start, frames);
