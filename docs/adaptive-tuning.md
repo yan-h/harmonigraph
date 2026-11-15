@@ -550,7 +550,8 @@ musical candidate selection and separate Lattice Map assignment dots remain.
 
 ## Capacities and memory
 
-These are selected ceilings sized for 16 tracks and 100+ simultaneous notes, not measured throughput.
+These are selected ceilings, not measured throughput.
+They hold 16 Tune rows of 64 voices each, far past the load the stakes record in `AGENTS.md` names: a chord of about six tones and a handful of held notes.
 Audio transport and policy-selection storage is preallocated.
 Every ceiling has an explicit failure but the cut's queue, which drops a Note-Off two stacked cuts cannot fit, with no notice (#1798 H5).
 A full local delay line or held set refuses the incoming event;

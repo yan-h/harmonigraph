@@ -41,8 +41,8 @@ pub const REPLY_RING: usize = 1024;
 /// Records the Hub orders in one pass across every source.
 pub const BATCH_EVENTS: usize = 2048;
 /// Note-offs and pedal neutralisations one cut may owe: every held voice, plus
-/// sustain, sostenuto and legato on each of sixteen channels. A cut does not
-/// recentre the bend, because a Tune does not track one.
+/// sustain, sostenuto and legato on each of sixteen channels. A Tune tracks
+/// each channel's bend, but the cut does not recentre it.
 pub const CUT_EVENTS: usize = HELD_PER_SOURCE + 16 * 3;
 /// Events one Tune puts on the wire in one enclosing callback. The delay line
 /// and the cut bound the backlog but not the burst: a stretch of blind or

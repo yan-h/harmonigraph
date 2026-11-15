@@ -404,8 +404,11 @@ impl Hub {
             self.sequencer.forget_history();
         }
         self.detect_loop(callback);
-        // Adopt even on callbacks with no note input: silence expiry below
-        // must use the current policy, not the last onset's configuration.
+        // Adopt even on callbacks with no note input, so silence expiry below
+        // uses the policy rather than the last onset's configuration. It is
+        // the policy the previous callback left: the wrapper reduces this
+        // callback's queued editor edits after `begin`, so an edit governs
+        // expiry from the callback after it arrives.
         self.sequencer.config = owner.current().into();
         // Silence expires released memory against the completed input
         // frontier, which is this callback's start: everything before it has
@@ -1228,7 +1231,7 @@ impl Hub {
         self.sequencer.context.iter().flatten().count()
     }
     /// Observe retained musical state after the callback, including any silence
-    /// expiry. The retired display mailbox observed it before expiry instead.
+    /// expiry.
     #[cfg(test)]
     pub fn test_next_context(&self) -> TestContext {
         let mut observed = Sequencer {

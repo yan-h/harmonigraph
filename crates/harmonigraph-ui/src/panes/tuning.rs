@@ -635,10 +635,11 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], sta
 }
 
 /// What a source's Retune and Show boxes answer a hover with, the bulk
-/// boxes included: off, Retune passes notes through without influencing
-/// adaptive tuning, and Show only ever affects the picture.
-const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through without influencing adaptive tuning.";
-const SHOW_HINT: &str = "Show this instance's output notes. Only affects the picture.";
+/// boxes included: off, Retune passes notes through uncorrected and still
+/// heard by Learn (a Tune's still through its delay), and Show changes
+/// nothing heard.
+const RETUNE_HINT: &str = "Tune new notes with the selected engine. Off, notes pass through uncorrected, without influencing adaptive tuning, and Learn still hears them; a Tune's untuned notes still pass through its tuning delay.";
+const SHOW_HINT: &str = "Show this instance's output notes on the lattice, in takes and in exports. Changes nothing you hear.";
 
 fn instance_controls(
     ui: &mut egui::Ui,

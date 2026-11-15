@@ -11,9 +11,11 @@ use std::sync::{Mutex, OnceLock};
 use super::{event::Event, CAPTURE_RING, REPLY_RING, TUNERS};
 
 /// Status bits. Each one shows in the editor and in `HG-TUNING`. All but
-/// [`CLOCK`] and [`DROPPED`] are cosmetic and never stop a note: an unassigned
-/// note sounds at its raw pitch, which is the whole of what such a fault costs
-/// here. `CLOCK` refuses the callback's input itself. `DROPPED` costs the input
+/// [`CLOCK`] and [`DROPPED`] never stop a note: an unassigned note sounds at
+/// its raw pitch. A full copy ring costs more than the pitch: that note is
+/// missing from the lattice, the take and Learn too, and a lost release copy
+/// leaves its voice drawn as held until the next cut. `CLOCK` refuses the
+/// callback's input itself. `DROPPED` costs the input
 /// when a local store refuses it, and only its correction when the Hub refuses
 /// its assignment or the output refuses the tuning event after its note: either
 /// way the note still sounds uncorrected.

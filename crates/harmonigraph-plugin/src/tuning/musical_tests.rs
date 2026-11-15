@@ -548,8 +548,8 @@ fn production_silence_and_stop_reset_settings_clear_only_the_musical_memory() {
 }
 
 /// A reduced policy edit must govern expiry at the next Hub begin even when
-/// no source sends a note. Observe after expiry, rather than the old outline
-/// mailbox's pre-expiry snapshot, so one callback of stale policy fails.
+/// no source sends a note. Observe after expiry, so one callback of stale
+/// policy fails.
 #[test]
 fn silence_policy_edits_apply_before_expiry_without_note_input() {
     let _scope = crate::test_scope::enter();
@@ -637,11 +637,11 @@ fn production_repeating_the_note_struck_last_weighs_as_holding_it() {
     assert_eq!(context(true), context(false));
 }
 
-/// The journey the old eight-bit coordinate and 2,147-cent correction limits
-/// used to stop. Nothing here is about the transport; it is the one musical
-/// case that proves the representation is still wide enough.
+/// A journey of 303 major thirds, past an eight-bit coordinate and a
+/// 2,147-cent correction. Nothing here is about the transport; it is the one
+/// musical case that proves the representation is wide enough.
 #[test]
-fn production_moving_major_thirds_cross_old_coordinate_and_correction_limits() {
+fn production_moving_major_thirds_travel_hundreds_of_nodes_from_the_origin() {
     let _scope = crate::test_scope::enter();
     let mut phrase = Phrase::new();
     // A chord every ten callbacks, 116 ms. Released memory fades by time
