@@ -24,7 +24,7 @@ pub(crate) mod spectrogram;
 mod tape;
 
 /// The Span drag's gain, reached by `spectrogram`'s
-/// `a_span_drag_refolds_once_per_rung_crossed` so that its fixture drags at the
+/// `a_span_drag_changes_level_once_per_rung_crossed` so that its fixture drags at the
 /// rate the pane drags at rather than at a copy of it — the whole claim there
 /// is about how far a drag travels between ladder rungs, which this sets.
 #[cfg(test)]

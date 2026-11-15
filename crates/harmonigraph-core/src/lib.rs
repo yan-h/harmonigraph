@@ -39,7 +39,6 @@ pub use notes::{
     Voice, VoiceKey, VoiceState,
 };
 pub use roll::{NoteRoll, RollNote};
-pub use spectrogram::{SpectrogramColumn, SpectrumHistory};
 pub use tuning::{
     learn_tuning, Comma, LearnedTuning, PitchClass, PitchClassDistance, Tempered, Tuning,
 };

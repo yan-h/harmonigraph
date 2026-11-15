@@ -64,9 +64,7 @@ pub(crate) use config::{
 // where the panes, both shells and the offline renderer name them. They are
 // declared in `video` beside the appearance document that carries them, so a
 // new one is one declaration and one name here, in this crate alone.
-pub use spectrum::{
-    AnalyzedColumn, AudioSpectrum, Delivery, SpectrogramColumn, SpectrumAnalysis, SpectrumHistory,
-};
+pub use spectrum::{AnalyzedColumn, AudioSpectrum, Delivery, SpectrumAnalysis};
 pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
     SharedState, SurfaceState, TakeState,
@@ -381,7 +379,8 @@ pub fn root_ui(
             cpu_ms,
             &state.picture.instruments.lattice_stats,
             state.picture.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            state.picture.surfaces.spectrogram.spectrogram_fallbacks(),
+            state.picture.surfaces.spectrogram.full_uploads(),
+            state.picture.runtime.spectrum.guard_counts(),
         ),
         now,
         Workload {

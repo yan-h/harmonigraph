@@ -92,11 +92,11 @@ impl VisualRuntime {
     /// Advance bounded display histories on the caller's clock, whether or not
     /// any surface is drawn. The latest observed parameters own the envelope;
     /// drawing observes them before advancing, closed draining retains them.
-    /// Raw spectral history also expires while input is stopped; this trims
-    /// retained data, not the capacity of every surface cache.
+    /// The spectrogram's history is not among them: each rung of its pyramid
+    /// is bounded by the ring it keeps, and a stopped stream scrolls out of
+    /// the window without being trimmed.
     pub fn advance_time(&mut self, now: f64, appearance: &crate::AppearanceDocument) {
         self.tracker.prune(now, &appearance.view.envelope(&self.frame_params));
-        self.spectrum.store.history.trim_older_than(now - AudioSpectrum::HISTORY_MAX_SECONDS);
     }
 
     /// The synchronous reducer's last complete value, for standalone recording.

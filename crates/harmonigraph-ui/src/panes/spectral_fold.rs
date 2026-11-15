@@ -717,7 +717,7 @@ mod tests {
             // the analyzer's tests and not the fold's.
             state.appearance.spectrum.window = crate::SpectrumWindow::Balanced;
             let cfg = state.appearance.spectrum;
-            state.runtime.spectrum.push_samples(samples, 1, SR, 1.0, &cfg);
+            crate::spectrum::heard_at(&mut state.runtime.spectrum, samples, 1, SR, 1.0, &cfg);
             let levels = *state.runtime.spectrum.display(1.0).expect("a second of audio is enough");
             let view = ViewConfig::default();
             Bench {
@@ -1068,7 +1068,7 @@ mod tests {
         state.appearance.spectrum.release = 0.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         // The MIDI picture alone, taken with the ring dialled to no width —
         // its one off switch, and the state every comparison below is against.
@@ -1148,7 +1148,7 @@ mod tests {
         state.appearance.spectrum.release = 0.0;
         state.appearance.view.spectral_reading = SpectralReading::Spectrum;
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         let scene = scene_of(&mut state);
         let grid = state.runtime.spectrum.display(1.0).expect("a second of audio is enough");
@@ -1220,7 +1220,7 @@ mod tests {
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sawtooth(48.0), 1, SR, 1.0, &cfg);
 
         // Each reading measured from a standing start. Both scenes are derived
         // at one clock, where the ring's envelope holds rather than steps (a
@@ -1293,7 +1293,7 @@ mod tests {
         state.appearance.spectrum.attack = 0.0;
         state.appearance.spectrum.release = 0.0;
         let cfg = state.appearance.spectrum;
-        state.runtime.spectrum.push_samples(&sawtooth(48.0), 1, SR, 1.0, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sawtooth(48.0), 1, SR, 1.0, &cfg);
         let scene = scene_of(&mut state);
 
         // The ring's ramp is the heatmap's gradient, entry for entry, with its
@@ -1421,7 +1421,7 @@ mod tests {
         // A full-scale sine at middle C: one partial, so what should ring is
         // the C nodes and nothing else. A saw would light its whole
         // constellation, which is the right picture and a poor test.
-        state.runtime.spectrum.push_samples(&sine(60.0), 1, SR, 1.0, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sine(60.0), 1, SR, 1.0, &cfg);
         let scene = scene_of(&mut state);
         let (mut rang, mut dark) = (0, 0);
         for node in &scene.nodes {
@@ -1482,10 +1482,10 @@ mod tests {
                 .map(|n| n.audio_ring)
                 .fold(0.0f32, f32::max)
         };
-        state.runtime.spectrum.push_samples(&sine(60.0), 1, SR, 1.5, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sine(60.0), 1, SR, 1.5, &cfg);
         let half = rung(&scene_of_at(&mut state, 1.5));
         assert!((half - 0.5).abs() < 1e-4, "half a Fade after the tone a C rings {half}");
-        state.runtime.spectrum.push_samples(&sine(60.0), 1, SR, 2.5, &cfg);
+        crate::spectrum::heard_at(&mut state.runtime.spectrum, &sine(60.0), 1, SR, 2.5, &cfg);
         let full = rung(&scene_of_at(&mut state, 2.5));
         assert_eq!(full, 1.0, "a Fade after the tone a C rings {full}");
     }
@@ -1725,10 +1725,11 @@ mod tests {
                 0.0,
             ];
             let mut levels = Vec::new();
+            let mut feed = crate::spectrum::TestFeed::default();
             for (phase, gain) in gains.into_iter().enumerate() {
                 let now = (phase + 1) as f64 * frames as f64 / f64::from(SR);
                 let samples: Vec<_> = unit.iter().flat_map(|x| [x * gain, -x * gain]).collect();
-                state.runtime.spectrum.push_samples(&samples, 2, SR, now, &cfg);
+                feed.feed(&mut state.runtime.spectrum, &samples, 2, SR, now, &cfg);
                 let scene = scene_of_at(&mut state, now);
                 let node = scene
                     .nodes

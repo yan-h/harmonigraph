@@ -3,6 +3,9 @@
 Playhead export and its whole-song fixtures were retired under #973.
 References and measurements for that path below are historical;
 Scrolling and Fit video retain the shared live analyzer.
+The column store, its tier merges and the per-surface refold described below were replaced by the slab pyramid under #1758,
+which folds each column into every slab width as it arrives and never refolds;
+what is said of them here is historical too.
 
 The three styles this file names are a historical record.
 PR #928 retired the Plain/Blur/Lava selector and its transfer-stage switch,
