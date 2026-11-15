@@ -152,9 +152,11 @@ fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
 }
 
 #[test]
-fn learn_step_writes_params_only_when_the_chord_changes() {
+fn learn_step_learns_only_when_the_chord_changes() {
     let mut state = fresh();
-    let backend = RecordingBackend::default();
+    let learns = |state: &SharedState| {
+        state.picture.runtime.console.lines().filter(|line| line.starts_with("learn:")).count()
+    };
     state.picture.runtime.learn_active = true;
     // Hold C and G (a 12-TET fifth: within learn range of just).
     for note in [60u8, 67] {
@@ -167,23 +169,20 @@ fn learn_step_writes_params_only_when_the_chord_changes() {
         ));
     }
 
-    state.picture.runtime.learn_step(&backend);
-    let first = backend.sets.borrow().clone();
-    assert!(
-        first.iter().any(|(k, v)| *k == params::ParamKey::Three && *v == 700.0),
-        "the fifth should be learned from C+G, got {first:?}"
-    );
+    state.picture.runtime.learn_step();
+    assert_eq!(state.picture.runtime.config_reducer.raw().three, 700_000_000, "C+G is a fifth");
+    assert_eq!(learns(&state), 1);
 
-    // Same chord again: change detection must suppress further writes.
-    state.picture.runtime.learn_step(&backend);
-    assert_eq!(backend.sets.borrow().len(), first.len());
+    // Same chord again: change detection must suppress another learn.
+    state.picture.runtime.learn_step();
+    assert_eq!(learns(&state), 1);
 
     // Disarming clears the memory so re-arming re-learns.
     state.picture.runtime.learn_active = false;
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     state.picture.runtime.learn_active = true;
-    state.picture.runtime.learn_step(&backend);
-    assert_eq!(backend.sets.borrow().len(), first.len() * 2);
+    state.picture.runtime.learn_step();
+    assert_eq!(learns(&state), 2);
 }
 
 /// Hold `notes` as channel-0 voices, each optionally bent by a per-note
@@ -212,19 +211,17 @@ fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
 #[test]
 fn learn_enables_meantone_from_a_12tet_triad() {
     let mut state = unlocked();
-    let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
     // 400 = 4·700 − 2400 this triad IS a meantone.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0)]);
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     assert!(state.picture.runtime.tempered.syntonic, "a 12-TET triad should engage meantone");
 }
 
 #[test]
 fn learn_disables_meantone_from_a_just_triad() {
     let mut state = fresh();
-    let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
     state.picture.runtime.tempered.syntonic = true; // start engaged
 
@@ -232,19 +229,18 @@ fn learn_disables_meantone_from_a_just_triad() {
     // syntonic comma below four fifths, so this is not a meantone.
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     assert!(!state.picture.runtime.tempered.syntonic, "a just third should release meantone");
 }
 
 #[test]
 fn learn_leaves_meantone_unchanged_without_a_third() {
     let mut state = fresh();
-    let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
     state.picture.runtime.tempered.syntonic = true;
     // A bare fifth fixes no third, so the meantone flag is left alone.
     hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     assert!(state.picture.runtime.tempered.syntonic, "a bare fifth shouldn't change the flag");
 }
 
@@ -256,41 +252,16 @@ fn unlocked() -> SharedState {
     state
 }
 
-/// Standalone's backend applies writes immediately. CLAP's delayed adoption is
-/// covered through its real configuration mailbox in the plugin tests.
-struct TuningBackend(std::cell::Cell<[f32; 5]>);
-impl Default for TuningBackend {
-    fn default() -> Self {
-        Self(std::cell::Cell::new(params::ParamKey::TUNING.map(|key| key.default_value())))
-    }
-}
-impl ParamBackend for TuningBackend {
-    fn get(&self, key: params::ParamKey) -> f32 {
-        params::ParamKey::TUNING
-            .iter()
-            .position(|&k| k == key)
-            .map_or_else(|| key.default_value(), |i| self.0.get()[i])
-    }
-    fn set(&self, key: params::ParamKey, value: f32) {
-        if let Some(i) = params::ParamKey::TUNING.iter().position(|&k| k == key) {
-            let mut values = self.0.get();
-            values[i] = value;
-            self.0.set(values);
-        }
-    }
-}
-
 #[test]
 fn standalone_edits_recognize_links_and_release_without_a_readout_jump() {
-    use harmonigraph_core::configuration::ConfigEdit;
+    use harmonigraph_core::configuration::{ConfigEdit, TuningAxis};
+    use harmonigraph_core::tuning::microcents;
     use harmonigraph_core::Comma;
     let mut state = fresh();
-    let backend = TuningBackend::default();
+    let backend = RecordingBackend::default();
     begin_frame(&mut state.picture, &backend, 0.0);
-    state
-        .picture
-        .runtime
-        .edit_tuning(&backend, ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(696.58)));
+    let fifth = ConfigEdit::axis(TuningAxis::Three, microcents(696.58));
+    state.picture.runtime.edit_tuning(&backend, fifth);
     let linked = state.picture.runtime.tuning;
     for comma in Comma::ALL.into_iter().rev() {
         let edit = ConfigEdit::temper(comma, false, state.picture.runtime.tuning);
@@ -304,13 +275,10 @@ fn standalone_edits_recognize_links_and_release_without_a_readout_jump() {
         assert!((state.picture.runtime.tuning.seven_cents() - linked.seven_cents()).abs() < 0.001);
     }
     // A typed same-value entry is new input even though polling cannot see it.
-    state.picture.runtime.edit_tuning(
-        &backend,
-        ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(linked.five_cents())),
-    );
+    state.picture.runtime.edit_tuning(&backend, ConfigEdit::axis(TuningAxis::Five, linked.five));
     assert!(state.picture.runtime.tempered.syntonic);
     assert!(state.picture.runtime.tempered.septimal_kleisma);
-    state.picture.runtime.edit_tuning(&backend, ConfigEdit::axis(2, 390_000_000));
+    state.picture.runtime.edit_tuning(&backend, ConfigEdit::axis(TuningAxis::Five, 390_000_000));
     begin_frame(&mut state.picture, &backend, 4.0);
     assert!(!state.picture.runtime.tempered.syntonic);
     assert_eq!(state.picture.runtime.tuning.five_cents(), 390.0);
@@ -321,33 +289,13 @@ fn standalone_edits_recognize_links_and_release_without_a_readout_jump() {
 }
 
 #[test]
-fn external_parameter_changes_only_recognize_related_intervals() {
-    use harmonigraph_core::configuration::ConfigEdit;
-    use harmonigraph_core::Comma;
-    let mut state = fresh();
-    let backend = TuningBackend::default();
-    begin_frame(&mut state.picture, &backend, 0.0);
-    let edit = ConfigEdit::temper(Comma::Syntonic, false, state.picture.runtime.tuning);
-    state.picture.runtime.edit_tuning(&backend, edit);
-    backend.set(params::ParamKey::Seven, 980.0);
-    begin_frame(&mut state.picture, &backend, 1.0);
-    assert!(!state.picture.runtime.tempered.syntonic);
-    assert!(!state.picture.runtime.tempered.septimal_kleisma);
-    backend.set(params::ParamKey::Three, 696.58);
-    backend.set(params::ParamKey::Five, 386.32);
-    begin_frame(&mut state.picture, &backend, 2.0);
-    assert!(state.picture.runtime.tempered.syntonic);
-}
-
-#[test]
 fn learn_enables_marvel_from_a_12tet_seventh() {
     let mut state = unlocked();
-    let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
     // seventh, which is 2·700 + 2·400 − 1200 exactly.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0), (70, 0.0)]);
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     assert!(
         state.picture.runtime.tempered.septimal_kleisma,
         "a 12-TET seventh chord tempers out 225/224"
@@ -358,12 +306,11 @@ fn learn_enables_marvel_from_a_12tet_seventh() {
 #[test]
 fn learn_leaves_marvel_unchanged_without_a_seventh() {
     let mut state = fresh();
-    let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
     state.picture.runtime.tempered.septimal_kleisma = true;
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     assert!(
         state.picture.runtime.tempered.septimal_kleisma,
         "a triad shouldn't change the septimal flag"
@@ -374,13 +321,12 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
 #[test]
 fn learn_measures_the_septimal_comma_against_the_derived_third() {
     let mut state = unlocked();
-    let backend = RecordingBackend::default();
     state.picture.runtime.learn_active = true;
     // A 700¢ fifth, a third 0.4¢ sharp, a seventh 0.6¢ sharp. The third is
     // inside the meantone tolerance, so the lattice's third becomes 400.0 and
     // the marvel seventh 1000.0 — which the played 1000.6 misses by 0.6¢.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.4), (67, 0.0), (70, 0.6)]);
-    state.picture.runtime.learn_step(&backend);
+    state.picture.runtime.learn_step();
     assert!(
         state.picture.runtime.tempered.syntonic,
         "a third 0.4¢ off four fifths is still a meantone"

@@ -66,7 +66,7 @@ mod reader;
 pub use configuration::ConfigurationRecord;
 pub mod render;
 
-pub use params::{ParamKey, MAX_TUNING_OFFSET};
+pub use params::ParamKey;
 pub use render::RenderProgress;
 
 use std::io::{BufRead, Write};
@@ -586,7 +586,6 @@ mod tests {
     /// nothing else would notice them drifting.
     #[test]
     fn the_fade_bar_reads_like_the_note_times_beside_it() {
-        assert!(!ParamKey::Fade.logarithmic(), "a linear second, like the Delay");
         assert_eq!(ParamKey::Fade.label(), "Note fade", "the unit is not in the name");
         // The SCALE the other two answers are premised on, and the one thing
         // here with a reach past the bar: this range is what the host exposes
@@ -601,8 +600,6 @@ mod tests {
             "one second, the same as the Delay bar above it",
         );
         assert_eq!(ParamKey::Fade.unit(), (1000.0, " ms", 0));
-        assert!(ParamKey::Tolerance.logarithmic());
-        assert_eq!(ParamKey::Tolerance.unit(), (1.0, "¢", 3));
     }
 
     /// Where the render starts is anchored to this, so it has to answer for a

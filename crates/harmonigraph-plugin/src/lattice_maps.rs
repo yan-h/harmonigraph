@@ -289,7 +289,7 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         MapEdit::Move(id, step) => params.maps.write().move_by(id, step),
     };
     if document_changed {
-        params.settings.changed();
+        params.settings.maps_changed();
     }
 }
 

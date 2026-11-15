@@ -23,7 +23,7 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     hub.activate();
     musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let settings = settings(&hub);
-    let fifth = || settings.visible().view.resolved.tuning.three;
+    let fifth = || settings.view().resolved.tuning.three;
     let learn = ConfigEdit { learning: Some(true), ..Default::default() };
     assert!(settings.submit(learn));
     // Every Tune pairs before any plays: a pairing is a session cut.
@@ -59,7 +59,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         let settings = settings(&hub);
         let learn = ConfigEdit { learning: Some(true), ..Default::default() };
         assert!(settings.submit(learn));
-        let refused = || settings.visible().view.status & 1 != 0;
+        let refused = || settings.view().status & 1 != 0;
         let mut bad = Device::new(true);
         bad.shared().set_retune(false);
         bad.activate();
@@ -102,7 +102,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         hub.run(448, vec![], None);
         assert_eq!(heard(&hub), Ok(0), "reset and departure both authoritatively cut state");
         assert!(!refused(), "the owner recovers with the state, not at a host reset");
-        let revision = settings.visible().view.resolved.revision;
+        let revision = settings.view().resolved.revision;
         // A just third, so what Learn derives differs from the 12-TET it heard.
         let bend = f64::from(harmonigraph_core::tuning::FIVE_JUST - 400.0) / 100.0;
         let mut triad: Vec<_> = [60, 64, 67].map(|key| note(key, 0, key as i16, 0, true)).to_vec();
@@ -112,7 +112,7 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         hub.run(576, vec![], None);
         assert_eq!(heard(&hub), Ok(3));
         assert_ne!(
-            settings.visible().view.resolved.revision,
+            settings.view().resolved.revision,
             revision,
             "a complete new chord is learned after recovery"
         );

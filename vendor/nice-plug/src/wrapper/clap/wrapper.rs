@@ -2655,11 +2655,15 @@ impl<P: ClapPlugin> Wrapper<P> {
             wrapper.plugin.lock().clap_main_inactive();
         }
         if wrapper.setup_pending.swap(false, Ordering::AcqRel) {
-            let dirty = wrapper.setup.as_ref().is_some_and(|setup| setup.service());
-            if dirty {
+            let serviced = wrapper.setup.as_ref().map(|setup| setup.service()).unwrap_or_default();
+            let rescan = if serviced.values { CLAP_PARAM_RESCAN_VALUES } else { 0 }
+                | if serviced.text { CLAP_PARAM_RESCAN_TEXT } else { 0 };
+            if rescan != 0 {
                 if let Some(params) = wrapper.host_params.borrow().as_ref() {
-                    unsafe_clap_call! { params=>rescan(&*wrapper.host_callback, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT) };
+                    unsafe_clap_call! { params=>rescan(&*wrapper.host_callback, rescan) };
                 }
+            }
+            if serviced.modified {
                 if let Some(state) = wrapper.host_state.borrow().as_ref() {
                     unsafe_clap_call! { state=>mark_dirty(&*wrapper.host_callback) };
                 }

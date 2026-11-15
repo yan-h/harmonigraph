@@ -65,11 +65,11 @@ pub(super) fn frame(
     let wall = shared.input.frame_wall(timing, now);
     let now = shared.input.display_now(wall);
     let sample_rate = shared.input.sample_rate();
-    if state.params.settings.take_legacy_notice() {
-        shared.ui.log(crate::configuration::LEGACY_AXES);
+    if let Some(line) = state.params.settings.take_notice() {
+        shared.ui.log(line);
     }
     // Snapshot current host movement before arming or queuing a render.
-    let configuration = state.params.settings.visible();
+    let configuration = state.params.settings.view();
     shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
         params: &state.params,
         setter: &setter,

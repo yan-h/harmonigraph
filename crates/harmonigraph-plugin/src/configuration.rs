@@ -1,18 +1,18 @@
 //! The tuning configuration, a plugin-owned setting rather than host
 //! parameters (#1756): saved in the plugin's `musical-settings` field, edited
-//! through one queue the audio owner drains before each callback's adoption,
-//! and published through one seqlock. Learn over the held pitch classes the
-//! Hub in `tuning` reads from its rows applies on the audio thread directly.
+//! through one queue the audio owner drains at each callback's start, and
+//! published through one seqlock. Learn over the held pitch classes the Hub in
+//! `tuning` reads from its rows applies on the audio thread directly.
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };
-use harmonigraph_core::tuning::{microcents, Incomplete, LearningState, PitchClass, Unlearnable};
+use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass, Unlearnable};
 use harmonigraph_core::{Tempered, Tuning};
-use harmonigraph_ui::params::{ConfigurationView, ParamKey};
+use harmonigraph_ui::params::ConfigurationView;
 use nice_plug::plugin::PluginState;
 use nice_plug::prelude::*;
 use nice_plug::wrapper::clap::configuration::*;
-use nice_plug::wrapper::clap::setup::{Prepared, Setup};
+use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,14 +21,17 @@ use std::sync::{Arc, OnceLock};
 pub const MUSICAL_SETTINGS: &str = "musical-settings";
 /// Edits the UI may queue ahead of the audio thread.
 const COMMANDS: usize = 128;
+/// The host parameter ids the axes had until #1756.
+const LEGACY_AXIS_IDS: [&str; 5] =
+    ["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
 
 /// The saved record: the raw axes the reducer holds, its links and Learn,
 /// and the adaptive policy.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct MusicalSettings {
-    /// Microcents: C offset, fifth, third, seventh and tolerance, as entered,
-    /// before any link derives one from another.
+    /// Microcents, indexed by `TuningAxis::index`, as entered, before any link
+    /// derives one from another.
     axes: [i32; 5],
     meantone: bool,
     marvel: bool,
@@ -37,67 +40,44 @@ pub(crate) struct MusicalSettings {
 }
 impl Default for MusicalSettings {
     fn default() -> Self {
-        Self {
-            axes: ParamKey::TUNING.map(|key| microcents(key.default_value())),
-            meantone: true,
-            marvel: true,
-            learning: false,
-            adaptive: Default::default(),
-        }
+        let reducer = ConfigReducer::default();
+        Self::of(reducer.raw(), reducer.resolved())
     }
 }
 impl MusicalSettings {
     fn of(raw: Tuning, resolved: ResolvedConfig) -> Self {
         Self {
-            axes: axes(raw),
+            axes: raw.axes(),
             meantone: resolved.modes.tempered.syntonic,
             marvel: resolved.modes.tempered.septimal_kleisma,
             learning: resolved.modes.learning,
             adaptive: resolved.policy.into(),
         }
     }
-    fn raw(self) -> Tuning {
-        let [c_offset, three, five, seven, tolerance] = self.axes;
-        Tuning { c_offset, three, five, seven, tolerance }
-    }
-    fn modes(self) -> TuningModes {
-        TuningModes {
-            tempered: Tempered { syntonic: self.meantone, septimal_kleisma: self.marvel },
-            learning: self.learning,
-        }
-    }
-    /// What the reducer installs from this record.
-    fn restore(self) -> ConfigMutation {
+    fn mutation(self) -> ConfigMutation {
         ConfigMutation::Restore {
-            raw: self.raw(),
-            modes: self.modes(),
+            raw: Tuning::from_axes(self.axes),
+            modes: TuningModes {
+                tempered: Tempered { syntonic: self.meantone, septimal_kleisma: self.marvel },
+                learning: self.learning,
+            },
             policy: PolicyConfig::from(self.adaptive),
         }
     }
-    /// The axes the sliders can show, so a restored value is the value on
-    /// screen. The policy is sanitized where it converts.
-    fn sanitize(mut self) -> Self {
-        self.axes = std::array::from_fn(|i| clamp_axis(i, self.axes[i]));
-        self
+    /// The reducer this record restores, which holds every axis in its range.
+    fn reducer(self) -> ConfigReducer {
+        let mut reducer = ConfigReducer::default();
+        reducer.apply(self.mutation());
+        reducer
     }
-}
-
-fn axes(tuning: Tuning) -> [i32; 5] {
-    [tuning.c_offset, tuning.three, tuning.five, tuning.seven, tuning.tolerance]
-}
-
-/// The microcents `ParamKey::TUNING[index]`'s slider spans.
-pub(crate) fn clamp_axis(index: usize, value: i32) -> i32 {
-    let range = ParamKey::TUNING[index].range();
-    value.clamp(microcents(*range.start()), microcents(*range.end()))
 }
 
 /// What the audio owner last applied, as the editor and a save read it: the
 /// id of the last edit it took, the reducer's raw axes and resolved
 /// configuration, and its status bits (1: Learn heard an incomplete row,
-/// 2: input or a revision was lost and the take refuses its configuration,
-/// 16: Learn heard more distinct classes than it reads). The editor adds 8
-/// when its last submission found the queue full.
+/// 2: host input was lost and the take refuses its configuration until a
+/// host reset, 16: Learn heard more distinct classes than it reads). The
+/// editor adds 8 when its last submission found the queue full.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Record {
     pub applied: u64,
@@ -131,9 +111,8 @@ impl Published {
         let words = [record.applied, record.resolved.revision, bits, u64::from(record.status)]
             .into_iter()
             .chain(
-                axes(record.raw)
-                    .into_iter()
-                    .chain(axes(record.resolved.tuning))
+                (record.raw.axes().into_iter())
+                    .chain(record.resolved.tuning.axes())
                     .chain(record.resolved.policy.words())
                     .map(|word| word as u32 as u64),
             );
@@ -154,13 +133,8 @@ impl Published {
                 continue;
             }
             let signed = |i: usize| words[i] as u32 as i32;
-            let tuning = |first: usize| Tuning {
-                c_offset: signed(first),
-                three: signed(first + 1),
-                five: signed(first + 2),
-                seven: signed(first + 3),
-                tolerance: signed(first + 4),
-            };
+            let tuning =
+                |first: usize| Tuning::from_axes(std::array::from_fn(|i| signed(first + i)));
             return Record {
                 applied: words[0],
                 raw: tuning(4),
@@ -190,11 +164,8 @@ pub(crate) struct Command {
 
 struct Producer {
     queue: rtrb::Producer<Command>,
+    /// The id the next command takes; the last one queued has the one before.
     next_id: u64,
-    /// The id of the last command queued.
-    accepted: u64,
-    /// A prepared restore holds one queue slot until it commits or drops.
-    reserved: bool,
     /// A committed restore the audio owner has not applied yet: what the
     /// editor shows and a save stores until it has.
     shadow: Option<(u64, MusicalSettings)>,
@@ -208,15 +179,18 @@ pub(crate) struct Settings {
     commands: Mutex<Option<rtrb::Consumer<Command>>>,
     published: Published,
     /// A UI or Learn edit applied, or a lattice-map document edited, since the
-    /// host last asked: it marks the project dirty.
-    dirty: AtomicBool,
+    /// host last asked: it marks the project modified.
+    modified: AtomicBool,
+    /// A lattice-map document edit since the host last asked: the Lattice
+    /// Map's label names its maps, so the host reads its text again.
+    text: AtomicBool,
     /// The last submission found the queue full.
     rejected: AtomicBool,
     /// Counts committed restores, for the map editor's undo.
     restored: AtomicU64,
-    /// A restored project held its axes as host parameters, so it opened at
-    /// fresh axes; the editor's Console says so.
-    legacy: AtomicBool,
+    /// A Console line the editor owes: a restore that opened a project at
+    /// fresh axes, or one the full queue refused.
+    notice: Mutex<Option<&'static str>>,
     wake: OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -224,28 +198,16 @@ pub(crate) struct Settings {
 /// parameters, before #1756: those values are not read.
 pub(crate) const LEGACY_AXES: &str = "This project saved its tuning axes as host parameters, \
      which are no longer read: it opened at fresh axes. Set the tuning again and save the project.";
-
-/// What the editor draws from: the raw axes the sliders show, and the
-/// resolved configuration.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Visible {
-    pub raw: Tuning,
-    pub view: ConfigurationView,
-}
+/// The Console line for a restore the full edit queue refused.
+const RESTORE_REFUSED: &str = "A tuning restore was refused: 128 tuning edits wait for the audio \
+     thread. Let the host run the plugin, then load the project again.";
 
 impl Default for Settings {
     fn default() -> Self {
         let (queue, commands) = rtrb::RingBuffer::new(COMMANDS);
-        let fresh = MusicalSettings::default();
-        let reducer = ConfigReducer::new(fresh.raw(), fresh.modes());
+        let reducer = ConfigReducer::default();
         Self {
-            producer: Mutex::new(Producer {
-                queue,
-                next_id: 1,
-                accepted: 0,
-                reserved: false,
-                shadow: None,
-            }),
+            producer: Mutex::new(Producer { queue, next_id: 1, shadow: None }),
             commands: Mutex::new(Some(commands)),
             published: Published::new(Record {
                 applied: 0,
@@ -253,10 +215,11 @@ impl Default for Settings {
                 resolved: reducer.resolved(),
                 status: 0,
             }),
-            dirty: AtomicBool::new(false),
+            modified: AtomicBool::new(false),
+            text: AtomicBool::new(false),
             rejected: AtomicBool::new(false),
             restored: AtomicU64::new(0),
-            legacy: AtomicBool::new(false),
+            notice: Mutex::new(None),
             wake: OnceLock::new(),
         }
     }
@@ -264,124 +227,121 @@ impl Default for Settings {
 
 impl Settings {
     /// Queue one UI edit for the audio owner. False when the queue is full.
-    pub fn submit(&self, mut edit: ConfigEdit) -> bool {
-        for (i, axis) in edit.axes.iter_mut().enumerate() {
-            *axis = axis.map(|value| clamp_axis(i, value));
-        }
+    pub fn submit(&self, edit: ConfigEdit) -> bool {
         let mut producer = self.producer.lock();
         let id = producer.next_id;
-        let room = producer.queue.slots() > usize::from(producer.reserved);
-        if !room
-            || producer.queue.push(Command { id, mutation: ConfigMutation::Edit(edit) }).is_err()
-        {
+        if producer.queue.push(Command { id, mutation: ConfigMutation::Edit(edit) }).is_err() {
             self.rejected.store(true, Ordering::Release);
             return false;
         }
         self.rejected.store(false, Ordering::Release);
         producer.next_id += 1;
-        producer.accepted = id;
         true
     }
 
-    pub fn visible(&self) -> Visible {
+    /// The configuration as the editor shows it and a save stores it, with
+    /// the raw axes the save needs.
+    fn current(&self) -> (Tuning, ConfigurationView) {
         let mut producer = self.producer.lock();
         let applied = self.published.load();
         let status = applied.status | if self.rejected.load(Ordering::Acquire) { 8 } else { 0 };
         if let Some((id, settings)) = producer.shadow {
             if applied.applied < id {
-                let mut resolved = ConfigReducer::new(settings.raw(), settings.modes()).resolved();
-                resolved.policy = PolicyConfig::from(settings.adaptive);
+                let reducer = settings.reducer();
+                let mut resolved = reducer.resolved();
                 resolved.revision = applied.resolved.revision;
-                let view = ConfigurationView { resolved, status, pending: true };
-                return Visible { raw: settings.raw(), view };
+                return (reducer.raw(), ConfigurationView { resolved, status, pending: true });
             }
             producer.shadow = None;
         }
-        let pending = producer.accepted > applied.applied;
-        Visible {
-            raw: applied.raw,
-            view: ConfigurationView { resolved: applied.resolved, status, pending },
-        }
+        let pending = producer.next_id - 1 > applied.applied;
+        (applied.raw, ConfigurationView { resolved: applied.resolved, status, pending })
+    }
+
+    pub fn view(&self) -> ConfigurationView {
+        self.current().1
     }
 
     pub fn restored(&self) -> u64 {
         self.restored.load(Ordering::Acquire)
     }
 
-    /// Whether a restore since the last call opened a project at fresh axes
-    /// because it held them as host parameters.
-    pub fn take_legacy_notice(&self) -> bool {
-        self.legacy.swap(false, Ordering::AcqRel)
+    /// The Console line a restore since the last call left, if any.
+    pub fn take_notice(&self) -> Option<&'static str> {
+        self.notice.lock().take()
     }
 
-    /// Something the project saves changed: have the host mark it dirty.
+    /// Something the project saves changed: have the host mark it modified.
     /// Audio-thread safe; the wrapper defers the host call out of a callback.
     pub fn changed(&self) {
-        self.dirty.store(true, Ordering::Release);
+        self.modified.store(true, Ordering::Release);
         if let Some(wake) = self.wake.get() {
             wake();
         }
     }
 
+    /// The lattice-map document changed: the project is modified and the
+    /// Lattice Map's labels may read differently.
+    pub fn maps_changed(&self) {
+        self.text.store(true, Ordering::Release);
+        self.changed();
+    }
+
     fn save(&self, state: &mut PluginState) {
-        let visible = self.visible();
-        let settings = MusicalSettings::of(visible.raw, visible.view.resolved);
+        let (raw, view) = self.current();
         state.fields.insert(
             MUSICAL_SETTINGS.to_owned(),
-            serde_json::to_string(&settings).expect("fixed musical settings serialize"),
+            serde_json::to_string(&MusicalSettings::of(raw, view.resolved))
+                .expect("fixed musical settings serialize"),
         );
     }
 
+    /// Main thread, like the commit that follows it, as is every editor edit
+    /// on macOS: nothing can take the slot this saw free in between.
     fn prepare(self: &Arc<Self>, state: &PluginState) -> Result<Restore, &'static str> {
-        let settings: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
+        let value: MusicalSettings = match state.fields.get(MUSICAL_SETTINGS) {
             Some(json) => serde_json::from_str(json).map_err(|error| {
                 nice_error!("Musical settings refused: {error}");
                 "invalid musical settings"
             })?,
             None => MusicalSettings::default(),
         };
-        let mut producer = self.producer.lock();
-        if producer.reserved || producer.queue.slots() == 0 {
+        if self.producer.lock().queue.slots() == 0 {
+            *self.notice.lock() = Some(RESTORE_REFUSED);
             return Err("the tuning edit queue is full");
         }
-        producer.reserved = true;
         // Nice-plug drops a parameter id it does not know, so the host values
         // of a project saved before #1756 vanish on their own; only the
         // notice is ours to give.
-        let legacy = ParamKey::TUNING.iter().any(|key| state.params.contains_key(key.id()));
-        Ok(Restore { settings: Some(self.clone()), value: settings.sanitize(), legacy })
+        let legacy = LEGACY_AXIS_IDS.iter().any(|id| state.params.contains_key(*id));
+        Ok(Restore { settings: self.clone(), value, legacy })
     }
 }
 
-/// A parsed restore holding its queue slot.
 struct Restore {
-    settings: Option<Arc<Settings>>,
+    settings: Arc<Settings>,
     value: MusicalSettings,
     legacy: bool,
 }
 impl Prepared for Restore {
-    fn commit(mut self: Box<Self>) {
-        let settings = self.settings.take().expect("an uncommitted restore");
+    fn commit(self: Box<Self>) {
+        let settings = &self.settings;
         let mut producer = settings.producer.lock();
-        producer.reserved = false;
         let id = producer.next_id;
-        producer
-            .queue
-            .push(Command { id, mutation: self.value.restore() })
-            .unwrap_or_else(|_| unreachable!("the slot prepare reserved"));
+        if producer.queue.push(Command { id, mutation: self.value.mutation() }).is_err() {
+            // Only another thread's edit between prepare and here takes the
+            // slot, which macOS never runs.
+            drop(producer);
+            nice_error!("{RESTORE_REFUSED}");
+            *settings.notice.lock() = Some(RESTORE_REFUSED);
+            return;
+        }
         producer.next_id += 1;
-        producer.accepted = id;
         producer.shadow = Some((id, self.value));
+        drop(producer);
         settings.restored.fetch_add(1, Ordering::AcqRel);
         if self.legacy {
-            settings.legacy.store(true, Ordering::Release);
-        }
-    }
-}
-impl Drop for Restore {
-    fn drop(&mut self) {
-        if let Some(settings) = &self.settings {
-            settings.producer.lock().reserved = false;
+            *settings.notice.lock() = Some(LEGACY_AXES);
         }
     }
 }
@@ -416,9 +376,11 @@ impl Setup for HubSetup {
         self.instance.install_wakeup(Box::new(move || instance()));
         assert!(self.settings.wake.set(wake).is_ok(), "one wakeup");
     }
-    fn service(&self) -> bool {
-        let instance = self.instance.service();
-        self.settings.dirty.swap(false, Ordering::AcqRel) || instance
+    fn service(&self) -> Serviced {
+        let mut serviced = self.instance.service();
+        serviced.modified |= self.settings.modified.swap(false, Ordering::AcqRel);
+        serviced.text |= self.settings.text.swap(false, Ordering::AcqRel);
+        serviced
     }
 }
 
@@ -473,32 +435,24 @@ impl Owner {
             status: self.status,
         });
     }
+
+    /// The callback's boundary: apply the edits queued before it, in arrival
+    /// order, then seed its history entry. Edits arriving later wait for the
+    /// next callback; automation the walk observes lands in the history at
+    /// its own sample.
     pub fn begin(
         &mut self,
         boundary: ConfigurationBoundary,
         recorder: &harmonigraph_record::Recorder,
-        _presentation_time: f64,
     ) {
         self.boundary = boundary;
         self.maps.begin(boundary);
         self.recording.captured_intent = recorder.capture_recording_intent();
         self.recording.block_start = boundary.steady_time;
         self.recording.block_frames = boundary.frames;
-    }
-
-    /// Apply the edits queued before this callback, in arrival order, then
-    /// seed the callback's history entry. Edits arriving later wait for the
-    /// next callback; automation the walk observes lands in the history at
-    /// its own sample.
-    pub fn adopt(&mut self) {
         for _ in 0..self.commands.slots() {
-            let command = *self.commands.peek().expect("a counted command");
-            // Revision exhaustion: the command stays queued.
-            if !self.reducer.apply(command.mutation) {
-                self.fault();
-                break;
-            }
-            let _ = self.commands.pop();
+            let command = self.commands.pop().expect("a counted command");
+            self.reducer.apply(command.mutation);
             self.applied = command.id;
             self.edited |= matches!(command.mutation, ConfigMutation::Edit(_));
         }
@@ -524,6 +478,7 @@ impl Owner {
         self.recording.reset(recorder);
         self.publish();
     }
+    /// Host input was lost: a take refuses its configuration until a reset.
     pub fn fault(&mut self) {
         self.status |= 2;
         self.publish();
@@ -570,7 +525,7 @@ impl Owner {
     /// each clears as soon as what is held allows Learn again.
     ///
     /// Learn applies at the block's start after the walk has pushed later
-    /// samples, so it is not pushed into the history: the next `adopt`
+    /// samples, so it is not pushed into the history: the next `begin`
     /// carries it.
     pub fn group_end(
         &mut self,
@@ -583,22 +538,8 @@ impl Owner {
         if self.maps.playback.engine.learns() {
             match self.learning.infer(self.reducer.resolved().modes.learning, classes) {
                 Ok(Some(learned)) => {
-                    // With retuning active only the origin is learned: the
-                    // lattice intervals remain the target.
-                    let mut raw = axes(self.reducer.raw());
-                    let found = [learned.c_offset, learned.three, learned.five, learned.seven];
-                    for (i, cents) in found.into_iter().enumerate() {
-                        if let Some(cents) = cents.filter(|_| i == 0 || !retuning) {
-                            raw[i] = clamp_axis(i, microcents(cents));
-                        }
-                    }
-                    let raw = MusicalSettings { axes: raw, ..Default::default() }.raw();
-                    if self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning, raw })
-                    {
-                        self.edited = true;
-                    } else {
-                        self.fault();
-                    }
+                    self.reducer.apply(ConfigMutation::LearnResolved { learned, retuning });
+                    self.edited = true;
                 }
                 Err(Unlearnable::Incomplete) => self.status |= 1,
                 Err(Unlearnable::TooManyClasses) => self.status |= 16,

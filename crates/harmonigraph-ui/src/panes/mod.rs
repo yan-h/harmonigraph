@@ -1,7 +1,7 @@
 //! Dock panes and their shared controls. The picture settings pages are composed in [`pages`].
 
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{RangeBar, ValueBar};
+use crate::widgets::RangeBar;
 use crate::PictureState;
 
 pub mod color;
@@ -341,37 +341,6 @@ pub(super) fn fresh_spectrum() -> &'static crate::SpectrumConfig {
     &FRESH
 }
 
-/// One editable ValueBar for a parameter, with automation-gesture
-/// bracketing so a drag records as a single host gesture.
-pub(super) fn param_bar(
-    ui: &mut egui::Ui,
-    params: &dyn ParamBackend,
-    key: ParamKey,
-    hint: &str,
-) -> egui::Response {
-    let mut value = params.get(key);
-    let (scale, suffix, decimals) = key.unit();
-    let response = ValueBar::new(&mut value, key.range(), key.label())
-        .eased(key.logarithmic())
-        .unit(scale, suffix)
-        .decimals(decimals)
-        .default_value(key.default_value())
-        .hint(hint)
-        .show(ui);
-    // Bracket drags so the host records one automation gesture per drag;
-    // one-shot changes (typed values) go through set() alone.
-    if response.drag_started() {
-        params.begin_set(key);
-    }
-    if response.changed() {
-        params.set(key, value);
-    }
-    if response.drag_stopped() {
-        params.end_set(key);
-    }
-    response
-}
-
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
 /// range whose ends are both automatable params (the Mappings page's Pitch color range).
 /// `label` names the bar, `hint` says what it sets on its hover, and
@@ -380,8 +349,8 @@ pub(super) fn param_bar(
 /// Both params are bracketed for the whole drag and written every changed
 /// frame, so a drag on either handle records as one gesture on each. A
 /// double-click reset to the params' defaults arrives as `changed` with no
-/// drag, and goes through the same `set` without a gesture — matching
-/// [`param_bar`]'s one-shot path.
+/// drag, and goes through the same `set` without a gesture, as a one-shot
+/// change does.
 pub(super) fn param_range_bar(
     ui: &mut egui::Ui,
     params: &dyn ParamBackend,

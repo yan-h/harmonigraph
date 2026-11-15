@@ -482,15 +482,17 @@ mod tests {
 
     #[test]
     fn resolved_configuration_round_trip_is_independent_of_replay_cadence() {
-        use harmonigraph_core::configuration::{ConfigEdit, ConfigMutation, ConfigReducer};
+        use harmonigraph_core::configuration::{
+            ConfigEdit, ConfigMutation, ConfigReducer, TuningAxis,
+        };
         use harmonigraph_take::{ConfigurationRecord, Record};
         let mut reducer = ConfigReducer::default();
         let mut encoded = opened();
         let mut expected = Vec::new();
         for (t, edit) in [
             (0.005, ConfigEdit { learning: Some(true), ..Default::default() }),
-            (0.013, ConfigEdit::axis(2, 390_000_000)),
-            (0.031, ConfigEdit::axis(1, 696_000_000)),
+            (0.013, ConfigEdit::axis(TuningAxis::Five, 390_000_000)),
+            (0.031, ConfigEdit::axis(TuningAxis::Three, 696_000_000)),
         ] {
             reducer.apply(ConfigMutation::Edit(edit));
             let config = reducer.resolved();
@@ -506,7 +508,7 @@ mod tests {
         for record in [
             Record::Note(on(0.0, 60)),
             Record::Note(on(0.0, 64)),
-            Record::Param(ParamRecord { t: 0.0, id: ParamKey::Three.id().into(), value: 710.0 }),
+            Record::Param(ParamRecord { t: 0.0, id: "tuning-three".into(), value: 710.0 }),
         ] {
             encoded.push('\n');
             encoded.push_str(&ron::to_string(&record).unwrap());

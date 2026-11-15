@@ -12,8 +12,10 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
-use harmonigraph_core::configuration::PolicyEdit;
+use harmonigraph_core::configuration::{PolicyEdit, TuningAxis};
+use harmonigraph_core::tuning::microcents;
 use harmonigraph_core::SourceId;
+use harmonigraph_ui::params::ParamKey;
 use nice_plug::plugin::ParamValue;
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
@@ -390,6 +392,15 @@ fn restored(device: &Device, fifth: f32) -> PluginState {
     state
 }
 /// The musical settings a saved state holds.
+/// What the editor shows, with the raw axes a save stores.
+struct Shown {
+    raw: Tuning,
+    view: ConfigurationView,
+}
+fn shown(settings: &Settings) -> Shown {
+    let (raw, view) = settings.current();
+    Shown { raw, view }
+}
 fn saved(state: &PluginState) -> MusicalSettings {
     serde_json::from_str(&state.fields[MUSICAL_SETTINGS]).unwrap()
 }
@@ -408,21 +419,21 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
         device.activate();
         let settings = device.settings();
         device.load(restored(&device, 690.0), gui);
-        assert!(settings.submit(ConfigEdit::axis(1, microcents(695.0))));
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
         device.load(restored(&device, 705.0), gui);
-        let shown = settings.visible();
-        assert!(shown.view.pending);
-        assert_eq!(shown.raw.three, microcents(705.0), "the newest restore is what shows");
+        let now = shown(&settings);
+        assert!(now.view.pending);
+        assert_eq!(now.raw.three, microcents(705.0), "the newest restore is what shows");
         assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
         assert_eq!(saved(&device.wrapper().get_state_object()).axes[1], microcents(705.0));
         device.run(1000, vec![], false);
-        let adopted = settings.visible();
+        let adopted = shown(&settings);
         assert!(!adopted.view.pending);
         assert_eq!(adopted.raw.three, microcents(705.0), "the queued UI edit came before it");
-        assert!(settings.submit(ConfigEdit::axis(1, microcents(700.0))));
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(700.0))));
         let marked = device.service();
         device.run(1064, vec![], false);
-        assert_eq!(settings.visible().raw.three, microcents(700.0));
+        assert_eq!(shown(&settings).raw.three, microcents(700.0));
         assert!(device.service() > marked, "an applied UI edit marks the project modified");
     }
 }
@@ -430,36 +441,36 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
 #[test]
 fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
     let _scope = crate::test_scope::enter();
-    for fifth in [696.58, *ParamKey::Three.range().start(), *ParamKey::Three.range().end()] {
+    for fifth in [696.58, *TuningAxis::Three.range().start(), *TuningAxis::Three.range().end()] {
         let mut device = Device::new();
         device.activate();
         let settings = device.settings();
-        assert!(settings.submit(ConfigEdit::axis(1, microcents(fifth))));
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(fifth))));
         device.run(0, vec![], false);
-        let linked = settings.visible().view.resolved;
+        let linked = shown(&settings).view.resolved;
         assert!(linked.modes.tempered.syntonic && linked.modes.tempered.septimal_kleisma);
         assert!((linked.tuning.five_cents() - (4.0 * fifth - 2400.0)).abs() < 0.001);
         for comma in harmonigraph_core::Comma::ALL.into_iter().rev() {
             assert!(settings.submit(ConfigEdit::temper(comma, false, linked.tuning)));
         }
-        assert!(settings.visible().view.pending, "the switches are one pending audio adoption");
+        assert!(shown(&settings).view.pending, "the switches are one pending audio adoption");
         device.run(64, vec![], false);
-        let released = settings.visible();
+        let released = shown(&settings);
         assert_eq!(released.view.resolved.modes.tempered, Tempered::default());
         // Within the microcent the cents a release carries round to.
         let kept = |raw: i32, linked: i32| (raw - linked).abs() <= 1;
         assert!(kept(released.raw.five, linked.tuning.five), "a released link keeps its value");
         assert!(kept(released.raw.seven, linked.tuning.seven));
         assert_eq!(saved(&device.save()).axes[2..4], [released.raw.five, released.raw.seven]);
-        assert!(settings.submit(ConfigEdit::axis(2, released.raw.five)));
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, released.raw.five)));
         device.run(128, vec![], false);
         assert!(
-            settings.visible().view.resolved.modes.tempered.syntonic,
+            shown(&settings).view.resolved.modes.tempered.syntonic,
             "a typed same-value entry recognizes meantone"
         );
-        assert!(settings.submit(ConfigEdit::axis(2, 390_000_000)));
+        assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000)));
         device.run(192, vec![], false);
-        let edited = settings.visible().view.resolved;
+        let edited = shown(&settings).view.resolved;
         assert!(!edited.modes.tempered.syntonic);
         assert_eq!(edited.tuning.five_cents(), 390.0);
         assert!(edited.modes.tempered.septimal_kleisma);
@@ -529,7 +540,7 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
     // boundary after the one it arrived on rather than the same one.
     let marked = device.service();
     device.run(64, vec![], false);
-    let learned = settings.visible();
+    let learned = shown(&settings);
     let resolved = learned.view.resolved;
     let keyboard = resolved.policy.keyboard;
     assert_eq!(keyboard, harmonigraph_core::tuning::fifth_generated(keyboard[0]));
@@ -549,9 +560,9 @@ fn learn_the_played_third(retune: bool, pass_through: bool) {
         assert!((learned.raw.five - third).abs() < 1_000);
     }
     assert!(device.service() > marked, "Learn marks the project");
-    assert_eq!(saved(&device.save()).axes, axes(learned.raw), "a save stores what Learn found");
+    assert_eq!(saved(&device.save()).axes, learned.raw.axes(), "a save stores what Learn found");
     device.run(128, vec![], false);
-    assert_eq!(settings.visible().view.resolved.revision, resolved.revision);
+    assert_eq!(shown(&settings).view.resolved.revision, resolved.revision);
     // A cut ends the chord with no delta on any row. Learn must stop hearing
     // it on the next callback, not whenever that source next plays.
     let heard = |device: &Device| {
@@ -586,10 +597,10 @@ fn a_full_command_queue_keeps_accepted_state() {
     assert!(device.try_load(restored(&device, 705.0)), "an applied restore is repeatable");
     assert_eq!(saved(&device.save()).axes[1], microcents(705.0));
     device.run(64, vec![], false);
-    let shown = settings.visible();
-    assert!(!shown.view.pending);
-    assert_eq!(shown.raw.three, microcents(705.0));
-    assert_eq!(shown.view.status, 8, "the deliberately rejected submission remains visible");
+    let now = shown(&settings);
+    assert!(!now.view.pending);
+    assert_eq!(now.raw.three, microcents(705.0));
+    assert_eq!(now.view.status, 8, "the deliberately rejected submission remains visible");
 }
 
 #[test]
@@ -599,21 +610,21 @@ fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() 
     device.activate();
     let events = (0..2048).map(|_| device.param(ParamKey::Fade, 0.2, 0)).collect();
     device.run(0, events, false);
-    assert_eq!(device.settings().visible().view.status, 0);
+    assert_eq!(shown(&device.settings()).view.status, 0);
     let (status, _) = device.run_status(
         64,
         (0..2049).map(|_| device.param(ParamKey::Fade, 0.3, 0)).collect(),
         false,
     );
     assert_eq!(status, CLAP_PROCESS_ERROR);
-    assert_eq!(device.settings().visible().view.status & 2, 2);
+    assert_eq!(shown(&device.settings()).view.status & 2, 2);
     // Exercise the host's recovery boundary after proving capacity
     // exhaustion, so this fixture does not leave an unresolved global owner.
     unsafe {
         ((*device.plugin).reset.unwrap())(device.plugin);
     }
     device.run(128, vec![], false);
-    assert_eq!(device.settings().visible().view.status, 0);
+    assert_eq!(shown(&device.settings()).view.status, 0);
 }
 
 #[test]
@@ -631,7 +642,7 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
             device.activate();
             device.run(0, vec![], false);
             device.load(restored(&device, 705.0), false);
-            assert!(settings.visible().view.pending, "an accepted restore is still queued");
+            assert!(shown(&settings).view.pending, "an accepted restore is still queued");
         } else {
             device.activate();
             device.run(0, (0..2048).map(|_| device.param(ParamKey::Fade, 0.2, 0)).collect(), false);
@@ -641,7 +652,7 @@ fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
                 false,
             );
             assert_eq!(status, CLAP_PROCESS_ERROR);
-            assert_eq!(device.settings().visible().view.status & 2, 2);
+            assert_eq!(shown(&device.settings()).view.status & 2, 2);
         }
         drop(device);
     }
@@ -679,7 +690,7 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
         (restoring.meantone, restoring.marvel, restoring.learning) = (meantone, marvel, learning);
         state.fields.insert(MUSICAL_SETTINGS.into(), serde_json::to_string(&restoring).unwrap());
         device.load(state, gui);
-        let preview = settings.visible().view;
+        let preview = shown(&settings).view;
         assert!(preview.pending);
         let preview = preview.resolved;
         let restored_modes = TuningModes {
@@ -693,10 +704,13 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
             (saved_host.meantone, saved_host.marvel, saved_host.learning),
             (meantone, marvel, learning)
         );
-        assert_eq!(saved_host.modes(), preview.modes);
-        assert_eq!(saved(&device.wrapper().get_state_object()).modes(), preview.modes);
+        assert_eq!(saved_host.reducer().resolved().modes, preview.modes);
+        assert_eq!(
+            saved(&device.wrapper().get_state_object()).reducer().resolved().modes,
+            preview.modes
+        );
         device.run(0, vec![], false);
-        assert_eq!(settings.visible().view.resolved.modes, preview.modes);
+        assert_eq!(shown(&settings).view.resolved.modes, preview.modes);
         // And the reducer the audio thread runs Learn and tempering under
         // holds them too, not only the words that report it.
         let adopted = device
@@ -716,21 +730,21 @@ fn a_project_saved_with_tuning_parameters_opens_at_fresh_axes() {
     let settings = device.settings();
     let mut state = device.wrapper().get_state_object();
     device.load(state.clone(), false);
-    assert!(!settings.take_legacy_notice(), "a project saved since opens quietly");
-    state.params.insert(ParamKey::Three.id().into(), ParamValue::F32(696.0));
-    state.params.insert(ParamKey::Tolerance.id().into(), ParamValue::F32(3.0));
+    assert_eq!(settings.take_notice(), None, "a project saved since opens quietly");
+    state.params.insert("tuning-three".into(), ParamValue::F32(696.0));
+    state.params.insert("tuning-tolerance".into(), ParamValue::F32(3.0));
     state.fields.insert(MUSICAL_SETTINGS.into(), r#"{"meantone":false,"marvel":true}"#.into());
     device.load(state, false);
-    assert!(settings.take_legacy_notice());
-    assert!(!settings.take_legacy_notice(), "the notice is given once");
+    assert_eq!(settings.take_notice(), Some(LEGACY_AXES));
+    assert_eq!(settings.take_notice(), None, "the notice is given once");
     device.activate();
     device.run(0, vec![], false);
-    let opened = device.settings().visible();
-    assert_eq!(axes(opened.raw), MusicalSettings::default().axes);
+    let opened = shown(&device.settings());
+    assert_eq!(opened.raw.axes(), MusicalSettings::default().axes);
     let modes = opened.view.resolved.modes.tempered;
     assert_eq!((modes.syntonic, modes.septimal_kleisma), (false, true));
     let resaved = device.save();
-    assert!(ParamKey::TUNING.iter().all(|key| !resaved.params.contains_key(key.id())));
+    assert!(LEGACY_AXIS_IDS.iter().all(|id| !resaved.params.contains_key(*id)));
     assert_eq!(saved(&resaved).axes, MusicalSettings::default().axes);
 }
 
@@ -747,9 +761,9 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
         assert!(settings.submit(ConfigEdit::default()));
     }
     assert!(!settings.submit(ConfigEdit::default()));
-    let shown = settings.visible();
-    assert_eq!(shown.view.status & 10, 10);
-    assert_eq!(shown.raw.three, microcents(690.0));
+    let now = shown(&settings);
+    assert_eq!(now.view.status & 10, 10);
+    assert_eq!(now.raw.three, microcents(690.0));
 }
 
 fn note(id: i32, key: i16, time: u32, kind: u16) -> Input {
@@ -794,10 +808,10 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     // does with the interval that is left.
     device.run(64, vec![id_tuning(10, 1.0)], false);
     device.run(128, vec![], false);
-    assert!(settings.submit(ConfigEdit::axis(1, 690_000_000)));
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, 690_000_000)));
     device.run(192, vec![], false);
     assert_eq!(
-        settings.visible().raw.three,
+        shown(&settings).raw.three,
         690_000_000,
         "only C moved: the remaining interval supplies no fifth evidence"
     );
@@ -808,11 +822,11 @@ fn note_id_only_expression_and_release_match_only_the_addressed_held_note() {
     release.channel = -1;
     release.port_index = -1;
     device.run(256, vec![Input::Note(release)], false);
-    assert!(settings.submit(ConfigEdit::axis(2, 390_000_000)));
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, 390_000_000)));
     device.run(320, vec![id_tuning(20, 5.0), note(30, 64, 0, CLAP_EVENT_NOTE_ON)], false);
     device.run(384, vec![], false);
     assert_eq!(
-        settings.visible().raw.five,
+        shown(&settings).raw.five,
         400_000_000,
         "ID20 survived the ID10 release and now supplies C beside E"
     );
@@ -1308,7 +1322,7 @@ fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origi
         }
     }
     let [(5.0, opened)] = runs[..] else { panic!("one run, at the accepted origin: {runs:?}") };
-    assert_eq!(parameters, [opened; ParamKey::HOST.len()]);
+    assert_eq!(parameters, [opened; ParamKey::ALL.len()]);
     assert_eq!(configurations, [opened], "one unchanged configuration where the run opened");
     assert_eq!(samples, 3 * 64 * 2);
     assert_eq!(capture.drain_audio().len(), samples);
@@ -1415,7 +1429,7 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         assert!((actual_origin - origin).abs() < 1e-8);
         assert_eq!(take.configurations.len(), 1);
         assert!((take.configurations[0].t - actual_origin).abs() < 1e-9);
-        assert_eq!(take.params.len(), ParamKey::HOST.len());
+        assert_eq!(take.params.len(), ParamKey::ALL.len());
         assert!(take.params.iter().all(|p| (p.t - actual_origin).abs() < 1e-9));
         let encoded = std::fs::read_to_string(&paths[0]).unwrap();
         assert_eq!(encoded.matches("Run((").count(), 1, "only one run states the WAV alignment");
@@ -1772,7 +1786,9 @@ fn configuration_observed_disarmed_does_not_become_later_armed_automation() {
     let (mut device, mut capture) = recorded_device();
     device.activate();
     for i in 0..9 {
-        assert!(device.settings().submit(ConfigEdit::axis(1, microcents(690.0 + i as f32))));
+        assert!(device
+            .settings()
+            .submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0 + i as f32))));
     }
     device.run(0, vec![], false);
     capture.arm();
@@ -1880,7 +1896,7 @@ fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
     let mut device = Device::new();
     device.activate();
     let settings = device.settings();
-    let observed = settings.visible().view.resolved.policy;
+    let observed = shown(&settings).view.resolved.policy;
     let first = PolicyConfig {
         radius: 5,
         reset_stop: true,
@@ -1906,7 +1922,7 @@ fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
     }
     device.run(0, vec![], false);
     assert_eq!(
-        settings.visible().view.resolved.policy,
+        shown(&settings).view.resolved.policy,
         PolicyConfig {
             radius: first.radius,
             reset_stop: first.reset_stop,
@@ -1924,7 +1940,7 @@ fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
     let mut device = Device::new();
     device.activate();
     let settings = device.settings();
-    let observed = settings.visible().view.resolved.policy;
+    let observed = shown(&settings).view.resolved.policy;
     let changed = PolicyConfig {
         pitch_flexibility: 37,
         keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
@@ -1937,7 +1953,7 @@ fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
         assert!(settings.submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
     }
     device.run(0, vec![], false);
-    let adopted = settings.visible().view.resolved;
+    let adopted = shown(&settings).view.resolved;
     assert_eq!(adopted.policy.keyboard, harmonigraph_core::tuning::fifth_generated(695_000_000));
     assert_eq!(adopted.policy.pitch_flexibility, 37);
 
@@ -1947,7 +1963,7 @@ fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
         ..Default::default()
     }));
     device.run(64, vec![], false);
-    let derived = settings.visible().view.resolved;
+    let derived = shown(&settings).view.resolved;
     assert_eq!(derived.policy.keyboard, harmonigraph_core::tuning::fifth_generated(697_000_000));
     assert_eq!(derived.policy.pitch_flexibility, 37);
     assert_eq!(derived.revision, adopted.revision + 1);
@@ -1974,12 +1990,12 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     );
     device.load(state, true);
     let settings = device.settings();
-    assert_eq!(settings.visible().view.resolved.policy, policy);
+    assert_eq!(shown(&settings).view.resolved.policy, policy);
     let saved: MusicalSettings =
         serde_json::from_str(&device.save().fields[MUSICAL_SETTINGS]).unwrap();
     assert_eq!(PolicyConfig::from(saved.adaptive), policy);
     device.run(0, vec![], false);
-    assert_eq!(settings.visible().view.resolved.policy, policy);
+    assert_eq!(shown(&settings).view.resolved.policy, policy);
     let defaults: MusicalSettings = serde_json::from_str("{\"adaptive\":{}}").unwrap();
     assert_eq!(PolicyConfig::from(defaults.adaptive), PolicyConfig::default());
     let old: MusicalSettings =
@@ -2097,7 +2113,7 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     device.wrapper().test_inspect_plugin(|plugin| {
         assert!(!crate::lattice_maps::view(&plugin.params).pending);
         let edit = |action| crate::lattice_maps::edit(&plugin.params, &setter, action);
-        let dirty = &plugin.params.settings.dirty;
+        let dirty = &plugin.params.settings.modified;
         dirty.store(false, std::sync::atomic::Ordering::Release);
         edit(MapEdit::EditShape(true));
         edit(MapEdit::Replace(map.node(64)));
@@ -2272,7 +2288,7 @@ fn every_engine_records_a_tuning_edit_at_the_callback_that_applies_it() {
         device.run(0, vec![], false);
         capture.arm();
         device.run(64, vec![], false);
-        assert!(device.settings().submit(ConfigEdit::axis(1, microcents(690.0))));
+        assert!(device.settings().submit(ConfigEdit::axis(TuningAxis::Three, microcents(690.0))));
         device.run(128, vec![], false);
         let configs: Vec<_> = capture
             .drain_entries()
@@ -2384,7 +2400,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
     let backend = crate::PluginParamBackend {
         params: &params,
         setter: &setter,
-        configuration: params.settings.visible(),
+        configuration: params.settings.view(),
         gesture: &gesture,
     };
     let mut events = Vec::new();

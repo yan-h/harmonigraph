@@ -19,7 +19,18 @@ pub trait Setup: Send + Sync {
     /// work even when the generic task queue is full and defers host reentry
     /// until any enclosing performance callback's runtime borrows have ended.
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>);
-    /// Main-thread service of registry returns and setup notifications. True
-    /// requests host parameter rescan/state-dirty after this call has returned.
-    fn service(&self) -> bool;
+    /// Main-thread service of registry returns and setup notifications. What
+    /// it reports, the wrapper tells the host after this call has returned.
+    fn service(&self) -> Serviced;
+}
+
+/// What a setup's service changed since the last call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Serviced {
+    /// The saved state changed: the host marks the project modified.
+    pub modified: bool,
+    /// A host parameter's value changed: the host rescans the values.
+    pub values: bool,
+    /// A host parameter's text changed: the host rescans the text.
+    pub text: bool,
 }

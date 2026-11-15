@@ -10,11 +10,10 @@ impl<P: ClapPlugin> Wrapper<P> {
         let mut input_guard = self.owned_input.lock();
         let input = input_guard.as_mut().unwrap();
         let mut plugin = self.plugin.lock();
-        plugin.clap_configuration_begin(boundary);
         // The block's first configuration, once the plugin has reduced the
         // edits queued before this callback: what every group sees until
         // automation changes it.
-        plugin.clap_configuration_adopt();
+        plugin.clap_configuration_begin(boundary);
         input.storage.bind_untimed(boundary.steady_time);
         // One walk, in input order, with each event's sample-precise timestamp
         // preserved.

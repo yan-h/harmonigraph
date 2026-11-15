@@ -1,5 +1,5 @@
 use super::*;
-use crate::params::{InstanceEdit, TuningInstance, TuningVoice};
+use crate::params::{InstanceEdit, ParamKey, TuningInstance, TuningVoice};
 use crate::tests::probe::{events_into, press, themed};
 use std::cell::RefCell;
 

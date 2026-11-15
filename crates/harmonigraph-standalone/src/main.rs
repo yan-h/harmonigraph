@@ -407,6 +407,12 @@ impl App {
     // eframe's reported target format can be passed straight through.
     fn new(target_format: harmonigraph_render::wgpu::TextureFormat) -> Self {
         let mut state = SharedState::new(target_format);
+        // The demo's deliberate divergence from the plugin's fresh tuning: a
+        // justly tuned lattice, with the tolerance wide enough that the 12-TET
+        // mock notes light it up out of the box.
+        let mut demo = harmonigraph_core::Tuning::just();
+        demo.tolerance = harmonigraph_core::tuning::microcents(20.0);
+        state.picture.runtime.restore_tuning(demo);
         state.log("dev harness started; mock MIDI is playing");
         // An empty port list with no message would read as "no MIDI gear";
         // tell the difference when enumeration itself failed.
@@ -653,20 +659,7 @@ struct StandaloneParams {
 
 impl Default for StandaloneParams {
     fn default() -> Self {
-        let params = StandaloneParams {
-            values: ParamKey::ALL.map(|key| (key, Cell::new(key.default_value()))),
-        };
-        // Demo overrides, applied on top of the shared defaults so the
-        // deliberate divergence from the plugin stays visible as a delta:
-        // a justly tuned lattice, with the tolerance wide enough that the
-        // 12-TET mock notes light it up out of the box.
-        let just = harmonigraph_core::Tuning::just();
-        params.set(ParamKey::COffset, just.c_offset_cents());
-        params.set(ParamKey::Three, just.three_cents());
-        params.set(ParamKey::Five, just.five_cents());
-        params.set(ParamKey::Seven, just.seven_cents());
-        params.set(ParamKey::Tolerance, 20.0);
-        params
+        StandaloneParams { values: ParamKey::ALL.map(|key| (key, Cell::new(key.default_value()))) }
     }
 }
 
@@ -857,8 +850,10 @@ mod tests {
             harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST)
         );
         assert_eq!(first.five, (4 * i64::from(first.three) - 2_400_000_000) as i32);
-        app.params.set(ParamKey::Three, 690.0);
-        app.params.set(ParamKey::Five, 390.0);
+        let mut edit = harmonigraph_core::configuration::ConfigEdit::default();
+        edit.axes[1] = Some(690_000_000);
+        edit.axes[2] = Some(390_000_000);
+        app.state.picture.runtime.edit_tuning(&app.params, edit);
         recorder.params(&app.params, &mut app.state, 1.0);
         let edited = app.state.picture.runtime.tuning;
         app.state.picture.runtime.learn_active = true;

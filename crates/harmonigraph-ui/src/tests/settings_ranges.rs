@@ -210,11 +210,11 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
         learning: false,
     };
-    assert!(reducer.apply(ConfigMutation::Restore {
+    reducer.apply(ConfigMutation::Restore {
         raw: harmonigraph_core::Tuning::default(),
         modes,
-        policy
-    }));
+        policy,
+    });
     Backend {
         config: params::ConfigurationView {
             resolved: reducer.resolved(),

@@ -546,7 +546,7 @@ fn drain_records(
             Entry::Param { t, key, value } => {
                 recording.writer.param(harmonigraph_take::ParamRecord {
                     t,
-                    id: ParamKey::HOST[key].id().to_string(),
+                    id: ParamKey::ALL[key].id().to_string(),
                     value,
                 })
             }

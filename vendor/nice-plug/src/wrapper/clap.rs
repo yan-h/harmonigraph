@@ -52,12 +52,12 @@ pub trait ClapPlugin: Plugin {
     fn clap_editor_host(&mut self, host: std::sync::Arc<dyn EditorHost>) {}
 
     /// All following hooks are inside the process allocation guard.
+    ///
+    /// The callback's boundary, before the walk: apply every edit accepted
+    /// before this callback and fix the block's effective configuration here;
+    /// nothing later in the callback may move it but the walk's own input, so
+    /// an edit arriving mid-block waits for the next one.
     fn clap_configuration_begin(&mut self, boundary: configuration::ConfigurationBoundary) {}
-    /// Apply every edit accepted before this callback and fix the block's
-    /// effective configuration here; nothing later in the callback may move
-    /// it but the walk's own input, so an edit arriving mid-block waits for
-    /// the next one.
-    fn clap_configuration_adopt(&mut self) {}
     /// Actual wrapper sub-block boundaries, including in-callback transport cuts.
     /// These are NOT configuration boundaries; `adopt` is the only one.
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {}

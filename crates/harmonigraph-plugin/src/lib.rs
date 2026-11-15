@@ -290,17 +290,12 @@ impl From<AnalysisInput> for AnalysisInputParam {
     }
 }
 
-/// Build a FloatParam entirely from the ParamKey metadata (name, default,
-/// range, skew) so the host-facing parameters can never drift from what
-/// the UI clamps and displays.
+/// Build a FloatParam entirely from the ParamKey metadata (name, default and
+/// range) so the host-facing parameters can never drift from what the UI
+/// clamps and displays.
 fn param_for_key(key: ParamKey) -> FloatParam {
     let range = key.range();
-    let (min, max) = (*range.start(), *range.end());
-    let range = if key.logarithmic() {
-        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(key.skew_steepness()) }
-    } else {
-        FloatRange::Linear { min, max }
-    };
+    let range = FloatRange::Linear { min: *range.start(), max: *range.end() };
     FloatParam::new(key.host_name(), key.default_value(), range)
 }
 
@@ -382,18 +377,8 @@ impl Default for HarmonigraphParams {
 }
 
 impl HarmonigraphParams {
-    /// The host parameter behind one of [`ParamKey::HOST`]. The tuning axes
-    /// are plugin settings (#1756), which `PluginParamBackend` routes to
-    /// [`configuration::Settings`] before it asks for a parameter.
     fn param_for(&self, key: ParamKey) -> &FloatParam {
         match key {
-            ParamKey::COffset
-            | ParamKey::Three
-            | ParamKey::Five
-            | ParamKey::Seven
-            | ParamKey::Tolerance => {
-                unreachable!("{key:?} is a plugin setting, not a host parameter")
-            }
             ParamKey::Fade => &self.fade,
             ParamKey::DarkestPitch => &self.darkest_pitch,
             ParamKey::BrightestPitch => &self.brightest_pitch,
@@ -413,7 +398,7 @@ pub(crate) struct PluginParamBackend<'a> {
     pub setter: &'a ParamSetter<'a>,
     /// The tuning configuration as this frame reads it, once, so every
     /// slider in the frame shows one coherent value.
-    pub configuration: configuration::Visible,
+    pub configuration: harmonigraph_ui::params::ConfigurationView,
     /// Keys inside explicit begin_set/end_set gestures. Lives in
     /// EditorShared so simultaneous axes survive across frames (this
     /// adapter is rebuilt every frame).
@@ -434,7 +419,7 @@ impl ParamBackend for PluginParamBackend<'_> {
         tuning::instances::edit(id, edit);
     }
     fn configuration(&self) -> Option<harmonigraph_ui::params::ConfigurationView> {
-        Some(self.configuration.view)
+        Some(self.configuration)
     }
     fn submit_tuning(&self, edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
         Some(self.params.settings.submit(edit))
@@ -445,22 +430,10 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn get(&self, key: ParamKey) -> f32 {
-        if let Some(index) = ParamKey::TUNING.iter().position(|k| *k == key) {
-            let raw = self.configuration.raw;
-            let axes = [raw.c_offset, raw.three, raw.five, raw.seven, raw.tolerance];
-            return axes[index] as f32 / 1_000_000.0;
-        }
         self.params.param_for(key).value()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
-        if let Some(index) = ParamKey::TUNING.iter().position(|k| *k == key) {
-            self.params.settings.submit(harmonigraph_core::configuration::ConfigEdit::axis(
-                index,
-                harmonigraph_core::tuning::microcents(value),
-            ));
-            return;
-        }
         let param = self.params.param_for(key);
         if self.gesture.get()[key as usize] {
             // Inside an explicit gesture (drag): just set.
@@ -485,9 +458,6 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn begin_set(&self, key: ParamKey) {
-        if ParamKey::TUNING.contains(&key) {
-            return;
-        }
         let mut active = self.gesture.get();
         if !active[key as usize] {
             self.setter.begin_set_parameter(self.params.param_for(key));
@@ -497,9 +467,6 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn end_set(&self, key: ParamKey) {
-        if ParamKey::TUNING.contains(&key) {
-            return;
-        }
         if self.gesture.get()[key as usize] {
             self.setter.end_set_parameter(self.params.param_for(key));
             let mut active = self.gesture.get();
@@ -910,7 +877,7 @@ impl Plugin for Harmonigraph {
         // timed on the take's own clock and placed by that run.
         let recorded = self.configuration.as_ref().filter(|_| self.take.recording());
         if let Some(at) = recorded.map(|owner| owner.take_time()) {
-            self.take.params(at, ParamKey::HOST.map(|key| self.params.param_for(key).value()));
+            self.take.params(at, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
 
             // The take's own audio, when asked for: the selected analysis input
             // exactly as it arrives, so the render gets a spectrum and a
@@ -1068,10 +1035,7 @@ impl ClapPlugin for Harmonigraph {
             lattice_maps::offsets(&self.params),
             self.params.map_follow.unmodulated_plain_value(),
         );
-        owner.begin(boundary, &self.take, self.presentation_seconds);
-    }
-    fn clap_configuration_adopt(&mut self) {
-        self.configuration.as_mut().unwrap().adopt();
+        owner.begin(boundary, &self.take);
     }
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
         self.configuration.as_mut().unwrap().segment(start, frames);
@@ -1602,11 +1566,7 @@ mod tests {
     fn every_param_key_id_matches_the_host_facing_id() {
         let params = HarmonigraphParams::default();
         let host_ids: Vec<String> = params.param_map().into_iter().map(|(id, _, _)| id).collect();
-        // Every key is a host parameter or a plugin-owned tuning setting.
         for key in ParamKey::ALL {
-            assert_ne!(ParamKey::HOST.contains(&key), ParamKey::TUNING.contains(&key), "{key:?}");
-        }
-        for key in ParamKey::HOST {
             assert!(
                 host_ids.iter().any(|id| id == key.id()),
                 "ParamKey::{key:?} claims id {:?}, which no #[id] attribute declares; \
@@ -1624,7 +1584,7 @@ mod tests {
         }
         assert_eq!(
             host_ids.len(),
-            ParamKey::HOST.len() + operational.len(),
+            ParamKey::ALL.len() + operational.len(),
             "the plugin exposes an unnamed operational parameter: {host_ids:?}"
         );
     }

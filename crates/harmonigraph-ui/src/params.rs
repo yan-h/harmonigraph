@@ -12,7 +12,7 @@
 //! and the seam that edits it together, which is how every call site already
 //! reads.
 
-pub use harmonigraph_take::params::{ParamKey, MAX_TUNING_OFFSET};
+pub use harmonigraph_take::params::ParamKey;
 
 /// Which of the plugin's audio inputs feeds every audio-derived picture.
 ///
@@ -50,8 +50,8 @@ pub trait ParamBackend {
     }
     /// Some(result) means the shell owns semantic transactions (the plugin,
     /// which queues them to the audio thread); None selects the synchronous
-    /// path the standalone and offline shells use, where the UI reduces the
-    /// edit itself and writes the axes through `set`.
+    /// path the standalone and offline shells use, where the UI's own reducer
+    /// takes the edit.
     fn submit_tuning(&self, _edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
         None
     }
@@ -123,19 +123,8 @@ pub enum InstanceEdit {
     Reset,
 }
 
-/// Assemble a [`harmonigraph_core::Tuning`] from the current parameter values.
-/// The f32 cent params are quantized to microcents here, once, at the
-/// param boundary; all lattice pitch math downstream is exact integers.
-pub fn tuning_from_params(params: &dyn ParamBackend) -> harmonigraph_core::Tuning {
-    harmonigraph_core::Tuning::from_cents(
-        params.get(ParamKey::COffset),
-        params.get(ParamKey::Three),
-        params.get(ParamKey::Five),
-        params.get(ParamKey::Seven),
-        params.get(ParamKey::Tolerance),
-    )
-}
-
+/// The tuning configuration as the plugin's audio owner last applied it, or as
+/// a queued restore will leave it.
 #[derive(Clone, Copy, Debug)]
 pub struct ConfigurationView {
     pub resolved: harmonigraph_core::configuration::ResolvedConfig,

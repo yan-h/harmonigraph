@@ -565,7 +565,7 @@ fn silence_policy_edits_apply_before_expiry_without_note_input() {
         // Reduce this edit while still below either timeout, then cross the
         // timeout on the next begin, when the reducer already holds the edit.
         phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
-        let visible = settings(&phrase.hub).visible().view;
+        let visible = settings(&phrase.hub).view();
         assert!(
             !visible.pending,
             "the editor edit must already be reduced before the expiry callback"
