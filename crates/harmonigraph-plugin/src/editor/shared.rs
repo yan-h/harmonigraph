@@ -337,7 +337,7 @@ mod tests {
         assert!(shared.take.is_recording());
         // One note captured, as the Hub publishes one into the take's first run.
         recorder.is_armed();
-        recorder.run(0.0, 0.0);
+        recorder.record(0.0, Some(0.0));
         let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = recorder.publish_note(on.into());
         let first_still = 1.0;

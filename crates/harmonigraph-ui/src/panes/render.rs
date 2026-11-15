@@ -401,14 +401,14 @@ fn frame_notes(ui: &mut egui::Ui, state: &mut PictureState) {
 ///
 /// It clears what you see and nothing else — not the take, the render, or the
 /// tuning — so there is nothing to undo and no confirmation to sit through. It
-/// does not change a video: an export always starts from an empty picture,
-/// whatever the live one holds.
+/// does not change a video: an export draws from its take alone, replaying
+/// the take's notes from its start, whatever the live picture holds.
 fn clear_everything(ui: &mut egui::Ui, state: &mut PictureState) {
     button_row(ui, |ui| {
         if ui
             .button("Clear display history")
             .on_hover_text(
-                "Clear lattice label history, MIDI ribbons, spectrogram history and lingering glow from what you see while recording. Held MIDI notes stay on the lattice but leave the roll until played again. A video export always starts from an empty picture, so this does not change one.",
+                "Clear lattice label history, MIDI ribbons, spectrogram history and lingering glow from what you see while recording. Held MIDI notes stay on the lattice but leave the roll until played again. A video export draws from its recorded take, not from what you see, so this does not change one.",
             )
             .clicked()
         {

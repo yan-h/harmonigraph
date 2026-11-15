@@ -245,7 +245,7 @@ fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
 /// has never seen the HUD.
 ///
 /// The gap this closes is the one a person actually opens: reopening the
-/// editor builds a BRAND NEW `egui::Context` (see `release_context_resources`)
+/// editor builds a BRAND NEW `egui::Context` (see `shell::Opening`)
 /// while the state lives across it, so the Area has no memory of its size and
 /// egui spends the first pass measuring. Every other test here reaches a
 /// placed HUD through a drag, on a context that already knows it. Without

@@ -318,8 +318,11 @@ mod tests {
                 .unwrap();
         let screen = ScreenDescriptor { size_in_pixels: [256, 256], pixels_per_point: 1.0 };
         let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256.0, 256.0));
-        // Through egui-wgpu's own renderer, as the editor's frames are.
+        // Through egui-wgpu's own renderer, as the editor's frames are, with
+        // egui's font texture published as the shells publish it.
+        let font = crate::text::tests::font_texture(&device, &queue, &crate::text::tests::atlas());
         let frame = |renderer: &mut egui_wgpu::Renderer, callbacks: Vec<egui::PaintCallback>| {
+            renderer.callback_resources.insert(font.clone());
             let primitives: Vec<_> = callbacks
                 .into_iter()
                 .map(|callback| egui::ClippedPrimitive {
@@ -362,7 +365,7 @@ mod tests {
                     vec![crate::text::tests::glyph()],
                     crate::GlyphRuns::default(),
                     None,
-                    crate::SheetUploads { font: Some(crate::text::tests::atlas()), marks: None },
+                    None,
                     crate::SlideAxis::default(),
                     FORMAT,
                     0,

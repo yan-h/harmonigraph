@@ -7,40 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ConfigurationRecord, NoteRecord};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TimingRecord {
-    pub runtime_session: u64,
-    pub clock_epoch: u64,
-    pub input: i64,
-    pub planned: Option<i64>,
-    pub sample: i64,
-    pub sample_rate: f64,
-}
-impl From<EventTiming> for TimingRecord {
-    fn from(t: EventTiming) -> Self {
-        Self {
-            runtime_session: t.clock.runtime_session,
-            clock_epoch: t.clock.epoch,
-            input: t.input,
-            planned: t.planned,
-            sample: t.sample,
-            sample_rate: t.sample_rate,
-        }
-    }
-}
-impl From<TimingRecord> for EventTiming {
-    fn from(t: TimingRecord) -> Self {
-        Self {
-            clock: ClockId { runtime_session: t.runtime_session, epoch: t.clock_epoch },
-            input: t.input,
-            planned: t.planned,
-            sample: t.sample,
-            sample_rate: t.sample_rate,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProvenanceRecord {
     #[default]
@@ -102,7 +68,6 @@ pub struct DeltaRecord {
     pub sequence: u64,
     pub lifetime: u64,
     pub provenance: ProvenanceRecord,
-    pub timing: Option<TimingRecord>,
     pub pitch_microcents: Option<i64>,
     pub assignment: Option<AssignmentRecord>,
     pub partial_output: bool,
@@ -114,7 +79,6 @@ impl From<NoteDelta> for DeltaRecord {
             sequence: d.sequence,
             lifetime: d.lifetime,
             provenance: d.provenance.into(),
-            timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
             assignment: d.assignment.map(Into::into),
             partial_output: d.partial_output,
@@ -128,7 +92,6 @@ impl From<DeltaRecord> for NoteDelta {
             sequence: d.sequence,
             lifetime: d.lifetime,
             provenance: d.provenance.into(),
-            timing: d.timing.map(Into::into),
             pitch_microcents: d.pitch_microcents,
             assignment: d.assignment.map(Into::into),
             partial_output: d.partial_output,
@@ -144,9 +107,7 @@ pub struct VoiceRecord {
     pub port: i16,
     pub host_note_id: i32,
     pub lifetime: u64,
-    pub input_onset: f64,
     pub actual_onset: f64,
-    pub onset: Option<TimingRecord>,
     pub pitch_microcents: i64,
     pub onset_pitch_microcents: i64,
     pub player_tuning: f64,
@@ -173,9 +134,7 @@ impl From<VoiceBaseline> for VoiceRecord {
             port: v.port,
             host_note_id: v.host_note_id,
             lifetime: v.lifetime,
-            input_onset: v.input_onset,
             actual_onset: v.actual_onset,
-            onset: v.onset.map(Into::into),
             pitch_microcents: v.pitch_microcents,
             onset_pitch_microcents: v.onset_pitch_microcents,
             player_tuning: v.player_tuning,
@@ -199,9 +158,7 @@ impl From<&VoiceRecord> for VoiceBaseline {
             port: v.port,
             host_note_id: v.host_note_id,
             lifetime: v.lifetime,
-            input_onset: v.input_onset,
             actual_onset: v.actual_onset,
-            onset: v.onset.map(Into::into),
             pitch_microcents: v.pitch_microcents,
             onset_pitch_microcents: v.onset_pitch_microcents,
             player_tuning: v.player_tuning,
@@ -427,6 +384,7 @@ mod tests {
         let voices: Vec<_> = (0..64)
             .map(|note| VoiceBaseline {
                 note,
+                lifetime: u64::from(note) + 1,
                 velocity: 0.8,
                 pitch_microcents: i64::from(note) * 100_000_000,
                 expressions: Expressions { pressure: 0.25, gain: 0.5, timbre: 0.75 },
