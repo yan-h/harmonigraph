@@ -50,7 +50,7 @@ fn callback(instances: Vec<RollInstance>, cut: crate::SurroundCut) -> RollCallba
         rect,
         pane_size: rect.size(),
         instances,
-        clipped_tail: (u32::MAX, rect),
+        clip: RollClip::whole(rect),
         axes: TOP,
         bloom: 0.0,
         cut,
@@ -177,8 +177,9 @@ fn draw_with_clipped_tail(
     clipped_start: u32,
     clear: wgpu::Color,
 ) -> Vec<u8> {
+    let rect = surface_rect();
     let cb = RollCallback {
-        clipped_tail: (clipped_start, surface_rect()),
+        clip: RollClip { head: rect, tail_start: clipped_start as usize, tail: rect },
         ..callback(instances, HARNESS_CUT)
     };
     draw_callback(device, queue, cb, clear).0
@@ -236,14 +237,9 @@ pub(crate) fn centered_note() -> RollInstance {
         center: [128.0, 128.0],
         half_extent: [12.0, 60.0],
         shear: 0.0,
-        lead: 0.0,
+        rounding: 0.0,
         lead_fade: 0.0,
-        lead_alpha: 0.0,
-        // The ordinary answer, and what a caller with nowhere to protect
-        // gives: the cap at the note's own end reaches as far as every
-        // other edge's cut, and it is the LEAD over it that decides
-        // whether it shows.
-        cap_reach: HARNESS_REACH,
+        lead_alpha: 1.0,
         core: [255, 0, 0, 255],
         // Cutting whole, and filling with black, so the harness's cut takes
         // the backdrop toward black.
@@ -257,14 +253,11 @@ pub(crate) fn centered_note() -> RollInstance {
     }
 }
 
-/// [`centered_note`] with a lead of `lead` points at its leading tip, `fade`
-/// of that spent fading, and `alpha` of it still standing. The lead is
-/// carved OUT of the note's own length rather than added to it, so every
-/// coordinate in the tests below stays where [`centered_note`] put it —
-/// which is what the pane does too, in reverse: it grows the box first and
-/// tells this crate where the note inside it ends.
-fn led_note(lead: f32, fade: f32, alpha: f32) -> RollInstance {
-    RollInstance { lead, lead_fade: fade, lead_alpha: alpha, ..centered_note() }
+/// [`centered_note`]'s box as a lead, the whole of it, with `fade` points of
+/// it spent fading at its leading tip (y = 68 under [`TOP`]) and `alpha` of
+/// it still standing: what the spectral pane hands over for a tongue.
+fn led_note(fade: f32, alpha: f32) -> RollInstance {
+    RollInstance { lead_fade: fade, lead_alpha: alpha, ..centered_note() }
 }
 
 #[test]
@@ -273,14 +266,14 @@ fn uniforms_match_the_bound_shader_layout() {
 }
 
 #[test]
-fn tremolo_marks_leave_the_edges_lead_and_coverage_continuous() {
+fn tremolo_marks_leave_the_edges_and_coverage_continuous() {
     let Some((device, queue)) = headless_device() else { return };
     for axes in [TOP, BOTTOM, LEFT, RIGHT] {
         for half_width in [3.0, 12.0] {
             let note = RollInstance {
                 half_extent: [half_width, 60.0],
                 core: [128, 64, 96, 192],
-                ..led_note(20.0, 0.0, 1.0)
+                ..centered_note()
             };
             let plain = draw_turned(&device, &queue, vec![note], axes, wgpu::Color::TRANSPARENT);
             let marked = draw_turned(
@@ -302,9 +295,7 @@ fn tremolo_marks_leave_the_edges_lead_and_coverage_continuous() {
                     changed += 1;
                     let delta = [x as f32 + 0.5 - 128.0, y as f32 + 0.5 - 128.0];
                     let pitch = delta[0] * axes.pitch_dir[0] + delta[1] * axes.pitch_dir[1];
-                    let depth = delta[0] * axes.depth_dir[0] + delta[1] * axes.depth_dir[1];
                     assert!(pitch.abs() < half_width - 0.5, "mark crossed the untouched rail");
-                    assert!(depth >= -40.0, "mark entered the lead");
                     assert!(b[0] >= 32 && b[0] <= a[0], "mark lost the solid fill: {b:?}");
                 }
             }
@@ -312,95 +303,6 @@ fn tremolo_marks_leave_the_edges_lead_and_coverage_continuous() {
             assert!(changed < 600, "ornament filled too much of the ribbon");
         }
     }
-}
-
-/// A led note's cap follows the note's own center LINE, so a sheared box
-/// gets its cap where the ribbon actually ends rather than where the box's
-/// center happens to sit.
-///
-/// This is the one path `box_distance_trimmed` exists for that nothing else
-/// runs: the pane can never reach it, because `RollNote::segments` closes a
-/// note at the pitch of its final bend, so the only segment that can carry
-/// a lead is flat. The shear terms cancel identically — trimming slides the
-/// box's center to `(slope * trim / 2, trim / 2)`, and both halves of that
-/// cancel in its distance — and an implementation that simply forgot to
-/// shear the trimmed box would pass every other test in this file.
-///
-/// Read across the note's own end, twelve points either side of the box's
-/// center: at a shear of 0.6 the end has drifted that far, so the cap is on
-/// one side and nothing is on the other.
-#[test]
-fn a_sheared_notes_cap_follows_its_center_line() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
-    // The band's CENTER rather than two samples of it. The cap reaches four
-    // points and the note is twenty-four wide, so a cap displaced by a wrong
-    // shear still covers most of the pixels a correct one does — picking
-    // two and asserting ink at one and none at the other passes for a
-    // mis-shear as readily as for this one. Where the run is centered is
-    // the claim itself.
-    let center = |shear: f32| {
-        let note = RollInstance { shear, ..led_note(40.0, 0.0, 0.0) };
-        let frame = draw(&device, &queue, vec![note], bg_color());
-        // Row 106 is a point and a half past the note's own end (y = 108), so the
-        // cap is the only thing painting in it: the lead is spent, and the
-        // wrap that would wrap the box goes with it.
-        let dark: Vec<u32> = (0..SIZE[0]).filter(|&x| darkened(pixel(&frame, x, 106))).collect();
-        assert!(!dark.is_empty(), "the cap painted nothing at all at a shear of {shear}");
-        // Between the first and last dark pixels' centres.
-        f32::from(*dark.first().unwrap() as u16 + *dark.last().unwrap() as u16) * 0.5 + 0.5
-    };
-    // The cap is the cut round the note's END, so its run is centred on
-    // that end rather than on the line carried on past it: on where the
-    // line stands at the note's own end, 20 points along depth from the
-    // box's own centre, having drifted `shear * 20` along pitch. A trimmed
-    // box whose centre is not slid along the shear stands its end
-    // elsewhere along pitch, and the run's middle with it.
-    for shear in [0.0f32, 0.6, -0.6] {
-        let want = 128.0 - shear * 20.0;
-        let got = center(shear);
-        assert!(
-            (got - want).abs() < 1.5,
-            "at a shear of {shear} the cap is centred on {got}, not {want} — it is \
-             standing where the BOX's centre is rather than where the note's line ends",
-        );
-    }
-}
-
-/// The cap is UNIONED with the wrap, not added to it.
-///
-/// The two shapes share three of their sides: along the note's own flanks
-/// the box the cap measures and the box the wrap measures are the same
-/// distance away, so both are looking at the same ink. Added, that overlap
-/// cuts deeper than the surround does anywhere else.
-///
-/// Read behind a spent lead, the one the pane keeps under a cap, beside the
-/// note's flank, where the wrap stands at full strength: a note with a cap
-/// there has to draw exactly the cut the same note draws with none.
-///
-/// A note cutting at HALF strength is what makes this readable: at full
-/// strength the wrap half a point off the flank is seven eighths of a cut,
-/// so doubling it runs into the composite's clamp at a whole one and the
-/// sum and the union land a few levels apart. At half they are a cut of
-/// 0.44 against 0.88.
-#[test]
-fn the_cap_is_unioned_with_the_wrap_and_not_added_to_it() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
-    // Half a point off the note's flank (x = 140), well inside its length.
-    let at = |cap_reach: f32| {
-        let note = RollInstance { aura: [0, 0, 0, 128], cap_reach, ..led_note(40.0, 0.0, 0.0) };
-        pixel(&draw(&device, &queue, vec![note], bg_color()), 140, 148)
-    };
-    let (capped, wrap_only) = (at(HARNESS_REACH), at(0.0));
-    assert!(!near(wrap_only, BG), "the probe missed the wrap: {wrap_only:?}");
-    assert!(
-        near(capped, wrap_only),
-        "the flank with a cap {capped:?} differs from the wrap alone {wrap_only:?} — the \
-         wrap and the cap are being summed rather than unioned",
-    );
 }
 
 /// One note's cut never darkens under another note's body, however
@@ -530,21 +432,6 @@ fn the_tint_fades_sooner_than_the_cut_it_fills() {
     let got = pixel(&draw_cut(&device, &queue, vec![faint], faster, black).0, 144, 128)[0];
     let want = (255.0 * 0.5 * cut * cut * cut).round() as u8;
     assert!(got.abs_diff(want) <= 3, "a faint note's tint read {got}, not {want}");
-    // Behind a spent lead the cap stands inside the box, 4.5 points past the
-    // note's own end at y = 108, and its tint follows that distance.
-    let capped =
-        RollInstance { aura: [255, 0, 0, 255], cap_reach: 8.0, ..led_note(40.0, 0.0, 0.0) };
-    let got = pixel(&draw_cut(&device, &queue, vec![capped], faster, black).0, 128, 103)[0];
-    let want = (255.0 * cut * cut * cut).round() as u8;
-    assert!(got.abs_diff(want) <= 3, "a cap's tint read {got}, not {want}");
-    // Beside a half-opaque lead the wrap hands over to the cap about y = 103,
-    // two points off the flank: the fill has no step where they tie.
-    let led = RollInstance { aura: [255, 0, 0, 255], cap_reach: 8.0, ..led_note(40.0, 0.0, 0.5) };
-    let frame = draw_cut(&device, &queue, vec![led], faster, black).0;
-    for y in 96..107 {
-        let (here, next) = (pixel(&frame, 142, y)[0], pixel(&frame, 142, y + 1)[0]);
-        assert!(here.abs_diff(next) <= 25, "the tint stepped {here} to {next} at y = {y}");
-    }
 }
 
 /// A hairline ribbon is held by as strong a cut as a wide one at the same
@@ -567,12 +454,83 @@ fn a_hairline_ribbons_cut_is_as_strong_as_a_wide_ones() {
     assert!(near(thin, wide), "the hairline's surround {thin:?} is not the wide one's {wide:?}");
 }
 
+/// A held note cut in two at a shared scissor edge, each half running a
+/// feather past it under the other's scissor, draws exactly the note it was
+/// cut from, its halo included: no seam where the edge passes through a
+/// pixel and no light blended twice where the two overlap, at a fractional
+/// density and below one pixel a point, with nothing drawn over the join.
+///
+/// The spectral pane's held note is that pair, its history and its tongue
+/// meeting at the now-line (`panes::spectral::roll`'s `seam_px`). Boxes that
+/// meet exactly at the edge leave the pixel it passes through part-covered by
+/// whichever of them draws it.
+#[test]
+fn a_note_cut_at_a_shared_scissor_edge_has_no_seam() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    for ppp in [0.5625f32, 1.5] {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(256.0 / ppp));
+        // The join a third of a pixel into the pixel it passes through.
+        let join = (60.0 + 1.0 / 3.0) / ppp;
+        let (tip, end, seam) = (20.0 / ppp, 140.0 / ppp, 1.0 / ppp);
+        // Bright enough to bloom, and translucent, where light blended twice
+        // shows most.
+        let span = |from: f32, to: f32| RollInstance {
+            center: [64.0 / ppp, 0.5 * (from + to)],
+            half_extent: [24.0 / ppp, 0.5 * (to - from)],
+            core: [255, 200, 240, 255],
+            fade: [0.5; 2],
+            ..centered_note()
+        };
+        let frame = |instances, clip| {
+            let cb = RollCallback {
+                rect,
+                pane_size: rect.size(),
+                clip,
+                point_scale: 1.0,
+                bloom: 1.5,
+                ..callback(instances, HARNESS_CUT)
+            };
+            let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
+            let mut resources = CallbackResources::default();
+            prepare_frame(&device, &queue, &mut resources, &screen, &cb);
+            let texture = render_to_texture(&device, &queue, SIZE, FORMAT, bg_color(), |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: ppp,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            });
+            readback(&device, &queue, &texture, SIZE)
+        };
+        let whole = frame(vec![span(tip, end)], RollClip::whole(rect));
+        let clip = RollClip {
+            head: egui::Rect::from_min_max(egui::pos2(0.0, join), rect.max),
+            tail_start: 1,
+            tail: egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, join)),
+        };
+        let cut = frame(vec![span(join - seam, end), span(tip, join + seam)], clip);
+        for y in 50..70 {
+            for x in 0..SIZE[0] {
+                let (got, want) = (pixel(&cut, x, y), pixel(&whole, x, y));
+                assert!(near(got, want), "at {ppp} px/pt ({x}, {y}) reads {got:?}, not {want:?}");
+            }
+        }
+    }
+}
+
 /// A roll whose rect stands off the surface's corner, as the docked pane's
 /// does beside the lattice, darkens the same pixels as one at the corner:
 /// the holdout and the surround's targets are over the roll's rect alone,
 /// so a texel read or a scissor measured from the wrong origin moves the
-/// cuts by the rect's offset. Its clipped tail cuts the tail note's
-/// surround off where it cuts the note.
+/// cuts by the rect's offset. Its clips cut each note's surround off where
+/// they cut the note, the head's as well as the tail's.
 #[test]
 fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
     let Some((device, queue)) = headless_device() else {
@@ -582,6 +540,9 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
     let right = RollInstance { center: [141.0, 128.0], ..centered_note() };
     let at_corner = draw(&device, &queue, vec![left, right], bg_color());
     let rect = egui::Rect::from_min_max(egui::pos2(40.0, 24.0), egui::pos2(220.0, 232.0));
+    // Starts inside the left note, a dozen points past its leading end at
+    // y = 68, so that end and its cut are before it.
+    let head = egui::Rect::from_min_max(egui::pos2(rect.min.x, 80.0), rect.max);
     // Ends inside the right note, so its far flank's cut is past it.
     let tail = egui::Rect::from_min_max(rect.min, egui::pos2(150.0, rect.max.y));
     let (offset, _) = draw_callback(
@@ -590,7 +551,7 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
         RollCallback {
             rect,
             pane_size: rect.size(),
-            clipped_tail: (1, tail),
+            clip: RollClip { head, tail_start: 1, tail },
             ..callback(vec![left, right], HARNESS_CUT)
         },
         bg_color(),
@@ -606,6 +567,13 @@ fn cuts_stay_on_their_notes_in_a_rect_off_the_surface_corner() {
     assert!(darkened(pixel(&at_corner, 154, 128)), "the probe is past the right note's cut");
     let cut = pixel(&offset, 154, 128);
     assert!(near(cut, BG), "the tail's cut ran past its clip: {cut:?}");
+    // A point and a half off the left note's leading end, and inside that
+    // end, both short of the head's clip.
+    assert!(darkened(pixel(&at_corner, 114, 66)), "the probe is past the left note's cut");
+    for (x, y, what) in [(114, 66, "cut"), (114, 74, "body")] {
+        let got = pixel(&offset, x, y);
+        assert!(near(got, BG), "the head's {what} ran past its clip at ({x}, {y}): {got:?}");
+    }
 }
 
 #[test]
@@ -747,11 +715,7 @@ fn the_cut_reach_scales_with_the_point_scale() {
     // The note's flank is at x = 123, and this pixel's centre 44.5 points
     // off it: past the reach at a scale of 1, inside it at 2.
     let frames = [1.0, 2.0].map(|point_scale| {
-        let note = RollInstance {
-            half_extent: [5.0, 12.0],
-            cap_reach: cut.reach_points(point_scale),
-            ..centered_note()
-        };
+        let note = RollInstance { half_extent: [5.0, 12.0], ..centered_note() };
         let cb = RollCallback { point_scale, ..callback(vec![note], cut) };
         draw_callback(&device, &queue, cb, wgpu::Color::WHITE).0
     });
@@ -782,12 +746,8 @@ fn roll_cuts_hold_at_editor_and_export_scales() {
         let physical = (64.0 * ppp).round() as u32;
         let size = [physical.div_ceil(64) * 64, physical];
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
-        let note = RollInstance {
-            center: [32.0, 32.0],
-            half_extent: [5.0, 12.0],
-            cap_reach: cut.reach_points(1.0),
-            ..centered_note()
-        };
+        let note =
+            RollInstance { center: [32.0, 32.0], half_extent: [5.0, 12.0], ..centered_note() };
         let cb = RollCallback { rect, pane_size: rect.size(), ..callback(vec![note], cut) };
         let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
         let mut resources = CallbackResources::default();
@@ -952,9 +912,9 @@ fn the_cut_runs_the_whole_length_of_its_note() {
 /// the pane.
 ///
 /// The OTHER end is untouched, which is what makes this a leading fade
-/// rather than a softening of the whole segment: the leading end is the low
-/// end of the depth axis, and the trailing end is where the ribbon carries
-/// on into the rest of its own note.
+/// rather than a softening of the whole lead: the leading end is the low
+/// end of the depth axis, and the trailing end is where the lead meets its
+/// own note.
 #[test]
 fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
     let Some((device, queue)) = headless_device() else {
@@ -962,16 +922,12 @@ fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
     };
     // White on black with no cut: every painted byte is the body's own
     // coverage, read straight off the frame. Under `TOP` the depth axis
-    // runs down the screen, so the leading tip of this note is at y = 68
-    // and its trailing end at y = 188. A lead of 40 points reaches to
-    // y = 108, and the fade is measured back from the tip.
-    let bare = |lead: f32, fade: f32| RollInstance {
-        core: [255; 4],
-        aura: [0; 4],
-        ..led_note(lead, fade, 1.0)
-    };
+    // runs down the screen, so the leading tip of this lead is at y = 68
+    // and its trailing end at y = 188, and the fade is measured back from
+    // the tip.
+    let bare = |fade: f32| RollInstance { core: [255; 4], aura: [0; 4], ..led_note(fade, 1.0) };
     let cov = |fade: f32, y: u32| {
-        let frame = draw(&device, &queue, vec![bare(40.0, fade)], wgpu::Color::BLACK);
+        let frame = draw(&device, &queue, vec![bare(fade)], wgpu::Color::BLACK);
         f32::from(pixel(&frame, 128, y)[0]) / 255.0
     };
 
@@ -995,7 +951,7 @@ fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
     // tip, inside the harness cut's reach, and that is exactly where a
     // body-only fade leaves a black ring standing in front of nothing.
     let capped = |fade: f32| {
-        let frame = draw(&device, &queue, vec![led_note(40.0, fade, 1.0)], bg_color());
+        let frame = draw(&device, &queue, vec![led_note(fade, 1.0)], bg_color());
         pixel(&frame, 128, 66)
     };
     assert!(darkened(capped(0.0)), "a square-ended ribbon lost its cap: {:?}", capped(0.0));
@@ -1013,7 +969,7 @@ fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
     // cut that took no share of the lead's coverage would ring the fading
     // tip in the cut a solid ribbon wears.
     let flank = |fade: f32| {
-        let frame = draw(&device, &queue, vec![led_note(40.0, fade, 1.0)], bg_color());
+        let frame = draw(&device, &queue, vec![led_note(fade, 1.0)], bg_color());
         f32::from(BG[2] - pixel(&frame, 140, 73)[2])
     };
     let (square, faded, share) = (flank(0.0), flank(20.0), cov(20.0, 73));
@@ -1025,85 +981,44 @@ fn a_lead_fade_takes_the_ribbon_out_toward_its_tip() {
     );
 }
 
-/// A lead's opacity dims the LEAD and never the note it hangs off.
+/// A lead's opacity takes the whole lead out evenly, from its tip to its far
+/// end, and its surround with it.
 ///
-/// That division is the whole reason `lead` is carried per instance rather
-/// than the fade being measured against the box. The spectral pane takes a
-/// released note's lead out over its release time
-/// (`panes::spectral::roll::lead_alpha`) while the ribbon itself is still
-/// sounding-loud and still scrolling; an opacity applied across the box
-/// would fade the note along with the thing hanging off it, and a roll that
-/// dims every note you let go of is telling you something the music did not.
-///
-/// Read on both sides of the note's own end: inside the lead the ink
-/// follows the opacity, and past it the ribbon is solid at every one.
+/// The spectral pane takes a released note's lead out over its release time
+/// (`panes::spectral::roll::lead_alpha`) while the note's own ribbon, a
+/// separate instance, carries on solid into the roll. The opacity rides
+/// `lead_alpha` rather than `fade` because the body holdout reads the one and
+/// leaves out the other: a lead held out at its whole box while fading would
+/// notch every neighbour's cut beside it.
 #[test]
-fn a_leads_opacity_dims_the_lead_and_not_the_note() {
+fn a_leads_opacity_takes_out_the_whole_lead() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    // White on black, no cut, a square-ended 40-point lead — so the
-    // only thing between the tip (y = 68) and the note's own end (y = 108)
-    // is the opacity, with no ramp on top of it to unpick.
+    // White on black, no cut, a square-ended lead, so the only thing on it is
+    // the opacity, with no ramp on top of it to unpick.
     let cov = |alpha: f32, y: u32| {
-        let note = RollInstance { core: [255; 4], aura: [0; 4], ..led_note(40.0, 0.0, alpha) };
+        let note = RollInstance { core: [255; 4], aura: [0; 4], ..led_note(0.0, alpha) };
         let frame = draw(&device, &queue, vec![note], wgpu::Color::BLACK);
         f32::from(pixel(&frame, 128, y)[0]) / 255.0
     };
-    for alpha in [0.25f32, 0.5, 0.75, 1.0] {
-        // Well inside the lead, and well inside the note.
-        let (lead, body) = (cov(alpha, 88), cov(alpha, 148));
-        assert!((lead - alpha).abs() < 0.03, "the lead covers {lead:.3} at an opacity of {alpha}",);
-        assert!(body > 0.97, "the note itself came out at {body:.3} with its lead at {alpha}",);
+    for alpha in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+        // Near its tip, and near its far end.
+        for y in [72, 184] {
+            let got = cov(alpha, y);
+            assert!((got - alpha).abs() < 0.03, "the lead covers {got:.3} at y = {y} at {alpha}");
+        }
     }
-    // Gone entirely, and the note is still every bit of itself.
-    assert!(cov(0.0, 88) < 0.03, "a lead at no opacity still painted");
-    assert!(cov(0.0, 148) > 0.97, "a lead at no opacity took its note with it");
-}
-
-/// The cap reaches exactly as far as `cap_reach`, which is the caller's
-/// answer and not the cut's.
-///
-/// The two are the same number wherever the cap has the room for it. Where
-/// it does not — the spectral pane's now-line being the case that exists,
-/// with the clip a lead opens past it belonging to the lead — the cap is
-/// SHORTENED rather than dimmed, so it grows out of the note's end and is
-/// wholly on the near side of whatever the caller is protecting at every
-/// width it passes through. Dimmed, it would put ink across that line at
-/// every width but the last.
-#[test]
-fn a_caps_reach_is_the_callers_and_not_the_cuts() {
-    let Some((device, queue)) = headless_device() else {
-        return;
+    // Its surround goes with it, half a point off the flank.
+    let flank = |alpha: f32| {
+        let frame = draw(&device, &queue, vec![led_note(0.0, alpha)], bg_color());
+        f32::from(BG[2] - pixel(&frame, 140, 128)[2])
     };
-    // The lead spent, as the pane leaves it under a cap, so the cap is
-    // uncovered and the frame reads it directly. The note's own end is at
-    // y = 108, and the cap reaches back from it toward the tip.
-    let at = |cap_reach: f32, y: u32| {
-        let note = RollInstance { cap_reach, ..led_note(40.0, 0.0, 0.0) };
-        pixel(&draw(&device, &queue, vec![note], bg_color()), 128, y)
-    };
-    // At the cut's own reach the cap paints a point and a half inside
-    // the end (y = 106)...
-    let full = at(HARNESS_REACH, 106);
-    assert!(darkened(full), "the full cap is absent: {full:?}");
-    // ...and told to cap over a single point, it paints half a point inside
-    // it (y = 107) and stops short of the row the cut's reach still
-    // covers.
-    assert!(darkened(at(1.0, 107)), "the shortened cap is absent: {:?}", at(1.0, 107));
+    let (whole, half) = (flank(1.0), flank(0.5));
+    assert!(whole > 100.0, "the probe missed the lead's surround: {whole}");
     assert!(
-        near(at(1.0, 106), BG),
-        "the cap reached past the point it was given: {:?}",
-        at(1.0, 106),
-    );
-    // None at all is none drawn: a cap of no reach leaves the note's end
-    // bare, which is what a caller with no room to give it is asking for.
-    let none = RollInstance { cap_reach: 0.0, ..led_note(40.0, 0.0, 0.0) };
-    let bare = draw(&device, &queue, vec![none], bg_color());
-    assert!(
-        near(pixel(&bare, 128, 107), BG),
-        "a cap of no reach still painted: {:?}",
-        pixel(&bare, 128, 107),
+        (half - 0.5 * whole).abs() <= 4.0,
+        "at half its opacity the lead's surround darkens by {half}, not half of {whole}",
     );
 }
 
@@ -1131,6 +1046,37 @@ fn a_notes_corners_are_square() {
         near(corner, [255, 0, 0, 255]),
         "the tap's corner is missing ({corner:?}) — something is rounding it off",
     );
+}
+
+/// A box rounded at its whole half extent is a disc, which is how the
+/// Spiral's dots draw: its ink is a circle's area, not a square's, and it
+/// reaches the same distance from its centre along the diagonal as along
+/// an axis.
+#[test]
+fn a_box_rounded_at_its_half_extent_is_a_disc() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    // White on black with no cut, so every byte is the disc's coverage.
+    let dot = RollInstance {
+        half_extent: [12.0, 12.0],
+        rounding: 12.0,
+        core: [255; 4],
+        aura: [0; 4],
+        ..centered_note()
+    };
+    let frame = draw(&device, &queue, vec![dot], wgpu::Color::BLACK);
+    let ink: f32 = (0..SIZE[1])
+        .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+        .map(|(x, y)| f32::from(pixel(&frame, x, y)[0]) / 255.0)
+        .sum();
+    let disc = std::f32::consts::PI * 12.0 * 12.0;
+    assert!((ink - disc).abs() < 0.01 * disc, "the dot's ink is {ink}, not a disc's {disc}");
+    // A pixel centre 11.5 points out along an axis, inside the edge, and one
+    // 12 points out along the diagonal, on it.
+    let (axis, diagonal) = (pixel(&frame, 139, 128)[0], pixel(&frame, 136, 136)[0]);
+    assert!(axis > 250, "the disc stops short along its axis: {axis}");
+    assert!(diagonal.abs_diff(255 / 2) < 40, "the disc's edge is not round: {diagonal}");
 }
 
 /// The cut must still stand OUTSIDE a note floored to its minimum
@@ -1375,48 +1321,6 @@ fn a_two_pixel_notes_halo_keeps_its_shape_as_it_scrolls() {
             100.0 * swing / peak,
         );
     }
-}
-
-/// The cut behind a spent lead stands off the note's end exactly as it
-/// stands off the same note with no lead at all.
-///
-/// Behind the lead the surround is the CAP (`cap_coverage`), measured to
-/// the note inside the box rather than to the box, and fading along the
-/// cut's own curve from that same end. Measured from anywhere else, or
-/// faded any other way, the surround there would come out thinner or
-/// thicker than at every other edge of the note. The pane keeps a spent
-/// lead on every released note until its end clears the now-line, so this
-/// is the surround at that end.
-///
-/// A bent fade over a long reach is what tells a cap that fades its own
-/// way from the wrap's, which is why the fixture has one; and the rows read
-/// stop well short of the box's own tip (y = 68), so a cap standing there
-/// instead reads as none.
-#[test]
-fn the_cap_behind_a_spent_lead_matches_the_note_alone() {
-    let Some((device, queue)) = headless_device() else { return };
-    let cut = crate::SurroundCut { reach: 8.0, shape: 1.0, ..HARNESS_CUT };
-    // The note's own stretch is y 108..188 either way; the led box carries
-    // a spent 40-point lead in front of it, out to y = 68.
-    let led = RollInstance { cap_reach: 8.0, ..led_note(40.0, 0.0, 0.0) };
-    let alone =
-        RollInstance { center: [128.0, 148.0], half_extent: [12.0, 40.0], ..centered_note() };
-    // All the darkening in front of the note's own end, on blue.
-    let darkness = |note: RollInstance| {
-        let frame = draw_cut(&device, &queue, vec![note], cut, bg_color()).0;
-        (90..108)
-            .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
-            .map(|(x, y)| f32::from(BG[2].saturating_sub(pixel(&frame, x, y)[2])))
-            .sum::<f32>()
-    };
-    let (behind_lead, by_itself) = (darkness(led), darkness(alone));
-    assert!(by_itself > 1000.0, "the note alone cut nothing past its end: {by_itself}");
-    let ratio = behind_lead / by_itself;
-    assert!(
-        (ratio - 1.0).abs() < 0.05,
-        "behind a spent lead the note's end cuts {ratio:.3} of what it cuts alone \
-         ({behind_lead} against {by_itself})",
-    );
 }
 
 fn bloom_frame(

@@ -2859,6 +2859,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             // share of the spectrum's own share, and so a share of `split`.
             let near = split - lead * split;
             let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+            super::roll::take_roll_draw_probe();
             let output = painted_into(SCREEN, WIDE, |ui| {
                 roll::draw_roll(
                     ui.painter(),
@@ -2929,6 +2930,23 @@ fn the_rolls_ink_stops_at_the_now_line() {
                 assert!(
                     cb.rect.expand(1e-3).contains(corner),
                     "pitch {p} sits outside the roll's region in {orientation:?}",
+                );
+            }
+            // Inside that region, the history stops AT the line and the tongue
+            // stands between it and the lead's edge, so no cap or outline the
+            // history wears at its near end, held or released, reaches past it.
+            let clip = super::roll::take_roll_draw_probe().expect("the roll drew").clip;
+            let depths = |r: egui::Rect| {
+                let (from, to) = (a.depth_at(r.min), a.depth_at(r.max));
+                (from.min(to), from.max(to))
+            };
+            for (what, rect, want) in
+                [("history", clip.head, (split, 1.0)), ("tongue", clip.tail, (near, split))]
+            {
+                let got = depths(rect);
+                assert!(
+                    (got.0 - want.0).abs() < 1e-3 && (got.1 - want.1).abs() < 1e-3,
+                    "the {what} is clipped to depths {got:?} in {orientation:?}, not {want:?}",
                 );
             }
         }

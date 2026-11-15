@@ -210,13 +210,10 @@ Click a labelled rail to restore its region at its remembered size.
 The spectrogram fold includes the piano roll and its note labels;
 the Analyzer's tab-bar arrow still folds the whole pane and remembers both region states.
 
-With the spectrum on the left or right,
-folding shrinks the editor window while keeping the other panes and the surviving region at their current sizes.
-Host size limits can force the open panes to share the remaining space.
-Top/bottom orientations and an Analyzer placed below the Lattice fold within the existing pane size.
+A region fold keeps its space inside the Analyzer, in every orientation and arrangement:
+the open region widens into it, and the editor window and the other panes keep their sizes.
+Folding the whole Analyzer is what gives its width back.
 Restoring both regions brings back their previous split at the original spectrum position.
-Changing the spectrum position while folded does not lose the width owed to the editor window.
-Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
 Hide tab bars hides their controls;
 press Tab to show them again.

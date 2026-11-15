@@ -510,6 +510,10 @@ pub(crate) fn pane_id(surface: usize) -> u64 {
     surface as u64
 }
 
+/// The Spiral's id in the roll's space, whose other ids are surfaces: its dots
+/// draw through `roll_paint_callback`, and it has the one docked copy (#974).
+pub(crate) const SPIRAL_ROLL_PANE: u64 = u64::MAX;
+
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
 /// even when the Tuning tab (and its Learn toggle) is hidden.
 ///
