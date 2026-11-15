@@ -102,33 +102,24 @@ pub struct RollInstance {
     /// Read for a box that neither shears nor tapers, which is the one shape a
     /// dot is; the rest stay square.
     pub rounding: f32,
-    /// Whether this box is a LEAD, and how long: a stretch of ribbon carried on
-    /// past where the note itself stops, drawn as its own instance beside the
-    /// note's box, in points, and 0 for an ordinary segment that is all note.
+    /// How much of the box's LEADING tip is spent fading out, in points: 0 for
+    /// an ordinary note, and for a lead — a stretch of ribbon carried on past
+    /// where its note stops, drawn as its own box — 0 to end it square, or as
+    /// much of its length as it fades over. The caller keeps it within the box.
     ///
-    /// The whole box is the lead. Its leading tip is the end at the low end of
-    /// the depth axis, which is the end nearest whatever the roll is drawn
-    /// beside — for the spectral pane, the analyzer past the now-line (see
-    /// `panes::spectral::roll::lead`, which is also the only thing that sets
-    /// this). [`lead_fade`](Self::lead_fade) and
-    /// [`lead_alpha`](Self::lead_alpha) decide how much of it is left, in
-    /// both layers and in the body holdout alike, which is why they ride here
-    /// rather than on [`fade`](Self::fade): the holdout leaves `fade` out, and
-    /// a tongue held out at its whole box would notch every neighbour's cut
-    /// along a tip that is not there.
-    ///
-    /// This crate is told how long the lead is and nothing about why, and it
-    /// invents no lead of its own.
-    pub lead: f32,
-    /// How much of that lead is spent fading out at the tip, in points: 0 ends
-    /// it square, the whole lead fades it from its far end outward.
-    ///
-    /// Both layers ride it: a lead that ends in a fade wears no surround cap
-    /// either, or the tip would dissolve inside a hard ring of cut.
+    /// The leading tip is the end at the low end of the depth axis, the one
+    /// nearest whatever the roll is drawn beside — for the spectral pane, the
+    /// analyzer past the now-line (`panes::spectral::roll::lead`). This and
+    /// [`lead_alpha`](Self::lead_alpha) take the box out in both layers and in
+    /// the body holdout alike, which is why they ride here rather than on
+    /// [`fade`](Self::fade): the holdout leaves `fade` out, and a lead held out
+    /// at its whole box would notch every neighbour's cut along a tip that is
+    /// not there. Both layers ride it, so a tip that fades wears no surround
+    /// cap either, or it would dissolve inside a hard ring of cut.
     pub lead_fade: f32,
-    /// How much of the lead is still standing, 0..1 — the whole of it while the
+    /// How much of a lead is still standing, 0..1: the whole of it while its
     /// note is sounding, falling to nothing over whatever the caller counts as
-    /// the note's release.
+    /// the note's release. 1 for an ordinary note.
     pub lead_alpha: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
@@ -203,7 +194,7 @@ impl RollInstance {
             2 => Float32,   // shear
             3 => Float32,   // rounding
             // Several to a slot, since a vertex takes sixteen at most.
-            4 => Float32x3, // lead, lead_fade, lead_alpha
+            4 => Float32x2, // lead_fade, lead_alpha
             8 => Unorm8x4,  // core
             9 => Unorm8x4,  // aura
             14 => Float32x4, // span, ramp

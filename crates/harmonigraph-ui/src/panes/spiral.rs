@@ -879,9 +879,8 @@ fn dots(
                     half_extent: [radius, radius],
                     shear: 0.0,
                     rounding: radius,
-                    lead: 0.0,
                     lead_fade: 0.0,
-                    lead_alpha: 0.0,
+                    lead_alpha: 1.0,
                     core: color.to_array(),
                     // The dots' cut is `dot_surround`'s, not the roll's.
                     aura: [0; 4],

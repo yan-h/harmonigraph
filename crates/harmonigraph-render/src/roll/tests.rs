@@ -238,9 +238,8 @@ pub(crate) fn centered_note() -> RollInstance {
         half_extent: [12.0, 60.0],
         shear: 0.0,
         rounding: 0.0,
-        lead: 0.0,
         lead_fade: 0.0,
-        lead_alpha: 0.0,
+        lead_alpha: 1.0,
         core: [255, 0, 0, 255],
         // Cutting whole, and filling with black, so the harness's cut takes
         // the backdrop toward black.
@@ -258,8 +257,7 @@ pub(crate) fn centered_note() -> RollInstance {
 /// it spent fading at its leading tip (y = 68 under [`TOP`]) and `alpha` of
 /// it still standing: what the spectral pane hands over for a tongue.
 fn led_note(fade: f32, alpha: f32) -> RollInstance {
-    let note = centered_note();
-    RollInstance { lead: 2.0 * note.half_extent[1], lead_fade: fade, lead_alpha: alpha, ..note }
+    RollInstance { lead_fade: fade, lead_alpha: alpha, ..centered_note() }
 }
 
 #[test]

@@ -725,8 +725,8 @@ fn source_instances(
                         shear: 0.0,
                         rounding: 0.0,
                         // The whole box is lead, so its opacity and configured tip
-                        // fade apply from the now-line to its analyzer-side tip.
-                        lead: lead_px,
+                        // fade apply from the now-line to its analyzer-side tip;
+                        // `lead` keeps the fade within the lead.
                         lead_fade: lead_fade_px,
                         lead_alpha: standing,
                         core: note_color(state, pitch, 1.0).to_array(),
@@ -828,9 +828,8 @@ fn source_instances(
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
                 rounding: 0.0,
-                lead: 0.0,
                 lead_fade: 0.0,
-                lead_alpha: 0.0,
+                lead_alpha: 1.0,
                 core: core.to_array(),
                 aura: note_fill(state, pitch, 1.0),
                 span: RollInstance::WHOLE,
@@ -2532,10 +2531,11 @@ mod tests {
                     let note = one(&history);
                     let ends = past_the_line(note, &axes, split);
                     assert!(
-                        ends.abs() < 1e-2 && note.lead == 0.0,
+                        ends.abs() < 1e-2 && (note.lead_fade, note.lead_alpha) == (0.0, 1.0),
                         "the sounding note's history ends {ends} points past the line, \
-                         carrying a lead of {}",
-                        note.lead,
+                         carrying a lead of ({}, {})",
+                        note.lead_fade,
+                        note.lead_alpha,
                     );
                 }
             }
@@ -2607,7 +2607,7 @@ mod tests {
         state.appearance.spectrum.roll_lead_release = 0.25;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let (_, tongues) = instance_groups(&state, 0.5);
-        assert!(one(&tongues).lead > 0.0 && one(&tongues).lead_alpha == 1.0);
+        assert_eq!(one(&tongues).lead_alpha, 1.0);
         state
             .runtime
             .tracker
@@ -2661,9 +2661,8 @@ mod tests {
 
         let at = |state: &PictureState, now: f64| instance_groups(state, now).1.first().copied();
         let first = at(&state, 4.0).expect("the released note has no tongue");
-        let full_lead = first.lead;
+        let full_lead = first.half_extent[1];
         let fixed_center = first.center;
-        assert!(full_lead > 0.0, "the note carries no lead at the moment of release");
         // Quarters of the way through the release, and the opacity is the
         // fraction of it left.
         for (elapsed, want) in [(0.0f64, 1.0f32), (0.1, 0.75), (0.2, 0.5), (0.3, 0.25)] {
@@ -2675,9 +2674,9 @@ mod tests {
                 extension.lead_alpha,
             );
             assert!(
-                (extension.lead - full_lead).abs() < 1e-3,
+                (extension.half_extent[1] - full_lead).abs() < 1e-3,
                 "the lead retracted to {} from {full_lead} while fading",
-                extension.lead,
+                extension.half_extent[1],
             );
             assert_eq!(extension.center, fixed_center, "the tongue followed history");
         }
@@ -2736,42 +2735,26 @@ mod tests {
                 kind: NoteEventKind::Tuning { semitones: 0.4 * (i + 1) as f32 },
             });
         }
-        let (mut notes, tongues) = instance_groups(&state, 5.0);
-        notes.extend(tongues);
+        let (notes, tongues) = instance_groups(&state, 5.0);
         assert!(notes.len() >= 4, "expected a segment per bend, got {}", notes.len());
-        let leading: Vec<&RollInstance> = notes.iter().filter(|n| n.lead > 0.0).collect();
-        assert_eq!(
-            leading.len(),
-            1,
-            "{} of {} instances lead; only the one tongue may",
-            leading.len(),
-            notes.len(),
-        );
-        // And it is the LAST one — the segments are built in time order, and
+        assert_eq!(tongues.len(), 1, "a bent note leads {} times, not once", tongues.len());
+        // And past the LAST segment: the segments are built in time order, and
         // depth runs away from the now-line, so the leading segment is the one
         // nearest it.
         let axes = Axes::new(PANE, &state.appearance.spectrum);
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
-        let nearest = notes
-            .iter()
-            .max_by(|a, b| {
-                past_the_line(a, &axes, split).total_cmp(&past_the_line(b, &axes, split))
-            })
-            .expect("the roll drew at least one segment");
-        assert!(nearest.lead > 0.0, "the segment that leads is not the one nearest the line");
-        // The segments and the tongue still TILE: the tongue stands past the
-        // last one's leading end, which is the end no other segment is behind,
-        // so it can overlap none of them.
+        let nearest = notes.iter().map(|n| past_the_line(n, &axes, split)).fold(f32::MIN, f32::max);
+        assert!(
+            past_the_line(&tongues[0], &axes, split) > nearest,
+            "the tongue does not stand past the segment nearest the line",
+        );
+        // The segments still TILE: no lead grows any of them into another.
         let dir = axes.dir_depth();
         let along = |n: &RollInstance| n.center[0] * dir.x + n.center[1] * dir.y;
         for pair in notes.windows(2) {
             let (a, b) = (&pair[0], &pair[1]);
             let clear = (along(b) - along(a)).abs() - (a.half_extent[1] + b.half_extent[1]);
-            assert!(
-                clear >= -1e-3,
-                "the lead pushed two segments {} points into each other",
-                -clear,
-            );
+            assert!(clear >= -1e-3, "two segments overlap by {} points", -clear);
         }
     }
 

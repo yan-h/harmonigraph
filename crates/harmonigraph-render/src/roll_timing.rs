@@ -80,9 +80,8 @@ fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
             half_extent: [half_pitch, half_depth],
             shear: 0.0,
             rounding: 0.0,
-            lead: 0.0,
             lead_fade: 0.0,
-            lead_alpha: 0.0,
+            lead_alpha: 1.0,
             core: [230, 40 + shade / 2, 255 - shade, 255],
             aura: [0, 0, 0, 255],
             span: RollInstance::WHOLE,
@@ -93,8 +92,7 @@ fn instances(work: &Workload, points: [f32; 2]) -> Vec<RollInstance> {
             tremolo: [0.0; 2],
         };
         if i % 7 == 0 && half_depth > 4.0 {
-            note.lead = 0.4 * half_depth;
-            note.lead_fade = if i % 2 == 0 { 0.0 } else { 0.5 * note.lead };
+            note.lead_fade = if i % 2 == 0 { 0.0 } else { 0.4 * half_depth };
             note.lead_alpha = if i % 3 == 0 { 0.5 } else { 0.0 };
         }
         if i % 11 == 0 {

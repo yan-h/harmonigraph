@@ -112,11 +112,10 @@ struct VertexOut {
     /// radius for a dot. See [`box_distance`].
     @location(3) @interpolate(flat) rounding: f32,
     /// Three to a slot, since a stage passes sixteen at most:
-    /// - `x`: whether the box is a lead, and how long, in points — 0 for the
-    ///   ordinary segment that is all note. See [`lead_coverage`].
-    /// - `y`: how much of that lead is spent fading out at the tip, in points.
-    /// - `z`: how much of the lead is still standing, 0..1.
-    @location(4) @interpolate(flat) lead: vec3<f32>,
+    /// - `x`: how much of the box's leading tip is spent fading out, in
+    ///   points; 0 for a note. See [`lead_coverage`].
+    /// - `y`: how much of a lead is still standing, 0..1; 1 for a note.
+    @location(4) @interpolate(flat) lead: vec2<f32>,
     /// Four depth offsets, ascending, and the ribbon's width at each as a share
     /// of its full `half_extent.x`. See [`taper_at`].
     @location(5) @interpolate(flat) taper_depth: vec4<f32>,
@@ -151,9 +150,9 @@ fn vs_note_cut(
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(3) rounding: f32,
-    // Lead, lead fade and lead alpha; span then ramp.
+    // Lead fade and lead alpha; span then ramp.
     // Packed, since a vertex takes sixteen at most.
-    @location(4) lead: vec3<f32>,
+    @location(4) lead: vec2<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
@@ -181,7 +180,7 @@ fn vs_note_body(
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(3) rounding: f32,
-    @location(4) lead: vec3<f32>,
+    @location(4) lead: vec2<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
@@ -204,7 +203,7 @@ fn note_vertex(
     half_extent: vec2<f32>,
     shear: f32,
     rounding: f32,
-    lead: vec3<f32>,
+    lead: vec2<f32>,
     core: vec4<f32>,
     aura: vec4<f32>,
     span_ramp: vec4<f32>,
@@ -359,28 +358,19 @@ fn cut_coverage(in: VertexOut, d: f32) -> f32 {
 /// spectral pane clips that cap off, its budget past the now-line being the
 /// lead itself; a caller who wants the cap has only to leave it room.)
 ///
-/// The fade is floored at one pixel and CAPPED at the lead, [`cut_coverage`]'s
-/// bargain in both directions and for its reasons: a sub-pixel ramp is an
-/// aliased edge, and a fade wider than the thing it is taking out has nothing
-/// past that to take. Capped, a fade dialled past its reach fades the whole
-/// lead from its far end outward rather than stepping at it — which is what
-/// this crate's `lead_fade` promises, and what lets the pane's bar clamp the
-/// pair for the bar's sake alone.
+/// The fade is floored at one pixel, [`cut_coverage`]'s bargain for its
+/// reason: a sub-pixel ramp is an aliased edge. The caller keeps it within the
+/// box, so a fade dialled past the lead's length fades it whole.
 ///
-/// A segment with no lead leaves at the first line, so the ordinary ribbon pays
-/// nothing at all for a lead it does not have.
+/// An ordinary note, a fade of 0 and an alpha of 1, leaves at the first line.
 fn lead_coverage(in: VertexOut) -> f32 {
-    let lead = in.lead.x;
-    let lead_fade = in.lead.y;
-    let lead_alpha = in.lead.z;
-    if (lead <= 0.0) {
-        return 1.0;
-    }
+    let lead_fade = in.lead.x;
+    let lead_alpha = in.lead.y;
     if (lead_fade <= 0.0) {
         return lead_alpha;
     }
     let u = in.local.y + in.half_extent.y;
-    return lead_alpha * clamp(u / max(min(lead_fade, lead), in.feather), 0.0, 1.0);
+    return lead_alpha * clamp(u / max(lead_fade, in.feather), 0.0, 1.0);
 }
 
 /// Signed distance from this fragment to the note's own box, in points:
