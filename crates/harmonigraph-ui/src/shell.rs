@@ -46,8 +46,8 @@ pub fn limit_font_atlas(input: &mut egui::RawInput) {
 ///
 /// A context, rather than a process or a window, is the unit: the plugin
 /// editor builds a new one every time its window opens while the state it
-/// draws lives on across all of them, and that gap is what
-/// [`crate::PictureState::release_context_resources`] exists to close.
+/// draws lives on across all of them, so what a context needs is owed again
+/// with every window.
 pub struct Opening<'a> {
     /// The context that has just been built. [`open`](Self::open) themes it,
     /// so a shell with styling of its own applies that afterwards.
@@ -58,13 +58,11 @@ pub struct Opening<'a> {
 }
 
 impl Opening<'_> {
-    /// Theme the context, drop what belonged to the previous one, tell the
-    /// layout its floor, then start the window session.
+    /// Theme the context, tell the layout its floor, then start the window
+    /// session.
     ///
-    /// All four every time a context is built, which is the part a hand-kept
-    /// copy loses one of: skip the release and the new window draws through
-    /// handles naming textures its renderer never allocated (the spectrogram
-    /// vanishes for good), skip the floor and the first fold asks for a window
+    /// All three every time a context is built, which is the part a hand-kept
+    /// copy loses one of: skip the floor and the first fold asks for a window
     /// narrower than the shell will ever grant.
     ///
     /// Nothing saved is read here. The state outlives every window, so it
@@ -73,7 +71,6 @@ impl Opening<'_> {
     /// restore or the standalone harness's start.
     pub fn open(self) {
         crate::theme::apply_theme(self.ctx);
-        self.state.picture.release_context_resources();
         self.state.workspace.min_window_size = MIN_WINDOW_SIZE;
         self.state.start_window_session();
     }

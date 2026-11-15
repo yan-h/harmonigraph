@@ -5,8 +5,8 @@
 //! - **Capture** reuses the analyzer's ring. While the transport rolls, each
 //!   block's descriptor carries its song position, and the input worker
 //!   appends those blocks to the [`store`] ([`worker`]), and places the notes
-//!   the display showed and the lattice map selected beside them, by pass
-//!   ([`notes`]).
+//!   the display showed and the lattice map selected as they played beside
+//!   them, by pass ([`notes`]).
 //! - **Audition** starts from a click in the Analyzer's Tape mode. Bitwig's own playhead
 //!   cannot start it: a click in the arranger while stopped does not change
 //!   the song position Bitwig sends a plugin (measured in #1721). The input
@@ -43,8 +43,9 @@ pub(crate) use deck::Deck;
 pub(crate) use worker::Worker;
 
 /// Capacity of the playback ring, in interleaved samples: 0.68 s of stereo at
-/// 96 kHz, well over the [`worker::LEAD_SECONDS`] the worker keeps queued at
-/// any rate a host offers.
+/// 96 kHz. It holds the [`worker::LEAD_SECONDS`] the worker keeps queued for
+/// stereo up to about 262 kHz, so at every rate from 44.1 to 192 kHz. Above
+/// that (352.8 or 384 kHz), free slots cap the queue short of the lead.
 const PLAYBACK_SAMPLES: usize = 1 << 17;
 /// Pieces in flight. The worker sends at most one a step per cue.
 const PIECES: usize = 256;
