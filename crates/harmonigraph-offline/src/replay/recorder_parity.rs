@@ -88,7 +88,6 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     capture.stop();
     assert!(!recorder.is_armed());
     recorder.run_end(ORIGIN + 1.0);
-    recorder.publish_frontier(ORIGIN + 1.0);
     writer.stop();
     writer.drain(&mut capture);
     assert!(!writer.failed());
@@ -253,10 +252,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     assert!(!recorder.is_armed());
     recorder.run_end(ORIGIN + 1.0);
     writer.stop();
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    assert!(writer.finished.is_none(), "the frontier has not passed the run's end");
-    recorder.publish_frontier(ORIGIN + 1.0);
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert_eq!(writer.finished.as_ref(), Some(&path));

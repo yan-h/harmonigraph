@@ -5,7 +5,7 @@
 //! One armed take is one file and one WAV beside it. The writer decides
 //! nothing about song time: it writes every item that arrives while a file is
 //! open, and the reader drops what falls in no run. It seals a stopped take
-//! once the audio thread's frontier has passed the take's last `RunEnd`.
+//! once the take's run has ended.
 
 use super::*;
 #[cfg(test)]
@@ -63,13 +63,13 @@ pub fn channel() -> (Recorder, Control) {
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
         let mut pump = Pump { latches: thread_latches, ..Default::default() };
         loop {
-            // The frontier first, then what the rings hold, then the commands:
-            // an item counted here was pushed before the frontier that covers
-            // it, and an armed one after the `Start` this poll will see. A
-            // Stop seals only once it was pending before the count, which so
-            // holds everything pushed before it.
+            // What the rings hold, then the commands: an armed item counted
+            // here was pushed after the `Start` this poll will see. The record
+            // ring is counted first, so a `RunEnd` counted here comes with
+            // every publication pushed before it. A Stop seals only once it
+            // was pending before the count, which so holds everything pushed
+            // before it.
             let stop_counted = pump.pending_stop;
-            let frontier = thread_fence.frontier();
             let counts = (consumer.slots(), publications.ready());
             #[cfg(feature = "test-support")]
             thread_fence.worker_before_commands.reach();
@@ -105,7 +105,7 @@ pub fn channel() -> (Recorder, Control) {
                 &mut audio_consumer,
                 &mut publications,
                 counts,
-                (frontier, stop_counted),
+                stop_counted,
                 &thread_status,
                 &thread_fence,
             );
@@ -215,8 +215,8 @@ impl Pump {
     }
 
     /// One pass: drain what the rings held when it was counted into the open
-    /// take, flush it, mark a failure, and seal a stopped take once the
-    /// frontier has passed its last `RunEnd`. An idle worker checks again
+    /// take, flush it, mark a failure, and seal a stopped take once its run
+    /// has ended. An idle worker checks again
     /// every 20 ms.
     #[allow(clippy::too_many_arguments)]
     fn pass(
@@ -225,7 +225,7 @@ impl Pump {
         audio: &mut rtrb::Consumer<f32>,
         publications: &mut publication::Consumer,
         (records, items): (usize, usize),
-        (frontier, stop_counted): (f64, bool),
+        stop_counted: bool,
         status: &Mutex<String>,
         fence: &RecordFence,
     ) -> Pumped {
@@ -248,7 +248,7 @@ impl Pump {
         if self.pending_stop {
             fence.worker_after_stop.reach();
         }
-        let sealable = self.open.as_ref().is_none_or(|o| o.sealable(frontier));
+        let sealable = self.open.as_ref().is_none_or(|o| !o.run_open);
         if self.pending_stop && stop_counted && (sealable || self.disconnected) {
             self.pending_stop = false;
             let finished = self.open.take().map(|mut open| (open.finish(), open.marked));
@@ -343,9 +343,8 @@ struct Recording {
     audio_file: Option<String>,
     /// The WAV itself, until it is finalized or a write to it fails.
     audio: Option<harmonigraph_take::WavWriter>,
-    /// Whether a `Run` is open, and where the last one ended.
+    /// Whether a `Run` is open.
     run_open: bool,
-    last_end: Option<f64>,
     /// Whether the file already holds its failure marker.
     marked: bool,
     /// Test hook: fail the marker write once.
@@ -431,7 +430,6 @@ impl Recording {
                 writer,
                 audio: Some(audio),
                 run_open: false,
-                last_end: None,
                 marked: false,
                 #[cfg(all(test, feature = "test-support"))]
                 fail_marker: false,
@@ -479,12 +477,6 @@ impl Recording {
                 )
             })
         })
-    }
-
-    /// Whether a stopped take may seal behind `frontier`: no run is open, and
-    /// everything that sounds before the last one ended is published.
-    fn sealable(&self, frontier: f64) -> bool {
-        !self.run_open && self.last_end.is_none_or(|end| end <= frontier)
     }
 
     /// Write the take's failure marker, once.
@@ -571,7 +563,6 @@ fn drain_records(
             }
             Entry::RunEnd { at } => {
                 recording.run_open = false;
-                recording.last_end = Some(at);
                 recording.writer.write(&harmonigraph_take::Record::RunEnd(
                     harmonigraph_take::RunEndRecord { at },
                 ))

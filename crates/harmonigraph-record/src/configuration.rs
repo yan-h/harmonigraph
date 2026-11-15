@@ -1,4 +1,4 @@
-//! The arm intent, the frontier the writer seals behind, and the failure flag.
+//! The arm intent and the failure flag.
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// What the GUI last asked of the audio thread: arm a take epoch, or disarm it.
@@ -36,11 +36,6 @@ pub(crate) struct RecordFence {
     pub failed: AtomicBool,
     /// First worker-side failure detail. Audio-thread failures only set `failed`.
     pub failure_message: parking_lot::Mutex<Option<String>>,
-    /// Presentation time (as `f64` bits) before which the audio thread has
-    /// published everything that sounds: stored once per callback, after it
-    /// publishes. The writer seals a stopped take once this passes its last
-    /// `RunEnd`.
-    frontier: AtomicU64,
     #[cfg(feature = "test-support")]
     pub worker_after_empty: TestPause,
     #[cfg(feature = "test-support")]
@@ -98,13 +93,6 @@ impl RecordFence {
     }
     pub fn fail(&self) {
         self.failed.store(true, Ordering::Release);
-    }
-    pub fn publish_frontier(&self, time: f64) {
-        self.frontier.store(time.to_bits(), Ordering::Release);
-    }
-    /// The last frontier stored, zero before any.
-    pub fn frontier(&self) -> f64 {
-        f64::from_bits(self.frontier.load(Ordering::Acquire))
     }
 
     /// Worker only: preserve the concrete cause across GUI status refreshes.

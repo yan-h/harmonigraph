@@ -89,13 +89,12 @@ impl Worker {
         wait_for("Stop processed", || self.fence.worker_stop_processed.load(Ordering::Acquire));
     }
 
-    /// What the owner and the Hub publish once a stopped take's next callback
-    /// observes the disarm: the run's end, and a frontier past it.
+    /// What the owner pushes once a stopped take's next callback observes the
+    /// disarm: the run's end.
     fn close(&mut self) {
         let recorder = self.recorder.as_mut().unwrap();
         assert!(!recorder.is_armed());
         recorder.run_end(1.0);
-        recorder.publish_frontier(1.0);
     }
 
     fn assert_failed(&self, cause: &str) {
@@ -284,10 +283,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         assert!(recorder.is_armed());
         testing::set_renderer_program(control, worker.directory.join("no-such-renderer"));
         control.stop();
-        assert_no_alloc(|| {
-            assert!(!recorder.is_armed());
-            recorder.publish_frontier(12.0);
-        });
+        assert_no_alloc(|| assert!(!recorder.is_armed()));
         wait_for("second take finalized", || !worker.fence.finishing.load(Ordering::Acquire));
         assert!(!worker.fence.failed.load(Ordering::Acquire));
     }

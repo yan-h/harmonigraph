@@ -412,12 +412,6 @@ impl Recorder {
         }
     }
 
-    /// Everything that sounds before `time` is published. Stored once per
-    /// callback, after it publishes: the writer seals a stopped take behind
-    /// it.
-    pub fn publish_frontier(&self, time: f64) {
-        self.fence.publish_frontier(time);
-    }
     /// [`is_armed_at`](Self::is_armed_at) the intent as it stands now, for a
     /// caller with no callback boundary of its own to have captured it at.
     pub fn is_armed(&mut self) -> bool {

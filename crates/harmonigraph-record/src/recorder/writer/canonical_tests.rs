@@ -36,32 +36,6 @@ fn record_block(recorder: &mut Recorder, at: f64, origin: f64, key: u8, level: f
     recorder.run_end(at + duration);
 }
 
-/// A stopped take seals once the audio thread's frontier has passed its last
-/// `RunEnd`, and not before: what sounds before that end may still be in
-/// flight until a callback starting after it has published.
-#[test]
-fn a_stopped_take_seals_once_the_frontier_passes_its_last_run_end() {
-    let file = path("frontier");
-    let (mut recorder, mut capture) = testing::channel();
-    capture.arm();
-    assert!(recorder.is_armed());
-    let mut writer = testing::FileWriter::new(&capture, file.clone());
-    record_block(&mut recorder, 1.0, 0.0, 60, 0.25);
-    capture.stop();
-    writer.stop();
-    recorder.publish_frontier(1.0);
-    writer.drain(&mut capture);
-    assert!(writer.finished.is_none(), "the frontier has not passed the run's end");
-    recorder.publish_frontier(1.0 + 64.0 / 48_000.0);
-    writer.drain(&mut capture);
-    assert!(!writer.failed());
-    let sealed = writer.finished.clone().expect("the frontier passed the run's end");
-    let take = harmonigraph_take::Take::read(&sealed).unwrap();
-    assert_eq!(take.notes().count(), 2);
-    assert_eq!(take.audio_start, Some(0.0));
-    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
-}
-
 /// What arrives once the take has sealed goes to no file and fails nothing.
 #[test]
 fn what_arrives_after_the_seal_is_dropped() {
@@ -74,7 +48,6 @@ fn what_arrives_after_the_seal_is_dropped() {
     capture.stop();
     recorder.is_armed();
     writer.stop();
-    recorder.publish_frontier(2.0);
     writer.drain(&mut capture);
     let sealed = writer.finished.clone().expect("sealed");
     recorder.publish_note(NoteEvent::on(2.5, SourceId::DIRECT, 0, 64, 0.8).into()).expect_both();
@@ -102,7 +75,6 @@ fn a_forward_seek_records_on_into_the_one_wav() {
     record_block(&mut recorder, 1.0 + duration, resumed, 72, 0.75);
     capture.stop();
     writer.stop();
-    recorder.publish_frontier(2.0);
     writer.drain(&mut capture);
     let sealed = writer.finished.clone().expect("sealed");
     let take = harmonigraph_take::Take::read(&sealed).unwrap();
@@ -144,7 +116,6 @@ fn a_lost_publication_is_a_gap_on_the_file() {
     recorder.run_end(1.0);
     capture.stop();
     writer.stop();
-    recorder.publish_frontier(1.0);
     writer.drain(&mut capture);
     let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
     let incomplete = take.incomplete.unwrap();
@@ -171,7 +142,6 @@ fn a_failed_take_is_marked_and_sealed_unrendered() {
     assert!(harmonigraph_take::Take::read(&file).unwrap().incomplete.is_some());
     capture.stop();
     writer.stop();
-    recorder.publish_frontier(2.0);
     writer.drain(&mut capture);
     assert!(writer.finished.is_none(), "a failed take is never rendered");
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
@@ -190,7 +160,7 @@ fn a_recorder_dropped_mid_take_fails_it() {
     std::fs::remove_dir_all(path("dropped").parent().unwrap()).unwrap();
 }
 
-/// The real worker: a Stop seals behind the frontier and launches the render,
+/// The real worker: a Stop seals once the run has ended and launches the render,
 /// and Start is refused until it has.
 #[test]
 fn the_real_worker_seals_a_stopped_take_and_renders_it() {
@@ -210,7 +180,6 @@ fn the_real_worker_seals_a_stopped_take_and_renders_it() {
     assert!(!recorder.is_armed());
     control.start(48000.0, String::new());
     assert!(!control.is_recording(), "Start waits for the previous take to seal");
-    recorder.publish_frontier(2.0);
     until(|| control.last_take().is_some());
     assert_eq!(control.last_take(), file());
     until(|| could_not_run(&control));

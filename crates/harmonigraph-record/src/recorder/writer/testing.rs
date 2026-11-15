@@ -114,8 +114,8 @@ impl Capture {
 ///
 /// **The pump this drives is the worker's own** ([`Pump::pass`]), not a copy of
 /// it: what the writer thread does between polling for a command and sleeping
-/// is exactly what [`FileWriter::drain`] does here, behind the frontier the
-/// recorder last published. The only halves it does not have are the ones a
+/// is exactly what [`FileWriter::drain`] does here. The only halves it does
+/// not have are the ones a
 /// command channel owns — no `Start` opens its file (the constructor does),
 /// and nothing can disconnect it.
 pub struct FileWriter {
@@ -149,14 +149,13 @@ impl FileWriter {
     }
     pub fn drain(&mut self, capture: &mut Capture) {
         let stop_counted = self.pump.pending_stop;
-        let frontier = self.fence.frontier();
         let counts = (capture._records.slots(), capture.publications.ready());
         let pumped = self.pump.pass(
             &mut capture._records,
             &mut capture.audio,
             &mut capture.publications,
             counts,
-            (frontier, stop_counted),
+            stop_counted,
             &self.status,
             &self.fence,
         );

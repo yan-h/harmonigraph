@@ -1121,8 +1121,7 @@ impl Hub {
         // and the reserve that refilled it would allocate, on audio.
         self.pending.clear();
         if let Some(time) = self.pending_loss.take() {
-            // Send it before publish advances the frontier past it, and let
-            // the ordinary all-source snapshots repair each lane.
+            // Let the ordinary all-source snapshots repair each lane.
             recorder.publication_lost(time);
         }
         let outage = recorder.take_publication_outage();
@@ -1154,20 +1153,15 @@ impl Hub {
         self.mapping().at(sample)
     }
 
-    /// The snapshot a display or take reads after a gap, and a take reads at
-    /// the start of every pass: what is sounding now, built from what the Hub
-    /// itself scheduled. It reconstructs no history.
+    /// Everything this callback sequenced, and the snapshot a display or take
+    /// reads after a gap and a take reads at the start of every run: what is
+    /// sounding now, built from what the Hub itself scheduled. It
+    /// reconstructs no history.
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         self.flush(recorder);
-        let Some(callback) = self.callback else { return };
-        self.snapshots(owner, recorder);
-        // Every record collected this callback has been published, and nothing
-        // still to come sounds before this callback began: what is still to be
-        // sequenced arrived at or after its start and sounds a delay later.
-        // What a full batch leaves in the rings is the exception, accepted: a
-        // flood past one batch in the callback that stops a take can lose its
-        // tail without a warning.
-        recorder.publish_frontier(self.presentation(callback.steady_time));
+        if self.callback.is_some() {
+            self.snapshots(owner, recorder);
+        }
     }
 
     /// Pay every snapshot a row owes and can state now, one lane at a time.

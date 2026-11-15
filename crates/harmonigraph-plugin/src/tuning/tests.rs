@@ -1072,29 +1072,45 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
 }
 
 /// The same lag against the take: a Tune the host runs after the Hub is a
-/// callback behind, so its record is stamped under the Hub's previous
-/// callback. Proving a callback's end complete as it ends would put that
-/// record below the proven frontier and fail the recorder for the session.
+/// callback behind, so the Hub sequences its note a callback after it was
+/// played, and a take stopped then still has it. The Hub publishes what it
+/// collected before any later sub-block ends the run, and the writer counts
+/// the record ring before the publication lane, so the run's end is never
+/// drained ahead of a note that sounds before it.
 #[test]
-fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
+fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     let _scope = crate::test_scope::enter();
-    let (mut hub, capture) = Device::recorded_hub();
+    let (hub, mut capture) = Device::recorded_hub();
+    let (mut hub, mut tune) = (hub, Device::new(true));
     hub.activate();
-    let mut tune = Device::new(true);
     tune.activate();
     let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
     capture.arm();
-    // The Tune runs first, then after the Hub, at the same block boundary.
-    tune.run_format(0, vec![], None, None, 512);
-    hub.run_format(0, vec![], None, None, 512);
-    hub.run_format(512, vec![], None, None, 512);
-    tune.run_format(512, vec![note(1, 0, 60, 0, true)], None, None, 512);
-    hub.run_format(1024, vec![], None, None, 512);
-    tune.run_format(1024, vec![], None, None, 512);
-    assert_eq!(inspect_hub(&hub, |h| h.test_held(0)), 1, "the late copy is sequenced");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    let mut position = 1.0;
+    let mut cycle = |raw: i64, played: Vec<Input>| {
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(timeline(position, true)));
+        tune.run_format(raw, played, None, None, 512);
+        position += 512.0 / 48_000.0;
+    };
+    cycle(0, vec![]);
+    // Played in the Tune after the Hub's callback: sequenced at 1024, where it
+    // sounds, inside the run.
+    cycle(512, vec![note(1, 0, 60, 0, true)]);
+    cycle(1024, vec![]);
+    capture.stop();
+    writer.stop();
+    // This callback observes the disarm and ends the run.
+    cycle(1536, vec![]);
+    writer.drain(&mut capture);
     assert!(!writer.failed(), "a routine lag must not fail the recorder");
+    let sealed = writer.finished.clone().expect("the stopped take seals");
+    let take = harmonigraph_take::Take::read(&sealed).unwrap();
+    let struck = take
+        .notes()
+        .any(|n| n.note == 60 && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }));
+    assert!(struck, "the Tune's last note before the run's end is in the take");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

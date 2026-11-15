@@ -100,8 +100,8 @@ impl Recording {
     }
 
     /// A joined boundary with the take disarmed: no callback can still close
-    /// its run, so it closes here, and nothing still to come can sound before
-    /// it. For a host that stops calling the audio thread after a Stop.
+    /// its run, so it closes here. For a host that stops calling the audio
+    /// thread after a Stop.
     pub fn close_stopped(&mut self, recorder: &mut Recorder) {
         let intent = recorder.capture_recording_intent();
         if intent.is_armed() {
@@ -113,7 +113,6 @@ impl Recording {
         if self.registered_through != i64::MIN {
             self.end_run(recorder, self.registered_through);
         }
-        recorder.publish_frontier(f64::INFINITY);
     }
 
     /// A host reset cuts the clock. A run open across it ends here and opens
