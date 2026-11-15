@@ -998,7 +998,7 @@ fn a_take_re_armed_with_no_callback_between_records_from_its_first_block() {
 /// nothing else, a loop wrap included. The recorder opens and closes it
 /// itself, from each block's origin.
 #[test]
-fn the_recording_run_changes_at_arming_and_a_resume_only() {
+fn every_run_the_recorder_opens_takes_a_new_serial() {
     fn block(b: &mut Bench, position: f64, playing: bool) -> Option<u64> {
         let origin = b.rec.observe_transport(position, playing, BLOCK_SECONDS);
         b.rec.record(position, origin);

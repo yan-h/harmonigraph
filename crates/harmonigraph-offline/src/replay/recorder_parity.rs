@@ -65,7 +65,7 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     assert!(recorder.is_armed());
     let path = parity_path("unsequenced");
     let mut writer = testing::FileWriter::new(&capture, path.clone());
-    recorder.run(0.0, 0.0);
+    recorder.record(0.0, Some(0.0));
     let live_events = [
         NoteEvent::on(ORIGIN + 0.125, SourceId::DIRECT, 0, 60, 0.8),
         NoteEvent {
@@ -179,7 +179,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     let mut writer = testing::FileWriter::new(&capture, path.clone());
     let configuration = harmonigraph_core::configuration::ConfigReducer::default().resolved();
     // One run whose presentation ORIGIN is song zero.
-    recorder.run(ORIGIN, 0.0);
+    recorder.record(ORIGIN, Some(0.0));
     recorder.configuration(ORIGIN, configuration);
 
     recorder

@@ -632,9 +632,8 @@ impl Recorder {
         self.fence.fail();
     }
     /// Open a run whose first sample sits at presentation time `at` and at
-    /// `song` in the take's audio. [`record`](Self::record) is the caller
-    /// outside a test.
-    pub fn run(&mut self, at: f64, song: f64) {
+    /// `song` in the take's audio.
+    fn run(&mut self, at: f64, song: f64) {
         self.run = self.run.wrapping_add(1);
         self.open = Some(OpenRun { serial: self.run, take: self.armed_epoch });
         self.run_opened = true;
