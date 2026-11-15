@@ -60,10 +60,15 @@ fn ring_block_of(
 
 /// Record song frames `from..to` as one pass, and stop.
 fn record(worker: &mut Worker, source: &mut u64, from: i64, to: i64) {
-    for song in (from..to).step_by(FRAMES) {
-        let (block, samples) = ring_block(*source, Some(song), STEREO);
+    record_in(FRAMES, worker, source, from, to);
+}
+
+/// [`record`] in host blocks of `frames`.
+fn record_in(frames: usize, worker: &mut Worker, source: &mut u64, from: i64, to: i64) {
+    for song in (from..to).step_by(frames) {
+        let (block, samples) = ring_block_of(frames, *source, Some(song), STEREO);
         worker.capture(block, &samples);
-        *source += FRAMES as u64;
+        *source += frames as u64;
     }
     let (block, samples) = ring_block(*source, None, STEREO);
     worker.capture(block, &samples);
@@ -343,20 +348,32 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
     assert_eq!(chunks, [(0, 300, 1, 0), (500, 700, 1, 0), (2000, 2200, 2, 2000)]);
 }
 
+/// A pass is cold until it has settled and warm after, and the chunk being
+/// recorded closes where it turns warm, so each chunk is judged where it is
+/// one or the other (#1742). In 300- and 400-frame blocks chunks are 1200
+/// frames, cut on grids that put the settle point inside one: judged at its
+/// start, a cold chunk's warm tail lost to older warm audio, and Tape mode
+/// dimmed it as cold.
 #[test]
-fn a_cold_pass_does_not_replace_warm_audio_until_it_has_settled() {
+fn a_pass_turns_warm_where_it_has_settled_and_not_a_chunk_later() {
     let (_, mut worker) = pair();
     let mut source = 0;
     let settle = (SETTLE_SECONDS * RATE) as i64;
-    record(&mut worker, &mut source, 0, 1000 + settle + 2000);
-    // Played again from 1.0 s: cold for the settling time, warm after.
-    record(&mut worker, &mut source, 1000, 1000 + settle + 2000);
+    record_in(300, &mut worker, &mut source, 0, 1000 + settle + 5000);
+    // Played again from 1.0 s, then a pass alone further on.
+    record_in(400, &mut worker, &mut source, 1000, 1000 + settle + 5000);
+    record_in(400, &mut worker, &mut source, 40_000, 40_000 + settle + 2000);
     let store = worker.store().unwrap();
     let owner =
         |frame: i64| store.chunks().find(|c| (c.start..c.end).contains(&frame)).unwrap().stamp.pass;
     assert_eq!(owner(1000), 1, "cold never overwrites warm");
     assert_eq!(owner(1000 + settle - 1), 1);
-    assert_eq!(owner(1000 + settle + 500), 2, "once settled, the fresher pass wins");
+    assert_eq!(owner(1000 + settle), 2, "once settled, the fresher pass wins");
+    let mut view = TapeView::default();
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let alone: Vec<(f64, f64, bool)> =
+        view.spans.iter().filter(|s| s.start >= 40.0).map(|s| (s.start, s.end, s.warm)).collect();
+    assert_eq!(alone, [(40.0, 50.0, false), (50.0, 52.0, true)]);
 }
 
 /// A cue cut partway through a piece must leave nothing of that piece in the

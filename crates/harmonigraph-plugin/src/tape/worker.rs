@@ -95,7 +95,7 @@ pub(crate) struct Worker {
     pass: Option<Pass>,
     next_pass: u64,
     /// The pass's chunk still being recorded; committed when it is full, the
-    /// pass ends, or a dropped stretch breaks it.
+    /// pass turns warm, the pass ends, or a dropped stretch breaks it.
     building: Option<Chunk>,
     /// The host's meter where the chunk being recorded starts.
     building_meter: Option<Meter>,
@@ -272,7 +272,18 @@ impl Worker {
         self.store.get_or_insert_with(|| Store::new(rate, channels));
         let full =
             |chunk: &Chunk| chunk.end - chunk.start >= (CHUNK_SECONDS * f64::from(rate)) as i64;
-        if self.building.as_ref().is_some_and(|chunk| chunk.end != song_frame || full(chunk)) {
+        // A chunk is wholly cold or wholly warm, to the block, because the
+        // store and Tape mode judge one by its warmth at a single frame
+        // (#1742): one that turns warm here closes, and its warm rest starts
+        // the next.
+        let settled = |chunk: &Chunk| {
+            !chunk.stamp.warm(chunk.start, rate) && chunk.stamp.warm(song_frame, rate)
+        };
+        if self
+            .building
+            .as_ref()
+            .is_some_and(|chunk| chunk.end != song_frame || full(chunk) || settled(chunk))
+        {
             self.close_chunk();
         }
         if self.building.is_none() {
