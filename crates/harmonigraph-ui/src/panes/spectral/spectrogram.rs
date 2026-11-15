@@ -447,7 +447,6 @@ mod gap_tests {
                     );
                 }
                 if step == 2 {
-                    state.release_context_resources();
                     gpu.reset_resources();
                 }
             }

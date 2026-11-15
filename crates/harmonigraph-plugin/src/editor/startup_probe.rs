@@ -152,7 +152,6 @@ impl WindowHandler for Host {
                 ready: Arc::new(AtomicBool::new(false)),
             },
             move |ctx, _, probe: &mut Probe| {
-                harmonigraph_ui::use_renderer_font_texture(ctx);
                 harmonigraph_ui::shell::Opening { ctx, state: &mut probe.shared.lock() }.open();
                 harmonigraph_ui::begin_editor_loading(ctx);
             },
