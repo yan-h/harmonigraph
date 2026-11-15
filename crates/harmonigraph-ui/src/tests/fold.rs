@@ -95,11 +95,14 @@ fn resetting_layout_restores_open_sections_after_traversal() {
     let mut state = fresh();
     let mut h = DockHarness::new();
     h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
     h.collapse_click(&mut state, panes::Tab::Lattice);
+    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false, true]);
     state.workspace.interaction.reset_layout = true;
     h.settle_folds(&mut state);
     assert_eq!(state.workspace.layout.folded, [false; 3]);
     assert_eq!(state.workspace.layout.position, Position::Right);
+    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
 }
 
 fn click_settled(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
@@ -849,4 +852,48 @@ fn a_short_analyzer_keeps_the_tape_controls_and_drops_the_overview() {
     assert!(stop, "the controls went with the overview");
     let overview = egui::Id::new(("tape-overview", panes::DOCKED_SURFACE));
     assert!(h.ctx.read_response(overview).is_none(), "the overview stayed on a short pane");
+}
+
+/// With time running across the Analyzer, a folded history region's space goes
+/// to the spectrum: its pitch rulings, which span its whole depth, run up to
+/// the folded region's rail rather than stopping where the open split had them
+/// and leaving a blank band beside the rail.
+#[test]
+fn a_region_fold_widens_the_open_region_up_to_the_rail() {
+    for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
+        let mut state = split_state();
+        state.picture.appearance.spectrum.orientation = orientation;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        region_click(&mut h, &mut state, 1);
+        h.settle(&mut state);
+        assert!(state.workspace.interaction.analyzer_regions.collapsed[1]);
+        let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
+        let rail =
+            h.ctx.read_response(egui::Id::new(("analyzer region fold", 1usize))).unwrap().rect;
+        let out = h.frame(&mut state, vec![]);
+        // The rulings across the depth axis, clipped to what is drawn.
+        let rulings: Vec<egui::Rect> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::LineSegment { points, .. } => {
+                    let r = egui::Rect::from_two_pos(points[0], points[1]).intersect(cs.clip_rect);
+                    (body.contains_rect(r) && r.width() > 20.0).then_some(r)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!rulings.is_empty(), "{orientation:?}: the fixture drew no pitch rulings");
+        let gap = match orientation {
+            SpectralOrientation::Left => {
+                rail.left() - rulings.iter().map(|r| r.right()).fold(f32::MIN, f32::max)
+            }
+            _ => rulings.iter().map(|r| r.left()).fold(f32::MAX, f32::min) - rail.right(),
+        };
+        assert!(
+            gap.abs() <= 2.0,
+            "{orientation:?}: {gap} points between the spectrum and the rail"
+        );
+    }
 }
