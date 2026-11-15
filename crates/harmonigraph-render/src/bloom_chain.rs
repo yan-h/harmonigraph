@@ -1,4 +1,5 @@
-//! The bloom post-process shared by the lattice, the roll and the spiral's glow.
+//! The bloom post-process shared by the lattice and the roll, the Spiral's dots
+//! included.
 
 use super::*;
 
@@ -75,8 +76,8 @@ pub(super) enum BloomSource {
 /// The four pipelines [`BloomChain::run`] steps through, in that order.
 ///
 /// Held by each caller rather than by the chain: they are built per target
-/// format (the lattice's offscreen texture, the roll's half floats, the glow's
-/// surface format), at the loading stage where each pane's own pipelines are.
+/// format (the lattice's offscreen texture, the roll's half floats), at the
+/// loading stage where each pane's own pipelines are.
 #[derive(Clone)]
 pub(super) struct BloomPipelines {
     bright: wgpu::RenderPipeline,

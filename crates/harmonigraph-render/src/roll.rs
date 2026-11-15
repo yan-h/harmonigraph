@@ -195,7 +195,9 @@ impl RollInstance {
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
             3 => Float32,   // rounding
-            // Several to a slot, since a vertex takes sixteen at most.
+            // Several to a slot, packed when sixteen locations were taken for
+            // the limit; the device takes the adapter's own, 31 on Metal
+            // (`device_limits`).
             4 => Float32x2, // lead_fade, lead_alpha
             8 => Unorm8x4,  // core
             9 => Unorm8x4,  // aura

@@ -657,8 +657,8 @@ fn vs_node_cell(
     out.clip_pos =
         select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, 1.0), cell_packed(box.cell));
     out.shadow_box = box.cell;
-    // The negative sign marks an analytic cell without consuming another
-    // interpolator; unspread cells return above with the positive scale.
+    // The negative sign marks an analytic cell in this interpolator rather than
+    // a further one; unspread cells return above with the positive scale.
     out.shadow_at = vec4<f32>(texel, -max(uv_points, 1e-6), box.cell_map.w);
     // The spread and the cell's texel in uv, for this draw's readers alone.
     // The ordinary cell above keeps its original rasterizer.

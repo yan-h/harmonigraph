@@ -111,7 +111,7 @@ struct VertexOut {
     /// How far the box's corners are rounded, in points: 0 for a note, the
     /// radius for a dot. See [`box_distance`].
     @location(3) @interpolate(flat) rounding: f32,
-    /// Three to a slot, since a stage passes sixteen at most:
+    /// Two to a slot:
     /// - `x`: how much of the box's leading tip is spent fading out, in
     ///   points; 0 for a note. See [`lead_coverage`].
     /// - `y`: how much of a lead is still standing, 0..1; 1 for a note.
@@ -151,7 +151,7 @@ fn vs_note_cut(
     @location(2) shear: f32,
     @location(3) rounding: f32,
     // Lead fade and lead alpha; span then ramp.
-    // Packed, since a vertex takes sixteen at most.
+    // Packed several to a slot.
     @location(4) lead: vec2<f32>,
     @location(8) core: vec4<f32>,
     @location(9) aura: vec4<f32>,

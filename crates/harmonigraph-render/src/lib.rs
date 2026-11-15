@@ -1254,9 +1254,8 @@ struct PaneBuffers {
     /// group naming it at group 3.
     ///
     /// A storage buffer rather than more rows beside the instances, for the
-    /// reason [`shadow::ShadowCaster`] gives: a node's instance rows and the box
-    /// beside them leave one of the sixteen attribute locations, where a caster
-    /// is four vec4s. Rebuilt with the buffer, which is the one thing the
+    /// reason [`shadow::ShadowCaster`] gives: one array that a node, a marker
+    /// and a name all index. Rebuilt with the buffer, which is the one thing the
     /// atlas's own bind groups must not be — hence a group of its own
     /// (`shadow::caster_layout`).
     caster_buffer: wgpu::Buffer,
