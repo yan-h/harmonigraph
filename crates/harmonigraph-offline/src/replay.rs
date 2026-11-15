@@ -73,17 +73,17 @@ pub struct Replay {
     /// Index of the first parameter change not yet applied.
     next_param: usize,
     next_configuration: usize,
-    /// The links the take's first configuration record carries, until the
-    /// first advance seeds the runtime with them. Frames before that record
-    /// (a lead-in, an early start) spell as the take was recorded rather than
-    /// with the fresh default; a take with no records keeps the default.
-    opening_tempered: Option<harmonigraph_core::Tempered>,
+    /// The take's first configuration record, until the first advance opens
+    /// the runtime with it. Frames before that record (a lead-in, an early
+    /// start) draw and spell under the tuning the take was recorded with
+    /// rather than the fresh default.
+    opening: Option<harmonigraph_core::configuration::ResolvedConfig>,
 }
 
 impl Replay {
     pub fn new(take: Take) -> Replay {
         Replay {
-            opening_tempered: take.configurations.first().map(|r| r.resolved().modes.tempered),
+            opening: take.configurations.first().map(|r| r.resolved()),
             take,
             params: ReplayParams::default(),
             next_note: 0,
@@ -101,10 +101,9 @@ impl Replay {
     /// been delivered yet. Call once per frame with a strictly increasing
     /// `now`; seeking backwards is not supported (use [`Replay::new`]).
     pub fn advance_to(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, now: f64) {
-        // The runtime's reducer restores from these links on its first
-        // observation, so they hold until the first record replaces them.
-        if let Some(tempered) = self.opening_tempered.take() {
-            runtime.tempered = tempered;
+        // Before the first record, the runtime draws what it will install.
+        if let Some(opening) = self.opening.take() {
+            runtime.open(opening);
         }
         while let Some(record) = self.take.configurations.get(self.next_configuration) {
             if record.t > now {
@@ -258,7 +257,6 @@ mod tests {
     #[test]
     fn accepted_off_after_gap_is_retained_without_a_held_baseline() {
         use harmonigraph_core::canonical::*;
-        use harmonigraph_core::confirmed::PitchProvenance;
         use harmonigraph_core::{NoteEvent, SourceId};
         use harmonigraph_take::CanonicalRecord;
         let source = SourceId(1);
@@ -361,7 +359,6 @@ mod tests {
     #[test]
     fn canonical_serialization_has_one_history_at_every_replay_cadence() {
         use harmonigraph_core::canonical::*;
-        use harmonigraph_core::confirmed::PitchProvenance;
         use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
         use harmonigraph_take::CanonicalRecord;
         let source = SourceId(1);
@@ -484,15 +481,17 @@ mod tests {
 
     #[test]
     fn resolved_configuration_round_trip_is_independent_of_replay_cadence() {
-        use harmonigraph_core::configuration::{ConfigEdit, ConfigMutation, ConfigReducer};
+        use harmonigraph_core::configuration::{
+            ConfigEdit, ConfigMutation, ConfigReducer, TuningAxis,
+        };
         use harmonigraph_take::{ConfigurationRecord, Record};
         let mut reducer = ConfigReducer::default();
         let mut encoded = opened();
         let mut expected = Vec::new();
         for (t, edit) in [
             (0.005, ConfigEdit { learning: Some(true), ..Default::default() }),
-            (0.013, ConfigEdit::axis(2, 390_000_000)),
-            (0.031, ConfigEdit::axis(1, 696_000_000)),
+            (0.013, ConfigEdit::axis(TuningAxis::Five, 390_000_000)),
+            (0.031, ConfigEdit::axis(TuningAxis::Three, 696_000_000)),
         ] {
             reducer.apply(ConfigMutation::Edit(edit));
             let config = reducer.resolved();
@@ -508,7 +507,7 @@ mod tests {
         for record in [
             Record::Note(on(0.0, 60)),
             Record::Note(on(0.0, 64)),
-            Record::Param(ParamRecord { t: 0.0, id: ParamKey::Three.id().into(), value: 710.0 }),
+            Record::Param(ParamRecord { t: 0.0, id: "tuning-three".into(), value: 710.0 }),
         ] {
             encoded.push('\n');
             encoded.push_str(&ron::to_string(&record).unwrap());
@@ -540,15 +539,17 @@ mod tests {
 
     /// An export can open before the take's first configuration record (a
     /// lead-in, an early `--start`), and lattice names are drawn with nothing
-    /// sounding. Those frames spell with the links the take was recorded with,
-    /// not the fresh default, so nothing respells at the first record.
+    /// sounding. Those frames draw and spell under the tuning and links the
+    /// take was recorded with, not the fresh default, so nothing moves at the
+    /// first record.
     #[test]
-    fn frames_before_the_first_configuration_record_use_its_links() {
+    fn frames_before_the_first_configuration_record_use_its_tuning_and_links() {
         use harmonigraph_core::configuration::ConfigReducer;
         use harmonigraph_take::{ConfigurationRecord, Record};
         let mut config = ConfigReducer::default().resolved();
         assert!(config.modes.tempered.syntonic, "the fresh default links Meantone");
-        config.modes.tempered.syntonic = false;
+        config.modes.tempered = harmonigraph_core::Tempered::default();
+        config.tuning = harmonigraph_core::Tuning::just();
         let mut encoded = opened();
         encoded.push('\n');
         encoded.push_str(
@@ -562,6 +563,7 @@ mod tests {
             harmonigraph_ui::begin_frame(&mut state, &replay.params, now);
             assert_eq!(state.runtime.replayed_configuration.is_some(), now >= 1.0);
             assert_eq!(state.runtime.tempered, config.modes.tempered, "at {now}");
+            assert_eq!(state.runtime.tuning, config.tuning, "at {now}");
         }
     }
 
@@ -673,9 +675,9 @@ mod tests {
     #[test]
     fn parameter_automation_is_applied_in_time_order() {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
-        let id = ParamKey::Fade.id().to_string();
+        let id = ParamKey::CameraYaw.id().to_string();
         // Two values a bar can actually reach, so what the test replays is a
-        // lane that could have been recorded (`ParamKey::Fade.range()`).
+        // lane that could have been recorded (`ParamKey::CameraYaw.range()`).
         let mut replay = Replay::new(take_with(
             vec![],
             vec![
@@ -684,10 +686,10 @@ mod tests {
             ],
         ));
         replay.advance_to(&mut state.runtime, 0.5);
-        assert_eq!(replay.params.get(ParamKey::Fade), 0.25);
+        assert_eq!(replay.params.get(ParamKey::CameraYaw), 0.25);
         assert!(!replay.is_spent(), "a change is still to come");
         replay.advance_to(&mut state.runtime, 1.0);
-        assert_eq!(replay.params.get(ParamKey::Fade), 0.75);
+        assert_eq!(replay.params.get(ParamKey::CameraYaw), 0.75);
     }
 
     #[test]
@@ -699,7 +701,7 @@ mod tests {
         ));
         replay.advance_to(&mut state.runtime, 1.0);
         assert!(replay.is_spent());
-        assert_eq!(replay.params.get(ParamKey::Fade), ParamKey::Fade.default_value());
+        assert_eq!(replay.params.get(ParamKey::CameraYaw), ParamKey::CameraYaw.default_value());
     }
 
     #[test]

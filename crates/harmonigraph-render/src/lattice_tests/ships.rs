@@ -767,11 +767,11 @@ fn a_released_node_ships_for_its_light_alone() {
             node.glow.level = 0.0;
         }
         let node = &mut scene.nodes[0];
-        node.glow = harmonigraph_scene::GlowStep { level: 0.5, light: None };
         if inked {
             node.presence_with_opacity = 1.0;
             node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
         }
+        node.glow = harmonigraph_scene::GlowStep { level: 0.5, light: node.glow_light() };
         scene
     };
     let cb = |inked: bool| {

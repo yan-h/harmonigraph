@@ -65,7 +65,7 @@ uniform_group! {
 }
 uniform_group! {
     /// Binding 4 in blit.wgsl: the strength of a bloom laid over a pane that
-    /// is not the lattice's — the roll's and the Spiral's dots' (`crate::glow`).
+    /// is not the lattice's — the roll's, the Spiral's dots included.
     struct AddUniforms {
         /// Strength in x; the rest is the 16 bytes a uniform block takes.
         strength: Float4,

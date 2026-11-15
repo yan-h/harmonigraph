@@ -192,12 +192,6 @@ impl MarkMotion {
         (if level > 0.0 { 1 << slot } else { 0 }, level, slot)
     }
 }
-/// The longest Fade a host can set: the top of `ParamKey::Fade`'s range, which
-/// this crate cannot see. It only bounds how long [`NodeMotion`] keeps an
-/// ended note's cursor; a longer fade still animates correctly, and at worst
-/// replays its horizon once when it is raised further.
-const FADE_MAX: f32 = 1.0;
-
 /// How far back a surface replays note edges.
 ///
 /// It has to exceed the longest animation `animation` can ask for, or a gap
@@ -740,7 +734,8 @@ impl NodeMotion {
             fade_out_delay: *crate::FADE_OUT_DELAY_RANGE.end(),
             ..NoteAnimationConfig::default()
         };
-        let retained = now - horizon.max(self::horizon(FADE_MAX, crate::MARK_DELAY_MAX, longest));
+        let retained =
+            now - horizon.max(self::horizon(crate::FADE_TIME_MAX, crate::MARK_DELAY_MAX, longest));
         let notes: Vec<_> = tracker
             .roll()
             .notes()
@@ -753,7 +748,7 @@ impl NodeMotion {
             let old = self.seen.get(&id);
             let end = note.end.map(f64::to_bits);
             // Completed old lifetimes cannot acquire more bends. Retain their
-            // cursor even outside today's horizon, up to the longest a host can
+            // cursor even outside today's horizon, up to the longest the bar can
             // set, so a longer fade setting cannot mistake them for newly
             // delivered notes.
             let tip = if note.end.is_some_and(|at| at < floor) && old.is_some_and(|v| v.end == end)
@@ -984,13 +979,6 @@ impl NodeMotion {
             node.melody_level = melody_level * fades[melody_slot];
             node.bass_slots = bass_slots;
             node.bass_level = bass_level * fades[bass_slot];
-            let color = |slot| {
-                let pitch = scene.octave_layout.slot_pitch(slot as i32, node.cents);
-                let t = crate::color::ramp_t(pitch, scene.darkest_pitch, scene.brightest_pitch);
-                crate::color::sample_lut(t as f32, &scene.pitch_lut, scene.pitch_lut_spacing)
-            };
-            node.melody_color = color(melody_slot);
-            node.bass_color = color(bass_slot);
             if scene.spectral.ring_draws() {
                 node.audio_ring =
                     fade.level(&scene.octave_layout, node.cents).max(node.presence_with_opacity);
@@ -1000,7 +988,8 @@ impl NodeMotion {
             // presence that waits on the slices (`NodeInstance::glow_target`).
             // Stateless snapshots draw it as it stands; the shell's glow pass
             // steps the level, and what the light is made of, toward it.
-            node.glow.level = node.glow_target();
+            let light = node.glow_light();
+            node.glow = crate::GlowStep { level: light.level(), light };
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -1039,9 +1028,8 @@ mod tests {
             ..on
         });
         tracker.handle_event(NoteEvent::off(0.06, SourceId::DIRECT, 0, 60));
-        let view = ViewConfig::default();
-        let frame = FrameParams { fade_time: 0.1, ..Default::default() };
-        let env = view.envelope(&frame);
+        let view = ViewConfig { fade_time: 0.1, ..ViewConfig::default() };
+        let env = view.envelope();
         tracker.prune(0.2, &env);
         assert_eq!(
             tracker.voices().count(),
@@ -1055,7 +1043,7 @@ mod tests {
         assert!(NodeMotion::light_classes(&tracker, &view, &env, 2.0).is_empty());
     }
 
-    use crate::{derive_scene, Camera, FrameParams, MIDDLE_C_SLOT};
+    use crate::{derive_scene, Camera, MIDDLE_C_SLOT};
     use harmonigraph_core::{NoteEvent, SourceId};
 
     fn draw(
@@ -1075,18 +1063,11 @@ mod tests {
         audio: bool,
         duration: f32,
     ) -> Scene {
-        let frame = FrameParams { fade_time: duration, ..Default::default() };
-        let env = view.envelope(&frame);
+        let view = &ViewConfig { fade_time: duration, ..view.clone() };
+        let env = view.envelope();
         tracker.prune(now, &env);
-        let mut scene = derive_scene(
-            tracker,
-            &Tuning::default(),
-            view,
-            &view.reach(),
-            &frame,
-            Camera::default(),
-            None,
-        );
+        let mut scene =
+            derive_scene(tracker, &Tuning::default(), view, &view.reach(), Camera::default(), None);
         let mut fade = RingFade::default();
         if audio {
             scene.spectral.inner = 0.1;
@@ -1581,7 +1562,7 @@ mod tests {
         tracker.handle_event(on(0.0, 60));
         let mut scene = draw(&mut motion, &mut tracker, &view, 1.1, false);
         scene.nodes.retain(|node| node.lattice_pos != LatticePos::ORIGIN);
-        let env = view.envelope(&FrameParams { fade_time: 1.0, ..Default::default() });
+        let env = ViewConfig { fade_time: 1.0, ..view.clone() }.envelope();
         motion.step(
             &mut scene,
             &tracker,
@@ -2128,8 +2109,8 @@ mod tests {
             view.mark_delay = 0.15;
             view.note_animation.fade_out_delay = 0.2;
             view.intensity.pressure.thickness = Some(0.5);
-            let frame = FrameParams { fade_time: 0.35, ..Default::default() };
-            let env = view.envelope(&frame);
+            view.fade_time = 0.35;
+            let env = view.envelope();
             let mut seed = 0x9e37_79b9_7f4a_7c15u64 + run as u64;
             let mut unit = move || {
                 seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
@@ -2215,7 +2196,6 @@ mod tests {
                         &Tuning::default(),
                         &view,
                         &view.reach(),
-                        &frame,
                         Camera::default(),
                         None,
                     );

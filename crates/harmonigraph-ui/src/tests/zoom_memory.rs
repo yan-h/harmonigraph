@@ -68,6 +68,16 @@ fn zoom_distances() -> Vec<f32> {
 
 fn played() -> SharedState {
     let mut state = fresh();
+    // The all-zero tuning this fixture's bounds were measured under: until
+    // #1756 its backend's tuning parameters all read 0. Under the fresh
+    // 12-TET tuning the same two octaves take the shipped Name size to the
+    // cap, and Name size 3 past it.
+    let mut zero = state.picture.runtime.resolved_configuration();
+    zero.tuning = harmonigraph_core::Tuning::from_axes([0; 5]);
+    state.picture.runtime.replayed_configuration = Some(zero);
+    // No arrival: every name stands whole from the first frame, so the
+    // warm-up draws the labels the sweeps then reuse.
+    state.picture.appearance.view.fade_time = 0.0;
     for key in 48..72 {
         state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.0,

@@ -17,6 +17,6 @@ Both bound types are checked against the same Rust declaration,
 and the prefix's zero offset, its size and its bloom offset are asserted explicitly.
 The roll's and the Spiral's bloom pass their strength in a separate `AddUniforms` buffer at binding 4.
 
-`GlowParams`, row capacity included, is zeroed together when reach or strength disables glow.
+`GlowParams` is zeroed together when reach or strength disables glow.
 Marker world units (`MarkerParams::world_unit`) and the shadow groups sit outside it,
 so marker shadows still draw with glow off.

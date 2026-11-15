@@ -391,16 +391,17 @@ fn the_heatmap_reads_its_own_color_level_scale() {
     }
 }
 
-/// "Clear everything" empties all four accumulations, not three of them.
+/// Clear display history empties the trail, the roll and the spectrogram; what
+/// it does to the glow, which keeps held halos, is
+/// `a_clear_keeps_held_halos_and_drops_released_ones`.
 ///
 /// Each is filled by a different path — the trail only once a released voice
 /// has faded past `prune`, the roll on the note-off, the spectrogram from
-/// analyzed audio, the glow from a lit surface's own step — so the
-/// interesting failure is one of the four quietly not being wired up.
-/// Asserting they are non-empty FIRST is what makes this a test of the clear
-/// rather than of four things that were already empty.
+/// analyzed audio — so the interesting failure is one of them quietly not
+/// being wired up. Asserting they are non-empty FIRST is what makes this a
+/// test of the clear rather than of things that were already empty.
 #[test]
-fn clearing_everything_empties_all_four_accumulations() {
+fn clearing_display_history_empties_the_trail_roll_and_spectrogram() {
     let mut state = fresh();
 
     // A note played and released; `prune` past its fade turns the released
@@ -427,22 +428,16 @@ fn clearing_everything_empties_all_four_accumulations() {
         .runtime
         .spectrum
         .push_history(0.0, &[1.0; harmonigraph_core::spectrum::SPECTRUM_BINS]);
-    // A surface's glow state, standing in for whatever a lit lattice pane
-    // be carrying by now — how it gets there is `glow_fade`'s
-    // own business and tested there.
-    state.picture.surfaces.glow_fade.insert(0, Default::default());
 
     assert!(!state.picture.runtime.tracker.history().is_empty(), "no trail to clear");
     assert!(!state.picture.runtime.tracker.roll().is_empty(), "no roll to clear");
     assert!(state.picture.runtime.spectrum.newest_column().is_some(), "no spectrogram to clear");
-    assert!(!state.picture.surfaces.glow_fade.is_empty(), "no glow to clear");
 
     state.picture.clear_accumulated();
 
     assert!(state.picture.runtime.tracker.history().is_empty(), "the lattice trail survived");
     assert!(state.picture.runtime.tracker.roll().is_empty(), "the piano roll survived");
     assert!(state.picture.runtime.spectrum.newest_column().is_none(), "the spectrogram survived");
-    assert!(state.picture.surfaces.glow_fade.is_empty(), "the lattice glow survived");
 }
 
 /// Two placements of one pane in a layout fold a grid each, keyed on the
@@ -627,36 +622,6 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     assert_eq!(spectrum.fold_measurements, 3);
     assert!(spectrum.folded(2.0, 50.0).is_none(), "expired audio must not reuse a Fold");
     assert_eq!(spectrum.fold_measurements, 3);
-}
-
-#[test]
-fn frame_observes_a_longer_fade_before_pruning() {
-    use harmonigraph_core::{NoteEvent, SourceId};
-    struct Fade(f32);
-    impl ParamBackend for Fade {
-        fn get(&self, key: params::ParamKey) -> f32 {
-            if key == params::ParamKey::Fade {
-                self.0
-            } else {
-                0.0
-            }
-        }
-        fn set(&self, _: params::ParamKey, _: f32) {}
-    }
-    let mut picture = super::probe::fresh_picture();
-    picture.runtime.frame_params.fade_time = 0.1;
-    picture.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.8));
-    picture.runtime.tracker.handle_event(NoteEvent::off(0.1, SourceId::DIRECT, 0, 60));
-    begin_frame(&mut picture, &Fade(2.0), 1.0);
-    assert_eq!(
-        picture.runtime.tracker.voices().count(),
-        1,
-        "new fade must preserve the released voice"
-    );
-    // Arrival lasts two seconds too; release follows it, so five seconds
-    // is beyond both halves of the new envelope.
-    begin_frame(&mut picture, &Fade(2.0), 5.0);
-    assert_eq!(picture.runtime.tracker.voices().count(), 0);
 }
 
 /// A run's columns are a function of its samples and the frame zero its

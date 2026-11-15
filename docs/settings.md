@@ -69,7 +69,7 @@ drag a bar, double-click it to reset, or Cmd-click it (Ctrl-click on Windows and
 | --- | --- |
 | Ring threshold | The upper handle sets the opening threshold; the lower sets hysteresis. The white marker shows the effective closing threshold, including the small floor that prevents silent rings from staying latched. A zero opening threshold deliberately shows silent rings. |
 | Drift | Point the vector along the direction of travel and drag outward for speed. Stars use a direction compass and keep their per-layer speeds. |
-| Note fade | Move the endpoint horizontally for duration and the midpoint vertically for curve shape. Duration remains host-automatable. |
+| Note fade | Move the endpoint horizontally for duration and the midpoint vertically for curve shape. |
 | Cabinet depth axis | Point the endpoint along the depth axis; its distance from the origin sets the depth-step scale. |
 | Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
 | Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
@@ -210,13 +210,10 @@ Click a labelled rail to restore its region at its remembered size.
 The spectrogram fold includes the piano roll and its note labels;
 the Analyzer's tab-bar arrow still folds the whole pane and remembers both region states.
 
-With the spectrum on the left or right,
-folding shrinks the editor window while keeping the other panes and the surviving region at their current sizes.
-Host size limits can force the open panes to share the remaining space.
-Top/bottom orientations and an Analyzer placed below the Lattice fold within the existing pane size.
+A region fold keeps its space inside the Analyzer, in every orientation and arrangement:
+the open region widens into it, and the editor window and the other panes keep their sizes.
+Folding the whole Analyzer is what gives its width back.
 Restoring both regions brings back their previous split at the original spectrum position.
-Changing the spectrum position while folded does not lose the width owed to the editor window.
-Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
 Hide tab bars hides their controls;
 press Tab to show them again.
@@ -230,6 +227,8 @@ each holds a look, edits land in the active slot,
 and an unused slot starts as a copy of the current look.
 **Save to** copies the current look into another slot.
 Camera movement, tuning and output stay as they are when a slot is chosen.
+Note fade and the Pitch color range are part of the look:
+a slot carries them, an edit to either undoes like any other, and an export from a chosen look uses that look's values.
 Each slot keeps its own undo history:
 Cmd-Z undoes the last edit and Cmd-Shift-Z redoes it (Ctrl on other systems).
 A drag, or one wheel or trackpad zoom of the Analyzer, is one edit.
@@ -299,11 +298,12 @@ Editing a linked interval independently recognizes or releases its link;
 editing its generators keeps it following them.
 Switching a link off keeps the currently displayed interval and stays off until a relevant tuning entry or sufficiently informative Learn result.
 Learn leaves relationships without enough evidence unchanged and preserves target intervals while retuning.
-The third and seventh parameter ranges include every interval their links can derive,
+The third and seventh ranges include every interval their links can derive,
 so switching off a link does not clamp the pitch to an older slider limit.
 There is no separate Auto setting.
 The links are tuning, not part of the look:
 slots and undo leave them alone.
+The axes and links are plugin settings, not host parameters (#1756): nothing automates or maps them, and Bitwig's own undo does not cover them.
 The plugin saves them with the project's tuning,
 and saved links and recorded configurations are restored as saved,
 without running recognition again.

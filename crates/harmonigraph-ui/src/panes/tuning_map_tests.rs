@@ -1,5 +1,6 @@
 use super::*;
 use crate::lattice_maps::{MapDocument, MapEdit, MapPlayback, MapView};
+use crate::params::ParamKey;
 use crate::tests::probe::{events_into, fresh_picture, press, themed};
 use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use std::cell::RefCell;

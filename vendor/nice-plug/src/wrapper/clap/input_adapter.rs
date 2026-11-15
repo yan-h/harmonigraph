@@ -100,7 +100,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         let (batch, original_len) = {
             let mut guard = self.owned_input.lock();
             let input = guard.as_mut().unwrap();
-            self.prepare_configuration_capture(input, boundary);
             let Some(batch) = input.batch.checked_add(1) else {
                 return InputStatus::Invalid;
             };
@@ -266,7 +265,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             }
             match event.value {
                 InputValue::Transport(value) => *transport = Some(value.event(time)),
-                InputValue::Parameter { id, value, modulation } if !self.configuration_owns(id) => {
+                InputValue::Parameter { id, value, modulation } => {
                     self.update_plain_value_by_hash(
                         id,
                         if modulation {

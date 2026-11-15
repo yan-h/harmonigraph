@@ -7,13 +7,24 @@
 //! names neither's type, and so are the host-owned tuning policy fields in
 //! `backend`, which never cross the editor's blob.
 //!
-//! The bar inventory stays MANUAL: new pages and conditional controls need a
-//! scenario and a visit expectation in `expected_labels`. Nothing but the code
-//! that draws the bars says which bars a page draws, and an expectation taken
-//! from that code would agree with it whatever it drew. SETTINGS_PANES only
-//! checks our page inventory, not future conditional coverage. Disabled bars
-//! are recorded, while hidden bars need an enabled scenario that makes them
-//! draw.
+//! The bars are FOUND rather than listed, and so is which input each one reads
+//! (#1752): every input path is observed. Each numeric path of the saved blob
+//! is nudged alone (a float to the edges below, an integer by one) and every
+//! scenario drawn through the real load door; the host's tuning parameters and
+//! adaptive policy fields are nudged the same way through the test backend.
+//! Three claims follow, and none needs a list of what a page draws:
+//!
+//! - every path moves some bar's raw value or changes which bars draw, unless
+//!   [`EXEMPT`] names it with its reason;
+//! - every bar some scenario draws is moved by some path;
+//! - every bar found fits its own range after a poisoned load, and sits at its
+//!   own reset target on a fresh one.
+//!
+//! A conditional bar no scenario reaches leaves its path unseen, which is what
+//! a hand-kept inventory used to catch by failing on every intended change
+//! (#1714). Disabled bars are recorded; hidden ones need a scenario that draws
+//! them. The camera's host parameters reach the pages through the appearance's
+//! camera, whose blob paths are nudged like any other.
 //! Gradients, StackBar, LayerStrip, choices, text fields, RangeBar
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
@@ -21,10 +32,11 @@
 use super::harness::{set_optional_sections, SETTINGS_PANES};
 use super::persist::{nested_pairs, nested_scalars};
 use super::probe::{fresh, themed};
-use crate::widgets::range_probe::collect;
+use crate::widgets::range_probe::{collect, Visit};
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
 use harmonigraph_scene::{Projection, SEVENS_LAYER_LIMIT};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Edge {
@@ -43,8 +55,8 @@ enum Edge {
 }
 
 /// The saved blob of a fresh state with every dialled value poisoned to the
-/// edge: each float under `appearance` and `prefs` bar the [`UNPOISONED`]
-/// ones, including the reach/fade pairs whose bar displays a subtraction and
+/// edge: each float under `appearance` and `prefs` bar the
+/// [`Held::Unpoisoned`] ones, including the reach/fade pairs whose bar displays a subtraction and
 /// the owners that have no bar at all. Values are written BEFORE the load door,
 /// never clamped by a fixture beside it.
 ///
@@ -79,14 +91,10 @@ fn poisoned(edge: Edge) -> String {
     a.view.center_sevens = n;
     a.view.octave_count = if matches!(edge, Edge::Low) { 0 } else { u32::MAX };
     let mut blob = saved.save_persist();
-    let exempt: Vec<&str> =
-        UNPOISONED.iter().flat_map(|(paths, _)| paths.iter().copied()).collect();
     let mut floats: Vec<_> = nested_scalars(&blob)
         .into_iter()
         .filter(|(path, range)| {
-            (path.starts_with("appearance.") || path.starts_with("prefs."))
-                && !exempt.contains(&path.as_str())
-                && is_float(&blob[range.clone()])
+            dialled(path) && !unpoisoned(path) && is_float(&blob[range.clone()])
         })
         .map(|(_, range)| range)
         .collect();
@@ -117,35 +125,27 @@ fn loaded(edge: Edge) -> SharedState {
     let mut normalized = state.picture.appearance.view.clone();
     normalized.sanitize();
     assert_eq!(state.picture.appearance.view, normalized);
-    // Spiral and take-render settings share the load boundary but, bar the
-    // Tail, have no recorded bar. Check their own normalization directly so adding
-    // zero-visit panes to the matrix does not pretend the bar guard covers them.
-    assert!((1.0..=8.0).contains(&state.workspace.interaction.prefs.spiral.zoom));
-    assert!(state.workspace.interaction.prefs.spiral.look.length() <= 1.0);
-    assert!(
-        (STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1).contains(&state.picture.appearance.render.stop_bar)
-    );
-    assert!((TAIL_RANGE.0..=TAIL_RANGE.1).contains(&state.picture.appearance.render.tail));
-    assert!((0.05..=0.95).contains(&state.picture.appearance.render.frame.split));
-    // The zoom, for the same reason: no bar, but `Camera::sanitize` is the one
-    // door holding it to the range `zoom`/`zoom_by` hold a drag to.
-    let camera = &state.picture.appearance.camera;
-    assert!(
-        (harmonigraph_scene::Camera::MIN_DISTANCE..=harmonigraph_scene::Camera::MAX_DISTANCE)
-            .contains(&camera.distance),
-        "a poisoned zoom loaded at {}",
-        camera.distance,
-    );
-    // The spectrum's own two: a choice spelled as a float, which must come
-    // back as one of the settings actually offered rather than merely inside
-    // their span, and the divider's split.
+    // The floats no bar shows, held to the range [`EXEMPT`] gives each.
+    let saved = state.save_persist();
+    for (path, range) in nested_scalars(&saved) {
+        if let Some((_, Held::Range(low, high), _)) = exemption(&path) {
+            // In the f32 every one of these is stored in, so an edge reads as
+            // the edge it was clamped to.
+            let value: f32 = saved[range].parse().expect("an exempt range holds a number");
+            let (low, high) = (*low as f32, *high as f32);
+            assert!((low..=high).contains(&value), "{edge:?}: {path} loaded at {value}");
+        }
+    }
+    // The two the ranges cannot say: a choice spelled as a float, which must
+    // come back as one of the settings actually offered rather than merely
+    // inside their span, and a direction held to the unit disc.
     let spectrum = &state.picture.appearance.spectrum;
     assert!(
         TILT_STEPS.contains(&spectrum.tilt),
         "a poisoned tilt loaded at {}, which is no step the control offers",
         spectrum.tilt,
     );
-    assert!((0.0..=1.0).contains(&spectrum.roll_fraction));
+    assert!(state.workspace.interaction.prefs.spiral.look.length() <= 1.0);
     // The sevens stack is a LayerStrip rather than a pair of bars, so it left
     // the recorded set when the two merged. Its three integers still cross this
     // door, and the invariant is the strip's own: both ends on the axis, home
@@ -171,14 +171,17 @@ fn loaded(edge: Edge) -> SharedState {
     state
 }
 
+/// The host's side of a draw: its camera parameters, and the configuration
+/// the tuning axes and the adaptive policy bars read.
 struct Backend {
     config: params::ConfigurationView,
+    host: [f32; params::ParamKey::ALL.len()],
 }
 impl ParamBackend for Backend {
     // Host-owned automatable params are not in UiPersist or normalized by UI.
-    // Use valid host defaults here; this does not test the host's restore code.
+    // Valid host values here; this does not test the host's restore code.
     fn get(&self, key: params::ParamKey) -> f32 {
-        key.default_value()
+        self.host[key_index(key)]
     }
     fn set(&self, _: params::ParamKey, _: f32) {
         panic!("drawing wrote a host parameter");
@@ -186,42 +189,71 @@ impl ParamBackend for Backend {
     fn configuration(&self) -> Option<params::ConfigurationView> {
         Some(self.config)
     }
-    // Adaptive, so the inventory reaches the adaptive policy's bars.
+    // Adaptive, so the pages draw the adaptive policy's bars.
     fn lattice_maps(&self) -> Option<crate::lattice_maps::MapView> {
         Some(super::harness::engine_view(harmonigraph_core::lattice_map::TuningEngine::Adaptive))
     }
 }
-fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
-    let mut policy = PolicyConfig::default();
-    // `Fresh` leaves the host's own defaults standing, for the reason `poison`
-    // leaves the appearance standing: what it asks is whether a first-ever
-    // load reads out values its bars can show.
-    if edge != Edge::Fresh {
-        let high = edge == Edge::High;
-        macro_rules! poison { ($($field:ident),+ $(,)?) => { $( policy.$field = if high { std::primitive::u16::MAX as _ } else { 0 }; )+ }; }
-        poison!(pitch_flexibility, half_life_ms, register);
-        policy.radius = if high { u8::MAX } else { 0 };
-        policy.tolerance = if high { u32::MAX } else { 0 };
-        policy.silence_ms = if high { u32::MAX } else { 0 };
-        policy.keyboard = [if high { i32::MAX } else { i32::MIN }; 3];
-    }
+
+fn key_index(key: params::ParamKey) -> usize {
+    params::ParamKey::ALL.iter().position(|&k| k == key).unwrap()
+}
+
+/// Each adaptive policy field the host owns, and how it is pushed to its low
+/// or high edge: all at once for the poison, one at a time for the paths.
+type PolicyEdge = (&'static str, fn(&mut PolicyConfig, bool));
+const POLICY: &[PolicyEdge] = &[
+    ("pitch_flexibility", |p, high| p.pitch_flexibility = if high { u16::MAX } else { 0 }),
+    ("half_life_ms", |p, high| p.half_life_ms = if high { u16::MAX } else { 0 }),
+    ("register", |p, high| p.register = if high { u16::MAX } else { 0 }),
+    ("radius", |p, high| p.radius = if high { u8::MAX } else { 0 }),
+    ("tolerance", |p, high| p.tolerance = if high { u32::MAX } else { 0 }),
+    ("silence_ms", |p, high| p.silence_ms = if high { u32::MAX } else { 0 }),
+    ("keyboard[0]", |p, high| p.keyboard[0] = if high { i32::MAX } else { i32::MIN }),
+    ("keyboard[1]", |p, high| p.keyboard[1] = if high { i32::MAX } else { i32::MIN }),
+    ("keyboard[2]", |p, high| p.keyboard[2] = if high { i32::MAX } else { i32::MIN }),
+];
+
+/// What a host holds before anything is nudged: every parameter at its default.
+fn host_defaults() -> [f32; params::ParamKey::ALL.len()] {
+    params::ParamKey::ALL.map(|key| key.default_value())
+}
+
+/// A backend whose configuration holds the raw tuning `raw`.
+fn backend_with(
+    policy: PolicyConfig,
+    raw: harmonigraph_core::Tuning,
+    meantone: bool,
+    marvel: bool,
+) -> Backend {
+    let host = host_defaults();
     let mut reducer = ConfigReducer::default();
     let modes = TuningModes {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
         learning: false,
     };
-    assert!(reducer.apply(ConfigMutation::Restore {
-        raw: harmonigraph_core::Tuning::default(),
-        modes,
-        policy
-    }));
+    reducer.apply(ConfigMutation::Restore { raw, modes, policy });
     Backend {
         config: params::ConfigurationView {
             resolved: reducer.resolved(),
             status: 0,
             pending: false,
         },
+        host,
     }
+}
+
+fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
+    let mut policy = PolicyConfig::default();
+    // `Fresh` leaves the host's own defaults standing, for the reason `poison`
+    // leaves the appearance standing: what it asks is whether a first-ever
+    // load reads out values its bars can show.
+    if edge != Edge::Fresh {
+        for (_, push) in POLICY {
+            push(&mut policy, edge == Edge::High);
+        }
+    }
+    backend_with(policy, harmonigraph_core::Tuning::default(), meantone, marvel)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -308,279 +340,63 @@ fn scenarios() -> Vec<Scenario> {
     cases
 }
 
-/// Named inventories retain duplicate labels (two shadow groups, two mapping
-/// targets). A new or missing control fails with its label rather than a count.
-fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
-    use harmonigraph_scene::{CloudStyle, LatticeMaterial};
-    use panes::Tab;
-    const WATERCOLOR: &[&str] = &[
-        "Patch size",
-        "Edge feathering",
-        "Shape warp",
-        "Refraction",
-        "Random brightness",
-        "Fine layer mix",
-    ];
-    const SCALES: &[&str] = &[
-        "Cell size",
-        "Size variation",
-        "Edge softness",
-        "Irregularity",
-        "Scale shape",
-        "Squareness",
-        "Tilt",
-    ];
-    let mut labels = Vec::new();
-    match scenario.pane {
-        Tab::Tuning => {
-            labels.extend([
-                "C pitch offset",
-                "Perfect fifth",
-                "Major third",
-                "Harmonic seventh",
-                "Note match tolerance",
-                "Pitch flexibility",
-                "Search radius",
-                "Fifth",
-                "Third",
-                "Seventh",
-                "Half-life",
-                "Weight per octave",
-                "Same-note tolerance",
-                "Silence reset",
-            ]);
-        }
-        Tab::Mappings => {
-            labels.extend([
-                "Pitch color range",
-                "Level color range",
-                "Opacity base",
-                "Thickness base",
-                "Thickness max",
-            ]);
-            if scenario.enabled {
-                for _ in 0..2 {
-                    labels.extend([
-                        "Velocity weight",
-                        "Gain weight",
-                        "Pressure weight",
-                        "Timbre weight",
-                    ]);
-                }
+/// The bars `scenario` draws from a loaded state, as they read on its first
+/// frame.
+fn draw(mut state: SharedState, scenario: Scenario, backend: &Backend) -> Vec<Visit> {
+    state.picture.runtime.observe_configuration(backend);
+    assert_eq!(state.picture.runtime.tempered.syntonic, scenario.meantone);
+    assert_eq!(state.picture.runtime.tempered.septimal_kleisma, scenario.marvel);
+    set_optional_sections(&mut state, scenario.enabled);
+    let a = &mut state.picture.appearance;
+    a.camera.projection = scenario.projection;
+    if scenario.pane == panes::Tab::Mappings {
+        for source in [
+            &mut a.view.intensity.velocity,
+            &mut a.view.intensity.gain,
+            &mut a.view.intensity.pressure,
+            &mut a.view.intensity.timbre,
+        ] {
+            for target in harmonigraph_scene::IntensityTarget::ALL {
+                let weight = source.weight_mut(target);
+                *weight = scenario.enabled.then_some(weight.unwrap_or(1.0));
             }
         }
-        Tab::LatticeSettings => {
-            labels.extend([
-                "Size per depth step",
-                "Gap",
-                "Silent slice brightness",
-                "Octaves",
-                "Center pitch",
-                "Note fade",
-                "Fade curve",
-                "Mark delay",
-                "Stagger spread",
-                "Fade-out delay",
-                "Starting offset & scale",
-                "Label size",
-                "Idle label/cross brightness",
-                "Cross length",
-                "Note bloom",
-                "Background glow reach",
-                "Background glow gain",
-                "Overlap buildup",
-                "Falloff curve",
-                "Color smoothing",
-                "Light on notes",
-                "Background glow attack",
-                "Background glow release",
-                "Breathing depth",
-                "Breathing speed",
-                "Pattern contrast",
-                "Pattern size",
-                "Pattern speed",
-            ]);
-            labels.extend(match scenario.projection {
-                Projection::Cabinet => ["Depth angle", "Depth step scale"],
-                Projection::Perspective | Projection::Orthographic => {
-                    ["Horizontal angle", "Vertical angle"]
-                }
-            });
-            if scenario.enabled {
-                labels.extend([
-                    "Ring threshold",
-                    "Threshold hysteresis",
-                    "Ring attack",
-                    "Ring release",
-                    "Pitch tolerance",
-                    "Pitch span",
-                ]);
-            }
-            if scenario.material != LatticeMaterial::None {
-                labels.extend(["Material amount", "Drift direction"]);
-                if scenario.material != LatticeMaterial::Stars {
-                    labels.push("Drift speed");
-                }
-            }
-            match scenario.material {
-                LatticeMaterial::None | LatticeMaterial::Stars => (),
-                LatticeMaterial::Watercolor => labels.extend_from_slice(WATERCOLOR),
-                LatticeMaterial::VelvetScales => labels.extend_from_slice(SCALES),
-            }
-        }
-        Tab::AnalyzerSettings => {
-            labels.extend([
-                "Frequency range",
-                "Axis label scale",
-                "History duration",
-                "Spectrum outline intensity",
-                "Spectrum level range",
-                "Live attack",
-                "Live release",
-                "Spiral bloom",
-                "Backdrop cut",
-                "Cut reach",
-                "Cut shape",
-                "Fill lightness",
-                "Tint fade",
-            ]);
-            if scenario.enabled {
-                labels.extend([
-                    "Pitch softness",
-                    "Time softness",
-                    "Texture mix",
-                    "Color pickup",
-                    "Color release",
-                    "Ribbon width",
-                    "Note bloom",
-                    "Held-note extension",
-                    "Extension release",
-                    "Label scale",
-                    "Drift direction",
-                ]);
-                if scenario.style != CloudStyle::Stars {
-                    labels.push("Drift speed");
-                }
-                match scenario.style {
-                    CloudStyle::Watercolor => {
-                        labels.extend_from_slice(WATERCOLOR);
-                        labels.extend(["Edge pooling", "Pooling width", "Pooling softness"]);
-                    }
-                    CloudStyle::VelvetScales => labels.extend_from_slice(SCALES),
-                    CloudStyle::Stars => (),
-                }
-            }
-        }
-        Tab::System => labels.extend([
-            "Lattice resolution",
-            "Spectrogram time step",
-            "Interface scale",
-            "Interface lightness",
-            "Tint hue",
-            "Tint amount",
-            "Accent hue",
-            "Accent saturation",
-        ]),
-        // Stop at bar stays a drag value (its range runs to 100,000), and
-        // draws only under its trigger.
-        Tab::Video => labels.push("Tail"),
-        Tab::Console => (),
-        _ => panic!("add the new settings page's bar inventory"),
     }
-    if scenario.pane == Tab::LatticeSettings {
-        // The ring and mark shadows' own bar, beside their Darkness.
-        labels.push("Hide behind");
-    }
-    // Two shadow groups on the lattice's page, and the labels' alone on the
-    // analyzer's, whose notes wear the Note surround instead.
-    let shadow_groups = match scenario.pane {
-        Tab::LatticeSettings => 2,
-        Tab::AnalyzerSettings => 1,
-        _ => 0,
-    };
-    for _ in 0..shadow_groups {
-        labels.extend(["Shadow width", "Shadow darkness", "Shadow spread"]);
-    }
-    let stars = (scenario.pane == Tab::LatticeSettings
-        && scenario.material == LatticeMaterial::Stars)
-        || (scenario.pane == Tab::AnalyzerSettings
-            && scenario.enabled
-            && scenario.style == CloudStyle::Stars);
-    if stars {
-        labels.extend([
-            "Stars resolution",
-            "Star layers",
-            // The per-layer editor's bar, for the property it opens on.
-            "Star size",
-            "Glow falloff",
-            "Brightness variation",
-            "Cover",
-            "Size variation",
-            "Position variation",
-            "Star lifetime",
-            "Twinkle",
-        ]);
-    }
-    labels
+    a.spectrum.atmosphere.cloud_style = scenario.style;
+    a.view.atmosphere.material_style = scenario.material;
+    let mut tab = scenario.pane;
+    let ctx = themed();
+    // Observe the first load frame once, before any discarded egui pass
+    // could mutate a value and make a later pass look normalized.
+    ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::new(1).unwrap());
+    ctx.memory_mut(|memory| memory.set_everything_is_visible(scenario.expanded));
+    collect(|| {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 4000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut viewer = panes::Viewer {
+                    state: &mut state.picture,
+                    interaction: &mut state.workspace.interaction,
+                    params: backend,
+                    now: 0.0,
+                };
+                viewer.ui(ui, &mut tab);
+            },
+        );
+    })
 }
 
 fn check(edge: Edge) {
     let mut violations = Vec::new();
     for scenario in scenarios() {
-        let mut state = loaded(edge);
         let backend = backend(edge, scenario.meantone, scenario.marvel);
-        state.picture.runtime.observe_configuration(&backend);
-        assert_eq!(state.picture.runtime.tempered.syntonic, scenario.meantone);
-        assert_eq!(state.picture.runtime.tempered.septimal_kleisma, scenario.marvel);
-        set_optional_sections(&mut state, scenario.enabled);
-        let a = &mut state.picture.appearance;
-        a.camera.projection = scenario.projection;
-        if scenario.pane == panes::Tab::Mappings {
-            for source in [
-                &mut a.view.intensity.velocity,
-                &mut a.view.intensity.gain,
-                &mut a.view.intensity.pressure,
-                &mut a.view.intensity.timbre,
-            ] {
-                for target in harmonigraph_scene::IntensityTarget::ALL {
-                    let weight = source.weight_mut(target);
-                    *weight = scenario.enabled.then_some(weight.unwrap_or(1.0));
-                }
-            }
-        }
-        a.spectrum.atmosphere.cloud_style = scenario.style;
-        a.view.atmosphere.material_style = scenario.material;
-        let mut tab = scenario.pane;
-        let ctx = themed();
-        // Observe the first load frame once, before any discarded egui pass
-        // could mutate a value and make a later pass look normalized.
-        ctx.options_mut(|options| options.max_passes = std::num::NonZeroUsize::new(1).unwrap());
-        ctx.memory_mut(|memory| memory.set_everything_is_visible(scenario.expanded));
-        let visits = collect(|| {
-            let _ = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(600.0, 4000.0),
-                    )),
-                    ..Default::default()
-                },
-                |ui| {
-                    let mut viewer = panes::Viewer {
-                        state: &mut state.picture,
-                        interaction: &mut state.workspace.interaction,
-                        params: &backend,
-                        now: 0.0,
-                    };
-                    viewer.ui(ui, &mut tab);
-                },
-            );
-        });
-        let mut actual: Vec<_> = visits.iter().map(|visit| visit.label.as_str()).collect();
-        let mut expected = expected_labels(scenario);
-        actual.sort_unstable();
-        expected.sort_unstable();
-        assert_eq!(actual, expected, "{edge:?} {scenario:?}: bar inventory changed");
+        let visits = draw(loaded(edge), scenario, &backend);
         for visit in visits {
             for value in &visit.values {
                 if !visit.range.contains(value) {
@@ -712,49 +528,346 @@ fn unpoisoned_floats(
     }
 }
 
-/// The floats [`poisoned`] leaves at their fresh value on purpose, as exact
-/// paths grouped under one reason each. A new float beside
-/// them is not covered by its neighbours: the walk poisons it.
-const UNPOISONED: &[(&[&str], &str)] = &[
+/// What holds an input path no bar reads, in place of the bar.
+#[derive(Debug)]
+enum Held {
+    /// Left at its fresh value by [`poisoned`]: no range to hold it to.
+    Unpoisoned,
+    /// No bar; a poisoned load must land inside this range ([`loaded`]).
+    Range(f64, f64),
+    /// No bar this guard records, and whatever does hold it is named in the
+    /// reason.
+    Elsewhere,
+}
+
+/// The input paths no bar reads, grouped by owner, each group under one
+/// reason. An entry names a path or a prefix of paths (`a.b` covers `a.b.c`
+/// and `a.b[2]`). A new path beside them is not covered by its neighbours:
+/// unless it falls under a prefix, it is nudged and must move a bar.
+const EXEMPT: &[(&[&str], Held, &str)] = &[
     (
-        &[
-            "appearance.camera.target[0]",
-            "appearance.camera.target[1]",
-            "appearance.camera.target[2]",
-        ],
+        &["appearance.camera.target"],
+        Held::Unpoisoned,
         "where the orbit looks, set by panning and framing: no bar and no range, so \
          its load repair only refuses a non-finite one",
     ),
     (
         &["prefs.perf_pos"],
+        Held::Unpoisoned,
         "where the performance overlay sits, set by dragging it and empty until then: \
          no bar and no range, so its load repair only drops a non-finite one",
     ),
     (
-        &[
-            "appearance.view.pitch_gradient.hue_start",
-            "appearance.view.pitch_gradient.hue_span",
-            "appearance.view.pitch_gradient.lightness",
-            "appearance.view.pitch_gradient.lightness_ramp",
-            "appearance.view.pitch_gradient.chroma",
-            "appearance.view.pitch_gradient.chroma_ramp",
-            "appearance.view.pitch_gradient.bend.at",
-            "appearance.view.pitch_gradient.bend.share",
-            "appearance.spectrum.spectrogram_gradient.hue_start",
-            "appearance.spectrum.spectrogram_gradient.hue_span",
-            "appearance.spectrum.spectrogram_gradient.lightness",
-            "appearance.spectrum.spectrogram_gradient.lightness_ramp",
-            "appearance.spectrum.spectrogram_gradient.chroma",
-            "appearance.spectrum.spectrogram_gradient.chroma_ramp",
-            "appearance.spectrum.spectrogram_gradient.bend.at",
-            "appearance.spectrum.spectrogram_gradient.bend.share",
-        ],
+        &["appearance.view.pitch_gradient", "appearance.spectrum.spectrogram_gradient"],
+        Held::Unpoisoned,
         "gradients are outside this guard (module header)",
+    ),
+    (
+        &["appearance.camera.distance"],
+        Held::Range(
+            harmonigraph_scene::Camera::MIN_DISTANCE as f64,
+            harmonigraph_scene::Camera::MAX_DISTANCE as f64,
+        ),
+        "the zoom: set by the wheel and pinch, which `Camera::sanitize` and \
+         `zoom_by` hold to one range",
+    ),
+    (
+        &["appearance.spectrum.roll_fraction"],
+        Held::Range(0.0, 1.0),
+        "the Analyzer's divider, set by dragging it",
+    ),
+    (
+        &["appearance.render.stop_bar"],
+        Held::Range(STOP_BAR_RANGE.0, STOP_BAR_RANGE.1),
+        "a drag value rather than a bar: its range runs to 100,000",
+    ),
+    (
+        &["appearance.render.frame.split"],
+        Held::Range(RenderFrame::SPLIT_MIN as f64, RenderFrame::SPLIT_MAX as f64),
+        "the video frame's lattice/spectral split, set by the Video page's divider",
+    ),
+    (
+        &["prefs.spiral.zoom"],
+        Held::Range(1.0, 8.0),
+        "the Spiral's framing, set on the picture itself",
+    ),
+    (
+        &["appearance.spectrum.tilt", "prefs.spiral.look"],
+        Held::Elsewhere,
+        "a choice spelled as a float and a direction: `loaded` checks each against \
+         its own steps and the unit disc",
+    ),
+    (
+        &[
+            "appearance.view.extent_threes",
+            "appearance.view.extent_fives",
+            "appearance.view.center_threes",
+            "appearance.view.center_fives",
+            "appearance.view.min_sevens",
+            "appearance.view.max_sevens",
+            "appearance.view.center_sevens",
+        ],
+        Held::Elsewhere,
+        "the drawn window and the sevens LayerStrip: integers no bar shows, the \
+         strip's invariant `loaded`'s own check",
+    ),
+    (
+        &[
+            "appearance.view.band_width",
+            "appearance.view.ring_inner",
+            "appearance.view.spectral_ring_width",
+            "appearance.view.mark_thickness",
+        ],
+        Held::Elsewhere,
+        "the layer widths: the Layers StackBar, outside this guard",
+    ),
+    (
+        &[
+            "appearance.view.atmosphere.stars.star_spacing_ratio",
+            "appearance.view.atmosphere.stars.star_speed",
+            "appearance.view.atmosphere.stars.star_solid",
+            "appearance.spectrum.atmosphere.stars.star_spacing_ratio",
+            "appearance.spectrum.atmosphere.stars.star_speed",
+            "appearance.spectrum.atmosphere.stars.star_solid",
+            "appearance.view.atmosphere.stars.star_size[4]",
+        ],
+        Held::Elsewhere,
+        "the Stars editor's Per layer plot shows one property at a time, chosen in \
+         egui's memory, and opens on Size; and a layer past the lattice's four fresh \
+         layers has no handle",
+    ),
+    (
+        &[
+            "appearance.render.frame.aspect_w",
+            "appearance.render.frame.aspect_h",
+            "appearance.render.short_edge",
+        ],
+        Held::Elsewhere,
+        "the Video page's Aspect and Output size choices",
+    ),
+    (
+        &["appearance.version"],
+        Held::Elsewhere,
+        "the document's version: any other value is refused at the door",
     ),
 ];
 
+/// Whether `entry` names `path`: the path itself, or a prefix of it at a field
+/// or an index.
+fn covers(entry: &str, path: &str) -> bool {
+    path.strip_prefix(entry).is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[']))
+}
+
+fn exemption(path: &str) -> Option<&'static (&'static [&'static str], Held, &'static str)> {
+    EXEMPT.iter().find(|(entries, _, _)| entries.iter().any(|entry| covers(entry, path)))
+}
+
+fn unpoisoned(path: &str) -> bool {
+    matches!(exemption(path), Some((_, Held::Unpoisoned, _)))
+}
+
+/// The two owners of the editor blob whose values the settings pages show.
+fn dialled(path: &str) -> bool {
+    path.starts_with("appearance.") || path.starts_with("prefs.")
+}
+
+/// One input a bar may read, as a name and the copy of the fresh inputs with
+/// that one nudged to its low or high edge: the blob for a saved path, the
+/// backend for a host's.
+struct Input {
+    name: String,
+    nudge: Box<dyn Fn(bool, Scenario) -> (String, Backend) + Sync>,
+}
+
+/// Every input path: the blob's numeric scalars under [`dialled`] owners
+/// bar the [`Held::Unpoisoned`] ones, the host's tuning parameters and the
+/// adaptive policy fields.
+fn inputs(blob: &str) -> Vec<Input> {
+    let mut inputs = Vec::new();
+    for (path, range) in nested_scalars(blob) {
+        let text = &blob[range.clone()];
+        if !dialled(&path) || unpoisoned(&path) || text.parse::<f64>().is_err() {
+            continue;
+        }
+        // The #1714 edges for a float; one step either way for an integer,
+        // whose type the text does not say and whose edge it does not need.
+        let (low, high) = if is_float(text) {
+            ("-1000000.0".to_owned(), "1000000.0".to_owned())
+        } else {
+            let n: i64 = text.parse().unwrap();
+            ((n - 1).to_string(), (n + 1).to_string())
+        };
+        let blob = blob.to_owned();
+        inputs.push(Input {
+            name: path,
+            nudge: Box::new(move |high_edge, scenario| {
+                let mut nudged = blob.clone();
+                nudged.replace_range(range.clone(), if high_edge { &high } else { &low });
+                (nudged, backend(Edge::Fresh, scenario.meantone, scenario.marvel))
+            }),
+        });
+    }
+    for axis in harmonigraph_core::configuration::TuningAxis::ALL {
+        let blob = blob.to_owned();
+        inputs.push(Input {
+            name: format!("tuning.{axis:?}"),
+            nudge: Box::new(move |high, scenario| {
+                let mut axes = harmonigraph_core::Tuning::default().axes();
+                let range = axis.range();
+                let edge = if high { *range.end() } else { *range.start() };
+                axes[axis.index()] = harmonigraph_core::tuning::microcents(edge);
+                let raw = harmonigraph_core::Tuning::from_axes(axes);
+                let backend =
+                    backend_with(PolicyConfig::default(), raw, scenario.meantone, scenario.marvel);
+                (blob.clone(), backend)
+            }),
+        });
+    }
+    for &(field, push) in POLICY {
+        let blob = blob.to_owned();
+        inputs.push(Input {
+            name: format!("host.policy.{field}"),
+            nudge: Box::new(move |high, scenario| {
+                let mut policy = PolicyConfig::default();
+                push(&mut policy, high);
+                let backend =
+                    backend_with(policy, Default::default(), scenario.meantone, scenario.marvel);
+                (blob.clone(), backend)
+            }),
+        });
+    }
+    inputs
+}
+
+/// Each bar a draw recorded, by page, label and which of that label's bars on
+/// the page it is, with the raw values it read.
+fn bars(scenario: Scenario, visits: &[Visit]) -> BTreeMap<String, Vec<f32>> {
+    let mut seen = BTreeMap::<&str, usize>::new();
+    visits
+        .iter()
+        .map(|visit| {
+            let n = seen.entry(&visit.label).or_default();
+            *n += 1;
+            (format!("{:?}: {} #{n}", scenario.pane, visit.label), visit.values.clone())
+        })
+        .collect()
+}
+
+/// The bars `scenario` draws from `blob` under `backend`, or `None` when the
+/// door refuses the blob.
+fn bars_from(
+    blob: &str,
+    scenario: Scenario,
+    backend: &Backend,
+) -> Option<BTreeMap<String, Vec<f32>>> {
+    let mut state = fresh();
+    state.install_document(blob).then(|| bars(scenario, &draw(state, scenario, backend)))
+}
+
+/// Every input path reaches some bar, and every bar is reached by some input
+/// path: the map is found by nudging each input alone and drawing every
+/// scenario (module header).
+///
+/// The fresh state's intensity weights are filled first, so that the Mappings
+/// page's weight bars read blob values rather than the 1.0 its enabled
+/// scenario fills an empty one with.
+#[test]
+fn every_input_path_moves_a_bar_and_every_bar_is_moved() {
+    let started = std::time::Instant::now();
+    let mut state = fresh();
+    let view = &mut state.picture.appearance.view;
+    for source in [
+        &mut view.intensity.velocity,
+        &mut view.intensity.gain,
+        &mut view.intensity.pressure,
+        &mut view.intensity.timbre,
+    ] {
+        for target in harmonigraph_scene::IntensityTarget::ALL {
+            *source.weight_mut(target) = Some(1.0);
+        }
+    }
+    let blob = state.save_persist();
+    let scenarios = scenarios();
+    let base: Vec<_> = scenarios
+        .iter()
+        .map(|&s| bars_from(&blob, s, &backend(Edge::Fresh, s.meantone, s.marvel)).unwrap())
+        .collect();
+    let inputs = inputs(&blob);
+    let draws = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    // Each input on its own, one thread per share of them: a draw is a whole
+    // settings page through the load door, and there are a few thousand.
+    let observed: Vec<(Vec<String>, BTreeSet<String>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = inputs
+            .chunks(inputs.len().div_ceil(threads))
+            .map(|share| {
+                let (scenarios, base, draws) = (&scenarios, &base, &draws);
+                scope.spawn(move || {
+                    let (mut seen, mut moved) = (Vec::new(), BTreeSet::new());
+                    for input in share {
+                        for high in [true, false] {
+                            let mut reached = false;
+                            for (s, &scenario) in scenarios.iter().enumerate() {
+                                let (blob, backend) = (input.nudge)(high, scenario);
+                                draws.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(nudged) = bars_from(&blob, scenario, &backend) else {
+                                    break;
+                                };
+                                // A bar drawn or hidden by the nudge counts as
+                                // the path being read, though by no one bar.
+                                reached |= nudged.keys().ne(base[s].keys());
+                                for (bar, values) in &nudged {
+                                    if base[s].get(bar).is_some_and(|was| was != values) {
+                                        reached = true;
+                                        moved.insert(bar.clone());
+                                    }
+                                }
+                            }
+                            if reached {
+                                seen.push(input.name.clone());
+                                break;
+                            }
+                        }
+                    }
+                    (seen, moved)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+    let (mut seen, mut moved) = (BTreeSet::new(), BTreeSet::new());
+    for (s, m) in observed {
+        seen.extend(s);
+        moved.extend(m);
+    }
+    eprintln!(
+        "{} input paths, {} scenarios, {} draws on {threads} threads in {:?}",
+        inputs.len(),
+        scenarios.len(),
+        draws.load(std::sync::atomic::Ordering::Relaxed),
+        started.elapsed(),
+    );
+
+    let names: Vec<&str> = inputs.iter().map(|input| input.name.as_str()).collect();
+    let unseen: Vec<_> =
+        names.iter().filter(|name| !seen.contains(**name) && exemption(name).is_none()).collect();
+    assert!(unseen.is_empty(), "no bar reads these input paths: {unseen:#?}");
+    // An entry no unseen path answers to: gone from the blob, or read by a bar
+    // now, which makes it a bar's to hold.
+    let stale: Vec<_> = EXEMPT
+        .iter()
+        .filter(|(_, held, _)| !matches!(held, Held::Unpoisoned))
+        .flat_map(|(entries, _, _)| entries.iter())
+        .filter(|entry| !names.iter().any(|name| covers(entry, name) && !seen.contains(*name)))
+        .collect();
+    assert!(stale.is_empty(), "EXEMPT names paths a bar reads or that are gone: {stale:?}");
+    let unmoved: Vec<_> =
+        base.iter().flat_map(|bars| bars.keys()).filter(|bar| !moved.contains(*bar)).collect();
+    assert!(unmoved.is_empty(), "no input path moves these bars: {unmoved:#?}");
+}
+
 /// Every float the fresh appearance and preferences hold is poisoned, unless
-/// [`UNPOISONED`] names it. This is fixture completeness, not discovery of
+/// [`EXEMPT`] holds it [`Held::Unpoisoned`]. This is fixture completeness, not discovery of
 /// controls: the conditional scenarios, real bar probes and visit assertions
 /// above still establish UI coverage.
 ///
@@ -777,13 +890,16 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     }
     // Detect the blob going wholly unrecognized if RON's value model changes.
     assert!(dialled > 0, "none of the blob's fields read as floats");
-    let exempt: Vec<&str> =
-        UNPOISONED.iter().flat_map(|(paths, _)| paths.iter().copied()).collect();
-    let stale: Vec<_> = exempt.iter().filter(|path| !missed.iter().any(|m| m == *path)).collect();
-    missed.retain(|path| !exempt.contains(&path.as_str()));
+    let stale: Vec<_> = EXEMPT
+        .iter()
+        .filter(|(_, held, _)| matches!(held, Held::Unpoisoned))
+        .flat_map(|(entries, _, _)| entries.iter())
+        .filter(|entry| !missed.iter().any(|path| covers(entry, path)))
+        .collect();
+    missed.retain(|path| !unpoisoned(path));
     assert!(missed.is_empty(), "the loaded-state guard never poisons {missed:?}");
     assert!(
         stale.is_empty(),
-        "UNPOISONED names floats the guard poisons or that are gone: {stale:?}"
+        "EXEMPT leaves unpoisoned floats the guard poisons or that are gone: {stale:?}"
     );
 }

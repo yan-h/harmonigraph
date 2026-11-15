@@ -41,8 +41,6 @@
 //! [`navigate`], which is also where the reason the wheel here does not mean
 //! what the wheel next door means is written down.
 
-use egui::Color32;
-
 use super::spectral::axes::{power_db, spectrogram_level_db};
 use super::spectral::roll::{note_color, note_fill};
 use super::spectral::spectrogram::{cell_color, footprint_mean_db};
@@ -498,10 +496,12 @@ impl Spiral {
 ///
 /// The docked tab is the only copy of this pane: the Spiral is an editor tab,
 /// never exported or previewed for video (#974). So what it holds between
-/// frames is one of each: the halo's bloom chain and the dots' surround buffers
-/// are single instances in their renderers, and the rim names' instance buffer
-/// and their shadow target take the docked surface's ids. Were a second copy
-/// ever drawn, each of those would need a key per copy again, and inside a
+/// frames is one of each: the dots' surround buffers are a single instance in
+/// their renderer, the dots and their bloom chain take one id in the roll's
+/// ([`SPIRAL_ROLL_PANE`](super::lattice::SPIRAL_ROLL_PANE)), and the rim
+/// names' instance buffer and their shadow target take the docked surface's
+/// ids. Were a second copy ever drawn, each of those
+/// would need a key per copy again, and inside a
 /// scrolling settings tab it would want the Analyzer's own `DOCKED_SURFACE`
 /// gate for the Analyzer's reason — a wheel
 /// spent zooming inside a scrolling settings tab is a wheel that tab cannot be
@@ -543,30 +543,26 @@ pub(crate) fn spiral_pane(
             state.surfaces.target_format,
         ));
     }
-    for mark in &marks {
-        painter.circle_filled(
-            egui::pos2(mark.center[0], mark.center[1]),
-            mark.radius,
-            Color32::from_rgba_premultiplied(
-                mark.color[0],
-                mark.color[1],
-                mark.color[2],
-                mark.color[3],
-            ),
-        );
-    }
-    // The spiral's own bloom, on its dots, whenever there are dots. Its chain
-    // stands for as long as the renderer does, so a silent frame has nothing
-    // to ask of it. The strength is left to the callback, which declines a
-    // strength of 0 without allocating and is the one place that can also
-    // tell a rect too thin to have a device pixel.
+    // The discs and their bloom, through the roll's renderer, whenever there
+    // are dots: a dot is the same note a ribbon is, drawn somewhere else, so
+    // it lights through the same chain at the Spiral's own strength. Its own
+    // cut is off, the dots' being the one above. The chain stands for as long
+    // as the renderer does, so a silent frame has nothing to ask of it, and a
+    // strength of 0 is the callback's to decline without allocating.
     if !marks.is_empty() {
         let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
-        painter.add(harmonigraph_render::glow_paint_callback(
+        painter.add(harmonigraph_render::roll_paint_callback(
             rect,
+            rect.size(),
             marks,
+            harmonigraph_render::RollClip::whole(rect),
+            // A disc has no axis to turn: any pair the shader can read.
+            harmonigraph_render::RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] },
             bloom,
+            harmonigraph_render::SurroundCut::OFF,
             state.surfaces.target_format,
+            super::lattice::SPIRAL_ROLL_PANE,
+            1.0,
         ));
     }
     // The names last, and outside the disc, so nothing in the picture is over
@@ -820,9 +816,9 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
     let mut voices: Vec<harmonigraph_core::Voice> = state.runtime.tracker.voices().collect();
     voices.sort_unstable_by(|a, b| a.pitch.total_cmp(&b.pitch).then(a.key().cmp(&b.key())));
     // One envelope for the whole pane, as every other caller takes it: it is a
-    // property of the view and the frame, and rebuilding it per voice would
-    // read as if it could vary between them.
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    // property of the view, and rebuilding it per voice would read as if it
+    // could vary between them.
+    let env = state.appearance.view.envelope();
     let intensity = state.appearance.view.intensity.sanitized();
     voices
         .into_iter()
@@ -849,23 +845,22 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
 /// [`note_color`], so a note is the same colour here, on the piano roll, and at
 /// the node it lit up.
 ///
-/// Hands back the coloured discs it painted, for the halo the caller lays over
-/// them ([`harmonigraph_render::glow_paint_callback`]), and the backdrop cut
-/// each disc wears: the roll's ribbons' own, filled with the note's hue at the
-/// cut's fill lightness, and as strong as the dot is opaque, so a fading dot's
-/// surround fades with it.
+/// Hands back the coloured discs, for the roll's renderer to draw and bloom
+/// (a box rounded at its half extent), and the backdrop cut each disc wears:
+/// the roll's ribbons' own, filled with the note's hue at the cut's fill
+/// lightness, and as strong as the dot is opaque, so a fading dot's surround
+/// fades with it.
 ///
-/// Both from HERE rather than derived a second time beside it, so neither the
-/// halo nor the cut can grow from a dot the picture does not have: one loop
-/// decides which notes get a mark, where, how big and how strong, and the
-/// light and the cut follow it by construction. The cut was once a second
-/// loop restating this one, held to it by a test (#1538) and then by a fix
-/// (#1606).
+/// Both from HERE rather than derived a second time beside it, so the cut
+/// cannot grow from a dot the picture does not have: one loop decides which
+/// notes get a mark, where, how big and how strong, and the cut follows it by
+/// construction. The cut was once a second loop restating this one, held to
+/// it by a test (#1538) and then by a fix (#1606).
 fn dots(
     spiral: &Spiral,
     state: &PictureState,
     sounding: &[Sounding],
-) -> (Vec<harmonigraph_render::GlowDot>, Vec<harmonigraph_render::SurroundDot>) {
+) -> (Vec<harmonigraph_render::RollInstance>, Vec<harmonigraph_render::SurroundDot>) {
     let radius = spiral.dot();
     sounding
         .iter()
@@ -876,7 +871,23 @@ fn dots(
             let strength = voice.strength * voice.opacity;
             let color = note_color(state, voice.pitch, strength);
             (
-                harmonigraph_render::GlowDot { center, radius, color: color.to_array() },
+                harmonigraph_render::RollInstance {
+                    center,
+                    half_extent: [radius, radius],
+                    shear: 0.0,
+                    rounding: radius,
+                    lead_fade: 0.0,
+                    lead_alpha: 1.0,
+                    core: color.to_array(),
+                    // The dots' cut is `dot_surround`'s, not the roll's.
+                    aura: [0; 4],
+                    span: harmonigraph_render::RollInstance::WHOLE,
+                    ramp: [0.0; 2],
+                    fade: [1.0; 2],
+                    taper_depth: [0.0; 4],
+                    taper: harmonigraph_render::RollInstance::UNTAPERED,
+                    tremolo: [0.0; 2],
+                },
                 harmonigraph_render::SurroundDot {
                     center,
                     radius,
@@ -1445,30 +1456,22 @@ mod tests {
             let mut state = fresh();
             state.appearance.spectrum.low_midi = 48.0;
             state.appearance.spectrum.high_midi = 84.0;
-            let fill = Spiral::new(PANE, &state.appearance.spectrum).dot();
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
-            // The coloured disc, by its radius, so each note counts once.
-            painted(&mut state, SpiralView::default(), 0.1)
-                .iter()
-                .filter(|s| matches!(s, egui::Shape::Circle(c) if c.radius == fill))
-                .count()
+            let spiral = Spiral::new(PANE, &state.appearance.spectrum);
+            dots(&spiral, &state, &sounding(&spiral, &state, 0.1)).0.len()
         };
         assert_eq!(marks(60), 1, "a note inside the range is marked once");
         assert_eq!(marks(24), 0, "a note below the range is not marked");
         assert_eq!(marks(120), 0, "a note above the range is not marked");
     }
 
-    /// The halo grows from the dots the picture HAS: every mark handed to the
-    /// renderer is one of the coloured discs on the painter, at its centre, its
-    /// radius and its colour.
+    /// Each sounding note is one round dot: a box the dot's size, rounded at
+    /// its whole half extent, in the note's colour.
     ///
     /// Asked of [`dots`] rather than of the callback, whose payload is the
-    /// render crate's own type and opaque from here. That is where the pair is
-    /// decided anyway, and this is the reason the marks are RETURNED from there
-    /// rather than derived a second time beside the call: a second derivation
-    /// is a second place for the picture and its light to disagree.
+    /// render crate's own type and opaque from here.
     #[test]
-    fn the_halo_grows_from_the_dots_that_were_painted() {
+    fn each_sounding_note_is_one_round_dot() {
         let mut state = fresh();
         for note in [55u8, 60, 67, 76] {
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
@@ -1477,8 +1480,10 @@ mod tests {
         let lit = sounding(&spiral, &state, 0.1);
         let (marks, _) = dots(&spiral, &state, &lit);
         assert_eq!(marks.len(), 4, "the fixture's four notes are four coloured discs");
-        assert!(marks.iter().all(|mark| mark.radius == spiral.dot()));
-        assert!(marks.iter().all(|mark| mark.color[3] > 0));
+        let radius = spiral.dot();
+        assert!(marks.iter().all(|mark| mark.half_extent == [radius; 2]));
+        assert!(marks.iter().all(|mark| mark.rounding == radius), "a dot is not round");
+        assert!(marks.iter().all(|mark| mark.core[3] > 0));
     }
 
     /// Each dot's surround cuts as strongly as the dot is opaque, and fills
@@ -1501,7 +1506,7 @@ mod tests {
         let (marks, cuts) = dots(&spiral, &state, &lit);
         assert_eq!(cuts.len(), 2, "the fixture's two notes are two surrounds");
         for ((cut, mark), voice) in cuts.iter().zip(&marks).zip(&lit) {
-            assert_eq!(cut.aura[3], mark.color[3], "the cut is not as strong as its dot is opaque");
+            assert_eq!(cut.aura[3], mark.core[3], "the cut is not as strong as its dot is opaque");
             let fill = super::super::spectral::roll::note_fill(&state, voice.pitch, 1.0);
             assert_eq!(cut.aura[..3], fill[..3], "the cut does not fill with its note's hue");
         }
@@ -1526,7 +1531,7 @@ mod tests {
         let full = sounding(&spiral, &state, 1.0);
         let (bright, _) = dots(&spiral, &state, &full);
         assert_eq!(mapped[0].strength, full[0].strength, "rim-name envelope is independent");
-        assert!(dim[0].color[3] > 0 && dim[0].color[3] < bright[0].color[3]);
+        assert!(dim[0].core[3] > 0 && dim[0].core[3] < bright[0].core[3]);
         state.appearance.view.intensity.opacity_rest = 0.0;
         state.appearance.view.intensity.velocity.opacity = None;
         let hidden = sounding(&spiral, &state, 1.0);
@@ -1534,13 +1539,13 @@ mod tests {
         assert!(dots(&spiral, &state, &hidden).0.is_empty(), "no invisible dot or halo remains");
     }
 
-    /// The halo's callback and the dots' surround go in on every frame with a
-    /// dot to light, whatever the strength, and a silent frame asks for
+    /// The dots' callback and their surround go in on every frame with a dot
+    /// to draw, whatever the bloom's strength, and a silent frame asks for
     /// neither.
     ///
-    /// The strength is the halo callback's to decline
-    /// (`harmonigraph_render::glow`'s `nothing_to_light_builds_no_chain`), so
-    /// gating on it here would be a second copy of that rule. Neither holds
+    /// The strength is the dots' callback's to decline (the roll's, which
+    /// builds no chain at 0), so gating on it here would be a second copy of
+    /// that rule. Neither holds
     /// anything a silent frame's call would keep alive: both renderers keep
     /// what they built for as long as they stand.
     ///
@@ -1576,7 +1581,7 @@ mod tests {
         assert_eq!(
             callbacks(0.0, true, true),
             callbacks(0.0, true, false) + 2,
-            "a visible dot did not add its halo's and surround's callbacks, or added more",
+            "a visible dot did not add its own and its surround's callbacks, or added more",
         );
         assert_eq!(
             callbacks(1.2, true, true),

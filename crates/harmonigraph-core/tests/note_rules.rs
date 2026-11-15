@@ -25,10 +25,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use harmonigraph_core::canonical::PitchProvenance;
 use harmonigraph_core::canonical::{
     CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
 };
-use harmonigraph_core::confirmed::PitchProvenance;
 use harmonigraph_core::{
     Envelope, Expression, Expressions, NoteEvent, NoteEventKind, NoteTracker, RollNote, SourceId,
     Time, Voice, VoiceKey, VoiceState,

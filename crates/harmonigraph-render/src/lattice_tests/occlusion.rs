@@ -23,10 +23,12 @@ fn a_node_behind_another(lit: bool) -> Scene {
     scene.lattice_ground = glam::vec4(0.35, 0.35, 0.35, 1.0);
     scene.pitch_lut.fill(glam::vec4(0.9, 0.6, 0.3, 1.0));
     scene.nodes[0].octaves.fill(f32::from(lit));
+    read_light(&mut scene.nodes[0]);
     scene.nodes[0].world_pos = glam::vec3(-0.6, 0.0, -1.0);
     let mut front = scene.nodes[0];
     // A real light source even when the receiver is unlit.
     front.octaves.fill(1.0);
+    read_light(&mut front);
     front.world_pos = glam::vec3(0.9, 0.0, 1.0);
     scene.nodes.push(front);
     scene

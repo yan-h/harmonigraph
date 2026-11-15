@@ -14,7 +14,6 @@ impl<P: ClapPlugin> Wrapper<P> {
         self.legacy_send_misuse.store(false, Ordering::Release);
         self.parameter_attempts.store(0, Ordering::Release);
         self.output_high_water.store(0, Ordering::Release);
-        self.begin_configuration_notifications();
         let writable = callback.input_status == performance::InputStatus::Complete;
         let mut output =
             unsafe { performance::Output::new(output, &self.output_high_water, writable) };
@@ -40,14 +39,10 @@ impl<P: ClapPlugin> Wrapper<P> {
             self.plugin.lock().clap_performance_finalize(callback, status, &mut writer);
         }
         // The parameter half drains with the real list even on an error exit:
-        // a host that discards the audio still keeps its parameter cache, and
-        // the racing-restore rescan depends on that value reaching it.
+        // a host that discards the audio still keeps its parameter cache.
         unsafe {
-            self.drain_performance(output, callback.frames.saturating_sub(1));
+            self.drain_performance(output);
         }
-        // A restore can service its rescan while an older host value attempt is
-        // in flight. Completion relatches dirty; every exit must wake that work.
-        self.configuration_request_main();
         let summary = performance::Summary {
             legacy_send_misuse: self.legacy_send_misuse.load(Ordering::Acquire),
         };
@@ -60,36 +55,18 @@ impl<P: ClapPlugin> Wrapper<P> {
         }
     }
 
-    /// The wrapper's own parameter and configuration output for one sub-block,
-    /// bounded by `through` — its last sample — and floored at the high-water
-    /// mark of what this callback has already put on the wire.
+    /// The wrapper's own parameter output for one sub-block: the GUI's edits,
+    /// each floored at the high-water mark of what this callback has already
+    /// put on the wire, since a GUI edit has no source sample of its own.
     /// [`performance::Output::push`] holds the whole ordering argument.
-    ///
-    /// The mark is what the notification cursor carries, so a value keeps its
-    /// own mapped offset unless something later is already on the wire, in which
-    /// case it lands just after that. Pinning to `through` instead would be one
-    /// line shorter and would cost every notification its sample: without
-    /// `SAMPLE_ACCURATE_AUTOMATION` a steady-transport callback is a single
-    /// sub-block, so `through` is the whole buffer's last sample and distinct
-    /// source samples would collapse onto it. What the plugin plays is not the
-    /// only thing at stake in an offset; what the host RECORDS is the other,
-    /// and it is the one this half exists for.
-    ///
-    /// The mark cannot exceed `through`, because the plugin's events for this
-    /// sub-block are all inside it — so a notification whose offset maps past
-    /// `through` still fails the `time <= through` filter and waits for the
-    /// sub-block that contains it, exactly as before. A caller that broke that
-    /// contract would starve its own notifications rather than unsort the list.
     ///
     /// [`performance::PARAMETER_OUTPUT_ATTEMPTS`] bounds what one callback
     /// spends here across all of its sub-block drains. The loop would terminate
     /// without it — the GUI half is a prefix admitted once per callback, at
-    /// capture, and the notification bank is a fixed number of cells whose
-    /// phases only advance — but it would terminate at `INPUT_SCAN`.
+    /// capture — but it would terminate at `INPUT_SCAN`.
     pub(super) unsafe fn drain_performance(
         &self,
         output: *const clap_output_events,
-        through: u32,
     ) {
         let Some(output) = unsafe { output.as_ref() }.filter(|o| o.try_push.is_some()) else {
             return;
@@ -98,37 +75,18 @@ impl<P: ClapPlugin> Wrapper<P> {
             < performance::PARAMETER_OUTPUT_ATTEMPTS
         {
             let floor = self.output_high_water.load(Ordering::Acquire);
-            let notification = self.next_configuration_notification(through, floor);
             // Copy before host callbacks. Only the captured/admitted prefix can
             // notify; a GUI arrival during this callback waits for its next one.
-            let ordinary = self.output_parameter_events.borrow_mut().notification();
-            if ordinary.is_none() && notification.is_none() {
+            let Some(change) = self.output_parameter_events.borrow_mut().notification() else {
                 break;
-            }
-            self.parameter_attempts.fetch_add(1, Ordering::AcqRel);
-            // A GUI edit has no source sample of its own, so it takes the floor.
-            let time = if ordinary.is_some() { floor } else { notification.unwrap().time };
-            let accepted = if let Some(change) = ordinary {
-                let accepted = unsafe { self.push_parameter(output, change, time) };
-                if accepted {
-                    self.output_parameter_events.borrow_mut().accept();
-                }
-                accepted
-            } else {
-                let notification = notification.unwrap();
-                let accepted = unsafe { notification.push(output) };
-                self.complete_configuration_notification(notification, accepted);
-                accepted
             };
-            if accepted {
-                // Raise the floor for the next iteration, or two values with
-                // distinct offsets could leave in the wrong order.
-                self.output_high_water.fetch_max(time, Ordering::AcqRel);
-            } else if ordinary.is_some() {
-                // A refused GUI value ends the drain rather than letting a
-                // notification overtake the value the host just declined.
+            self.parameter_attempts.fetch_add(1, Ordering::AcqRel);
+            if !unsafe { self.push_parameter(output, change, floor) } {
+                // A refused GUI value ends the drain, so no later value
+                // overtakes the one the host just declined.
                 break;
             }
+            self.output_parameter_events.borrow_mut().accept();
         }
     }
 

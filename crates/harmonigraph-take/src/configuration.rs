@@ -78,13 +78,7 @@ impl ConfigurationRecord {
         Self {
             t,
             revision: config.revision,
-            axes: [
-                config.tuning.c_offset,
-                config.tuning.three,
-                config.tuning.five,
-                config.tuning.seven,
-                config.tuning.tolerance,
-            ],
+            axes: config.tuning.axes(),
             tempered: [config.modes.tempered.syntonic, config.modes.tempered.septimal_kleisma],
             learning: config.modes.learning,
             policy: p.into(),
@@ -94,13 +88,7 @@ impl ConfigurationRecord {
         let p = self.policy;
         ResolvedConfig {
             revision: self.revision,
-            tuning: Tuning {
-                c_offset: self.axes[0],
-                three: self.axes[1],
-                five: self.axes[2],
-                seven: self.axes[3],
-                tolerance: self.axes[4],
-            },
+            tuning: Tuning::from_axes(self.axes),
             modes: TuningModes {
                 tempered: Tempered {
                     syntonic: self.tempered[0],

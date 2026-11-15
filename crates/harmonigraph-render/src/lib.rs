@@ -65,7 +65,7 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{roll_paint_callback, RollAxes, RollInstance, DEFAULT_RIBBON_SEMITONES};
+pub use roll::{roll_paint_callback, RollAxes, RollClip, RollInstance, DEFAULT_RIBBON_SEMITONES};
 
 /// The backdrop cut round a note, shared by the roll's ribbons and the
 /// Spiral's dots.
@@ -88,9 +88,6 @@ pub use spectrogram::{
 #[cfg(test)]
 mod dial_nudges;
 mod dot_surround;
-/// A halo alone, over marks a pane drew for itself — the third caller of
-/// [`BloomChain`], and the one that draws no picture of its own.
-mod glow;
 mod lattice_material;
 mod lattice_node_glow;
 mod lattice_stars;
@@ -98,7 +95,6 @@ mod material_cells;
 mod stars;
 mod travel;
 pub use dot_surround::{dot_surround_paint_callback, SurroundDot};
-pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
 
 /// Label text, for the same reason the roll has its own callback: what a
@@ -591,11 +587,6 @@ struct GpuInstance {
     /// than folded into the dead `params.y`/`params.z` floats because the
     /// shader masks them bitwise, which needs a flat-interpolated `u32`.
     marks: [u32; 2],
-    /// Each mark's own color (see `NodeInstance::melody_color`): the sector it
-    /// links back to, not a fixed livery, so a ring reads as belonging to the
-    /// indicator it points at.
-    melody_color: [f32; 4],
-    bass_color: [f32; 4],
     /// Billboard size factor: 1 on the home sheet, smaller with every step off
     /// it (`NodeInstance::scale`).
     scale: f32,
@@ -641,7 +632,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 2 => Float32x3, 3 => Uint32x3, 15 => Uint32x4,
             4 => Float32, 6 => Uint32x2,
-            7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
+            10 => Float32, 11 => Float32,
             12 => Float32x3, 1 => Uint32x3
         ],
     };
@@ -663,7 +654,6 @@ struct LightRow {
     /// stepped: a tuning change moves a halo at once (#1759, Q1).
     cents: f32,
     l: [f32; harmonigraph_scene::OCTAVE_SLOTS],
-    p: [f32; harmonigraph_scene::OCTAVE_SLOTS],
     m: [f32; harmonigraph_scene::OCTAVE_SLOTS],
 }
 
@@ -678,8 +668,8 @@ const _: () = assert!(
 
 impl LightRow {
     fn new(cents: f32, light: harmonigraph_scene::GlowLight) -> Self {
-        let harmonigraph_scene::GlowLight { l, p, m } = light;
-        Self { cents, l, p, m }
+        let harmonigraph_scene::GlowLight { l, m } = light;
+        Self { cents, l, m }
     }
 }
 
@@ -1256,9 +1246,8 @@ struct PaneBuffers {
     /// group naming it at group 3.
     ///
     /// A storage buffer rather than more rows beside the instances, for the
-    /// reason [`shadow::ShadowCaster`] gives: a node's instance rows and the box
-    /// beside them leave one of the sixteen attribute locations, where a caster
-    /// is four vec4s. Rebuilt with the buffer, which is the one thing the
+    /// reason [`shadow::ShadowCaster`] gives: one array that a node, a marker
+    /// and a name all index. Rebuilt with the buffer, which is the one thing the
     /// atlas's own bind groups must not be — hence a group of its own
     /// (`shadow::caster_layout`).
     caster_buffer: wgpu::Buffer,
@@ -1285,7 +1274,6 @@ struct PaneBuffers {
     /// write whole, so it is rebuilt taller whenever a frame lights more nodes
     /// than it has rows for, and nothing is lost.
     ink_strip: Option<InkStrip>,
-    ink_kernel: lattice_node_glow::InkKernel,
     material_tile: Option<lattice_material::Tile>,
     /// How far the glow material has drifted, the stars travelled and the
     /// glow's texture and breathing run, held here rather than with the
@@ -1721,7 +1709,6 @@ impl LatticeResources {
                 glyph_bind_group: None,
                 glyph_sheet_keys: (u64::MAX, u64::MAX),
                 ink_strip: None,
-                ink_kernel: Default::default(),
                 material_tile: None,
                 material_travel: Default::default(),
                 offscreen: None,

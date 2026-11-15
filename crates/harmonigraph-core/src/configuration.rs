@@ -210,8 +210,74 @@ pub struct ResolvedConfig {
     pub policy: PolicyConfig,
 }
 
-/// A semantic UI transaction. Every populated field changes together. The five
-/// axis indices are origin, three, five, seven and display tolerance.
+/// How far each prime's interval may sit from just intonation, in cents.
+pub const MAX_TUNING_OFFSET: f32 = 40.0;
+
+/// One of the five tuning axes: the lattice origin, the three intervals that
+/// span it, and the match tolerance. Each owns its place in [`Tuning::axes`]
+/// and [`ConfigEdit::axes`], its default and the range the reducer holds it
+/// in, which is every value an editor can show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TuningAxis {
+    /// Offset of the lattice origin (C) in cents.
+    COffset,
+    /// Perfect fifth (prime 3).
+    Three,
+    /// Major third (prime 5).
+    Five,
+    /// Harmonic seventh (prime 7).
+    Seven,
+    /// How far a played pitch may sit from a node and still light it.
+    Tolerance,
+}
+
+impl TuningAxis {
+    pub const ALL: [TuningAxis; 5] =
+        [Self::COffset, Self::Three, Self::Five, Self::Seven, Self::Tolerance];
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// 12-TET, so the lattice matches a plain MIDI keyboard until the tuning
+    /// is dialled in.
+    pub fn default_cents(self) -> f32 {
+        Tuning::default().cents(self)
+    }
+
+    /// In cents.
+    pub fn range(self) -> std::ops::RangeInclusive<f32> {
+        use crate::tuning::{marvel_seventh, meantone_third, THREE_JUST};
+        match self {
+            Self::COffset => -600.0..=600.0,
+            Self::Three => THREE_JUST - MAX_TUNING_OFFSET..=THREE_JUST + MAX_TUNING_OFFSET,
+            // A released link keeps its value without a pitch jump, so each
+            // derived interval's range holds every value its generators derive.
+            Self::Five => {
+                let fifth = Self::Three.range();
+                meantone_third(*fifth.start()).floor()..=meantone_third(*fifth.end()).ceil()
+            }
+            Self::Seven => {
+                let (fifth, third) = (Self::Three.range(), Self::Five.range());
+                marvel_seventh(*fifth.start(), *third.start()).floor()
+                    ..=marvel_seventh(*fifth.end(), *third.end()).ceil()
+            }
+            Self::Tolerance => 0.001..=49.999,
+        }
+    }
+
+    /// `microcents`, held in [`range`](Self::range).
+    pub fn clamp(self, microcents: i32) -> i32 {
+        let range = self.range();
+        microcents.clamp(
+            crate::tuning::microcents(*range.start()),
+            crate::tuning::microcents(*range.end()),
+        )
+    }
+}
+
+/// A semantic UI transaction. Every populated field changes together. The
+/// axes are indexed by [`TuningAxis::index`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ConfigEdit {
     pub axes: [Option<i32>; 5],
@@ -221,25 +287,33 @@ pub struct ConfigEdit {
 }
 
 impl ConfigEdit {
-    pub fn axis(index: usize, microcents: i32) -> Self {
+    pub fn axis(axis: TuningAxis, microcents: i32) -> Self {
         let mut edit = Self::default();
-        edit.axes[index] = Some(microcents);
+        edit.axes[axis.index()] = Some(microcents);
         edit
     }
 
     /// Switch off at the interval currently heard and displayed, including a
     /// value derived by another link. Send the value and flag as one edit so
-    /// host parameters and project saves retain that value too.
+    /// project saves retain that value too.
     pub fn temper(comma: Comma, on: bool, current: Tuning) -> Self {
         let mut edit = Self::default();
         edit.tempered[comma.index()] = Some(on);
         if !on {
-            edit.axes[comma.index() + 2] = Some(match comma {
-                Comma::Syntonic => crate::tuning::microcents(current.five_cents()),
-                Comma::SeptimalKleisma => crate::tuning::microcents(current.seven_cents()),
-            });
+            let axis = comma.derived_axis();
+            edit.axes[axis.index()] = Some(current.axes()[axis.index()]);
         }
         edit
+    }
+}
+
+impl Comma {
+    /// The interval this comma derives from its generators while tempered.
+    pub fn derived_axis(self) -> TuningAxis {
+        match self {
+            Comma::Syntonic => TuningAxis::Five,
+            Comma::SeptimalKleisma => TuningAxis::Seven,
+        }
     }
 }
 
@@ -252,18 +326,19 @@ pub enum ConfigMutation {
         policy: PolicyConfig,
     },
     /// Learn classifies its unconstrained evidence before imposing any links.
-    /// With retuning active, only the origin and keyboard are learned: the
-    /// lattice intervals remain the target. `raw` is the committed host input.
+    /// The learned origin replaces the raw one. With retuning active, only the
+    /// origin and keyboard are learned: the lattice intervals remain the
+    /// target. Otherwise every learned interval replaces its raw one too.
     LearnResolved {
         learned: LearnedTuning,
         retuning: bool,
-        raw: Tuning,
     },
 }
 
 /// One owner for edits and their effective tuning. Independent interval edits
 /// recognize relationships; a linked interval follows edits of its generators.
-/// Restore and display observation never rejudge an unchanged tuning.
+/// Restore never rejudges an unchanged tuning. Every raw axis it takes in is
+/// held in its [`TuningAxis::range`].
 #[derive(Clone, Debug)]
 pub struct ConfigReducer {
     raw: Tuning,
@@ -277,8 +352,15 @@ impl Default for ConfigReducer {
     }
 }
 
+/// `raw` with each axis held in its range.
+fn clamped(raw: Tuning) -> Tuning {
+    let axes = raw.axes();
+    Tuning::from_axes(TuningAxis::ALL.map(|axis| axis.clamp(axes[axis.index()])))
+}
+
 impl ConfigReducer {
     pub fn new(raw: Tuning, modes: TuningModes) -> Self {
+        let raw = clamped(raw);
         let mut reducer = Self {
             raw,
             modes,
@@ -299,50 +381,27 @@ impl ConfigReducer {
     pub fn resolved(&self) -> ResolvedConfig {
         self.resolved
     }
-    /// Synchronous shells adapt actual parameter changes into edits. CLAP
-    /// supplies the edited axes directly, including same-value typed entries.
-    pub fn sync_display(&mut self, raw: Tuning, modes: TuningModes, policy: PolicyConfig) -> bool {
-        let before =
-            [self.raw.c_offset, self.raw.three, self.raw.five, self.raw.seven, self.raw.tolerance];
-        let after = [raw.c_offset, raw.three, raw.five, raw.seven, raw.tolerance];
-        self.apply(ConfigMutation::Edit(ConfigEdit {
-            axes: std::array::from_fn(|i| (before[i] != after[i]).then_some(after[i])),
-            tempered: std::array::from_fn(|i| {
-                let comma = Comma::ALL[i];
-                (self.modes.tempered.has(comma) != modes.tempered.has(comma))
-                    .then_some(modes.tempered.has(comma))
-            }),
-            learning: Some(modes.learning),
-            policy: Some(PolicyEdit::all(policy)),
-        }))
-    }
-
-    /// Returns false only on revision exhaustion. The caller retains its command
-    /// and enters explicit recovery; no counter wraps into an old identity.
-    pub fn apply(&mut self, mutation: ConfigMutation) -> bool {
-        let previous = self.clone();
+    /// A new revision whenever the resolved configuration changes musically.
+    /// The counter is 64 bits, a few million years of one edit per sample.
+    pub fn apply(&mut self, mutation: ConfigMutation) {
+        let previous = self.resolved;
         match mutation {
             ConfigMutation::Restore { raw, modes, policy } => {
                 self.resolved.policy = policy.sanitize();
-                self.raw = raw;
+                self.raw = clamped(raw);
                 self.modes = modes;
             }
             ConfigMutation::Edit(edit) => {
                 if let Some(policy) = edit.policy {
                     policy.apply_to(&mut self.resolved.policy);
                 }
-                let axes = [
-                    &mut self.raw.c_offset,
-                    &mut self.raw.three,
-                    &mut self.raw.five,
-                    &mut self.raw.seven,
-                    &mut self.raw.tolerance,
-                ];
-                for (axis, value) in axes.into_iter().zip(edit.axes) {
-                    if let Some(value) = value {
-                        *axis = value;
+                let mut axes = self.raw.axes();
+                for axis in TuningAxis::ALL {
+                    if let Some(value) = edit.axes[axis.index()] {
+                        axes[axis.index()] = axis.clamp(value);
                     }
                 }
+                self.raw = Tuning::from_axes(axes);
                 // A switch-off carries a frozen interval, not a new independent
                 // tuning entry. It must not recognize a different released link.
                 let entered = [
@@ -375,7 +434,7 @@ impl ConfigReducer {
                     self.modes.learning = on;
                 }
             }
-            ConfigMutation::LearnResolved { learned, retuning, raw } => {
+            ConfigMutation::LearnResolved { learned, retuning } => {
                 if let Some(three) = learned.three {
                     self.resolved.policy.keyboard =
                         crate::tuning::fifth_generated(crate::tuning::microcents(three));
@@ -383,21 +442,24 @@ impl ConfigReducer {
                 if !retuning {
                     self.modes = learned_modes(learned, self.modes);
                 }
-                self.raw = raw;
+                let mut axes = self.raw.axes();
+                let found = [learned.c_offset, learned.three, learned.five, learned.seven];
+                for (axis, cents) in TuningAxis::ALL.into_iter().zip(found) {
+                    let learns = axis == TuningAxis::COffset || !retuning;
+                    if let Some(cents) = cents.filter(|_| learns) {
+                        axes[axis.index()] = axis.clamp(crate::tuning::microcents(cents));
+                    }
+                }
+                self.raw = Tuning::from_axes(axes);
             }
         }
         self.resolve();
         // Display tolerance and acknowledgements are not musical changes.
-        let mut before = previous.resolved;
+        let mut before = previous;
         before.tuning.tolerance = self.resolved.tuning.tolerance;
         if before != self.resolved {
-            let Some(revision) = previous.resolved.revision.checked_add(1) else {
-                *self = previous;
-                return false;
-            };
-            self.resolved.revision = revision;
+            self.resolved.revision = previous.revision + 1;
         }
-        true
     }
 
     fn resolve(&mut self) {
@@ -445,7 +507,6 @@ mod tests {
         reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning { three: Some(696.578), ..Default::default() },
             retuning: true,
-            raw: reducer.raw(),
         });
         let learned = reducer.resolved();
         assert_ne!(learned.policy.keyboard, observed.keyboard);
@@ -456,26 +517,65 @@ mod tests {
         assert_eq!(reducer.resolved().revision, learned.revision + 1);
     }
 
-    /// The synchronous shell's adapter carries the switch the display flipped
-    /// and leaves the other where it was.
-    #[test]
-    fn sync_display_carries_a_flipped_temper_switch() {
-        let mut reducer = ConfigReducer::default();
-        let resolved = reducer.resolved();
-        assert!(resolved.modes.tempered.syntonic && resolved.modes.tempered.septimal_kleisma);
-        let mut modes = resolved.modes;
-        modes.tempered.syntonic = false;
-        assert!(reducer.sync_display(reducer.raw(), modes, resolved.policy));
-        assert_eq!(reducer.resolved().modes.tempered, modes.tempered);
-    }
-
     fn enter(reducer: &mut ConfigReducer, index: usize, cents: f32) {
-        assert!(reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(index, microcents(cents)))));
+        let edit = ConfigEdit::axis(TuningAxis::ALL[index], microcents(cents));
+        reducer.apply(ConfigMutation::Edit(edit));
     }
 
     fn switch(reducer: &mut ConfigReducer, comma: Comma, on: bool) {
         let edit = ConfigEdit::temper(comma, on, reducer.resolved().tuning);
-        assert!(reducer.apply(ConfigMutation::Edit(edit)));
+        reducer.apply(ConfigMutation::Edit(edit));
+    }
+
+    /// The reducer is the one door the raw axes come through, so it holds each
+    /// in the range an editor can show, whichever way it arrives.
+    #[test]
+    fn every_way_in_holds_the_raw_axes_in_their_ranges() {
+        let wild = Tuning::from_axes([2_000_000_000, 1, 1_500_000_000, -5, 60_000_000]);
+        let held = |raw: Tuning| {
+            TuningAxis::ALL.into_iter().all(|axis| axis.range().contains(&raw.cents(axis)))
+        };
+        let mut reducer = ConfigReducer::new(wild, TuningModes::default());
+        assert!(held(reducer.raw()), "new: {:?}", reducer.raw());
+        let edit = ConfigEdit { axes: wild.axes().map(Some), ..Default::default() };
+        reducer = ConfigReducer::default();
+        reducer.apply(ConfigMutation::Edit(edit));
+        assert!(held(reducer.raw()), "edit: {:?}", reducer.raw());
+        reducer = ConfigReducer::default();
+        let policy = PolicyConfig::default();
+        reducer.apply(ConfigMutation::Restore { raw: wild, modes: TuningModes::default(), policy });
+        assert!(held(reducer.raw()), "restore: {:?}", reducer.raw());
+        reducer = ConfigReducer::default();
+        let learned = LearnedTuning {
+            c_offset: Some(5000.0),
+            three: Some(500.0),
+            five: Some(900.0),
+            seven: Some(1.0),
+        };
+        reducer.apply(ConfigMutation::LearnResolved { learned, retuning: false });
+        assert!(held(reducer.raw()), "learn: {:?}", reducer.raw());
+    }
+
+    /// Under retuning the lattice intervals are the target, so Learn moves the
+    /// origin alone; without it, every interval it heard too.
+    #[test]
+    fn learn_under_retuning_moves_only_the_origin() {
+        let learned = LearnedTuning {
+            c_offset: Some(10.0),
+            three: Some(THREE_JUST),
+            five: Some(FIVE_JUST),
+            seven: Some(crate::tuning::SEVEN_JUST),
+        };
+        let mut retuned = ConfigReducer::default();
+        let before = retuned.raw();
+        retuned.apply(ConfigMutation::LearnResolved { learned, retuning: true });
+        let raw = retuned.raw();
+        assert_eq!(raw.c_offset, microcents(10.0));
+        assert_eq!([raw.three, raw.five, raw.seven], [before.three, before.five, before.seven]);
+        let mut passed = ConfigReducer::default();
+        passed.apply(ConfigMutation::LearnResolved { learned, retuning: false });
+        assert_eq!(passed.raw().c_offset, microcents(10.0));
+        assert_eq!(passed.raw().five, microcents(FIVE_JUST));
     }
 
     #[test]
@@ -517,10 +617,6 @@ mod tests {
         switch(&mut reducer, Comma::Syntonic, false);
         assert_eq!(reducer.raw().five, microcents(380.0));
         assert_eq!(reducer.raw().seven, microcents(950.0));
-        let released = reducer.resolved();
-        for _ in 0..3 {
-            reducer.sync_display(reducer.raw(), released.modes, released.policy);
-        }
         enter(&mut reducer, 0, 3.0);
         enter(&mut reducer, 4, 2.0);
         enter(&mut reducer, 3, 951.0);
@@ -564,16 +660,11 @@ mod tests {
         for comma in Comma::ALL {
             switch(&mut reducer, comma, false);
         }
-        let mut raw = reducer.raw();
-        raw.three = microcents(696.58);
         reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning { three: Some(696.58), ..Default::default() },
             retuning: false,
-            raw,
         });
         assert_eq!(reducer.resolved().modes.tempered, Tempered::default());
-        raw.five = microcents(386.32);
-        raw.seven = microcents(965.8);
         reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning {
                 three: Some(696.58),
@@ -582,7 +673,6 @@ mod tests {
                 ..Default::default()
             },
             retuning: false,
-            raw,
         });
         assert_eq!(reducer.resolved().modes.tempered, TuningModes::default().tempered);
         let learned = LearnedTuning {
@@ -598,7 +688,7 @@ mod tests {
             "Marvel uses played 386, not the old linked third"
         );
         let before = reducer.resolved();
-        reducer.apply(ConfigMutation::LearnResolved { learned, retuning: true, raw });
+        reducer.apply(ConfigMutation::LearnResolved { learned, retuning: true });
         assert_eq!(reducer.resolved().tuning, before.tuning);
         assert_eq!(reducer.resolved().modes, before.modes);
     }

@@ -37,11 +37,7 @@ fn position(seconds: i64) -> Input {
 }
 
 fn submit(hub: &Device, edit: ConfigEdit) {
-    hub_wrapper(hub)
-        .configuration_handle()
-        .unwrap()
-        .submit(crate::configuration::packet(edit))
-        .unwrap();
+    assert!(settings(hub).submit(edit));
 }
 
 /// Three Tunes and one Hub, at 44.1 kHz and 512-frame callbacks, so D is 512
@@ -569,12 +565,12 @@ fn silence_policy_edits_apply_before_expiry_without_note_input() {
         // Reduce this edit while still below either timeout, then cross the
         // timeout on the next begin, when the reducer already holds the edit.
         phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
-        let (visible, pending) = hub_wrapper(&phrase.hub).configuration_handle().unwrap().visible();
-        assert!(!pending, "the editor edit must already be reduced before the expiry callback");
-        assert_eq!(
-            crate::configuration::view(visible, false).resolved.policy.silence_ms,
-            if enable { 1000 } else { 0 }
+        let visible = settings(&phrase.hub).view();
+        assert!(
+            !visible.pending,
+            "the editor edit must already be reduced before the expiry callback"
         );
+        assert_eq!(visible.resolved.policy.silence_ms, if enable { 1000 } else { 0 });
         phrase.raw += 2 * 44100;
         // Only the Hub runs: no note, controller or source input can incidentally
         // adopt the edited policy in input_boundary before this observation.

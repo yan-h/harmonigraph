@@ -1,7 +1,7 @@
 //! Dock panes and their shared controls. The picture settings pages are composed in [`pages`].
 
-use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{RangeBar, ValueBar};
+use crate::params::ParamBackend;
+use crate::widgets::RangeBar;
 use crate::PictureState;
 
 pub mod color;
@@ -233,13 +233,11 @@ impl Viewer<'_> {
                 }
             }
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::LatticeSettings => {
-                lattice_settings_pane(ui, self.state, self.interaction, self.params)
-            }
+            Tab::LatticeSettings => lattice_settings_pane(ui, self.state, self.interaction),
             Tab::AnalyzerSettings => {
                 analyzer_settings_pane(ui, self.state, self.interaction, self.params)
             }
-            Tab::Mappings => color_pane(ui, &mut self.state.appearance, self.params),
+            Tab::Mappings => color_pane(ui, &mut self.state.appearance),
             Tab::System => system_pane(ui, &mut self.state.appearance, self.interaction),
             Tab::Console => console_pane(ui, &mut self.state.runtime),
             Tab::Spectral => {
@@ -327,7 +325,7 @@ pub(super) fn learn_pulse(now: f64) -> f32 {
 }
 
 /// The view a fresh state opens on, built once: where a double-click on one
-/// of its bars puts the value back (see [`ValueBar::default_value`]).
+/// of its bars puts the value back (see [`crate::widgets::ValueBar::default_value`]).
 pub(super) fn fresh_view() -> &'static harmonigraph_scene::ViewConfig {
     static FRESH: std::sync::LazyLock<harmonigraph_scene::ViewConfig> =
         std::sync::LazyLock::new(Default::default);
@@ -339,78 +337,6 @@ pub(super) fn fresh_spectrum() -> &'static crate::SpectrumConfig {
     static FRESH: std::sync::LazyLock<crate::SpectrumConfig> =
         std::sync::LazyLock::new(Default::default);
     &FRESH
-}
-
-/// One editable ValueBar for a parameter, with automation-gesture
-/// bracketing so a drag records as a single host gesture.
-pub(super) fn param_bar(
-    ui: &mut egui::Ui,
-    params: &dyn ParamBackend,
-    key: ParamKey,
-    hint: &str,
-) -> egui::Response {
-    let mut value = params.get(key);
-    let (scale, suffix, decimals) = key.unit();
-    let response = ValueBar::new(&mut value, key.range(), key.label())
-        .eased(key.logarithmic())
-        .unit(scale, suffix)
-        .decimals(decimals)
-        .default_value(key.default_value())
-        .hint(hint)
-        .show(ui);
-    // Bracket drags so the host records one automation gesture per drag;
-    // one-shot changes (typed values) go through set() alone.
-    if response.drag_started() {
-        params.begin_set(key);
-    }
-    if response.changed() {
-        params.set(key, value);
-    }
-    if response.drag_stopped() {
-        params.end_set(key);
-    }
-    response
-}
-
-/// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (the Mappings page's Pitch color range).
-/// `label` names the bar, `hint` says what it sets on its hover, and
-/// `display` formats each end's readout.
-///
-/// Both params are bracketed for the whole drag and written every changed
-/// frame, so a drag on either handle records as one gesture on each. A
-/// double-click reset to the params' defaults arrives as `changed` with no
-/// drag, and goes through the same `set` without a gesture — matching
-/// [`param_bar`]'s one-shot path.
-pub(super) fn param_range_bar(
-    ui: &mut egui::Ui,
-    params: &dyn ParamBackend,
-    (low_key, high_key): (ParamKey, ParamKey),
-    range: std::ops::RangeInclusive<f32>,
-    min_span: f32,
-    (label, hint): (&str, &str),
-    display: fn(f32) -> String,
-) -> egui::Response {
-    let (mut low, mut high) = (params.get(low_key), params.get(high_key));
-    let response = RangeBar::new(&mut low, &mut high, range, label)
-        .min_span(min_span)
-        .default_value((low_key.default_value(), high_key.default_value()))
-        .display(display)
-        .hint(hint)
-        .show(ui);
-    if response.drag_started() {
-        params.begin_set(low_key);
-        params.begin_set(high_key);
-    }
-    if response.changed() {
-        params.set(low_key, low);
-        params.set(high_key, high);
-    }
-    if response.drag_stopped() {
-        params.end_set(low_key);
-        params.end_set(high_key);
-    }
-    response
 }
 
 /// One bar for a soft edge: how far it REACHES past whatever it surrounds, and

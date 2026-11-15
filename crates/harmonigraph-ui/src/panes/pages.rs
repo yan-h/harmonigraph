@@ -21,7 +21,6 @@ pub(super) fn lattice_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
     interaction: &mut crate::Interaction,
-    params: &dyn ParamBackend,
 ) {
     section(ui, "View", |ui| {
         view::camera(ui, &mut state.appearance, interaction);
@@ -29,7 +28,7 @@ pub(super) fn lattice_settings_pane(
     });
     section(ui, "Note layers", |ui| nodes::layers(ui, &mut state.appearance.view));
     section(ui, "Octave layout", |ui| nodes::octaves(ui, &mut state.appearance.view));
-    section(ui, "Note animation", |ui| nodes::motion(ui, &mut state.appearance.view, params));
+    section(ui, "Note animation", |ui| nodes::motion(ui, &mut state.appearance.view));
     section(ui, "Note labels", |ui| labels::labels(ui, state));
     section(ui, "Audio ring", |ui| nodes::audio_ring(ui, &mut state.appearance.view));
     plus_pane(ui, &mut state.appearance);

@@ -165,7 +165,7 @@ impl<'a> Output<'a> {
     /// while a parameter report only has to be recorded in order, so where the
     /// two would cross it is the parameter that moves later. A value observed
     /// during a callback shaped none of that callback's notes anyway -- the
-    /// configuration in force was frozen at `clap_configuration_adopt` before
+    /// configuration in force was frozen at `clap_configuration_begin` before
     /// the first of them -- so later is also the reading that matches cause.
     pub fn push(&mut self, value: InputValue, time: u32) -> bool {
         debug_assert!(

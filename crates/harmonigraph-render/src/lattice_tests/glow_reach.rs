@@ -422,7 +422,7 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     let mut far = flat.nodes[0];
     far.world_pos.z = -1.0;
     far.world_pos.x += 0.6;
-    far.glow = harmonigraph_scene::GlowStep { level: 1.0, light: None };
+    far.glow = harmonigraph_scene::GlowStep { level: 1.0, light: far.glow_light() };
     let mut sheets = at(0.8);
     sheets.view.glow_reach = 3.0;
     sheets.view.glow_strength = SHEETS_STRENGTH;

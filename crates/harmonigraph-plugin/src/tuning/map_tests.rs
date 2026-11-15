@@ -1,5 +1,6 @@
 //! Map timing through real CLAP ingress, Hub ordering and Tune output.
 use super::*;
+use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
 use harmonigraph_core::{LatticePos, Tuning};
 
@@ -201,23 +202,18 @@ fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice()
 
 #[test]
 fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
-    use nice_plug::prelude::Param;
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
     hub.activate();
     let (first, second) = install(&hub);
     hub.run(0, vec![parameter("tuning-engine", 2.0, 0)], None);
-    let axis_value = hub_wrapper(&hub)
-        .test_inspect_plugin(|plugin| plugin.params.three.preview_normalized(699.0));
-    hub.run(
-        512,
-        vec![
-            note(1, 0, 67, 9, true),
-            note(2, 0, 79, 10, true),
-            parameter("tuning-three", f64::from(axis_value), 10),
-        ],
-        None,
-    );
+    hub.run(256, vec![note(1, 0, 67, 9, true)], None);
+    let fifth = harmonigraph_core::tuning::microcents(699.0);
+    assert!(settings(&hub).submit(harmonigraph_core::configuration::ConfigEdit::axis(
+        harmonigraph_core::configuration::TuningAxis::Three,
+        fifth
+    )));
+    hub.run(512, vec![note(2, 0, 79, 10, true)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 67).frozen_offset_microcents,
         first.correction(67, Tuning::just())
@@ -315,19 +311,50 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     assert_eq!(found, ids.len());
 }
 
-/// A record the Hub holds over to the next callback carries a sample from
-/// before this callback began, and a backward locate clears the map history
-/// out from under it: `at` then has nothing to answer with. Holding one over
-/// is routine rather than exotic — any Tune the host runs after the Hub is a
-/// callback behind by construction, and `collect` leaves whatever passes
-/// `BATCH_EVENTS` in the ring on top of that.
-///
-/// Lattice Map is right to refuse there: the map that sample ran under is
-/// exactly what was lost. Adaptive has no per-sample map state to be missing
-/// and decides from the block configuration, which is still in hand, so the
-/// same refusal would uncorrect the onset for nothing.
+/// A record the Hub holds over is assigned under the configuration in force
+/// at its own sample, not the one the next block adopts: an editor edit of the
+/// fifth landing between the two leaves the held-over G on the old fifth,
+/// while a G struck in the new block takes the new one.
 #[test]
-fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
+fn a_held_over_onset_keeps_its_own_blocks_configuration_across_an_editor_edit() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate_format(44100.0, 512);
+    install(&hub);
+    let mut source = Device::new(true);
+    source.activate_format(44100.0, 512);
+    hub.run_format(0, vec![parameter("tuning-engine", 1.0, 0)], None, None, 512);
+    for raw in [512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    // The Hub runs first in this block, so the source's G is held over.
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(1536, vec![note(1, 0, 55, 0, true)], None, None, 512);
+    let edit = ConfigEdit::axis(harmonigraph_core::configuration::TuningAxis::Three, 699_000_000);
+    assert!(settings(&hub).submit(edit));
+    hub.run_format(2048, vec![note(2, 0, 67, 0, true)], None, None, 512);
+    let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    let held_over = voice(&hub, 0, 55);
+    let struck = voice(&hub, crate::tuning::DIRECT, 67);
+    assert_eq!(held_over.attack_node, Some(LatticePos::new(1, 0, 0)));
+    assert_eq!(struck.attack_node, Some(LatticePos::new(1, 0, 0)));
+    assert!((held_over.frozen_offset_microcents - i64::from(just - 700_000_000)).abs() < 100);
+    assert!((struck.frozen_offset_microcents + 1_000_000).abs() < 100);
+}
+
+/// A record the Hub holds over to the next callback carries a sample from
+/// before this callback began, and a steady-clock regression clears the
+/// history out from under it: `at` then has nothing to answer with. Holding
+/// one over is routine rather than exotic — any Tune the host runs after the
+/// Hub is a callback behind by construction, and `collect` leaves whatever
+/// passes `BATCH_EVENTS` in the ring on top of that.
+///
+/// Every engine then assigns from the state it holds now, as it would have had
+/// the history still reached that sample (#920, #1792), rather than leaving the
+/// onset raw.
+#[test]
+fn a_retained_onset_behind_a_clock_regression_is_assigned_from_the_live_state() {
     for engine in [TuningEngine::Adaptive, TuningEngine::LatticeMap] {
         // The same onset twice: once with the next callback in sequence, which
         // is the control, and once with it located behind the sample the
@@ -360,11 +387,7 @@ fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
         let (node, correction, policy) = landed[0];
         assert!(node.is_some() && correction != 0, "{engine:?} corrects a record it caught up to");
         assert!(!policy, "{engine:?} refuses nothing when the history is still there");
-        if engine == TuningEngine::LatticeMap {
-            assert_eq!(landed[1], (None, 0, true), "the map that sample ran under was lost");
-        } else {
-            assert_eq!(landed[1], landed[0], "a lost map history is not Adaptive's to refuse");
-        }
+        assert_eq!(landed[1], landed[0], "{engine:?} assigns a record the history lost");
     }
 }
 

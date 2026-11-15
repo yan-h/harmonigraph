@@ -360,9 +360,8 @@ pub struct Interaction {
     /// Which of the Analyzer's regions are folded, and the composition they
     /// fold back open to (see [`panes::spectral::collapse::Regions`]).
     ///
-    /// The layout's content rather than a preference: the width a folded
-    /// region gives up is held in `Layout::region_widths`, so the two are
-    /// saved, loaded and reset together.
+    /// The layout's content rather than a preference, so it is saved, loaded
+    /// and reset with the layout.
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see Camera in the Lattice page's View section).
@@ -785,8 +784,8 @@ pub(crate) struct UiPersist {
     /// the floor — [`SharedState::install_document`] refuses it entirely.
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
-    /// See [`Interaction::analyzer_regions`]: the half of a folded region
-    /// that `layout` does not hold.
+    /// Which Analyzer regions are folded, saved beside the layout (see
+    /// [`Interaction::analyzer_regions`]).
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
@@ -866,9 +865,6 @@ impl PictureState {
     /// Install an already normalized appearance at a load boundary.
     pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
         self.appearance = appearance;
-        // A load boundary: adopt the next parameter snapshot verbatim rather
-        // than as an edit, so it cannot rejudge the runtime's links.
-        self.runtime.restore_configuration = true;
     }
     /// The block of lattice the picture is currently showing, which is what
     /// every "is this pitch on the lattice" question has to be asked of.
@@ -915,7 +911,7 @@ impl PictureState {
     /// Display state only — nothing about the tuning, the take, or the
     /// render.
     ///
-    /// Named as a set because the Video pane's "Clear everything" clears it
+    /// Named as a set because the Video pane's "Clear display history" clears it
     /// before a take, and a fifth accumulation would have to join it here or
     /// that button quietly stops living up to its name. Each pane still clears
     /// what it draws — Labels the trail, the Analyzer its roll and spectrogram
@@ -926,17 +922,19 @@ impl PictureState {
     /// lattice keeps what is still sounding while the roll drops it (see
     /// [`NoteRoll::clear`](harmonigraph_core::NoteRoll::clear)). Each clear
     /// answers that for itself; evening them up here would make this do
-    /// something the pane buttons do not. The glow is the one exception —
-    /// dropping every surface's [`GlowFade`](crate::panes::glow_fade::GlowFade)
-    /// does not spare a held note's light, because a light re-seeds rather than
-    /// fading up from nothing (see [`glow_fade::apply`](crate::panes::glow_fade::apply)),
-    /// so a still-sounding node is lit again on the very next frame — this
-    /// only cuts the fade a released node's light was still riding.
+    /// something the pane buttons do not. The glow follows the lattice: each
+    /// surface's [`GlowFade`](crate::panes::glow_fade::GlowFade) drops the
+    /// lights of released notes, cutting the fade they were still riding, and
+    /// keeps a sounding note's light where it is. Dropping that one too would
+    /// not re-light it at once: a new light starts dark under a Glow attack, so
+    /// every held halo would go out and fade back up.
     pub fn clear_accumulated(&mut self) {
         self.runtime.tracker.clear_history();
         self.runtime.tracker.clear_roll();
         self.runtime.spectrum.clear_history();
-        self.surfaces.glow_fade.clear();
+        for glow in self.surfaces.glow_fade.values_mut() {
+            glow.clear_released();
+        }
         self.surfaces.note_names.clear();
     }
     /// The causal tracker's rolling window, filling in as notes arrive.

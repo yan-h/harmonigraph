@@ -194,8 +194,6 @@ fn the_final_dither_breaks_radial_quantization_rings_without_temporal_noise() {
         1.0,
     );
     let grey = glam::Vec4::new(0.72, 0.72, 0.72, 1.0);
-    scene.nodes[0].melody_color = grey;
-    scene.nodes[0].bass_color = grey;
     scene.nodes[0].audio_ring = 0.0;
     scene.pitch_lut.fill(grey);
     scene.view.glow_reach = 1.4;

@@ -57,8 +57,8 @@ pub use config::{
     TILT_STEPS,
 };
 pub(crate) use config::{
-    COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
-    ROLL_LEAD_MAX, ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
+    LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN, ROLL_LEAD_MAX,
+    ROLL_LEAD_RELEASE_MAX, ROLL_SECONDS_MAX, ROLL_SECONDS_MIN,
 };
 // The Video settings sit at the crate root like the analyzer's above, which is
 // where the panes, both shells and the offline renderer name them. They are
@@ -405,8 +405,8 @@ pub fn root_ui(
 }
 
 /// Everything that must happen once per frame before any pane draws:
-/// refresh the per-frame mirrors of the parameters and age out voices
-/// whose fade has completed.
+/// follow the host's camera and tuning parameters and age out voices whose
+/// fade has completed.
 ///
 /// [`root_ui`] calls this itself. It is public for shells that compose
 /// their own layout instead of using the dock — the offline renderer
@@ -586,7 +586,7 @@ pub(crate) struct Moving {
     /// departure's Fade-out delay, its stagger and the presence it holds for
     /// them), or a node's Background glow still moving: its level falling, or
     /// its colour still easing toward its reading
-    /// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), which
+    /// ([`GlowFade::step`](panes::glow_fade::GlowFade::step)), which
     /// can outlast the slices by many seconds.
     releasing: bool,
     /// A picture drawn from audio above silence. Samples arriving are not

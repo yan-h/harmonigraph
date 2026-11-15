@@ -1,6 +1,4 @@
-//! [`ViewConfig`] — the persisted, non-automatable visual settings — plus the
-//! per-frame [`FrameParams`] mirror of the host-automatable appearance
-//! parameters.
+//! [`ViewConfig`] — the persisted, non-automatable visual settings.
 //!
 //! The pieces that are their own shapes rather than fields of the settings
 //! struct live in the submodules beside this one and are re-exported here, so
@@ -8,14 +6,12 @@
 
 mod animation;
 mod drawn_window;
-mod frame_params;
 mod glow_curve;
 mod ring_stack;
 mod windowing;
 
 pub use animation::*;
 pub use drawn_window::*;
-pub use frame_params::*;
 pub use glow_curve::*;
 pub use ring_stack::*;
 
@@ -24,9 +20,10 @@ use ring_stack::{slot_start, Stack};
 use crate::spectral::SpectralReading;
 use crate::style::{Gradient, NoteNames, SevensLabel};
 use crate::{
-    AtmosphereSettings, Camera, ShadowSettings, GAP_MAX, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
-    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES,
-    NODE_RADIUS_FACTOR, PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
+    AtmosphereSettings, Camera, ShadowSettings, COLOR_RANGE_MIN_SPAN, FADE_TIME_MAX, GAP_MAX,
+    GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX,
+    GLOW_STRENGTH_MAX, MARK_THICKNESS_MAX, MAX_DRAWN_NODES, NODE_RADIUS_FACTOR, PITCH_COLOR_MAX,
+    PLUS_SIZE_MAX, RING_INNER_MAX, RING_WIDTH_MAX,
 };
 use harmonigraph_core::{coords, Envelope, LatticePos};
 
@@ -248,6 +245,17 @@ pub struct ViewConfig {
     /// (see [`Gradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
     pub pitch_gradient: Gradient,
+    /// Pitch (MIDI note) mapped to the darkest gradient color: the low end of
+    /// the Mappings page's Pitch color range. Every note is colored by pitch,
+    /// whatever channel carried it, and a note outside the range keeps the
+    /// nearest end color rather than wrapping.
+    ///
+    /// Part of the look beside the gradient it spreads, so a slot, an undo and
+    /// an export from a chosen look carry the two together (#1744).
+    pub darkest_pitch: f32,
+    /// Pitch mapped to the brightest gradient color: the range's high end.
+    /// See [`darkest_pitch`](Self::darkest_pitch).
+    pub brightest_pitch: f32,
     /// How thick the octave band is — the MIDI ring, in quad UV units, whose
     /// inner edge is wherever the layer inside it ended plus one
     /// [`ring_gap`](Self::ring_gap) (see [`rings`](Self::rings)). Every outer
@@ -563,7 +571,7 @@ pub struct ViewConfig {
     /// harmonic is PRESENT. A filter long enough to settle the second is longer
     /// than the first should ever be.
     ///
-    /// Its own times rather than the note Fade, too, because that parameter's
+    /// Its own times rather than the note Fade, too, because that setting's
     /// default is a judgement about MIDI transients. Riding the ring's
     /// steadiness on it means one cannot be tuned without detuning the other.
     /// The Fade still carries the ring's ARRIVAL and DEPARTURE
@@ -574,9 +582,31 @@ pub struct ViewConfig {
     pub spectral_ring_release: f32,
     // ---- Note envelope ---------------------------------------------------
     // How a note ARRIVES and how it LEAVES, for every layer of the node at
-    // once. The DURATION of both is the host-automatable Fade param and lives
-    // in [`FrameParams`]; the shape here is the other half of it, and
-    // [`ViewConfig::envelope`] is where the two are put back together.
+    // once: a duration and a shape, which [`ViewConfig::envelope`] puts
+    // together.
+    /// Seconds a note takes to arrive, and — once it is released — to leave,
+    /// for EVERY layer of the node: the audio ring, the octave glyphs, and the
+    /// melody/bass marks. The Note fade diagram's duration handle.
+    ///
+    /// One time per DIRECTION, so the lattice answers the keys the way it
+    /// lets go of them; a note that came up quickly and left slowly would
+    /// read as two instruments. It costs a short note no brightness, only
+    /// time at full, because the arrival lands before the departure starts
+    /// (see [`ViewConfig::envelope`]).
+    ///
+    /// One time per LAYER too, so an arrival or a release reads as a single
+    /// gesture instead of pieces of the node moving at different rates. The
+    /// octave sectors and the melody/bass marks arrive on the same ramp as
+    /// each other, because a mark and the sector it links back to
+    /// belong to one note — [`ViewConfig::mark_delay`] moves a ring's ramp
+    /// LATER without changing its rate, which is the one thing that may
+    /// differ. A Stagger spread stretches the slices to this × (1 + spread)
+    /// in all.
+    ///
+    /// At most [`FADE_TIME_MAX`]. A look setting beside the curve it pairs
+    /// with, so one drag of the diagram is one undo entry and a slot carries
+    /// both; it was a host parameter until #1744.
+    pub fade_time: f32,
     /// How curved both ends of the note envelope are, 0..=1: 0 the straight
     /// line every layer has always faded on, 1 the sharpest curve on offer.
     /// It walks the exponent of an ease-out — see
@@ -730,14 +760,17 @@ pub struct ViewConfig {
     /// instead. Its own value so that it sits
     /// with the Spiral's other settings on the Analyzer tab.
     pub spiral_bloom: f32,
-    /// The node halo: how far past a node's outermost drawn edge its light
-    /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
+    /// The node halo: how far past a node's rim its light spreads, in the quad
+    /// UV units the layer sizes are in. The rim is the ring stack's outer edge,
+    /// or the mark strip's whenever marks are on, whether or not this node
+    /// wears one ([`glow_span`](crate::glow_span)), so a mark arriving or
+    /// leaving does not resize the light. 0 turns it off —
     /// nothing is drawn at all — so the glow's other fields need no toggle of
     /// their own, and the Glow rows grey them under it.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
-    /// angle, over a falloff sized to the whole node: the node's outermost
-    /// drawn edge plus this reach is the falloff's domain and outer limit.
+    /// angle, over a falloff sized to the whole node: the rim plus this reach is
+    /// the falloff's domain and outer limit.
     ///
     /// [`glow_curve`](Self::glow_curve) says how much light is left at each
     /// distance inside that span. Keeping the two separate makes a wide Reach
@@ -887,39 +920,45 @@ pub struct ViewConfig {
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
     /// node is DRAWING, blurred round the node (`ink_at` in lattice.wgsl):
-    /// every layer's colour at each angle, weighted by that layer's level there
-    /// and by the radial width the stack handed it. So a lit band sector, an
-    /// audio wedge and a mark each light the halo in their own colour and in
-    /// the proportion they occupy the node, and widening a layer on the Layers
-    /// bar moves the light toward its colour with no knob of its own.
+    /// every lit layer's colour at each angle, weighted by that layer's level
+    /// there and by the radial width the stack handed it. So a lit band sector
+    /// and a mark each light the halo in their own colour and in the
+    /// proportion they occupy the node, and widening a layer on the Layers bar
+    /// moves the light toward its colour with no knob of its own. The audio
+    /// ring is drawn and never shone, so it lights nothing.
     ///
-    /// This is how far round that average is taken: at 0 each layer's sectors
-    /// stay distinct arcs of colour, and at 1 the whole node's ink averages
-    /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    /// This is how far round that average is taken: at 0 each layer's colour
+    /// stays near its own arc, softened over about half a radian (a von Mises
+    /// lobe of concentration 4), and at 1 the whole node's ink averages into
+    /// one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
     ///
-    /// A BLEND and not a spread, in the name as on the bar: under the Glow
-    /// heading, beside a Reach that is a distance, a "spread" reads as how far
-    /// the light goes, and this moves no light at all — only what colour it is.
+    /// A smoothing and not a spread, as the bar's "Color smoothing" says: under
+    /// the Glow heading, beside a Reach that is a distance, a "spread" reads as
+    /// how far the light goes, and this moves no light at all — only what
+    /// colour it is.
     pub glow_blend: f32,
     /// Blend from the fixed-peak glow (0) to the original per-channel screen
     /// accumulation (1). Only overlapping halos change; a lone glow is identical.
     pub glow_accumulation: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
-    /// of the exponential its LEVEL and its COLOUR are both carried on — this
-    /// one while the light is coming up, [`glow_release`](Self::glow_release)
-    /// once it is going down.
+    /// of the exponential its LEVEL and its COLOUR are both carried on, each
+    /// value in its own direction: the level, and each slot's and mark's share
+    /// of the light, rise on this and fall on
+    /// [`glow_release`](Self::glow_release) (#1784 G2). So a note joining a lit
+    /// node brings its colour in on the attack while one leaving takes its
+    /// colour out on the release, both at once in an octave handoff.
     ///
     /// Its own pair rather than the note Fade every drawn layer rides, because
     /// the light is not one of those layers. A halo is the slow part of the
     /// picture; stepped with the marks' and the audio ring's own fast
     /// envelopes it flickers with them. On a pair of its own a node's light
-    /// LINGERS past the ink that lit it — the node keeps being drawn into the
-    /// ink strip while its level is above nothing at all — and its hue morphs
-    /// toward a new octave's rather than cutting to it.
+    /// LINGERS past the ink that lit it — the node keeps its light while the
+    /// level is above nothing at all — and its hue morphs toward a new
+    /// octave's rather than cutting to it.
     ///
-    /// One pair for both halves, which is what keeps the two from disagreeing:
-    /// the same coefficient `1 - exp(-dt/tau)` carries the level on the CPU and
-    /// the node's own ink on the GPU (`panes::glow_fade` in harmonigraph-ui).
+    /// One pair for both halves: the coefficient `1 - exp(-dt/tau)` of the one
+    /// a value is heading by carries the level and what the light is made of,
+    /// both on the CPU (`panes::glow_fade` in harmonigraph-ui).
     /// Inert while [`glow_reach`](Self::glow_reach) is 0 — with no light there
     /// is nothing to carry.
     pub glow_attack: f32,
@@ -930,9 +969,8 @@ pub struct ViewConfig {
 }
 
 impl ViewConfig {
-    /// The note envelope, assembled from the two halves it is stored in: the
-    /// shape is a LOOK and lives here, the duration is host-automatable and
-    /// lives in [`FrameParams`].
+    /// The note envelope: [`fade_time`](Self::fade_time) at both ends, on
+    /// [`fade_shape`](Self::fade_shape)'s curve.
     ///
     /// ONE duration at both ends, so a note comes up on the time it goes down
     /// on and there is a single number to say how quick the lattice is. It
@@ -941,9 +979,13 @@ impl ViewConfig {
     /// [`release_level`](harmonigraph_core::Voice::release_level), where that
     /// is written and argued.
     ///
-    /// One assembly point for every envelope a NOTE runs on, so the split is
-    /// invisible past this line and no caller can pair a duration with the
-    /// wrong shape. The shape has already passed through `sanitize`.
+    /// One assembly point for every envelope a NOTE runs on, so no caller can
+    /// pair a duration with the wrong shape. Both have passed through
+    /// `sanitize` on every door a look arrives by — the editor's load, which
+    /// also repairs the stored slots, and `AppearanceDocument::parse` for a
+    /// take's or a file's look — and a bar cannot set either past its range.
+    /// A view built in code skips those doors, and `derive_scene` sanitizes
+    /// its own copy.
     ///
     /// The Note animation section's Note fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
@@ -952,12 +994,8 @@ impl ViewConfig {
     /// them here. What it must not do is re-derive the SHAPE, and
     /// `the_shape_bars_preview_is_the_curve_the_notes_run_on` is what holds
     /// it to this function's answer.
-    pub fn envelope(&self, frame: &FrameParams) -> Envelope {
-        Envelope {
-            attack_time: frame.fade_time,
-            fade_time: frame.fade_time,
-            shape: self.fade_shape,
-        }
+    pub fn envelope(&self) -> Envelope {
+        Envelope { attack_time: self.fade_time, fade_time: self.fade_time, shape: self.fade_shape }
     }
 
     /// Whether a melody/bass mark can be drawn at all: the depth has to leave
@@ -1126,6 +1164,14 @@ impl ViewConfig {
         // every pitch-colored shape reads, so a non-finite one would miss the
         // cache on every lookup as well as drawing a NaN.
         self.pitch_gradient = self.pitch_gradient.sanitized();
+        // The range that gradient is spread over, held to what its bar can
+        // produce: both ends on the MIDI axis, the high end at least
+        // `COLOR_RANGE_MIN_SPAN` above the low, so the readout's two ends are
+        // the two the ramp reads.
+        self.darkest_pitch = finite_or(self.darkest_pitch, fresh.darkest_pitch)
+            .clamp(0.0, PITCH_COLOR_MAX - COLOR_RANGE_MIN_SPAN);
+        self.brightest_pitch = finite_or(self.brightest_pitch, fresh.brightest_pitch)
+            .clamp(self.darkest_pitch + COLOR_RANGE_MIN_SPAN, PITCH_COLOR_MAX);
 
         self.octave_count = crate::octaves::clamp_count(self.octave_count);
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
@@ -1151,11 +1197,11 @@ impl ViewConfig {
         // OVER, so a NaN shape would show as a curve that silently
         // straightens: the picture quietly drawing something other than what
         // the bar reads out, which is exactly what this door is for. The
-        // duration beside it is the Fade param rather than a blob field, and
-        // has no door here to need.
+        // duration beside it, for the same reason, onto its bar's second.
         self.note_animation = self.note_animation.sanitized();
         self.intensity = self.intensity.sanitized();
         self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
+        self.fade_time = finite_or(self.fade_time, fresh.fade_time).clamp(0.0, FADE_TIME_MAX);
 
         // The spectral kernel's width, against that same hole and one more: it
         // is a DIVISOR in the fold's Gaussian, so a 0 from a hand-edited blob
@@ -1402,6 +1448,11 @@ impl Default for ViewConfig {
                 chroma_ramp: 0.069_999_99,
                 ..Gradient::default()
             },
+            // C1 to C8, the seven-octave keyboard range. Notes outside it are
+            // not lost: the ramp holds its end color past either end, so an
+            // outlying note reads as the nearest end rather than wrapping.
+            darkest_pitch: 24.0,
+            brightest_pitch: 108.0,
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct
             // marks rather than a solid annulus, and every layer keeps clear
@@ -1468,6 +1519,14 @@ impl Default for ViewConfig {
             // the ear has finished the note. The straight line is still one
             // drag away.
             fade_shape: 0.313_509_55,
+            // Both ends of a note, so this is read twice: as an arrival long
+            // enough to take the hard edge off a note-on, and as a release
+            // long enough to read as a fade rather than a cut. A third of a
+            // second, as captured from the DAW on 2026-10-07. A
+            // whole second keeps released notes up long enough to blur which
+            // of them are still sounding, and puts a stab's arrival behind
+            // the ear by a beat.
+            fade_time: 0.339_419_16,
             note_animation: NoteAnimationConfig::default(),
             intensity: crate::IntensitySettings::default(),
             note_bloom: 0.800_103_1,

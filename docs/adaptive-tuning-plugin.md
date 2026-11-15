@@ -161,6 +161,7 @@ see [issue #852](https://github.com/yan-h/harmonigraph/issues/852).
 ## Controls
 
 The Tuning pane exposes the keyboard tuning, pitch flexibility, neighborhood radius, allowed axes, half-life, register weight per octave, same-note tolerance, silence timeout and transport reset choices.
+They and the five tuning axes are plugin settings saved in musical settings, not host parameters (#1756); the `tuning-*` host parameter ids an older project holds are not read.
 Defaults are the baseline profile most policy fixtures replay.
 The precision profile used by the paired intentional-E examples is obtained by setting Pitch flexibility to 50 cents.
 
@@ -199,6 +200,8 @@ The core policy fixtures, `crates/harmonigraph-core/src/policy/fixtures.txt`, we
 since that model retired (#1677) they are committed golden data, and the Rust policy is the reference.
 They record every onset in all eighteen musical examples with their seeded context and with every setting the example declared, named on its case line in the plugin's own integer units.
 A setting the replay cannot honour fails the fixture test rather than replaying at a default the example never chose.
+The replay assembles each onset's context through `policy::context`, the one the Hub's sequencer calls,
+so the fixtures describe production's held-voice order, decay origin and deduplication rather than a copy of them (#1750).
 The test compares coordinates exactly and output pitches within 0.001 cent,
 the axis rounding between the model's floating-point logarithms and the plugin's fixed microcents.
 After a deliberate policy change, this rewrites the node and output of each onset that no longer agrees, leaving the rest, and the PR states every line it moves:

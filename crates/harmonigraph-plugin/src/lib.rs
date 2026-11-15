@@ -114,10 +114,9 @@ pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
-    /// Installed by the CLAP wrapper as it constructs the plugin and taken at
-    /// destruction, so every host callback sees one. Only a test that builds
-    /// the plugin without the wrapper runs `process` with none, and then
-    /// nothing records.
+    /// Built at CLAP init and taken at destruction, so every host callback
+    /// sees one. Only a test that builds the plugin without the wrapper runs
+    /// `process` with none, and then nothing records.
     configuration: Option<Box<configuration::Owner>>,
     aggregation: Option<Box<tuning::hub::Hub>>,
     /// The input worker, the one thing that drains the audio thread's rings
@@ -218,9 +217,9 @@ pub struct HarmonigraphParams {
     /// Where following has moved the map, packed by [`lattice_maps::pack`]:
     /// written by the Hub on audio, read by the editor.
     pub map_followed: Arc<std::sync::atomic::AtomicU64>,
-    session: std::sync::OnceLock<Arc<tuning::setup::Shared>>,
-    configuration:
-        std::sync::OnceLock<Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>>,
+    /// The tuning axes, links, Learn and adaptive policy: plugin-owned
+    /// settings rather than host parameters, saved in `musical-settings`.
+    settings: Arc<configuration::Settings>,
     /// Window size in logical pixels, persisted with the plugin state.
     #[persist = "editor-state"]
     pub editor_state: Arc<editor::EguiState>,
@@ -239,27 +238,6 @@ pub struct HarmonigraphParams {
     #[id = "analysis-input"]
     pub analysis_input: EnumParam<AnalysisInputParam>,
 
-    #[id = "tuning-c-offset"]
-    pub c_offset: FloatParam,
-    #[id = "tuning-three"]
-    pub three: FloatParam,
-    #[id = "tuning-five"]
-    pub five: FloatParam,
-    #[id = "tuning-seven"]
-    pub seven: FloatParam,
-    #[id = "tuning-tolerance"]
-    pub tolerance: FloatParam,
-    /// Keeps the pre-merge id: this used to be the pitch class's own fade,
-    /// and it now drives every layer, at both ends of the note. Reusing the
-    /// id means projects automating it keep their value instead of snapping
-    /// back to the default. (The retired "octave-fade" id is simply ignored
-    /// on load.)
-    #[id = "pitch-class-fade"]
-    pub fade: FloatParam,
-    #[id = "darkest-pitch"]
-    pub darkest_pitch: FloatParam,
-    #[id = "brightest-pitch"]
-    pub brightest_pitch: FloatParam,
     #[id = "camera-yaw"]
     pub camera_yaw: FloatParam,
     #[id = "camera-pitch"]
@@ -301,17 +279,12 @@ impl From<AnalysisInput> for AnalysisInputParam {
     }
 }
 
-/// Build a FloatParam entirely from the ParamKey metadata (name, default,
-/// range, skew) so the host-facing parameters can never drift from what
-/// the UI clamps and displays.
+/// Build a FloatParam entirely from the ParamKey metadata (name, default and
+/// range) so the host-facing parameters can never drift from what the UI
+/// clamps and displays.
 fn param_for_key(key: ParamKey) -> FloatParam {
     let range = key.range();
-    let (min, max) = (*range.start(), *range.end());
-    let range = if key.logarithmic() {
-        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(key.skew_steepness()) }
-    } else {
-        FloatRange::Linear { min, max }
-    };
+    let range = FloatRange::Linear { min: *range.start(), max: *range.end() };
     FloatParam::new(key.host_name(), key.default_value(), range)
 }
 
@@ -372,8 +345,7 @@ impl Default for HarmonigraphParams {
             )
             .with_value_to_string(Arc::new(|value| Follow::from_index(value).label().into())),
             map_followed: Default::default(),
-            session: std::sync::OnceLock::new(),
-            configuration: std::sync::OnceLock::new(),
+            settings: Default::default(),
             editor_state: editor::EguiState::from_size(
                 editor::DEFAULT_SIZE.0,
                 editor::DEFAULT_SIZE.1,
@@ -381,14 +353,6 @@ impl Default for HarmonigraphParams {
             ui_state: editor::UiState::new(),
             analysis_input: EnumParam::new("Analyzer Audio Input", AnalysisInputParam::Main)
                 .non_automatable(),
-            c_offset: param_for_key(ParamKey::COffset),
-            three: param_for_key(ParamKey::Three),
-            five: param_for_key(ParamKey::Five),
-            seven: param_for_key(ParamKey::Seven),
-            tolerance: param_for_key(ParamKey::Tolerance),
-            fade: param_for_key(ParamKey::Fade),
-            darkest_pitch: param_for_key(ParamKey::DarkestPitch),
-            brightest_pitch: param_for_key(ParamKey::BrightestPitch),
             camera_yaw: param_for_key(ParamKey::CameraYaw),
             camera_pitch: param_for_key(ParamKey::CameraPitch),
             camera_distance: param_for_key(ParamKey::CameraDistance),
@@ -401,14 +365,6 @@ impl Default for HarmonigraphParams {
 impl HarmonigraphParams {
     fn param_for(&self, key: ParamKey) -> &FloatParam {
         match key {
-            ParamKey::COffset => &self.c_offset,
-            ParamKey::Three => &self.three,
-            ParamKey::Five => &self.five,
-            ParamKey::Seven => &self.seven,
-            ParamKey::Tolerance => &self.tolerance,
-            ParamKey::Fade => &self.fade,
-            ParamKey::DarkestPitch => &self.darkest_pitch,
-            ParamKey::BrightestPitch => &self.brightest_pitch,
             ParamKey::CameraYaw => &self.camera_yaw,
             ParamKey::CameraPitch => &self.camera_pitch,
             ParamKey::CameraDistance => &self.camera_distance,
@@ -423,8 +379,9 @@ impl HarmonigraphParams {
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a HarmonigraphParams,
     pub setter: &'a ParamSetter<'a>,
-    pub configuration:
-        Option<(nice_plug::wrapper::clap::configuration::ConfigurationSnapshot, bool)>,
+    /// The tuning configuration as this frame reads it, once, so every
+    /// slider in the frame shows one coherent value.
+    pub configuration: harmonigraph_ui::params::ConfigurationView,
     /// Keys inside explicit begin_set/end_set gestures. Lives in
     /// EditorShared so simultaneous axes survive across frames (this
     /// adapter is rebuilt every frame).
@@ -433,44 +390,22 @@ pub(crate) struct PluginParamBackend<'a> {
 
 impl ParamBackend for PluginParamBackend<'_> {
     fn lattice_maps(&self) -> Option<harmonigraph_ui::lattice_maps::MapView> {
-        self.params.configuration.get()?;
         Some(lattice_maps::view(self.params))
     }
     fn edit_lattice_map(&self, edit: harmonigraph_ui::lattice_maps::MapEdit) {
         lattice_maps::edit(self.params, self.setter, edit);
     }
     fn tuning_instances(&self) -> Vec<harmonigraph_ui::params::TuningInstance> {
-        if self.params.configuration.get().is_some() {
-            tuning::instances::snapshots()
-        } else {
-            Vec::new()
-        }
+        tuning::instances::snapshots()
     }
     fn edit_tuning_instance(&self, id: u64, edit: harmonigraph_ui::params::InstanceEdit) {
         tuning::instances::edit(id, edit);
     }
     fn configuration(&self) -> Option<harmonigraph_ui::params::ConfigurationView> {
-        self.configuration.map(|(snapshot, pending)| configuration::view(snapshot, pending))
+        Some(self.configuration)
     }
     fn submit_tuning(&self, edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
-        let mut packet = configuration::packet(edit);
-        if let Some((snapshot, _)) = self.configuration {
-            for (i, on) in edit.tempered.into_iter().enumerate() {
-                let index = i + 2;
-                if let (Some(false), Some(value)) = (on, packet.values[index]) {
-                    // Releasing a link freezes its displayed, modulated pitch.
-                    // The host applies its offset again to a submitted base value.
-                    let param = self.params.param_for(ParamKey::TUNING[index]);
-                    packet.values[index] = Some(
-                        param.preview_plain(
-                            (param.preview_normalized(value) - snapshot.modulation[index])
-                                .clamp(0.0, 1.0),
-                        ),
-                    );
-                }
-            }
-        }
-        self.params.configuration.get().map(|mailbox| mailbox.submit(packet).is_ok())
+        Some(self.params.settings.submit(edit))
     }
 
     fn camera_value(&self, key: ParamKey) -> Option<f32> {
@@ -478,26 +413,10 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn get(&self, key: ParamKey) -> f32 {
-        if let (Some((snapshot, _)), Some(index)) =
-            (self.configuration, ParamKey::TUNING.iter().position(|k| *k == key))
-        {
-            return snapshot.raw[index];
-        }
         self.params.param_for(key).value()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
-        if let (Some(mailbox), Some(index)) =
-            (self.params.configuration.get(), ParamKey::TUNING.iter().position(|k| *k == key))
-        {
-            let _ = mailbox.submit(configuration::packet(
-                harmonigraph_core::configuration::ConfigEdit::axis(
-                    index,
-                    harmonigraph_core::tuning::microcents(value),
-                ),
-            ));
-            return;
-        }
         let param = self.params.param_for(key);
         if self.gesture.get()[key as usize] {
             // Inside an explicit gesture (drag): just set.
@@ -522,9 +441,6 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn begin_set(&self, key: ParamKey) {
-        if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
-            return;
-        }
         let mut active = self.gesture.get();
         if !active[key as usize] {
             self.setter.begin_set_parameter(self.params.param_for(key));
@@ -534,9 +450,6 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 
     fn end_set(&self, key: ParamKey) {
-        if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
-            return;
-        }
         if self.gesture.get()[key as usize] {
             self.setter.end_set_parameter(self.params.param_for(key));
             let mut active = self.gesture.get();
@@ -686,7 +599,6 @@ impl Default for Harmonigraph {
         let aggregation = tuning::hub::Hub::new();
         let wake = aggregation.shared.clone();
         take_control.set_stop_wakeup(move || wake.request_main());
-        params.session.set(aggregation.shared.clone()).unwrap_or_else(|_| unreachable!());
         let editor_shared = Arc::new(editor::EditorLock::new(
             editor::EditorShared::new(
                 consumer,
@@ -734,7 +646,9 @@ impl Plugin for Harmonigraph {
         // the map index, so the value loaded is the value shown. Any of them
         // absent takes its default so a previous preset cannot leak in: every
         // state the plugin saves carries all of them, so only an older or
-        // hand-made one omits any.
+        // hand-made one omits any. The retired `tuning-*` ids of a project
+        // saved before #1756 need nothing here: nice-plug drops an id it does
+        // not know, and the musical settings' restore says so.
         use nice_plug::plugin::ParamValue;
         for id in lattice_maps::HOST_LANE_IDS {
             let value = match state.params.get(id) {
@@ -841,14 +755,6 @@ impl Plugin for Harmonigraph {
             if let Some(hub) = &mut self.aggregation {
                 hub.stop();
             }
-            let mailbox = self.params.configuration.get().unwrap();
-            let generation = mailbox.reset_generation.load(Ordering::Relaxed);
-            if let Some(next) = generation.checked_add(1) {
-                mailbox.reset_generation.store(next, Ordering::Release);
-            } else {
-                owner.fault();
-            }
-            mailbox.published.publish(owner.snapshot);
         }
         self.samples_processed = 0;
         self.audio_producer.reset();
@@ -988,15 +894,19 @@ impl Plugin for Harmonigraph {
 impl ClapPlugin for Harmonigraph {
     const CLAP_PERFORMANCE: bool = true;
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
-        Some(Arc::new(tuning::setup::Adapter(
-            self.aggregation.as_ref().unwrap().shared.clone(),
-            None,
-        )))
+        Some(Arc::new(configuration::HubSetup {
+            instance: tuning::setup::Adapter(
+                self.aggregation.as_ref().unwrap().shared.clone(),
+                None,
+            ),
+            settings: self.params.settings.clone(),
+        }))
     }
     fn clap_editor_host(&mut self, host: Arc<dyn nice_plug::wrapper::clap::EditorHost>) {
         self.editor_host = Some(host);
     }
     fn clap_main_init(&mut self) -> bool {
+        self.configuration = Some(Box::new(configuration::Owner::new(&self.params)));
         self.aggregation.as_mut().unwrap().register();
         true
     }
@@ -1099,41 +1009,6 @@ impl ClapPlugin for Harmonigraph {
         "map-sevenths-extension",
         "map-follow",
     ];
-    const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
-        &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
-    const CLAP_CONFIGURATION_FIELDS: &'static [&'static str] = &[configuration::MUSICAL_SETTINGS];
-    fn clap_configuration_install(
-        &mut self,
-        handle: Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>,
-    ) {
-        let owner = Box::new(configuration::Owner::new(&self.params));
-        handle.published.publish(owner.snapshot);
-        self.params
-            .configuration
-            .set(handle)
-            .unwrap_or_else(|_| panic!("configuration installed twice"));
-        self.configuration = Some(owner);
-    }
-    fn clap_configuration_prepare(
-        state: &nice_plug::plugin::PluginState,
-    ) -> Result<
-        nice_plug::wrapper::clap::configuration::ConfigurationEdit,
-        nice_plug::wrapper::clap::configuration::SubmitError,
-    > {
-        configuration::prepare(state)
-    }
-    fn clap_configuration_preview(
-        mut snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
-    ) -> nice_plug::wrapper::clap::configuration::ConfigurationSnapshot {
-        configuration::resolve_preview(&mut snapshot);
-        snapshot
-    }
-    fn clap_configuration_save(
-        snapshot: nice_plug::wrapper::clap::configuration::ConfigurationSnapshot,
-        state: &mut nice_plug::plugin::PluginState,
-    ) {
-        configuration::save(snapshot, state);
-    }
     fn clap_configuration_begin(
         &mut self,
         boundary: nice_plug::wrapper::clap::configuration::ConfigurationBoundary,
@@ -1145,25 +1020,10 @@ impl ClapPlugin for Harmonigraph {
             lattice_maps::offsets(&self.params),
             self.params.map_follow.unmodulated_plain_value(),
         );
-        owner.begin(boundary, &self.take, self.presentation_seconds);
-    }
-    fn clap_configuration_adopt(&mut self) {
-        self.configuration.as_mut().unwrap().adopt();
+        owner.begin(boundary, &self.take);
     }
     fn clap_configuration_segment(&mut self, start: u32, frames: u32) {
         self.configuration.as_mut().unwrap().segment(start, frames);
-    }
-    fn clap_configuration_apply(
-        &mut self,
-        command: nice_plug::wrapper::clap::configuration::ConfigurationCommand,
-        commit: nice_plug::wrapper::clap::configuration::ConfigurationCommit,
-    ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationSnapshot> {
-        let owner = self.configuration.as_mut().unwrap();
-        let result = owner.apply(command, commit);
-        if result.is_none() {
-            self.params.configuration.get().unwrap().published.publish(owner.snapshot);
-        }
-        result
     }
     /// The Hub's own notes reach learning through its own sequenced row, at
     /// the time they are scheduled to sound, so there is nothing left for a
@@ -1173,23 +1033,16 @@ impl ClapPlugin for Harmonigraph {
         event: nice_plug::wrapper::clap::configuration::OwnedInput,
     ) {
         let owner = self.configuration.as_mut().unwrap();
-        owner.maps.observe(event, owner.reducer.resolved());
+        owner.maps.observe(event, owner.current());
     }
-    fn clap_configuration_group_end(
-        &mut self,
-        _sample: i64,
-    ) -> Option<nice_plug::wrapper::clap::configuration::ConfigurationEdit> {
-        let retuning = self.aggregation.as_ref().unwrap().retuning();
+    fn clap_configuration_group_end(&mut self, _sample: i64) {
+        let hub = self.aggregation.as_ref().unwrap();
         let owner = self.configuration.as_mut().unwrap();
-        let result = owner.group_end(retuning);
-        self.params.configuration.get().unwrap().published.publish(owner.snapshot);
-        result
+        owner.group_end(hub.retuning(), |scratch| hub.held_classes(scratch));
     }
     fn clap_configuration_fault(&mut self) {
-        let owner = self.configuration.as_mut().unwrap();
-        owner.fault();
+        self.configuration.as_mut().unwrap().fault();
         self.aggregation.as_mut().unwrap().configuration_exhausted();
-        self.params.configuration.get().unwrap().published.publish(owner.snapshot);
     }
 
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";

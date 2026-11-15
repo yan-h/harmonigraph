@@ -1,7 +1,7 @@
 //! Instance settings and diagnostics. Saved participation and visibility are
 //! independent; pairing remains automatic and has no persisted identity.
 use nice_plug::plugin::PluginState;
-use nice_plug::wrapper::clap::setup::{Prepared, Setup};
+use nice_plug::wrapper::clap::setup::{Prepared, Serviced, Setup};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -275,7 +275,7 @@ impl Setup for Adapter {
     fn install_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>) {
         assert!(self.0.wake.set(wake.into()).is_ok());
     }
-    fn service(&self) -> bool {
+    fn service(&self) -> Serviced {
         self.0.diagnostics.log(&self.0);
         let adopted = self.adopt_requested_delay();
         if let Some(params) = &self.1 {
@@ -283,14 +283,15 @@ impl Setup for Adapter {
                 .requested_multiplier
                 .store(params.delay.value().max(1) as u32, Ordering::Release);
         }
-        self.0.dirty.swap(false, Ordering::AcqRel) || adopted
+        let dirty = self.0.dirty.swap(false, Ordering::AcqRel);
+        Serviced { modified: dirty || adopted, values: adopted, text: false }
     }
 }
 
 impl Adapter {
     /// Take a Hub's "apply to all" request, if there is one. Writing the
-    /// parameter here and reporting true is exactly what this trait's `true`
-    /// means — a host parameter rescan and a dirty state — so the value the
+    /// parameter here and reporting it as a value change and a modified
+    /// project is exactly what the host needs to hear, so the value the
     /// project saves is the value on screen. The latency that follows is
     /// reported from this Tune's own process callback, which is what asks the
     /// host to reactivate it.

@@ -8,7 +8,7 @@ pub(super) fn apply(scene: &mut Scene, state: &mut crate::PictureState, surface:
     // single assembly point is what keeps a caller from pairing one with the
     // wrong other — the Fade bar's preview is the one exception the doc there
     // names, and this was a second, undeclared one.
-    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let env = state.appearance.view.envelope();
     let motion = state.surfaces.node_motion.entry(surface).or_default();
     motion.step(
         scene,

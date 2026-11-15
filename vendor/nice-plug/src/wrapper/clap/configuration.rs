@@ -1,58 +1,8 @@
-//! Opt-in, fixed-value configuration ingress. The plugin owns musical reduction;
-//! this module owns off-thread submission and input retention. It carries no
-//! assignment policy or performance output emitter.
+//! The configuration walk's input: every owned host input of a callback, in
+//! input order, with its exact sample. The plugin owns its musical
+//! configuration itself; this module only retains the input it walks.
 
-use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-
-pub const CONFIG_COMMANDS: usize = 128;
 pub const INPUT_SCAN: usize = 2048;
-pub const CONFIG_PARAMETERS: usize = 5;
-pub const PAYLOAD_WORDS: usize = 18;
-/// Header, the four parameter arrays, the payload, then the status word.
-const PUBLISHED_WORDS: usize = 23 + PAYLOAD_WORDS + 1;
-const STATUS_WORD: usize = PUBLISHED_WORDS - 1;
-
-/// Plugin-defined fixed semantic payload plus one atomic parameter-write batch.
-/// Values are ordinary unmodulated plugin units, not CLAP's normalized units.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ConfigurationEdit {
-    pub values: [Option<f32>; CONFIG_PARAMETERS],
-    pub payload: [i32; PAYLOAD_WORDS],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConfigurationOrigin {
-    Ui,
-    Restore,
-    Automation,
-    Flush,
-    Learning,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ConfigurationCommand {
-    pub id: u64,
-    pub origin: ConfigurationOrigin,
-    pub edit: ConfigurationEdit,
-}
-
-/// A coherent applied value. The two numeric forms have distinct consumers:
-/// host save uses unmodulated plain; get_value uses modulated normalized values.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ConfigurationSnapshot {
-    pub applied_id: u64,
-    pub revision: u64,
-    pub effective_sample: i64,
-    pub raw: [f32; CONFIG_PARAMETERS],
-    pub unmodulated: [f32; CONFIG_PARAMETERS],
-    pub normalized: [f32; CONFIG_PARAMETERS],
-    /// Exact transient host offset; never infer it by subtracting clamped values.
-    pub modulation: [f32; CONFIG_PARAMETERS],
-    pub payload: [i32; PAYLOAD_WORDS],
-    pub status: u32,
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct ConfigurationBoundary {
@@ -63,214 +13,9 @@ pub struct ConfigurationBoundary {
     pub playing: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct ConfigurationCommit {
-    pub sample: i64,
-    pub modulation: [f32; CONFIG_PARAMETERS],
-    pub raw: [f32; CONFIG_PARAMETERS],
-    pub unmodulated: [f32; CONFIG_PARAMETERS],
-    pub normalized: [f32; CONFIG_PARAMETERS],
-}
-
-// Atomic payload words, not a racing ordinary/volatile struct copy. Only the
-// serialized audio owner publishes. Non-RT readers may retry; audio never does.
-pub struct PublishedConfiguration {
-    sequence: AtomicU64,
-    words: [AtomicU64; PUBLISHED_WORDS],
-}
-impl Default for PublishedConfiguration {
-    fn default() -> Self {
-        Self { sequence: AtomicU64::new(0), words: std::array::from_fn(|_| AtomicU64::new(0)) }
-    }
-}
-impl PublishedConfiguration {
-    pub fn publish(&self, value: ConfigurationSnapshot) {
-        let sequence = self.sequence.load(Ordering::Relaxed);
-        // Counter exhaustion is a visible protocol failure; never wrap a reader's
-        // validation sequence. This requires reinitialization after ~2^63 writes.
-        if sequence > u64::MAX - 2 {
-            self.words[STATUS_WORD].fetch_or(2, Ordering::SeqCst);
-            return;
-        }
-        self.sequence.store(sequence + 1, Ordering::SeqCst);
-        let mut words = [0; PUBLISHED_WORDS];
-        words[0] = value.applied_id;
-        words[1] = value.revision;
-        words[2] = value.effective_sample as u64;
-        for (i, v) in value
-            .raw
-            .into_iter()
-            .chain(value.unmodulated)
-            .chain(value.normalized)
-            .chain(value.modulation)
-            .enumerate()
-        {
-            words[3 + i] = u64::from(v.to_bits());
-        }
-        for (i, v) in value.payload.into_iter().enumerate() {
-            words[23 + i] = v as u32 as u64;
-        }
-        words[STATUS_WORD] = u64::from(value.status);
-        for (cell, word) in self.words.iter().zip(words) {
-            cell.store(word, Ordering::SeqCst);
-        }
-        self.sequence.store(sequence + 2, Ordering::SeqCst);
-    }
-
-    /// Off-thread only. All payload accesses are atomic even on failed reads.
-    pub fn load(&self) -> ConfigurationSnapshot {
-        loop {
-            let before = self.sequence.load(Ordering::SeqCst);
-            if before & 1 != 0 {
-                std::hint::spin_loop();
-                continue;
-            }
-            let words = self.words.each_ref().map(|word| word.load(Ordering::SeqCst));
-            if before != self.sequence.load(Ordering::SeqCst) {
-                continue;
-            }
-            return ConfigurationSnapshot {
-                applied_id: words[0],
-                revision: words[1],
-                effective_sample: words[2] as i64,
-                raw: std::array::from_fn(|i| f32::from_bits(words[3 + i] as u32)),
-                unmodulated: std::array::from_fn(|i| f32::from_bits(words[8 + i] as u32)),
-                normalized: std::array::from_fn(|i| f32::from_bits(words[13 + i] as u32)),
-                modulation: std::array::from_fn(|i| f32::from_bits(words[18 + i] as u32)),
-                payload: std::array::from_fn(|i| words[23 + i] as u32 as i32),
-                status: words[STATUS_WORD] as u32,
-            };
-        }
-    }
-}
-
-struct Producer {
-    queue: rtrb::Producer<ConfigurationCommand>,
-    next_id: u64,
-    /// Accepted host restore intent, not another resolver. Retired only after an
-    /// applied owner publication includes this restore, never on queue transfer.
-    shadow: Option<ConfigurationSnapshot>,
-}
-
+/// The owned input pool has no free cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SubmitError {
-    Full,
-    Invalid,
-    CounterExhausted,
-}
-
-pub struct ConfigurationMailbox {
-    producer: Mutex<Producer>,
-    pub published: PublishedConfiguration,
-    pub dirty: AtomicBool,
-    pub notification_rejected: AtomicBool,
-    pub gesture_debt: AtomicBool,
-    submission_rejected: AtomicBool,
-    pub reset_generation: AtomicU64,
-    /// Unsent older UI value notifications may not overwrite a newer accepted
-    /// restore in the host cache. Its shadow also overlays readback and save.
-    pub accepted_restore: AtomicU64,
-    pub accepted_command: AtomicU64,
-    notify: Box<dyn Fn() + Send + Sync>,
-}
-
-impl ConfigurationMailbox {
-    pub(crate) fn new(
-        notify: Box<dyn Fn() + Send + Sync>,
-    ) -> (Arc<Self>, rtrb::Consumer<ConfigurationCommand>) {
-        let (queue, consumer) = rtrb::RingBuffer::new(CONFIG_COMMANDS);
-        (
-            Arc::new(Self {
-                producer: Mutex::new(Producer { queue, next_id: 1, shadow: None }),
-                published: PublishedConfiguration::default(),
-                dirty: AtomicBool::new(false),
-                notification_rejected: AtomicBool::new(false),
-                gesture_debt: AtomicBool::new(false),
-                submission_rejected: AtomicBool::new(false),
-                reset_generation: AtomicU64::new(0),
-                accepted_restore: AtomicU64::new(0),
-                accepted_command: AtomicU64::new(0),
-                notify,
-            }),
-            consumer,
-        )
-    }
-
-    /// Main/editor thread only; a single producer mutex serializes UI, restore
-    /// and future nonparameter edits. No audio caller takes this mutex.
-    pub fn submit(&self, edit: ConfigurationEdit) -> Result<u64, SubmitError> {
-        if edit.values.iter().flatten().any(|v| !v.is_finite()) {
-            return Err(SubmitError::Invalid);
-        }
-        let mut producer = self.producer.lock();
-        let id = producer.next_id;
-        let next = id.checked_add(1).ok_or(SubmitError::CounterExhausted)?;
-        producer
-            .queue
-            .push(ConfigurationCommand { id, origin: ConfigurationOrigin::Ui, edit })
-            .map_err(|_| {
-                self.submission_rejected.store(true, Ordering::Release);
-                SubmitError::Full
-            })?;
-        self.submission_rejected.store(false, Ordering::Release);
-        producer.next_id = next;
-        self.accepted_command.store(id, Ordering::Release);
-        drop(producer);
-        (self.notify)();
-        Ok(id)
-    }
-
-    /// Preparation and generic visual restore happen off audio in `apply_visual`.
-    /// Reserve the queue slot first; failure changes no accepted musical state.
-    pub(crate) fn restore(
-        &self,
-        prepare_and_apply: impl FnOnce() -> Result<
-            (ConfigurationEdit, ConfigurationSnapshot),
-            SubmitError,
-        >,
-    ) -> Result<u64, SubmitError> {
-        let mut producer = self.producer.lock();
-        if producer.queue.slots() == 0 {
-            return Err(SubmitError::Full);
-        }
-        let id = producer.next_id;
-        let next = id.checked_add(1).ok_or(SubmitError::CounterExhausted)?;
-        let (edit, mut shadow) = prepare_and_apply()?;
-        shadow.applied_id = id;
-        producer.shadow = Some(shadow);
-        self.accepted_restore.store(id, Ordering::Release);
-        self.dirty.store(true, Ordering::Release);
-        // Reserved under the sole producer lock. A consumer can only free space.
-        producer
-            .queue
-            .push(ConfigurationCommand { id, origin: ConfigurationOrigin::Restore, edit })
-            .expect("reserved configuration command slot");
-        producer.next_id = next;
-        self.accepted_command.store(id, Ordering::Release);
-        drop(producer);
-        (self.notify)();
-        Ok(id)
-    }
-
-    pub fn visible(&self) -> (ConfigurationSnapshot, bool) {
-        let mut producer = self.producer.lock();
-        let mut applied = self.published.load();
-        if self.notification_rejected.load(Ordering::Acquire) {
-            applied.status |= 4;
-        }
-        if self.submission_rejected.load(Ordering::Acquire) {
-            applied.status |= 8;
-        }
-        if let Some(mut shadow) = producer.shadow {
-            if applied.applied_id < shadow.applied_id {
-                shadow.status |= applied.status;
-                return (shadow, true);
-            }
-            producer.shadow = None;
-        }
-        (applied, self.accepted_command.load(Ordering::Acquire) > applied.applied_id)
-    }
-}
+pub struct Full;
 
 /// Exact owned CLAP input values, shared with the later performance adapter.
 /// Signed wildcard addresses, event flags and f64 tuning survive capture.
@@ -343,9 +88,9 @@ impl InputStorage {
     pub fn available(&self) -> usize {
         INPUT_SCAN - self.len
     }
-    pub fn push(&mut self, input: OwnedInput) -> Result<(), SubmitError> {
+    pub fn push(&mut self, input: OwnedInput) -> Result<(), Full> {
         if self.len == INPUT_SCAN {
-            return Err(SubmitError::Full);
+            return Err(Full);
         }
         self.cells[(self.head + self.len) % INPUT_SCAN] = Some(input);
         self.len += 1;
@@ -392,16 +137,5 @@ impl InputStorage {
     }
 }
 
-const _: () = assert!(std::mem::size_of::<ConfigurationCommand>() <= 256);
 const _: () = assert!(std::mem::size_of::<Option<OwnedInput>>() <= 192);
 const _: () = assert!(std::mem::align_of::<OwnedInput>() <= 8);
-
-#[cfg(feature = "clap-boundary-tests")]
-pub fn print_test_memory_layout() {
-    println!("LEDGER configuration mailbox [command,owner] {:?}",
-        [std::mem::size_of::<ConfigurationCommand>(), std::mem::size_of::<ConfigurationMailbox>()]);
-}
-#[cfg(feature = "clap-boundary-tests")]
-pub fn test_memory_mailbox() -> (Arc<ConfigurationMailbox>, impl Sized) {
-    ConfigurationMailbox::new(Box::new(|| {}))
-}

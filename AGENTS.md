@@ -175,6 +175,21 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 - A project at 44.1 kHz, which is within the use: the live heatmap's fresh edge reads its lag at 48 kHz, 9% short (15 ms at Precise), inside the strip's 120 ms freshness allowance, so the cost is cheap. An export's edge is exact: it reads ahead at the soundtrack's own rate.
 - The standalone synth below 5 frames a second: each frame restarts its run, so the heatmap and the curve draw nothing until frames come faster.
 
+**Cases the region folds go without** (PR #1785), each with its cost when it occurs:
+
+- A project saved with an Analyzer region folded before region folds kept their space: it reopens with the Analyzer at its folded width, and unfolding gives the width back to nothing; a divider drag does.
+- A section fold clicked on a frame whose pass egui repeats: it draws the new fold in the old window for that one frame.
+
+**Cases the tuning settings go without** (PR #1795), each with its cost when it occurs:
+
+- More than 128 editor edits queued while the Hub runs no audio: the rest are refused with the Tuning pane's notice and a Console line, and a restore then is refused whole with a line in the editor's Console and in the macOS log.
+- A save between an editor edit and the Hub's next callback stores the configuration before the edit: one host block of it while audio runs, and for as long as it does not; the slider and the file both hold the value before the edit until then.
+- After lost input, editor edits and Learn keep applying until the host resets; the fault notice stays and a take recorded after the loss refuses its configuration (Yan's answer, #1795, recorded in `docs/intent/tuning.md`).
+
+**Cases the glow goes without** (PR #1791), each with its cost when it occurs:
+
+- More than `MAX_LIGHTS` (4,096) lit nodes reaching the lattice renderer, which no producer sends: `GlowFade` is the only cap, and the renderer checks it with a `debug_assert` alone. A release build grows the light strip to the next power of two and draws every halo up to the adapter's texture limit (16,384 rows on Apple silicon); past that, which only a window over 16,384 lit nodes could reach, creating the strip fails wgpu's validation.
+
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.

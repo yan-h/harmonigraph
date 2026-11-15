@@ -157,8 +157,8 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
 
     // A unit-length arrival, which is the whole curve: the shape lives in the
     // fraction and not in the seconds, so any positive duration draws it.
-    let envelope = harmonigraph_scene::ViewConfig::default()
-        .envelope(&harmonigraph_scene::FrameParams { fade_time: 1.0, ..Default::default() });
+    let envelope =
+        harmonigraph_scene::ViewConfig { fade_time: 1.0, ..Default::default() }.envelope();
     let (left, right) = (points[0].x, points[points.len() - 1].x);
     let (floor, ceiling) = (points[0].y, points[points.len() - 1].y);
     assert!(right > left, "the line runs backwards, {left} to {right}");
@@ -1353,6 +1353,14 @@ fn a_configuration_fault_asks_for_a_host_reset() {
     assert_eq!(notices(1), [false, true], "incomplete held state");
     assert_eq!(notices(2), [true, false], "configuration fault");
     assert_eq!(notices(3), [true, false], "fault and incomplete held state");
+    let shapes = |status| {
+        let mut state = fresh();
+        state.picture.runtime.configuration_status = status;
+        tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes
+    };
+    let too_many = &panes::tuning::too_many_pitches_notice();
+    assert!(text_y(&shapes(16), too_many).is_some(), "more pitches than Learn reads");
+    assert!(text_y(&shapes(0), too_many).is_none());
 }
 
 /// The size a settings pane is soloed at to make it scroll: narrow enough that
