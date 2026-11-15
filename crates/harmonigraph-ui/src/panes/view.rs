@@ -261,14 +261,11 @@ fn sevens_rows(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
         &mut appearance.view.max_sevens,
         appearance.view.sevens_size,
     )
-    .show(ui)
-    .on_hover_text(
+    .hint(
         "Which seventh layers the lattice draws and which of them is home, \
-             counted in seventh steps from the layer containing C. Drag an end to \
-             add or drop layers on that side, the middle mark to move home, \
-             between them to slide the whole stack. Double-click for the home \
-             layer alone.",
-    );
+             counted in seventh steps from the layer containing C.",
+    )
+    .show(ui);
 
     let has_depth = appearance.view.max_sevens != appearance.view.min_sevens;
     ui.add_enabled_ui(has_depth, |ui| {

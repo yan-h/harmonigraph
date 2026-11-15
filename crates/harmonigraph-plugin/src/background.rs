@@ -693,7 +693,7 @@ mod tests {
         // take's run — and the transport since stopped: the two conditions
         // the debounce needs before it will end a take.
         h.recorder.is_armed();
-        h.recorder.run(0.0, 0.0);
+        h.recorder.record(0.0, Some(0.0));
         let on = CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = h.recorder.publish_note(on.into());
 

@@ -69,7 +69,6 @@ pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
     SharedState, SurfaceState, TakeState,
 };
-pub use text::use_renderer_font_texture;
 pub use video::{
     LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender, VideoEncoder,
     STOP_BAR_RANGE, TAIL_RANGE,

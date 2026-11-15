@@ -1475,14 +1475,13 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
             harmonigraph_take::CanonicalRecord::Delta(delta)
                 if matches!(delta.event.kind, harmonigraph_take::NoteKind::On { .. }) =>
             {
-                delta.timing
+                Some(delta.event.t)
             }
             _ => None,
         })
-        .expect("the onset reached the display lane with its own timing");
-    assert_eq!(onset.input, 64, "the sample it arrived at");
-    assert_eq!(onset.sample, 64 + 512, "and the sample it is scheduled to sound at");
-    assert_eq!(onset.planned, Some(onset.sample));
+        .expect("the onset reached the display lane");
+    let sample = onset * 48_000.0;
+    assert!((sample - f64::from(64 + 512)).abs() < 1e-6, "drawn where it sounds: {sample}");
 }
 
 /// A paired Tune's pressure reaches the display as an expression on the note
