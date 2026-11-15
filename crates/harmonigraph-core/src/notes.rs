@@ -1460,15 +1460,16 @@ mod tests {
         assert_eq!(tracker.voices().next().unwrap().on_time, 1.0);
     }
 
-    /// One voice as a canonical source PUBLISHES it, which is the only shape
-    /// that carries a lifetime and so the only one a baseline can resume.
+    /// One voice as a canonical source PUBLISHES it: accepted output, with the
+    /// lifetime a baseline resumes it by and a real `onset`.
     ///
     /// `AcceptedOutput` is the load-bearing field and the reason this helper
     /// exists: `VoiceBaseline::default()` is `ObservedDirect`, which
     /// `SourceBaseline::validate` rejects on every source but
     /// [`SourceId::DIRECT`] — so the obvious fixture is refused, and refused
     /// for a reason that has nothing to do with the note. Saying
-    /// `AcceptedOutput` then requires a nonzero lifetime and a real `onset`.
+    /// `AcceptedOutput` then requires a real `onset`, and every restated voice
+    /// needs a nonzero lifetime.
     fn published_voice(note: u8, lifetime: u64) -> VoiceBaseline {
         VoiceBaseline {
             note,
