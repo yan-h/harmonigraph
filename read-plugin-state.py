@@ -60,6 +60,16 @@ STATE_START = b'{"version"'
 # "never open before a save", a warning a session acts on.
 OUR_PARAMS = {"camera-yaw", "tuning-engine", "tuning_delay"}
 
+# Host parameters a current build no longer declares, and the look field that
+# holds the setting now. A project saved before #1744 still carries their
+# values; the plugin ignores them on load, so they are labelled rather than
+# shown as live.
+RETIRED_PARAMS = {
+    "pitch-class-fade": "view.fade_time",
+    "darkest-pitch": "view.darkest_pitch",
+    "brightest-pitch": "view.brightest_pitch",
+}
+
 VIEW_SOURCE = pathlib.Path(__file__).resolve().parent / "crates/harmonigraph-scene/src/view/mod.rs"
 
 
@@ -299,7 +309,9 @@ def main() -> None:
             print(f"\n=== instance {n} ===")
         print("\n--- params (host-automatable; always current) ---")
         for k, v in sorted(st.get("params", {}).items()):
-            print(f"  {k}: {list(v.values())[0]}")
+            retired = RETIRED_PARAMS.get(k)
+            note = f"  (retired by #1744, ignored on load; the look's {retired} holds it)" if retired else ""
+            print(f"  {k}: {list(v.values())[0]}{note}")
         if not ui:
             # A Tune has no editor, so its missing ui-state is not the trap.
             if set(st.get("params", {})) == {"tuning_delay"}:
