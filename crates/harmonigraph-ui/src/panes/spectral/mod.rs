@@ -693,10 +693,8 @@ pub(crate) fn spectral_pane(
     if let Some(drag) = orientation_drag {
         drag.finish(&painter, rect, state);
     }
-    match song {
-        Some(window) => tape::keep_window(ui, surface, window, &mut state.runtime.tape),
-        None if tape::editor(navigation) => state.runtime.tape.window = None,
-        None => {}
+    if let Some(window) = song {
+        tape::keep_window(ui, surface, window);
     }
 }
 
