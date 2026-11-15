@@ -1483,12 +1483,17 @@ mod tests {
 
         // The worker has the analysis out while it analyzes, so wait for a
         // moment it has given it back.
+        let started = Instant::now();
         let (shared, lag) = loop {
             let shared = plugin.editor_shared.lock();
             if let Some(lag) = shared.input.analysis_lag() {
                 break (shared, lag);
             }
             drop(shared);
+            assert!(
+                started.elapsed() < ANALYSIS_DEADLINE,
+                "the input worker held the analysis out for {ANALYSIS_DEADLINE:?}",
+            );
             std::thread::sleep(background::POLL);
         };
         assert_eq!(shared.ui.picture.appearance.camera.yaw, 1.23);

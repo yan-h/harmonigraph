@@ -421,12 +421,9 @@ fn the_plan_decides_the_layout_without_a_frame() {
 /// reads another level — so a drag would pay a full upload, every frame, for
 /// as long as it lasted. On the ladder the width holds across a whole rung.
 ///
-/// Swept in both directions: widening is the harder one, since it reaches
-/// back to slabs the window did not want a frame ago.
+/// Swept in both directions, a frame of drag at a time.
 #[test]
 fn dragging_the_span_holds_the_grid_between_ladder_steps() {
-    let interval = crate::AudioSpectrum::FFT_INTERVAL;
-    let lag = 0.5 * 8192.0 / 48000.0;
     let cols = LIVE_SLAB_CAP as usize;
     // One rung, end to end: at the 1024-slab cap a width holds while the
     // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
@@ -434,34 +431,15 @@ fn dragging_the_span_holds_the_grid_between_ladder_steps() {
     // is a real re-layout and not what this is about.
     let rung = live_slab(30.0, cols);
     let (lo, hi) = (rung * 520.0, rung * 1010.0);
-
-    let mut widths = std::collections::BTreeSet::new();
-
-    // Hold the widest Span a while, then sweep.
-    let settled = hi + 10.0;
-    let frames = ((settled + 40.0) / interval) as usize;
-    let mut dragged = 0u32;
-    for i in 0..frames {
-        let now = i as f64 * interval + lag;
-        // Once the history is deep enough, sweep the Span down and back up,
-        // a frame at a time as a drag delivers it.
-        let span = if now < settled {
-            hi
-        } else {
-            dragged += 1;
-            let phase = (dragged as f64 / 600.0).min(2.0);
-            if phase <= 1.0 {
-                hi - (hi - lo) * phase
-            } else {
-                lo + (hi - lo) * (phase - 1.0)
-            }
-        };
-
-        let bucket = live_slab(span, cols);
-        widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
-    }
-
-    assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
+    let widths: std::collections::BTreeSet<i64> = (0..=1200)
+        .map(|frame| {
+            let phase = f64::from(frame) / 600.0;
+            let span =
+                if phase <= 1.0 { hi - (hi - lo) * phase } else { lo + (hi - lo) * (phase - 1.0) };
+            // Microseconds, to compare exactly.
+            (live_slab(span, cols) * 1e6).round() as i64
+        })
+        .collect();
     assert_eq!(
         widths.len(),
         1,
@@ -1591,8 +1569,13 @@ mod gpu {
         push(&mut tally, &mut spectrum, 6, 0.024);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
         // Clear display history, and the history starting again after it:
-        // no delta can describe that.
+        // no delta can describe that. A few columns after it, which without
+        // the Clear would move a slab or two of the run and go as a delta.
         spectrum.clear_history();
+        push(&mut tally, &mut spectrum, 6, 0.0);
+        let rebuilds = tally.rebuilds;
+        frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
+        assert!(tally.rebuilds > rebuilds, "the run after a Clear was sent as a delta");
         push(&mut tally, &mut spectrum, 40, 0.0);
         frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));
         push(&mut tally, &mut spectrum, 8, 0.0);
