@@ -121,6 +121,7 @@ how often it occurs here, and what it costs when it does.
 
 **Use.** Yan alone, composing in Bitwig Studio on macOS 14 or later, on Apple silicon with a 144 Hz display,
 and exporting the pieces as videos.
+The projects run at 44.1 or 48 kHz (Yan, 2026-11-14).
 One or two personal Bitwig projects hold saved state.
 Anyone else builds from source with rough edges promised (README), and no case is handled for their sake.
 Linux is only where cloud agent sessions build and test.
@@ -155,7 +156,7 @@ the value on screen is the value the file holds.
 - An analysis not given back before the next take, which the input worker's recovery after a panic rules out: a release build analyzes on from a fresh analyzer dated from the interrupted run's frame zero, so its columns date backward, as above.
 - A crash inside the slab pyramid's fold: the levels it reached keep that column and the rest miss it, drawn so until the slabs scroll out; the input worker restarts its analysis as before.
 - A Clear pressed while the input worker analyzes: the audio that step took from before the press stays in the emptied history, a few milliseconds normally, and as much as it took when it catches up after a stall (up to the 1.37 s audio ring).
-- 44.1, 88.2 and 176.4 kHz: the live heatmap's fresh edge reads its lag at 48 kHz, up to 9% off (15 ms at Precise, 44.1 kHz), inside the strip's 120 ms freshness allowance; rates below 44.1 kHz are outside the use. An export's edge is exact: it reads ahead at the soundtrack's own rate.
+- A project at 44.1 kHz, which is within the use: the live heatmap's fresh edge reads its lag at 48 kHz, 9% short (15 ms at Precise), inside the strip's 120 ms freshness allowance, so the cost is cheap. An export's edge is exact: it reads ahead at the soundtrack's own rate.
 - The standalone synth below 5 frames a second: each frame restarts its run, so the heatmap and the curve draw nothing until frames come faster.
 
 ## Backwards compatibility is not a constraint
