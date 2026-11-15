@@ -770,6 +770,115 @@ fn a_pending_restore_keeps_fault_and_refusal_status_visible() {
     assert_eq!(now.raw.three, microcents(690.0));
 }
 
+/// A host that saves right after restoring, before it has run the plugin
+/// once, stores the restored record rather than the fresh one.
+#[test]
+fn a_save_before_any_audio_stores_the_restore() {
+    let _scope = crate::test_scope::enter();
+    let device = Device::new();
+    device.load(restored(&device, 690.0), false);
+    let saved = saved(&device.save());
+    assert_eq!(saved.axes[TuningAxis::Three.index()], microcents(690.0));
+    assert!(!saved.meantone && !saved.marvel, "the restore's links, not the fresh ones");
+}
+
+/// The queue keeps arrival order across kinds: an edit queued before a restore
+/// is overwritten by it, and one queued after it lands on the restored record.
+#[test]
+fn a_restore_queued_behind_an_edit_applies_after_it() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let settings = device.settings();
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(695.0))));
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::COffset, microcents(5.0))));
+    device.load(restored(&device, 690.0), false);
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Seven, microcents(980.0))));
+    device.run(0, vec![], false);
+    let raw = shown(&settings).raw;
+    assert_eq!(raw.three, microcents(690.0), "the restore came after the fifth");
+    assert_eq!(raw.c_offset, 0, "and replaced the origin the edit before it set");
+    assert_eq!(raw.seven, microcents(980.0), "the edit after it lands on the restore");
+}
+
+/// Every word the seqlock carries comes back as itself: distinct values in
+/// every one, negatives in the signed ones, and modes that differ bit by bit.
+#[test]
+fn the_published_record_round_trips_every_word() {
+    let record = Record {
+        applied: u64::MAX - 7,
+        raw: Tuning::from_axes([-1, -200_000_000, 3, 40_000_000, 5]),
+        resolved: ResolvedConfig {
+            revision: (1 << 40) + 9,
+            tuning: Tuning::from_axes([-600_000_000, 11, -12, 13, 14]),
+            modes: TuningModes {
+                tempered: Tempered { syntonic: false, septimal_kleisma: true },
+                learning: true,
+            },
+            policy: PolicyConfig {
+                radius: 2,
+                axes: 3,
+                pitch_flexibility: 37,
+                half_life_ms: 1234,
+                register: 850,
+                tolerance: 1_000_001,
+                silence_ms: 4500,
+                reset_stop: true,
+                reset_loop: false,
+                keyboard: [695_000_007, 380_000_008, 980_000_009],
+            },
+        },
+        status: 16 | 2,
+    };
+    assert_eq!(Published::new(record).load(), record);
+}
+
+/// A take recorded with every axis off its default and a link released
+/// carries those axes in its configuration records, which replay applies
+/// verbatim, and none in its parameter lane.
+#[test]
+fn a_take_carries_released_axes_in_its_configuration_records() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    let settings = device.settings();
+    let edit = ConfigEdit {
+        axes: [
+            Some(microcents(12.0)),
+            Some(microcents(696.0)),
+            None,
+            Some(microcents(975.0)),
+            Some(microcents(3.0)),
+        ],
+        ..Default::default()
+    };
+    assert!(settings.submit(edit));
+    device.run(0, vec![], false);
+    let linked = settings.view().resolved.tuning;
+    assert!(settings.submit(ConfigEdit::temper(harmonigraph_core::Comma::Syntonic, false, linked)));
+    device.run(64, vec![], false);
+    let expected = settings.view().resolved;
+    assert!(!expected.modes.tempered.syntonic);
+    let fresh = Tuning::default().axes();
+    assert!(expected.tuning.axes().iter().zip(fresh).all(|(axis, fresh)| *axis != fresh));
+    capture.arm();
+    device.run(128, vec![], false);
+    let entries = capture.drain_entries();
+    let configs: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            harmonigraph_record::Entry::Configuration(config) => Some(*config),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(configs.len(), 1);
+    let replayed = configs[0].resolved();
+    assert_eq!(replayed.tuning, expected.tuning);
+    assert_eq!(replayed.modes, expected.modes);
+    let lane = entries.iter().filter(|e| matches!(e, harmonigraph_record::Entry::Param { .. }));
+    assert_eq!(lane.count(), ParamKey::ALL.len(), "only the camera, once each");
+}
+
 fn note(id: i32, key: i16, time: u32, kind: u16) -> Input {
     Input::Note(clap_event_note {
         header: header::<clap_event_note>(kind, time),
