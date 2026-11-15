@@ -122,6 +122,7 @@ how often it occurs here, and what it costs when it does.
 **Use.** Yan alone, composing in Bitwig Studio on macOS 14 or later, on Apple silicon with a 144 Hz display,
 and exporting the pieces as videos.
 The pieces often carry tuning automation that moves the Lattice Map over time (Yan, 2026-11-14).
+Yan no longer uses the Adaptive engine but keeps it in the product, so a case only Adaptive reaches lies outside the use (Yan, 2026-11-15).
 The projects run at 44.1 or 48 kHz (Yan, 2026-11-14).
 One or two personal Bitwig projects hold saved state.
 Anyone else builds from source with rough edges promised (README), and no case is handled for their sake.

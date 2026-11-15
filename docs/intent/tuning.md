@@ -45,3 +45,9 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 - The missed-corrections count and its red name last until Reset all voices or a delay change rather than clearing at every Stop; the other fault notices still clear at every cut. #1798 H3, #1797
 - Tuning Delay becomes a saved Tune setting rather than a host parameter, as #1756 did for the axes; it leaves Bitwig's parameter list and existing Tunes reopen at 1×. #1798 H4, #1797
 - Cut, as cases only review supposed: the Reset generation and its pause hook (Reset comes only from Harmonigraph's own row), Learn's "held state is incomplete" state, rows taking turns past 2,048 records in one callback, and the count of Note-Offs a stacked cut could not queue. #1798 H5, #1797
+
+## 2026-11-15 (feature-scale pass, #1798)
+
+- Yan no longer uses Adaptive but keeps it in the product; its cases lie outside the stated use, so it gets no new mechanism for its own rare cases.
+- Live note-history loss is handled only by the take's gap record and its export warning: the live banner, per-source certainty and the withdrawn release fade go, since the Hub repays the snapshots within about a callback once the display lane drains. #1798 F1, #1797
+- The Tuning pane sends the whole policy it shows rather than only the fields changed; a pane edit within one block of a keyboard Learn result may revert it until Learn runs again. #1798 F2, #1797
