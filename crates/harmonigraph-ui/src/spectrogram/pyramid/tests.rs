@@ -1,5 +1,5 @@
 //! The pyramid held to the oracle fold it replaced (`spectrogram::oracle`),
-//! level by level, and the guard decided apart from any store.
+//! level by level.
 
 use super::*;
 use crate::spectrogram::oracle::SlabGrid;
@@ -42,8 +42,7 @@ fn sanitized(power: &SpectrumBuckets) -> Box<SpectrumBuckets> {
 /// Hold every level of `pyramid` to the oracle folded over `columns` (all
 /// fed to the pyramid, in order): over the slabs both hold, byte for byte.
 /// The oracle folds from one slab before the level's first, so it allocates
-/// no long run of silence and can still reproduce a hold at that first slab.
-/// Once a level has evicted, it must hold exactly its retention.
+/// no long run of silence. Once a level has evicted, it must hold exactly its retention.
 fn matches_the_oracle(pyramid: &mut SlabPyramid, columns: &[Column], at: &str) {
     for n in 0..LEVELS {
         let (first_key, slabs) = pyramid.level(n);
@@ -51,7 +50,7 @@ fn matches_the_oracle(pyramid: &mut SlabPyramid, columns: &[Column], at: &str) {
         let from = columns.partition_point(|(t, _)| ((t / w).floor() as i64) < first_key - 1);
         let mut grid = SlabGrid::default();
         for (time, power) in &columns[from..] {
-            grid.fold(*time, &sanitized(power)[..], 1, w, None);
+            grid.fold(*time, &sanitized(power)[..], w);
         }
         grid.finish();
         let oracle_first = (grid.centers[0] / w).floor() as i64;
@@ -102,7 +101,7 @@ fn every_level_folds_what_the_oracle_folds_over_what_it_keeps() {
     let mut pyramid = SlabPyramid::default();
     let checkpoints = [columns.len() / 7, columns.len() / 2, columns.len() - 1];
     for (i, (time, power)) in columns.iter().enumerate() {
-        assert_eq!(pyramid.push(*time, power), Admit::Fold);
+        pyramid.push(*time, power);
         if checkpoints.contains(&i) {
             matches_the_oracle(&mut pyramid, &columns[..=i], &format!("at column {i}"));
         }
@@ -114,35 +113,10 @@ fn every_level_folds_what_the_oracle_folds_over_what_it_keeps() {
     );
 }
 
-/// Level 6 (1.024 s slabs) holds its previous slab across one it missed,
-/// sharing it, and draws a longer gap in the shared silent slab.
-#[test]
-fn level_six_holds_one_missed_slab_and_goes_silent_over_a_longer_gap() {
-    let w = width(6);
-    let mut pyramid = SlabPyramid::default();
-    let mut stream = Stream(7);
-    // Slab 100 loud, slab 101 missed, slab 102 loud, slabs 103 and 104
-    // missed, slab 105 loud.
-    for slab in [100.0, 102.0, 105.0] {
-        for k in 0..4 {
-            pyramid.push((slab + 0.1 + 0.2 * f64::from(k)) * w, &stream.power());
-        }
-    }
-    let (first_key, slabs) = pyramid.level(6);
-    let at = |key: i64| &slabs[(key - first_key) as usize];
-    assert_eq!(first_key, 100);
-    assert!(Arc::ptr_eq(at(101), at(100)), "the one missed slab is not its predecessor, held");
-    assert!(at(100).iter().any(|&b| b > 0), "the fixture's slabs are not loud");
-    for key in [103, 104] {
-        assert!(Arc::ptr_eq(at(key), pyramid.silence()), "slab {key} of a longer gap");
-    }
-}
-
 /// The zero-column fast path changes no byte the plain fold would write, at
 /// any level, across every state it has: a slab opened by a zero column and
 /// then given data, data and then zeros, zero runs across slab boundaries at
-/// levels 0, 1 and 6, a one-slab gap held from a slab that saw only zeros,
-/// and a NaN column and a -0.0 bucket part-way through a slab.
+/// levels 0, 1 and 6, a one-slab gap after a slab that saw only zeros, and a NaN column and a -0.0 bucket part-way through a slab.
 ///
 /// A slab that saw only zeros is the shared silent slab, and its open
 /// predecessor is never marked behind its sums: its bytes cannot change.
@@ -156,8 +130,7 @@ fn the_zero_column_fast_path_folds_what_the_oracle_folds() {
     // Zeros straddling several level-0 and level-1 slabs, then data opening
     // into the slab the zeros left open, then zeros again.
     plan.extend([[Some(false); 9].as_slice(), &[Some(true); 5], &[Some(false); 9]].concat());
-    // A one-slab gap at level 0 after a slab of zeros: the hold is the
-    // shared silent slab.
+    // A one-slab gap at level 0 after a slab of zeros.
     plan.extend([[None; 2].as_slice(), &[Some(false); 4], &[Some(true); 2]].concat());
     for wanted in plan {
         if let Some(data) = wanted {
@@ -215,22 +188,6 @@ fn the_zero_column_fast_path_folds_what_the_oracle_folds() {
             }
         }
     }
-}
-
-/// The guard folds only a column newer than the newest, drops one up to a
-/// second at or before it or one that is not a date at all, and resets on
-/// one further back.
-#[test]
-fn the_guard_drops_a_step_back_and_resets_on_a_long_one() {
-    let newest = 100.0;
-    for time in [100.0 + 1e-9, 101.0, 4000.0] {
-        assert_eq!(admit(newest, time), Admit::Fold, "{time}");
-    }
-    for time in [newest, newest - 0.13, newest - 0.99, f64::NAN, f64::INFINITY] {
-        assert_eq!(admit(newest, time), Admit::Drop, "{time}");
-    }
-    assert_eq!(admit(newest, newest - 1.01), Admit::Reset);
-    assert_eq!(admit(f64::NEG_INFINITY, -1e9), Admit::Fold, "an empty history takes anything");
 }
 
 /// The whole pyramid, every level holding its full retention of distinct
