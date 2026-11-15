@@ -101,13 +101,15 @@ pub(crate) struct Worker {
     /// not a recording: a pass replaces the anchors where it plays, whether or
     /// not its audio wins there, and its last rules on to the next anchor.
     meters: BTreeMap<i64, Meter>,
-    /// Bumped whenever the store, the meters or the notes Tape mode's roll
-    /// draws change, so its spans and roll are rebuilt only then; and the
-    /// values they were last built at. While the transport rolls it moves
-    /// once a chunk, about a second.
+    /// Bumped whenever the store or the meters change, so Tape mode's spans
+    /// are rebuilt only then; and the value they were last built at. While
+    /// the transport rolls it moves once a chunk, about a second.
     generation: u64,
     shown: Option<u64>,
-    roll_shown: Option<u64>,
+    /// Bumped when a mark lands where Tape mode's roll draws it; with
+    /// `generation`, what the roll was last built from.
+    notes_generation: u64,
+    roll_shown: Option<(u64, u64)>,
     playback: Option<Playback>,
     /// The speed Tape mode asks for, which the next cue plays at.
     speed: Speed,
@@ -192,6 +194,7 @@ impl Worker {
             notes_dropped_reported: false,
             book: Book::default(),
             player: Player::default(),
+            notes_generation: 0,
             roll_shown: None,
             visible: false,
             built_roll: None,
@@ -365,7 +368,7 @@ impl Worker {
             for &(pass, start, frame) in &self.opened {
                 if start > time {
                     self.book.passes.entry(pass).or_default().place(frame, mark);
-                    self.generation += 1;
+                    self.notes_generation += 1;
                 }
             }
             // Newest first, and no further back than the first block that
@@ -386,7 +389,7 @@ impl Worker {
                 // chunk still being recorded changes it when that commits.
                 let recording = self.building.as_ref().filter(|c| c.stamp.pass == p.pass);
                 if recording.is_none_or(|chunk| frame < chunk.start) {
-                    self.generation += 1;
+                    self.notes_generation += 1;
                 }
             }
         }
@@ -451,11 +454,7 @@ impl Worker {
             // A pass none of whose audio survives has no notes to show.
             let live: BTreeSet<u64> = store.chunks().map(|c| c.stamp.pass).collect();
             let current = self.pass.map(|p| p.id);
-            let before = self.book.passes.len();
             self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
-            if self.book.passes.len() != before {
-                self.generation += 1;
-            }
         }
         self.generation += 1;
     }
@@ -522,10 +521,11 @@ impl Worker {
     /// lock held: it walks every note recorded.
     pub(crate) fn roll(&mut self) {
         self.retired_roll = None;
-        if !self.visible || self.roll_shown == Some(self.generation) {
+        let built = (self.generation, self.notes_generation);
+        if !self.visible || self.roll_shown == Some(built) {
             return;
         }
-        self.roll_shown = Some(self.generation);
+        self.roll_shown = Some(built);
         let roll = self.store.as_ref().map_or_else(Default::default, |store| {
             super::notes::song_roll(store, &self.book.passes)
         });
