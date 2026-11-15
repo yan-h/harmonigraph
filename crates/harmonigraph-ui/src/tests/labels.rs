@@ -85,7 +85,7 @@ fn lattice_labels_in(
             &[],
             &mut batch,
         );
-        labels = Some(batch.lattice_labels(ui.painter(), rect, &state.picture));
+        labels = Some(batch.lattice_labels(ui.painter(), rect));
     });
     labels.expect("the closure runs")
 }

@@ -115,7 +115,6 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
             LatticeLabels {
                 glyphs,
                 labels,
-                atlas: Some(crate::text::tests::atlas()),
                 marks: Some(crate::text::tests::mark_sheet()),
                 slide: SlideAxis::default(),
             },
@@ -125,6 +124,11 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
             None,
         );
         let mut resources = CallbackResources::default();
+        resources.insert(crate::text::tests::font_texture(
+            &device,
+            &queue,
+            &crate::text::tests::atlas(),
+        ));
         let screen = ScreenDescriptor { size_in_pixels: SCENE_SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
@@ -264,7 +268,6 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0), glyph(2.0), glyph(3.0)],
             labels: [near, hush_a, hush_b, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
-            atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
         },
@@ -370,7 +373,6 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
         LatticeLabels {
             glyphs: vec![glyph(0.0), glyph(1.0)],
             labels: [near, home].map(|node| Label { node, glyphs: 1 }).to_vec(),
-            atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
         },
@@ -447,7 +449,6 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
         LatticeLabels {
             glyphs: vec![glyph],
             labels: vec![Label { node: 0, glyphs: 1 }],
-            atlas: Some(crate::text::tests::atlas()),
             marks: None,
             slide: SlideAxis::default(),
         },
@@ -520,19 +521,18 @@ fn a_label_adds_no_light_through_the_bloom() {
         scene.view.shadow.lattice_text.depth = 0.0;
         let cb = LatticeCallback::from_scene(
             &scene,
-            LatticeLabels {
-                glyphs,
-                labels,
-                atlas: Some(crate::text::tests::atlas()),
-                marks: None,
-                slide: SlideAxis::default(),
-            },
+            LatticeLabels { glyphs, labels, marks: None, slide: SlideAxis::default() },
             points,
             format,
             13,
             None,
         );
         let mut resources = CallbackResources::default();
+        resources.insert(crate::text::tests::font_texture(
+            &device,
+            &queue,
+            &crate::text::tests::atlas(),
+        ));
         let screen = ScreenDescriptor { size_in_pixels: SCENE_SIZE, pixels_per_point: 1.0 };
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
@@ -663,7 +663,7 @@ fn a_pane_rebinds_its_sheets_only_when_one_moves() {
     // A mark sheet of another size, which cannot be written into the texture
     // in hand and so makes every bind group naming it stale.
     let mut moved = one_name(&scene, SIZE);
-    moved.marks = Some(FontAtlas {
+    moved.marks = Some(MarkSheet {
         image: std::sync::Arc::new(egui::ColorImage::filled([128, 32], egui::Color32::WHITE)),
         key: 7,
     });

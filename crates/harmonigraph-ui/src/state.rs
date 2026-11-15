@@ -9,7 +9,7 @@ use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, DrawnWindow};
 
 use crate::VisualRuntime;
-use crate::{panes, text, workspace};
+use crate::{panes, workspace};
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`Console::log`].
@@ -241,7 +241,7 @@ pub struct EditorPrefs {
     ///
     /// Here rather than in egui `Context` memory, and the home is load-bearing:
     /// the plugin builds a brand new `Context` every time the editor window
-    /// opens (the trap [`PictureState::release_context_resources`] sets out), so
+    /// opens (see [`shell::Opening`](crate::shell::Opening)), so
     /// a fold kept in memory springs open with every reopen. Each section's
     /// header reads and writes it through the hand-off
     /// [`panes::section`] describes.
@@ -481,13 +481,6 @@ pub struct Instruments {
     /// second roll on screen and reporting its count as THE count would be
     /// wrong, exactly as it is for the preview's lattice.
     pub(crate) roll_notes: std::sync::atomic::AtomicU32,
-    /// The label callback's context-local fallback font and mark publication
-    /// state (see [`text::AtlasMirror`]). Taken once per flush, uncontended.
-    pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
-    /// The same publication state for the lattice callback, whose node names
-    /// draw inside its own scene pass and whose mark sheet has a GPU copy of
-    /// its own.
-    pub(crate) lattice_atlas: std::sync::Mutex<text::AtlasMirror>,
     /// What the shell measured about the previous frame. Written by the shell
     /// before `root_ui` and read once, by `FrameCosts::assemble`; no pane
     /// touches it. The one field here a shell outside this crate writes, which
@@ -505,8 +498,6 @@ impl Default for Instruments {
         Instruments {
             lattice_stats: std::sync::Arc::new(harmonigraph_render::LatticeStats::default()),
             roll_notes: std::sync::atomic::AtomicU32::new(0),
-            font_atlas: Default::default(),
-            lattice_atlas: Default::default(),
             timings: ShellTimings::default(),
             perf: PerfStats::default(),
         }
@@ -877,22 +868,6 @@ impl PictureState {
         // A load boundary: adopt the next parameter snapshot verbatim rather
         // than as an edit, so it cannot rejudge the runtime's links.
         self.runtime.restore_configuration = true;
-    }
-    /// Drop everything that belongs to a particular egui context. Shells MUST
-    /// call this whenever they build one.
-    ///
-    /// The label trackers carry the fallback atlas guards and the mark sheet's
-    /// publication key, all of which describe one context. Carrying them into
-    /// another context can suppress the first publication to its renderer.
-    pub fn release_context_resources(&mut self) {
-        // Each callback owns its fallback and mark texture, so each publication
-        // tracker describes the context that closed.
-        for mirror in [&mut self.instruments.font_atlas, &mut self.instruments.lattice_atlas] {
-            mirror
-                .get_mut()
-                .expect("the label mirror is never held across a panic")
-                .forget_context();
-        }
     }
     /// The block of lattice the picture is currently showing, which is what
     /// every "is this pitch on the lattice" question has to be asked of.
