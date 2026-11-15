@@ -222,6 +222,8 @@ arm Record take, export, and both files land together.
 The video never ends before the recorded audio does,
 so a Tail of 0 ends an export's video at its range end rather than a few silent seconds past it.
 A take recorded under *Loop end* honours it like any other (#1677).
+A note still held when the take ends is released there, so the Tail fades it and counts from the take's end (#1803):
+its own release sounds after the last recorded block, as a host's releases do when the transport stops, and the take does not hold it.
 The renderer reads the Tail from the look it draws with —
 the recorded one, or the current one on a queued export —
 and `--tail` overrides it.

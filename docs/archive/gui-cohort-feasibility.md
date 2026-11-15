@@ -1,5 +1,9 @@
 # GUI cohort feasibility for #968 (2026-09-19)
 
+**Archived 2026-11-15 (#1806) as a dated result, not kept current:** it compares product revisions `6a4d80a5` and, in the re-evaluation, `69701dc7` with the versions then published,
+and the vendored patches have changed since (`PATCHES.md` is their record).
+An upgrade starts from a fresh comparison.
+
 Compared product revision `6a4d80a5` with the published cohort below.
 This is a feasibility result for [#968](https://github.com/yan-h/harmonigraph/issues/968),
 not an implementation launch.
@@ -160,8 +164,8 @@ Sources: [published CLAP wrapper](https://docs.rs/crate/nice-plug/0.4.2/source/s
 ## Runtime probe
 
 Completed scratch build and native execution.
-The [reproduction recipe](evidence/gui-cohort-feasibility/README.md) preserves the harness and logging patch;
-the [runtime transcript](evidence/gui-cohort-feasibility/probe-final.log) is the definitive measurement.
+The [reproduction recipe](../evidence/gui-cohort-feasibility/README.md) preserves the harness and logging patch;
+the [runtime transcript](../evidence/gui-cohort-feasibility/probe-final.log) is the definitive measurement.
 The exact resolver lock remains local at `/tmp/gui-feasibility-968/probe/Cargo.lock`;
 the recipe records its hash and resolved cohort.
 The original compile/run command was:

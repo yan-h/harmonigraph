@@ -7,6 +7,9 @@
 //! record is a lookup of its own time, with no ordering between the records
 //! and nothing kept from one to the next (#1760).
 
+use harmonigraph_core::canonical::NoteDelta;
+use harmonigraph_core::NoteEvent;
+
 use crate::{CanonicalRecord, Header, IncompleteRecord, ReadError, Record, Take};
 
 /// One run, as the file states it: `[start, end)` on the presentation clock,
@@ -120,7 +123,8 @@ pub(crate) fn assemble(
             Record::RunEnd(_) | Record::Header(_) | Record::Run(_) => {}
         }
     }
-    finish(take, events)
+    let end = runs.last().filter(|run| run.end.is_finite()).map(|run| run.end + run.offset);
+    finish(take, events, end)
 }
 
 /// Sort by time, and refuse what no stable sort can make a valid history: a
@@ -132,14 +136,32 @@ pub(crate) fn assemble(
 /// the file holds its records in the order they sound, and a snapshot is timed
 /// at the latest record its cut covers, so the sort keeps a snapshot after
 /// what it covers.
-fn finish(mut take: Take, mut events: Vec<(CanonicalRecord, usize)>) -> Result<Take, ReadError> {
+///
+/// `end` is the song time the take's last run ended at, when the file says it
+/// did. If a shown source still holds a note there, everything held is
+/// released at it, as a session reset releases it: a release that sounded
+/// after the last block that recorded,
+/// as a host's do when the transport stops, was dropped, and without this a
+/// Tail would draw its note held to the last frame (#1803). A take with
+/// nothing held at its end gains no record, so its length is unchanged.
+fn finish(
+    mut take: Take,
+    mut events: Vec<(CanonicalRecord, usize)>,
+    end: Option<f64>,
+) -> Result<Take, ReadError> {
     events.sort_by(|(a, _), (b, _)| a.time().total_cmp(&b.time()));
     let mut order = harmonigraph_core::canonical::CanonicalOrder::default();
+    let mut held = harmonigraph_core::NoteTracker::new();
     for (record, line) in events {
         if !record.ordered(&mut order) {
             return Err(ReadError::OutOfOrder(line));
         }
+        record.apply(&mut held).map_err(|_| ReadError::InvalidCanonical(line))?;
         take.events.push(record);
+    }
+    if let Some(end) = end.filter(|_| held.held_count() > 0) {
+        let release = NoteDelta::from(NoteEvent::session_reset(end));
+        take.events.push(CanonicalRecord::Delta(release.into()));
     }
     take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
     take.configurations.sort_by(|a, b| a.t.total_cmp(&b.t));

@@ -125,6 +125,38 @@ fn a_take_holds_its_runs_on_its_audio_and_drops_its_pause() {
     assert!(take.incomplete.is_none());
 }
 
+/// The take's end is the end of what it observed. A note still held there is
+/// released at it, so a Tail fades the note and counts from the end: its own
+/// release sounded after the last block that recorded, as a host's releases do
+/// when the transport stops, and was dropped with the stop's snapshot. A take
+/// that ends with nothing held gains no record, so its length is still its
+/// last event's (#1803).
+#[test]
+fn the_takes_end_releases_what_is_still_held() {
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    let held = read(&[
+        run(0, 0.0),
+        delta(1, 60, true, 24_000 - DELAY),
+        end(96_000),
+        delta(2, 60, false, 96_000 - DELAY),
+        snapshot(2, &[], 96_000),
+    ])
+    .unwrap();
+    let note = notes_of(&held, 60);
+    assert!(note.len() == 1 && near(note[0].0, 0.5), "{note:?}");
+    assert!(note[0].1.is_some_and(|end| near(end, 2.0)), "{note:?}");
+    assert!(near(held.duration(), 2.0), "{}", held.duration());
+
+    let released = read(&[
+        run(0, 0.0),
+        delta(1, 60, true, 24_000 - DELAY),
+        delta(2, 60, false, 48_000 - DELAY),
+        end(96_000),
+    ])
+    .unwrap();
+    assert!(near(released.duration(), 1.0), "{}", released.duration());
+}
+
 /// A record played before a pause that sounds after the next run begins lands
 /// in that run, before its opening snapshot, and continues the note that
 /// snapshot restates rather than splitting or orphaning it.

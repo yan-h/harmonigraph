@@ -32,7 +32,7 @@ use harmonigraph_render::{SpectrogramGrid, SpectrogramSlab, SpectrogramVertex};
 use super::axes::{Axes, PitchScale, TimeAxis};
 use super::roll::{self, RollDrawOptions, RollSource, Width};
 use super::Navigation;
-use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP};
+use crate::spectrogram::{pane_ppp, pitch_pixels, read_of, PaneView, LIVE_SLAB_CAP, RING_SLOTS};
 use crate::tape::spectrogram::{silent_slab, COLUMN_SECONDS, LEVELS};
 use crate::tape::{Speed, TapeRequest, TapeView};
 use crate::{theme, PictureState};
@@ -347,9 +347,11 @@ fn heatmap(
     let tape = &state.runtime.tape.spectrogram;
     let run: Arc<[SpectrogramSlab]> =
         (first..=last).map(|j| tape.slab(level, j).cloned().unwrap_or_else(silent_slab)).collect();
-    // A power of two over the run, so the ring keeps its size while a pan or
-    // a zoom within one level moves the run.
-    let capacity = ((run.len() + 2).next_power_of_two() + 8) as u32;
+    // The live heatmap's one size, which holds any run a region's pixels cut,
+    // so neither a pan nor a zoom reallocates the ring: sized from the run, a
+    // drag at an unlucky zoom re-sent the whole grid at every slab it crossed.
+    // Only the coarsest level's run can be longer, a song past about 2.3 hours.
+    let capacity = RING_SLOTS.max(run.len()) as u32;
     // Column k is centred on its own song seconds, so slab j of any level
     // starts half a column before column `j * 2^level`.
     let origin = first as f64 * width - 0.5 * COLUMN_SECONDS;

@@ -127,8 +127,10 @@ class StateExtraction(unittest.TestCase):
         """Every nice-plug plugin saves the same JSON shape, so a project's other
         plugins are found too; only an editor of ours earns the no-ui-state warning."""
         saved = [
-            {"version": "0.5.0", "params": {"camera-yaw": {"f32": 0.4}}, "fields": {}},
-            {"version": "0.5.0", "params": {"tuning_delay": {"f32": 0.0}}, "fields": {}},
+            {"version": "0.5.0", "params": {"camera-yaw": {"f32": 0.4}, "tuning-three": {"i32": 7}},
+             "fields": {"musical-settings": '{"axes":[0,1955000,0,0,0]}'}},
+            # A Tune exports no host parameter: its saved field is all that marks it.
+            {"version": "0.5.0", "params": {}, "fields": {"tuning-instance": '{"delay":2}'}},
             {"version": "1.0.0", "params": {"gain": {"f32": 0.25}, "macro01": {"f32": 0.0}},
              "fields": {"editor": "{}", "patch": "{}"}},
         ]
@@ -144,6 +146,12 @@ class StateExtraction(unittest.TestCase):
         self.assertEqual(out.count("=== instance"), 2)
         self.assertEqual(out.count("the editor was never open before a save"), 1)
         self.assertIn("a Harmonigraph Tune", out)
+        # The tuning axes are a saved setting; the host parameter that held one
+        # before #1795 is ignored on load and must not read as the live value.
+        self.assertIn('musical-settings: {"axes":[0,1955000,0,0,0]}', out)
+        self.assertIn('tuning-instance: {"delay":2}', out)
+        self.assertRegex(out, r"tuning-three: 7 +\(not a parameter of this build")
+        self.assertRegex(out, r"camera-yaw: 0\.4\n")
 
     def test_distinct_compressed_instances_share_a_prefix(self):
         states = [state("first"), state("second")]

@@ -1493,12 +1493,10 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
         assert_eq!(wav.len(), 44 + 64 * 2 * 4, "exactly one callback, no scrub or restore audio");
         // Harmonigraph's own input sounds in the callback it is played in,
-        // the one the take recorded, so its onset is the take's one delta.
-        let deltas = take
-            .events
-            .iter()
-            .filter(|e| matches!(e, harmonigraph_take::CanonicalRecord::Delta(_)));
-        assert_eq!(deltas.count(), usize::from(with_note), "{:?}", take.events);
+        // the one the take recorded, so its onset is the take's one onset.
+        let onsets =
+            take.notes().filter(|note| matches!(note.kind, harmonigraph_take::NoteKind::On { .. }));
+        assert_eq!(onsets.count(), usize::from(with_note), "{:?}", take.events);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -168,8 +168,9 @@ through one the button reads down.
 `Cargo.toml` gains an empty `[workspace]` table so `cargo test --manifest-path` reaches the unit tests over the mask arithmetic;
 ci.sh runs them.
 macOS only.
-- **Upgrade**: read the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) first;
-its disposition table is a snapshot that stops at Patch 6, so dispose of later patches from their entries here.
+- **Upgrade**: start from a fresh comparison with the versions then published.
+The [last one](docs/archive/gui-cohort-feasibility.md) is archived as a dated result (2026-09-19, re-evaluated 2026-10-21):
+its disposition table stops at Patch 6, so dispose of later patches from their entries here.
 Patch 7 (#1692's re-pace of a changed divisor, with `FrameTiming::woken`) was retired whole in #1747, with the idle pacing it served;
 a divisor set from a frame takes effect after the one frame the link has already scheduled.
 baseview 0.4 drives frames from a display link too, but pauses it while idle and has no divisor, watchdog or frame timing.
@@ -394,11 +395,12 @@ A size from the `SizeSource` runs that frame's pass whatever the backoff says, s
 `Queue::longest_tick_gap` hands the app the longest gap between link frames since its last pass, measured on every frame, for its stall check.
 It replaces Patch 21 (#1692, #1707), which slowed the link's divisor to land on the frame the idle poll drew on, and is retired whole with baseview Patch 7:
 `paced_divisor`, `PACE_MARGIN`, `MAX_FRAME_GAP`, `RESIZE_HOLD`, the restore of the chosen divisor on every event and the earliest-deadline keep for undrawn passes all went with it.
-- **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package;
-its disposition table is a snapshot that stops at Patch 17, so dispose of later patches from their entries here.
+- **Upgrade**: start from a fresh comparison with the versions then published.
+The [last one](docs/archive/gui-cohort-feasibility.md) is archived as a dated result (2026-09-19, re-evaluated 2026-10-21):
+its disposition table stops at Patch 17, so dispose of later patches from their entries here.
 The egui 0.36 publication trigger is met and investigated,
 and egui-baseview 0.9.0 has been re-evaluated since (#1529);
-the current recommendation is to retain the product stack until the need-driven trigger the map names.
+that result recommends retaining the product stack until the need-driven trigger it names.
 Published egui-baseview 0.7.2 replaces the Queue API and some old patch topologies,
 so do not mechanically reapply every numbered patch.
 The map records retained obligations,
