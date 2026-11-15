@@ -1013,7 +1013,6 @@ impl ClapPlugin for Harmonigraph {
             .unwrap()
             .finish_stopped_recording(self.configuration.as_mut().unwrap(), &mut self.take);
     }
-    fn clap_configuration_retire(&mut self, _unfinished: bool) {}
     /// Destruction gives the rings back. A take still recording fails, which
     /// the recorder's own drop decides: a Tune learns the Hub is gone from the
     /// same slot it learned the Hub was here.

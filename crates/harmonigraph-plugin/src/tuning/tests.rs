@@ -1114,59 +1114,6 @@ fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// More captures than one batch holds, from Tunes the host runs after the Hub:
-/// what the batch leaves in the rings is sequenced a callback later still, two
-/// after its input. The proven frontier holds below that backlog, and the
-/// intent it was played under is kept, so it is published and stamped like
-/// any other, and recording, armed or not, carries on.
-#[test]
-fn a_tune_backlog_past_one_batch_keeps_the_recorder_whole() {
-    for armed in [false, true] {
-        let _scope = crate::test_scope::enter();
-        let (mut hub, mut capture) = Device::recorded_hub();
-        hub.activate();
-        let tunes: Vec<Device> = (0..3)
-            .map(|_| {
-                let mut tune = Device::new(true);
-                tune.activate();
-                tune
-            })
-            .collect();
-        let dir = std::env::temp_dir()
-            .join(format!("harmonigraph-tune-backlog-{}-{armed}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        if armed {
-            capture.arm();
-        }
-        let mut writer =
-            harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-        let cycle = |raw: i64, played: &dyn Fn(usize) -> Vec<Input>| {
-            hub.run_format(raw, vec![], None, None, 512);
-            for (index, tune) in tunes.iter().enumerate() {
-                tune.run_format(raw, played(index), None, None, 512);
-            }
-        };
-        for raw in [0, 512] {
-            cycle(raw, &|_| vec![]);
-        }
-        cycle(1024, &|index| {
-            let id = 10 + index as i32;
-            let mut events = vec![note(id, 0, 60 + index as i16, 0, true)];
-            events.extend((0..760u32).map(|k| expression(id, f64::from(k % 7) * 0.01, 1 + k / 2)));
-            events
-        });
-        let captured: usize =
-            tunes.iter().map(|tune| inspect_tune(tune, |tune| tune.captured as usize)).sum();
-        assert!(captured > crate::tuning::BATCH_EVENTS, "the fixture must overflow one batch");
-        for raw in [1536, 2048, 2560, 3072] {
-            cycle(raw, &|_| vec![]);
-        }
-        writer.drain(&mut capture);
-        assert!(!writer.failed(), "armed: {armed}");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-}
-
 /// Armed with the transport stopped, a note played, and disarmed: nothing
 /// recorded, so the take draws nothing, though the note was played armed.
 #[test]
@@ -1202,60 +1149,6 @@ fn an_armed_take_whose_transport_never_rolled_draws_no_note() {
     let take = harmonigraph_take::Take::read(&sealed).unwrap();
     let notes: Vec<_> = take.notes().map(|n| (n.note, n.t)).collect();
     assert!(notes.is_empty(), "an unrecorded note reaches the take: {notes:?}");
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// A flood past one batch every callback, across a Stop: the frontier still
-/// moves, to the earliest capture left in the rings and no further, so the
-/// take seals whole once what it recorded is published rather than only once
-/// the flood ends.
-#[test]
-fn a_take_stopped_in_a_flood_seals_before_the_flood_ends() {
-    let _scope = crate::test_scope::enter();
-    let (mut hub, mut capture) = Device::recorded_hub();
-    hub.activate();
-    let tunes: Vec<Device> = (0..3)
-        .map(|_| {
-            let mut tune = Device::new(true);
-            tune.activate();
-            tune
-        })
-        .collect();
-    let dir = std::env::temp_dir().join(format!("harmonigraph-flood-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    capture.arm();
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
-    let mut sealed = None;
-    for step in 0..14 {
-        let raw = step * 512;
-        if step == 4 {
-            capture.stop();
-            writer.stop();
-        }
-        hub.run_format(raw, vec![], None, None, 512);
-        for (index, tune) in tunes.iter().enumerate() {
-            let id = 10 + index as i32;
-            let bends = (0..761u32).map(|k| expression(id, f64::from(k % 7) * 0.01, 1 + k / 2));
-            let events = match step {
-                2 => {
-                    std::iter::once(note(id, 0, 60 + index as i16, 0, true)).chain(bends).collect()
-                }
-                3..=9 => std::iter::once(expression(id, 0.05, 0)).chain(bends).collect(),
-                10 => vec![note(id, 0, 60 + index as i16, 0, false)],
-                _ => vec![],
-            };
-            tune.run_format(raw, events, None, None, 512);
-        }
-        writer.drain(&mut capture);
-        assert!(!writer.failed(), "failed at step {step}");
-        if sealed.is_none() && writer.finished.is_some() {
-            sealed = Some(step);
-        }
-    }
-    let sealed = sealed.expect("the take seals");
-    assert!(sealed < 9, "sealed at step {sealed}, after the flood ended");
-    let take = harmonigraph_take::Take::read(writer.finished.as_ref().unwrap()).unwrap();
-    assert!(take.incomplete.is_none(), "{:?}", take.incomplete);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

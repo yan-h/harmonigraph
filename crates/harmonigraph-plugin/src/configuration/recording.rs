@@ -66,12 +66,11 @@ impl Recording {
         }
     }
 
-    /// Close or open this sub-block's run. It records when it has an origin
-    /// and the take was armed at this callback's boundary; `origin` is where
-    /// it sits in the take's audio.
+    /// Close or open this sub-block's run. It records when it has an origin,
+    /// which the transport observation gives only to an armed take that
+    /// rolls; `origin` is where it sits in the take's audio.
     pub fn record(&mut self, recorder: &mut Recorder, origin: Option<f64>) {
         let start = self.block_start;
-        let origin = origin.filter(|_| recorder.armed() && self.captured_intent.is_armed());
         let serial = recorder.recording_run();
         if self.run.is_some_and(|run| origin.is_none() || serial != run) {
             self.end_run(recorder, start);

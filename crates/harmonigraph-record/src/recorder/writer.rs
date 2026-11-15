@@ -91,10 +91,7 @@ pub fn channel() -> (Recorder, Control) {
                     }
                     Err(mpsc::TryRecvError::Empty) => {
                         #[cfg(feature = "test-support")]
-                        {
-                            thread_fence.worker_empty_visits.fetch_add(1, Ordering::AcqRel);
-                            thread_fence.worker_after_empty.reach();
-                        }
+                        thread_fence.worker_after_empty.reach();
                     }
                     Err(mpsc::TryRecvError::Disconnected) => pump.disconnected = true,
                 }
@@ -112,8 +109,6 @@ pub fn channel() -> (Recorder, Control) {
             // pass that observed the disconnect is published and rendered
             // rather than going with the thread.
             if let Some(path) = pumped.finished {
-                #[cfg(all(test, feature = "test-support"))]
-                thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
                 let render = RenderRequest { appearance: None };
                 spawn_render(render, path, None, thread_progress.clone(), thread_render.clone());
@@ -239,10 +234,6 @@ impl Pump {
                 fence.fail_with_message(error.to_string());
             }
         }
-        #[cfg(feature = "test-support")]
-        if self.pending_stop {
-            fence.worker_after_stop.reach();
-        }
         let sealable = self.open.as_ref().is_none_or(|o| !o.run_open);
         if self.pending_stop && stop_counted && (sealable || self.disconnected) {
             self.pending_stop = false;
@@ -337,9 +328,6 @@ struct Recording {
     run_open: bool,
     /// Whether the file already holds its failure marker.
     marked: bool,
-    /// Test hook: fail the marker write once.
-    #[cfg(all(test, feature = "test-support"))]
-    fail_marker: bool,
 }
 
 impl Recording {
@@ -421,8 +409,6 @@ impl Recording {
                 audio: Some(audio),
                 run_open: false,
                 marked: false,
-                #[cfg(all(test, feature = "test-support"))]
-                fail_marker: false,
             });
         }
         *status.lock() = "recording filename suffix exhausted".into();
@@ -477,10 +463,6 @@ impl Recording {
         };
         if self.marked {
             return Ok(());
-        }
-        #[cfg(all(test, feature = "test-support"))]
-        if std::mem::take(&mut self.fail_marker) {
-            self.writer.make_read_only_for_test(&self.path)?;
         }
         let result =
             self.writer.incomplete(record).and_then(|_| self.writer.flush()).map_err(|error| {

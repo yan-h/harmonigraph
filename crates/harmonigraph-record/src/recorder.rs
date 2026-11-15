@@ -627,11 +627,6 @@ impl Recorder {
     pub fn recording_epoch(&self) -> u64 {
         self.fence.epoch()
     }
-    /// Whether a recorded block would land in a take: from the arm until the
-    /// take completes or is disarmed.
-    pub fn armed(&self) -> bool {
-        self.lifecycle.armed() && self.lifecycle != State::Complete
-    }
     pub fn fail_configuration(&self) {
         self.fence.fail();
     }
