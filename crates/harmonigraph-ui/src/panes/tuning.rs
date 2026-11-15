@@ -35,6 +35,9 @@ pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
 /// Configuration status bit 1: the held notes cannot be read for Learn.
 pub(crate) const HELD_STATE_INCOMPLETE_NOTICE: &str =
     "Learning unavailable: held state is incomplete. Reset to recover.";
+/// Configuration status bit 16: more distinct pitches are held than Learn reads.
+pub(crate) const TOO_MANY_PITCHES_NOTICE: &str =
+    "Learning paused: more than 256 distinct pitches are held.";
 
 /// Interval entry always submits a semantic edit, even when its typed value is
 /// unchanged. Linked readouts use the resolved value; their ordinary edit path
@@ -316,6 +319,12 @@ pub(super) fn tuning_pane(
         crate::widgets::label(
             ui,
             egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
+        );
+        true
+    } else if state.runtime.configuration_status & 16 != 0 {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(TOO_MANY_PITCHES_NOTICE).color(theme::armed()),
         );
         true
     } else if state.runtime.configuration_status & 4 != 0 {

@@ -4,7 +4,7 @@ use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, PolicyEdit, ResolvedConfig,
     TuningModes,
 };
-use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass};
+use harmonigraph_core::tuning::{Incomplete, LearningState, PitchClass, Unlearnable};
 use harmonigraph_core::{LearnedTuning, Tempered, Tuning};
 use harmonigraph_ui::params::{ConfigurationView, ParamKey};
 use nice_plug::plugin::ParamValue;
@@ -339,8 +339,9 @@ impl Owner {
     /// actually retunes. Pass through learns the axes from unchanged input.
     ///
     /// `classes` is the Hub's `held_classes`, asked only while Learn is armed.
-    /// Status bit 1 reports this evaluation alone rather than latching, so it
-    /// clears as soon as a departure or a Reset's cut makes the rows complete.
+    /// Status bits 1 (the rows are incomplete) and 16 (more distinct classes
+    /// than Learn reads) report this evaluation alone rather than latching, so
+    /// each clears as soon as what is held allows Learn again.
     pub fn group_end(
         &mut self,
         retuning: bool,
@@ -348,7 +349,7 @@ impl Owner {
     ) -> Option<ConfigurationEdit> {
         let retuning = retuning
             && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
-        self.snapshot.status &= !1;
+        self.snapshot.status &= !(1 | 16);
         if self.snapshot.status & 2 != 0 || !self.maps.playback.engine.learns() {
             return None;
         }
@@ -365,8 +366,12 @@ impl Owner {
                 }
                 Some(ConfigurationEdit { values, payload })
             }
-            Err(_) => {
+            Err(Unlearnable::Incomplete) => {
                 self.snapshot.status |= 1;
+                None
+            }
+            Err(Unlearnable::TooManyClasses) => {
+                self.snapshot.status |= 16;
                 None
             }
             Ok(None) => None,

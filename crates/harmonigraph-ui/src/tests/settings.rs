@@ -1353,6 +1353,14 @@ fn a_configuration_fault_asks_for_a_host_reset() {
     assert_eq!(notices(1), [false, true], "incomplete held state");
     assert_eq!(notices(2), [true, false], "configuration fault");
     assert_eq!(notices(3), [true, false], "fault and incomplete held state");
+    let shapes = |status| {
+        let mut state = fresh();
+        state.picture.runtime.configuration_status = status;
+        tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes
+    };
+    let too_many = panes::tuning::TOO_MANY_PITCHES_NOTICE;
+    assert!(text_y(&shapes(16), too_many).is_some(), "more pitches than Learn reads");
+    assert!(text_y(&shapes(0), too_many).is_none());
 }
 
 /// The size a settings pane is soloed at to make it scroll: narrow enough that

@@ -149,10 +149,6 @@ Neither gets a handler or a repair of its own.
 The per-type `sanitize` repairs stay for the one thing the next section asks of them:
 the value on screen is the value the file holds.
 
-**Cases gone without, each with what it costs.**
-
-- More than 256 distinct held pitch classes make Learn's audio-thread inference cost about 0.43 ms at 512 classes and 1.6 ms at 1,088, once each time the set changes (0.10 ms at 256; release build on Yan's Mac). No cap refuses it (PR #1792).
-
 ## Backwards compatibility is not a constraint
 
 One or two personal Bitwig projects load this plugin, so a saved blob, a param range and a recorded automation lane are worth what it costs to reopen those projects and drag a bar back.
