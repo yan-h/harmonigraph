@@ -173,10 +173,12 @@ pub struct TapeView {
     pub map: Option<RecordedMap>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an
-    /// audition would play. The worker's copy, shared; rebuilt when the
-    /// recording changes.
+    /// audition would play. The worker's copy, shared; rebuilt after the
+    /// recording changes, only while Tape mode shows, the editor is open and
+    /// the roll is on.
     pub notes: std::sync::Arc<harmonigraph_core::NoteRoll>,
-    /// Memory the recording holds.
+    /// Memory the recording holds: its audio and spectrogram, which the cap
+    /// counts, and its notes, which it does not.
     pub bytes: usize,
     /// What is recorded, in song order.
     pub spans: Vec<TapeSpan>,
@@ -196,7 +198,7 @@ pub struct TapeView {
     /// The Analyzer draws the tape rather than the live picture. Never saved:
     /// the tape is not, so a reopened project would open on an empty picture.
     /// Set only by the Analyzer's Tape tab, which clears it for any other
-    /// tab.
+    /// tab. The plugin analyzes the tape whether it is set or not.
     pub showing: bool,
 }
 
