@@ -5,31 +5,16 @@ use nice_plug::wrapper::clap::{configuration::OwnedInput, performance as api};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::{setup, tune::Tune, DELAY_MULTIPLIER_MAX};
+use super::{setup, tune::Tune};
 
+/// A Tune exports no host parameter. Its Tuning delay is a saved setting
+/// (`setup::InstanceSettings`): a change needs the host to reactivate the Tune,
+/// so it cannot usefully be automated, and the saved value is there for the
+/// Tune to report its latency from before any Hub exists.
 #[derive(Params)]
-pub struct TuneParams {
-    /// Positive integer multiples of the host's advertised maximum callback
-    /// size. An ordinary parameter, so the host saves it and each Tune reports
-    /// the latency it implies before any Hub exists.
-    #[id = "tuning_delay"]
-    pub delay: IntParam,
-}
-impl Default for TuneParams {
-    fn default() -> Self {
-        Self {
-            delay: IntParam::new(
-                "Tuning Delay",
-                1,
-                IntRange::Linear { min: 1, max: DELAY_MULTIPLIER_MAX },
-            )
-            .with_value_to_string(Arc::new(|value| format!("{value}x buffer"))),
-        }
-    }
-}
+struct NoParams {}
 
 pub struct HarmonigraphTune {
-    pub params: Arc<TuneParams>,
     pub shared: Arc<setup::Shared>,
     pub tune: Option<Box<Tune>>,
     /// The maximum callback size this activation advertised. One buffer means
@@ -42,13 +27,13 @@ impl Default for HarmonigraphTune {
     fn default() -> Self {
         let shared = setup::Shared::source();
         let tune = Tune::new(shared.clone());
-        Self { params: Arc::new(TuneParams::default()), shared, tune: Some(tune), frames: 0 }
+        Self { shared, tune: Some(tune), frames: 0 }
     }
 }
 
 impl HarmonigraphTune {
     fn multiplier(&self) -> u32 {
-        self.params.delay.value().clamp(1, DELAY_MULTIPLIER_MAX) as u32
+        setup::clamp_delay(self.shared.requested_multiplier.load(Ordering::Acquire))
     }
     /// What this Tune asks the host for. Zero frames means no activation has
     /// advertised a format yet, and there is no delay to report until one has.
@@ -75,7 +60,7 @@ impl Plugin for HarmonigraphTune {
     type SysExMessage = ();
     type BackgroundTask = ();
     fn params(&self) -> Arc<dyn Params> {
-        self.params.clone()
+        Arc::new(NoParams {})
     }
     fn initialize(
         &mut self,
@@ -115,7 +100,7 @@ impl ClapPlugin for HarmonigraphTune {
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
     const CLAP_PERFORMANCE: bool = true;
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
-        Some(Arc::new(setup::Adapter(self.shared.clone(), Some(self.params.clone()))))
+        Some(Arc::new(setup::Adapter(self.shared.clone())))
     }
     fn clap_main_init(&mut self) -> bool {
         self.tune().register();
@@ -124,7 +109,6 @@ impl ClapPlugin for HarmonigraphTune {
     fn clap_main_activate(&mut self, config: &BufferConfig) -> bool {
         self.frames = config.max_buffer_size;
         let multiplier = self.multiplier();
-        self.shared.requested_multiplier.store(multiplier, Ordering::Release);
         self.shared.active_multiplier.store(multiplier, Ordering::Release);
         self.shared.publish_format(f64::from(config.sample_rate), config.max_buffer_size);
         self.tune().activate(f64::from(config.sample_rate), config.max_buffer_size, multiplier);

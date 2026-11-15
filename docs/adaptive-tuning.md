@@ -95,7 +95,7 @@ a design whose rejected branch was implemented first knows exactly what it cost.
 
 | Decision | Chosen design | Built, then removed | Why this won | Reopen only when |
 |---|---|---|---|---|
-| The delay | A per-Tune **Tuning delay** parameter: 1 to 16 multiples of the host's advertised maximum callback size, resolved at activation, fixed for that activation and reported as latency | One fixed session-wide delay of 512 samples | A sample count is either short at one buffer size or needless latency at another; a multiple of the host's own callback is the quantity the round trip actually has to fit inside, and 16× reaches the old 512 even from a 32-frame callback | Automatic latency adaptation is requested — it explicitly is not, today |
+| The delay | A per-Tune **Tuning delay** setting: 1 to 16 multiples of the host's advertised maximum callback size, resolved at activation, fixed for that activation and reported as latency | One fixed session-wide delay of 512 samples | A sample count is either short at one buffer size or needless latency at another; a multiple of the host's own callback is the quantity the round trip actually has to fit inside, and 16× reaches the old 512 even from a 32-frame callback | Automatic latency adaptation is requested — it explicitly is not, today |
 | Tune→Hub transport | Self-contained copied records through bounded preallocated queues; the Hub owns what it receives and Tune owns its pending state | A shared `CaptureArena` with `unsafe impl Sync`, `Token`/`Key`/`Permissions`, a split between original and local storage, and a storage-retirement handshake | Each record is fixed-size and its storage preallocated, so copying costs no allocation and no extra delay — and it deletes an entire ownership protocol whose only purpose was avoiding the copy | Copying is measured to cost callback budget the assignment cannot afford |
 | Same-sample ordering | Merge the per-source streams by sample; within one sample apply every release and controller from every source, then assign onsets in key, channel, source order | A 15-phase incremental topological sort over a 1,280-vertex adjacency bitset, built by an O(n²) pairwise scan and budgeted across callbacks | Across sources the dependency graph is empty by construction, and within one source the host already delivers events in dependency order, which copying preserves. There was nothing for a graph to discover | A dependency exists that this order does not already respect |
 | Configuration granularity | One sample-indexed configuration history for every engine, the one [#890](https://github.com/yan-h/harmonigraph/pull/890) built for Lattice Map: an attack is assigned, and a take segmented, by the configuration in force at its own input sample ([#1749](https://github.com/yan-h/harmonigraph/issues/1749)) | A 128-marker `ConfigTimeline` with a `ControlBudget`, and a pass-routing `Recording` of 2,178 segments (~198 KB live on the audio thread); then, beside the history, a per-callback `block` configuration that Adaptive and Pass through assigned and recorded from | The history already answered the sample-exact question for every engine and the Hub discarded the answer unless the engine was Lattice Map, so a second granularity was one more rule to hold and a block-size dependence near automation, for no saving | A take's configuration records under dense axis modulation, one per event rather than one per block, are measured to cost more than a pass can afford |
@@ -183,7 +183,7 @@ No callback waits for another instance, takes a contended lock, allocates, frees
 Offline rendering runs the same sample-timed state machine and cannot depend on a worker keeping up.
 ## The delay
 
-The **Tuning delay** parameter is a stepped integer, 1 to 16, defaulting to 1. One step is the host's advertised **maximum** callback size at activation —
+The **Tuning delay** setting is a stepped integer, 1 to 16, defaulting to 1. One step is the host's advertised **maximum** callback size at activation —
 not its minimum, not the current callback length, not an observed typical size —
 so
 
@@ -192,7 +192,8 @@ D_samples = multiplier × advertised_max_frames
 ```
 
 and that number is fixed for the whole activation.
-Each Tune persists its own multiplier as an ordinary plugin parameter and reports the resulting latency from it at activation, before any Hub pairing exists.
+Each Tune saves its own multiplier with its state, not as a host parameter, and reports the resulting latency from it at activation, before any Hub pairing exists.
+A change needs the host to reactivate the Tune, so it could not usefully be automated (#1798 H4).
 The Hub's **Tuning → Tuning sources → Tuning delay** controls offer **Apply to all tuners** as a convenience.
 Per-instance overrides live in **Source details**, and each Tune that changes requests its own reactivation.
 The Hub's own input has no delay.
@@ -567,7 +568,7 @@ Shrinking a buffer does not make its overflow path unreachable.
 | `MAX_CONTEXT` / `MAX_MEMORY` / `MAX_CANDIDATES` | 256 / 24 / 4,096 | Held voices the Hub's context holds across every source, released contributions and the complete local candidate union |
 | `PUBLICATION_RING` / `SNAPSHOT_SLOTS` / `GAP_RESERVE` | 4,096 / 20 / 1 | Publication items, snapshot frames, and the one cell an outage may always spend |
 | `EMIT_PER_CALLBACK` | 512 | Accepted output-event budget, checked between queued inputs. A note and its tuning expression complete together, even when the pair crosses the budget |
-| `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay parameter |
+| `DELAY_MULTIPLIER_MAX` | 16 | Steps on the Tuning delay setting |
 
 The rings now belong to the **process** rather than to an instance.
 Sixteen capture rings and sixteen reply rings are about 1.5 MB, allocated once when the first instance registers, and that is what pays for pairing being an atomic load instead of a handoff.
@@ -791,7 +792,7 @@ Tune's output delay does not give the Hub more processing time either way.
 
 **Closed, recorded here because the record was wrong about them more than once.** [#672](https://github.com/yan-h/harmonigraph/issues/672) was fixed through #669 → #709 and closed on 2026-09-07;
 it was twice described as waiting on later work.
-[#703](https://github.com/yan-h/harmonigraph/issues/703), reactivation staying pending after a host format change, was fixed while building the delay parameter.
+[#703](https://github.com/yan-h/harmonigraph/issues/703), reactivation staying pending after a host format change, was fixed while building the delay parameter that preceded the saved setting.
 [#748](https://github.com/yan-h/harmonigraph/issues/748)'s reply-latency measurement was closed when stage 8 removed the mechanism it measured.
 [#787](https://github.com/yan-h/harmonigraph/pull/787) reproduced the Apply stall and diagnosed it without fixing it, on purpose:
 its test is retargeted here as "Reset cuts and audio resumes within two callbacks".

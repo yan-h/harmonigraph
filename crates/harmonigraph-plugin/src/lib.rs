@@ -893,10 +893,7 @@ impl ClapPlugin for Harmonigraph {
     const CLAP_PERFORMANCE: bool = true;
     fn clap_setup(&self) -> Option<Arc<dyn nice_plug::wrapper::clap::setup::Setup>> {
         Some(Arc::new(configuration::HubSetup {
-            instance: tuning::setup::Adapter(
-                self.aggregation.as_ref().unwrap().shared.clone(),
-                None,
-            ),
+            instance: tuning::setup::Adapter(self.aggregation.as_ref().unwrap().shared.clone()),
             settings: self.params.settings.clone(),
         }))
     }

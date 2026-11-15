@@ -312,8 +312,6 @@ fn parameter(id: &str, value: f64, time: u32) -> Input {
         value,
     })
 }
-/// The one parameter the Tune exports.
-const DELAY_PARAM: u32 = 0;
 struct Device {
     plugin: *const clap_plugin,
     _host: Box<clap_host>,
@@ -430,43 +428,13 @@ impl Device {
     fn latency(&self) -> u32 {
         latency_of(self.plugin)
     }
-    fn param_id(&self, index: u32) -> u32 {
+    fn tune_wrapper(&self) -> &nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune> {
         assert!(self.tuner);
-        let mut info = unsafe { std::mem::zeroed() };
-        assert!(unsafe { self.params().get_info.unwrap()(self.plugin, index, &mut info) });
-        info.id
-    }
-    /// Automation for the Tune's parameter at `index`, carrying the value a
-    /// host sends: a stepped parameter's CLAP value is its step index, so
-    /// Participating is 0 or 1 and the tuning delay's 1x buffer is a zero.
-    fn param_event(&self, index: u32, value: f64, time: u32) -> Input {
-        Input::Param(clap_event_param_value {
-            header: header::<clap_event_param_value>(CLAP_EVENT_PARAM_VALUE, time),
-            param_id: self.param_id(index),
-            cookie: ptr::null_mut(),
-            note_id: -1,
-            port_index: -1,
-            channel: -1,
-            key: -1,
-            value,
-        })
-    }
-    /// What the host reads back for that parameter, in the same units.
-    fn param_value(&self, index: u32) -> f64 {
-        let mut value = 0.0;
-        assert!(unsafe {
-            self.params().get_value.unwrap()(self.plugin, self.param_id(index), &mut value)
-        });
-        value
+        unsafe { &*((*self.plugin).plugin_data.cast()) }
     }
     fn shared(&self) -> std::sync::Arc<setup::Shared> {
         if self.tuner {
-            let wrapper = unsafe {
-                &*((*self.plugin)
-                    .plugin_data
-                    .cast::<nice_plug::wrapper::clap::Wrapper<plugin::HarmonigraphTune>>())
-            };
-            wrapper.test_inspect_plugin(|plugin| plugin.shared.clone())
+            self.tune_wrapper().test_inspect_plugin(|plugin| plugin.shared.clone())
         } else {
             let wrapper = unsafe {
                 &*((*self.plugin)
@@ -1286,21 +1254,23 @@ fn the_hub_asks_to_be_kept_running_with_nothing_paired_or_sounding() {
 }
 
 /// The delay is `multiplier x advertised maximum frames`, resolved at
-/// activation and reported to the host as latency before any Hub exists.
+/// activation and reported to the host as latency before any Hub exists. The
+/// multiplier is a saved setting, so a project reopens at the one it saved.
 #[test]
-fn the_delay_is_reported_as_latency_from_the_saved_multiplier_alone() {
+fn the_delay_is_saved_and_reported_as_latency_before_any_hub_exists() {
     let _scope = crate::test_scope::enter();
     let mut tune = Device::new(true);
     assert_eq!(tune.latency(), 0, "no activation has advertised a format yet");
     tune.activate_format(48000.0, 256);
     assert_eq!(tune.latency(), 256);
-    // A stepped parameter's CLAP value is its step index, so 3 is 4x buffer.
-    tune.run(0, vec![tune.param_event(DELAY_PARAM, 3.0, 0)], None);
+    tune.shared().request_delay(4);
     tune.reactivate_format(48000.0, 256);
     assert_eq!(tune.latency(), 4 * 256, "the new multiplier is adopted at the reactivation");
-    // The round trip is through a normalized f32, so this is the step index
-    // rather than an exact double.
-    assert_eq!(tune.param_value(DELAY_PARAM).round(), 3.0, "and the host reads back what it set");
+    let saved = tune.tune_wrapper().get_state_object();
+    let mut reopened = Device::new(true);
+    reopened.tune_wrapper().set_state_object_from_gui(saved);
+    reopened.activate_format(48000.0, 256);
+    assert_eq!(reopened.latency(), 4 * 256, "a reopened project reports the saved delay");
 }
 
 /// A host format change is a cut: the notes standing in the line were
@@ -1788,7 +1758,7 @@ fn a_full_local_line_refuses_onset_and_release_before_copying() {
     hub.activate();
     let mut tune = Device::new(true);
     tune.activate();
-    tune.run(0, vec![tune.param_event(DELAY_PARAM, 15.0, 0)], None);
+    tune.shared().request_delay(16);
     tune.reactivate_format(48000.0, 512);
     assert_eq!(tune.latency(), 16 * 512);
     let mut pair = Pair { hub, tune, raw: 512 };

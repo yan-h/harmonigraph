@@ -30,7 +30,7 @@ pub fn snapshots() -> Vec<TuningInstance> {
         .filter_map(|(id, weak)| {
             let shared = weak.upgrade()?;
             let active = shared.active_multiplier.load(Ordering::Acquire);
-            let requested = shared.requested_multiplier.load(Ordering::Acquire).max(1);
+            let requested = setup::clamp_delay(shared.requested_multiplier.load(Ordering::Acquire));
             let (rate, frames) = shared.format();
             let input = shared.last_input.load(Ordering::Relaxed);
             let output = shared.last_output.load(Ordering::Relaxed);

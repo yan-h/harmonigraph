@@ -882,8 +882,8 @@ fn instance_controls(
 }
 
 /// A tuner's delay in whole buffers, from one to `max`. A double-click puts
-/// it back on one buffer, the fresh value of every tuner's `Tuning Delay`
-/// param (`harmonigraph-plugin`'s `TuneParams`). The caller commits the edit:
+/// it back on one buffer, the fresh value of every tuner's saved Tuning delay
+/// (`harmonigraph-plugin`'s `InstanceSettings`). The caller commits the edit:
 /// the delay is the tuner's configuration, not the look, so nothing here
 /// reaches the appearance's undo.
 fn delay_bar(ui: &mut egui::Ui, delay: &mut u32, max: u32, label: &str) -> egui::Response {

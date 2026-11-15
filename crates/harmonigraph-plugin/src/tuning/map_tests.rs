@@ -32,7 +32,7 @@ fn lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders() 
             let mut tune = Device::new(true);
             tune.activate_format(48000.0, frames);
             // 2x tolerates Hub-first callbacks without changing input timestamps.
-            tune.run_format(0, vec![tune.param_event(DELAY_PARAM, 1.0, 0)], None, None, frames);
+            tune.shared().request_delay(2);
             tune.reactivate_format(48000.0, frames);
             hub.run_format(0, vec![parameter("tuning-engine", 2.0, 0)], None, None, frames);
             let start = i64::from(frames);
