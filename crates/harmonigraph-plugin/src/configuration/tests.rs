@@ -25,6 +25,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 struct Host {
     dirty: AtomicUsize,
     callbacks: AtomicUsize,
+    /// `params.rescan` calls, and the flags of the last.
+    rescans: AtomicUsize,
+    rescan_flags: std::sync::atomic::AtomicU32,
     /// `gui.closed` calls, and whether the last asked for destruction.
     closed: AtomicUsize,
     closed_destroyed: AtomicBool,
@@ -48,7 +51,11 @@ unsafe extern "C" fn request(_: *const clap_host) {}
 unsafe extern "C" fn callback(host: *const clap_host) {
     unsafe { &*((*host).host_data.cast::<Host>()) }.callbacks.fetch_add(1, Ordering::Relaxed);
 }
-unsafe extern "C" fn rescan(_: *const clap_host, _: u32) {}
+unsafe extern "C" fn rescan(host: *const clap_host, flags: u32) {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    stats.rescans.fetch_add(1, Ordering::Relaxed);
+    stats.rescan_flags.store(flags, Ordering::Relaxed);
+}
 unsafe extern "C" fn clear(_: *const clap_host, _: u32, _: u32) {}
 static PARAMS: clap_host_params =
     clap_host_params { rescan: Some(rescan), clear: Some(clear), request_flush: Some(request) };
@@ -588,8 +595,18 @@ fn a_full_command_queue_keeps_accepted_state() {
         assert!(settings.submit(ConfigEdit::default()));
     }
     assert!(!settings.submit(ConfigEdit::default()));
-    assert!(!device.try_load(restored(&device, 700.0)), "a restore needs a free slot");
-    assert_eq!(saved(&device.save()).axes[1], microcents(695.0));
+    let before = device.save();
+    let mut refused = restored(&device, 700.0);
+    refused.params.insert(ParamKey::CameraDistance.id().into(), ParamValue::F32(20.0));
+    assert!(!device.try_load(refused), "a restore needs a free slot");
+    assert_eq!(settings.take_notice(), Some(RESTORE_REFUSED), "and says so in the Console");
+    let after = device.save();
+    assert_eq!(saved(&after).axes[1], microcents(695.0));
+    assert_eq!(
+        plain(&after, ParamKey::CameraDistance),
+        plain(&before, ParamKey::CameraDistance),
+        "a refused restore installs none of its state"
+    );
     device.activate();
     device.run(0, vec![], false);
     assert!(device.try_load(restored(&device, 705.0)), "an applied restore is repeatable");
@@ -778,6 +795,31 @@ fn a_save_before_any_audio_stores_the_restore() {
     let saved = saved(&device.save());
     assert_eq!(saved.axes[TuningAxis::Three.index()], microcents(690.0));
     assert!(!saved.meantone && !saved.marvel, "the restore's links, not the fresh ones");
+}
+
+/// An axis edit changes no host parameter, so the host marks the project
+/// modified without rescanning; a map-document edit rescans the parameter
+/// text, since the Lattice Map's label names its map.
+#[test]
+fn an_axis_edit_marks_the_project_without_a_rescan() {
+    use clap_sys::ext::params::{CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES};
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let settings = device.settings();
+    device.run(0, vec![], false);
+    let marked = device.service();
+    let rescans = device.stats.rescans.load(Ordering::Relaxed);
+    assert!(settings.submit(ConfigEdit::axis(TuningAxis::Three, microcents(696.0))));
+    device.run(64, vec![], false);
+    assert!(device.service() > marked, "the edit marks the project modified");
+    assert_eq!(device.stats.rescans.load(Ordering::Relaxed), rescans, "and rescans nothing");
+    settings.maps_changed();
+    device.service();
+    assert_eq!(device.stats.rescans.load(Ordering::Relaxed), rescans + 1);
+    let flags = device.stats.rescan_flags.load(Ordering::Relaxed);
+    assert_eq!(flags & CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_TEXT);
+    assert_eq!(flags & CLAP_PARAM_RESCAN_VALUES, 0, "the values did not change");
 }
 
 /// The queue keeps arrival order across kinds: an edit queued before a restore
