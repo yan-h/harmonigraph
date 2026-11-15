@@ -114,7 +114,6 @@ pub(crate) fn assemble(
                         None => run.start + run.offset - voice.actual_onset,
                     };
                     voice.actual_onset += shift;
-                    voice.input_onset += shift;
                     if let Some(assignment) = &mut voice.assignment {
                         assignment.t = voice.actual_onset;
                     }

@@ -1146,7 +1146,7 @@ mod tests {
     /// starts after its take's audio does, so the two clocks differ.
     #[test]
     fn an_export_sounds_the_takes_audio_at_the_take_time_it_was_recorded() {
-        use harmonigraph_take::canonical::{DeltaRecord, TimingRecord};
+        use harmonigraph_take::canonical::DeltaRecord;
         use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RunRecord};
         let Some(ffmpeg) = real_ffmpeg() else { return };
         let dir =
@@ -1166,12 +1166,6 @@ mod tests {
                 kind: NoteKind::On { velocity: 0.8 },
                 ..Default::default()
             },
-            timing: Some(TimingRecord {
-                input: 12_000,
-                sample: 12_000,
-                sample_rate: 48_000.0,
-                ..Default::default()
-            }),
             ..Default::default()
         };
         let note = Record::Canonical(harmonigraph_take::CanonicalRecord::Delta(note));

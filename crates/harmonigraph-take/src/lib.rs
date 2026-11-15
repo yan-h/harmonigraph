@@ -20,7 +20,7 @@
 //! Header((version:8,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
 //! Run((at:3.5,song:12.0))
 //! Param((t:3.5,id:"pitch-class-fade",value:2.0))
-//! Canonical(Delta((event:(t:3.51,...),timing:Some((input:512,...)),...)))
+//! Canonical(Delta((event:(t:3.51,...),sequence:4,lifetime:2,...)))
 //! RunEnd((at:5.5))
 //! ```
 //!
@@ -973,6 +973,7 @@ mod tests {
         use harmonigraph_core::{NoteEvent, SourceId};
         let row = VoiceBaseline {
             note: 60,
+            lifetime: 1,
             velocity: 0.8,
             pitch_microcents: 6_000_000_000,
             ..Default::default()
@@ -1036,8 +1037,11 @@ mod tests {
     /// writer emitted them in — `coverage_start` after `t`, sixteen `channels`
     /// of 128 controllers after `voices`, `configuration_revision` first inside
     /// an assignment, `start_samples` after `sample_rate` and `window_points`
-    /// after `appearance` (#895 dropped those two). A hand-shortened stand-in
-    /// would prove nothing about the nested vector RON actually has to skip.
+    /// after `appearance` (#895 dropped those two), and a delta's `timing` and
+    /// a voice's `onset`, each in its last shape with every key it ever had,
+    /// and `input_onset` before a voice's `actual_onset` (#1780). A
+    /// hand-shortened stand-in would prove nothing about the nested vector RON
+    /// actually has to skip.
     ///
     /// The HEADER's two matter for a second reason the others do not have: the
     /// version check reads out of the header, so a header that failed to parse
@@ -1049,6 +1053,7 @@ mod tests {
         use harmonigraph_core::{NoteEvent, SourceId};
         let row = VoiceBaseline {
             note: 60,
+            lifetime: 1,
             velocity: 0.8,
             pitch_microcents: 6_000_000_000,
             ..Default::default()
@@ -1070,10 +1075,16 @@ mod tests {
         )))
         .unwrap();
         let header = ron::to_string(&Record::Header(Header::default())).unwrap();
-        let current = Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}")))
-            .expect("the fixture has to parse before the aged one means anything");
+        // A run holding both records: a take reads nothing outside its runs.
+        let run = ron::to_string(&Record::Run(RunRecord::default())).unwrap();
+        let current =
+            Take::parse(std::io::Cursor::new(format!("{header}\n{run}\n{frame}\n{note}")))
+                .expect("the fixture has to parse before the aged one means anything");
+        assert_eq!(current.events.len(), 2, "and reach both records");
 
         // What the pre-prune writer put in the same two records.
+        const TIMING: &str = "(runtime_session:1,clock_epoch:0,input:143000,planned:Some(144000),\
+                              sample:144000,sample_rate:48000.0)";
         let channel = format!(
             "(controllers:[{}],controller_valid:(0,0),pitch_bend:None,pressure:None,program:None)",
             ["0"; 128].join(",")
@@ -1081,9 +1092,12 @@ mod tests {
         let channels = format!(",channels:[{}]", vec![channel; 16].join(","));
         let aged_frame = frame
             .replace("t:2.0,", "t:2.0,coverage_start:2.0,")
+            .replace("actual_onset:", "input_onset:0.0,actual_onset:")
+            .replace(",pitch_microcents:", &format!(",onset:Some({TIMING}),pitch_microcents:"))
             .replace(")))", &format!("{channels})))"));
-        let aged_note =
-            note.replace("assignment:Some((", "assignment:Some((configuration_revision:9,");
+        let aged_note = note
+            .replace("assignment:Some((", "assignment:Some((configuration_revision:9,")
+            .replace(",pitch_microcents:", &format!(",timing:Some({TIMING}),pitch_microcents:"));
         let aged_header = header
             .replace("sample_rate:48000.0,", "sample_rate:48000.0,start_samples:Some(1024),")
             .replace("appearance:None,", "appearance:None,window_points:Some((1000.0,700.0)),");
@@ -1091,13 +1105,16 @@ mod tests {
         // line passes when only one of the replacements landed — and each was
         // checked alone against `deny_unknown_fields`.
         assert!(aged_frame.contains("coverage_start:2.0"), "{aged_frame}");
+        assert!(aged_frame.contains("input_onset:0.0,actual_onset:"), "{aged_frame}");
         assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
+        assert!(aged_frame.contains(&format!("onset:Some({TIMING})")), "{aged_frame}");
+        assert!(aged_note.contains(&format!("timing:Some({TIMING})")), "{aged_note}");
         assert!(aged_header.contains("start_samples:Some(1024)"), "{aged_header}");
         assert!(aged_header.contains("window_points:Some((1000.0,700.0))"), "{aged_header}");
-        let aged =
-            Take::parse(std::io::Cursor::new(format!("{aged_header}\n{aged_frame}\n{aged_note}")))
-                .expect("a take carrying pruned keys still opens");
+        let aged = format!("{aged_header}\n{run}\n{aged_frame}\n{aged_note}");
+        let aged = Take::parse(std::io::Cursor::new(aged))
+            .expect("a take carrying pruned keys still opens");
         assert_eq!(aged.events, current.events, "and draws exactly what it drew");
         assert_eq!(aged.header.version, current.header.version, "and its header still reads");
     }

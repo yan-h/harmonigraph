@@ -325,7 +325,10 @@ struct Recording {
     audio_file: Option<String>,
     /// The WAV itself, until it is finalized or a write to it fails.
     audio: Option<harmonigraph_take::WavWriter>,
-    /// Whether a `Run` is open.
+    /// Whether the file holds a `Run` no `RunEnd` has followed yet: a stopped
+    /// take seals only once one has. This is what the ring has delivered, a
+    /// ring's length behind [`Recorder::open_run`](super::Recorder::open_run),
+    /// so it is the file's own state rather than a copy of the recorder's.
     run_open: bool,
     /// Whether the file already holds its failure marker.
     marked: bool,

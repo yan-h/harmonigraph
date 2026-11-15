@@ -57,7 +57,6 @@ pub struct RollNote {
     pub note: u8,
     pub velocity: f32,
     pub start: Time,
-    original_onset: Time,
     /// When it was released, or `None` while it is still sounding.
     pub end: Option<Time>,
     /// Observation stopped without proof of termination. This is not a release.
@@ -119,7 +118,6 @@ impl RollNote {
             note: key.note,
             velocity,
             start,
-            original_onset: start,
             end: None,
             observed_until: None,
             lifetime: None,
@@ -488,10 +486,9 @@ impl NoteRoll {
         }
     }
 
-    pub(crate) fn set_identity(&mut self, key: VoiceKey, lifetime: Option<u64>, onset: Time) {
+    pub(crate) fn set_lifetime(&mut self, key: VoiceKey, lifetime: Option<u64>) {
         if let Some(note) = self.live.get_mut(&key) {
             note.lifetime = lifetime;
-            note.original_onset = onset;
         }
     }
 
@@ -603,7 +600,7 @@ impl NoteRoll {
         offset: Time,
     ) {
         let matches = |row: &VoiceBaseline, note: &RollNote| {
-            row.matches_voice(source, note.key(), note.lifetime, note.original_onset)
+            row.matches_voice(source, note.key(), note.lifetime)
         };
         let omitted: Vec<_> = self
             .live
@@ -653,8 +650,7 @@ impl NoteRoll {
             let start = row.actual_onset + offset;
             let mut note =
                 RollNote::new(key, row.velocity, start, at, row.pitch(), row.expressions);
-            note.original_onset = row.actual_onset;
-            note.lifetime = (row.lifetime != 0).then_some(row.lifetime);
+            note.lifetime = Some(row.lifetime);
             note.history_complete = false;
             self.live.insert(key, note);
         }
