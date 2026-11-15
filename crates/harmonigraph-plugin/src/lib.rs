@@ -1604,33 +1604,36 @@ mod tests {
         assert_eq!(saved(&plugin), shown, "an opened editor saved nothing");
     }
 
-    /// A restore into an open window (a preset load, a host undo) reaches the
-    /// editor at the next hold of its lock, as one into a shut window does
-    /// (#1329; #324's test has the shut one).
+    /// An empty restore into an open window (a host undo back to an untouched
+    /// preset) installs the fresh look, and the edits made after it are what
+    /// the next save stores, not `""`.
     #[test]
-    fn a_restore_into_an_open_window_is_installed() {
+    fn an_empty_restore_into_an_open_window_keeps_saving_its_edits() {
         let plugin = Harmonigraph::default();
         editor::open_window_session(&plugin.editor_shared, &egui::Context::default());
-        plugin.params.editor_state.set_open(true);
-        turn_live_yaw(&plugin, 2.0);
-        restore_yaw(&plugin, 0.5);
-        assert_eq!(live_yaw(&plugin), 0.5, "the open window kept what the restore replaced");
-        plugin.params.editor_state.set_open(false);
+        restore(&plugin, "");
+        turn_live_yaw(&plugin, 1.25);
+        assert_eq!(saved_yaw(&plugin), 1.25, "a save after the empty restore lost the edit");
     }
 
-    /// An empty restore is what such a project carries, so it puts the fresh
-    /// look back and saves nothing again (#1757 Q3): undoing a preset load
-    /// whose preset came from an untouched editor goes back to the fresh look.
+    /// An empty restore is what an untouched editor's project carries, so it
+    /// puts the fresh look back (#1757 Q3): undoing a preset load whose preset
+    /// came from an untouched editor goes back to the fresh look, and a save
+    /// then stores that look.
     #[test]
-    fn an_empty_restore_is_the_fresh_look_and_saves_nothing() {
+    fn an_empty_restore_is_the_fresh_look() {
         let plugin = Harmonigraph::default();
         let fresh = live_yaw(&plugin);
         restore_yaw(&plugin, fresh + 0.5);
         assert_eq!(saved_yaw(&plugin), fresh + 0.5);
 
         restore(&plugin, "");
-        assert_eq!(saved(&plugin), "");
         assert_eq!(live_yaw(&plugin), fresh, "the editor kept the restore an empty one replaced");
+        assert_eq!(
+            saved_yaw(&plugin),
+            fresh,
+            "a save after the empty restore is not the fresh look"
+        );
     }
 
     /// A save that cannot take the editor lock — one the host makes from a

@@ -868,8 +868,8 @@ fn a_refused_blob_says_why() {
 /// A save stores the settings the editor holds (#1757): one installed whole
 /// saves back as it came, a refused one leaves the settings, and so the save,
 /// as they were, and the empty one — what an editor never opened saves — puts
-/// the fresh settings back and saves empty again until a window opens, with
-/// nothing on the Console.
+/// the fresh settings back, which a save then stores, with nothing on the
+/// Console. Only an editor that has held nothing saves empty.
 #[test]
 fn an_install_decides_what_a_save_stores() {
     let saved = dialled().save_persist();
@@ -885,7 +885,11 @@ fn an_install_decides_what_a_save_stores() {
 
     let lines = state.picture.runtime.console.lines().count();
     assert!(state.install_document(""));
-    assert_eq!(state.save_answer().as_ref(), "", "the empty document saves something");
+    assert_eq!(
+        state.save_answer().as_ref(),
+        state.save_persist(),
+        "an empty restore into an editor that held settings saves nothing"
+    );
     assert_eq!(
         state.save_persist(),
         fresh().save_persist(),

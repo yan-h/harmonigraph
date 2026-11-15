@@ -102,10 +102,11 @@ pub enum ExportAction {
 pub struct SharedState {
     pub picture: PictureState,
     pub workspace: Workspace,
-    /// Fresh, or freshly restored from the empty document, and no window
-    /// opened since: a host save stores `""`, so a project whose editor was
-    /// never opened keeps following the fresh look of whichever build loads
-    /// it (#1757 Q2).
+    /// Nothing installed and no window opened since the state was fresh: a
+    /// host save stores `""`, so a project whose editor was never opened keeps
+    /// following the fresh look of whichever build loads it (#1757 Q2). An
+    /// empty restore leaves it as it was, so one into an editor that has held
+    /// settings never turns its later saves into `""`.
     untouched: bool,
 }
 
@@ -625,8 +626,8 @@ impl SharedState {
     /// harness's last run.
     ///
     /// The empty document is what an editor never opened saves, so it installs
-    /// the fresh settings, and a save stores `""` again until a window opens
-    /// (#1757 Q3). A value naming a variant this build does not have costs its
+    /// the fresh settings (#1757 Q3); a save then stores `""` only if the
+    /// editor has held nothing else and no window has opened. A value naming a variant this build does not have costs its
     /// own key, which opens at its default (#1757 Q4); refused input leaves the
     /// current content intact. Either loss opens the Console and says there
     /// what was lost; a save then stores the settings as they stand, like any
@@ -643,7 +644,6 @@ impl SharedState {
                 &Workspace::default(),
                 &crate::AppearanceDocument::default(),
             ));
-            self.untouched = true;
             return true;
         }
         let (persist, dropped) = match crate::persist_keys::decode::<UiPersist>(serialized) {
