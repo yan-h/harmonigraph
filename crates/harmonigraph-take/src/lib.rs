@@ -1038,7 +1038,8 @@ mod tests {
     /// of 128 controllers after `voices`, `configuration_revision` first inside
     /// an assignment, `start_samples` after `sample_rate` and `window_points`
     /// after `appearance` (#895 dropped those two), and `runtime_session`,
-    /// `clock_epoch`, `input` and `planned` first inside a timing (#1780). A
+    /// `clock_epoch`, `input` and `planned` first inside a timing and
+    /// `input_onset` before a voice's `actual_onset` (#1780). A
     /// hand-shortened stand-in would prove nothing about the nested vector RON
     /// actually has to skip.
     ///
@@ -1090,6 +1091,7 @@ mod tests {
         let channels = format!(",channels:[{}]", vec![channel; 16].join(","));
         let aged_frame = frame
             .replace("t:2.0,", "t:2.0,coverage_start:2.0,")
+            .replace("actual_onset:", "input_onset:0.0,actual_onset:")
             .replace(")))", &format!("{channels})))"));
         let aged_note = note
             .replace("assignment:Some((", "assignment:Some((configuration_revision:9,")
@@ -1104,6 +1106,7 @@ mod tests {
         // line passes when only one of the replacements landed — and each was
         // checked alone against `deny_unknown_fields`.
         assert!(aged_frame.contains("coverage_start:2.0"), "{aged_frame}");
+        assert!(aged_frame.contains("input_onset:0.0,actual_onset:"), "{aged_frame}");
         assert!(aged_frame.contains(",channels:[(controllers:[0,"), "{aged_frame}");
         assert!(aged_note.contains("configuration_revision:9"), "{aged_note}");
         assert!(

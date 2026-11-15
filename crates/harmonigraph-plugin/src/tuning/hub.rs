@@ -1002,7 +1002,6 @@ impl Hub {
             sequence: self.rows[index].sequence,
             lifetime: record.serial,
             time,
-            input_time: self.presentation(record.sample),
             timing,
         };
         let delta = self.rows[index].state.apply(event, stamp);

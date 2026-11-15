@@ -210,7 +210,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     let row = VoiceBaseline {
         note: 60,
         lifetime: LIFETIME,
-        input_onset: ORIGIN + 0.125,
         actual_onset: ORIGIN + 0.125,
         onset: Some(EventTiming {
             sample: ((ORIGIN + 0.125) * 48_000.0) as i64,

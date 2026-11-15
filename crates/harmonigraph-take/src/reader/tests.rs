@@ -47,7 +47,6 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
         pitch_microcents: i64::from(note) * 100_000_000,
         lifetime: u64::from(note),
         provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
-        input_onset: presentation(input),
         actual_onset: presentation(input + DELAY),
         onset: Some(harmonigraph_core::canonical::EventTiming {
             sample: input + DELAY,

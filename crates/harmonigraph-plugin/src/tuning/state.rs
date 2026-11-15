@@ -48,7 +48,6 @@ pub struct Stamp {
     /// finds its voice by what the event addresses.
     pub lifetime: u64,
     pub time: f64,
-    pub input_time: f64,
     pub timing: EventTiming,
 }
 
@@ -220,7 +219,6 @@ impl State {
                 note,
                 host_note_id: id,
                 lifetime: stamp.lifetime,
-                input_onset: stamp.input_time,
                 actual_onset: stamp.time,
                 onset: Some(stamp.timing),
                 velocity,

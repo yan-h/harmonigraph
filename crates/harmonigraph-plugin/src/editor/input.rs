@@ -723,7 +723,6 @@ mod tests {
                 provenance: PitchProvenance::AcceptedOutput,
                 onset: accepted.timing,
                 actual_onset: 2.0,
-                input_onset: 2.0,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
                 ..Default::default()
@@ -789,7 +788,6 @@ mod tests {
                 note: 72,
                 lifetime: 61,
                 actual_onset: 2.0,
-                input_onset: 2.0,
                 onset: accepted.timing,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,

@@ -108,7 +108,6 @@ pub struct VoiceBaseline {
     /// Which press this is, minted when its source struck it. Every restated
     /// voice carries one, so a baseline row names the press it continues.
     pub lifetime: u64,
-    pub input_onset: Time,
     pub actual_onset: Time,
     pub onset: Option<EventTiming>,
     pub pitch_microcents: i64,
@@ -137,7 +136,6 @@ impl Default for VoiceBaseline {
             port: 0,
             host_note_id: -1,
             lifetime: 0,
-            input_onset: 0.0,
             actual_onset: 0.0,
             onset: None,
             pitch_microcents: 0,
@@ -318,7 +316,6 @@ impl SourceBaseline {
                 || voice.note >= 128
                 || voice.port != 0
                 || voice.host_note_id < -1
-                || !voice.input_onset.is_finite()
                 || !voice.actual_onset.is_finite()
                 || voice.actual_onset > self.time
                 || !voice.player_tuning.is_finite()
@@ -345,7 +342,6 @@ impl SourceBaseline {
     pub fn translate(&mut self, offset: f64) {
         self.time += offset;
         for voice in &mut self.voices[..self.count] {
-            voice.input_onset += offset;
             voice.actual_onset += offset;
         }
     }
@@ -438,7 +434,6 @@ mod tests {
         VoiceBaseline {
             note,
             lifetime: u64::from(note) + 1,
-            input_onset: 0.0,
             actual_onset: 1.0,
             onset: Some(EventTiming { sample: 48000, sample_rate: 48000.0 }),
             pitch_microcents: i64::from(note) * 100_000_000,
@@ -769,12 +764,7 @@ mod tests {
                 reason: GapReason::PublicationFull,
             }))
             .unwrap();
-        let row = VoiceBaseline {
-            actual_onset: 0.0,
-            input_onset: 0.0,
-            pitch_microcents: 6_063_000_000,
-            ..voice(60)
-        };
+        let row = VoiceBaseline { actual_onset: 0.0, pitch_microcents: 6_063_000_000, ..voice(60) };
         let frame = SourceBaseline::new(source, 1, 2.0, 66, true, &[row]).unwrap();
         tracker.replace_source(&frame).unwrap();
         tracker

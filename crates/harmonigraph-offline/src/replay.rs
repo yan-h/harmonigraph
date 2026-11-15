@@ -389,7 +389,6 @@ mod tests {
         let row = VoiceBaseline {
             note: 60,
             lifetime: 61,
-            input_onset: 0.09,
             actual_onset: 0.1,
             onset: Some(EventTiming { sample: 4800, sample_rate: 48000.0 }),
             pitch_microcents: 6_025_000_000,

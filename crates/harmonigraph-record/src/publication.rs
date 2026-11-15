@@ -345,7 +345,6 @@ mod tests {
             note,
             lifetime: u64::from(note) + 1,
             actual_onset: onset,
-            input_onset: onset,
             velocity: 0.8,
             pitch_microcents: pitch,
             ..Default::default()
