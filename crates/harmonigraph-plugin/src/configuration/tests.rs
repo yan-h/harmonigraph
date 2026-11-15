@@ -457,10 +457,8 @@ fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
         device.run(64, vec![], false);
         let released = shown(&settings);
         assert_eq!(released.view.resolved.modes.tempered, Tempered::default());
-        // Within the microcent the cents a release carries round to.
-        let kept = |raw: i32, linked: i32| (raw - linked).abs() <= 1;
-        assert!(kept(released.raw.five, linked.tuning.five), "a released link keeps its value");
-        assert!(kept(released.raw.seven, linked.tuning.seven));
+        assert_eq!(released.raw.five, linked.tuning.five, "a released link keeps its value");
+        assert_eq!(released.raw.seven, linked.tuning.seven);
         assert_eq!(saved(&device.save()).axes[2..4], [released.raw.five, released.raw.seven]);
         assert!(settings.submit(ConfigEdit::axis(TuningAxis::Five, released.raw.five)));
         device.run(128, vec![], false);

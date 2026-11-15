@@ -325,7 +325,7 @@ pub(super) fn learn_pulse(now: f64) -> f32 {
 }
 
 /// The view a fresh state opens on, built once: where a double-click on one
-/// of its bars puts the value back (see [`ValueBar::default_value`]).
+/// of its bars puts the value back (see [`crate::widgets::ValueBar::default_value`]).
 pub(super) fn fresh_view() -> &'static harmonigraph_scene::ViewConfig {
     static FRESH: std::sync::LazyLock<harmonigraph_scene::ViewConfig> =
         std::sync::LazyLock::new(Default::default);
