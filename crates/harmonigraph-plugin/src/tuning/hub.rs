@@ -1193,14 +1193,6 @@ impl Hub {
     pub fn retuning(&self) -> bool {
         self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
     }
-    /// The configuration owner refused an evaluation. Here it is a status bit
-    /// that silences nothing and holds until the cut like the Hub's other
-    /// faults. The owner's own fault bit, which refuses every tuning edit,
-    /// holds until a host reset.
-    pub fn configuration_exhausted(&mut self) {
-        self.status |= session::POLICY;
-    }
-
     pub fn end(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         // A callback no sub-block reached still publishes what it sequenced.
         self.flush(recorder);

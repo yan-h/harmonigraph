@@ -1042,7 +1042,6 @@ impl ClapPlugin for Harmonigraph {
     }
     fn clap_configuration_fault(&mut self) {
         self.configuration.as_mut().unwrap().fault();
-        self.aggregation.as_mut().unwrap().configuration_exhausted();
     }
 
     const CLAP_ID: &'static str = "com.yan-h.harmonigraph";
