@@ -373,7 +373,6 @@ fn fit_axis<const N: usize>(
 pub(crate) struct Runtime {
     area: Option<Vec2>,
     requested: Option<u64>,
-    before_request: Option<Layout>,
     pub rects: [Rect; 3],
     pub bodies: [Option<(Tab, Rect)>; 3],
     grip: Option<Grip>,
@@ -392,7 +391,6 @@ impl Default for Runtime {
         Self {
             area: None,
             requested: None,
-            before_request: None,
             rects: [Rect::NOTHING; 3],
             bodies: [None; 3],
             grip: None,
@@ -430,15 +428,10 @@ pub(crate) fn show(
     let gap = theme::LINE_WIDTH;
     let floor = theme::min_settings(scale);
     let resized = runtime.area.is_none_or(|last| (last - area.size()).length_sq() > 0.25);
-    // A request is answered before the next plugin frame. Keep the guard
-    // across egui's discarded/repeated passes as well as the answering frame.
+    // A request is answered before the next plugin frame, so a resize seen
+    // while it is outstanding is the answer rather than a window drag.
     let frame = ui.ctx().cumulative_frame_nr();
     let answering = runtime.requested.is_some_and(|asked| frame <= asked + 1);
-    let repeated = runtime.requested == Some(frame);
-    // A discarded pass must redraw the click's original geometry. Replaying
-    // its controls into a temporary copy cannot apply that click twice.
-    let mut replay = if repeated { runtime.before_request.clone() } else { None };
-    let layout = replay.as_mut().unwrap_or(layout);
     if !layout.sized || (resized && runtime.area.is_some() && !answering) {
         layout.fit(area.size(), rail, gap);
         layout.sized = true;
@@ -464,17 +457,13 @@ pub(crate) fn show(
     }
     layout.position = viewer.interaction.dock;
     let open = viewer.interaction.open_settings.take();
-    if let Some(tab) = open.filter(|_| !repeated) {
+    if let Some(tab) = open {
         layout.select(tab);
         layout.folded[Section::Settings as usize] = false;
     }
     let unchanged = (before.position, before.folded) == (layout.position, layout.folded);
     dividers(ui, layout, runtime, &drawn, unchanged, scale, floor);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
-    if repeated {
-        viewer.interaction.analyzer_regions.request = None;
-        return None;
-    }
     // A region fold keeps its space inside the Analyzer: the open region
     // takes it, and the window is not asked to change.
     if viewer.interaction.analyzer_regions.apply() {
@@ -493,7 +482,6 @@ pub(crate) fn show(
     if reset || edited {
         runtime.grip = None;
         runtime.requested = Some(frame);
-        runtime.before_request = Some(before);
         ui.ctx().request_repaint();
         return Some(layout.natural_size(rail, gap, floor) - area.size());
     }

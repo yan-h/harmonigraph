@@ -467,36 +467,6 @@ fn stacked_settings_only_is_compact_and_all_sections_can_reopen() {
     assert_eq!(state.workspace.layout.folded, [false; 3]);
 }
 
-#[test]
-fn a_discarded_pass_does_not_toggle_a_fold_twice() {
-    let mut state = fresh();
-    let mut h = DockHarness::new();
-    h.settle(&mut state);
-    let rect = state.workspace.layout_runtime.rects[1];
-    let at = rect.min + egui::vec2(12.0, theme::tab_bar_height(1.0) * 0.5);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
-    h.frame(&mut state, vec![press(at, true)]);
-    let ctx = h.ctx.clone();
-    let raw = egui::RawInput {
-        screen_rect: Some(h.screen),
-        events: vec![press(at, false)],
-        ..Default::default()
-    };
-    let output = ctx.run_ui(raw, |ui| {
-        root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
-        if ui.ctx().current_pass_index() == 0 {
-            ui.ctx().request_discard("exercise repeated layout pass");
-        }
-    });
-    assert!(output.platform_output.num_completed_passes > 1);
-    assert!(state.workspace.layout.folded[1]);
-    assert_eq!(
-        state.workspace.layout_runtime.rects[1], rect,
-        "the click's frame retains its geometry until the host answers"
-    );
-    assert!(state.workspace.take_window_size_change().unwrap().x < -100.0);
-}
-
 /// The fresh state with the analyzer's split at an even three quarters, so
 /// each region is wider than the button rail it folds to by enough for a
 /// fold to show in the window's width. The fresh split leaves the spectrum
