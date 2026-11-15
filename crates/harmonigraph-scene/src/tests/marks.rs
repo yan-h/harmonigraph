@@ -666,106 +666,54 @@ fn a_non_finite_delay_draws_as_no_delay_at_all() {
 
 /// `notes` held with both ends marked and the octave wheel set to `count`
 /// octaves centered on `center`.
-fn marked(notes: &[u8], count: u32, center: f32) -> (Scene, ViewConfig) {
+fn marked(notes: &[u8], count: u32, center: f32) -> Scene {
     let mut motion = NodeMotion::default();
     let mut tracker = NoteTracker::new();
     for &note in notes {
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
     }
     let view = ViewConfig { octave_count: count, octave_center: center, ..plain_view() };
-    (motion_scene(&mut motion, &tracker, &Tuning::default(), &view, 0.0), view)
-}
-
-/// A lone held note — its own melody and bass — and the origin node it
-/// lights.
-fn lone_mark(note: u8, count: u32, center: f32) -> (NodeInstance, ViewConfig) {
-    let (scene, view) = marked(&[note], count, center);
-    (*origin_node(&scene), view)
-}
-
-/// What the octave layer paints slot `slot` on this node. Built the shader's
-/// way rather than through the scene's own helper — the pitch of the slot on
-/// this pitch class, then `pitch_lut_color`'s walk across `pitch_ramp_lut` —
-/// so this pins the arithmetic in `lattice.wgsl` and not merely the fact that
-/// two call sites agree.
-///
-/// The gradient comes off the view the helpers above build with, NOT from
-/// `Gradient::default()` — that one is the gradient type's own default
-/// and is free to differ from what a fresh view opens on. Reading it here
-/// would pin the two together and fail the moment either moves.
-fn sector_color(node: &NodeInstance, slot: u32, view: &ViewConfig) -> Vec4 {
-    let pitch = slot as f32 * 12.0 + node.cents / 100.0;
-    let lut = pitch_ramp_lut(ViewConfig::default().pitch_gradient);
-    let t = ((pitch - view.darkest_pitch) / (view.brightest_pitch - view.darkest_pitch))
-        .clamp(0.0, 1.0);
-    let f = t * (PITCH_LUT_N - 1) as f32;
-    let i0 = f.floor() as usize;
-    lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+    motion_scene(&mut motion, &tracker, &Tuning::default(), &view, 0.0)
 }
 
 #[test]
-fn a_mark_is_the_color_of_the_sector_it_extends() {
+fn a_mark_extends_the_sector_its_note_lights() {
     // The reported bug: move the octave wheel off the register being played
     // and the melody/bass marks stop matching the note they mark. A note past
-    // either end folds onto the outermost slot, so a mark carrying the VOICE's
-    // color paints C7 onto the C6 indicator it is extending. The mark is
-    // part of the octave layer, so it takes the color of the slot it links
-    // back to — whatever the wheel, and whether or not the note folded.
+    // either end folds onto the outermost slot, and its mark has to name that
+    // slot — the slice its note lights — since the shader colours a mark from
+    // its slot's pitch, as it colours the slice.
     //
     // Every marked node is checked rather than the origin alone: one voice
-    // lights every node its pitch class matches, and those nodes are the SAME
-    // class at different tunings of it, so their cents differ and the pitch
-    // class's half of the slot pitch is live. C4 alone would leave it at zero
-    // on every node it reaches.
-    let (mut folded, mut off_c, mut ramp_top) = (false, false, false);
+    // lights every node its pitch class matches.
+    let mut folded = false;
     for (count, center) in [(9, 60.0), (4, 74.0), (4, 60.0), (4, 48.0)] {
         for note in [96u8, 64, 108] {
             // C7, E4, C8
-            let (scene, view) = marked(&[note], count, center);
+            let scene = marked(&[note], count, center);
             let lit: Vec<_> = scene.nodes.iter().filter(|n| n.melody_slots != 0).collect();
             assert!(!lit.is_empty(), "note {note} must light a node at span {count}/{center}");
             for node in lit {
                 assert_eq!(node.melody_slots.count_ones(), 1, "one note, one marked sector");
                 assert_eq!(node.melody_slots, node.bass_slots, "a lone note is both ends");
-
                 let slot = node.melody_slots.trailing_zeros();
                 folded |= note == 96 && slot != 8; // C7's own slot, when the wheel reaches it
-                off_c |= node.cents != 0.0;
-                ramp_top |= slot as f32 * 12.0 + node.cents / 100.0 >= view.brightest_pitch;
-                let sector = sector_color(node, slot, &view);
                 let where_ =
                     format!("note {note}, span {count} at {center}, {:?}", node.lattice_pos);
-                assert_eq!(node.melody_color, sector, "melody mark: {where_}");
-                assert_eq!(node.bass_color, sector, "bass mark: {where_}");
+                assert!(node.octaves[slot as usize] > 0.0, "the mark's slice is unlit: {where_}");
             }
         }
     }
     assert!(folded, "a wheel here has to fold C7, or the fold is not being tested");
-    assert!(off_c, "a marked node here has to be off C, or its cents are not being tested");
-    assert!(ramp_top, "a sector here has to reach the top of the ramp, or its clamp is not");
 }
 
 #[test]
-fn the_two_marks_on_one_node_carry_their_own_sectors_colors() {
+fn the_two_marks_on_one_node_name_their_own_slots() {
     // A chord voiced inside one pitch class puts both ends on ONE node, in
-    // different octaves — which is the case that says the color has to be
-    // derived per slot and not once per voice. Deriving it once and handing it
-    // to both would paint the bass mark at the top of the ramp.
-    let (scene, view) = marked(&[36, 96], 9, 60.0); // C2 and C7
+    // different octaves, so each mark names its own slot and wears its own
+    // sector's colour rather than one handed to both.
+    let scene = marked(&[36, 96], 9, 60.0); // C2 and C7
     let node = origin_node(&scene);
     let (melody, bass) = (node.melody_slots.trailing_zeros(), node.bass_slots.trailing_zeros());
     assert_eq!((melody, bass), (8, 3), "C7 is the melody up top, C2 the bass below");
-    assert_eq!(node.melody_color, sector_color(node, melody, &view));
-    assert_eq!(node.bass_color, sector_color(node, bass, &view));
-    assert_ne!(node.melody_color, node.bass_color, "five octaves apart on the ramp");
-}
-
-#[test]
-fn a_folded_note_marks_the_lit_sector_on_the_ramp() {
-    // A note past the wheel's end folds onto its outermost slot. Its mark
-    // takes that sector's pitch, so it cannot paint C7 around a C6 indicator.
-    let (node, view) = lone_mark(96, 4, 48.0); // C7, above a wheel centered on C3
-    let slot = node.melody_slots.trailing_zeros();
-    assert_ne!(slot, 8, "C7's own slot is 8; a wheel this narrow has to fold it");
-    assert_eq!(node.melody_color, sector_color(&node, slot, &view));
 }

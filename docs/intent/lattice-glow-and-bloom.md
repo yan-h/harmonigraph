@@ -15,3 +15,9 @@ One line per decision; the audit reads this before asking anything.
 - A held or fading halo takes a gradient, range, width or tuning change in the frame its note does; no record asked for the old ease toward it over the Glow times. #1759 Q1
 - A held halo's colour arrives where its note says, live and in exports, rather than stalling short of it. #1759 Q2
 - Halos still fading survive a big chord arriving. #1759 Q3
+
+## 2026-11-14 (drift audit, #1784)
+
+- Clear display history (the Video pane's clear) keeps a held note's halo lit where it is, and drops only released notes' lights; a held halo no longer goes dark and fades back up over the Glow attack. Yan, 2026-11-14. #1784 G1
+- Every value a halo carries takes its own direction: its brightness and each octave's and mark's share of its colour rise on the Glow attack and fall on the release. So a note joining a lit node brings its colour in on the attack, a note leaving takes its colour out on the release, an octave handoff does both at once, and a lingering halo does not dip when a note joins it. Yan, 2026-11-14 (B′). #1784 G2
+- A slice's Thickness no longer weighs its share of the halo's colour: a slice is weighed by its light over the band's width at rest, however Thickness draws it. Yan, 2026-11-14. #1784 G3

@@ -141,8 +141,6 @@ impl LatticeCallback {
             },
             cents: n.cents,
             marks: [n.melody_slots, n.bass_slots],
-            melody_color: n.melody_color.to_array(),
-            bass_color: n.bass_color.to_array(),
             scale: n.scale,
             ring: n.audio_ring,
             // The row is settled by the walk below, which numbers the lit
@@ -189,8 +187,9 @@ impl LatticeCallback {
         // light is over — exactly 0, again rather than nearly, so a shipped
         // instance is always one with something to draw.
         //
-        // What it ships FOR is the light's own passes alone, which draw every
-        // instance (`fs_ink_strip`, `vs_glow_splat`). A node
+        // What it ships FOR is the light's own passes alone: its row of the
+        // light table, which the reading pass lays into the strip
+        // (`fs_ink_strip`), and the halo's splat (`vs_glow_splat`). A node
         // with no INK left — its Fade run out while its light still releases —
         // paints nothing in the scene pass and fills its cell with nothing, so
         // its shadow, its scene draw and its occlusion of what stands behind it
@@ -246,16 +245,13 @@ impl LatticeCallback {
         // most of them. `sort_by` is stable, so the ones kept come out in the
         // order they held in the full sort. Whether a node ships, and whether
         // with ink or for its light alone, is asked here, once, of its packed
-        // instance. So is whether it is LIT: past the most a strip holds
-        // (`MAX_LIGHTS`) a node has no light, as `GlowFade` leaves one, and
-        // ships only if it has ink.
+        // instance. So is whether it is LIT: `GlowFade` lights no more than a
+        // strip holds (`MAX_LIGHTS`), which the walk asserts below.
         let mut order = emptied(order, 0);
-        let mut lit_count = 0;
         order.extend(scene.nodes.iter().enumerate().filter_map(|(i, n)| {
             let g = to_gpu(n);
             let inked = inked(&g);
-            let lit = lights_drawn && g.glow[0] > 0.0 && lit_count < harmonigraph_scene::MAX_LIGHTS;
-            lit_count += usize::from(lit);
+            let lit = lights_drawn && g.glow[0] > 0.0;
             let ships = inked || lit;
             (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
                 .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked, lit))
@@ -453,15 +449,11 @@ impl LatticeCallback {
                 // A lit node's row of the light table is the next one: the
                 // table is this frame's lit instances in the order they ship,
                 // which is the order the reading pass lays the strip down in
-                // and the halo's own draw reads it back. One the cap left
-                // unlit draws no halo.
+                // and the halo's own draw reads it back.
                 if lit {
                     let node = &scene.nodes[i];
                     instance.glow[1] = lights.len() as f32;
-                    let light = node.glow.light.unwrap_or_else(|| node.glow_light());
-                    lights.push(LightRow::new(node.cents, light));
-                } else if lights_drawn {
-                    instance.glow[0] = 0.0;
+                    lights.push(LightRow::new(node.cents, node.glow.light));
                 }
                 // Display modulation is separate from the carried level, and
                 // settled in prepare, where the pane's travel says how far the
@@ -488,6 +480,11 @@ impl LatticeCallback {
                 pluses[cross].place = casters.len().saturating_sub(1) as u32;
             }
         }
+        debug_assert!(
+            lights.len() <= harmonigraph_scene::MAX_LIGHTS,
+            "{} lights, more than a strip holds: the glow pass caps them",
+            lights.len(),
+        );
         LatticeCallback {
             pipeline_cache: None,
             instances,

@@ -121,13 +121,11 @@ pub(super) fn parity_scene() -> Scene {
             },
             melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
-            melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
-            bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
             // Lit and settled: the light's own clock is the shell's pass and
             // no shell has run here, so this fixture is the picture with
-            // nothing carried — which is exactly what a still image of the
-            // draw paths wants.
-            glow: harmonigraph_scene::GlowStep { level: 1.0, light: None },
+            // nothing carried, its light the node's reading (set below) —
+            // which is exactly what a still image of the draw paths wants.
+            glow: harmonigraph_scene::GlowStep { level: 1.0, ..Default::default() },
             // Cluster tightly so painter order and scaled off-sheet nodes
             // both contribute to the fixture.
             ..harmonigraph_scene::NodeInstance::at(
@@ -139,6 +137,7 @@ pub(super) fn parity_scene() -> Scene {
                 i == 1,
             )
         });
+        read_light(nodes.last_mut().expect("just pushed"));
     }
     // Two markers, one under a node and one clear of every node, so the pass is
     // exercised both where the nodes composite over it and where it stands
@@ -487,13 +486,9 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // a freshly-held note.
         melody_level: f32::from(melody_slots != 0),
         bass_level: f32::from(bass_slots != 0),
-        // Distinct hues so the both-ends check below can tell the two
-        // marks apart; in the app these are the marked SECTORS' colors,
-        // which are the same color wherever the two name one sector.
-        melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
-        bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
-        // Lit and settled: one node, nothing carried.
-        glow: harmonigraph_scene::GlowStep { level: 1.0, light: None },
+        // Lit and settled: one node, nothing carried, its light its reading
+        // (set below).
+        glow: harmonigraph_scene::GlowStep { level: 1.0, ..Default::default() },
         ..harmonigraph_scene::NodeInstance::at(
             LatticePos::ORIGIN,
             Vec3::ZERO,
@@ -503,6 +498,7 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
             false,
         )
     }];
+    read_light(&mut scene.nodes[0]);
     // BLACK, which is the colour `Shooter::shot` clears to, so the pane and the
     // ground the scene names are one value: every reading taken off this fixture
     // is of the node's own ink or of the light around it, and a ground lifted
@@ -518,6 +514,13 @@ pub(crate) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     // different world distances, one for a ring and one for a cross.
     scene.marker_unit = scene.node_radius * 1.8;
     scene
+}
+
+/// Give `node` the light [`NodeMotion::step`](harmonigraph_scene::NodeMotion::step)
+/// writes, its own reading as its layers stand: what a fixture that has set a
+/// node's layers calls before drawing it, so its halo is not a stale reading.
+pub(super) fn read_light(node: &mut harmonigraph_scene::NodeInstance) {
+    node.glow.light = node.glow_light();
 }
 
 /// The slot beside middle C's, as a mask — a second sector for the two ends to
@@ -617,6 +620,7 @@ pub(super) fn ringing_node(held: Option<usize>, sounding: Option<f32>, range: f3
     if let Some(slot) = held {
         node.octaves[slot] = 1.0;
     }
+    read_light(node);
     // The probe's stack: the two rings land far enough apart to be measured in
     // pixels, at radii no capture of a dialled-in look moves.
     let rings = harmonigraph_scene::ViewConfig {

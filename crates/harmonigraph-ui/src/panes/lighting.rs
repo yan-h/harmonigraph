@@ -225,7 +225,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 .percent()
                 .hint(
                     "Mix the MIDI octave and melody/bass colors around each node. \
-                     0% keeps separate colored arcs; \
+                     0% keeps each color near its own arc, softly blended; \
                      100% makes one average color. \
                      Audio-ring colors do not feed the glow.",
                 )

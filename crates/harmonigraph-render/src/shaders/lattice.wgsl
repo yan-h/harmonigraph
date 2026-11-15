@@ -189,13 +189,12 @@ const INK_STRIP_N: u32 = 64u;
 
 // One lit node's row of the frame's light table (`LightRow` in lib.rs): what
 // its light is made of, slot by slot, and the pitch class its slot colours are
-// looked up at. `l` each slot's light, `p` that light times the slice's
-// thickness, `m` the light of the mark on each slot (`GlowLight` in
+// looked up at. `l` each slot's light, `m` the light of the mark on each slot
+// (`GlowLight` in
 // harmonigraph-scene, which argues why these are weights and nothing else).
 struct LightRow {
     cents: f32,
     l: array<f32, OCTAVE_SLOTS>,
-    p: array<f32, OCTAVE_SLOTS>,
     m: array<f32, OCTAVE_SLOTS>,
 };
 
@@ -492,11 +491,6 @@ struct Instance {
     // octave slot. Which SECTOR each mark continues outward (see
     // mark_extension); its fade level rides params.y/params.z.
     @location(6) marks: vec2<u32>,
-    // Each mark's own color: its own sector's pitch off the ramp, with no lift
-    // on top of it (see NodeInstance::melody_color), so a mark reads as the
-    // indicator it extends rather than as a fixed livery.
-    @location(7) melody_color: vec4<f32>,
-    @location(8) bass_color: vec4<f32>,
     // The billboard's size factor: 1 on the home sheet, smaller with every
     // step off it. See ViewConfig::sevens_size.
     @location(10) scale: f32,
@@ -554,8 +548,6 @@ struct VsOut {
     // (`spread_union`, `cell_reach`). Zero on every other draw.
     @location(5) @interpolate(flat) cell_texel: f32,
     @location(6) @interpolate(flat) marks: vec2<u32>,
-    @location(7) @interpolate(flat) melody_color: vec4<f32>,
-    @location(8) @interpolate(flat) bass_color: vec4<f32>,
     // The circle the node fits inside (`node_rim`, or a swelled slice's reach
     // past it — `slices_outer`), in this node's uv — computed once in the
     // vertex shader because the billboard is sized on it.
@@ -734,8 +726,6 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     out.motion = inst.motion;
     out.cents = inst.cents;
     out.marks = inst.marks;
-    out.melody_color = inst.melody_color;
-    out.bass_color = inst.bass_color;
     out.rim = rim;
     out.swell = swell;
     out.ring = inst.ring;
@@ -1137,8 +1127,7 @@ fn oct_slot_lit(cents: f32, octaves: vec3<u32>, slot: i32) -> vec4<f32> {
 
 // The colour of slot `slot` LIT on a node whose pitch class is `cents`,
 // stated once, here: the slice wears it ([`oct_slot_lit`]), the mark extending
-// that slice wears it (`NodeInstance::melody_color` is the CPU's reading of
-// the same table), and the light reads both layers in it ([`ink_at`]).
+// that slice wears it, and the light reads both layers in it ([`ink_at`]).
 fn oct_slot_colour(cents: f32, slot: i32) -> vec3<f32> {
     // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
     // class for the glyph's true pitch.
@@ -1738,7 +1727,13 @@ fn mark_extension(
 // strip's layer between `inner` and `outer`. A slot whose slice is the band
 // reads the shared strip itself, so where every marked slice is, this is
 // [`mark_extension`]'s answer; the light's own reading (`ink_at`) takes the
-// marks angularly and keeps that.
+// marks angularly and keeps that. `slot` is the slot whose mark covers the
+// fragment most, whose sector's colour the mark wears.
+struct DrawnMarks {
+    layer: NodeLayer,
+    slot: i32,
+}
+
 fn drawn_marks(
     in: VsOut,
     slots: u32,
@@ -1750,10 +1745,11 @@ fn drawn_marks(
     outer: f32,
     aa: f32,
     analytic: bool,
-) -> NodeLayer {
+) -> DrawnMarks {
     let top = ring.base + i32(oct_span()) - 1;
     var sd = EMPTY_DISTANCE;
     var coverage = 0.0;
+    var slot = ring.base;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) == 0u || s < ring.base || s > top {
@@ -1773,9 +1769,12 @@ fn drawn_marks(
         }
         let layer = outer_glyph(s, ring, uv, own, r.x, r.y, aa);
         sd = min(sd, layer.sd);
-        coverage = max(coverage, layer.coverage);
+        if layer.coverage > coverage {
+            coverage = layer.coverage;
+            slot = s;
+        }
     }
-    return NodeLayer(sd, strip.level, coverage);
+    return DrawnMarks(NodeLayer(sd, strip.level, coverage), slot);
 }
 
 // One wedge's own frame, which both readings below are taken in.
@@ -2228,7 +2227,7 @@ fn base_node_ink(
     if mark_out > mark_in {
         mark_strip = glyph_band(d, mark_in, mark_out, 1.0, aa);
     }
-    let melody_layer = drawn_marks(
+    let melody = drawn_marks(
         in,
         in.marks.x,
         oct,
@@ -2240,7 +2239,7 @@ fn base_node_ink(
         aa,
         analytic,
     );
-    let bass_layer = drawn_marks(
+    let bass = drawn_marks(
         in,
         in.marks.y,
         oct,
@@ -2252,6 +2251,8 @@ fn base_node_ink(
         aa,
         analytic,
     );
+    let melody_layer = melody.layer;
+    let bass_layer = bass.layer;
     let melody_cov = layer_coverage(melody_layer);
     let bass_cov = layer_coverage(bass_layer);
     let melody_mask = melody_layer.coverage * mask_level(melody_layer.level);
@@ -2265,7 +2266,8 @@ fn base_node_ink(
     // layer already runs between two adjacent indicators.
     var mark = max(melody_cov, bass_cov);
     var mark_mask = max(melody_mask, bass_mask);
-    let mark_rgb = select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov);
+    let owner = select(bass.slot, melody.slot, melody_cov > bass_cov);
+    let mark_rgb = oct_slot_colour(in.cents, owner);
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it
@@ -2373,7 +2375,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
             let melody = select(0.0, in.params.y, (in.marks.x & bit) != 0u);
             let bass = select(0.0, in.params.z, (in.marks.y & bit) != 0u);
             let level = max(melody, bass) * opacity;
-            let color = select(in.bass_color.rgb, in.melody_color.rgb, melody > bass);
+            let color = oct_slot_colour(in.cents, slot);
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, strip.x, strip.y, level, soft), strip.x, strip.y, soft);
             let taper = 1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d);
             let coverage = layer_coverage(shape) * taper;
@@ -2902,11 +2904,9 @@ fn ink_arc(r: f32) -> f32 {
 /// **Linear in every weight**, which is what lets a carried light ease: the
 /// colours, the geometry and the widths come from the uniforms and `cents`
 /// alone, so stepping each weight toward its target is mixing the two readings
-/// by the same amount. Two places are not linear, and both are listed don't-
-/// cares (#1759): the swell cap, past which a slice reaches no further and is
-/// weighed by its light rather than its thickness, and the mark walk's
-/// per-angle max, where two marks crossing on one wedge's soft edge trade the
-/// direction.
+/// by the same amount. One place is not linear, a listed don't-care (#1759):
+/// the mark walk's per-angle max, where two marks crossing on one wedge's soft
+/// edge trade the direction.
 /// `a_stepped_light_reads_as_its_two_readings_mixed` holds the rest.
 ///
 /// **The AUDIO RING is not one of them.** A node's light says something is
@@ -2974,15 +2974,12 @@ fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
             // The slot's lit colour and not the drawn ink: what a slice is lit
             // at is its own light, where the ink's opacity is the node's
             // PRESENCE — the ghost included, which is the backdrop and weighs
-            // nothing. Over the width the lit slice is DRAWN, thinned or
-            // swelled: its light times its reach past the band's inner edge,
-            // at the thickness `p / l` carries, asked of `reach_at` as the
-            // slice itself asks it (`slice_reach`). Below the swell cap that
-            // is `p` times the band's width, which is what makes it linear.
+            // nothing. Its light times the band's width: a slice thinned or
+            // swelled by Thickness keeps its share of the colour (#1784 G3).
             let s = u32(owner);
             let l = row.l[s];
             if l > 0.0 {
-                let w = cov * l * (reach_at(row.p[s] / l, band_in, band_out) - band_in);
+                let w = cov * l * (band_out - band_in);
                 rgb = rgb + oct_slot_colour(row.cents, owner) * w;
                 wsum = wsum + w;
             }
@@ -2992,8 +2989,7 @@ fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
     // The marks, in the strip past the outermost ring: each slot's mark at its
     // own light, and the strongest owns the direction exactly as it owns the
     // pixel in `node_ink`, in the colour of the sector it extends — the
-    // slot's own pitch, which is what `NodeInstance::melody_color` is on the
-    // CPU (`the_halos_mark_colour_is_its_slots`). The depth the strip is
+    // slot's own pitch, as the drawn mark wears it. The depth the strip is
     // dialled to, capped at the quad the way the layer's own is, weighs it.
     // Slots the ring has no room for are skipped, as `mark_extension` skips
     // them: `oct_sector` has no angle to put one at.

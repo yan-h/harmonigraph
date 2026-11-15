@@ -236,10 +236,11 @@ impl ShadowBox {
     /// leave free (`Instance` in lattice.wgsl, `GpuInstance::LAYOUT`) — the
     /// second instance-step buffer the node draw and the cell draw both bind.
     ///
-    /// Scattered rather than consecutive because they take the four locations
-    /// under sixteen a node's rows leave free. Sixteen is no ceiling: the
-    /// device takes the adapter's own limits, 31 locations on Metal
-    /// (`device_limits`), so a node attribute added now can take one above.
+    /// Scattered rather than consecutive because they take four of the
+    /// locations under sixteen a node's rows leave free (7 and 8 are the other
+    /// two). Sixteen is no ceiling: the device takes the adapter's own limits,
+    /// 31 locations on Metal (`device_limits`), so a node attribute added now
+    /// can take one above.
     pub(crate) const BESIDE_NODES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
