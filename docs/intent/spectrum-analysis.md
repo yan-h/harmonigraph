@@ -41,7 +41,7 @@ Yan’s decisions recorded for future drift audits.
 ## 2026-11-02 (drift audit, #1635)
 
 - The spectrum/history now-line stays at the 2 pt line width, deliberately heavier than the 1 pt spectrum outline (#1585): the two share a colour, not a weight. #1635 Spectrum Q1, #1631
-- Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631 (Superseded 2026-11-14 by the guard below, #1758: the assertion stays, and release builds now drop or reset instead of drawing a backward column.)
+- Replace the defensive rule that drops a source-dated column not newer than the history's tail with a debug assertion: the clock only moves forward, so a break in ordering should fail tests loudly rather than be worked around in release builds. #1635 Spectrum Q2, #1631 (Superseded 2026-11-14 by the guard below, #1758; restored 2026-11-14 by S2, #1784: the assertion alone, with no release guard.)
 
 ## 2026-11-14 (premises audit, #1739)
 
@@ -52,10 +52,16 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 
 ## 2026-11-14 (F2′ rework, #1758 PR A)
 
-- Each feeder owns its analysis and dates its columns from a frame zero it states: the plugin from its clock mapping, the offline renderer from the first soundtrack frame it reads, the standalone synth from the frames it renders. Nothing dates columns by when they arrive, so the smoothed arrival anchor is gone, and the standalone synth's stall over 200 ms draws as a gap rather than sliding its columns back into line. After the plugin's input worker recovers from a crash, the newest edge keeps the lag of the resolution that drew it. #1758, #1761
+- Each feeder owns its analysis and dates its columns from a frame zero it states: the plugin from its clock mapping, the offline renderer from the first soundtrack frame it reads, the standalone synth from the frames it renders. Nothing dates columns by when they arrive, so the smoothed arrival anchor is gone, and the standalone synth's stall over 200 ms draws as a gap rather than sliding its columns back into line. After the plugin's input worker recovers from a crash, the newest edge keeps the lag of the resolution that drew it. #1758, #1761 (The lag half superseded 2026-11-14 by #1784 S3, below: the edge reads the lag from the settings.)
 
 ## 2026-11-14 (F2′ rework, #1758 PR B)
 
 - The heatmap's history is one slab pyramid, a level per rung of the slab ladder, written once as each column arrives and never redrawn from stored columns. A rung change, a late open and the Video preview read what was folded on arrival. Answered yes to #1758 Q B; Yan, 2026-11-14.
-- Under the slab pyramid, release builds drop a column not dated after the newest folded one, keeping the debug assertion and counting drops on the overlay (#1739 D10). A column more than a second behind the newest, or a crash inside the fold, resets the history as Clear display history does, counted too, rather than dropping every correct column after a mis-dated one. This supersedes the 2026-11-02 line above (#1635 Spectrum Q2): its reason still holds, but a backward column would misdraw a write-once history for up to ten minutes. #1758 Q A; Yan, 2026-11-14.
+- Under the slab pyramid, release builds drop a column not dated after the newest folded one, keeping the debug assertion and counting drops on the overlay (#1739 D10). A column more than a second behind the newest, or a crash inside the fold, resets the history as Clear display history does, counted too, rather than dropping every correct column after a mis-dated one. This supersedes the 2026-11-02 line above (#1635 Spectrum Q2): its reason still holds, but a backward column would misdraw a write-once history for up to ten minutes. #1758 Q A; Yan, 2026-11-14. (Superseded 2026-11-14 by #1784 S2, below: the guard is reduced to its debug assertion.)
 - The bfloat16 rounding of stored powers goes with the column store it halved (#1505): a slab averages the analyzer's f32 power. A bucket whose mean sits on a dB step can draw one step lighter or darker. #1758
+
+## 2026-11-14 (drift audit, #1784)
+
+- A gap in the heatmap's columns always draws as silence, however short: the one-slab hold, which repeated the previous slab across a gap of one or two slab widths (an analyzer refill, a host pause), is gone, as its frame-jitter case went with the sample-grid FFT (4fb12e57). At the fresh History duration a seam shows as one 256 ms stripe of silence. #1784 S1; Yan, 2026-11-14.
+- The spectrogram's dating guard is its debug assertion alone, as the stakes record asks of a case no producer writes: release builds no longer drop a backward column, reset the history on one or on a crash in the fold, or count either on the overlay. If a dating bug ever shipped, debug tests fail; in release a column dated backward averages into the open slab, and one dated far ahead erases the history and draws blank until Clear display history or until real time reaches that date. This supersedes the 2026-11-14 guard line above (#1758 Q A) and restores the 2026-11-02 line (#1635 Spectrum Q2). #1784 S2; Yan, 2026-11-14.
+- A frame reads the analysis lag from the settings rather than from a lag carried with each batch of columns, so for a frame or two after a switch to a shorter Frequency resolution the strip's newest edge can stop short of the now-line. #1784 S3; Yan, 2026-11-14.

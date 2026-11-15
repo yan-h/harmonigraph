@@ -512,7 +512,7 @@ impl LatticeCallback {
             shadow: scene.view.shadow,
             marker_arm_points,
             draws,
-            sheets: crate::SheetUploads { font: labels.atlas, marks: labels.marks },
+            marks: labels.marks,
             slide: labels.slide,
             pluses,
             uniforms: Uniforms {

@@ -6,7 +6,7 @@ use harmonigraph_scene::{ViewConfig, SEVENS_LAYER_LIMIT};
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, paint_thumbs, poised, track_fill,
-    BAR_TEXT_PAD, HANDLE_W,
+    with_gestures, BAR_TEXT_PAD, HANDLE_W,
 };
 use super::text_at;
 use crate::theme;
@@ -19,6 +19,12 @@ const CELL_GAP: f32 = 1.0;
 /// comes out under a pixel on a short row, and a cell that is not there says
 /// the sheet is not either.
 const CELL_MIN_H: f32 = 3.0;
+
+/// What the strip's three handles do, which its hover says after the caller's
+/// hint: the strip has them, so no caller writes them (see
+/// [`with_gestures`]).
+const DRAGS: &str = "Drag an end to add or drop layers on that side, the middle mark to move \
+     home, between them to slide the whole stack.";
 
 /// Cells on the axis: every sheet [`SEVENS_LAYER_LIMIT`] allows, drawn or not.
 const CELLS: i32 = 2 * SEVENS_LAYER_LIMIT + 1;
@@ -226,6 +232,7 @@ pub struct LayerStrip<'a> {
     /// The size falloff, read-only: it shapes the profile the strip draws and
     /// has its own bar under it.
     size: f32,
+    hint: Option<&'a str>,
 }
 
 /// The stack a double-click goes home to: the one a fresh view opens with.
@@ -240,7 +247,16 @@ pub(super) fn reset_stack() -> (i32, i32, i32) {
 
 impl<'a> LayerStrip<'a> {
     pub fn new(low: &'a mut i32, home: &'a mut i32, high: &'a mut i32, size: f32) -> Self {
-        LayerStrip { low, home, high, size }
+        LayerStrip { low, home, high, size, hint: None }
+    }
+
+    /// What the hover says the setting is; the strip ends it with what its
+    /// handles do and the gestures it answers to (see [`ValueBar::hint`]).
+    ///
+    /// [`ValueBar::hint`]: super::value::ValueBar::hint
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -366,7 +382,14 @@ impl<'a> LayerStrip<'a> {
             &[(name_at, label)],
         );
 
-        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        // A double-click puts the stack back on a fresh view's.
+        // Formatted only while the pointer is over the strip, as the hover the
+        // gestures go into is.
+        let hint = response
+            .hovered()
+            .then(|| self.hint.map_or_else(|| DRAGS.to_owned(), |hint| format!("{hint} {DRAGS}")));
+        with_gestures(response, hint.as_deref(), true, false)
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
 
@@ -684,6 +707,39 @@ mod tests {
         );
         let lit: Vec<bool> = grips(&shapes).into_iter().map(|(_, lit)| lit).collect();
         assert_eq!(lit.iter().filter(|l| **l).count(), 1, "hovering an end lit {lit:?}");
+    }
+
+    /// The strip's hover ends with what its handles do and the gestures it
+    /// answers to, said by the strip and the shared bar wording rather than by
+    /// its caller, so a double-click is promised as the reset it is.
+    #[test]
+    fn the_strips_hover_ends_with_its_gestures() {
+        use crate::tests::probe::{events_into, themed};
+        let ctx = themed();
+        ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+        let size = egui::vec2(300.0, 200.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let (mut l, mut c, mut h) = (-1, 0, 1);
+        let mut draw = |events| {
+            events_into(&ctx, size, rect, events, |ui| {
+                LayerStrip::new(&mut l, &mut c, &mut h, 0.55).hint("Which sheets.").show(ui);
+            })
+        };
+        draw(vec![]);
+        draw(vec![egui::Event::PointerMoved(egui::pos2(150.0, 10.0))]);
+        let last = (0..3).map(|_| draw(vec![])).last().unwrap();
+        let shown: Vec<_> = last
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("Drag") => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        let gestures = super::super::bar::gestures(&ctx, true, false);
+        assert_eq!(shown, [format!("Which sheets. {DRAGS}\n{gestures}")]);
     }
 
     /// A gesture is decided ONCE and holds, so an end dragged clean past its

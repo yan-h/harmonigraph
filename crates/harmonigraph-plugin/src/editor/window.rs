@@ -267,13 +267,9 @@ impl Editor for LatticeEditor {
                 .with_pass_request(self.egui_state.pass_request.clone()),
             WindowState::new(self.shared.clone(), self.params.clone(), Arc::downgrade(&pop_out)),
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
-                // egui-baseview installs the current font texture in
-                // CallbackResources after applying this frame's deltas.
-                harmonigraph_ui::use_renderer_font_texture(egui_ctx);
                 // Everything this context owes the shared UI state, which is
-                // NOT new when the context is: the theme, the release of what
-                // the closed window left behind, the fold floor and the new
-                // window session. The settings are already in the state; a
+                // NOT new when the context is: the theme, the fold floor and
+                // the new window session. The settings are already in the state; a
                 // host restore waiting is installed by the lock.
                 open_window_session(&state.shared, egui_ctx);
             },

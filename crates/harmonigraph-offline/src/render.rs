@@ -174,9 +174,6 @@ pub fn render(
         .ok_or("no usable GPU adapter (this needs a real GPU, not a container)")?;
 
     let context = egui::Context::default();
-    // `frames::Renderer` installs the current font texture after applying
-    // each frame's texture deltas and before paint callbacks prepare.
-    harmonigraph_ui::use_renderer_font_texture(&context);
     harmonigraph_ui::theme::apply_theme(&context);
     context.set_pixels_per_point(settings.pixels_per_point);
     // What the GPU under this render will actually take. Read once: it is a
@@ -361,8 +358,8 @@ impl<'a> Soundtrack<'a> {
 /// for its first column, and with only the lag the opening frame would have
 /// none.
 ///
-/// Never further than that: a column dated after `now` would advance live
-/// retention past the picture's far edge at low frame rates.
+/// Never further than that: a column dated after `now` is sound the frame's
+/// notes have not reached yet, and would draw at its now-line.
 fn prepare_frame(
     replay: &mut Replay,
     state: &mut PictureState,
@@ -619,7 +616,6 @@ mod tests {
                         "{fps} fps, start {offset}: {time} instead of {expected}",
                     );
                 }
-                assert!((state.runtime.spectrum.column_lag() - lag).abs() < 1e-12);
                 let bins: Vec<_> = history.iter().map(|(_, power)| power.clone()).collect();
                 if let Some(previous) = &previous_bins {
                     assert!(&bins == previous, "batching changed the spectrum at {fps} fps");

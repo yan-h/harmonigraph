@@ -253,15 +253,12 @@ pub struct Recorder {
     history: History,
     /// Published for the GUI: is the transport actually moving?
     rolling: Arc<AtomicBool>,
-    /// Which unbroken run of recorded blocks the take is in. See
-    /// [`Recorder::recording_run`].
+    /// The serial of the last `Run` this recorder opened: each one takes the
+    /// next, whatever closed the one before it.
     run: u64,
-    /// Whether the last transport observation recorded, so the next one that
-    /// does after one that did not starts a new run.
-    run_live: bool,
-    /// Whether a `Run` is open on the ring: a take dropped with one open
-    /// fails.
-    run_open: bool,
+    /// The `Run` open on the ring. The one record of whether this block
+    /// records. See [`Recorder::record`].
+    open: Option<OpenRun>,
     /// Whether this take has opened a run, so its notes count from there: the
     /// On transport stop countdown reads the count, and a note played before
     /// playback must not start it.
@@ -305,8 +302,7 @@ impl Recorder {
             history: History::default(),
             rolling: Arc::default(),
             run: 0,
-            run_live: false,
-            run_open: false,
+            open: None,
             run_opened: false,
             end_at_rewind: Arc::default(),
             latches: Arc::default(),
@@ -434,10 +430,6 @@ impl Recorder {
         let (action, _) = self.advance(Observation::Armed(armed));
         if action == Action::Arm {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
-            // A take armed with no transport position records from here on
-            // without a transport observation to start its run.
-            self.run = self.run.wrapping_add(1);
-            self.run_live = false;
             self.run_opened = false;
             self.latches.clear();
         }
@@ -451,18 +443,38 @@ impl Recorder {
         }
     }
 
-    /// Which unbroken run of recorded blocks the take is in. It changes when
-    /// the take is armed, and when it records again after any block it did not
-    /// (a transport paused and resumed).
+    /// The run this block records in, or `None` when it records nothing.
     ///
-    /// Each change owes the take the notes already sounding: whatever began
+    /// Each new run owes the take the notes already sounding: whatever began
     /// while nothing recorded — before arming, or in a pause — would otherwise
-    /// reach it only as releases, and replay draws nothing for those (#1129). A caller remembers the run it last
-    /// opened and opens again when this differs, so the debt is paid once per
-    /// run however many blocks ask. The Hub pays it with a snapshot of every
-    /// row.
-    pub fn recording_run(&self) -> u64 {
-        self.run
+    /// reach it only as releases, and replay draws nothing for those (#1129).
+    /// A caller remembers the run it last paid and pays again when this
+    /// differs, so the debt is paid once per run however many blocks ask. The
+    /// Hub pays it with a snapshot of every row.
+    pub fn open_run(&self) -> Option<u64> {
+        self.open.map(|open| open.serial)
+    }
+
+    /// Whether this block records.
+    pub fn recording(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Close or open this block's run. `origin` is where the block sits in the
+    /// take's audio when it records, and `at` is its first sample on the
+    /// presentation clock. The transport observation gives an origin only to
+    /// an armed take that rolls, and a block with no transport position gives
+    /// its local clock to any armed take.
+    ///
+    /// A run opened before the take was last armed ends here, and the block
+    /// opens a new one: a Stop and a Start between two callbacks.
+    pub fn record(&mut self, at: f64, origin: Option<f64>) {
+        if self.open.is_some_and(|open| origin.is_none() || open.take != self.armed_epoch) {
+            self.run_end(at);
+        }
+        if let (Some(song), None) = (origin, self.open) {
+            self.run(at, song);
+        }
     }
 
     /// Every armed take records audio, until the take has failed.
@@ -549,10 +561,6 @@ impl Recorder {
     ) -> Option<f64> {
         let (action, origin) = self.advance(Observation::Transport { position, playing, duration });
         let rolling = action == Action::Record;
-        if rolling && !self.run_live {
-            self.run = self.run.wrapping_add(1);
-        }
-        self.run_live = rolling;
         if rolling {
             self.latches.rolled.store(true, Ordering::Relaxed);
         }
@@ -625,16 +633,18 @@ impl Recorder {
     }
     /// Open a run whose first sample sits at presentation time `at` and at
     /// `song` in the take's audio.
-    pub fn run(&mut self, at: f64, song: f64) {
-        self.run_open = true;
+    fn run(&mut self, at: f64, song: f64) {
+        self.run = self.run.wrapping_add(1);
+        self.open = Some(OpenRun { serial: self.run, take: self.armed_epoch });
         self.run_opened = true;
         self.push(Entry::Run { at, song });
     }
-    /// Close the open run at the presentation time of its first sample that
-    /// did not record.
+    /// Close the open run, if one is, at the presentation time of its first
+    /// sample that did not record.
     pub fn run_end(&mut self, at: f64) {
-        self.run_open = false;
-        self.push(Entry::RunEnd { at });
+        if self.open.take().is_some() {
+            self.push(Entry::RunEnd { at });
+        }
     }
     pub fn configuration(
         &mut self,
@@ -655,11 +665,22 @@ impl Recorder {
     }
 }
 
+/// A `Run` on the ring that no `RunEnd` has followed yet.
+#[derive(Clone, Copy)]
+struct OpenRun {
+    /// Its serial, which the Hub pays a snapshot per (#1129).
+    serial: u64,
+    /// The epoch of the take armed when it opened.
+    take: u64,
+}
+
 /// A plugin destroyed mid-take fails it: nothing will close its run or
-/// publish what it still held.
+/// publish what it still held. A stopped take seals only once its run's end is
+/// written (#1776), so one whose run is still open fails too: still armed at
+/// deactivate, so `close_stopped` closed nothing, then disarmed while inactive.
 impl Drop for Recorder {
     fn drop(&mut self) {
-        if self.run_open || self.fence.intent().is_armed() {
+        if self.open.is_some() || self.fence.intent().is_armed() {
             self.fence.fail();
         }
     }

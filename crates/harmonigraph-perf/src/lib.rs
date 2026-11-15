@@ -206,11 +206,6 @@ pub struct FrameCosts {
     /// opened. CUMULATIVE, so the readout below can difference it into a rate
     /// without a dropped frame losing an event.
     pub spectrogram_uploads: u32,
-    /// The spectrogram history's guard since the plugin opened: columns it
-    /// dropped for a date at or just before the newest, and the times the
-    /// history reset. Totals, shown as totals: both read zero while every
-    /// feeder dates forward, which every shipped feeder does.
-    pub spectrogram_guard: (u32, u32),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -586,9 +581,6 @@ pub struct PerfStats {
     /// pane's silent performance bugs sat at hundreds a second while a
     /// healthy build sits at zero.
     pub spec_uploads: f32,
-    /// The spectrogram history guard's totals, latched with everything else:
-    /// see [`FrameCosts::spectrogram_guard`].
-    pub spec_guard: (u32, u32),
     /// The frame rate the display link was last asked for, which the headline
     /// rate is judged against. Kept across the frames the link did not ask for
     /// (the watchdog's and the occlusion repaint's, which carry none), so one
@@ -654,7 +646,6 @@ impl Default for PerfStats {
             verts: 0,
             roll_notes: 0,
             spec_uploads: 0.0,
-            spec_guard: (0, 0),
             target_fps: None,
             last_uploads: 0,
             footprint_bytes: 0,
@@ -689,7 +680,6 @@ impl FrameCosts {
         lattice: &harmonigraph_render::LatticeStats,
         roll_notes: u32,
         spectrogram_uploads: u32,
-        spectrogram_guard: (u32, u32),
     ) -> FrameCosts {
         use std::sync::atomic::Ordering::Relaxed;
         // The callback runs after the UI: these are the preceding rendered
@@ -726,7 +716,6 @@ impl FrameCosts {
             verts: shell.verts,
             roll_notes,
             spectrogram_uploads,
-            spectrogram_guard,
             encode_ms: shell.encode_ms,
             submit_ms: shell.submit_ms,
             target_fps: shell.target_fps,
@@ -811,7 +800,6 @@ impl PerfStats {
                 self.spec_uploads = (f64::from(uploads) / elapsed) as f32;
             }
             self.last_uploads = costs.spectrogram_uploads;
-            self.spec_guard = costs.spectrogram_guard;
             self.last_readout = now;
         }
         self.workload = workload;
@@ -1026,7 +1014,7 @@ mod tests {
         let samples = [None, Some(2.0), None, None, None, None, Some(10.0)];
         for (frame, draw_gpu_ms) in samples.into_iter().enumerate() {
             let shell = ShellTimings { draw_gpu_ms, ..Default::default() };
-            let costs = FrameCosts::assemble(shell, 0.0, &stats, 0, 0, (0, 0));
+            let costs = FrameCosts::assemble(shell, 0.0, &stats, 0, 0);
             perf.record(costs, frame as f64 * 0.01, Workload::default());
         }
         assert_eq!(perf.windows[Stage::DrawGpu as usize].n, 2);
@@ -1048,7 +1036,7 @@ mod tests {
         use std::sync::atomic::Ordering::Relaxed;
 
         let stats = LatticeStats::default();
-        let assemble = || FrameCosts::assemble(ShellTimings::default(), 0.0, &stats, 0, 0, (0, 0));
+        let assemble = || FrameCosts::assemble(ShellTimings::default(), 0.0, &stats, 0, 0);
         let publish_cpu = |prepare: f32| {
             stats.poll_ms.store(1.0f32.to_bits(), Relaxed);
             stats.write_ms.store(2.0f32.to_bits(), Relaxed);
@@ -1537,9 +1525,9 @@ mod tests {
             .collect();
         // A shallow parse fails by finding nothing, which would pass every
         // assertion below, so it has to show it found the list first: a plain
-        // reading, and the one field whose type is not a bare `f32`.
+        // reading, and a field whose type is not `f32`.
         assert!(
-            fields.contains(&"tick_ms") && fields.contains(&"spectrogram_guard"),
+            fields.contains(&"tick_ms") && fields.contains(&"spectrogram_uploads"),
             "the field list did not parse: {fields:?}",
         );
         for field in fields {

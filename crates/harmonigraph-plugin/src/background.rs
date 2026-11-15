@@ -460,10 +460,10 @@ mod tests {
     }
 
     /// The analysis window's column lag, in seconds, at the harness's rate:
-    /// what [`AudioSpectrum::column_lag`] reads back out of the analyzer, and
-    /// so the one window setting observable from outside it.
+    /// what [`SpectrumAnalysis::lag`] reads back out of the analyzer, and so
+    /// the one window setting observable from outside it.
     ///
-    /// [`AudioSpectrum::column_lag`]: harmonigraph_ui::AudioSpectrum::column_lag
+    /// [`SpectrumAnalysis::lag`]: harmonigraph_ui::SpectrumAnalysis::lag
     fn lag_of(window: harmonigraph_ui::SpectrumWindow) -> f64 {
         harmonigraph_ui::SpectrumConfig { window, ..Default::default() }.column_lag(48_000.0)
     }
@@ -556,7 +556,7 @@ mod tests {
         /// precisely the bug (see `SpectrumAnalysis::feed_source`, the one
         /// thing that carries one to the other).
         fn analyzed_lag(&self) -> f64 {
-            self.shared.lock().ui.picture.runtime.spectrum.column_lag()
+            self.shared.lock().input.analysis_lag().expect("a step gave the analysis back")
         }
     }
 
@@ -744,7 +744,7 @@ mod tests {
         // take's run — and the transport since stopped: the two conditions
         // the debounce needs before it will end a take.
         h.recorder.is_armed();
-        h.recorder.run(0.0, 0.0);
+        h.recorder.record(0.0, Some(0.0));
         let on = CoreNoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
         let _ = h.recorder.publish_note(on.into());
 
@@ -777,38 +777,12 @@ mod tests {
         assert!(h.columns() > 0, "the step analyzed nothing");
     }
 
-    /// A Clear the window makes while a step analyzes empties the history of
-    /// that step's columns too: they come from audio before the Clear.
-    #[test]
-    fn a_clear_during_the_analysis_keeps_its_columns_out() {
-        let mut h = harness();
-        h.push_audio(20_000);
-        BETWEEN_HOLDS.set(Some(Box::new(|shared: &EditorLock, _| {
-            shared.lock().ui.picture.runtime.spectrum.clear_history();
-        })));
-        h.step();
-        BETWEEN_HOLDS.set(None);
-        assert_eq!(h.columns(), 0, "the step put back columns from before the Clear");
-
-        h.push_audio(20_000);
-        h.step();
-        assert!(h.columns() > 0, "audio after the Clear was not kept");
-    }
-
     /// A step that panics with the analysis out leaves the next one
     /// analyzing again, with its columns dated where they belong rather than
-    /// from the frame zero of the run the panic interrupted. Until then the
-    /// newest edge keeps the running resolution's lag, not a fresh analyzer's.
+    /// from the frame zero of the run the panic interrupted.
     #[test]
     fn a_panicking_step_leaves_the_next_one_analyzing() {
-        use harmonigraph_ui::SpectrumWindow;
-
         let mut h = harness();
-        // Not the resolution a fresh analyzer starts at, so the lag tells the
-        // two apart.
-        let window = SpectrumWindow::Fast;
-        assert_ne!(lag_of(window), harmonigraph_ui::SpectrumAnalysis::default().lag());
-        h.shared.lock().ui.picture.appearance.spectrum.window = window;
         h.push_audio(20_000);
         h.step();
         let before = h.columns();
@@ -823,7 +797,6 @@ mod tests {
         super::guarded_step(&h.shared, &h.editor_state, &mut h.tape, &mut panicked);
         BETWEEN_HOLDS.set(None);
         assert!(panicked, "the hook did not run");
-        assert!((h.analyzed_lag() - lag_of(window)).abs() < 1e-9, "the recovery reset the lag");
 
         h.push_audio(40_000);
         h.step();
@@ -840,9 +813,7 @@ mod tests {
     }
 
     /// A step analyzes under the settings it took the audio with, even if they
-    /// change while it analyzes, and the next step under the new ones. While
-    /// it analyzes, a frame reads the lag of the columns it is drawing: the
-    /// running resolution's, not the one just picked.
+    /// change while it analyzes, and the next step under the new ones.
     #[test]
     fn a_step_analyzes_under_the_settings_it_took() {
         use harmonigraph_ui::SpectrumWindow;
@@ -857,17 +828,15 @@ mod tests {
         h.push_audio(40_000);
         h.step();
         h.push_audio(40_000);
-        let read = std::rc::Rc::new(std::cell::Cell::new(None));
-        let between = read.clone();
+        let ran = std::rc::Rc::new(std::cell::Cell::new(false));
+        let between = ran.clone();
         BETWEEN_HOLDS.set(Some(Box::new(move |shared: &EditorLock, _| {
-            let mut shared = shared.lock();
-            shared.ui.picture.appearance.spectrum.window = second;
-            between.set(Some(shared.ui.picture.runtime.spectrum.column_lag()));
+            shared.lock().ui.picture.appearance.spectrum.window = second;
+            between.set(true);
         })));
         h.step();
         BETWEEN_HOLDS.set(None);
-        let read = read.get().expect("the hook did not run");
-        assert!((read - lag_of(first)).abs() < 1e-9, "the edge read the new lag mid-step");
+        assert!(ran.get(), "the hook did not run");
         assert!((h.analyzed_lag() - lag_of(first)).abs() < 1e-9, "analyzed under the edit");
 
         h.push_audio(40_000);

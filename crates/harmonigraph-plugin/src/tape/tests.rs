@@ -60,10 +60,15 @@ fn ring_block_of(
 
 /// Record song frames `from..to` as one pass, and stop.
 fn record(worker: &mut Worker, source: &mut u64, from: i64, to: i64) {
-    for song in (from..to).step_by(FRAMES) {
-        let (block, samples) = ring_block(*source, Some(song), STEREO);
+    record_in(FRAMES, worker, source, from, to);
+}
+
+/// [`record`] in host blocks of `frames`.
+fn record_in(frames: usize, worker: &mut Worker, source: &mut u64, from: i64, to: i64) {
+    for song in (from..to).step_by(frames) {
+        let (block, samples) = ring_block_of(frames, *source, Some(song), STEREO);
         worker.capture(block, &samples);
-        *source += FRAMES as u64;
+        *source += frames as u64;
     }
     let (block, samples) = ring_block(*source, None, STEREO);
     worker.capture(block, &samples);
@@ -164,7 +169,7 @@ fn a_cue_plays_the_recording_from_there_and_rolling_cuts_it() {
         lines.iter().any(|l| l.contains("stopped after 0.10 s by the transport started")),
         "{lines:?}"
     );
-    assert!(lines.iter().any(|l| l.contains("from the parked playhead")), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("carried tape")), "{lines:?}");
 }
 
 #[test]
@@ -343,20 +348,46 @@ fn passes_split_at_jumps_and_stops_and_a_dropped_stretch_leaves_a_gap() {
     assert_eq!(chunks, [(0, 300, 1, 0), (500, 700, 1, 0), (2000, 2200, 2, 2000)]);
 }
 
+/// A pass is cold until it has settled and warm after, and the chunk being
+/// recorded closes where it turns warm, so each chunk is judged where it is
+/// one or the other (#1742). In 300- and 400-frame blocks chunks are 1200
+/// frames, cut on grids that put the settle point inside one: judged at its
+/// start, a cold chunk's warm tail lost to older warm audio, and Tape mode
+/// dimmed it as cold.
 #[test]
-fn a_cold_pass_does_not_replace_warm_audio_until_it_has_settled() {
+fn a_pass_turns_warm_where_it_has_settled_and_not_a_chunk_later() {
     let (_, mut worker) = pair();
     let mut source = 0;
     let settle = (SETTLE_SECONDS * RATE) as i64;
-    record(&mut worker, &mut source, 0, 1000 + settle + 2000);
-    // Played again from 1.0 s: cold for the settling time, warm after.
-    record(&mut worker, &mut source, 1000, 1000 + settle + 2000);
+    record_in(300, &mut worker, &mut source, 0, 1000 + settle + 5000);
+    // Played again from 1.0 s, then a pass alone further on.
+    let block = 400;
+    record_in(block, &mut worker, &mut source, 1000, 1000 + settle + 5000);
+    let (alone, to) = (40_000, 40_000 + settle + 2000);
+    record_in(block, &mut worker, &mut source, alone, to);
+    // Where a pass from `start` recorded up to `to` reaches: the end of the
+    // block holding `to - 1`. A pass turns warm at the first block that
+    // starts settled.
+    let reach =
+        |start: i64, to: i64| start + ((to - start) as usize).div_ceil(block) as i64 * block as i64;
+    let warm = |start: i64| reach(start, start + settle);
     let store = worker.store().unwrap();
     let owner =
         |frame: i64| store.chunks().find(|c| (c.start..c.end).contains(&frame)).unwrap().stamp.pass;
     assert_eq!(owner(1000), 1, "cold never overwrites warm");
-    assert_eq!(owner(1000 + settle - 1), 1);
-    assert_eq!(owner(1000 + settle + 500), 2, "once settled, the fresher pass wins");
+    assert_eq!(owner(warm(1000) - 1), 1);
+    assert_eq!(owner(warm(1000)), 2, "once settled, the fresher pass wins");
+    let mut view = TapeView::default();
+    worker.exchange(&mut view, &SpectrumConfig::default(), true);
+    let seconds = |frame: i64| frame as f64 / RATE;
+    let spans: Vec<(f64, f64, bool)> = view
+        .spans
+        .iter()
+        .filter(|s| s.start >= seconds(alone))
+        .map(|s| (s.start, s.end, s.warm))
+        .collect();
+    let (warm, end) = (seconds(warm(alone)), seconds(reach(alone, to)));
+    assert_eq!(spans, [(seconds(alone), warm, false), (warm, end, true)]);
 }
 
 /// A cue cut partway through a piece must leave nothing of that piece in the
@@ -442,7 +473,7 @@ fn a_stretched_cue_counts_the_song_at_its_speed_and_a_new_speed_cues_again() {
 }
 
 /// A pass opens with the lattice map selected then and records a change of
-/// selection where it happens, as it does the tuning.
+/// selection where it happens.
 #[test]
 fn a_pass_records_the_map_selection_where_it_changes() {
     use nice_plug::params::InternalParamMut;
@@ -461,7 +492,7 @@ fn a_pass_records_the_map_selection_where_it_changes() {
         worker.settle();
     }
     let slots: Vec<(i64, usize)> =
-        worker.passes()[&1].drawn.iter().map(|(f, d)| (*f, d.map.slot)).collect();
+        worker.passes()[&1].maps.iter().map(|(f, m)| (*f, m.slot)).collect();
     assert_eq!(slots, [(0, 2), (199, 3)]);
 }
 
@@ -610,44 +641,6 @@ fn tape_mode_sees_spans_by_pass_and_warmth_the_newest_meter_and_the_spectrogram(
     worker.exchange(&mut view, &SpectrumConfig::default(), true);
     let columns = view.spectrogram.columns() as f64;
     assert!((columns - 4.0 / 0.032).abs() <= 2.0, "{columns} columns");
-}
-
-/// A pass replaces the meter only over what it recorded: a short pass across
-/// another's anchor rules from its start to its end, and the meter it covered
-/// rules again from there.
-#[test]
-fn a_short_pass_replaces_the_meter_only_where_it_played() {
-    let (_, mut worker) = pair();
-    let mut source = 0;
-    at_tempo(&mut worker, &mut source, 0, 3000, 120.0);
-    at_tempo(&mut worker, &mut source, 500, 1300, 90.0);
-    let mut view = TapeView::default();
-    worker.exchange(&mut view, &SpectrumConfig::default(), true);
-    // 4/4: a bar is two seconds at 120, 2.67 at 90.
-    let bar = |at: f64| (view.bar_seconds(at).unwrap() * 1000.0).round() / 1000.0;
-    assert_eq!(bar(0.4), 2.0);
-    assert_eq!(bar(1.2), 2.667);
-    assert_eq!(bar(1.5), 2.0, "past the short pass's end");
-    assert_eq!(view.meters.len(), 4, "{:?}", view.meters);
-}
-
-/// A block with no song position carries no tape, so rolling after one is not
-/// rolling after tape.
-#[test]
-fn a_block_with_no_position_clears_the_tape_before_rolling() {
-    let (mut deck, mut worker) = pair();
-    let mut source = 0;
-    record(&mut worker, &mut source, 0, 3000);
-    cue(&mut deck, &mut worker, 0.0, 1.0);
-    worker.play();
-    let (audio, _) = run(&mut deck, 0.0, false, true);
-    assert!(audio[0].iter().any(|&s| s != 0.0), "the tape sounded");
-    let block =
-        BlockIn { position: None, playing: false, frames: FRAMES, rate: RATE, enabled: true };
-    deck.process(block, &mut [&mut [0.0; FRAMES], &mut [0.0; FRAMES]]);
-    run(&mut deck, 0.0, true, true);
-    let lines = events(&mut worker);
-    assert!(!lines.iter().any(|l| l.contains("carried tape")), "{lines:?}");
 }
 
 /// Stop while a new cue waits for the old one to fade: the fade finishes and

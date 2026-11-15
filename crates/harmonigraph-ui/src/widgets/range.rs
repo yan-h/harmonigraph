@@ -370,8 +370,6 @@ pub struct RangeBar<'a> {
     /// Closest the two ends may come, in value units — the range can be
     /// narrowed but never collapsed.
     min_span: f32,
-    /// Whether a drag lands on whole values only (see [`RangeBar::integer`]).
-    integer: bool,
     /// Whether the span is painted as a fade off the end of a fill (see
     /// [`RangeBar::fade_span`]) rather than as a filled slice of the track.
     fade_span: bool,
@@ -394,7 +392,6 @@ impl<'a> RangeBar<'a> {
             range,
             label,
             min_span: 0.0,
-            integer: false,
             fade_span: false,
             default: None,
             display: |v| format!("{v:.2}"),
@@ -457,30 +454,6 @@ impl<'a> RangeBar<'a> {
         self
     }
 
-    /// Land on whole values only — for a range whose ends MEAN something at
-    /// each step and whose readout says which one it is.
-    ///
-    /// The case for it is a range read out as a note name: left continuous,
-    /// two ends a tenth of a semitone apart both read "C1" while one of them
-    /// draws an indicator fewer, and an end exactly on an octave is
-    /// unreachable except by luck.
-    ///
-    /// No `RangeBar` in the panes asks for this — the octave wheel is a count
-    /// and a center, and snaps through [`ValueBar::integer`] instead. Kept as
-    /// the pair to that one so a range whose ends MEAN something at each step
-    /// has it available, and exercised by this module's tests.
-    ///
-    /// Snapped at the POINTER, ahead of the grab arithmetic, so the minimum
-    /// span survives it: rounding the pair afterwards can take a semitone off
-    /// a span that was exactly at the minimum, while rounding the value the
-    /// gesture is reading leaves every bound it is clamped against whole.
-    ///
-    /// [`ValueBar::integer`]: super::value::ValueBar::integer
-    pub fn integer(mut self) -> Self {
-        self.integer = true;
-        self
-    }
-
     /// How each end reads out (the bar itself never interprets the value).
     pub fn display(mut self, display: fn(f32) -> String) -> Self {
         self.display = display;
@@ -522,19 +495,6 @@ impl<'a> RangeBar<'a> {
         let value_at = |x: f32| {
             min + ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
         };
-        // The value a press at `x` is aimed at, snapped the way the live value
-        // is: the span grab reads its own offset off this, so an unsnapped one
-        // would leave a fraction of a value inside a gesture whose whole point
-        // is whole ones.
-        let aim_at = |x: f32| {
-            let v = value_at(x);
-            if self.integer {
-                v.round()
-            } else {
-                v
-            }
-        };
-
         // ---- Interaction ----------------------------------------------------
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
         if response.double_clicked() {
@@ -550,11 +510,10 @@ impl<'a> RangeBar<'a> {
         // of it (see `drag`), so dragging one end past the other doesn't hand
         // the drag to whichever handle is nearest now.
         let pair = (*self.low, *self.high);
-        let held = drag(ui, &response, |aim| Grab::at(aim_at(aim.x), pair, near));
+        let held = drag(ui, &response, |aim| Grab::at(value_at(aim.x), pair, near));
         if let Some((grab, p)) = held {
-            let v = value_at(p.x);
-            let v = if self.integer { v.round() } else { v };
-            let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
+            let (lo, hi) =
+                grab.apply(value_at(p.x), (*self.low, *self.high), (min, max), self.min_span);
             if lo != *self.low || hi != *self.high {
                 (*self.low, *self.high) = (lo, hi);
                 response.mark_changed();
@@ -797,7 +756,7 @@ impl<'a> RangeBar<'a> {
         // on one point with only the low one in reach, so the unlit one is
         // painted first and the lit one shows (`paint_thumbs`).
         let in_hand = holding.or_else(|| {
-            poised(ui, &response).map(|p| Grab::at(aim_at(p.x), (*self.low, *self.high), near))
+            poised(ui, &response).map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), near))
         });
         let (low_lit, high_lit) = match in_hand {
             Some(Grab::Low) => (true, false),
@@ -919,12 +878,8 @@ mod tests {
     /// Drag a range bar from `from` to `to` (fractions of its width) and
     /// answer where its two ends ended up. A real gesture through a real
     /// context: press, then move with the button still down, which is the only
-    /// way to reach the pointer-value path `integer()` snaps in.
-    fn drag_range_bar(
-        (low, high): (f32, f32),
-        (from, to): (f32, f32),
-        integer: bool,
-    ) -> (f32, f32) {
+    /// way to reach the pointer-value path a drag is read on.
+    fn drag_range_bar((low, high): (f32, f32), (from, to): (f32, f32)) -> (f32, f32) {
         const W: f32 = 300.0;
         let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(W, 100.0));
@@ -941,8 +896,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    let bar = RangeBar::new(lo, hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE);
-                    let response = if integer { bar.integer().show(ui) } else { bar.show(ui) };
+                    let response =
+                        RangeBar::new(lo, hi, AXIS.0..=AXIS.1, NAME).min_span(OCTAVE).show(ui);
                     track.set(response.rect);
                 },
             );
@@ -1030,35 +985,6 @@ mod tests {
             ]
         });
         assert_eq!(dragged, [true, false], "the low end dragged past the high one");
-    }
-
-    /// An `integer()` bar lands on whole values, and a plain one does not —
-    /// the second half matters as much as the first, since a snap that came
-    /// from the axis rather than from the flag would pass the first alone.
-    ///
-    /// The minimum span survives the snap too. That is the reason it is taken
-    /// at the POINTER rather than by rounding the pair afterwards: a span
-    /// sitting exactly at the minimum, rounded end by end, can come out a
-    /// whole value short of it.
-    #[test]
-    fn an_integer_range_bar_lands_on_whole_values() {
-        // Slide the whole span, which is the grab that could carry a
-        // fraction furthest: it holds an OFFSET taken at the press and adds
-        // it back on every frame, so a fractional one would leave both ends
-        // off the grid for the rest of the gesture.
-        let held = (48.0f32, 84.0f32);
-        let (lo, hi) = drag_range_bar(held, (0.45, 0.6), true);
-        assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
-        assert!(lo > held.0, "the drag moved nothing");
-        assert_eq!(hi - lo, held.1 - held.0, "a slid span keeps its width");
-        let (loose, _) = drag_range_bar(held, (0.45, 0.6), false);
-        assert_ne!(loose, loose.round(), "the axis snaps by itself; the flag proves nothing");
-
-        // Squeezed against the minimum span: the high end dragged down past
-        // the low one, from a position that is not a whole value.
-        let (lo, hi) = drag_range_bar((60.0, 96.0), (1.0, 0.371), true);
-        assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
-        assert_eq!(hi - lo, OCTAVE, "the span stopped at {} rather than the minimum", hi - lo);
     }
 
     /// A double-click puts back the pair handed to `default_value` — not the
@@ -1653,7 +1579,7 @@ mod tests {
         for reach in [-GRAB_PX * 0.8, GRAB_PX * 0.8] {
             for run in [-50.0f32, 50.0] {
                 let from = x_of(held.0) + reach;
-                let (lo, hi) = drag_range_bar(held, (frac(from), frac(from + run)), false);
+                let (lo, hi) = drag_range_bar(held, (frac(from), frac(from + run)));
                 let aimed = format!("pressed {reach} from the low end and dragged {run}");
                 assert_eq!(hi, held.1, "{aimed}: the high end came along");
                 assert_ne!(lo, held.0, "{aimed}: the low end did not move");
@@ -1681,9 +1607,9 @@ mod tests {
         let frac = |x: f32| (x - bar.left()) / bar.width();
         // Inside the reach, which a 12-unit span caps at 0.35 of itself.
         let from = x_of(held.0) + 8.0;
-        let inward = drag_range_bar(held, (frac(from), frac(from + 40.0)), false);
+        let inward = drag_range_bar(held, (frac(from), frac(from + 40.0)));
         assert_eq!(inward, held, "the low end moved into a span already at its minimum");
-        let outward = drag_range_bar(held, (frac(from), frac(from - 40.0)), false);
+        let outward = drag_range_bar(held, (frac(from), frac(from - 40.0)));
         assert!(outward.0 < held.0, "the same press outward did not open the span");
         assert_eq!(outward.1, held.1, "opening the span carried the high end with it");
     }

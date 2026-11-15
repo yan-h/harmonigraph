@@ -51,6 +51,9 @@ cargo test
 ```
 
 The standalone harness uses the same UI and render paths as the plugin.
+Its labels read egui's font texture as the plugin's do,
+published from eframe's `ui()` rather than by Patch 13,
+so on the frame egui replaces that texture (the atlas growing, or its rebuild at 80% full) the harness's labels read the retired one.
 It can accept hardware or virtual MIDI,
 and feeds its analyzer with a mock synth rather than external audio.
 
