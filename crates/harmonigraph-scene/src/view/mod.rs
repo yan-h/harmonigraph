@@ -760,14 +760,17 @@ pub struct ViewConfig {
     /// instead. Its own value so that it sits
     /// with the Spiral's other settings on the Analyzer tab.
     pub spiral_bloom: f32,
-    /// The node halo: how far past a node's outermost drawn edge its light
-    /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
+    /// The node halo: how far past a node's rim its light spreads, in the quad
+    /// UV units the layer sizes are in. The rim is the ring stack's outer edge,
+    /// or the mark strip's whenever marks are on, whether or not this node
+    /// wears one ([`glow_span`](crate::glow_span)), so a mark arriving or
+    /// leaving does not resize the light. 0 turns it off —
     /// nothing is drawn at all — so the glow's other fields need no toggle of
     /// their own, and the Glow rows grey them under it.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
-    /// angle, over a falloff sized to the whole node: the node's outermost
-    /// drawn edge plus this reach is the falloff's domain and outer limit.
+    /// angle, over a falloff sized to the whole node: the rim plus this reach is
+    /// the falloff's domain and outer limit.
     ///
     /// [`glow_curve`](Self::glow_curve) says how much light is left at each
     /// distance inside that span. Keeping the two separate makes a wide Reach
@@ -917,39 +920,45 @@ pub struct ViewConfig {
     ///
     /// The glow's colour is not a formula naming its sources — it is what the
     /// node is DRAWING, blurred round the node (`ink_at` in lattice.wgsl):
-    /// every layer's colour at each angle, weighted by that layer's level there
-    /// and by the radial width the stack handed it. So a lit band sector, an
-    /// audio wedge and a mark each light the halo in their own colour and in
-    /// the proportion they occupy the node, and widening a layer on the Layers
-    /// bar moves the light toward its colour with no knob of its own.
+    /// every lit layer's colour at each angle, weighted by that layer's level
+    /// there and by the radial width the stack handed it. So a lit band sector
+    /// and a mark each light the halo in their own colour and in the
+    /// proportion they occupy the node, and widening a layer on the Layers bar
+    /// moves the light toward its colour with no knob of its own. The audio
+    /// ring is drawn and never shone, so it lights nothing.
     ///
-    /// This is how far round that average is taken: at 0 each layer's sectors
-    /// stay distinct arcs of colour, and at 1 the whole node's ink averages
-    /// into one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
+    /// This is how far round that average is taken: at 0 each layer's colour
+    /// stays near its own arc, softened over about half a radian (a von Mises
+    /// lobe of concentration 4), and at 1 the whole node's ink averages into
+    /// one tint. Inert while [`glow_reach`](Self::glow_reach) is 0.
     ///
-    /// A BLEND and not a spread, in the name as on the bar: under the Glow
-    /// heading, beside a Reach that is a distance, a "spread" reads as how far
-    /// the light goes, and this moves no light at all — only what colour it is.
+    /// A smoothing and not a spread, as the bar's "Color smoothing" says: under
+    /// the Glow heading, beside a Reach that is a distance, a "spread" reads as
+    /// how far the light goes, and this moves no light at all — only what
+    /// colour it is.
     pub glow_blend: f32,
     /// Blend from the fixed-peak glow (0) to the original per-channel screen
     /// accumulation (1). Only overlapping halos change; a lone glow is identical.
     pub glow_accumulation: f32,
     /// How fast a node's light follows the node, in seconds: the time constant
-    /// of the exponential its LEVEL and its COLOUR are both carried on — this
-    /// one while the light is coming up, [`glow_release`](Self::glow_release)
-    /// once it is going down.
+    /// of the exponential its LEVEL and its COLOUR are both carried on, each
+    /// value in its own direction: the level, and each slot's and mark's share
+    /// of the light, rise on this and fall on
+    /// [`glow_release`](Self::glow_release) (#1784 G2). So a note joining a lit
+    /// node brings its colour in on the attack while one leaving takes its
+    /// colour out on the release, both at once in an octave handoff.
     ///
     /// Its own pair rather than the note Fade every drawn layer rides, because
     /// the light is not one of those layers. A halo is the slow part of the
     /// picture; stepped with the marks' and the audio ring's own fast
     /// envelopes it flickers with them. On a pair of its own a node's light
-    /// LINGERS past the ink that lit it — the node keeps being drawn into the
-    /// ink strip while its level is above nothing at all — and its hue morphs
-    /// toward a new octave's rather than cutting to it.
+    /// LINGERS past the ink that lit it — the node keeps its light while the
+    /// level is above nothing at all — and its hue morphs toward a new
+    /// octave's rather than cutting to it.
     ///
-    /// One pair for both halves, which is what keeps the two from disagreeing:
-    /// the same coefficient `1 - exp(-dt/tau)` carries the level on the CPU and
-    /// the node's own ink on the GPU (`panes::glow_fade` in harmonigraph-ui).
+    /// One pair for both halves: the coefficient `1 - exp(-dt/tau)` of the one
+    /// a value is heading by carries the level and what the light is made of,
+    /// both on the CPU (`panes::glow_fade` in harmonigraph-ui).
     /// Inert while [`glow_reach`](Self::glow_reach) is 0 — with no light there
     /// is nothing to carry.
     pub glow_attack: f32,

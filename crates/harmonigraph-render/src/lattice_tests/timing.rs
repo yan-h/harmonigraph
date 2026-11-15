@@ -119,7 +119,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
             let n = &mut scene.nodes[112];
             n.presence_with_opacity = 1.0;
             n.octaves.fill(1.0);
-            n.glow = harmonigraph_scene::GlowStep { level: 1.0, light: None };
+            n.glow = harmonigraph_scene::GlowStep { level: 1.0, light: n.glow_light() };
         }
         scene.node_radius = 0.34;
         scene.view.glow_reach = 0.8;

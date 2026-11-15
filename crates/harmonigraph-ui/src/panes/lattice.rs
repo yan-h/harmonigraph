@@ -223,8 +223,8 @@ pub(crate) fn compose_scene(
     super::node_motion::apply(&mut scene, state, surface, now);
     // And the node glow's own clock, last: a filter can only step a level the
     // derivation has already written, and the light is stepped against what a
-    // node's MIDI layers say. Per surface, because what this hands out is rows
-    // of that surface's own ink strip.
+    // node's MIDI layers say. Per surface, because each surface carries the
+    // lights of the window it draws.
     super::glow_fade::apply(&mut scene, state, surface, now);
     scene
 }
@@ -1499,8 +1499,6 @@ mod tests {
             presence_with_opacity: presence,
             presence_without_opacity: presence,
             departing: true,
-            melody_color: glam::Vec4::ONE,
-            bass_color: glam::Vec4::ONE,
             ..harmonigraph_scene::NodeInstance::at(
                 harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
                 glam::Vec3::ZERO,

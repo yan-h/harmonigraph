@@ -206,29 +206,16 @@ impl LatticeCallback {
     }
 }
 
-/// Shared angular weights, keyed only by sanitized Color Blend. The strip
-/// resolution is a compile-time constant; camera, notes, time, target size and
-/// the strip's height do not affect this table.
-#[derive(Default)]
-pub(super) struct InkKernel {
-    blend: Option<f32>,
-    weights: [Float4; INK_STRIP_N as usize / 4],
-}
-
-impl InkKernel {
-    pub(super) fn weights(&mut self, blend: f32) -> [Float4; INK_STRIP_N as usize / 4] {
-        let blend = blend.clamp(0.0, 1.0);
-        if self.blend != Some(blend) {
-            // Color Blend runs from a von Mises concentration of 4 (roughly
-            // half a radian wide) to the uniform circular mean.
-            let kappa = 4.0 * (1.0 - blend);
-            for i in 0..INK_STRIP_N as usize {
-                let distance = i.min(INK_STRIP_N as usize - i);
-                let off = distance as f32 * (std::f32::consts::TAU / INK_STRIP_N as f32);
-                self.weights[i / 4].0[i % 4] = (kappa * (off.cos() - 1.0)).exp();
-            }
-            self.blend = Some(blend);
-        }
-        self.weights
+/// The angular weights the halo's colour is smoothed round the node with, from
+/// the Color smoothing bar: a von Mises lobe of concentration 4 (roughly half a
+/// radian wide) at 0, widening to the uniform circular mean at 1.
+pub(super) fn ink_kernel(blend: f32) -> [Float4; INK_STRIP_N as usize / 4] {
+    let kappa = 4.0 * (1.0 - blend.clamp(0.0, 1.0));
+    let mut weights = [Float4::default(); INK_STRIP_N as usize / 4];
+    for i in 0..INK_STRIP_N as usize {
+        let off =
+            i.min(INK_STRIP_N as usize - i) as f32 * (std::f32::consts::TAU / INK_STRIP_N as f32);
+        weights[i / 4].0[i % 4] = (kappa * (off.cos() - 1.0)).exp();
     }
+    weights
 }

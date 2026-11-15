@@ -586,7 +586,7 @@ pub(crate) struct Moving {
     /// departure's Fade-out delay, its stagger and the presence it holds for
     /// them), or a node's Background glow still moving: its level falling, or
     /// its colour still easing toward its reading
-    /// ([`GlowFade::fading_at`](panes::glow_fade::GlowFade::fading_at)), which
+    /// ([`GlowFade::step`](panes::glow_fade::GlowFade::step)), which
     /// can outlast the slices by many seconds.
     releasing: bool,
     /// A picture drawn from audio above silence. Samples arriving are not

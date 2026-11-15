@@ -869,6 +869,7 @@ fn marks_do_not_change_the_halo_footprint() {
         "the mark must extend beyond the rings to exercise the old size change"
     );
     scene.nodes[0].octaves.fill(1.0);
+    read_light(&mut scene.nodes[0]);
     let alpha =
         |pixels: Vec<u8>| pixels.as_chunks::<4>().0.iter().map(|p| p[3]).collect::<Vec<_>>();
     let bare = alpha(glow(&mut shooter, &scene));
@@ -876,6 +877,7 @@ fn marks_do_not_change_the_halo_footprint() {
     for level in [0.25, 1.0, 0.0] {
         scene.nodes[0].melody_slots = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
         scene.nodes[0].melody_level = level;
+        read_light(&mut scene.nodes[0]);
         assert_eq!(bare, alpha(glow(&mut shooter, &scene)), "mark level {level}");
     }
 }
@@ -888,6 +890,7 @@ fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
     let mut scene = scene(&[1.0], 0.75, false);
     scene.view.glow_blend = 0.0;
     scene.nodes[0].octaves.fill(1.0);
+    read_light(&mut scene.nodes[0]);
     scene.pitch_lut = std::array::from_fn(|i| {
         let t = i as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
         glam::vec4(1.0 - t, 0.05, t, 1.0)

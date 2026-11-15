@@ -10,6 +10,7 @@ fn scene(depth: f32) -> Scene {
     let mut scene = lit_node_and_a_name(3.0, 0.7, depth);
     scene.camera.distance = 6.0;
     scene.nodes[0].octaves.fill(1.0);
+    read_light(&mut scene.nodes[0]);
     scene.pitch_lut.fill(glam::vec4(0.9, 0.8, 0.7, 1.0));
     scene.view.glow_strength = 4.0;
     scene.view.shadow.lattice_geometry.depth = 0.0;
