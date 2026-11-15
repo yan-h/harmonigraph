@@ -1,5 +1,5 @@
-// The spectrogram's heatmap, read per fragment out of the aggregator's slab
-// grid rather than sampled out of a picture something else composed.
+// The spectrogram's heatmap, read per fragment out of a run of the slab
+// pyramid's slabs rather than sampled out of a picture something else composed.
 //
 // One quad's worth of geometry carries two coordinates: where the fragment
 // sits along the run of slabs, and where it sits across the visible pitch
