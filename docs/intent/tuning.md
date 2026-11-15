@@ -31,3 +31,9 @@ Calls marked "delegated" were made by the audit session after Yan asked it to se
 ## 2026-11-14 (review of #1792)
 
 - One lost-history path for every engine: where the configuration history no longer reaches an attack's sample, Lattice Map assigns from the live map and configuration as Adaptive does, rather than sounding the note raw and raising the policy fault. A Lattice Map note struck just before a steady-clock discontinuity is tuned by the current map. Yan's call. #1792
+
+## 2026-11-14 (#1756)
+
+- Bitwig's own undo no longer covers edits of the tuning axes, now that they are plugin settings rather than host parameters; no editor undo replaces it. Accepted by Yan. #1756, #1795
+- A project saved while the axes were host parameters opens at fresh axes, keeping its links and policy, with one Console line saying so; there is no compatibility shim. Accepted by Yan. #1756, #1795
+- After lost host input, editor tuning edits and Learn keep applying until the host resets; the fault notice says so, and a take recorded after the loss still refuses its configuration. Accepted by Yan. #1795

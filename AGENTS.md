@@ -184,7 +184,7 @@ Yan's answer to #1784 T3 cut these, so they are his decisions rather than gaps:
 
 - More than 128 editor edits queued while the Hub runs no audio: the rest are refused with the Tuning pane's notice and a Console line, and a restore then is refused whole with a line in the editor's Console and in the macOS log.
 - A save between an editor edit and the Hub's next callback stores the configuration before the edit: one host block of it while audio runs, and for as long as it does not; the slider and the file both hold the value before the edit until then.
-- After lost input, edits keep applying until the host resets; the fault notice stays and the take refuses its configuration.
+- After lost input, editor edits and Learn keep applying until the host resets; the fault notice stays and a take recorded after the loss refuses its configuration (Yan's answer, #1795, recorded in `docs/intent/tuning.md`).
 
 **Cases the glow goes without** (PR #1791), each with its cost when it occurs:
 
