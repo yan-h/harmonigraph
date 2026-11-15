@@ -1,17 +1,10 @@
 //! The canonical display/take boundary: observed direct input, accepted output,
 //! complete source replacement and explicit missing history, as the Hub
 //! schedules them from its own sequenced rows.
-use crate::configuration::ResolvedConfig;
 use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
 
 /// Held voices one source's baseline can carry.
 pub const HELD_PER_SOURCE: usize = 64;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PitchProvenance {
-    ObservedDirect,
-    AcceptedOutput,
-}
 
 /// What the tuner decided about one attack. It also named the configuration
 /// revision the decision was taken under, for reconstructing historical
@@ -35,43 +28,28 @@ pub struct NoteDelta {
     /// output has a nonzero source-monotonic sequence and lifetime.
     pub sequence: u64,
     pub lifetime: u64,
-    pub provenance: PitchProvenance,
     /// Exact current accepted pitch, when this delta establishes one. The f32
     /// in NoteEvent remains the presentation adapter, never pitch authority.
     pub pitch_microcents: Option<i64>,
     /// Attack selection and current player expression, separate from accepted
     /// pitch. The complete configuration is in the take configuration timeline.
     pub assignment: Option<AssignmentMetadata>,
-    /// This physical onset was accepted, but its required initial tuning was
-    /// rejected. Its intended correction is not an accepted pitch fact.
-    pub partial_output: bool,
 }
 
 impl From<NoteEvent> for NoteDelta {
     fn from(event: NoteEvent) -> Self {
-        Self {
-            event,
-            sequence: 0,
-            lifetime: 0,
-            provenance: PitchProvenance::ObservedDirect,
-            pitch_microcents: None,
-            assignment: None,
-            partial_output: false,
-        }
+        Self { event, sequence: 0, lifetime: 0, pitch_microcents: None, assignment: None }
     }
 }
 
 impl NoteDelta {
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
+        // An unsequenced delta is a direct observation; a sequenced one is
+        // what a source played, and names its press.
         if !self.event.has_valid_payload()
-            || (self.provenance == PitchProvenance::ObservedDirect
-                && self.event.source != SourceId::DIRECT)
-            || (self.provenance == PitchProvenance::AcceptedOutput
-                && (self.sequence == 0 || self.lifetime == 0))
+            || (self.sequence == 0 && self.event.source != SourceId::DIRECT)
+            || (self.sequence != 0 && self.lifetime == 0)
             || self.assignment.is_some_and(|a| a.decision == 0 || !a.player_tuning.is_finite())
-            || (self.partial_output
-                && (self.provenance != PitchProvenance::AcceptedOutput
-                    || !matches!(self.event.kind, NoteEventKind::On { .. })))
         {
             return Err(InvalidCanonical);
         }
@@ -89,8 +67,8 @@ impl NoteDelta {
     }
 }
 
-/// Saved factual state, not a new emitted attack. Musical provenance is optional
-/// for observed DIRECT and intentionally unretuned output.
+/// Saved factual state, not a new emitted attack. A decision is optional: an
+/// observed DIRECT voice and an unretuned one carry none.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VoiceBaseline {
     pub channel: u8,
@@ -110,13 +88,11 @@ pub struct VoiceBaseline {
     /// Where the voice's expressions stand now, so a note resumed from a
     /// baseline does not snap back to [`Expressions::NEUTRAL`].
     pub expressions: Expressions,
-    pub provenance: PitchProvenance,
-    pub assignment: Option<ResolvedConfig>,
+    /// The tuner's decision for the attack, zero for none. With
+    /// `attack_node` and `frozen_offset_microcents` it is what a person reads
+    /// when a render comes out wrong.
     pub decision: u64,
     pub attack_node: Option<LatticePos>,
-    /// An accepted onset with unestablished intended tuning remains factual.
-    pub partial_output: bool,
-    pub release_pending: bool,
 }
 
 impl Default for VoiceBaseline {
@@ -134,12 +110,8 @@ impl Default for VoiceBaseline {
             frozen_offset_microcents: 0,
             velocity: 0.0,
             expressions: Expressions::NEUTRAL,
-            provenance: PitchProvenance::ObservedDirect,
-            assignment: None,
             decision: 0,
             attack_node: None,
-            partial_output: false,
-            release_pending: false,
         }
     }
 }
@@ -153,7 +125,7 @@ impl VoiceBaseline {
     }
 
     pub fn metadata(&self) -> Option<AssignmentMetadata> {
-        self.assignment.filter(|_| self.decision != 0).map(|_| AssignmentMetadata {
+        (self.decision != 0).then_some(AssignmentMetadata {
             decision: self.decision,
             node: self.attack_node,
             correction_microcents: self.frozen_offset_microcents,
@@ -283,8 +255,6 @@ impl SourceBaseline {
                 || !(0.0..=1.0).contains(&voice.velocity)
                 || !voice.expressions.valid()
                 || voice.lifetime == 0
-                || (voice.provenance == PitchProvenance::ObservedDirect
-                    && self.source != SourceId::DIRECT)
                 || self.voices()[..i].iter().any(|old| {
                     old.key(self.source) == voice.key(self.source) || old.lifetime == voice.lifetime
                 })
@@ -295,8 +265,8 @@ impl SourceBaseline {
         Ok(())
     }
 
-    /// Map all presentation times with the SAME translation. Exact sample
-    /// provenance and assignment values are deliberately unchanged.
+    /// Map all presentation times with the SAME translation. Pitches and
+    /// decisions are deliberately unchanged.
     pub fn translate(&mut self, offset: f64) {
         self.time += offset;
         for voice in &mut self.voices[..self.count] {
@@ -391,7 +361,6 @@ mod tests {
             actual_onset: 1.0,
             pitch_microcents: i64::from(note) * 100_000_000,
             velocity: 0.8,
-            provenance: PitchProvenance::AcceptedOutput,
             ..Default::default()
         }
     }
@@ -432,15 +401,7 @@ mod tests {
     }
 
     fn delta(event: NoteEvent, sequence: u64) -> NoteDelta {
-        NoteDelta {
-            assignment: None,
-            partial_output: false,
-            event,
-            sequence,
-            lifetime: 61,
-            provenance: PitchProvenance::AcceptedOutput,
-            pitch_microcents: None,
-        }
+        NoteDelta { assignment: None, event, sequence, lifetime: 61, pitch_microcents: None }
     }
 
     /// Every clause of the publication boundary refuses on its own: a delta,
@@ -455,23 +416,17 @@ mod tests {
                 correction_microcents: 0,
                 player_tuning: 0.0,
             }),
-            partial_output: true,
             ..delta(NoteEvent::on(1.0, SourceId(1), 0, 60, 0.8), 1)
         };
         assert_eq!(good.validate(), Ok(()));
         let kind = |kind| NoteEvent { kind, ..good.event };
         let decision = Some(AssignmentMetadata { decision: 0, ..good.assignment.unwrap() });
-        let direct = PitchProvenance::ObservedDirect;
         for (what, bad) in [
             ("note", NoteDelta { event: NoteEvent { note: 128, ..good.event }, ..good }),
             ("velocity", NoteDelta { event: kind(NoteEventKind::On { velocity: 1.5 }), ..good }),
-            (
-                "direct from a source",
-                NoteDelta { provenance: direct, partial_output: false, ..good },
-            ),
+            ("unsequenced from a source", NoteDelta { sequence: 0, ..good }),
             ("output lifetime", NoteDelta { lifetime: 0, ..good }),
             ("decision", NoteDelta { assignment: decision, ..good }),
-            ("partial off", NoteDelta { event: kind(NoteEventKind::Off), ..good }),
         ] {
             assert_eq!(bad.validate(), Err(InvalidCanonical), "{what}");
         }
@@ -497,17 +452,15 @@ mod tests {
         let row = VoiceBaseline { actual_onset: 2.0, ..voice(60) };
         assert!(frame(&[row, voice(64)]).is_ok());
         // A direct voice names its press by a lifetime like any other.
-        let observed = VoiceBaseline { provenance: direct, ..row };
         let direct_frame = |voice| SourceBaseline::new(SourceId::DIRECT, 2.0, 64, true, &[voice]);
-        assert!(direct_frame(observed).is_ok());
+        assert!(direct_frame(row).is_ok());
         assert_eq!(
-            direct_frame(VoiceBaseline { lifetime: 0, ..observed }).err(),
+            direct_frame(VoiceBaseline { lifetime: 0, ..row }).err(),
             Some(InvalidCanonical)
         );
         for (what, bad) in [
             ("note", VoiceBaseline { note: 128, ..row }),
             ("onset after the frame", VoiceBaseline { actual_onset: 3.0, ..row }),
-            ("direct from a source", VoiceBaseline { provenance: direct, ..row }),
             ("same key", VoiceBaseline { lifetime: 99, ..row }),
             ("same lifetime", VoiceBaseline { note: 64, ..row }),
         ] {

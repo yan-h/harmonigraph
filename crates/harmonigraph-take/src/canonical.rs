@@ -1,33 +1,10 @@
-//! Version 4 canonical records. Serde stays out of the musical core; complete
+//! The take's canonical records. Serde stays out of the musical core; complete
 //! frames are validated before either live replay or full-roll reconstruction.
 use harmonigraph_core::canonical::*;
 use harmonigraph_core::{Expressions, LatticePos, NoteTracker, SourceId};
 use serde::{Deserialize, Serialize};
 
-use crate::{ConfigurationRecord, NoteRecord};
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProvenanceRecord {
-    #[default]
-    ObservedDirect,
-    AcceptedOutput,
-}
-impl From<PitchProvenance> for ProvenanceRecord {
-    fn from(p: PitchProvenance) -> Self {
-        match p {
-            PitchProvenance::ObservedDirect => Self::ObservedDirect,
-            PitchProvenance::AcceptedOutput => Self::AcceptedOutput,
-        }
-    }
-}
-impl From<ProvenanceRecord> for PitchProvenance {
-    fn from(p: ProvenanceRecord) -> Self {
-        match p {
-            ProvenanceRecord::ObservedDirect => Self::ObservedDirect,
-            ProvenanceRecord::AcceptedOutput => Self::AcceptedOutput,
-        }
-    }
-}
+use crate::NoteRecord;
 
 /// Compact provenance for a normal accepted musical delta. Configuration values
 /// are retained separately by the existing configuration records.
@@ -66,10 +43,8 @@ pub struct DeltaRecord {
     pub event: NoteRecord,
     pub sequence: u64,
     pub lifetime: u64,
-    pub provenance: ProvenanceRecord,
     pub pitch_microcents: Option<i64>,
     pub assignment: Option<AssignmentRecord>,
-    pub partial_output: bool,
 }
 impl From<NoteDelta> for DeltaRecord {
     fn from(d: NoteDelta) -> Self {
@@ -77,10 +52,8 @@ impl From<NoteDelta> for DeltaRecord {
             event: d.event.into(),
             sequence: d.sequence,
             lifetime: d.lifetime,
-            provenance: d.provenance.into(),
             pitch_microcents: d.pitch_microcents,
             assignment: d.assignment.map(Into::into),
-            partial_output: d.partial_output,
         }
     }
 }
@@ -90,10 +63,8 @@ impl From<DeltaRecord> for NoteDelta {
             event: d.event.into(),
             sequence: d.sequence,
             lifetime: d.lifetime,
-            provenance: d.provenance.into(),
             pitch_microcents: d.pitch_microcents,
             assignment: d.assignment.map(Into::into),
-            partial_output: d.partial_output,
         }
     }
 }
@@ -113,12 +84,8 @@ pub struct VoiceRecord {
     pub frozen_offset_microcents: i64,
     pub velocity: f32,
     pub expressions: ExpressionsRecord,
-    pub provenance: ProvenanceRecord,
-    pub assignment: Option<ConfigurationRecord>,
     pub decision: u64,
     pub attack_node: Option<[i32; 3]>,
-    pub partial_output: bool,
-    pub release_pending: bool,
 }
 impl Default for VoiceRecord {
     fn default() -> Self {
@@ -140,12 +107,8 @@ impl From<VoiceBaseline> for VoiceRecord {
             frozen_offset_microcents: v.frozen_offset_microcents,
             velocity: v.velocity,
             expressions: v.expressions.into(),
-            provenance: v.provenance.into(),
-            assignment: v.assignment.map(|a| ConfigurationRecord::new(v.actual_onset, a)),
             decision: v.decision,
             attack_node: v.attack_node.map(|p| [p.threes, p.fives, p.sevens]),
-            partial_output: v.partial_output,
-            release_pending: v.release_pending,
         }
     }
 }
@@ -164,12 +127,8 @@ impl From<&VoiceRecord> for VoiceBaseline {
             frozen_offset_microcents: v.frozen_offset_microcents,
             velocity: v.velocity,
             expressions: v.expressions.into(),
-            provenance: v.provenance.into(),
-            assignment: v.assignment.map(ConfigurationRecord::resolved),
             decision: v.decision,
             attack_node: v.attack_node.map(|p| LatticePos::new(p[0], p[1], p[2])),
-            partial_output: v.partial_output,
-            release_pending: v.release_pending,
         }
     }
 }

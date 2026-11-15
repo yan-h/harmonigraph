@@ -90,7 +90,6 @@ struct Assigned {
     decision: u64,
     player: f64,
     channel_pitch: i64,
-    configuration: ResolvedConfig,
 }
 
 /// One scheduled delta, held from the input boundary, where the replies have
@@ -770,7 +769,6 @@ impl Hub {
                 decision: 0,
                 player,
                 channel_pitch,
-                configuration: config,
             });
         }
         let incoming = self.arriving(record, channel, key);
@@ -805,14 +803,7 @@ impl Hub {
                     self.status |= session::POLICY;
                 }
             }
-            return Some(Assigned {
-                correction,
-                node,
-                decision,
-                player,
-                channel_pitch,
-                configuration: config,
-            });
+            return Some(Assigned { correction, node, decision, player, channel_pitch });
         }
         self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
@@ -864,7 +855,7 @@ impl Hub {
         if !self.sequencer.hold(voice) {
             self.status |= session::POLICY;
         }
-        Some(Assigned { correction, node, decision, player, channel_pitch, configuration: config })
+        Some(Assigned { correction, node, decision, player, channel_pitch })
     }
 
     /// What actually arrived, key number and every tuning the source already
@@ -970,7 +961,6 @@ impl Hub {
                 assigned.correction,
                 assigned.node,
                 assigned.decision,
-                assigned.configuration,
                 assigned.player,
                 assigned.channel_pitch,
             );

@@ -190,7 +190,6 @@ fn production_musical_dfa_permutations_include_each_predecessor() {
             assert_eq!(output[i][0].0, 0);
             let voice = phrase.voice(i, keys[i] as u8, 0);
             assert_eq!(voice.attack_node, Some(positions[i]));
-            assert_eq!(voice.assignment.unwrap().policy, harmonigraph_core::policy::CONFIG);
             pitches[i] = voice.pitch_microcents;
             decisions[i] = voice.decision;
         }
@@ -383,7 +382,7 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
     let correction = onset.frozen_offset_microcents;
     let input_pitch = 5_750_000_000;
     let expected = harmonigraph_core::policy::assign_new_note(
-        onset.assignment.unwrap().into(),
+        settings(&phrase.hub).view().resolved.into(),
         &[],
         &Default::default(),
         harmonigraph_core::policy::OrderedOnset { pitch: input_pitch },

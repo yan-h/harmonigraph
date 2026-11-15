@@ -87,7 +87,10 @@ use serde::{Deserialize, Serialize};
 /// each record by when it sounds, in one take with one WAV (#1760); version 9
 /// reads the Note fade and the Pitch color range from the recorded look, where
 /// version 8 recorded them as parameter lanes a newer reader ignores and its
-/// look left at the fresh value (#1744). There are no compatibility shims.
+/// look left at the fresh value (#1744). Dropping a field needs no version:
+/// this reader skips the key in an older take, and an older reader refuses a
+/// newer one (#1798 dropped each snapshot's `id`, which an older reader reads
+/// as 0 and refuses). There are no compatibility shims.
 pub const FORMAT_VERSION: u32 = 9;
 
 /// Conventional file extension. Not enforced anywhere.
@@ -913,7 +916,7 @@ mod tests {
         let baseline = SourceBaseline::new(SourceId::DIRECT, 2.0, 5, true, &[]).unwrap();
         let frame = serialize(CanonicalEvent::Baseline(&baseline));
         let mut delta: NoteDelta = NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 0.8).into();
-        delta.sequence = 4;
+        (delta.sequence, delta.lifetime) = (4, 1);
         let note = serialize(CanonicalEvent::Note(delta));
         let mut later = delta;
         later.sequence = 6;
@@ -952,17 +955,13 @@ mod tests {
         )))
         .unwrap();
         let header = opened(Header::default());
-        for invalid in [
-            full.replace("note:60", "note:256"),
-            full.replace("ObservedDirect", "UnknownProvenance"),
-        ] {
-            assert_ne!(invalid, full);
-            let parsed = Take::parse(std::io::Cursor::new(format!("{header}\n{invalid}")));
-            assert!(
-                matches!(parsed, Err(ReadError::Parse(3, _))),
-                "complete malformed record was accepted: {parsed:?}"
-            );
-        }
+        let invalid = full.replace("note:60", "note:256");
+        assert_ne!(invalid, full);
+        let parsed = Take::parse(std::io::Cursor::new(format!("{header}\n{invalid}")));
+        assert!(
+            matches!(parsed, Err(ReadError::Parse(3, _))),
+            "complete malformed record was accepted: {parsed:?}"
+        );
         let mut record = canonical::BaselineRecord::from(&baseline);
         record.voices = vec![row.into(); 65];
         let header = opened(Header::default());

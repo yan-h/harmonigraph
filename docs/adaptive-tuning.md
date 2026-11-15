@@ -591,9 +591,8 @@ a refused event may be retried later while the display and take retain its sched
 This was never a measurement of resulting acoustic pitch either;
 a receiving instrument may ignore, smooth or modulate the expression.
 
-One provenance reaches the take now rather than two.
-`PitchProvenance` keeps both variants because `ObservedDirect` is still live production code, the default provenance for a plain direct-source `NoteEvent` (`NoteDelta::from`, `canonical.rs`), not a compat shim kept for an old take;
-every adaptive-tuning record this build writes carries `AcceptedOutput`.
+One provenance reaches the take now rather than two, so records carry none (#1798):
+an unsequenced delta is a direct observation, and a sequenced one is what a source played and names its press by a lifetime.
 Learning is the one consumer that reads something else:
 it is given the **player's** pitch, with the adaptive correction taken back off.
 Every row is tuned now, the Hub's own included, so feeding Learn what was emitted would make it a fixed point that infers the axes it has already chosen.
@@ -616,8 +615,8 @@ A snapshot restores **what is sounding now**;
 it does not reconstruct missing attacks, releases or trajectories, and the test that pins it asserts no note-on appears among the refresh records.
 One lost report owes every source a snapshot.
 
-Takes are format v6;
-v1–v5 are refused whole with a version error rather than half-read.
+Takes are format v9;
+v1–v8 are refused whole with a version error rather than half-read (`FORMAT_VERSION` in `harmonigraph-take` says what each version changed).
 Every record carries a container-level `#[serde(default)]` and none denies unknown fields, which is what makes dropping a field safe without touching the format version —
 and is why a take written today is refused by a pre-prune build rather than misread by one.
 Renaming a field is not safe that way, because each side reads the other's key as absent:
@@ -822,4 +821,4 @@ The code seams:
 - [`harmonigraph-core/src/notes.rs`](../crates/harmonigraph-core/src/notes.rs) and [`roll.rs`](../crates/harmonigraph-core/src/roll.rs) — source-aware tracking and live history, off the audio thread;
 - [`harmonigraph-plugin/src/configuration.rs`](../crates/harmonigraph-plugin/src/configuration.rs) — effective CLAP tuning on audio, including editor-independent learning;
 - [`harmonigraph-record/src/publication.rs`](../crates/harmonigraph-record/src/publication.rs) — the two independent lanes;
-- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — take format, source and reset scope, actual sample and pitch provenance.
+- [`harmonigraph-take/src/lib.rs`](../crates/harmonigraph-take/src/lib.rs) — take format, source and reset scope.

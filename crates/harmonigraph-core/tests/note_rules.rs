@@ -24,7 +24,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use harmonigraph_core::canonical::PitchProvenance;
 use harmonigraph_core::canonical::{
     CanonicalEvent, GapReason, NoteDelta, PublicationGap, SourceBaseline, VoiceBaseline,
 };
@@ -322,7 +321,6 @@ impl Run<'_> {
             event: NoteEvent { time: event.time - self.offset, ..event },
             sequence: *sequence,
             lifetime,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents: pitch,
             ..NoteDelta::from(event)
         };
@@ -551,7 +549,6 @@ impl Run<'_> {
                     pressure: self.rng.pick(&[0.0, 0.5]),
                     ..Expressions::NEUTRAL
                 },
-                provenance: PitchProvenance::AcceptedOutput,
                 ..VoiceBaseline::default()
             })
             .collect();

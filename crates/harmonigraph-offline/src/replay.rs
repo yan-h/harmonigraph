@@ -307,11 +307,9 @@ mod tests {
         let source = SourceId(1);
         let delta = |event: NoteEvent, sequence| {
             CanonicalRecord::from_event(CanonicalEvent::Note(NoteDelta {
-                partial_output: false,
                 event,
                 sequence,
                 lifetime: 61,
-                provenance: PitchProvenance::AcceptedOutput,
                 pitch_microcents: None,
                 assignment: None,
             }))
@@ -324,7 +322,6 @@ mod tests {
             actual_onset: 0.1,
             pitch_microcents: 6_025_000_000,
             velocity: 0.8,
-            provenance: PitchProvenance::AcceptedOutput,
             ..Default::default()
         };
         let held = SourceBaseline::new(source, 0.15, 5, true, &[row]).unwrap();

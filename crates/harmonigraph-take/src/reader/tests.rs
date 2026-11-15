@@ -1,7 +1,7 @@
 use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
 use harmonigraph_core::{NoteEvent, SourceId};
 
-use crate::canonical::{BaselineRecord, DeltaRecord, GapRecord, ProvenanceRecord};
+use crate::canonical::{BaselineRecord, DeltaRecord, GapRecord};
 use crate::*;
 
 const RATE: f64 = 48_000.0;
@@ -34,7 +34,6 @@ fn delta(sequence: u64, key: u8, on: bool, input: i64) -> Record {
     let mut delta = DeltaRecord::from(harmonigraph_core::canonical::NoteDelta::from(event));
     delta.sequence = sequence;
     delta.lifetime = u64::from(key);
-    delta.provenance = ProvenanceRecord::AcceptedOutput;
     Record::Canonical(CanonicalRecord::Delta(delta))
 }
 
@@ -45,7 +44,6 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
         velocity: 0.8,
         pitch_microcents: i64::from(note) * 100_000_000,
         lifetime: u64::from(note),
-        provenance: harmonigraph_core::canonical::PitchProvenance::AcceptedOutput,
         actual_onset: presentation(input + DELAY),
         ..Default::default()
     }
@@ -55,12 +53,7 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
 fn snapshot(cut: u64, voices: &[VoiceBaseline], sample: i64) -> Record {
     let frame =
         SourceBaseline::new(SourceId::DIRECT, presentation(sample), cut, true, voices).unwrap();
-    let mut record = BaselineRecord::from(&frame);
-    for voice in &mut record.voices {
-        voice.assignment =
-            Some(ConfigurationRecord { t: voice.actual_onset, ..ConfigurationRecord::default() });
-    }
-    Record::Canonical(CanonicalRecord::Baseline(Box::new(record)))
+    Record::Canonical(CanonicalRecord::Baseline(Box::new(BaselineRecord::from(&frame))))
 }
 
 fn gap(first: u64, from: i64, to: i64) -> Record {
@@ -83,16 +76,10 @@ fn read(records: &[Record]) -> Result<Take, ReadError> {
 }
 
 /// `(start, end)` of every note the take's events draw for `key`, through the
-/// replay path, after checking each restated voice's assignment is at its
-/// onset.
+/// replay path.
 fn notes_of(take: &Take, key: u8) -> Vec<(f64, Option<f64>)> {
     let mut tracker = harmonigraph_core::NoteTracker::new();
     for event in &take.events {
-        if let CanonicalRecord::Baseline(b) = event {
-            for voice in &b.voices {
-                assert_eq!(voice.assignment.map(|a| a.t), Some(voice.actual_onset));
-            }
-        }
         event.apply(&mut tracker).unwrap();
     }
     tracker.roll().notes().filter(|n| n.note == key).map(|n| (n.start, n.end)).collect()

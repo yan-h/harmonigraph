@@ -148,21 +148,11 @@ fn accepted_exact(
     pitch_microcents: Option<i64>,
 ) -> harmonigraph_core::canonical::NoteDelta {
     use harmonigraph_core::canonical::NoteDelta;
-    use harmonigraph_core::canonical::PitchProvenance;
-    NoteDelta {
-        event,
-        sequence,
-        lifetime,
-        provenance: PitchProvenance::AcceptedOutput,
-        pitch_microcents,
-        assignment: None,
-        partial_output: false,
-    }
+    NoteDelta { event, sequence, lifetime, pitch_microcents, assignment: None }
 }
 
 #[test]
 fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
-    use harmonigraph_core::canonical::PitchProvenance;
     use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
     use harmonigraph_record::publication::Lane;
@@ -213,7 +203,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         pitch_microcents: 6_037_500_000,
         onset_pitch_microcents: 6_000_000_000,
         velocity: 0.8,
-        provenance: PitchProvenance::AcceptedOutput,
         ..Default::default()
     };
     let repaired = SourceBaseline::new(source, ORIGIN + 0.5, 2, true, &[row]).unwrap();

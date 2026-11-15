@@ -5,9 +5,7 @@
 //! the display and the take show a schedule rather than a confirmation. What
 //! that costs is written down: a note the host refuses is drawn anyway, and
 //! nothing in the protocol can tell.
-use harmonigraph_core::canonical::{
-    NoteDelta, PitchProvenance, SourceBaseline, VoiceBaseline, HELD_PER_SOURCE,
-};
+use harmonigraph_core::canonical::{NoteDelta, SourceBaseline, VoiceBaseline, HELD_PER_SOURCE};
 use harmonigraph_core::{LatticePos, NoteEvent, NoteEventKind, SourceId};
 
 use super::event::Event;
@@ -84,14 +82,12 @@ impl State {
     /// Freeze this onset's adaptive choice onto its voice. The emitted pitch
     /// includes the correction because the Tune states it as a per-note tuning
     /// expression at the same sample as the note.
-    #[allow(clippy::too_many_arguments)]
     pub fn assign(
         &mut self,
         lifetime: u64,
         correction: i64,
         node: Option<LatticePos>,
         decision: u64,
-        configuration: harmonigraph_core::configuration::ResolvedConfig,
         player: f64,
         channel_pitch: i64,
     ) {
@@ -106,7 +102,6 @@ impl State {
             + (player * 100_000_000.0).round() as i64;
         voice.pitch_microcents = voice.onset_pitch_microcents;
         if decision != 0 {
-            voice.assignment = Some(configuration);
             voice.decision = decision;
             voice.attack_node = node;
         }
@@ -153,10 +148,8 @@ impl State {
             },
             sequence: stamp.sequence,
             lifetime,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents: Some(voice.pitch_microcents),
             assignment: VoiceBaseline::metadata(voice),
-            partial_output: false,
         })
     }
 
@@ -184,7 +177,6 @@ impl State {
                 velocity,
                 pitch_microcents: pitch,
                 onset_pitch_microcents: pitch,
-                provenance: PitchProvenance::AcceptedOutput,
                 ..VoiceBaseline::default()
             });
             result =
@@ -260,10 +252,8 @@ impl State {
             event: NoteEvent { source: stamp.source, time: stamp.time, channel, note, kind },
             sequence: stamp.sequence,
             lifetime,
-            provenance: PitchProvenance::AcceptedOutput,
             pitch_microcents,
             assignment: self.voice(lifetime).and_then(VoiceBaseline::metadata),
-            partial_output: false,
         })
     }
 }
