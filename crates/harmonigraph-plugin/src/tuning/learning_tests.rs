@@ -13,13 +13,16 @@ fn heard(device: &Device) -> Result<usize, Incomplete> {
 }
 
 /// Five sources of 64 held notes are 320 voices, past the 256 the session's
-/// adaptive context holds: Learn hears every one rather than refusing.
+/// adaptive context holds: Learn hears every one and learns from them, moving
+/// a just fifth to the 12-TET one the keys were played in.
 #[test]
 fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
     hub.activate();
+    musical_tests::configure(&hub, harmonigraph_core::Tuning::just());
     let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
+    let fifth = || crate::configuration::view(mailbox.visible().0, false).resolved.tuning.three;
     let learn = ConfigEdit { learning: Some(true), ..Default::default() };
     mailbox.submit(crate::configuration::packet(learn)).unwrap();
     // Every Tune pairs before any plays: a pairing is a session cut.
@@ -35,11 +38,13 @@ fn learn_hears_more_held_voices_than_the_adaptive_context_holds() {
         tune.run(0, (0..64).map(|key| note(key, 0, key as i16, 0, true)).collect(), None);
     }
     hub.run(0, vec![], None);
+    let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    assert_eq!(fifth(), just, "nothing is learned before the rows hold the chord");
     hub.run(64, vec![], None);
     let held: usize = (0..=DIRECT).map(|row| inspect_hub(&hub, |hub| hub.test_held(row))).sum();
     assert_eq!(held, 5 * HELD_PER_SOURCE, "the fixture never held 320 voices");
     assert_eq!(heard(&hub), Ok(12), "64 keys fold into twelve classes");
-    assert_eq!(mailbox.visible().0.status & 1, 0, "Learn is not refused");
+    assert_eq!(fifth(), harmonigraph_core::tuning::microcents(700.0), "Learn learned");
     drop(tunes);
 }
 

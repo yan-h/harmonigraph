@@ -481,7 +481,9 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
 /// Allocation-free inference from sorted, distinct classes. [`LearningState`]
 /// supplies its fixed scratch slice here, preserving deterministic ties.
 pub fn learn_sorted_classes(classes: &[PitchClass]) -> LearnedTuning {
-    learn_sorted_classes_counted(classes, &mut 0)
+    debug_assert!(classes.windows(2).all(|pair| pair[0] < pair[1]));
+    let [three, five, seven] = learn_primes(classes);
+    LearnedTuning { c_offset: learn_c_offset(classes), three, five, seven }
 }
 
 /// The held notes Learn would read are not all known: a source's state lost
@@ -497,17 +499,11 @@ pub struct LearningState<const N: usize> {
     scratch: [PitchClass; N],
     previous: [PitchClass; N],
     previous_len: Option<usize>,
-    pub last_pair_visits: usize,
 }
 
 impl<const N: usize> Default for LearningState<N> {
     fn default() -> Self {
-        Self {
-            scratch: [PitchClass(0); N],
-            previous: [PitchClass(0); N],
-            previous_len: None,
-            last_pair_visits: 0,
-        }
+        Self { scratch: [PitchClass(0); N], previous: [PitchClass(0); N], previous_len: None }
     }
 }
 
@@ -520,7 +516,6 @@ impl<const N: usize> LearningState<N> {
         armed: bool,
         classes: impl FnOnce(&mut [PitchClass; N]) -> Result<usize, Incomplete>,
     ) -> Result<Option<LearnedTuning>, Incomplete> {
-        self.last_pair_visits = 0;
         if !armed {
             self.previous_len = None;
             return Ok(None);
@@ -535,17 +530,8 @@ impl<const N: usize> LearningState<N> {
         if classes.is_empty() {
             return Ok(None);
         }
-        Ok(Some(learn_sorted_classes_counted(classes, &mut self.last_pair_visits)))
+        Ok(Some(learn_sorted_classes(classes)))
     }
-}
-
-pub(crate) fn learn_sorted_classes_counted(
-    classes: &[PitchClass],
-    pair_visits: &mut usize,
-) -> LearnedTuning {
-    debug_assert!(classes.windows(2).all(|pair| pair[0] < pair[1]));
-    let [three, five, seven] = learn_primes(classes, pair_visits);
-    LearnedTuning { c_offset: learn_c_offset(classes), three, five, seven }
 }
 
 /// The sounding pitch class closest to C, as a signed cents offset in
@@ -575,7 +561,7 @@ fn learn_c_offset(classes: &[PitchClass]) -> Option<f32> {
 /// are candidates — a fourth implies a fifth, since octaves are assumed
 /// perfectly tuned — and the candidate closest to just wins, if within
 /// [`LEARN_RANGE_CENTS`].
-fn learn_primes(classes: &[PitchClass], pair_visits: &mut usize) -> [Option<f32>; 3] {
+fn learn_primes(classes: &[PitchClass]) -> [Option<f32>; 3] {
     let mut best = [
         (PitchClass::from_cents(THREE_JUST), None::<PitchClass>),
         (PitchClass::from_cents(FIVE_JUST), None),
@@ -583,7 +569,6 @@ fn learn_primes(classes: &[PitchClass], pair_visits: &mut usize) -> [Option<f32>
     ];
     for (i, &a) in classes.iter().enumerate() {
         for &b in &classes[i + 1..] {
-            *pair_visits += 1;
             for interval in [a - b, b - a] {
                 for (target, best_so_far) in &mut best {
                     let diff = interval.distance_to(*target);
@@ -846,10 +831,10 @@ mod tests {
         assert!((three - THREE_JUST).abs() < 0.01, "three = {three}");
     }
 
-    /// 256 distinct classes visit every one of their 32,640 pairs once, and the
-    /// same set again is remembered rather than learned twice.
+    /// A class set is learned from as `learn_tuning` would, and the same set
+    /// again is remembered rather than learned twice.
     #[test]
-    fn learning_state_reaches_every_pair_and_learns_a_class_set_once() {
+    fn learning_state_learns_a_class_set_once() {
         let mut learning = LearningState::<256>::default();
         let held = |scratch: &mut [PitchClass; 256]| {
             for (i, class) in scratch.iter_mut().enumerate() {
@@ -858,12 +843,10 @@ mod tests {
             Ok(256)
         };
         let result = learning.infer(true, held).unwrap().unwrap();
-        assert_eq!(learning.last_pair_visits, 32640);
         let mut classes = [PitchClass(0); 256];
         assert_eq!(held(&mut classes), Ok(256));
         assert_eq!(result, learn_tuning(&classes));
         assert_eq!(learning.infer(true, held).unwrap(), None);
-        assert_eq!(learning.last_pair_visits, 0);
     }
 
     #[test]

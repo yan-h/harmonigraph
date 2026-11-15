@@ -1,5 +1,6 @@
 //! Map timing through real CLAP ingress, Hub ordering and Tune output.
 use super::*;
+use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
 use harmonigraph_core::{LatticePos, Tuning};
 
@@ -317,6 +318,7 @@ fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
 
 /// Adaptive reads the configuration timeline Lattice Map does: a fifth
 /// automated at sample 10 tunes the attack at 10, and not the one at 9.
+/// Goes with #1756, which retires host automation of the axes.
 #[test]
 fn adaptive_assigns_from_the_tuning_in_force_at_the_attacks_own_sample() {
     use nice_plug::prelude::Param;
@@ -343,6 +345,39 @@ fn adaptive_assigns_from_the_tuning_in_force_at_the_attacks_own_sample() {
     assert_eq!(after.attack_node, Some(LatticePos::new(1, 0, 0)));
     assert!((before.frozen_offset_microcents - i64::from(just - 700_000_000)).abs() < 100);
     assert!((after.frozen_offset_microcents + 1_000_000).abs() < 100);
+}
+
+/// A record the Hub holds over is assigned under the configuration in force
+/// at its own sample, not the one the next block adopts: an editor edit of the
+/// fifth landing between the two leaves the held-over G on the old fifth,
+/// while a G struck in the new block takes the new one.
+#[test]
+fn a_held_over_onset_keeps_its_own_blocks_configuration_across_an_editor_edit() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate_format(44100.0, 512);
+    install(&hub);
+    let mut source = Device::new(true);
+    source.activate_format(44100.0, 512);
+    hub.run_format(0, vec![parameter("tuning-engine", 1.0, 0)], None, None, 512);
+    for raw in [512, 1024] {
+        source.run_format(raw, vec![], None, None, 512);
+        hub.run_format(raw, vec![], None, None, 512);
+    }
+    // The Hub runs first in this block, so the source's G is held over.
+    hub.run_format(1536, vec![], None, None, 512);
+    source.run_format(1536, vec![note(1, 0, 55, 0, true)], None, None, 512);
+    let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
+    let edit = ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(699.0));
+    mailbox.submit(crate::configuration::packet(edit)).unwrap();
+    hub.run_format(2048, vec![note(2, 0, 67, 0, true)], None, None, 512);
+    let just = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
+    let held_over = voice(&hub, 0, 55);
+    let struck = voice(&hub, crate::tuning::DIRECT, 67);
+    assert_eq!(held_over.attack_node, Some(LatticePos::new(1, 0, 0)));
+    assert_eq!(struck.attack_node, Some(LatticePos::new(1, 0, 0)));
+    assert!((held_over.frozen_offset_microcents - i64::from(just - 700_000_000)).abs() < 100);
+    assert!((struck.frozen_offset_microcents + 1_000_000).abs() < 100);
 }
 
 /// A record the Hub holds over to the next callback carries a sample from

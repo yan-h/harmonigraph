@@ -645,6 +645,7 @@ fn releasing_an_interval_link_accounts_for_the_hosts_current_modulation() {
     assert!((released.tuning.seven_cents() - linked.seven_cents()).abs() < 0.001);
 }
 
+/// Goes with #1756, which retires host automation of the axes.
 #[test]
 fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flush() {
     let _scope = crate::test_scope::enter();
@@ -2678,6 +2679,7 @@ fn an_out_of_range_engine_or_map_restores_as_the_value_the_host_shows() {
     }
 }
 
+/// Goes with #1756, which retires host automation of the axes.
 #[test]
 fn every_engine_records_shared_tuning_at_its_actual_sample_boundary() {
     let _scope = crate::test_scope::enter();
