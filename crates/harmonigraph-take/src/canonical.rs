@@ -209,7 +209,6 @@ impl From<ExpressionsRecord> for Expressions {
 #[serde(default)]
 pub struct BaselineRecord {
     pub source: u64,
-    pub id: u64,
     pub t: f64,
     pub output_cut: u64,
     pub shown: bool,
@@ -219,7 +218,6 @@ impl From<&SourceBaseline> for BaselineRecord {
     fn from(b: &SourceBaseline) -> Self {
         Self {
             source: b.source.0,
-            id: b.id,
             t: b.time,
             output_cut: b.output_cut,
             shown: b.shown,
@@ -238,7 +236,6 @@ impl BaselineRecord {
         }
         SourceBaseline::new(
             SourceId(self.source),
-            self.id,
             self.t,
             self.output_cut,
             self.shown,
@@ -332,25 +329,25 @@ impl CanonicalRecord {
             Self::Gap(g) => PublicationGap::from(*g).validate(),
         }
     }
-    pub fn apply(&self, tracker: &mut NoteTracker) -> Result<bool, InvalidCanonical> {
+    pub fn apply(&self, tracker: &mut NoteTracker) -> Result<(), InvalidCanonical> {
         self.validate()?;
         match self {
             Self::Note(n) => {
                 tracker.handle_event((*n).into());
-                Ok(true)
+                Ok(())
             }
             Self::Delta(d) => tracker.handle_canonical(CanonicalEvent::Note((*d).into())),
             Self::Baseline(b) => tracker.replace_source(&b.baseline()?),
             Self::Gap(g) => tracker.handle_canonical(CanonicalEvent::Gap((*g).into())),
         }
     }
-    /// Ordering only, after the parser has validated every payload in file
-    /// order. No voice reconstruction is needed to accept a sorted take.
-    pub(crate) fn check_order(&self, order: &mut CanonicalOrder) -> Result<bool, InvalidCanonical> {
+    /// Whether this record keeps its source's order (see [`CanonicalOrder`]),
+    /// which the reader refuses a take for breaking.
+    pub(crate) fn ordered(&self, order: &mut CanonicalOrder) -> bool {
         match self {
             Self::Delta(d) => order.note(SourceId(d.event.source), d.sequence),
-            Self::Baseline(b) => order.baseline(SourceId(b.source), b.id, b.output_cut),
-            Self::Note(_) | Self::Gap(_) => Ok(true),
+            Self::Baseline(b) => order.baseline(SourceId(b.source), b.output_cut),
+            Self::Note(_) | Self::Gap(_) => true,
         }
     }
     pub fn note(&self) -> Option<NoteRecord> {
@@ -390,7 +387,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let frame = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &voices).unwrap();
+        let frame = SourceBaseline::new(SourceId::DIRECT, 2.0, 5, true, &voices).unwrap();
         assert_eq!(BaselineRecord::from(&frame).baseline(), Ok(frame));
     }
 }

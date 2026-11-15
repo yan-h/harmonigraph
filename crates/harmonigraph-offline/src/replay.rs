@@ -212,7 +212,7 @@ mod tests {
         use harmonigraph_core::{NoteEvent, SourceId};
         use harmonigraph_take::{CanonicalRecord, Record};
         let source = SourceId::DIRECT;
-        let silent = SourceBaseline::new(source, 1, 3.0, 0, true, &[]).unwrap();
+        let silent = SourceBaseline::new(source, 3.0, 0, true, &[]).unwrap();
         let mut text = opened();
         for record in [
             CanonicalRecord::from_event(CanonicalEvent::Note(
@@ -260,8 +260,8 @@ mod tests {
         use harmonigraph_core::{NoteEvent, SourceId};
         use harmonigraph_take::{CanonicalRecord, Record};
         let source = SourceId::DIRECT;
-        let off = SourceBaseline::new(source, 1, 0.03, 0, false, &[]).unwrap();
-        let rejoin = SourceBaseline::new(source, 2, 0.08, 0, true, &[]).unwrap();
+        let off = SourceBaseline::new(source, 0.03, 0, false, &[]).unwrap();
+        let rejoin = SourceBaseline::new(source, 0.08, 0, true, &[]).unwrap();
         let mut text = opened();
         for record in [
             CanonicalRecord::from_event(CanonicalEvent::Note(
@@ -317,7 +317,7 @@ mod tests {
             }))
         };
         let first = delta(NoteEvent::on(0.01, source, 0, 60, 0.8), 1);
-        let empty = SourceBaseline::new(source, 1, 0.08, 3, true, &[]).unwrap();
+        let empty = SourceBaseline::new(source, 0.08, 3, true, &[]).unwrap();
         let row = VoiceBaseline {
             note: 60,
             lifetime: 61,
@@ -327,10 +327,9 @@ mod tests {
             provenance: PitchProvenance::AcceptedOutput,
             ..Default::default()
         };
-        let held = SourceBaseline::new(source, 2, 0.15, 5, true, &[row]).unwrap();
-        let recovered = SourceBaseline::new(source, 3, 0.3, 8, true, &[row]).unwrap();
+        let held = SourceBaseline::new(source, 0.15, 5, true, &[row]).unwrap();
+        let recovered = SourceBaseline::new(source, 0.3, 8, true, &[row]).unwrap();
         let events = [
-            first.clone(),
             first,
             delta(
                 NoteEvent {

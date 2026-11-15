@@ -173,9 +173,15 @@ impl VoiceBaseline {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidCanonical;
 
-/// Ordering and deduplication for one non-RT publication stream. Callers
-/// validate payloads first. These counters own no musical state and authorize
-/// no journal reclamation; gaps, resets and file boundaries do not clear them.
+/// The order one publication stream keeps: each source's deltas rise, a
+/// snapshot's cut covers every delta of its source already seen, and no later
+/// delta falls at or below it. Nothing republishes
+/// (`harmonigraph_record::publication`), so the live display, which applies
+/// records in publication order, checks it in debug builds alone (#1798). A
+/// take is read in time order, which a Tune whose delay was lowered while it
+/// recorded does break (its snapshot after the cut is timed at the old delay,
+/// its next deltas at the new), so the take reader refuses such a take. It
+/// owns no musical state.
 #[derive(Default)]
 pub struct CanonicalOrder {
     sources: std::collections::BTreeMap<SourceId, CanonicalCursor>,
@@ -184,49 +190,29 @@ pub struct CanonicalOrder {
 #[derive(Default)]
 struct CanonicalCursor {
     output: u64,
-    baseline: u64,
     state_cut: u64,
 }
 
 impl CanonicalOrder {
-    /// False identifies an already consumed delta. Unsequenced observations
-    /// neither advance ordering nor establish membership in this stream.
-    pub fn note(&mut self, source: SourceId, sequence: u64) -> Result<bool, InvalidCanonical> {
+    /// Whether this delta keeps the order. An unsequenced observation is not
+    /// part of it.
+    pub fn note(&mut self, source: SourceId, sequence: u64) -> bool {
         if sequence == 0 {
-            return Ok(true);
+            return true;
         }
         let cursor = self.sources.entry(source).or_default();
-        if sequence <= cursor.output {
-            return Ok(false);
-        }
-        // Available history must precede its baseline. A baseline is not
-        // permission to silently discard history we have never consumed.
-        if sequence <= cursor.state_cut {
-            return Err(InvalidCanonical);
-        }
-        cursor.output = sequence;
-        Ok(true)
+        let ordered = sequence > cursor.output && sequence > cursor.state_cut;
+        cursor.output = cursor.output.max(sequence);
+        ordered
     }
 
-    /// False identifies an already consumed baseline. Its cut records state
-    /// coverage, not consumed output, and may retreat as long as it still
-    /// covers all output this consumer has seen.
-    pub fn baseline(
-        &mut self,
-        source: SourceId,
-        id: u64,
-        output_cut: u64,
-    ) -> Result<bool, InvalidCanonical> {
+    /// Whether this snapshot's cut covers every delta of its source already
+    /// seen.
+    pub fn baseline(&mut self, source: SourceId, output_cut: u64) -> bool {
         let cursor = self.sources.entry(source).or_default();
-        if id <= cursor.baseline {
-            return Ok(false);
-        }
-        if cursor.output > output_cut {
-            return Err(InvalidCanonical);
-        }
-        cursor.baseline = id;
+        let ordered = cursor.output <= output_cut;
         cursor.state_cut = output_cut;
-        Ok(true)
+        ordered
     }
 }
 
@@ -242,7 +228,6 @@ impl CanonicalOrder {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SourceBaseline {
     pub source: SourceId,
-    pub id: u64,
     pub time: Time,
     pub output_cut: u64,
     /// The source's Show switch. False hides its notes without releasing
@@ -257,7 +242,6 @@ impl SourceBaseline {
     // together; no partially initialized baseline is publicly constructible.
     pub fn new(
         source: SourceId,
-        id: u64,
         time: Time,
         output_cut: u64,
         shown: bool,
@@ -268,7 +252,6 @@ impl SourceBaseline {
         }
         let mut result = Self {
             source,
-            id,
             time,
             output_cut,
             shown,
@@ -285,7 +268,7 @@ impl SourceBaseline {
     }
 
     pub fn validate(&self) -> Result<(), InvalidCanonical> {
-        if self.id == 0 || !self.time.is_finite() || self.count > HELD_PER_SOURCE {
+        if !self.time.is_finite() || self.count > HELD_PER_SOURCE {
             return Err(InvalidCanonical);
         }
         for (i, voice) in self.voices().iter().enumerate() {
@@ -383,24 +366,22 @@ mod tests {
     use super::*;
     use crate::NoteTracker;
 
+    /// The order consumers check in debug builds: each source's deltas rise,
+    /// and a snapshot's cut covers the deltas already seen and stays below the
+    /// next. An unsequenced observation is outside it.
     #[test]
-    fn ordering_distinguishes_duplicates_from_history_missing_before_a_cut() {
+    fn the_canonical_order_is_rising_deltas_and_covering_cuts() {
         let mut order = CanonicalOrder::default();
         let source = SourceId(1);
-        assert_eq!(order.note(SourceId(3), 0), Ok(true));
-        assert_eq!(order.note(source, 5), Ok(true));
-        assert_eq!(order.baseline(source, 1, 8), Ok(true));
-        assert_eq!(order.note(source, 5), Ok(false));
-        assert_eq!(order.note(source, 6), Err(InvalidCanonical));
-        assert_eq!(order.baseline(source, 1, 0), Ok(false));
-        assert_eq!(order.baseline(source, 2, 4), Err(InvalidCanonical));
-        // A newer baseline can retreat to a cut that still covers consumed
-        // output. The rejected baseline above must not consume its ID.
-        assert_eq!(order.baseline(source, 2, 6), Ok(true));
-        assert_eq!(order.note(source, 7), Ok(true));
-        assert_eq!(order.note(SourceId(2), 1), Ok(true));
-        assert_eq!(order.baseline(SourceId(2), 1, 4), Ok(true));
-        assert_eq!(order.note(SourceId(2), 2), Err(InvalidCanonical));
+        assert!(order.note(SourceId(3), 0));
+        assert!(order.note(source, 5));
+        assert!(order.baseline(source, 8));
+        assert!(!order.note(source, 5), "a repeated delta");
+        assert!(!order.note(source, 6), "a delta the cut already covers");
+        assert!(!order.baseline(source, 4), "a cut below a delta seen");
+        assert!(order.baseline(source, 6));
+        assert!(order.note(source, 7));
+        assert!(order.note(SourceId(2), 1), "each source keeps its own order");
     }
 
     fn voice(note: u8) -> VoiceBaseline {
@@ -416,7 +397,7 @@ mod tests {
     }
 
     fn frame(voices: &[VoiceBaseline]) -> Result<SourceBaseline, InvalidCanonical> {
-        SourceBaseline::new(SourceId(1), 1, 2.0, 64, true, voices)
+        SourceBaseline::new(SourceId(1), 2.0, 64, true, voices)
     }
 
     #[test]
@@ -425,9 +406,8 @@ mod tests {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent::on(0.0, SourceId(2), 0, 0, 0.6));
         let baseline = frame(&voices).unwrap();
-        assert_eq!(tracker.replace_source(&baseline), Ok(true));
+        assert_eq!(tracker.replace_source(&baseline), Ok(()));
         assert_eq!(tracker.held_count(), 65);
-        assert_eq!(tracker.replace_source(&baseline), Ok(false));
         let mut invalid = voices.clone();
         invalid.push(voice(64));
         assert_eq!(frame(&invalid), Err(InvalidCanonical));
@@ -435,7 +415,6 @@ mod tests {
         invalid[63] = invalid[0];
         assert_eq!(frame(&invalid), Err(InvalidCanonical));
         let mut malformed = baseline;
-        malformed.id = 2;
         malformed.voices[63].actual_onset = f64::NAN;
         assert_eq!(tracker.replace_source(&malformed), Err(InvalidCanonical));
         assert_eq!(tracker.held_count(), 65);
@@ -519,8 +498,7 @@ mod tests {
         assert!(frame(&[row, voice(64)]).is_ok());
         // A direct voice names its press by a lifetime like any other.
         let observed = VoiceBaseline { provenance: direct, ..row };
-        let direct_frame =
-            |voice| SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 64, true, &[voice]);
+        let direct_frame = |voice| SourceBaseline::new(SourceId::DIRECT, 2.0, 64, true, &[voice]);
         assert!(direct_frame(observed).is_ok());
         assert_eq!(
             direct_frame(VoiceBaseline { lifetime: 0, ..observed }).err(),
@@ -537,9 +515,6 @@ mod tests {
             let beside = if what.starts_with("same") { row } else { voice(64) };
             assert_eq!(frame(&[beside, bad]).err(), Some(InvalidCanonical), "{what}");
         }
-        let mut envelope = frame(&[row]).unwrap();
-        envelope.id = 0;
-        assert_eq!(envelope.validate(), Err(InvalidCanonical), "id");
     }
 
     /// A baseline row is the same voice by its lifetime. A row naming another
@@ -552,45 +527,14 @@ mod tests {
             let mut tracker = NoteTracker::new();
             let on = NoteEvent::on(1.0, source, 0, 60, 0.8);
             tracker.handle_canonical(CanonicalEvent::Note(delta(on, 1))).unwrap();
-            let baseline = SourceBaseline::new(source, 1, 2.0, 64, true, &[row]).unwrap();
+            let baseline = SourceBaseline::new(source, 2.0, 64, true, &[row]).unwrap();
             tracker.replace_source(&baseline).unwrap();
             assert_eq!(tracker.roll().notes().count(), notes, "{row:?}");
         }
     }
 
     #[test]
-    fn a_recovered_release_keeps_history_ordered_for_activity_and_trimming() {
-        let source = SourceId(1);
-        let mut tracker = NoteTracker::new();
-        tracker
-            .handle_canonical(CanonicalEvent::Note(delta(
-                NoteEvent::on(0.0, source, 0, 60, 0.8),
-                1,
-            )))
-            .unwrap();
-        tracker
-            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
-                source: Some(source),
-                time: 1.0,
-                through: 1.0,
-                first: 2,
-                last: 2,
-                reason: GapReason::PublicationFull,
-            }))
-            .unwrap();
-        tracker.handle_event(NoteEvent::on(1.5, SourceId::DIRECT, 0, 64, 0.8));
-        tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 64));
-        tracker
-            .handle_canonical(CanonicalEvent::Note(delta(NoteEvent::off(3.0, source, 0, 60), 3)))
-            .unwrap();
-        assert_eq!(tracker.roll().latest_activity(4.0), Some(3.0));
-        tracker.prune(crate::NoteRoll::MAX_AGE + 2.5, &crate::Envelope::default());
-        let notes: Vec<_> = tracker.roll().notes().map(|note| note.note).collect();
-        assert_eq!(notes, [60], "the expired neighbor is not hidden behind the recovered off");
-    }
-
-    #[test]
-    fn empty_baseline_keeps_completed_history_and_duplicates_do_not_replay() {
+    fn empty_baseline_keeps_completed_history() {
         let mut tracker = NoteTracker::new();
         let source = SourceId(1);
         let events = [
@@ -608,13 +552,10 @@ mod tests {
             delta(NoteEvent::off(1.0, source, 0, 60), 3),
         ];
         for event in events {
-            assert_eq!(tracker.handle_canonical(CanonicalEvent::Note(event)), Ok(true));
+            assert_eq!(tracker.handle_canonical(CanonicalEvent::Note(event)), Ok(()));
         }
         let baseline = frame(&[]).unwrap();
         tracker.replace_source(&baseline).unwrap();
-        for event in events {
-            assert_eq!(tracker.handle_canonical(CanonicalEvent::Note(event)), Ok(false));
-        }
         let note = tracker.roll().notes().next().unwrap();
         assert_eq!((note.start, note.end, note.settled_pitch()), (0.0, Some(1.0), 60.25));
         assert_eq!(tracker.roll().notes().count(), 1);
@@ -655,7 +596,6 @@ mod tests {
         assert!(note.history_complete);
         assert_eq!(tracker.roll().notes().count(), 1);
         let mut off = frame(&[row]).unwrap();
-        off.id = 2;
         off.shown = false;
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
@@ -674,9 +614,8 @@ mod tests {
         tuning.pitch_microcents = Some(6_050_000_000);
         tracker.handle_canonical(CanonicalEvent::Note(tuning)).unwrap();
         assert_eq!(tracker.held_count(), 0, "Off output remains factual but hidden");
-        let mut rejoin = SourceBaseline::new(
+        let rejoin = SourceBaseline::new(
             source,
-            3,
             2.2,
             65,
             true,
@@ -689,7 +628,6 @@ mod tests {
         assert_eq!((note.start, note.settled_pitch(), note.end_pitch()), (1.0, 60.25, 60.5));
         assert_eq!(note.lifetime, Some(61));
         assert!(note.history_complete);
-        rejoin.id += 1;
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1);
     }
@@ -721,7 +659,7 @@ mod tests {
         }
         assert_eq!(tracker.roll().notes().next().unwrap().segments(0.7).count(), 64);
         let row = VoiceBaseline { actual_onset: 0.0, pitch_microcents: 6_070_000_000, ..voice(60) };
-        let frame = SourceBaseline::new(source, 1, 2.0, 66, true, &[row]).unwrap();
+        let frame = SourceBaseline::new(source, 2.0, 66, true, &[row]).unwrap();
         tracker.replace_source(&frame).unwrap();
         tracker
             .handle_canonical(CanonicalEvent::Note(delta(

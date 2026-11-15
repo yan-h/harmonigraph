@@ -1925,7 +1925,7 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
         velocity: 0.8,
         ..Default::default()
     });
-    let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &voices).unwrap();
+    let baseline = SourceBaseline::new(SourceId::DIRECT, 1.0, 0, true, &voices).unwrap();
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {
         for _ in 0..SNAPSHOT_SLOTS {

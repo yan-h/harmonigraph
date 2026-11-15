@@ -355,6 +355,9 @@ pub enum ReadError {
     /// Written in an unsupported older or newer format.
     Version(u32),
     InvalidCanonical(usize),
+    /// A record that, sorted by time, breaks its source's order. Carries the
+    /// 1-based line number.
+    OutOfOrder(usize),
 }
 
 impl std::fmt::Display for ReadError {
@@ -366,6 +369,11 @@ impl std::fmt::Display for ReadError {
             ReadError::InvalidCanonical(line) => {
                 write!(f, "line {line}: invalid complete canonical record")
             }
+            ReadError::OutOfOrder(line) => write!(
+                f,
+                "line {line}: a note record sounds out of order with its source's others, \
+                 as a Tune's delay lowered while recording leaves it"
+            ),
             ReadError::Version(v) => {
                 write!(f, "take is format version {v}, this build understands {FORMAT_VERSION}")
             }
@@ -893,14 +901,16 @@ mod tests {
         ));
     }
 
+    /// Records sort by time, stably, and a malformed payload is refused at its
+    /// own line.
     #[test]
-    fn canonical_order_uses_stable_time_order_but_payload_errors_keep_file_precedence() {
+    fn canonical_records_sort_by_time_and_a_malformed_payload_is_refused_at_its_line() {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, SourceId};
         let header = opened(Header::default());
         let serialize =
             |event| ron::to_string(&Record::Canonical(CanonicalRecord::from_event(event))).unwrap();
-        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[]).unwrap();
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 2.0, 5, true, &[]).unwrap();
         let frame = serialize(CanonicalEvent::Baseline(&baseline));
         let mut delta: NoteDelta = NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 0.8).into();
         delta.sequence = 4;
@@ -909,44 +919,26 @@ mod tests {
         later.sequence = 6;
         later.event.time = 3.0;
         let later = serialize(CanonicalEvent::Note(later));
-        let take = Take::parse(std::io::Cursor::new(format!(
-            "{header}\n{later}\n{note}\n{frame}\n{note}\n"
-        )))
-        .unwrap();
-        assert_eq!(take.events.len(), 4, "validation does not remove duplicate records");
+        let take =
+            Take::parse(std::io::Cursor::new(format!("{header}\n{later}\n{note}\n{frame}\n")))
+                .unwrap();
+        assert_eq!(take.events.len(), 3);
         assert!(matches!(take.events[0], CanonicalRecord::Delta(_)));
         assert!(matches!(take.events[1], CanonicalRecord::Baseline(_)));
         assert_eq!(take.events.last().unwrap().time(), 3.0);
-        assert!(matches!(
-            Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}\n"))),
-            Err(ReadError::InvalidCanonical(4))
-        ));
 
-        delta.event.time = 3.0;
-        let late_history = serialize(CanonicalEvent::Note(delta));
-        let invalid_order = format!("{header}\n{late_history}\n{frame}\n");
-        assert!(matches!(
-            Take::parse(std::io::Cursor::new(&invalid_order)),
-            Err(ReadError::InvalidCanonical(3))
-        ));
         delta.event.kind = harmonigraph_core::NoteEventKind::On { velocity: 2.0 };
-        let malformed_duplicate = serialize(CanonicalEvent::Note(delta));
+        let malformed = serialize(CanonicalEvent::Note(delta));
         assert!(matches!(
-            Take::parse(std::io::Cursor::new(format!(
-                "{header}\n{note}\n{frame}\n{malformed_duplicate}\n"
-            ))),
-            Err(ReadError::InvalidCanonical(5))
-        ));
-        assert!(matches!(
-            Take::parse(std::io::Cursor::new(format!("{invalid_order}{malformed_duplicate}\n"))),
+            Take::parse(std::io::Cursor::new(format!("{header}\n{note}\n{frame}\n{malformed}\n"))),
             Err(ReadError::InvalidCanonical(5))
         ));
     }
 
     #[test]
-    fn invalid_complete_final_baseline_and_out_of_order_cut_are_refused() {
+    fn an_invalid_complete_final_baseline_is_refused() {
         use harmonigraph_core::canonical::*;
-        use harmonigraph_core::{NoteEvent, SourceId};
+        use harmonigraph_core::SourceId;
         let row = VoiceBaseline {
             note: 60,
             lifetime: 1,
@@ -954,7 +946,7 @@ mod tests {
             pitch_microcents: 6_000_000_000,
             ..Default::default()
         };
-        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[row]).unwrap();
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 2.0, 5, true, &[row]).unwrap();
         let full = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Baseline(&baseline),
         )))
@@ -981,20 +973,6 @@ mod tests {
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text)),
             Err(ReadError::InvalidCanonical(3))
-        ));
-        let frame = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
-            CanonicalEvent::Baseline(&baseline),
-        )))
-        .unwrap();
-        let mut delta: NoteDelta = NoteEvent::on(3.0, SourceId::DIRECT, 0, 60, 0.8).into();
-        delta.sequence = 4;
-        let later = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
-            CanonicalEvent::Note(delta),
-        )))
-        .unwrap();
-        assert!(matches!(
-            Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{later}"))),
-            Err(ReadError::InvalidCanonical(4))
         ));
     }
 
@@ -1034,7 +1012,7 @@ mod tests {
             pitch_microcents: 6_000_000_000,
             ..Default::default()
         };
-        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[row]).unwrap();
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 2.0, 5, true, &[row]).unwrap();
         let frame = ron::to_string(&Record::Canonical(CanonicalRecord::from_event(
             CanonicalEvent::Baseline(&baseline),
         )))

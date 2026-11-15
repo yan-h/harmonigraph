@@ -125,20 +125,14 @@ impl State {
             .map(|voice| voice.pitch_microcents.saturating_sub(voice.frozen_offset_microcents))
     }
 
-    pub fn baseline(
-        &self,
-        source: SourceId,
-        id: u64,
-        cut: u64,
-        time: f64,
-    ) -> Option<SourceBaseline> {
+    pub fn baseline(&self, source: SourceId, cut: u64, time: f64) -> Option<SourceBaseline> {
         let mut voices = [VoiceBaseline::default(); HELD_PER_SOURCE];
         let mut count = 0;
         for voice in self.voices() {
             voices[count] = *voice;
             count += 1;
         }
-        SourceBaseline::new(source, id, time, cut, true, &voices[..count]).ok()
+        SourceBaseline::new(source, time, cut, true, &voices[..count]).ok()
     }
 
     /// The delta that states a held voice's pitch after a channel move: a

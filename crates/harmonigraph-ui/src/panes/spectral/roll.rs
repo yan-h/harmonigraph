@@ -2643,7 +2643,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let (_, tongues) = instance_groups(&state, 0.5);
         assert_eq!(one(&tongues).lead_alpha, 1.0);
-        let omitting = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &[]).unwrap();
+        let omitting = SourceBaseline::new(SourceId::DIRECT, 1.0, 0, true, &[]).unwrap();
         state.runtime.tracker.replace_source(&omitting).unwrap();
         let note = state.roll().notes().next().unwrap();
         assert_eq!(note.end, None);

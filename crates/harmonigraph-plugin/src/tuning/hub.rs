@@ -289,7 +289,6 @@ struct Row {
     applied_time: Option<f64>,
     delay: i64,
     repair: publication::Lanes<bool>,
-    baseline_id: publication::Lanes<u64>,
 }
 
 pub struct Hub {
@@ -1142,33 +1141,29 @@ impl Hub {
             // FOLLOW all of them. On the lane: the cut is `applied`, which
             // counts every delta this row has scheduled, and both callers have
             // flushed every one of those before asking, since the display and
-            // the take both refuse history at or below a cut they have adopted
-            // (#1127).
+            // the take both hold that no history falls at or below a cut they
+            // have adopted, checked in debug builds (#1127).
             //
             // And in time, which is what a take is sorted by on read: a delta
-            // the cut covers that sorts after its snapshot is refused as late
-            // history, and the whole file with it. Those deltas sound up to D
+            // the cut covers that sorted after its snapshot would replay after
+            // the snapshot that already restated it. Those deltas sound up to D
             // after this callback, so the frame is timed at the latest of them
             // rather than at the block's start, which also leaves no voice
             // whose onset lies after the frame that claims it is sounding.
             let at = self.rows[index].applied_time.map_or(time, |applied| applied.max(time));
             let identity = identity(index as u8);
-            // One lane at a time, on its own free cells and its own next
-            // identity. A display ring nobody is draining must not hold this
-            // frame back from a healthy take.
+            // One lane at a time, on its own free cells. A display ring nobody
+            // is draining must not hold this frame back from a healthy take.
             for lane in publication::Lane::ALL {
                 if !self.rows[index].repair[lane] || recorder.publication_free()[lane] < 2 {
                     continue;
                 }
-                let id = self.rows[index].baseline_id[lane] + 1;
                 let applied = self.rows[index].applied;
-                let Some(mut frame) = self.rows[index].state.baseline(identity, id, applied, at)
-                else {
+                let Some(mut frame) = self.rows[index].state.baseline(identity, applied, at) else {
                     continue;
                 };
                 frame.shown = self.rows[index].show;
                 if recorder.publish_baseline(lane, &frame).is_ok() {
-                    self.rows[index].baseline_id[lane] = id;
                     self.rows[index].repair[lane] = false;
                 }
             }

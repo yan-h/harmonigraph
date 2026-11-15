@@ -52,9 +52,9 @@ fn struck(note: u8, input: i64) -> VoiceBaseline {
 }
 
 /// A snapshot of the DIRECT row at `sample`, covering output through `cut`.
-fn snapshot(id: u64, cut: u64, voices: &[VoiceBaseline], sample: i64) -> Record {
+fn snapshot(cut: u64, voices: &[VoiceBaseline], sample: i64) -> Record {
     let frame =
-        SourceBaseline::new(SourceId::DIRECT, id, presentation(sample), cut, true, voices).unwrap();
+        SourceBaseline::new(SourceId::DIRECT, presentation(sample), cut, true, voices).unwrap();
     let mut record = BaselineRecord::from(&frame);
     for voice in &mut record.voices {
         voice.assignment =
@@ -118,7 +118,7 @@ fn a_take_holds_its_runs_on_its_audio_and_drops_its_pause() {
         end(128),
         delta(4, 64, true, 160),
         run(256, resumed),
-        snapshot(1, 4, &[struck(60, 10), struck(64, 160)], 256),
+        snapshot(4, &[struck(60, 10), struck(64, 160)], 256),
         delta(5, 60, false, 300),
     ])
     .unwrap();
@@ -151,7 +151,7 @@ fn a_record_sounding_into_the_next_run_lands_before_its_snapshot() {
         // Played in the run, sounding after the resume at 160.
         delta(2, 62, true, 110),
         run(160, resumed),
-        snapshot(1, 2, &[struck(60, 10), struck(62, 110)], 174),
+        snapshot(2, &[struck(60, 10), struck(62, 110)], 174),
         delta(3, 60, false, 200),
         delta(4, 62, false, 210),
     ])

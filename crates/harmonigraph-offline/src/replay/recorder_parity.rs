@@ -216,7 +216,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         provenance: PitchProvenance::AcceptedOutput,
         ..Default::default()
     };
-    let repaired = SourceBaseline::new(source, 1, ORIGIN + 0.5, 2, true, &[row]).unwrap();
+    let repaired = SourceBaseline::new(source, ORIGIN + 0.5, 2, true, &[row]).unwrap();
     recorder.publish_baseline(Lane::Take, &repaired).unwrap();
     recorder.publish_baseline(Lane::Display, &repaired).unwrap();
     recorder
@@ -227,7 +227,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
             None,
         ))
         .expect_both();
-    let empty = SourceBaseline::new(source, 2, ORIGIN + 0.75, 3, true, &[]).unwrap();
+    let empty = SourceBaseline::new(source, ORIGIN + 0.75, 3, true, &[]).unwrap();
     recorder.publish_baseline(Lane::Take, &empty).unwrap();
     recorder.publish_baseline(Lane::Display, &empty).unwrap();
 

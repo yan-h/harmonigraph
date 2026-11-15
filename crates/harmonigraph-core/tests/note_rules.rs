@@ -161,7 +161,6 @@ struct Run<'a> {
     clock: Time,
     offset: Time,
     sequence: BTreeMap<SourceId, u64>,
-    baselines: BTreeMap<SourceId, u64>,
     lifetimes: u64,
     played: Vec<Played>,
     /// Notes Clear took off the roll while they sounded or faded, by key and
@@ -329,7 +328,7 @@ impl Run<'_> {
         };
         let accepted =
             self.tracker.handle_canonical_mapped(CanonicalEvent::Note(delta), self.offset);
-        assert_eq!(accepted, Ok(true));
+        assert_eq!(accepted, Ok(()));
     }
 
     fn published_on(&mut self, before: &Snap) {
@@ -419,7 +418,7 @@ impl Run<'_> {
             reason: GapReason::PublicationFull,
         };
         let accepted = self.tracker.handle_canonical_mapped(CanonicalEvent::Gap(gap), self.offset);
-        assert_eq!(accepted, Ok(true));
+        assert_eq!(accepted, Ok(()));
         let after = snap(&self.tracker);
         if !before.held.is_empty() {
             self.hit("a gap changes nothing");
@@ -556,14 +555,12 @@ impl Run<'_> {
                 ..VoiceBaseline::default()
             })
             .collect();
-        let id = self.baselines.entry(source).or_default();
-        *id += 1;
         let cut = self.sequence.get(&source).copied().unwrap_or(0);
-        let frame = SourceBaseline::new(source, *id, time, cut, shown, &rows_in).unwrap();
+        let frame = SourceBaseline::new(source, time, cut, shown, &rows_in).unwrap();
         let was_shown = !self.tracker.hides(source);
         let accepted =
             self.tracker.handle_canonical_mapped(CanonicalEvent::Baseline(&frame), self.offset);
-        assert_eq!(accepted, Ok(true));
+        assert_eq!(accepted, Ok(()));
         self.after_baseline(before, source, (was_shown, shown), at, &rows_in);
     }
 
@@ -683,7 +680,6 @@ fn every_press_follows_the_rules() {
             clock: 1.0,
             offset: 0.0,
             sequence: BTreeMap::new(),
-            baselines: BTreeMap::new(),
             lifetimes: 0,
             played: Vec::new(),
             cleared: BTreeSet::new(),

@@ -617,12 +617,9 @@ impl NoteTracker {
         Self::default()
     }
 
-    /// Consume one canonical item. False identifies a duplicate, not a new
-    /// musical event. This non-RT consumer cannot acknowledge source journals.
-    pub fn handle_canonical(
-        &mut self,
-        event: CanonicalEvent<'_>,
-    ) -> Result<bool, InvalidCanonical> {
+    /// Consume one canonical item. This non-RT consumer cannot acknowledge
+    /// source journals.
+    pub fn handle_canonical(&mut self, event: CanonicalEvent<'_>) -> Result<(), InvalidCanonical> {
         self.handle_canonical_mapped(event, 0.0)
     }
 
@@ -632,7 +629,7 @@ impl NoteTracker {
         &mut self,
         event: CanonicalEvent<'_>,
         offset: Time,
-    ) -> Result<bool, InvalidCanonical> {
+    ) -> Result<(), InvalidCanonical> {
         if !offset.is_finite() {
             return Err(InvalidCanonical);
         }
@@ -641,9 +638,8 @@ impl NoteTracker {
                 delta.validate()?;
                 delta.event.time += offset;
                 delta.validate()?;
-                if !self.canonical.note(delta.event.source, delta.sequence)? {
-                    return Ok(false);
-                }
+                let ordered = self.canonical.note(delta.event.source, delta.sequence);
+                debug_assert!(ordered, "a delta out of its source's order: {delta:?}");
                 let key = delta.event.key();
                 if !matches!(
                     delta.event.kind,
@@ -656,7 +652,7 @@ impl NoteTracker {
                         .held_on(key)
                         .is_some_and(|note| note.lifetime != Some(delta.lifetime))
                 {
-                    return Ok(true);
+                    return Ok(());
                 }
                 self.handle_event(delta.display_event());
                 if matches!(delta.event.kind, NoteEventKind::On { .. }) {
@@ -673,13 +669,13 @@ impl NoteTracker {
             // (#1798 F1).
             CanonicalEvent::Gap(gap) => gap.validate()?,
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Validate the entire held set before mutation. Matching lifetimes keep
     /// their onset and bend history. Missing observations
     /// are closed as history gaps, never fictional downstream releases.
-    pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<bool, InvalidCanonical> {
+    pub fn replace_source(&mut self, frame: &SourceBaseline) -> Result<(), InvalidCanonical> {
         self.replace_source_mapped(frame, 0.0)
     }
 
@@ -687,17 +683,16 @@ impl NoteTracker {
         &mut self,
         frame: &SourceBaseline,
         offset: Time,
-    ) -> Result<bool, InvalidCanonical> {
+    ) -> Result<(), InvalidCanonical> {
         frame.validate()?;
         let mut mapped = *frame;
         mapped.translate(offset);
         mapped.validate()?;
-        if !self.canonical.baseline(frame.source, frame.id, frame.output_cut)? {
-            return Ok(false);
-        }
+        let ordered = self.canonical.baseline(frame.source, frame.output_cut);
+        debug_assert!(ordered, "a snapshot cut below a delta it should cover: {frame:?}");
         self.roll.set_shown(frame.source, frame.shown);
         self.roll.replace_source(frame.source, frame.voices(), mapped.time, offset);
-        Ok(true)
+        Ok(())
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
@@ -978,9 +973,9 @@ mod tests {
         // note is still down — its baseline still lists the note, so the
         // voice stays HELD and merely drops off the screen.
         let mut tracker = NoteTracker::new();
-        let struck = SourceBaseline::new(SourceId::DIRECT, 1, 0.0, 0, true, &[row]).unwrap();
+        let struck = SourceBaseline::new(SourceId::DIRECT, 0.0, 0, true, &[row]).unwrap();
         tracker.replace_source(&struck).unwrap();
-        let hide = SourceBaseline::new(SourceId::DIRECT, 2, 1.0, 0, false, &[row]).unwrap();
+        let hide = SourceBaseline::new(SourceId::DIRECT, 1.0, 0, false, &[row]).unwrap();
         tracker.replace_source(&hide).unwrap();
         assert_eq!(tracker.voices().count(), 0, "a held voice cuts the instant its source hides");
         tracker.handle_event(off(2.0, 60));
@@ -988,7 +983,7 @@ mod tests {
         // The source rejoins with two thirds of the fade still to run. The
         // fixture has to actually reach a release, or every assertion below
         // passes on a voice that was dropped at the hide.
-        let rejoin = SourceBaseline::new(SourceId::DIRECT, 3, 2.3, 0, true, &[]).unwrap();
+        let rejoin = SourceBaseline::new(SourceId::DIRECT, 2.3, 0, true, &[]).unwrap();
         tracker.replace_source(&rejoin).unwrap();
         assert_eq!(tracker.roll().notes().count(), 1, "released onto the timeline, not dropped");
         assert_eq!(tracker.voices().count(), 0, "a fade begun hidden is not handed back");
@@ -999,7 +994,7 @@ mod tests {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(2.0, 60));
-        let hide = SourceBaseline::new(SourceId::DIRECT, 1, 2.3, 0, false, &[]).unwrap();
+        let hide = SourceBaseline::new(SourceId::DIRECT, 2.3, 0, false, &[]).unwrap();
         tracker.replace_source(&hide).unwrap();
         assert_eq!(tracker.voices().count(), 1, "a fade begun visible finishes on screen");
         assert!(tracker.voices().next().unwrap().activation(2.3, &env) > 0.0, "and is still lit");
@@ -1387,34 +1382,34 @@ mod tests {
     fn a_publication_gap_leaves_the_held_set_to_the_next_baseline() {
         let source = SourceId(1);
         let (kept, lost) = (published_voice(60, 61), published_voice(64, 62));
-        let baseline = |id, time, rows: &[VoiceBaseline]| {
-            SourceBaseline::new(source, id, time, 0, true, rows).unwrap()
+        let baseline = |time, rows: &[VoiceBaseline]| {
+            SourceBaseline::new(source, time, 0, true, rows).unwrap()
         };
         let mut tracker = NoteTracker::new();
-        tracker.replace_source(&baseline(1, 1.0, &[kept, lost])).unwrap();
+        tracker.replace_source(&baseline(1.0, &[kept, lost])).unwrap();
         for gap in [gap(2.0, Some(source)), gap(2.5, None)] {
-            assert_eq!(tracker.handle_canonical(gap), Ok(true));
+            assert_eq!(tracker.handle_canonical(gap), Ok(()));
         }
         assert_eq!(tracker.held_count(), 2, "a gap releases nothing");
-        tracker.replace_source(&baseline(2, 3.0, &[kept])).unwrap();
+        tracker.replace_source(&baseline(3.0, &[kept])).unwrap();
         let held: Vec<_> = tracker.held_voices().map(|v| (v.note, v.on_time)).collect();
         assert_eq!(held, [(60, kept.actual_onset)], "the baseline ends the note it omits");
         assert_eq!(tracker.roll().notes().count(), 2, "and keeps the one it lists as one note");
     }
 
     /// A baseline states a voice's expressions along with its pitch: a note it
-    /// opens starts at them, and a note it resumes after an outage takes the
-    /// value it came back with as a step, rather than snapping to neutral.
+    /// opens starts at them, and a note it restates takes the value it states
+    /// as a step, rather than snapping to neutral.
     #[test]
     fn a_baseline_carries_its_voices_expressions() {
         let source = SourceId(1);
         let mut row = published_voice(60, 61);
         row.expressions.pressure = 0.5;
         let mut tracker = NoteTracker::new();
-        let baseline = |id, time, row| SourceBaseline::new(source, id, time, 0, true, &[row]);
-        assert_eq!(tracker.replace_source(&baseline(1, 2.0, row).unwrap()), Ok(true));
+        let baseline = |time, row| SourceBaseline::new(source, time, 0, true, &[row]);
+        assert_eq!(tracker.replace_source(&baseline(2.0, row).unwrap()), Ok(()));
         row.expressions.pressure = 0.8;
-        assert_eq!(tracker.replace_source(&baseline(2, 3.2, row).unwrap()), Ok(true));
+        assert_eq!(tracker.replace_source(&baseline(3.2, row).unwrap()), Ok(()));
 
         assert_eq!(tracker.held_voices().next().unwrap().expressions.pressure, 0.8);
         let note = tracker.roll().notes().next().unwrap();

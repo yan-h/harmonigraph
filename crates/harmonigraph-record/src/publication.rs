@@ -30,9 +30,7 @@ const GAP_RESERVE: usize = 1;
 ///
 /// The take's file and the editor's display each own a [`channel`] of their
 /// own, so one can fill without the other noticing. Snapshots are therefore
-/// published one lane at a time: each lane's consumer deduplicates on
-/// [`SourceBaseline::id`], so each lane needs an identity that advances when
-/// IT accepted a frame rather than when both did.
+/// published one lane at a time, each on its own free cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lane {
     Take,
@@ -49,7 +47,7 @@ impl Lane {
 /// publication path is a value derived from both lanes.** A `usize` of free
 /// cells or a `Result` for "the publication" is what let a full display ring
 /// gate a snapshot the take was waiting for, and what let one lane's refusal
-/// hold back the other lane's baseline identity (#712). Neither is
+/// hold back the other lane's snapshot (#712). Neither is
 /// expressible here without writing the fold by hand, which is what makes the
 /// separation structural instead of a habit each new caller has to keep.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -351,8 +349,8 @@ mod tests {
         }
     }
 
-    fn frame(id: u64, time: f64, voices: &[VoiceBaseline]) -> SourceBaseline {
-        SourceBaseline::new(SourceId::DIRECT, id, time, 0, true, voices).unwrap()
+    fn frame(time: f64, voices: &[VoiceBaseline]) -> SourceBaseline {
+        SourceBaseline::new(SourceId::DIRECT, time, 0, true, voices).unwrap()
     }
 
     /// Publish releases until no ordinary cell is left.
@@ -437,7 +435,7 @@ mod tests {
 
         // The refresh restores what is sounding NOW and nothing else: key 60
         // was released while the lane was full and does not come back.
-        publisher.baseline(&frame(1, 9001.0, &[held(72, 0.0, 7_200_000_000)])).unwrap();
+        publisher.baseline(&frame(9001.0, &[held(72, 0.0, 7_200_000_000)])).unwrap();
         consumer.drain(|event| {
             tracker.handle_canonical(event).unwrap();
             true
@@ -454,11 +452,12 @@ mod tests {
         let (mut publisher, mut consumer) = channel();
         let voices: Vec<_> =
             (0..64).map(|note| held(note, 0.0, i64::from(note) * 100_000_000)).collect();
-        for id in 1..=SNAPSHOT_SLOTS as u64 {
-            publisher.baseline(&frame(id, 1.0, &voices)).unwrap();
+        // Each frame told apart by its time.
+        for slot in 1..=SNAPSHOT_SLOTS {
+            publisher.baseline(&frame(slot as f64, &voices)).unwrap();
         }
         assert_eq!(
-            publisher.baseline(&frame(99, 1.0, &voices)),
+            publisher.baseline(&frame(99.0, &voices)),
             Err(PublishError::Busy),
             "a full snapshot FIFO refuses rather than reporting lost history"
         );
@@ -466,11 +465,11 @@ mod tests {
         let mut seen = Vec::new();
         consumer.drain(|event| {
             let CanonicalEvent::Baseline(frame) = event else { panic!() };
-            seen.push(frame.id);
+            seen.push(frame.time);
             true
         });
-        assert_eq!(seen, (1..=SNAPSHOT_SLOTS as u64).collect::<Vec<_>>());
-        publisher.baseline(&frame(99, 2.0, &voices)).unwrap();
+        assert_eq!(seen, (1..=SNAPSHOT_SLOTS).map(|slot| slot as f64).collect::<Vec<_>>());
+        publisher.baseline(&frame(99.0, &voices)).unwrap();
         eprintln!(
             "canonical layouts: NoteDelta={} Item={} VoiceBaseline={} SourceBaseline={} ring_payload={} snapshot_fifo={}",
             std::mem::size_of::<NoteDelta>(),

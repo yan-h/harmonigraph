@@ -953,12 +953,11 @@ fn production_musical_nonjust_axes_select_locally_and_preserve_attack_expression
 }
 
 /// The other half of the lane contract. A lane that refuses a snapshot must
-/// not hold back the lane that would take it, and must not spend the identity
-/// it refused: a retry under an id the other lane has already seen is dropped
-/// as a duplicate, silently. The fixture stops draining the display and keeps
-/// draining the take, so the refusal is on the display and the take is whole.
+/// not hold back the lane that would take it. The fixture stops draining the
+/// display and keeps draining the take, so the refusal is on the display and
+/// the take is whole.
 #[test]
-fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
+fn a_snapshot_one_lane_refused_still_reaches_the_other_lane() {
     use harmonigraph_take::CanonicalRecord;
     let _scope = crate::test_scope::enter();
     let (recorder, mut capture) = harmonigraph_record::testing::channel();
@@ -983,33 +982,24 @@ fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
         }
     }
     writer.drain(&mut capture);
-    let of_source = |records: &[CanonicalRecord], source: u64| -> Vec<u64> {
+    let of_source = |records: &[CanonicalRecord], source: u64| {
         records
             .iter()
-            .filter_map(|record| match record {
-                CanonicalRecord::Baseline(frame) => frame.baseline().ok(),
-                _ => None,
-            })
-            .filter(|frame| frame.source.0 == source)
-            .map(|frame| frame.id)
-            .collect()
+            .filter(|record| matches!(record, CanonicalRecord::Baseline(f) if f.source == source))
+            .count()
     };
     let take = harmonigraph_take::Take::read(&path).unwrap();
     let written = of_source(&take.events, 1);
     let displayed = of_source(&capture.display_events(), 1);
     assert!(
-        displayed.len() < RESETS,
+        displayed < RESETS,
         "the fixture must actually reach a refusal on the display: {} of {RESETS}",
-        displayed.len()
+        displayed
     );
     assert!(
-        written.len() >= RESETS,
+        written >= RESETS,
         "every refresh the row owed reached the take: {} of {RESETS}",
-        written.len()
-    );
-    assert!(
-        written.windows(2).all(|pair| pair[1] > pair[0]),
-        "each one under a fresh identity, so none is deduplicated away"
+        written
     );
     phrase.release_all();
     drop(writer);

@@ -1148,6 +1148,50 @@ fn a_tune_run_after_the_hub_has_its_last_notes_in_a_stopped_take() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Lowering a Tune's delay while a take records leaves the snapshot after its
+/// cut timed at the old delay and the deltas after it at the new one, so
+/// sorted by time they come before the snapshot that should follow them. The
+/// reader refuses that take rather than export it out of order.
+#[test]
+fn lowering_a_tunes_delay_while_recording_makes_a_take_the_reader_refuses() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    let mut tune = Device::new(true);
+    tune.shared().request_delay(4);
+    hub.activate();
+    tune.activate();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-delay-down-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    capture.arm();
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    let mut position = 1.0;
+    let mut cycle = |hub: &Device, tune: &Device, raw: i64, played: Vec<Input>| {
+        tune.run_format(raw, played, None, None, 512);
+        hub.run_callback(raw, vec![], (None, None), (512, false), Some(timeline(position, true)));
+        position += 512.0 / 48_000.0;
+    };
+    // Sounds at 512 + 4 x 512, where the snapshot after the cut is timed.
+    cycle(&hub, &tune, 512, vec![note(1, 0, 60, 0, true)]);
+    tune.shared().request_delay(1);
+    tune.reactivate_format(48000.0, 512);
+    // Sounds at 1024 + 512, before that snapshot.
+    cycle(&hub, &tune, 1024, vec![note(2, 0, 64, 0, true)]);
+    for raw in [1536, 2048, 2560, 3072] {
+        cycle(&hub, &tune, raw, vec![]);
+    }
+    capture.stop();
+    writer.stop();
+    cycle(&hub, &tune, 3584, vec![]);
+    writer.drain(&mut capture);
+    let sealed = writer.finished.clone().expect("the stopped take seals");
+    let read = harmonigraph_take::Take::read(&sealed);
+    assert!(
+        matches!(read, Err(harmonigraph_take::ReadError::OutOfOrder(_))),
+        "the take must be refused for its order: {read:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Armed with the transport stopped, a note played, and disarmed: nothing
 /// recorded, so the take draws nothing, though the note was played armed.
 #[test]

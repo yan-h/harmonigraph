@@ -703,7 +703,6 @@ mod tests {
         use harmonigraph_core::canonical::{SourceBaseline, VoiceBaseline};
         let baseline = SourceBaseline::new(
             SourceId::DIRECT,
-            1,
             3.0,
             1,
             true,
@@ -760,7 +759,6 @@ mod tests {
         // its line at the baseline's own time.
         let restated = SourceBaseline::new(
             SourceId(3),
-            1,
             3.5,
             3,
             true,
