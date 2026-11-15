@@ -393,24 +393,6 @@ fn in_a_window_narrowed_past_the_floor_the_dividers_keep_pace_with_the_pointer()
     }
 }
 
-/// A switch of analyzer tab edits no saved width (see `Layout::repaid`), and
-/// that holds in a window narrow enough for the floor to be drawn.
-#[test]
-fn in_a_window_narrowed_past_the_floor_a_tab_switch_edits_no_saved_width() {
-    let (mut h, mut state) = narrowed_past_the_floor(Position::Right);
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    // The region fold started from the drawn layout and saved the floor, so
-    // narrow again for the switch to start from a column the floor overrides.
-    h.screen.max.x -= 60.0;
-    h.settle(&mut state);
-    let saved = state.workspace.layout.right;
-    assert!(saved.settings < theme::min_settings(1.0) - 10.0, "fixture saved {saved:?}");
-    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
-    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
-    assert_eq!(state.workspace.layout.right, saved);
-}
-
 /// Folding one picture in a window narrowed past the floor leaves the other
 /// drawn at the size it had, as it does in a roomy window.
 #[test]
@@ -430,13 +412,12 @@ fn in_a_window_narrowed_past_the_floor_a_fold_keeps_the_other_pictures_size() {
 
 #[test]
 fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
-    let mut state = split_state();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut state = fresh();
     let mut h = DockHarness::new();
     h.settle(&mut state);
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    region_click(&mut h, &mut state, 1);
+    h.collapse_click(&mut state, panes::Tab::Tuning);
+    let rail = state.workspace.layout_runtime.rects[Section::Settings as usize];
+    click_at(&mut h, &mut state, rail.center());
     let requested = state.workspace.take_window_size_change().expect("unfold requests a resize");
     assert!(requested.x > 30.0, "fixture must request a wider window");
     // The host refuses that request, so the drawing fits while the saved
@@ -460,31 +441,6 @@ fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
     let mut reopened = fresh();
     assert!(reopened.install_document(&saved_blob));
     assert!((reopened.workspace.layout.right.settings - saved.settings).abs() < 0.1);
-}
-
-/// The drawing carries a lent width at the window's fit ratio while the saved
-/// layout keeps it in saved units, so a window that is not exactly the size
-/// the lend asked for must still leave the dividers draggable.
-#[test]
-fn dividers_drag_while_another_analyzer_tab_borrows_folded_width() {
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-    let mut h = DockHarness::new();
-    h.settle(&mut state);
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    click_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
-    // The host refuses the width the lend asks for.
-    assert!(state.workspace.take_window_size_change().is_some(), "fixture must lend width");
-    h.settle(&mut state);
-    let saved = state.workspace.layout.right.lattice;
-    let [lattice, analyzer, _] = state.workspace.layout_runtime.rects;
-    let origin = egui::pos2((lattice.right() + analyzer.left()) * 0.5, lattice.center().y);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
-    h.frame(&mut state, vec![press(origin, true)]);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(origin - egui::vec2(30.0, 0.0))]);
-    h.frame(&mut state, vec![press(origin - egui::vec2(30.0, 0.0), false)]);
-    assert!(state.workspace.layout.right.lattice < saved - 10.0, "divider did not move");
 }
 
 #[test]
@@ -637,15 +593,13 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
             let window = h.screen.width();
             for index in [first, 1 - first] {
                 region_click(&mut h, &mut state, index);
-                assert!(
-                    !state.workspace.interaction.analyzer_regions.collapsed[index],
-                    "click frame retains its old picture"
-                );
-                h.settle_folds(&mut state);
+                assert_eq!(state.workspace.take_window_size_change(), None, "a region fold asked");
+                h.settle(&mut state);
                 assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
-                assert!(h.screen.width() < window - 10.0);
-                for (tab, width) in
-                    [(panes::Tab::Lattice, before[0]), (panes::Tab::Tuning, before[2])]
+                // The fold keeps its space inside the Analyzer: no section moves.
+                for (tab, width) in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning]
+                    .into_iter()
+                    .zip(before)
                 {
                     assert!(
                         (pane_body(&state, &tab).unwrap().width() - width).abs() < 1.0,
@@ -659,7 +613,7 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
             assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [true; 2]);
             for index in [first, 1 - first] {
                 region_click(&mut h, &mut state, index);
-                h.settle_folds(&mut state);
+                h.settle(&mut state);
             }
             assert!((h.screen.width() - window).abs() < 1.0);
             for (tab, width) in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning]
@@ -679,31 +633,6 @@ fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
             );
         }
     }
-}
-
-#[test]
-fn analyzer_region_restore_survives_a_saved_project() {
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-    let mut h = DockHarness::new();
-    h.settle(&mut state);
-    let width = h.screen.width();
-    let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap().width();
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    let saved = state.save_persist();
-    let mut reopened = fresh();
-    assert!(reopened.install_document(&saved));
-    h.settle(&mut reopened);
-    assert!(
-        (pane_body(&reopened, &panes::Tab::Lattice).unwrap().width() - lattice).abs() < 1.0,
-        "saved layout retains neighboring widths"
-    );
-    assert_eq!(reopened.workspace.take_window_size_change(), None);
-    assert_eq!(reopened.workspace.interaction.analyzer_regions.collapsed, [false, true]);
-    region_click(&mut h, &mut reopened, 1);
-    h.settle_folds(&mut reopened);
-    assert!((h.screen.width() - width).abs() < 1.0, "saved internal fold lost its restore ceiling");
 }
 
 #[test]
@@ -727,34 +656,6 @@ fn analyzer_region_restore_respects_a_split_edited_while_folded() {
 }
 
 #[test]
-fn analyzer_region_folds_remain_usable_when_the_host_constrains_the_window() {
-    for floor in [0.0, 950.0] {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.workspace.min_window_size.x = floor;
-        let mut h = DockHarness::new();
-        h.settle(&mut state);
-        for index in [0, 1, 0, 1] {
-            region_click(&mut h, &mut state, index);
-            if floor == 0.0 {
-                // A host that rejects the request entirely.
-                state.workspace.take_window_size_change();
-                h.settle(&mut state);
-            } else {
-                h.settle_folds(&mut state);
-            }
-            assert_eq!(
-                state.workspace.take_window_size_change(),
-                None,
-                "no repeated resize requests"
-            );
-        }
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
-        assert!((h.screen.width() - 1000.0).abs() < 1.0);
-    }
-}
-
-#[test]
 fn analyzer_local_region_folds_restore_the_original_split() {
     for orientation in [
         SpectralOrientation::Top,
@@ -765,11 +666,6 @@ fn analyzer_local_region_folds_restore_the_original_split() {
         for sequence in [&[0, 0][..], &[1, 1], &[0, 1, 0, 1], &[1, 0, 1, 0]] {
             let mut state = fresh();
             state.picture.appearance.spectrum.orientation = orientation;
-            if !orientation.is_time_vertical() {
-                // A stacked Analyzer also folds locally, without resizing the
-                // window. Exercise the same geometry in both depth axes.
-                state.workspace.layout.position = Position::Below;
-            }
             let mut h = DockHarness::new();
             h.settle(&mut state);
             let lattice = pane_body(&state, &panes::Tab::Lattice).unwrap();
@@ -789,159 +685,6 @@ fn analyzer_local_region_folds_restore_the_original_split() {
             );
         }
     }
-}
-
-#[test]
-fn analyzer_region_restore_repays_its_width_after_orientation_changes() {
-    for index in [0, 1] {
-        for roundtrip in [false, true] {
-            let mut state = fresh();
-            state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-            let mut h = DockHarness::new();
-            h.settle(&mut state);
-            let before = pane_body(&state, &panes::Tab::Spectral).unwrap();
-            let id = egui::Id::new(("spectral-split", 0usize));
-            let split = h.ctx.read_response(id).unwrap().rect.center();
-            region_click(&mut h, &mut state, index);
-            h.settle_folds(&mut state);
-            state.picture.appearance.spectrum.orientation = SpectralOrientation::Top;
-            h.settle(&mut state);
-            // Debt and restoration geometry must survive a save even while
-            // the picture is using a different axis from the original fold.
-            let saved = state.save_persist();
-            state = fresh();
-            assert!(state.install_document(&saved));
-            h.settle(&mut state);
-            if roundtrip {
-                state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-                h.settle(&mut state);
-            }
-            region_click(&mut h, &mut state, index);
-            h.settle_folds(&mut state);
-            assert!((h.screen.width() - 1000.0).abs() < 1.0);
-            let after = pane_body(&state, &panes::Tab::Spectral).unwrap();
-            assert!(
-                (after.width() - before.width()).abs() <= 1.0,
-                "region {index}, roundtrip {roundtrip}: {before:?} -> {after:?}, window {}",
-                h.screen.width()
-            );
-            if roundtrip {
-                assert!(h.ctx.read_response(id).unwrap().rect.center().distance(split) < 1.0);
-            }
-        }
-    }
-}
-
-#[test]
-fn resetting_the_layout_restores_space_held_by_analyzer_regions() {
-    // What a reset window measures when nothing was folded: the default
-    // layout's own width, read off a frame rather than restated here.
-    let unfolded = {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-        let mut h = DockHarness::new();
-        h.settle(&mut state);
-        state.workspace.reset_layout();
-        h.frame(&mut state, vec![]);
-        h.settle_folds(&mut state);
-        h.screen.width()
-    };
-    for fold_lattice_first in [None, Some(true), Some(false)] {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-        let mut h = DockHarness::new();
-        h.settle(&mut state);
-        if fold_lattice_first == Some(true) {
-            h.collapse_click(&mut state, panes::Tab::Lattice);
-        }
-        region_click(&mut h, &mut state, 1);
-        h.settle_folds(&mut state);
-        if fold_lattice_first == Some(false) {
-            h.collapse_click(&mut state, panes::Tab::Lattice);
-        }
-        assert!(h.screen.width() < unfolded - 1.0, "the folds held no space to restore");
-        let saved = state.save_persist();
-        state = fresh();
-        assert!(state.install_document(&saved));
-        h.settle(&mut state);
-        state.workspace.reset_layout();
-        h.frame(&mut state, vec![]);
-        h.settle_folds(&mut state);
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
-        assert!(
-            (h.screen.width() - unfolded).abs() < 1.0,
-            "order {fold_lattice_first:?}: {}, not the unfolded {unfolded}",
-            h.screen.width()
-        );
-    }
-}
-
-#[test]
-fn internal_fold_width_belongs_to_the_arrangement_that_removed_it() {
-    for closed_in in [Position::Right, Position::Below] {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-        let mut h = DockHarness::new();
-        h.settle(&mut state);
-        let original = h.screen.size();
-        let right = state.workspace.layout_runtime.rects;
-        if closed_in == Position::Below {
-            dock(&mut h, &mut state, Position::Below);
-        }
-        region_click(&mut h, &mut state, 1);
-        h.settle_folds(&mut state);
-        dock(
-            &mut h,
-            &mut state,
-            if closed_in == Position::Right { Position::Below } else { Position::Right },
-        );
-        region_click(&mut h, &mut state, 1);
-        h.settle_folds(&mut state);
-        if closed_in == Position::Right {
-            dock(&mut h, &mut state, Position::Right);
-        }
-        near(h.screen.size(), original);
-        for (now, before) in state.workspace.layout_runtime.rects.iter().zip(right) {
-            near(now.size(), before.size());
-        }
-        assert_eq!(state.workspace.layout.region_widths, [0.0; 2]);
-    }
-}
-
-#[test]
-fn a_discarded_pass_does_not_charge_an_internal_fold_twice() {
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-    let mut h = DockHarness::new();
-    h.settle(&mut state);
-    let original = h.screen.size();
-    let rect = state.workspace.layout_runtime.rects[1];
-    let at =
-        h.ctx.read_response(egui::Id::new(("analyzer region fold", 1usize))).unwrap().rect.center();
-    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
-    h.frame(&mut state, vec![press(at, true)]);
-    let output = h.ctx.run_ui(
-        egui::RawInput {
-            screen_rect: Some(h.screen),
-            time: Some(h.next_time()),
-            events: vec![press(at, false)],
-            ..Default::default()
-        },
-        |ui| {
-            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
-            if ui.ctx().current_pass_index() == 0 {
-                ui.ctx().request_discard("exercise internal fold repeat");
-            }
-        },
-    );
-    assert!(output.platform_output.num_completed_passes > 1);
-    assert_eq!(state.workspace.layout_runtime.rects[1], rect);
-    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false; 2]);
-    h.settle_folds(&mut state);
-    assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false, true]);
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    near(h.screen.size(), original);
 }
 
 #[test]
@@ -980,15 +723,14 @@ fn section_and_region_chevrons_show_hover_feedback() {
 }
 
 #[test]
-fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
+fn a_narrow_analyzer_keeps_one_header_row_and_its_spiral_choice() {
     for scale in [1.0, 1.5] {
         let mut state = fresh();
+        state.workspace.layout.right =
+            workspace::Sizes { lattice: 650.0, analyzer: 60.0, cross: 800.0, settings: 287.0 };
+        state.workspace.layout.sized = true;
         let mut h = DockHarness::scaled(egui::vec2(1000.0, 800.0) * scale, scale, &mut state);
         h.settle(&mut state);
-        region_click(&mut h, &mut state, 0);
-        h.settle_folds(&mut state);
-        region_click(&mut h, &mut state, 1);
-        h.settle_folds(&mut state);
         let out = h.frame(&mut state, vec![]);
         let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
         let body = pane_body(&state, &panes::Tab::Spectral).unwrap();
@@ -1017,130 +759,8 @@ fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
     }
 }
 
-/// Choose an analyzer tab by its header label, through the strip's dropdown
-/// when the section is too narrow to list it.
-fn click_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::Tab) {
-    let label = |out: &egui::FullOutput, state: &SharedState, name: &str| {
-        let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
-        out.shapes.iter().find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t)
-                if t.galley.text() == name
-                    && t.pos.x >= section.left()
-                    && t.pos.x < section.right() =>
-            {
-                Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
-            }
-            _ => None,
-        })
-    };
-    let name = panes::tab_title(&tab);
-    let out = h.frame(state, vec![]);
-    let at = match label(&out, state, name) {
-        Some(at) => at,
-        None => {
-            let current = panes::tab_title(&state.workspace.layout.analyzer_tab);
-            let picker = label(&out, state, current).expect("current view dropdown");
-            click_at(h, state, picker);
-            let menu = h.frame(state, vec![]);
-            label(&menu, state, name).expect("tab in dropdown")
-        }
-    };
-    click_at(h, state, at);
-    assert_eq!(state.workspace.layout.analyzer_tab, tab);
-}
-
-/// [`click_analyzer_tab`], with the window it asks for granted.
-fn pick_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::Tab) {
-    click_analyzer_tab(h, state, tab);
-    h.settle_folds(state);
-}
-
-/// Only the Spectral tab can unfold its regions, so another analyzer tab is
-/// drawn with their width lent back, and Spectral takes it again on return
-/// without any saved width having moved (#1124).
-#[test]
-fn another_analyzer_tab_borrows_back_the_width_of_folded_regions() {
-    for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.orientation = orientation;
-        let mut h = DockHarness::new();
-        h.settle(&mut state);
-        let window = h.screen.size();
-        let open = state.workspace.layout_runtime.rects;
-        region_click(&mut h, &mut state, 1);
-        h.settle_folds(&mut state);
-        assert!(h.screen.width() < window.x - 10.0, "{orientation:?}: the fold took no width");
-        let folded = state.workspace.layout_runtime.rects;
-        let folded_window = h.screen.size();
-        let saved = (state.workspace.layout.right, state.workspace.layout.region_widths);
-
-        pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
-        near(h.screen.size(), window);
-        for (now, was) in state.workspace.layout_runtime.rects.iter().zip(open) {
-            near(now.size(), was.size());
-        }
-        let spiral = pane_body(&state, &panes::Tab::Spiral).expect("Spiral is showing");
-        assert!((spiral.width() - open[Section::Analyzer as usize].width()).abs() < 0.1);
-        assert_eq!((state.workspace.layout.right, state.workspace.layout.region_widths), saved);
-
-        pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
-        near(h.screen.size(), folded_window);
-        for (now, was) in state.workspace.layout_runtime.rects.iter().zip(folded) {
-            near(now.min.to_vec2(), was.min.to_vec2());
-            near(now.size(), was.size());
-        }
-        assert_eq!((state.workspace.layout.right, state.workspace.layout.region_widths), saved);
-        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false, true]);
-    }
-}
-
-/// A window shrunk below the lent width while Spiral shows shrinks the lend
-/// with it rather than squeezing the saved sizes to nothing, so Spectral comes
-/// back with the same proportions.
-#[test]
-fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
-    let floor = 400.0;
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
-    state.workspace.min_window_size.x = floor;
-    state.workspace.layout.right =
-        workspace::Sizes { lattice: 300.0, analyzer: 900.0, cross: 800.0, settings: 280.0 };
-    state.workspace.layout.sized = true;
-    let mut h = DockHarness::at(egui::vec2(1486.0, 800.0));
-    h.settle(&mut state);
-    // What the dock spends between its sections, measured before anything
-    // folds rather than quoted, so the fill below is the same fill.
-    let widths = |state: &SharedState| -> f32 {
-        state.workspace.layout_runtime.rects.iter().map(|rect| rect.width()).sum()
-    };
-    let gutters = h.screen.width() - widths(&state);
-    region_click(&mut h, &mut state, 1);
-    h.settle_folds(&mut state);
-    let lent: f32 = state.workspace.layout.region_widths.iter().sum();
-    assert!(lent > floor, "the fold ({lent}) must outgrow the whole narrowed window");
-    let folded = state.workspace.layout.right;
-    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
-
-    h.screen.max.x = h.screen.min.x + floor;
-    h.settle(&mut state);
-    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
-
-    let saved = state.workspace.layout.right;
-    for (now, was) in [
-        (saved.lattice, folded.lattice),
-        (saved.analyzer, folded.analyzer),
-        (saved.settings, folded.settings),
-    ] {
-        assert!(now > 20.0, "a saved width collapsed: {saved:?}");
-        assert!((now / saved.lattice - was / folded.lattice).abs() < 0.01, "{saved:?}");
-    }
-    let rects = state.workspace.layout_runtime.rects;
-    assert!(rects.iter().all(|rect| rect.width() > 20.0), "{rects:?}");
-    assert!((widths(&state) + gutters - h.screen.width()).abs() < 1.0, "{rects:?}");
-}
-
 /// Where a region's outer edge survives its fold, Expand appears exactly where
-/// Collapse was. The other region's rail rides the shrinking window edge.
+/// Collapse was.
 #[test]
 fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
     for (orientation, index) in [(SpectralOrientation::Right, 1), (SpectralOrientation::Left, 0)] {
@@ -1148,7 +768,6 @@ fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
         state.picture.appearance.spectrum.orientation = orientation;
         let mut h = DockHarness::new();
         h.settle(&mut state);
-        let window = h.screen.width();
         let id = egui::Id::new(("analyzer region fold", index));
         let button = |h: &mut DockHarness, state: &mut SharedState| {
             let cell = h.ctx.read_response(id).expect("region control is drawn").rect;
@@ -1170,9 +789,8 @@ fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
         };
         let collapse = button(&mut h, &mut state);
         region_click(&mut h, &mut state, index);
-        h.settle_folds(&mut state);
+        h.settle(&mut state);
         assert!(state.workspace.interaction.analyzer_regions.collapsed[index]);
-        assert!(h.screen.width() < window - 10.0, "the fold did not resize the window");
         let expand = button(&mut h, &mut state);
         near(expand.min.to_vec2(), collapse.min.to_vec2());
         near(expand.size(), collapse.size());

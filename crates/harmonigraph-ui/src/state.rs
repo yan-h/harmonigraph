@@ -360,9 +360,8 @@ pub struct Interaction {
     /// Which of the Analyzer's regions are folded, and the composition they
     /// fold back open to (see [`panes::spectral::collapse::Regions`]).
     ///
-    /// The layout's content rather than a preference: the width a folded
-    /// region gives up is held in `Layout::region_widths`, so the two are
-    /// saved, loaded and reset together.
+    /// The layout's content rather than a preference, so it is saved, loaded
+    /// and reset with the layout.
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see Camera in the Lattice page's View section).

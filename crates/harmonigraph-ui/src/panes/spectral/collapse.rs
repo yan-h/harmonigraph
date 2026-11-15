@@ -13,21 +13,12 @@ pub(crate) struct Regions {
     /// Last fully open composition. Temporary expansion into a folded region
     /// never changes this snapshot or the appearance dial.
     geometry: Option<Geometry>,
+    /// The folds a click asked for, applied once the click's pass has drawn
+    /// (see [`Self::apply`]).
     #[serde(skip)]
-    pub request: Option<Request>,
-    #[serde(skip)]
-    landing: Option<[bool; 2]>,
+    pub request: Option<[bool; 2]>,
     #[serde(skip)]
     restore: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Request {
-    pub collapsed: [bool; 2],
-    pub region: usize,
-    /// `Some` closes a region, removing this width in the Right arrangement;
-    /// `None` reopens it using the fold controller's recorded deduction.
-    pub width: Option<f32>,
 }
 
 #[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
@@ -61,18 +52,13 @@ impl Regions {
         self.restore = true;
     }
 
-    /// Visibility lands with the resize, never on the click's old geometry.
-    pub fn begin_frame(&mut self) {
-        if let Some(collapsed) = self.landing.take() {
-            self.collapsed = collapsed;
-            self.restore = !collapsed.iter().any(|&c| c);
-        }
-    }
-
-    pub fn land(&mut self) {
-        if let Some(request) = self.request.take() {
-            self.landing = Some(request.collapsed);
-        }
+    /// Take the folds a click asked for, once the click's frame has drawn its
+    /// old geometry, and say whether there were any.
+    pub fn apply(&mut self) -> bool {
+        let Some(collapsed) = self.request.take() else { return false };
+        self.collapsed = collapsed;
+        self.restore = !collapsed.iter().any(|&c| c);
+        true
     }
 
     /// The docked Analyzer: in Tape mode, the audition's controls along the
@@ -219,9 +205,7 @@ impl Regions {
             {
                 let mut collapsed = self.collapsed;
                 collapsed[index] = !closed;
-                let width = if vertical { 0.0 } else { (drawn_depths[index] - rail).max(0.0) };
-                self.request =
-                    Some(Request { collapsed, region: index, width: (!closed).then_some(width) });
+                self.request = Some(collapsed);
             }
         }
     }
