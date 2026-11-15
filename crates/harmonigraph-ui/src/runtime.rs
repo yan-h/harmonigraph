@@ -120,15 +120,7 @@ impl VisualRuntime {
         } else if let Some(recorded) = self.replayed_configuration {
             self.apply_resolved(recorded);
         } else {
-            self.config_reducer.sync_modes(self.tuning_modes(), self.adaptive_policy);
             self.apply_resolved(self.config_reducer.resolved());
-        }
-    }
-
-    fn tuning_modes(&self) -> harmonigraph_core::configuration::TuningModes {
-        harmonigraph_core::configuration::TuningModes {
-            tempered: self.tempered,
-            learning: self.learn_active,
         }
     }
 
@@ -139,19 +131,20 @@ impl VisualRuntime {
         self.learn_active = config.modes.learning;
     }
 
-    /// Install `raw` axes in a synchronous shell without rejudging its links,
-    /// as a project restore would: the standalone's demo starting tuning.
-    pub fn restore_tuning(&mut self, raw: Tuning) {
+    /// Install a configuration in this runtime's own reducer without rejudging
+    /// its links, as a project restore would: the standalone's demo tuning,
+    /// and a replay's frames before its take's first configuration record.
+    pub fn open(&mut self, config: harmonigraph_core::configuration::ResolvedConfig) {
         self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Restore {
-            raw,
-            modes: self.tuning_modes(),
-            policy: self.adaptive_policy,
+            raw: config.tuning,
+            modes: config.modes,
+            policy: config.policy,
         });
         self.apply_resolved(self.config_reducer.resolved());
     }
 
     /// Apply one tuning action atomically. The synchronous shell uses the same
-    /// reducer as the audio owner; observation only adopts the panes' mode flags.
+    /// reducer as the audio owner.
     pub fn edit_tuning(
         &mut self,
         params: &dyn ParamBackend,
@@ -164,7 +157,6 @@ impl VisualRuntime {
             }
             return;
         }
-        self.config_reducer.sync_modes(self.tuning_modes(), self.adaptive_policy);
         self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(edit));
         self.apply_resolved(self.config_reducer.resolved());
     }
@@ -189,7 +181,6 @@ impl VisualRuntime {
             return;
         }
         if !classes.is_empty() {
-            self.config_reducer.sync_modes(self.tuning_modes(), self.adaptive_policy);
             let learned = harmonigraph_core::learn_tuning(&classes);
             // No audio owner and so no Tune source: the lattice axes are the
             // only target, and every value is learned.

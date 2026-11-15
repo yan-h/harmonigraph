@@ -374,21 +374,6 @@ impl ConfigReducer {
     pub fn resolved(&self) -> ResolvedConfig {
         self.resolved
     }
-    /// Synchronous shells adopt the links, Learn and policy their panes
-    /// changed in place: a switch that flipped carries, the others stay.
-    pub fn sync_modes(&mut self, modes: TuningModes, policy: PolicyConfig) {
-        self.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered: std::array::from_fn(|i| {
-                let comma = Comma::ALL[i];
-                (self.modes.tempered.has(comma) != modes.tempered.has(comma))
-                    .then_some(modes.tempered.has(comma))
-            }),
-            learning: Some(modes.learning),
-            policy: Some(PolicyEdit::all(policy)),
-            ..Default::default()
-        }));
-    }
-
     /// A new revision whenever the resolved configuration changes musically.
     /// The counter is 64 bits, a few million years of one edit per sample.
     pub fn apply(&mut self, mutation: ConfigMutation) {
@@ -523,19 +508,6 @@ mod tests {
         assert_eq!(reducer.resolved().policy.keyboard, learned.policy.keyboard);
         assert_eq!(reducer.resolved().policy.pitch_flexibility, 37);
         assert_eq!(reducer.resolved().revision, learned.revision + 1);
-    }
-
-    /// The synchronous shell's adapter carries the switch the display flipped
-    /// and leaves the other where it was.
-    #[test]
-    fn sync_modes_carries_a_flipped_temper_switch() {
-        let mut reducer = ConfigReducer::default();
-        let resolved = reducer.resolved();
-        assert!(resolved.modes.tempered.syntonic && resolved.modes.tempered.septimal_kleisma);
-        let mut modes = resolved.modes;
-        modes.tempered.syntonic = false;
-        reducer.sync_modes(modes, resolved.policy);
-        assert_eq!(reducer.resolved().modes.tempered, modes.tempered);
     }
 
     fn enter(reducer: &mut ConfigReducer, index: usize, cents: f32) {

@@ -412,7 +412,10 @@ impl App {
         // mock notes light it up out of the box.
         let mut demo = harmonigraph_core::Tuning::just();
         demo.tolerance = harmonigraph_core::tuning::microcents(20.0);
-        state.picture.runtime.restore_tuning(demo);
+        state.picture.runtime.open(harmonigraph_core::configuration::ResolvedConfig {
+            tuning: demo,
+            ..harmonigraph_core::configuration::ConfigReducer::default().resolved()
+        });
         state.log("dev harness started; mock MIDI is playing");
         // An empty port list with no message would read as "no MIDI gear";
         // tell the difference when enumeration itself failed.
@@ -856,7 +859,11 @@ mod tests {
         app.state.picture.runtime.edit_tuning(&app.params, edit);
         recorder.params(&app.params, &mut app.state, 1.0);
         let edited = app.state.picture.runtime.tuning;
-        app.state.picture.runtime.learn_active = true;
+        let learn = harmonigraph_core::configuration::ConfigEdit {
+            learning: Some(true),
+            ..Default::default()
+        };
+        app.state.picture.runtime.edit_tuning(&app.params, learn);
         for note in [60, 64, 67] {
             app.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, note, 0.8));
         }

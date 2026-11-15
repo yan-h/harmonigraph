@@ -1,8 +1,10 @@
 //! The lattice pane's own input — wheel and zoom gestures onto the camera
-//! — and the learn mode that writes tuning params back from held notes.
+//! — and the learn mode that learns the tuning from held notes.
 
 use super::harness::*;
 use crate::*;
+use harmonigraph_core::configuration::ConfigEdit;
+use harmonigraph_core::Comma;
 
 /// Drive the real root_ui (dock, hover, everything) with a synthetic wheel
 /// event over the lattice pane and return the camera distance after it.
@@ -157,7 +159,7 @@ fn learn_step_learns_only_when_the_chord_changes() {
     let learns = |state: &SharedState| {
         state.picture.runtime.console.lines().filter(|line| line.starts_with("learn:")).count()
     };
-    state.picture.runtime.learn_active = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
     // Hold C and G (a 12-TET fifth: within learn range of just).
     for note in [60u8, 67] {
         state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
@@ -178,9 +180,9 @@ fn learn_step_learns_only_when_the_chord_changes() {
     assert_eq!(learns(&state), 1);
 
     // Disarming clears the memory so re-arming re-learns.
-    state.picture.runtime.learn_active = false;
+    edit(&mut state, ConfigEdit { learning: Some(false), ..Default::default() });
     state.picture.runtime.learn_step();
-    state.picture.runtime.learn_active = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
     state.picture.runtime.learn_step();
     assert_eq!(learns(&state), 2);
 }
@@ -211,7 +213,7 @@ fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
 #[test]
 fn learn_enables_meantone_from_a_12tet_triad() {
     let mut state = unlocked();
-    state.picture.runtime.learn_active = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
     // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
     // 400 = 4·700 − 2400 this triad IS a meantone.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0)]);
@@ -222,8 +224,8 @@ fn learn_enables_meantone_from_a_12tet_triad() {
 #[test]
 fn learn_disables_meantone_from_a_just_triad() {
     let mut state = fresh();
-    state.picture.runtime.learn_active = true;
-    state.picture.runtime.tempered.syntonic = true; // start engaged
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
+    temper(&mut state, Comma::Syntonic, true); // start engaged
 
     // C + a JUST major third (386.31¢) + G. The just third sits a full
     // syntonic comma below four fifths, so this is not a meantone.
@@ -236,27 +238,35 @@ fn learn_disables_meantone_from_a_just_triad() {
 #[test]
 fn learn_leaves_meantone_unchanged_without_a_third() {
     let mut state = fresh();
-    state.picture.runtime.learn_active = true;
-    state.picture.runtime.tempered.syntonic = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
+    temper(&mut state, Comma::Syntonic, true);
     // A bare fifth fixes no third, so the meantone flag is left alone.
     hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
     state.picture.runtime.learn_step();
     assert!(state.picture.runtime.tempered.syntonic, "a bare fifth shouldn't change the flag");
 }
 
+/// One tuning edit, as the Tuning pane makes it in a synchronous shell.
+fn edit(state: &mut SharedState, edit: ConfigEdit) {
+    state.picture.runtime.edit_tuning(&RecordingBackend::default(), edit);
+}
+fn temper(state: &mut SharedState, comma: Comma, on: bool) {
+    let tuning = state.picture.runtime.tuning;
+    edit(state, ConfigEdit::temper(comma, on, tuning));
+}
+
 /// An unlinked starting point makes each recognition assertion exercise Learn.
 fn unlocked() -> SharedState {
     let mut state = fresh();
-    state.picture.runtime.tempered.syntonic = false;
-    state.picture.runtime.tempered.septimal_kleisma = false;
+    temper(&mut state, Comma::Syntonic, false);
+    temper(&mut state, Comma::SeptimalKleisma, false);
     state
 }
 
 #[test]
 fn standalone_edits_recognize_links_and_release_without_a_readout_jump() {
-    use harmonigraph_core::configuration::{ConfigEdit, TuningAxis};
+    use harmonigraph_core::configuration::TuningAxis;
     use harmonigraph_core::tuning::microcents;
-    use harmonigraph_core::Comma;
     let mut state = fresh();
     let backend = RecordingBackend::default();
     begin_frame(&mut state.picture, &backend, 0.0);
@@ -291,7 +301,7 @@ fn standalone_edits_recognize_links_and_release_without_a_readout_jump() {
 #[test]
 fn learn_enables_marvel_from_a_12tet_seventh() {
     let mut state = unlocked();
-    state.picture.runtime.learn_active = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
     // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
     // seventh, which is 2·700 + 2·400 − 1200 exactly.
     hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0), (70, 0.0)]);
@@ -306,8 +316,8 @@ fn learn_enables_marvel_from_a_12tet_seventh() {
 #[test]
 fn learn_leaves_marvel_unchanged_without_a_seventh() {
     let mut state = fresh();
-    state.picture.runtime.learn_active = true;
-    state.picture.runtime.tempered.septimal_kleisma = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
+    temper(&mut state, Comma::SeptimalKleisma, true);
     let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
     hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
     state.picture.runtime.learn_step();
@@ -321,7 +331,7 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
 #[test]
 fn learn_measures_the_septimal_comma_against_the_derived_third() {
     let mut state = unlocked();
-    state.picture.runtime.learn_active = true;
+    edit(&mut state, ConfigEdit { learning: Some(true), ..Default::default() });
     // A 700¢ fifth, a third 0.4¢ sharp, a seventh 0.6¢ sharp. The third is
     // inside the meantone tolerance, so the lattice's third becomes 400.0 and
     // the marvel seventh 1000.0 — which the played 1000.6 misses by 0.6¢.
