@@ -2854,6 +2854,7 @@ fn camera_orbit_gestures_reach_the_host_once_per_axis() {
 /// or `closed(false)` (#1609).
 #[test]
 fn the_close_button_tells_the_host_to_destroy_the_editor() {
+    let _scope = crate::test_scope::enter();
     let device = Device::new();
     let host = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_host.clone().unwrap());
     assert!(host.closed(), "a host with a gui extension is told");
