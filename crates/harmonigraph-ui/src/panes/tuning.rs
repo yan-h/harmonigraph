@@ -15,7 +15,7 @@ use super::{section, subsection};
 use crate::params::{ConfigurationView, ParamBackend};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
-use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit, TuningAxis};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, TuningAxis};
 use harmonigraph_core::tuning;
 use std::collections::BTreeMap;
 
@@ -330,11 +330,9 @@ pub(super) fn tuning_pane(
 }
 
 /// How the player's controller renders each prime. Learn fills it from the
-/// fifth it hears; it is an adaptive policy setting, so edits travel as one.
-fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
-    let mut p = state.runtime.adaptive_policy;
-    let before = p;
-    let mut derive_keyboard = false;
+/// fifth it hears; it is an adaptive policy setting, edited in the policy the
+/// Adaptive section sends. "Derive from fifth" derives from the fifth shown.
+fn keyboard_controls(ui: &mut egui::Ui, p: &mut PolicyConfig) {
     super::block(ui, "Keyboard", |ui| {
         let fresh = PolicyConfig::default().keyboard;
         for ((value, fresh), label) in
@@ -358,7 +356,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             ))
             .clicked()
         {
-            derive_keyboard = true;
+            p.keyboard = tuning::fifth_generated(p.keyboard[0]);
         }
     })
     .response
@@ -368,15 +366,6 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
          pitch cost outweighs harmonic benefit. Learn sets the keyboard from the \
          fifth it hears.",
     );
-    let mut policy = PolicyEdit::changed(before, p);
-    if derive_keyboard {
-        policy = policy.derive_keyboard();
-    }
-    if !policy.is_empty() {
-        state
-            .runtime
-            .edit_tuning(params, ConfigEdit { policy: Some(policy), ..Default::default() });
-    }
 }
 
 fn fifths(steps: i32) -> String {
@@ -386,8 +375,7 @@ fn fifths(steps: i32) -> String {
 }
 
 /// The policy's own rows first and its two blocks after them, so no row
-/// reads as the end of a block. Keyboard edits travel on their own, and each
-/// edit carries only the fields it changed, so the two compose in one frame.
+/// reads as the end of a block. Any change sends the whole policy shown.
 fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     section(ui, "Adaptive tuning", |ui| {
         let mut p = state.runtime.adaptive_policy;
@@ -418,17 +406,14 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                 },
             );
         });
-        keyboard_controls(ui, state, params);
+        keyboard_controls(ui, &mut p);
         super::block(ui, "Context", |ui| context_controls(ui, &mut p, &fresh, true))
             .response
             .on_hover_text(
                 "New notes follow the moving context; sounding notes keep their correction.",
             );
         if p != before {
-            state.runtime.edit_tuning(
-                params,
-                ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
-            );
+            state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
         }
     });
 }
@@ -483,10 +468,7 @@ fn follow_controls(
     let before = p;
     context_controls(ui, &mut p, &PolicyConfig::default(), false);
     if p != before {
-        state.runtime.edit_tuning(
-            params,
-            ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
-        );
+        state.runtime.edit_tuning(params, ConfigEdit { policy: Some(p), ..Default::default() });
     }
 }
 

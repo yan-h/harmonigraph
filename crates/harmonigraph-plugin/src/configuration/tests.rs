@@ -12,7 +12,7 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::*;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
-use harmonigraph_core::configuration::{PolicyEdit, TuningAxis};
+use harmonigraph_core::configuration::TuningAxis;
 use harmonigraph_core::tuning::microcents;
 use harmonigraph_core::SourceId;
 use harmonigraph_ui::params::ParamKey;
@@ -1948,85 +1948,6 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     nice_assert_no_alloc::assert_no_alloc(|| publisher.baseline(&baseline).unwrap());
     consumer.drain(|_| true);
     eprintln!("canonical guarded fill: {SNAPSHOT_SLOTS} complete 64-voice payloads + {} notes + Busy/Lost = {duration:?}; no allocation/deallocation", PUBLICATION_RING - 1 - SNAPSHOT_SLOTS);
-}
-
-#[test]
-fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let settings = device.settings();
-    let observed = shown(&settings).view.resolved.policy;
-    let first = PolicyConfig {
-        radius: 5,
-        reset_stop: true,
-        pitch_flexibility: 37,
-        half_life_ms: 1200,
-        keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
-        ..observed
-    };
-    let second = PolicyConfig {
-        axes: 3,
-        reset_loop: true,
-        register: 850,
-        tolerance: 1_000_000,
-        silence_ms: 4500,
-        keyboard: [observed.keyboard[0], 380_000_000, 980_000_000],
-        ..observed
-    };
-    for policy in [first, second] {
-        assert!(settings.submit(ConfigEdit {
-            policy: Some(PolicyEdit::changed(observed, policy)),
-            ..Default::default()
-        }));
-    }
-    device.run(0, vec![], false);
-    assert_eq!(
-        shown(&settings).view.resolved.policy,
-        PolicyConfig {
-            radius: first.radius,
-            reset_stop: first.reset_stop,
-            pitch_flexibility: first.pitch_flexibility,
-            half_life_ms: first.half_life_ms,
-            keyboard: [first.keyboard[0], second.keyboard[1], second.keyboard[2]],
-            ..second
-        }
-    );
-}
-
-#[test]
-fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
-    let _scope = crate::test_scope::enter();
-    let mut device = Device::new();
-    device.activate();
-    let settings = device.settings();
-    let observed = shown(&settings).view.resolved.policy;
-    let changed = PolicyConfig {
-        pitch_flexibility: 37,
-        keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
-        ..observed
-    };
-    for policy in [
-        PolicyEdit::changed(observed, changed),
-        PolicyEdit::changed(observed, observed).derive_keyboard(),
-    ] {
-        assert!(settings.submit(ConfigEdit { policy: Some(policy), ..Default::default() }));
-    }
-    device.run(0, vec![], false);
-    let adopted = shown(&settings).view.resolved;
-    assert_eq!(adopted.policy.keyboard, harmonigraph_core::tuning::fifth_generated(695_000_000));
-    assert_eq!(adopted.policy.pitch_flexibility, 37);
-
-    let changed = PolicyConfig { keyboard: [697_000_000, 0, 0], ..adopted.policy };
-    assert!(settings.submit(ConfigEdit {
-        policy: Some(PolicyEdit::changed(adopted.policy, changed).derive_keyboard()),
-        ..Default::default()
-    }));
-    device.run(64, vec![], false);
-    let derived = shown(&settings).view.resolved;
-    assert_eq!(derived.policy.keyboard, harmonigraph_core::tuning::fifth_generated(697_000_000));
-    assert_eq!(derived.policy.pitch_flexibility, 37);
-    assert_eq!(derived.revision, adopted.revision + 1);
 }
 
 #[test]

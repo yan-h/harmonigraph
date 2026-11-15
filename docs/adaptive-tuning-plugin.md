@@ -34,7 +34,6 @@ Pitch flexibility is the only pitch/harmony control, from 1 to 100 cents, defaul
 The default preserves the established musical fixture spellings; paired precision examples use 50 cents.
 Existing saved Harmonic weight and Pitch scale fields are ignored, and the new field defaults to 100 cents without a compatibility translation.
 Other saved settings retain their values.
-The state mailbox uses policy version 3.
 
 An unsnapped onset has no assigned lattice node and does not move or take ownership of the reference.
 It still contributes its actual onset pitch to context, where unassigned pitches are projected locally for harmonic scoring,
@@ -144,8 +143,11 @@ Toggling Retune copies nothing in either direction.
 No policy fixture makes the keyboard filter bind, so the fixtures say nothing about it;
 the Rust policy tests cover it on their own.
 
-A policy edit from the pane sends only the fields it changed (`PolicyEdit::changed`, `e8463e6a`),
-so one that lands just after Learn has changed the keyboard leaves Learn's keyboard in place.
+A policy edit from the pane sends the whole policy it shows, and **Derive from fifth** derives from the fifth on screen (#1798 F2).
+One that lands within a block of Learn changing the keyboard puts back the keyboard it showed, until the next chord change makes Learn run again;
+only Adaptive with Learn armed reaches that, since Lattice Map suspends Learn.
+Two policy edits to different fields queued before the Hub's next callback keep only the second's fields, since each carries the whole policy the pane showed before either applied:
+while audio runs that window is about one block, and while the Hub runs no audio the earlier setting snaps back when audio resumes.
 
 With a schismatic keyboard and radius three, C followed by the key four fifths above it cannot reach the Pythagorean E node.
 The fallback can choose the nearby 5/4 E, but cannot double C even at maximum pitch flexibility.

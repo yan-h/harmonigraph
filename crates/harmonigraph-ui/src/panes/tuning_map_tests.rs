@@ -6,7 +6,8 @@ use harmonigraph_core::lattice_map::{Follow, TuningEngine};
 use std::cell::RefCell;
 
 /// A Hub with `engine` and `follow` selected and `maps` saved maps, recording
-/// the edits the pane sends. `pending` is whether audio has yet to adopt them.
+/// the map and tuning edits the pane sends. `pending` is whether audio has yet
+/// to adopt them.
 struct Edits {
     engine: TuningEngine,
     follow: Follow,
@@ -14,6 +15,7 @@ struct Edits {
     pending: bool,
     offsets: crate::lattice_maps::MapOffsets,
     edits: RefCell<Vec<MapEdit>>,
+    tuning: RefCell<Vec<ConfigEdit>>,
 }
 impl Edits {
     fn new(engine: TuningEngine, follow: Follow, maps: usize) -> Self {
@@ -24,6 +26,7 @@ impl Edits {
             pending: false,
             offsets: Default::default(),
             edits: Default::default(),
+            tuning: Default::default(),
         }
     }
 }
@@ -55,6 +58,10 @@ impl ParamBackend for Edits {
     }
     fn edit_lattice_map(&self, edit: MapEdit) {
         self.edits.borrow_mut().push(edit);
+    }
+    fn submit_tuning(&self, edit: ConfigEdit) -> Option<bool> {
+        self.tuning.borrow_mut().push(edit);
+        Some(true)
     }
 }
 
@@ -115,6 +122,31 @@ fn every_map_control_needs_no_fold_opened() {
         let last = params.edits.borrow_mut().pop().map(|edit| format!("{edit:?}"));
         assert_eq!(last.as_deref(), Some(expected), "{label}");
     }
+}
+
+/// The pane sends the whole policy it shows, and "Derive from fifth" derives
+/// the third and seventh from the fifth on screen.
+#[test]
+fn derive_from_fifth_sends_the_shown_policy_with_the_shown_fifths_keyboard() {
+    let ctx = themed();
+    let params = Edits::new(TuningEngine::Adaptive, Follow::Off, 1);
+    let mut state = fresh_picture();
+    let shown =
+        PolicyConfig { pitch_flexibility: 37, keyboard: [695_000_000, 1, 2], ..Default::default() };
+    state.runtime.adaptive_policy = shown;
+    let size = egui::vec2(420.0, 2000.0);
+    let mut frame = |events| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
+            tuning_pane(ui, &mut state, &params, 0.0);
+        })
+    };
+    frame(vec![]);
+    let out = frame(vec![]);
+    let at = text_at(&out, "Derive from fifth").expect("the button must be visible");
+    click(&mut frame, at);
+    let sent: Vec<_> = params.tuning.borrow().iter().map(|edit| edit.policy).collect();
+    let keyboard = harmonigraph_core::tuning::fifth_generated(695_000_000);
+    assert_eq!(sent, [Some(PolicyConfig { keyboard, ..shown })]);
 }
 
 /// With Learn on, whether the pane draws the armed ring at `now`.

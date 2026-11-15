@@ -84,7 +84,7 @@ pub(crate) struct Record {
     pub status: u32,
 }
 
-const WORDS: usize = 24;
+const WORDS: usize = 14 + PolicyConfig::WORDS;
 
 /// One writer, the audio owner, and readers off audio that retry. Every word
 /// is atomic, so a torn read is retried rather than undefined.
