@@ -44,3 +44,4 @@
 - A loss of note history that touched no recorded run does not mark a take incomplete: it warned about a hole the take did not have. #1760 Q2
 - Takes recorded before take v7, the 2026-11-04 one included, are not converted: they render only with a renderer from before the cut (`c423bf44`). #1760 Q3
 - Behaviour holds only at the end: the reader and the cut to v7 are one PR. #1760 Q4
+- A failed take warns on every pass, an earlier whole one included: the `PassClosed` record that kept a pass closed before the failure whole is dropped, with the proof that wrote it. Gaps still mark only the passes their inputs touch. #1766

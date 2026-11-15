@@ -1622,7 +1622,7 @@ fn a_note_struck_in_a_long_pause_draws_from_the_resume() {
 }
 
 /// A host reset right after a loop wrap opened pass 2: the take keeps both
-/// passes whole, the second on the new clock, and pass 1 closes.
+/// passes whole, the second on the new clock.
 #[test]
 fn a_host_reset_right_after_a_split_keeps_both_passes() {
     let _scope = crate::test_scope::enter();
@@ -1662,7 +1662,6 @@ fn a_host_reset_right_after_a_split_keeps_both_passes() {
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert!(writer.finished.is_some());
-    assert!(std::fs::read_to_string(&path).unwrap().contains("PassClosed(1)"));
     for (pass, key) in [(1, 60), (2, 64)] {
         let take = harmonigraph_take::Take::read_pass(&path, Some(pass)).unwrap();
         assert!(take.incomplete.is_none(), "pass {pass}");
@@ -1704,8 +1703,6 @@ fn a_pass_split_by_a_loop_opens_with_the_note_held_across_it() {
     assert!(!writer.failed());
     let first = harmonigraph_take::Take::read_pass(&path, Some(1)).unwrap();
     assert!(records_an_on(&first, 60), "the first pass saw the note begin");
-    let written = std::fs::read_to_string(&path).unwrap();
-    assert!(written.contains("PassClosed(1)"), "both frontiers passed pass 1's last run");
     let second = harmonigraph_take::Take::read_pass(&path, Some(2)).unwrap();
     assert!(!records_an_on(&second, 60), "the fixture must hold the note across the wrap");
     let notes = drawn(&second, 60);

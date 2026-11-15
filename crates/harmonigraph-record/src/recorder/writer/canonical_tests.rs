@@ -1107,11 +1107,8 @@ fn an_audio_only_last_pass_renders_after_a_pass_with_midi() {
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
-/// A failure inside a pass is raised before that pass's proof reaches the
-/// writer, but its marker is written only once both lanes settle, below the
-/// pass's `PassClosed`, which would read that pass whole. So no `PassClosed`
-/// is published or written once the take has failed, and the pass the failure
-/// touched warns.
+/// A writer stalled while a pass records more audio than its ring holds fails
+/// the take, and the pass that lost the audio says so.
 #[test]
 fn a_failure_inside_a_pass_marks_that_pass() {
     let file = path("closed-failure");
@@ -1132,23 +1129,21 @@ fn a_failure_inside_a_pass_marks_that_pass() {
     let samples = AUDIO_RING_CAPACITY + 256;
     recorder.audio(&mut std::iter::repeat_n(0.5, samples), samples);
     recorder.run_end(epoch, at(128));
-    // A forward seek opens pass 2, and pass 1's proof follows.
+    // A forward seek opens pass 2.
     let origin = recorder.observe_transport(10.0, true, duration).unwrap();
     assert_eq!(recorder.armed_pass().unwrap().1, 2);
     record_block(&mut recorder, 640, origin, 72, 0.75);
-    recorder.pass_closed(1, 1, 1.0);
     writer.drain(&mut capture);
     assert!(writer.failed(), "the fixture must fail the take inside pass 1");
-    assert!(!std::fs::read_to_string(&file).unwrap().contains("PassClosed("));
     let first = harmonigraph_take::Take::read_pass(&file, Some(1)).unwrap();
     assert!(first.incomplete.is_some(), "pass 1 lost audio and must say so");
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
-/// A failure after a pass closed leaves that pass whole, and marks the pass
-/// it touched: what a take split by a loop owes an earlier pass's export.
+/// A failure marker names no pass, so a failure in pass 2 marks pass 1 too,
+/// though everything pass 1 recorded reached the file (#1766).
 #[test]
-fn a_failure_after_a_pass_closed_leaves_that_pass_whole() {
+fn a_failure_marks_every_pass_of_the_take() {
     let file = path("late-failure");
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
@@ -1159,13 +1154,12 @@ fn a_failure_after_a_pass_closed_leaves_that_pass_whole() {
     record_block(&mut recorder, 0, origin, 60, 0.25);
     let origin = recorder.observe_transport(10.0, true, duration).unwrap();
     record_block(&mut recorder, 640, origin, 72, 0.75);
-    recorder.pass_closed(1, 1, 1.0);
     writer.drain(&mut capture);
     recorder.fail_configuration();
     writer.drain(&mut capture);
     assert!(writer.failed());
     let first = harmonigraph_take::Take::read_pass(&file, Some(1)).unwrap();
-    assert!(first.incomplete.is_none(), "pass 1 closed before the failure");
+    assert!(first.incomplete.is_some(), "the take failed, so pass 1 warns too");
     assert_eq!(first.notes().count(), 2);
     let second = harmonigraph_take::Take::read_pass(&file, Some(2)).unwrap();
     assert!(second.incomplete.is_some(), "pass 2 was open when it failed");

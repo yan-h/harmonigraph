@@ -421,8 +421,7 @@ impl CanonicalFanout {
             // disarmed belongs to none, and a loss that only covered such
             // history touched no recorded run: it is dropped, warning nothing.
             let epoch = match delivery {
-                publication::Delivery::PassClosed { epoch, .. }
-                | publication::Delivery::EpochComplete(epoch) => Some(epoch),
+                publication::Delivery::EpochComplete(epoch) => Some(epoch),
                 publication::Delivery::Event(_) => {
                     span.intent.is_armed().then(|| span.intent.epoch())
                 }
@@ -440,23 +439,6 @@ impl CanonicalFanout {
             }
             let recording = epoch.and_then(|epoch| open.as_mut().filter(|o| o.epoch == epoch));
             match delivery {
-                publication::Delivery::PassClosed { epoch, pass } => {
-                    // The one guard: a failure's marker comes only once both
-                    // lanes settle, below this line, and must still reach this
-                    // pass, whether the audio side or this thread raised it. A
-                    // failure raised after the pass's proof then warns on it too.
-                    if failure.contains(epoch) || fence.failed.load(Ordering::Acquire) {
-                        return true;
-                    }
-                    match recording {
-                        Some(recording) => {
-                            if let Err(error) = recording.pass_closed(pass) {
-                                fence.fail_with_message(error.to_string());
-                            }
-                        }
-                        None => fence.fail(),
-                    }
-                }
                 publication::Delivery::EpochComplete(epoch) => {
                     if failure.contains(epoch) {
                         return true;
@@ -703,10 +685,6 @@ impl Recording {
         self.writer.write(&harmonigraph_take::Record::Run(record))
     }
 
-    fn pass_closed(&mut self, pass: u32) -> std::io::Result<()> {
-        self.writer.write(&harmonigraph_take::Record::PassClosed(pass))
-    }
-
     fn ready(&self, epoch: u64) -> bool {
         self.epoch == epoch
             && self.producer_closed
@@ -714,8 +692,8 @@ impl Recording {
             && self.source_closed
     }
 
-    /// Write the take's failure marker, once. It touches every pass not
-    /// closed above it, which the reader works out from its place.
+    /// Write the take's failure marker, once. It names no pass, so it marks
+    /// every pass of the take (#1766).
     fn mark_incomplete(
         &mut self,
         record: harmonigraph_take::IncompleteRecord,
