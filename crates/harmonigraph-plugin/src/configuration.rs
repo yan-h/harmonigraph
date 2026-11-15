@@ -286,17 +286,11 @@ impl Owner {
             return None;
         }
         let resolved = self.reducer.resolved();
-        let learn = command.edit.payload[0] == LEARN;
-        if learn {
+        if command.edit.payload[0] == LEARN {
             self.learned = None;
         } else {
             self.maps.tuning_changed(commit.sample, resolved);
         }
-        self.snapshot.effective_sample = if learn {
-            self.boundary.steady_time.saturating_add(i64::from(self.boundary.frames))
-        } else {
-            commit.sample
-        };
         if command.id != 0 {
             self.snapshot.applied_id = command.id;
         }

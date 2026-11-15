@@ -655,11 +655,7 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     assert_eq!(before.raw[1], 700.0, "untimed flush has not invented a boundary");
     device.activate();
     device.run(500, vec![], false);
-    assert_eq!(
-        mailbox.visible().0.effective_sample,
-        500,
-        "an untimed flush bound to the boundary of [500,564) is effective there"
-    );
+    assert_eq!(mailbox.visible().0.raw[1], 690.0, "an untimed flush applies at the next boundary");
     let first = mailbox
         .submit(packet(ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(390.0))))
         .unwrap();
@@ -678,12 +674,11 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
     );
     let snapshot = mailbox.visible().0;
     assert_eq!(snapshot.applied_id, second);
-    assert_eq!(snapshot.effective_sample, 595, "the last automation is effective at its sample");
+    assert_eq!(snapshot.raw[1], 699.0, "the last automation wins");
     assert!(!view(snapshot, false).resolved.modes.tempered.syntonic);
     device.flush(vec![device.param(ParamKey::Three, 697.0, 44)]);
-    assert_eq!(mailbox.visible().0.effective_sample, 595, "an untimed flush applies nothing yet");
+    assert_eq!(mailbox.visible().0.raw[1], 699.0, "an untimed flush applies nothing yet");
     device.run(628, vec![], false);
-    assert_eq!(mailbox.visible().0.effective_sample, 628, "bound to the next boundary");
     assert_eq!(mailbox.visible().0.raw[1], 697.0);
 }
 

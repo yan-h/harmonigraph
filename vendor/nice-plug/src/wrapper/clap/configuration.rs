@@ -11,7 +11,7 @@ pub const INPUT_SCAN: usize = 2048;
 pub const CONFIG_PARAMETERS: usize = 5;
 pub const PAYLOAD_WORDS: usize = 18;
 /// Header, the four parameter arrays, the payload, then the status word.
-const PUBLISHED_WORDS: usize = 23 + PAYLOAD_WORDS + 1;
+const PUBLISHED_WORDS: usize = 22 + PAYLOAD_WORDS + 1;
 const STATUS_WORD: usize = PUBLISHED_WORDS - 1;
 
 /// Plugin-defined fixed semantic payload plus one atomic parameter-write batch.
@@ -44,7 +44,6 @@ pub struct ConfigurationCommand {
 pub struct ConfigurationSnapshot {
     pub applied_id: u64,
     pub revision: u64,
-    pub effective_sample: i64,
     pub raw: [f32; CONFIG_PARAMETERS],
     pub unmodulated: [f32; CONFIG_PARAMETERS],
     pub normalized: [f32; CONFIG_PARAMETERS],
@@ -96,7 +95,6 @@ impl PublishedConfiguration {
         let mut words = [0; PUBLISHED_WORDS];
         words[0] = value.applied_id;
         words[1] = value.revision;
-        words[2] = value.effective_sample as u64;
         for (i, v) in value
             .raw
             .into_iter()
@@ -105,10 +103,10 @@ impl PublishedConfiguration {
             .chain(value.modulation)
             .enumerate()
         {
-            words[3 + i] = u64::from(v.to_bits());
+            words[2 + i] = u64::from(v.to_bits());
         }
         for (i, v) in value.payload.into_iter().enumerate() {
-            words[23 + i] = v as u32 as u64;
+            words[22 + i] = v as u32 as u64;
         }
         words[STATUS_WORD] = u64::from(value.status);
         for (cell, word) in self.words.iter().zip(words) {
@@ -132,12 +130,11 @@ impl PublishedConfiguration {
             return ConfigurationSnapshot {
                 applied_id: words[0],
                 revision: words[1],
-                effective_sample: words[2] as i64,
-                raw: std::array::from_fn(|i| f32::from_bits(words[3 + i] as u32)),
-                unmodulated: std::array::from_fn(|i| f32::from_bits(words[8 + i] as u32)),
-                normalized: std::array::from_fn(|i| f32::from_bits(words[13 + i] as u32)),
-                modulation: std::array::from_fn(|i| f32::from_bits(words[18 + i] as u32)),
-                payload: std::array::from_fn(|i| words[23 + i] as u32 as i32),
+                raw: std::array::from_fn(|i| f32::from_bits(words[2 + i] as u32)),
+                unmodulated: std::array::from_fn(|i| f32::from_bits(words[7 + i] as u32)),
+                normalized: std::array::from_fn(|i| f32::from_bits(words[12 + i] as u32)),
+                modulation: std::array::from_fn(|i| f32::from_bits(words[17 + i] as u32)),
+                payload: std::array::from_fn(|i| words[22 + i] as u32 as i32),
                 status: words[STATUS_WORD] as u32,
             };
         }
