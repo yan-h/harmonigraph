@@ -31,6 +31,14 @@ type Owner = crate::configuration::Owner;
 /// bare flag word rather than as a clap-sys type.
 const HAS_SECONDS: u32 = 1 << 2;
 
+/// One observation of the host's seconds timeline: where the song was, at
+/// which steady sample.
+#[derive(Clone, Copy)]
+struct Seconds {
+    song: f64,
+    sample: i64,
+}
+
 /// The identity one row's notes carry downstream. The Hub's own track keeps
 /// the reserved DIRECT id every consumer already knows it by; a Tune row is
 /// one past its own index, so no paired track can collide with it.
@@ -304,8 +312,9 @@ pub struct Hub {
     rate: f64,
     callback: Option<api::Callback>,
     anchor: Option<(i64, f64)>,
-    /// Host seconds against elapsed samples, for loop and seek detection.
-    seconds: Option<f64>,
+    /// The last observation of the host's seconds timeline, for loop and
+    /// seek detection.
+    seconds: Option<Seconds>,
     /// The last recording run every row was told to open with a take-lane
     /// snapshot. See [`Hub::publish`].
     opened: Option<u64>,
@@ -479,9 +488,13 @@ impl Hub {
         self.status = status;
     }
 
-    /// A greater-than-two-millisecond discontinuity between the host's seconds
-    /// timeline and elapsed sample time is a loop or a seek. What it does then
-    /// is the `reset_loop` control's business, at the next attack.
+    /// A loop or a seek is a song position that neither held still nor
+    /// advanced with the samples since the last observation, by more than two
+    /// milliseconds either way. That one rule covers a playing transport, a
+    /// stopped one a host holds still, a stop that returns to where play began,
+    /// and an export that reports not playing while its position climbs. What
+    /// a jump does then is the `reset_loop` control's business, at the next
+    /// attack.
     fn detect_loop(&mut self, callback: api::Callback) {
         let Some(transport) = callback.transport else {
             return;
@@ -499,11 +512,15 @@ impl Hub {
         let (Some(sample), true) = (sample, self.rate > 0.0 && flags & HAS_SECONDS != 0) else {
             return;
         };
-        let offset = song_pos_seconds as f64 / 2_147_483_648.0 - sample as f64 / self.rate;
-        if self.seconds.is_some_and(|previous| (offset - previous).abs() > 0.002) {
-            self.sequencer.loop_pending = true;
+        let song = song_pos_seconds as f64 / 2_147_483_648.0;
+        if let Some(previous) = self.seconds {
+            let moved = song - previous.song;
+            let elapsed = (sample - previous.sample) as f64 / self.rate;
+            if moved.abs().min((moved - elapsed).abs()) > 0.002 {
+                self.sequencer.loop_pending = true;
+            }
         }
-        self.seconds = Some(offset);
+        self.seconds = Some(Seconds { song, sample });
     }
 
     pub fn input(&mut self, input: OwnedInput) {

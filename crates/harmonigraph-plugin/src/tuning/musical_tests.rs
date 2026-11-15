@@ -36,6 +36,17 @@ fn position(seconds: i64) -> Input {
     Input::Transport(value)
 }
 
+/// A transport at `seconds` on the host's seconds timeline, playing or not.
+fn at(seconds: f64, playing: bool) -> Input {
+    let Input::Transport(mut value) = transport(0, 120.0) else { unreachable!() };
+    value.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+    if !playing {
+        value.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+    }
+    value.song_pos_seconds = (seconds * 2_147_483_648.0) as i64;
+    Input::Transport(value)
+}
+
 fn submit(hub: &Device, edit: ConfigEdit) {
     assert!(settings(hub).submit(edit));
 }
@@ -728,6 +739,63 @@ fn production_a_loop_clears_released_memory_once_before_the_next_attack() {
         } else {
             assert_ne!(after, Some(LatticePos::ORIGIN), "without the control it keeps travelling");
         }
+        phrase.release_all();
+    }
+}
+
+/// A seek is a song position that neither held still nor advanced with the
+/// samples. Each case plays moving thirds, moves the transport, and then an
+/// attack: a seek clears the history before it, anything else keeps it. Each
+/// callback here is 11.6 ms, past the 2 ms either way the rule allows.
+#[test]
+fn a_seek_is_a_position_that_neither_held_still_nor_advanced_with_the_samples() {
+    let _scope = crate::test_scope::enter();
+    let step = 512.0 / 44100.0;
+    // (case, transport moves as seconds and playing, whether it is a seek)
+    type Case = (&'static str, Vec<(f64, bool)>, bool);
+    let cases: [Case; 4] = [
+        ("parked still", vec![(5.0, false); 3], false),
+        ("parked, then moved", vec![(5.0, false), (5.0, false), (1.0, false)], true),
+        (
+            "stopped back where play began",
+            vec![(5.0, true), (5.0 + step, true), (4.0, false)],
+            true,
+        ),
+        (
+            "stopped, its position climbing",
+            vec![(5.0, false), (5.0 + step, false), (5.0 + 2.0 * step, false)],
+            false,
+        ),
+    ];
+    for (case, moves, seek) in cases {
+        let mut phrase = Phrase::new();
+        let policy = PolicyConfig {
+            reset_loop: true,
+            reset_stop: false,
+            half_life_ms: 50,
+            ..Default::default()
+        };
+        configure_policy(&phrase.hub, policy);
+        phrase.idle();
+        // Moving thirds, so a kept memory is told apart from a cleared one.
+        for root in [48, 52, 56] {
+            let chord = vec![
+                note(1, 0, root, 0, true),
+                note(2, 0, root + 4, 1, true),
+                note(3, 0, root + 7, 2, true),
+            ];
+            phrase.step([chord, vec![], vec![]], [0, 1, 2]);
+            phrase.idle();
+            phrase.release_all();
+        }
+        for (seconds, playing) in moves {
+            phrase.transport_all(|| at(seconds, playing));
+        }
+        let chord = vec![note(1, 0, 48, 0, true), note(2, 0, 52, 1, true), note(3, 0, 55, 2, true)];
+        phrase.step([chord, vec![], vec![]], [0, 1, 2]);
+        phrase.idle();
+        let after = phrase.voice(0, 48, 0).attack_node;
+        assert_eq!(after == Some(LatticePos::ORIGIN), seek, "{case}: {after:?}");
         phrase.release_all();
     }
 }
