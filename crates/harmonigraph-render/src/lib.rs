@@ -660,7 +660,6 @@ struct LightRow {
     /// stepped: a tuning change moves a halo at once (#1759, Q1).
     cents: f32,
     l: [f32; harmonigraph_scene::OCTAVE_SLOTS],
-    p: [f32; harmonigraph_scene::OCTAVE_SLOTS],
     m: [f32; harmonigraph_scene::OCTAVE_SLOTS],
 }
 
@@ -675,8 +674,8 @@ const _: () = assert!(
 
 impl LightRow {
     fn new(cents: f32, light: harmonigraph_scene::GlowLight) -> Self {
-        let harmonigraph_scene::GlowLight { l, p, m } = light;
-        Self { cents, l, p, m }
+        let harmonigraph_scene::GlowLight { l, m } = light;
+        Self { cents, l, m }
     }
 }
 

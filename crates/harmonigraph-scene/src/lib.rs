@@ -416,9 +416,9 @@ pub const MAX_LIGHTS: usize = 4096;
 /// uniforms, so a gradient, range or tuning change reaches a halo in the frame
 /// it reaches the notes (#1759, Q1). What a light CARRIES between frames is how
 /// much of each layer it holds, and the halo's colour is a sum of the slot
-/// colours weighted by these numbers — linear in each of them, save the two
-/// places `ink_at` names (the swell cap and the mark walk's per-angle
-/// max) — so stepping every weight toward its target eases the colour exactly
+/// colours weighted by these numbers — linear in each of them, save the one
+/// place `ink_at` names (the mark walk's per-angle max) — so stepping every
+/// weight toward its target eases the colour exactly
 /// as mixing the two readings would. That is the guarantee, and the renderer's
 /// `a_stepped_light_reads_as_its_two_readings_mixed` is what holds it.
 ///
@@ -431,10 +431,6 @@ pub struct GlowLight {
     /// Each slot's light: its colour after the Opacity mapping
     /// ([`NodeInstance::octaves`]), clamped to 0..=1.
     pub l: [f32; OCTAVE_SLOTS],
-    /// Each slot's light times its thickness ([`NodeInstance::thickness`]):
-    /// how far out the lit slice reaches, which is the band's share of the
-    /// light below the swell cap. Past the cap `l` scales it instead.
-    pub p: [f32; OCTAVE_SLOTS],
     /// The light of the mark standing on each slot: the melody's and the
     /// bass's levels on their strongest slots, clamped, and the larger where
     /// the two share one.
@@ -452,8 +448,8 @@ impl GlowLight {
     /// every field, so a field added to the struct is stepped by adding it to
     /// the pattern below, which the compiler insists on.
     pub fn step(&mut self, target: &Self, mix: f32) {
-        let Self { l, p, m } = self;
-        for (weights, goal) in [l, p, m].into_iter().zip([&target.l, &target.p, &target.m]) {
+        let Self { l, m } = self;
+        for (weights, goal) in [l, m].into_iter().zip([&target.l, &target.m]) {
             for (weight, goal) in weights.iter_mut().zip(goal) {
                 *weight += (goal - *weight) * mix;
             }
@@ -836,8 +832,10 @@ impl NodeInstance {
         self.glow_light().level()
     }
 
-    /// What this node's light is made of as it stands: every slot's light, its
-    /// reach and its mark (see [`GlowLight`]). The one constructor of that
+    /// What this node's light is made of as it stands: every slot's light and
+    /// its mark (see [`GlowLight`]). A slice's Thickness does not weigh in: it
+    /// changes how the slice is drawn, not its share of the halo's colour
+    /// (#1784 G3). The one constructor of that
     /// reading — [`NodeMotion::step`] writes it, and the shell's glow pass
     /// steps toward it.
     pub fn glow_light(&self) -> GlowLight {
@@ -852,7 +850,7 @@ impl NodeInstance {
                 }
             }
         }
-        GlowLight { l, p: std::array::from_fn(|i| l[i] * self.thickness[i].max(0.0)), m }
+        GlowLight { l, m }
     }
 }
 

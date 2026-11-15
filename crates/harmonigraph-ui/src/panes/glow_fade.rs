@@ -108,12 +108,9 @@ struct Lit {
 /// and is the level's own fall, while a slice swelling under a held note moves
 /// the colour by its share of the light whatever the light's size.
 fn easing(level: f32, light: &GlowLight, goal: &GlowLight) -> f32 {
-    let GlowLight { l, p, m } = light;
-    let pairs = || {
-        [(l, &goal.l), (p, &goal.p), (m, &goal.m)]
-            .into_iter()
-            .flat_map(|(a, b)| a.iter().zip(b.iter()))
-    };
+    let GlowLight { l, m } = light;
+    let pairs =
+        || [(l, &goal.l), (m, &goal.m)].into_iter().flat_map(|(a, b)| a.iter().zip(b.iter()));
     let largest = pairs().map(|(a, b)| a.abs().max(b.abs())).fold(0.0, f32::max);
     let distance = pairs().map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
     if largest > 0.0 {
@@ -342,13 +339,11 @@ mod tests {
     }
 
     /// Velocity to Opacity over a rest of about a third, as the routes stood
-    /// fresh until #1475, and pressure to Thickness: so a soft note's slots
-    /// light short of full and a press swells a held slice.
+    /// fresh until #1475: so a soft note's slots light short of full.
     fn routed() -> harmonigraph_scene::IntensitySettings {
         use harmonigraph_scene::IntensitySource;
         harmonigraph_scene::IntensitySettings {
             velocity: IntensitySource { opacity: Some(0.6), thickness: None },
-            pressure: IntensitySource { opacity: None, thickness: Some(1.0) },
             opacity_rest: 0.3,
             ..harmonigraph_scene::IntensitySettings::default()
         }
@@ -451,9 +446,7 @@ mod tests {
     /// - the melody handed to an unmarked middle slot, three octaves held and
     ///   the top one let go: the marks;
     /// - a soft note under velocity-to-Opacity let go: a slot's light short of
-    ///   full (#1315);
-    /// - pressure routed to Thickness, pressed on a held note: the slice's
-    ///   reach, with its light unmoved.
+    ///   full (#1315).
     ///
     /// Settled before the change, with no attack and no Fade, so the light is
     /// its reading and every layer moves in one frame; each change leaves the
@@ -464,18 +457,8 @@ mod tests {
         const AT: f64 = 0.5;
         let on = |note, velocity| NoteEvent::on(0.0, SourceId::DIRECT, 0, note, velocity);
         let off = |note| NoteEvent::off(AT, SourceId::DIRECT, 0, note);
-        let pressure = NoteEvent {
-            time: AT,
-            source: SourceId::DIRECT,
-            channel: 0,
-            note: 60,
-            kind: harmonigraph_core::NoteEventKind::Expression {
-                expression: harmonigraph_core::Expression::Pressure,
-                value: 1.0,
-            },
-        };
         type Reach = fn(&GlowLight, &GlowLight) -> bool;
-        let rows: [(&str, Vec<NoteEvent>, Vec<NoteEvent>, Reach); 4] = [
+        let rows: [(&str, Vec<NoteEvent>, Vec<NoteEvent>, Reach); 3] = [
             ("inkless release", vec![on(60, 1.0), on(72, 0.5)], vec![off(60), off(72)], |a, b| {
                 a.l.iter().filter(|&&l| l > 0.0).count() == 2 && b.level() == 0.0
             }),
@@ -487,9 +470,6 @@ mod tests {
             ),
             ("soft release", vec![on(60, 0.3)], vec![off(60)], |a, b| {
                 a.level() > 0.0 && a.level() < 0.9 && b.level() == 0.0
-            }),
-            ("pressure to thickness", vec![on(60, 1.0)], vec![pressure], |a, b| {
-                a.l == b.l && a.p != b.p
             }),
         ];
         for (what, before, change, reach) in rows {
@@ -520,7 +500,7 @@ mod tests {
                 let share = 1.0 - (-elapsed / RELEASE).exp() as f32;
                 let mut expected = from;
                 expected.step(&to, share);
-                let fields = |light: &GlowLight| [light.l, light.p, light.m].concat();
+                let fields = |light: &GlowLight| [light.l, light.m].concat();
                 for (i, (got, want)) in fields(&carried).iter().zip(fields(&expected)).enumerate() {
                     assert!(
                         (got - want).abs() < 1e-5,
@@ -532,15 +512,16 @@ mod tests {
         }
     }
 
-    /// A light whose level holds still while what it is made of eases — a
-    /// press swelling a held slice — keeps the frame loop awake until the
-    /// colour has arrived, as a falling level does; one settled asks for
-    /// nothing.
+    /// A light whose level holds still while what it is made of eases — an
+    /// octave let go under one still held at full — keeps the frame loop awake
+    /// until the colour has arrived, as a falling level does; one settled asks
+    /// for nothing.
     #[test]
     fn a_light_easing_its_colour_at_a_steady_level_asks_for_repaints() {
         let mut state = lit(0.0, 0.5);
-        state.appearance.view.intensity = routed();
-        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        for note in [60, 72] {
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+        }
         let mut fade = GlowFade::default();
         let mut level_at = |state: &PictureState, now: f64| {
             let mut scene = scene_at(state, now);
@@ -549,16 +530,7 @@ mod tests {
         };
         let (held, settled_awake) = level_at(&state, 0.5);
         assert!(!settled_awake, "a settled light asked to be repainted");
-        state.runtime.tracker.handle_event(NoteEvent {
-            time: 0.5,
-            source: SourceId::DIRECT,
-            channel: 0,
-            note: 60,
-            kind: harmonigraph_core::NoteEventKind::Expression {
-                expression: harmonigraph_core::Expression::Pressure,
-                value: 1.0,
-            },
-        });
+        state.runtime.tracker.handle_event(NoteEvent::off(0.5, SourceId::DIRECT, 0, 72));
         for now in [0.52, 1.0, 1.5] {
             let (level, awake) = level_at(&state, now);
             assert_eq!(level, held, "the fixture's level must hold still");

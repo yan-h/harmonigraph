@@ -189,13 +189,12 @@ const INK_STRIP_N: u32 = 64u;
 
 // One lit node's row of the frame's light table (`LightRow` in lib.rs): what
 // its light is made of, slot by slot, and the pitch class its slot colours are
-// looked up at. `l` each slot's light, `p` that light times the slice's
-// thickness, `m` the light of the mark on each slot (`GlowLight` in
+// looked up at. `l` each slot's light, `m` the light of the mark on each slot
+// (`GlowLight` in
 // harmonigraph-scene, which argues why these are weights and nothing else).
 struct LightRow {
     cents: f32,
     l: array<f32, OCTAVE_SLOTS>,
-    p: array<f32, OCTAVE_SLOTS>,
     m: array<f32, OCTAVE_SLOTS>,
 };
 
@@ -2905,11 +2904,9 @@ fn ink_arc(r: f32) -> f32 {
 /// **Linear in every weight**, which is what lets a carried light ease: the
 /// colours, the geometry and the widths come from the uniforms and `cents`
 /// alone, so stepping each weight toward its target is mixing the two readings
-/// by the same amount. Two places are not linear, and both are listed don't-
-/// cares (#1759): the swell cap, past which a slice reaches no further and is
-/// weighed by its light rather than its thickness, and the mark walk's
-/// per-angle max, where two marks crossing on one wedge's soft edge trade the
-/// direction.
+/// by the same amount. One place is not linear, a listed don't-care (#1759):
+/// the mark walk's per-angle max, where two marks crossing on one wedge's soft
+/// edge trade the direction.
 /// `a_stepped_light_reads_as_its_two_readings_mixed` holds the rest.
 ///
 /// **The AUDIO RING is not one of them.** A node's light says something is
@@ -2977,15 +2974,12 @@ fn ink_at(row: LightRow, oct: OctRing, angle: f32) -> vec4<f32> {
             // The slot's lit colour and not the drawn ink: what a slice is lit
             // at is its own light, where the ink's opacity is the node's
             // PRESENCE — the ghost included, which is the backdrop and weighs
-            // nothing. Over the width the lit slice is DRAWN, thinned or
-            // swelled: its light times its reach past the band's inner edge,
-            // at the thickness `p / l` carries, asked of `reach_at` as the
-            // slice itself asks it (`slice_reach`). Below the swell cap that
-            // is `p` times the band's width, which is what makes it linear.
+            // nothing. Its light times the band's width: a slice thinned or
+            // swelled by Thickness keeps its share of the colour (#1784 G3).
             let s = u32(owner);
             let l = row.l[s];
             if l > 0.0 {
-                let w = cov * l * (reach_at(row.p[s] / l, band_in, band_out) - band_in);
+                let w = cov * l * (band_out - band_in);
                 rgb = rgb + oct_slot_colour(row.cents, owner) * w;
                 wsum = wsum + w;
             }

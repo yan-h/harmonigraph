@@ -267,9 +267,8 @@ fn scene_floats(scene: &Scene) -> Floats {
         let GlowStep { level, light } = glow;
         f.one(format!("nodes[{i}].glow.level"), *level);
         {
-            let GlowLight { l, p, m } = light;
+            let GlowLight { l, m } = light;
             f.many(&format!("nodes[{i}].glow.light.l"), *l);
-            f.many(&format!("nodes[{i}].glow.light.p"), *p);
             f.many(&format!("nodes[{i}].glow.light.m"), *m);
         }
         f.one(format!("nodes[{i}].trail"), *trail);
