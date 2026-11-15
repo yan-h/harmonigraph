@@ -20,7 +20,7 @@
 //! Header((version:8,sample_rate:48000.0,audio_file:Some("take-….wav"),...))
 //! Run((at:3.5,song:12.0))
 //! Param((t:3.5,id:"pitch-class-fade",value:2.0))
-//! Canonical(Delta((event:(t:3.51,...),timing:Some((input:512,...)),...)))
+//! Canonical(Delta((event:(t:3.51,...),timing:Some((sample:512,...)),...)))
 //! RunEnd((at:5.5))
 //! ```
 //!
