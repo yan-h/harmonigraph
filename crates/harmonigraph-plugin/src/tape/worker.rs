@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use harmonigraph_core::{NoteRoll, Tuning};
 
@@ -34,10 +34,6 @@ const RECENT: usize = crate::audio_ingress::DESCRIPTORS;
 /// Passes recently opened, kept for a mark dated before a pass's start that
 /// is drained after it opened.
 const OPENED: usize = 16;
-
-/// How often Tape mode's roll is rebuilt while the recording keeps changing
-/// under it: a song's whole roll is rebuilt each time, so not every step.
-const ROLL_EVERY: Duration = Duration::from_millis(250);
 
 /// A rolling block's place on both clocks, to place notes.
 #[derive(Clone, Copy, Debug)]
@@ -104,10 +100,13 @@ pub(crate) struct Worker {
     /// not a recording: a pass replaces the anchors where it plays, whether or
     /// not its audio wins there, and only over what it recorded.
     meters: BTreeMap<i64, Meter>,
-    /// Bumped whenever the store or the meters change, so Tape mode's
-    /// spans are rebuilt only then; and the value they were last built at.
+    /// Bumped whenever the store, the meters or the notes Tape mode's roll
+    /// draws change, so its spans and roll are rebuilt only then; and the
+    /// values they were last built at. While the transport rolls it moves
+    /// once a chunk, about a second.
     generation: u64,
     shown: Option<u64>,
+    roll_shown: Option<u64>,
     playback: Option<Playback>,
     /// The speed Tape mode asks for, which the next cue plays at.
     speed: Speed,
@@ -138,18 +137,11 @@ pub(crate) struct Worker {
     notes_dropped_reported: bool,
     book: Book,
     player: Player,
-    /// Bumped when a mark is placed or a pass's notes dropped; with
-    /// `generation`, what Tape mode's roll was last built from, and when.
-    notes_generation: u64,
-    roll_shown: Option<(u64, u64)>,
-    roll_built: Option<Instant>,
     /// Tape mode's roll was on screen at the last exchange, so worth
     /// building.
     visible: bool,
-    /// A roll built between holds, for the next exchange to hand over, and
-    /// the one it replaced, freed between holds too.
+    /// A roll built between holds, for the next exchange to hand over.
     built_roll: Option<Arc<NoteRoll>>,
-    retired_roll: Option<Arc<NoteRoll>>,
 }
 
 /// Song seconds as the console prints them.
@@ -196,12 +188,9 @@ impl Worker {
             notes_dropped_reported: false,
             book: Book::default(),
             player: Player::default(),
-            notes_generation: 0,
             roll_shown: None,
-            roll_built: None,
             visible: false,
             built_roll: None,
-            retired_roll: None,
         }
     }
 
@@ -380,7 +369,7 @@ impl Worker {
             for &(pass, start, frame) in &self.opened {
                 if start > time {
                     self.book.passes.entry(pass).or_default().place(frame, mark);
-                    self.notes_generation += 1;
+                    self.generation += 1;
                 }
             }
             // Newest first, and no further back than the first block that
@@ -401,7 +390,7 @@ impl Worker {
                 // chunk still being recorded changes it when that commits.
                 let recording = self.building.as_ref().filter(|c| c.stamp.pass == p.pass);
                 if recording.is_none_or(|chunk| frame < chunk.start) {
-                    self.notes_generation += 1;
+                    self.generation += 1;
                 }
             }
         }
@@ -479,7 +468,7 @@ impl Worker {
             let before = self.book.passes.len();
             self.book.passes.retain(|id, _| live.contains(id) || Some(*id) == current);
             if self.book.passes.len() != before {
-                self.notes_generation += 1;
+                self.generation += 1;
             }
         }
         self.generation += 1;
@@ -533,7 +522,7 @@ impl Worker {
         view.bytes = self.store.as_ref().map_or(0, Store::bytes) + self.book.bytes();
         self.visible = view.showing && open && settings.show_roll;
         if let Some(roll) = self.built_roll.take() {
-            self.retired_roll = Some(std::mem::replace(&mut view.notes, roll));
+            view.notes = roll;
         }
         if self.shown != Some(self.generation) {
             self.shown = Some(self.generation);
@@ -545,18 +534,12 @@ impl Worker {
     }
 
     /// Rebuild Tape mode's roll if the recording changed under it, with no
-    /// lock held: it walks every note recorded. At most every [`ROLL_EVERY`],
-    /// so a recording growing under the view rebuilds it a few times a second
-    /// rather than every step.
+    /// lock held: it walks every note recorded.
     pub(crate) fn roll(&mut self) {
-        self.retired_roll = None;
-        let built = (self.generation, self.notes_generation);
-        let due = self.roll_built.is_none_or(|at| at.elapsed() >= ROLL_EVERY);
-        if !self.visible || self.roll_shown == Some(built) || !due {
+        if !self.visible || self.roll_shown == Some(self.generation) {
             return;
         }
-        self.roll_shown = Some(built);
-        self.roll_built = Some(Instant::now());
+        self.roll_shown = Some(self.generation);
         let roll = self.store.as_ref().map_or_else(Default::default, |store| {
             super::notes::song_roll(store, &self.book.passes)
         });
