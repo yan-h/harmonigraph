@@ -406,24 +406,27 @@ fn a_node_never_hides_its_own_cross_or_name() {
     let Some(mut shooter) = Shooter::new([256, 256]) else {
         return;
     };
-    let mut moved = |own: bool| {
-        let mut shot = |hide_behind: f32| {
-            let mut scene = a_lone_ring();
-            let behind = a_bare_place(&mut scene, -2.0);
-            let place = if own { 0 } else { behind };
-            let top = band_top(&scene, 0);
-            a_cross_on(&mut scene, place, top);
-            scene.view.shadow = one_shadow(1.0, 0.5);
-            scene.view.hide_behind = hide_behind;
-            scene.view.glow_reach = 0.0;
-            scene.view.note_bloom = 0.0;
-            // Clear of the crossing, still over the band.
-            let name = a_name_on(&scene, place, top + glam::vec3(0.6, 0.0, 0.0), 6.0);
-            shooter.draw(&scene, name)
-        };
-        differing_pixels(&shot(0.0), &shot(1.0))
+    let mut shot = |own: bool, hide_behind: f32, named: bool| {
+        let mut scene = a_lone_ring();
+        let behind = a_bare_place(&mut scene, -2.0);
+        let place = if own { 0 } else { behind };
+        let top = band_top(&scene, 0);
+        a_cross_on(&mut scene, place, top);
+        scene.view.shadow = one_shadow(1.0, 0.5);
+        scene.view.hide_behind = hide_behind;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        // Clear of the crossing, still over the band.
+        let name = a_name_on(&scene, place, top + glam::vec3(0.6, 0.0, 0.0), 6.0);
+        shooter.draw(&scene, if named { name } else { LatticeLabels::default() })
     };
-    let reached = moved(false);
+    let reached = differing_pixels(&shot(false, 0.0, true), &shot(false, 1.0, true));
     assert!(reached > 50, "from behind they were hidden by only {reached} pixels");
-    assert_eq!(moved(true), 0, "a node hid part of its own cross or name");
+    let own = shot(true, 1.0, true);
+    assert!(differing_pixels(&own, &shot(true, 1.0, false)) > 0, "the name drew nothing");
+    assert_eq!(
+        differing_pixels(&shot(true, 0.0, true), &own),
+        0,
+        "a node hid part of its own cross or name"
+    );
 }

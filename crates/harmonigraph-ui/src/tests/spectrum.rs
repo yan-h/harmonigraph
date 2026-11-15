@@ -219,8 +219,31 @@ fn a_live_column_is_stamped_at_the_centre_of_its_window() {
         "a column measured over [{:.3}, {now}] was stamped {stamped}, not {lag} s back",
         now - frame,
     );
-    // The pane allows for this lag when extending fresh data to the now-line.
-    assert!((spectrum.column_lag() - lag).abs() < 1e-9);
+}
+
+/// The frame loop stays awake for as long as the curve is drawn after its
+/// samples stop, whatever the shell's rate: at 44.1 kHz Precise lags 15 ms
+/// longer than the 48 kHz lag a frame reads from the settings, and a bound
+/// built on that lag let the loop idle on a curve still drawn.
+#[test]
+fn the_curve_moves_for_as_long_as_it_is_drawn_at_44_1_khz() {
+    let sr = 44_100.0;
+    let config =
+        SpectrumConfig { window: SpectrumWindow::Precise, release: 2.0, ..Default::default() };
+    let tone: Vec<f32> = (0..2 * config.window.frame(sr))
+        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin())
+        .collect();
+    let mut spectrum = AudioSpectrum::default();
+    let now = 5.0;
+    crate::spectrum::heard_at(&mut spectrum, &tone, 1, sr, now, &config);
+    let last_drawn = now + AudioSpectrum::HOLD_SECONDS - 1e-3;
+    assert!(spectrum.display(last_drawn).is_some(), "the fixture's curve hid early");
+    for ms in 0..1000 {
+        let t = now + f64::from(ms) * 1e-3;
+        if spectrum.display(t).is_some() {
+            assert!(spectrum.moving(t), "the curve is drawn at {t} s and idles");
+        }
+    }
 }
 
 #[test]
@@ -574,7 +597,7 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
     );
     assert!(passes >= 2, "the fixture must actually discard a pass");
     assert!(state.picture.surfaces.glow_fade.len() >= 2, "both lattice surfaces must draw");
-    assert_eq!(state.picture.runtime.spectrum.store.fold_measurements, 1);
+    assert_eq!(state.picture.runtime.spectrum.fold_measurements, 1);
 }
 
 #[test]
@@ -591,7 +614,7 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     let first = spectrum.folded(1.0, 2.0).unwrap().to_vec();
     assert!(first.iter().any(|v| *v > 0.0), "the fixture must contain measured energy");
     assert_eq!(spectrum.folded(1.0, 2.0).unwrap().as_slice(), first);
-    assert_eq!(spectrum.store.fold_measurements, 1);
+    assert_eq!(spectrum.fold_measurements, 1);
     let wide = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(wide, first, "a changed width must change this fixture's measurement");
     // More audio while the frame's time stands still, so only the display
@@ -601,9 +624,9 @@ fn fold_measurement_observes_same_time_audio_and_width_edits() {
     feed.feed(&mut spectrum, &short, 1, 48_000.0, 1.0 + batch / 48_000.0, &cfg);
     let next = spectrum.folded(1.0, 50.0).unwrap().to_vec();
     assert_ne!(next, wide, "same-time audio must invalidate the measured grid");
-    assert_eq!(spectrum.store.fold_measurements, 3);
+    assert_eq!(spectrum.fold_measurements, 3);
     assert!(spectrum.folded(2.0, 50.0).is_none(), "expired audio must not reuse a Fold");
-    assert_eq!(spectrum.store.fold_measurements, 3);
+    assert_eq!(spectrum.fold_measurements, 3);
 }
 
 /// A run's columns are a function of its samples and the frame zero its
@@ -642,8 +665,8 @@ fn a_run_cut_into_any_chunks_makes_the_same_columns() {
                         actual.extend(feed(&mut chunked, &mut analyses.1, chunk, sr, origin));
                     }
                     assert_eq!(analyses.0.frames_seen, analyses.1.frames_seen);
-                    assert_eq!(whole.store.display, chunked.store.display);
-                    assert_eq!(whole.store.last_samples, chunked.store.last_samples);
+                    assert_eq!(whole.display, chunked.display);
+                    assert_eq!(whole.last_samples, chunked.last_samples);
                 }
                 assert!(expected.len() > 10, "fixture must reach measurements");
                 assert!(
@@ -692,104 +715,6 @@ fn a_setting_listens_as_long_at_every_sample_rate() {
     );
 }
 
-/// A column of `power` in every bucket at `time`, as the analysis hands one
-/// over.
-fn delivered(time: f64, power: f32) -> Delivery {
-    Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
-        time,
-        power: [power; harmonigraph_core::spectrum::SPECTRUM_BINS],
-        step: AudioSpectrum::FFT_INTERVAL,
-    }))
-}
-
-/// A column at or up to a second before the newest is dropped and counted:
-/// it folds into no slab, moves the newest date nowhere, and stamps no
-/// heard column — which is what tells a drop from a fold here, since the
-/// column before it was silent.
-#[test]
-fn the_guard_drops_a_column_at_or_just_before_the_newest() {
-    let cfg = SpectrumConfig::default();
-    let mut spectrum = AudioSpectrum::default();
-    let clears = spectrum.clears();
-    spectrum.give(clears, [delivered(100.0, 0.0)], &cfg);
-    assert_eq!(spectrum.last_audible().column, None, "the fixture's first column is silent");
-    crate::spectrum::expecting_backward_dates(|| {
-        let backward = [100.0, 100.0 - 0.13, 100.0 - 0.99, f64::NAN];
-        spectrum.give(clears, backward.map(|time| delivered(time, 1.0)), &cfg);
-    });
-    assert_eq!(spectrum.guard_counts(), (4, 0));
-    assert_eq!(spectrum.newest_column(), Some(100.0));
-    assert_eq!(spectrum.last_audible().column, None, "a dropped column was heard");
-    assert_eq!(spectrum.pyramid().open_count(0), 1, "a dropped column was folded");
-}
-
-/// A column further back than a second resets the history and starts it
-/// again, counted, and so does a correct column after one dated an hour
-/// ahead, which would otherwise have every correct column dropped for an
-/// hour. A reset is not a Clear: the rest of the hand-over it happened in
-/// still joins the history it started, where a Clear between two
-/// hand-overs keeps the second out.
-#[test]
-fn the_guard_resets_on_a_long_step_back_and_keeps_the_rest_of_the_batch() {
-    let cfg = SpectrumConfig::default();
-    let mut spectrum = AudioSpectrum::default();
-    let clears = spectrum.clears();
-    spectrum.give(clears, [delivered(100.0, 1.0)], &cfg);
-    let epoch = spectrum.history_epoch();
-    crate::spectrum::expecting_backward_dates(|| {
-        spectrum.give(clears, [delivered(100.0 - 1.01, 1.0)], &cfg);
-    });
-    assert_eq!(spectrum.guard_counts(), (0, 1));
-    assert_eq!(spectrum.newest_column(), Some(100.0 - 1.01), "the reset dropped its column");
-    assert_ne!(spectrum.history_epoch(), epoch, "the colour memory missed the reset");
-
-    let ahead = 100.0 + 3600.0;
-    let batch = [ahead, 101.0, 101.008, 101.016].map(|time| delivered(time, 1.0));
-    crate::spectrum::expecting_backward_dates(|| spectrum.give(clears, batch, &cfg));
-    assert_eq!(spectrum.guard_counts(), (0, 2));
-    assert_eq!(spectrum.newest_column(), Some(101.016), "the batch after the reset was lost");
-    assert_eq!(spectrum.pyramid().open_count(crate::spectrogram::LEVELS - 1), 3);
-
-    // A Clear between two hand-overs of audio taken before it.
-    spectrum.give(clears, [delivered(101.024, 1.0)], &cfg);
-    spectrum.clear_history();
-    spectrum.give(clears, [delivered(101.032, 1.0)], &cfg);
-    assert_eq!(spectrum.newest_column(), None, "a hand-over taken before the Clear joined it");
-}
-
-/// A crash inside the fold leaves the levels part-folded, which a history
-/// written once would draw for as long as a level keeps a slab, so it resets
-/// the history; a crash anywhere else costs it nothing. Either way the next
-/// column folds.
-#[test]
-fn a_crash_in_the_fold_resets_the_history_and_one_outside_it_does_not() {
-    let bins = [0.5; harmonigraph_core::spectrum::SPECTRUM_BINS];
-    let mut spectrum = AudioSpectrum::default();
-    spectrum.push_history(1.0, &bins);
-    let epoch = spectrum.history_epoch();
-
-    let outside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        spectrum.push_history(1.008, &bins);
-        panic!("a fault after the fold");
-    }));
-    assert!(outside.is_err());
-    assert_eq!(spectrum.newest_column(), Some(1.008), "a crash outside the fold cost history");
-    assert_eq!((spectrum.history_epoch(), spectrum.guard_counts()), (epoch, (0, 0)));
-
-    crate::spectrogram::FAIL_AT_LEVEL.set(Some(7));
-    let inside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        spectrum.push_history(1.016, &bins);
-    }));
-    crate::spectrogram::FAIL_AT_LEVEL.set(None);
-    assert!(inside.is_err(), "the fault was not injected");
-    assert_eq!(spectrum.newest_column(), None, "a part-folded history survived the crash");
-    assert_ne!(spectrum.history_epoch(), epoch, "the colour memory missed the reset");
-    assert_eq!(spectrum.guard_counts(), (0, 1));
-
-    spectrum.push_history(1.024, &bins);
-    assert_eq!(spectrum.newest_column(), Some(1.024));
-}
-
 /// The costs the slab pyramid adds, for the numbers #1758 quotes: a column
 /// folded into all sixteen levels, a silent one on the fast path, and the
 /// hold of the editor lock a mono catch-up takes, 371 columns given at
@@ -826,7 +751,6 @@ fn the_folds_timings() {
     println!("a silent column, fast path: {:.3} us", per_column(&silent));
 
     let mut spectrum = AudioSpectrum::default();
-    let clears = spectrum.clears();
     let deliveries: Vec<_> = (0..371)
         .map(|k| {
             Delivery::Column(Box::new(crate::spectrum::AnalyzedColumn {
@@ -837,7 +761,7 @@ fn the_folds_timings() {
         })
         .collect();
     let start = Instant::now();
-    spectrum.give(clears, deliveries, &cfg);
+    spectrum.give(deliveries, &cfg);
     let hold = start.elapsed().as_secs_f64() * 1e3;
     println!("the hold of a 371-column catch-up given at once: {hold:.3} ms");
 }

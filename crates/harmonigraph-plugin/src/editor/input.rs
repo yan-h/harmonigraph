@@ -40,11 +40,6 @@ pub(crate) struct LiveInput {
 /// moved out with it: what [`LiveInput::analyze`] runs without the lock.
 pub(crate) struct Taken {
     analysis: harmonigraph_ui::SpectrumAnalysis,
-    /// The history's Clear count at take: a Clear before the give keeps this
-    /// step's columns out (see [`AudioSpectrum::give`]).
-    ///
-    /// [`AudioSpectrum::give`]: harmonigraph_ui::AudioSpectrum::give
-    clears: u32,
     audio: TakenAudio,
 }
 
@@ -128,7 +123,6 @@ impl LiveInput {
         let Some(offset) = self.clock.offset else { return };
         let tracker = &mut runtime.tracker;
         let (recorder, tape) = (&mut self.recorder, &mut self.tape_notes);
-        recorder.catch_up(tracker, tape);
         self.consumer.drain(|event| {
             let result = tracker.handle_canonical_mapped(event, offset);
             debug_assert!(result.is_ok(), "validated canonical publication");
@@ -146,11 +140,7 @@ impl LiveInput {
     /// spectrogram read this one analyzer, the curve is always drawn, and
     /// feeding it is also what drives smooth repaint while anything it heard
     /// is still on screen (`harmonigraph_ui::Animating::audible`).
-    fn take_audio(
-        &mut self,
-        runtime: &mut harmonigraph_ui::VisualRuntime,
-        appearance: &harmonigraph_ui::AppearanceDocument,
-    ) -> Option<Taken> {
+    fn take_audio(&mut self, appearance: &harmonigraph_ui::AppearanceDocument) -> Option<Taken> {
         // One clock conversion per take, shared with note delivery and made
         // in the same hold, observed and then mapped as a frame's drain did.
         let offset = self.clock.offset?;
@@ -178,13 +168,11 @@ impl LiveInput {
             self.spare = audio;
             return None;
         }
-        // An analysis never given back, which no step leaves, would otherwise
-        // drop this audio and every take's after it. Healed as a panicking
-        // step is, with a fresh analysis starting a fresh run at this audio.
+        // Every step gives the analysis back, and a step that panicked with
+        // it out has it replaced by `recover_analysis` before the next.
         debug_assert!(self.analysis.is_some(), "the analysis was given back");
-        audio.blocks[0].restart |= self.analysis.is_none();
         let analysis = self.analysis.take().unwrap_or_default();
-        Some(Taken { analysis, clears: runtime.spectrum.clears(), audio })
+        Some(Taken { analysis, audio })
     }
     /// Run the FFTs over what [`Self::take`] moved out, with no lock held.
     pub(crate) fn analyze(taken: &mut Taken) {
@@ -207,24 +195,27 @@ impl LiveInput {
             );
         }
     }
+    /// The lag the analysis runs at, which tells a test the resolution it
+    /// analyzes under; `None` while a step has it out.
+    #[cfg(test)]
+    pub(crate) fn analysis_lag(&self) -> Option<f64> {
+        self.analysis.as_ref().map(harmonigraph_ui::SpectrumAnalysis::lag)
+    }
     /// Put a fresh analysis back if a panic between [`Self::take`] and
     /// [`Self::give`] lost the one taken, and start the source run over, so the
     /// next block re-anchors the fresh analyzer's grid instead of extending
     /// the interrupted run's.
-    ///
-    /// The store keeps the lag the lost analysis last handed over, which is
-    /// the running resolution's, until the fresh one hands over its own.
     pub(crate) fn recover_analysis(&mut self) {
         if self.analysis.is_none() {
             self.analysis = Some(Default::default());
             self.audio_position = None;
         }
     }
-    /// Hand what [`Self::analyze`] made to the store, and put the analysis
+    /// Hand what [`Self::analyze`] made to the spectrum, and put the analysis
     /// back.
     pub(crate) fn give(&mut self, runtime: &mut harmonigraph_ui::VisualRuntime, taken: Taken) {
-        let Taken { analysis, clears, mut audio } = taken;
-        runtime.spectrum.give(clears, audio.deliveries.drain(..), &audio.config);
+        let Taken { analysis, mut audio } = taken;
+        runtime.spectrum.give(audio.deliveries.drain(..), &audio.config);
         debug_assert!(self.analysis.is_none(), "given back twice, or after a recover");
         self.analysis = Some(analysis);
         audio.samples.clear();
@@ -286,7 +277,7 @@ impl LiveInput {
         now: f64,
     ) -> Option<Taken> {
         self.drain_into_tracker(runtime, now);
-        self.take_audio(runtime, appearance)
+        self.take_audio(appearance)
     }
     /// A whole step with the lock held throughout: take, analyze, give. The
     /// input worker splits the same three around its lock; this is them in
@@ -651,13 +642,6 @@ mod tests {
                     sequence: 1,
                     lifetime: 1,
                     provenance: harmonigraph_core::confirmed::PitchProvenance::AcceptedOutput,
-                    timing: Some(harmonigraph_core::canonical::EventTiming {
-                        clock: Default::default(),
-                        input: 0,
-                        planned: None,
-                        sample: 0,
-                        sample_rate: 48000.0,
-                    }),
                     pitch_microcents: None,
                 })
                 .unwrap();
@@ -685,7 +669,7 @@ mod tests {
         producer.observe_clock(11.0);
         // Audio now=11 and GUI now=21. A delayed event from audio=2 belongs
         // at GUI=12; neither its batch nor a later idle poll is a new clock.
-        use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta};
+        use harmonigraph_core::canonical::NoteDelta;
         use harmonigraph_core::confirmed::PitchProvenance;
         let accepted = NoteDelta {
             assignment: None,
@@ -694,18 +678,11 @@ mod tests {
             sequence: 1,
             lifetime: 61,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(EventTiming {
-                clock: ClockId::default(),
-                input: 96000,
-                planned: None,
-                sample: 96000,
-                sample_rate: 48000.0,
-            }),
             pitch_microcents: None,
         };
         producer.note(accepted).unwrap();
         let event = NoteEvent::on(2.0, SourceId::DIRECT, 0, 72, 0.8);
-        producer.note(event.into()).unwrap();
+        producer.note(NoteDelta { event, lifetime: 62, ..accepted }).unwrap();
         shared.input.drain_into_tracker(&mut shared.ui.picture.runtime, 21.0);
         assert_eq!(
             shared
@@ -724,12 +701,13 @@ mod tests {
             SourceId::DIRECT,
             1,
             3.0,
-            0,
+            1,
             true,
             &[VoiceBaseline {
                 note: 72,
+                lifetime: 62,
+                provenance: PitchProvenance::AcceptedOutput,
                 actual_onset: 2.0,
-                input_onset: 2.0,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
                 ..Default::default()
@@ -749,7 +727,7 @@ mod tests {
             .find(|n| n.source == SourceId::DIRECT)
             .unwrap();
         assert_eq!(note.start, 12.0);
-        assert!(note.history_complete, "baseline retains the matching observed lifetime");
+        assert!(note.history_complete, "the baseline continues the press its lifetime names");
         assert_eq!(
             shared
                 .ui
@@ -795,8 +773,6 @@ mod tests {
                 note: 72,
                 lifetime: 61,
                 actual_onset: 2.0,
-                input_onset: 2.0,
-                onset: accepted.timing,
                 velocity: 0.8,
                 pitch_microcents: 7_200_000_000,
                 provenance: PitchProvenance::AcceptedOutput,

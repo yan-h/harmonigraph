@@ -42,10 +42,6 @@ const MIN_SECONDS: f64 = 2.0;
 /// The space a label needs along the time axis, in points, before the ruler
 /// labels every bar or every few.
 const LABEL_SPACING: f32 = 44.0;
-/// The widest stretch of song the region will zoom out to: the widest slabs
-/// the pyramid holds, no more of them than a live window is cut into. Past
-/// it, the slabs drawn grow with the window rather than with the pane.
-const MAX_SECONDS: f64 = COLUMN_SECONDS * (1u32 << (LEVELS - 1)) as f64 * LIVE_SLAB_CAP as f64;
 /// The thickness, in points, of the band along the low-pitch edge that marks
 /// what is recorded: the one place a gap reads apart from recorded silence.
 const COVERAGE_PT: f32 = 3.0;
@@ -81,9 +77,10 @@ impl Window {
         self.to - self.from
     }
 
-    /// Zoom by `factor` (above 1 zooms in) about song seconds `at`.
+    /// Zoom by `factor` (above 1 zooms in) about song seconds `at`, out to
+    /// the whole strip at most.
     pub(super) fn zoom(&mut self, factor: f64, at: f64) {
-        let width = (self.seconds() / factor).clamp(MIN_SECONDS, MAX_SECONDS);
+        let width = (self.seconds() / factor).clamp(MIN_SECONDS, self.end);
         let share = (at - self.from) / self.seconds();
         self.from = self.on_strip(at - share * width, width);
         self.to = self.from + width;
@@ -112,17 +109,17 @@ impl Window {
         self.moved(at - 0.5 * self.seconds() - self.from)
     }
 
-    /// Its start moved to `from`, its end held, within the zoom's bounds.
+    /// Its start moved to `from`, a point on the strip, its end held, and no
+    /// narrower than the zoom allows.
     fn with_from(self, from: f64) -> Window {
-        // The end is at least `MIN_SECONDS` into the song, so the bounds hold
-        // their order.
-        let from = from.clamp((self.to - MAX_SECONDS).max(0.0), self.to - MIN_SECONDS);
+        let from = from.min(self.to - MIN_SECONDS);
         Window { from, zoomed: true, ..self }
     }
 
-    /// Its end moved to `to`, its start held, within the zoom's bounds.
+    /// Its end moved to `to`, a point on the strip, its start held, and no
+    /// narrower than the zoom allows.
     fn with_to(self, to: f64) -> Window {
-        let to = to.clamp(self.from + MIN_SECONDS, self.from + MAX_SECONDS);
+        let to = to.max(self.from + MIN_SECONDS);
         Window { to, zoomed: true, ..self }
     }
 }
@@ -198,11 +195,15 @@ pub(super) fn window(ui: &egui::Ui, view: &TapeView, surface: usize) -> Window {
     held.filter(|w| w.zoomed).map_or(fit, |w| Window { end: fit.end, ..w }.moved(0.0))
 }
 
-/// Keep the stretch shown for the next frame, and tell the worker which
-/// columns to analyze first.
-pub(super) fn keep_window(ui: &egui::Ui, surface: usize, window: Window, view: &mut TapeView) {
+/// Keep the stretch shown for the next frame.
+pub(super) fn keep_window(ui: &egui::Ui, surface: usize, window: Window) {
     ui.data_mut(|d| d.insert_temp(window_id(surface), window));
-    view.window = Some((window.from, window.to));
+}
+
+/// The stretch shown on `surface` by the last frame drawn in Tape mode.
+#[cfg(test)]
+pub(super) fn kept_window(ctx: &egui::Context, surface: usize) -> Option<(f64, f64)> {
+    ctx.data(|d| d.get_temp::<Window>(window_id(surface))).map(|w| (w.from, w.to))
 }
 
 /// The tape's own GPU grid, apart from the live heatmap's, so that switching
@@ -219,8 +220,8 @@ fn slab_seconds(level: usize) -> f64 {
 /// This frame lets go of the click that cues the tape: over the song, where a
 /// cue can start. The pane senses drags only, so a drag takes hold on the
 /// press; a press let go of before it travelled far enough to be a drag is a
-/// click. `drag_zoom` reads the same, to take back what the press panned.
-pub(super) fn cues(response: &egui::Response, axes: &Axes, split: f32, view: &TapeView) -> bool {
+/// click.
+fn cues(response: &egui::Response, axes: &Axes, split: f32, view: &TapeView) -> bool {
     response.drag_stopped()
         && response.ctx.input(|i| i.pointer.could_any_button_be_click())
         && view.enabled
@@ -827,12 +828,12 @@ mod tests {
     }
 
     #[test]
-    fn zooming_out_stops_where_the_widest_slabs_fill_a_live_window() {
-        let mut window = Window { from: 0.0, to: 60.0, zoomed: false, end: 60.0 };
-        for _ in 0..100 {
-            window.zoom(0.5, 30.0);
+    fn zooming_out_stops_at_the_whole_strip() {
+        let mut window = Window { from: 20.0, to: 30.0, zoomed: true, end: 60.0 };
+        for _ in 0..10 {
+            window.zoom(0.5, 25.0);
         }
-        assert_eq!(window.seconds(), MAX_SECONDS);
+        assert_eq!((window.from, window.to), (0.0, 60.0));
     }
 
     /// A pan or a zoom stops at the strip's end with its width kept, as at

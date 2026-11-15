@@ -5,7 +5,7 @@
 //! the display and the take show a schedule rather than a confirmation. What
 //! that costs is written down: a note the host refuses is drawn anyway, and
 //! nothing in the protocol can tell.
-use harmonigraph_core::canonical::{EventTiming, NoteDelta, SourceBaseline, VoiceBaseline};
+use harmonigraph_core::canonical::{NoteDelta, SourceBaseline, VoiceBaseline};
 use harmonigraph_core::confirmed::{
     ConfirmedPitch, ConfirmedPitches, PitchProvenance, HELD_PER_SOURCE,
 };
@@ -48,8 +48,6 @@ pub struct Stamp {
     /// finds its voice by what the event addresses.
     pub lifetime: u64,
     pub time: f64,
-    pub input_time: f64,
-    pub timing: EventTiming,
 }
 
 impl State {
@@ -194,7 +192,6 @@ impl State {
             sequence: stamp.sequence,
             lifetime,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(stamp.timing),
             pitch_microcents: Some(voice.pitch_microcents),
             assignment: VoiceBaseline::metadata(voice),
             partial_output: false,
@@ -220,9 +217,7 @@ impl State {
                 note,
                 host_note_id: id,
                 lifetime: stamp.lifetime,
-                input_onset: stamp.input_time,
                 actual_onset: stamp.time,
-                onset: Some(stamp.timing),
                 velocity,
                 pitch_microcents: pitch,
                 onset_pitch_microcents: pitch,
@@ -304,7 +299,6 @@ impl State {
             sequence: stamp.sequence,
             lifetime,
             provenance: PitchProvenance::AcceptedOutput,
-            timing: Some(stamp.timing),
             pitch_microcents,
             assignment: self.voice(lifetime).and_then(VoiceBaseline::metadata),
             partial_output: false,

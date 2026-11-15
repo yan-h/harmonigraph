@@ -91,11 +91,6 @@ impl Meter {
         self.beats + seconds * self.tempo / 60.0
     }
 
-    /// The same meter read `seconds` after this anchor.
-    pub fn after(self, seconds: f64) -> Meter {
-        Meter { beats: self.beats_after(seconds), ..self }
-    }
-
     /// Seconds from this anchor to quarter note `beats`.
     fn seconds_to(&self, beats: f64) -> f64 {
         (beats - self.beats) * 60.0 / self.tempo
@@ -168,21 +163,22 @@ pub struct TapeView {
     /// that reached the picture until the next one starts or the transport
     /// rolls: what places the notes played over it.
     pub audition: Option<Audition>,
-    /// The tuning axes the spot sounding now was recorded under, while an
-    /// audition is cued or plays: the picture draws with them in place of the
-    /// host's, so a note lands where it was heard (see
-    /// `VisualRuntime::observe_configuration`).
-    pub tuning: Option<harmonigraph_core::Tuning>,
-    /// The lattice map selected where the spot sounding now was recorded,
-    /// while an audition is cued or plays: the lattice marks its nodes, where
-    /// the recorded notes were assigned.
+    /// The lattice map selected where the spot heard last was recorded, which
+    /// tuning automation moves over the song: the lattice marks its nodes,
+    /// where the recorded notes were assigned. Set by each block of an
+    /// audition's audio, so a new cue marks the last spot's, or the live map,
+    /// until its first block arrives, a few tens of milliseconds; cleared
+    /// when the audition ends. The tuning axes, which nothing automates
+    /// (#1756), stay the host's.
     pub map: Option<RecordedMap>,
     /// What was played along the song, in song seconds: each stretch's notes
     /// from the recording whose audio won there, so the roll shows what an
-    /// audition would play. The worker's copy, shared; rebuilt when the
-    /// recording changes.
+    /// audition would play. The worker's copy, shared; rebuilt after the
+    /// recording changes, only while Tape mode shows, the editor is open and
+    /// the roll is on.
     pub notes: std::sync::Arc<harmonigraph_core::NoteRoll>,
-    /// Memory the recording holds.
+    /// Memory the recording holds: its audio and spectrogram, which the cap
+    /// counts, and its notes, which it does not.
     pub bytes: usize,
     /// What is recorded, in song order.
     pub spans: Vec<TapeSpan>,
@@ -202,11 +198,8 @@ pub struct TapeView {
     /// The Analyzer draws the tape rather than the live picture. Never saved:
     /// the tape is not, so a reopened project would open on an empty picture.
     /// Set only by the Analyzer's Tape tab, which clears it for any other
-    /// tab: the plugin analyzes the tape while it is set.
+    /// tab. The plugin analyzes the tape whether it is set or not.
     pub showing: bool,
-    /// The song seconds the Analyzer shows while [`showing`](Self::showing),
-    /// which the worker analyzes first.
-    pub window: Option<(f64, f64)>,
 }
 
 impl TapeView {

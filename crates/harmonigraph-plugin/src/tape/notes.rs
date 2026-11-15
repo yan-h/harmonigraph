@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 
 use harmonigraph_core::notes::{Expression, NoteEvent, NoteEventKind, NoteTracker};
-use harmonigraph_core::{Expressions, NoteRoll, Tuning, VoiceKey};
+use harmonigraph_core::{Expressions, NoteRoll, VoiceKey};
 use harmonigraph_ui::tape::Audition;
 
 use super::store::Store;
@@ -70,25 +70,18 @@ impl Mark {
 type Voice = (VoiceKey, f64, Sounding);
 
 /// The live drain's half: the marks one tracker event made, read as the
-/// change in the held voices since the last event. The baseline is what the
-/// marks so far say is held, so a change made to the tracker outside the drain
-/// is recorded at the next event rather than lost, and so is a change the
-/// [`NOTES`] bound held back.
+/// change in the held voices since the last event, so a change made to the
+/// tracker outside the drain is recorded at the next event rather than lost.
 #[derive(Default)]
 pub(crate) struct Recorder {
     before: Vec<Voice>,
     after: Vec<Voice>,
-    next: Vec<Voice>,
-    /// The time of the latest event whose marks the bound held back, if any.
-    /// The latest, so a held-back mark is never dated before one of the same
-    /// voice that fitted: a lone Off fits where an Off and On together did
-    /// not.
-    behind: Option<f64>,
 }
 
-/// Marks the live drain may hold for one step; past it, a step's marks wait
-/// for the next step ([`Recorder::catch_up`]), so they are recorded late
-/// rather than lost. Swapped out every step.
+/// Marks the live drain may hold for one step, swapped out every step: past
+/// it the step's further marks are lost. One event can make several (a
+/// retrigger an Off and an On, a tuning change a Change per held voice), so
+/// a retrigger split at the cap can lose either half.
 pub(crate) const NOTES: usize = 4096;
 
 impl Recorder {
@@ -102,161 +95,82 @@ impl Recorder {
     }
 
     /// After the tracker applies an event: what changed, at presentation
-    /// time `time`, into `out`.
-    ///
-    /// A voice whose marks do not fit keeps its old reading in the baseline,
-    /// so the next event's comparison makes them again. Moving the baseline
-    /// to what was seen instead lost a dropped Off for good, and the tape
-    /// held that note to the end of its pass on every playback.
+    /// time `time`, into `out`, as far as [`NOTES`] allows.
     pub(crate) fn record(&mut self, tracker: &NoteTracker, time: f64, out: &mut Vec<(f64, Mark)>) {
         Self::held(tracker, &mut self.after);
-        self.next.clear();
-        let next = &mut self.next;
-        let behind = &mut self.behind;
-        // Every mark one voice needs, or none of them.
-        let mut push = |marks: &[Mark]| {
-            let fits = out.len() + marks.len() <= NOTES;
-            if fits {
-                out.extend(marks.iter().map(|&mark| (time, mark)));
-            } else {
-                *behind = Some(time);
+        let mut push = |mark: Mark| {
+            if out.len() < NOTES {
+                out.push((time, mark));
             }
-            fits
         };
         // Both are in key order: the tracker's held map is a BTreeMap.
         let (mut a, mut b) = (self.before.iter().peekable(), self.after.iter().peekable());
         loop {
             match (a.peek(), b.peek()) {
                 (None, None) => break,
-                (Some(&&old @ (key, _, _)), None) => {
-                    if !push(&[Mark::Off { key }]) {
-                        next.push(old);
-                    }
+                (Some(&&(key, _, _)), None) => {
+                    push(Mark::Off { key });
                     a.next();
                 }
-                (None, Some(&&new @ (key, _, sounding))) => {
-                    if push(&[Mark::On { key, sounding }]) {
-                        next.push(new);
-                    }
+                (None, Some(&&(key, _, sounding))) => {
+                    push(Mark::On { key, sounding });
                     b.next();
                 }
-                (Some(&&old), Some(&&new)) => {
-                    let ((was_key, onset, was), (key, again, sounding)) = (old, new);
+                (Some(&&(was_key, onset, was)), Some(&&(key, again, sounding))) => {
                     if was_key < key {
-                        if !push(&[Mark::Off { key: was_key }]) {
-                            next.push(old);
-                        }
+                        push(Mark::Off { key: was_key });
                         a.next();
                         continue;
                     }
                     if key < was_key {
-                        if push(&[Mark::On { key, sounding }]) {
-                            next.push(new);
-                        }
+                        push(Mark::On { key, sounding });
                         b.next();
                         continue;
                     }
-                    let recorded = if onset != again {
-                        push(&[Mark::Off { key }, Mark::On { key, sounding }])
+                    if onset != again {
+                        push(Mark::Off { key });
+                        push(Mark::On { key, sounding });
                     } else if was != sounding {
-                        push(&[Mark::Change { key, sounding }])
-                    } else {
-                        true
-                    };
-                    next.push(if recorded { new } else { old });
+                        push(Mark::Change { key, sounding });
+                    }
                     a.next();
                     b.next();
                 }
             }
         }
-        std::mem::swap(&mut self.before, &mut self.next);
-    }
-
-    /// At the start of a step's drain, with `out` empty again: the marks the
-    /// bound held back, at the time of the last event that did. Waiting for
-    /// the next event instead could wait past the end of the pass, and the
-    /// note would still hang.
-    pub(crate) fn catch_up(&mut self, tracker: &NoteTracker, out: &mut Vec<(f64, Mark)>) {
-        if let Some(time) = self.behind.take() {
-            self.record(tracker, time, out);
-        }
+        std::mem::swap(&mut self.before, &mut self.after);
     }
 }
 
-/// Marks between two of a pass's checkpoints: what bounds a chase. A dense
-/// pass (MPE pressure on four notes for half an hour, 675k marks) replays
-/// from its start in 4.6 ms, under the editor lock, at every cue and seam.
-const CHECKPOINT: usize = 1024;
-
-/// What the display drew with, sampled once a step: what an audition draws
-/// its spot with in place of the live values.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Drawn {
-    /// The tuning axes, the one part of the tuning that decides where a
-    /// pitch lies; `None` until the configuration has been published.
-    pub tuning: Option<Tuning>,
-    /// The lattice map selected, which the lattice marks.
-    pub map: MapSelection,
-}
-
-/// One pass's notes and what they were drawn with, by song frame.
+/// One pass's notes and the lattice map selected as they played, by song
+/// frame.
 #[derive(Default)]
 pub(crate) struct PassNotes {
     /// Sorted by frame; marks at one frame in the order they happened. Opens
     /// with the voices already held when the pass started.
     pub events: Vec<(i64, Mark)>,
-    /// What the display drew with from each frame on, sorted.
-    pub drawn: Vec<(i64, Drawn)>,
-    /// The voices held after the first `n` events, every [`CHECKPOINT`]
-    /// events, so a chase replays from the nearest one rather than the
-    /// pass's start. A mark placed among them drops those after it, and
-    /// they are taken again as the timeline grows.
-    checkpoints: Vec<(usize, BTreeMap<VoiceKey, Sounding>)>,
+    /// The map selected from each frame on, sampled once a step, sorted:
+    /// what an audition marks in place of the live selection, which tuning
+    /// automation moves over the song.
+    pub maps: Vec<(i64, MapSelection)>,
 }
 
 impl PassNotes {
     pub(crate) fn place(&mut self, frame: i64, mark: Mark) {
         let at = self.events.partition_point(|(f, _)| *f <= frame);
         self.events.insert(at, (frame, mark));
-        self.checkpoints.retain(|(n, _)| *n <= at);
-        loop {
-            let last = self.checkpoints.last().map_or(0, |(n, _)| *n);
-            let to = last + CHECKPOINT;
-            if to > self.events.len() {
-                break;
-            }
-            let mut replay = self.replay_from(last);
-            while replay.next < to {
-                self.events[replay.next].1.apply(&mut replay.held);
-                replay.next += 1;
-            }
-            self.checkpoints.push((to, replay.held));
-        }
     }
 
-    /// A replay standing after the checkpoint at `n` events, or the start.
-    fn replay_from(&self, n: usize) -> Replay {
-        self.checkpoints
-            .iter()
-            .rev()
-            .find(|(at, _)| *at == n)
-            .map_or_else(Replay::default, |(at, held)| Replay { next: *at, held: held.clone() })
-    }
-
-    /// What `frame` was drawn with: the last change at or before it, else
-    /// the first, which the pass's opening moments were drawn with too. A
-    /// pass that opened before the configuration was published takes the
-    /// first tuning axes it recorded for those moments, in the same way.
-    pub(crate) fn drawn_at(&self, frame: i64) -> Option<Drawn> {
-        let after = self.drawn.partition_point(|(f, _)| *f <= frame);
-        let drawn = self.drawn.get(after.saturating_sub(1)).map(|(_, drawn)| *drawn)?;
-        let first = || self.drawn.iter().find_map(|(_, drawn)| drawn.tuning);
-        Some(Drawn { tuning: drawn.tuning.or_else(first), ..drawn })
+    /// The map selected at `frame`: the last change at or before it, else
+    /// the first, which the pass's opening moments were marked with too.
+    pub(crate) fn map_at(&self, frame: i64) -> Option<MapSelection> {
+        let after = self.maps.partition_point(|(f, _)| *f <= frame);
+        self.maps.get(after.saturating_sub(1)).map(|(_, map)| *map)
     }
 
     pub(crate) fn bytes(&self) -> usize {
         self.events.len() * std::mem::size_of::<(i64, Mark)>()
-            + self.drawn.len() * std::mem::size_of::<(i64, Drawn)>()
+            + self.maps.len() * std::mem::size_of::<(i64, MapSelection)>()
     }
 }
 
@@ -283,13 +197,11 @@ impl Replay {
         }
     }
 
-    /// The voices `notes` holds at `frame`, read on from the last
-    /// checkpoint before it.
+    /// The voices `notes` holds at `frame`, read from the pass's start: a
+    /// chase at a cue or seam, which a pass of a few minutes replays in well
+    /// under a millisecond.
     pub(crate) fn at(notes: &PassNotes, frame: i64) -> Replay {
-        let before = notes.events.partition_point(|(f, _)| *f < frame);
-        let start =
-            notes.checkpoints.iter().rev().find(|(n, _)| *n <= before).map_or(0, |(n, _)| *n);
-        let mut replay = notes.replay_from(start);
+        let mut replay = Replay::default();
         replay.advance(notes, frame, |_, _, _| {});
         replay
     }
@@ -358,9 +270,11 @@ pub(crate) struct Player {
     sounding: BTreeMap<VoiceKey, Sounding>,
     /// The audition the notes belong to, for Tape mode.
     pub audition: Option<Audition>,
-    /// What the spot heard last was drawn with, while an audition is cued or
-    /// sounds.
-    pub drawn: Option<Drawn>,
+    /// The map selected where the spot heard last was recorded, set by each
+    /// block that carries the tape's audio and cleared by one with none. A
+    /// new cue keeps the last spot's, or none, until its audio arrives, a few
+    /// tens of milliseconds.
+    pub map: Option<MapSelection>,
 }
 
 /// One block's events into the tracker, on the display clock.
@@ -452,7 +366,7 @@ impl Player {
                 audition.until = Some(time);
             }
         }
-        self.drawn = None;
+        self.map = None;
         if rolling {
             self.audition = None;
         }
@@ -526,7 +440,7 @@ impl Player {
                     }
                 }
             });
-            self.drawn = notes.drawn_at(until - 1);
+            self.map = notes.map_at(until - 1);
             frame = until;
         }
         self.cue = Some(cue);
@@ -543,12 +457,12 @@ pub(crate) struct Book {
 
 impl Book {
     /// Open pass `pass` at song frame `frame` with the voices held now.
-    pub(crate) fn open(&mut self, pass: u64, frame: i64, drawn: Drawn) {
+    pub(crate) fn open(&mut self, pass: u64, frame: i64, map: MapSelection) {
         let notes = self.passes.entry(pass).or_default();
         for (key, sounding) in &self.held {
             notes.place(frame, Mark::On { key: *key, sounding: *sounding });
         }
-        notes.drawn.push((frame, drawn));
+        notes.maps.push((frame, map));
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -580,16 +494,10 @@ mod tests {
         Mark::Off { key: key(1, note) }
     }
 
-    /// Tuning axes told apart by their origin.
-    /// Drawn with tuning `n` and map slot `n`.
-    fn drawn(n: i32) -> Drawn {
+    /// Map slot `n` selected.
+    fn map(n: usize) -> MapSelection {
         let engine = harmonigraph_core::lattice_map::TuningEngine::LatticeMap;
-        let position = harmonigraph_core::LatticePos::ORIGIN;
-        Drawn { tuning: Some(tuning(n)), map: MapSelection { engine, slot: n as usize, position } }
-    }
-
-    fn tuning(origin: i32) -> Tuning {
-        Tuning { c_offset: origin, ..Tuning::default() }
+        MapSelection { engine, slot: n, position: harmonigraph_core::LatticePos::ORIGIN }
     }
 
     fn chunk(start: i64, end: i64, pass: u64) -> Chunk {
@@ -609,11 +517,11 @@ mod tests {
         for (frame, mark) in [(500, on(60)), (1200, on(64)), (1400, off(64)), (2500, off(60))] {
             first.place(frame, mark);
         }
-        first.drawn.push((0, drawn(1)));
+        first.maps.push((0, map(1)));
         let mut second = PassNotes::default();
         second.place(1100, on(72));
         second.place(1300, off(72));
-        second.drawn.push((1000, drawn(2)));
+        second.maps.push((1000, map(2)));
         (store, BTreeMap::from([(1, first), (2, second)]))
     }
 
@@ -679,37 +587,6 @@ mod tests {
         assert!((audition.clock_at(1.15) - 60.2).abs() < 1e-9);
     }
 
-    /// A step already holding [`NOTES`] marks has no room for a release. It
-    /// was lost for good, and the tape held the note to the end of its pass;
-    /// the next step records it, at its own time, with no event needed.
-    #[test]
-    fn a_mark_the_bound_held_back_is_recorded_in_the_next_step() {
-        let mut tracker = NoteTracker::new();
-        let mut recorder = Recorder::default();
-        let mut marks = Vec::new();
-        let source = harmonigraph_core::SourceId(1);
-        for (time, note) in [(1.0, 60), (1.1, 62)] {
-            tracker.handle_event(NoteEvent::on(time, source, 0, note, 1.0));
-            recorder.record(&tracker, time, &mut marks);
-        }
-        let full = (0.0, Mark::Off { key: key(1, 0) });
-        marks = vec![full; NOTES];
-        for (time, note) in [(2.0, 60), (2.5, 62)] {
-            tracker.handle_event(NoteEvent::off(time, source, 0, note));
-            recorder.record(&tracker, time, &mut marks);
-        }
-        assert_eq!(marks.len(), NOTES, "the full step took the releases");
-
-        // The next step's drain starts empty.
-        marks.clear();
-        // Dated at the last held-back event, never before a mark that fitted.
-        recorder.catch_up(&tracker, &mut marks);
-        let late = |note| (2.5, Mark::Off { key: key(1, note) });
-        assert_eq!(marks, [late(60), late(62)]);
-        recorder.catch_up(&tracker, &mut marks);
-        assert_eq!(marks.len(), 2, "nothing left behind");
-    }
-
     /// The defect that kept notes out of #1720: a chunk cut by a newer pass
     /// lost the notes held across the cut. Cued after it, the 60 struck
     /// before the cut sounds; cued before the newer pass's stretch, its 72
@@ -724,14 +601,14 @@ mod tests {
         let heard = Heard { cue: 1, seconds: 2.0, frames: 100, speed: 1.0 };
         player.heard(&mut tracker, &store, &passes, heard, 50.0);
         assert_eq!(tape_voices(&tracker), [(60, 50.0)]);
-        assert_eq!(player.drawn, Some(drawn(1)));
+        assert_eq!(player.map, Some(map(1)));
 
         // A new cue at 1.2 s: the old voices stop, pass 2's 72 is held there
         // and ends at 1.3 s, and from 1.5 s pass 1's 60 sounds.
         let heard = Heard { cue: 3, seconds: 1.2, frames: 200, speed: 1.0 };
         player.heard(&mut tracker, &store, &passes, heard, 60.0);
         assert_eq!(tape_voices(&tracker), [], "the 72 ended and the seam is not reached");
-        assert_eq!(player.drawn, Some(drawn(2)));
+        assert_eq!(player.map, Some(map(2)));
         let heard = Heard { cue: 3, seconds: 1.4, frames: 200, speed: 1.0 };
         player.heard(&mut tracker, &store, &passes, heard, 60.2);
         assert_eq!(tape_voices(&tracker), [(60, 60.3)]);
@@ -743,7 +620,7 @@ mod tests {
         // A block with no tape ends it.
         player.silent(&mut tracker, 61.0, false);
         assert_eq!(tape_voices(&tracker), []);
-        assert_eq!(player.drawn, None);
+        assert_eq!(player.map, None);
         assert_eq!(player.audition.and_then(|a| a.until), Some(61.0));
     }
 
@@ -764,32 +641,6 @@ mod tests {
         player.heard(&mut tracker, &store, &passes, heard, 50.2);
         assert_eq!(tape_voices(&tracker), [(60, 50.2)]);
         assert_eq!(player.audition.map(|a| (a.clock, a.song)), Some((50.2, 2.2)));
-    }
-
-    /// A chase read from a checkpoint is the chase read from the start, and
-    /// still is after a mark lands among the checkpoints.
-    #[test]
-    fn a_checkpointed_chase_matches_one_replayed_from_the_start() {
-        let mut notes = PassNotes::default();
-        for i in 0..3 * CHECKPOINT as i64 {
-            let note = 40 + (i % 32) as u8;
-            notes.place(i * 10, if i % 64 < 32 { on(note) } else { off(note) });
-        }
-        // Late, and early in the pass: a release before most checkpoints.
-        notes.place(15, off(40));
-        let whole = |frame: i64| {
-            let mut held = BTreeMap::new();
-            for (_, mark) in notes.events.iter().filter(|(f, _)| *f < frame) {
-                mark.apply(&mut held);
-            }
-            held
-        };
-        // Every checkpoint after the late mark was taken again, so a chase
-        // into the middle of the pass reads from one.
-        assert_eq!(notes.checkpoints.len(), notes.events.len() / CHECKPOINT);
-        for frame in [0, 16, 10_235, 10_250, 15_000, 20_480, 25_000, 30_000, i64::MAX] {
-            assert_eq!(Replay::at(&notes, frame).held, whole(frame), "frame {frame}");
-        }
     }
 
     /// Tape mode's roll is what an audition would play: each stretch's notes

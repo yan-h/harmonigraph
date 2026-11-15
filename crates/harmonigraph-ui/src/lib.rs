@@ -69,7 +69,6 @@ pub use state::{
     CameraPreset, Console, EditorPrefs, ExportAction, FrameRate, Interaction, PictureState,
     SharedState, SurfaceState, TakeState,
 };
-pub use text::use_renderer_font_texture;
 pub use video::{
     LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectrogramRender, VideoEncoder,
     STOP_BAR_RANGE, TAIL_RANGE,
@@ -380,7 +379,6 @@ pub fn root_ui(
             &state.picture.instruments.lattice_stats,
             state.picture.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
             state.picture.surfaces.spectrogram.full_uploads(),
-            state.picture.runtime.spectrum.guard_counts(),
         ),
         now,
         Workload {
