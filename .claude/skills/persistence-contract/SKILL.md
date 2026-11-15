@@ -79,7 +79,7 @@ take/record transport its serialized text opaquely.
 `AppearanceDocument::parse` checks the appearance version and normalizes its settings once before export chooses output configuration or initializes drawing.
 Editor load calls the same `normalize` implementation on its nested document before applying any workspace state.
 An editor version-floor bump does not invalidate a recorded appearance.
-`install_appearance` installs the normalized value and adopts the next parameter snapshot verbatim, without rejudging the tuning links.
+`install_appearance` installs the normalized value and nothing else.
 The links are not in the appearance:
 the runtime holds them, resolved from the configuration's owner,
 and the plugin saves them in `musical-settings` (#1677).
