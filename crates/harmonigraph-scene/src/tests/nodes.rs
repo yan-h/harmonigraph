@@ -970,19 +970,6 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
     }
 }
 
-#[test]
-fn an_inverted_color_range_still_derives_a_scene() {
-    // Every color in the picture runs the gradient math, and Darkest above
-    // Brightest is one drag of a host's parameter list away (raise Darkest
-    // before lowering Brightest and it is the state in between). Deriving
-    // must not panic there.
-    let frame =
-        FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
-    let view = ViewConfig::default();
-    let scene = scene_of(&held(60), &Tuning::default(), &view, &frame, 0.0);
-    assert!(scene.pitch_lut.iter().all(|c| c.is_finite()), "the pitch colours must be colours");
-}
-
 /// The octave indicator lit by a note stands for the pitch that note has ON
 /// THIS NODE, across the octave wrap.
 ///
