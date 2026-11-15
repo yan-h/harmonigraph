@@ -214,8 +214,8 @@ fn extend(rect: &mut Rect, delta: Vec2) {
 /// than a floating widget over the picture.
 ///
 /// The cell is a rail's width, not a row's, so the visible button lands on the
-/// spot its rail's Expand button takes when the region stays put, rather than
-/// a few points off it.
+/// spot its rail's Expand button takes once the region folds (a fold never
+/// moves the pane's edges), rather than a few points off it.
 fn control_rect(axes: &Axes, index: usize, size: f32) -> Rect {
     let inset = size * 0.5;
     let pitch = 1.0 - inset / axes.pitch_len();

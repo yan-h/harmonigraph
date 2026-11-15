@@ -407,8 +407,11 @@ impl Runtime {
     }
 }
 
-/// Draw all sections before applying any fold, so the click's frame still
-/// shows the old layout. The shell applies the request before the next frame.
+/// Draw all sections before a section fold or a dock move takes effect, so the
+/// click's frame still shows the old layout; the window is asked for its new
+/// size, which the shell applies before the next frame. An Analyzer region
+/// fold asks for nothing: it toggles at its click, after its pane has drawn,
+/// and the next frame draws it.
 /// Owning the buttons directly removes the dock's flag/fraction feedback loop.
 pub(crate) fn show(
     ui: &mut egui::Ui,

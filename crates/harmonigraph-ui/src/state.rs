@@ -793,8 +793,8 @@ pub(crate) struct UiPersist {
     /// the floor — [`SharedState::install_document`] refuses it entirely.
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
-    /// See [`Interaction::analyzer_regions`]: the half of a folded region
-    /// that `layout` does not hold.
+    /// Which Analyzer regions are folded, saved beside the layout (see
+    /// [`Interaction::analyzer_regions`]).
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,

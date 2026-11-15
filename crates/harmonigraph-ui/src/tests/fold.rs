@@ -472,7 +472,7 @@ fn stacked_settings_only_is_compact_and_all_sections_can_reopen() {
 
 /// The fresh state with the analyzer's split at an even three quarters, so
 /// each region is wider than the button rail it folds to by enough for a
-/// fold to show in the window's width. The fresh split leaves the spectrum
+/// fold to move the open region visibly. The fresh split leaves the spectrum
 /// only a few points wider than its rail.
 fn split_state() -> SharedState {
     let mut state = fresh();
@@ -732,11 +732,16 @@ fn a_narrow_analyzer_keeps_one_header_row_and_its_spiral_choice() {
     }
 }
 
-/// Where a region's outer edge survives its fold, Expand appears exactly where
-/// Collapse was.
+/// A fold leaves the Analyzer its size, so every region's outer edge stays
+/// where it was and Expand appears exactly where Collapse was.
 #[test]
 fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
-    for (orientation, index) in [(SpectralOrientation::Right, 1), (SpectralOrientation::Left, 0)] {
+    for (orientation, index) in [
+        (SpectralOrientation::Right, 1),
+        (SpectralOrientation::Left, 0),
+        (SpectralOrientation::Right, 0),
+        (SpectralOrientation::Left, 1),
+    ] {
         let mut state = split_state();
         state.picture.appearance.spectrum.orientation = orientation;
         let mut h = DockHarness::new();
