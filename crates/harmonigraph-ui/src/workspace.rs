@@ -372,9 +372,6 @@ fn fit_axis<const N: usize>(
 
 pub(crate) struct Runtime {
     area: Option<Vec2>,
-    /// The frame a click last folded something, a section or an Analyzer
-    /// region: a pass that repeats it replays the click into a copy of
-    /// `before_request` rather than applying it twice.
     requested: Option<u64>,
     before_request: Option<Layout>,
     pub rects: [Rect; 3],
@@ -474,9 +471,6 @@ pub(crate) fn show(
     let unchanged = (before.position, before.folded) == (layout.position, layout.folded);
     dividers(ui, layout, runtime, &drawn, unchanged, scale, floor);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
-    // A region fold toggled in a pass egui discards would be toggled again
-    // when the pass repeats with the same input, so only the frame's first
-    // pass applies one.
     if repeated {
         viewer.interaction.analyzer_regions.request = None;
         return None;
@@ -484,8 +478,6 @@ pub(crate) fn show(
     // A region fold keeps its space inside the Analyzer: the open region
     // takes it, and the window is not asked to change.
     if viewer.interaction.analyzer_regions.apply() {
-        runtime.requested = Some(frame);
-        runtime.before_request = Some(before.clone());
         ui.ctx().request_repaint();
     }
     // A fold or a dock move reshapes the layout, starting from the layout as
