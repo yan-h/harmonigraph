@@ -1493,12 +1493,27 @@ fn a_short_stopped_export_finishes_with_or_without_midi() {
         let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
         assert_eq!(wav.len(), 44 + 64 * 2 * 4, "exactly one callback, no scrub or restore audio");
         // Harmonigraph's own input sounds in the callback it is played in,
-        // the one the take recorded, so its onset is the take's one delta.
-        let deltas = take
+        // the one the take recorded, so its onset is the take's one played
+        // delta. The note is still held when the take ends, and the reader
+        // releases it there (#1803).
+        let kinds: Vec<_> = take
             .events
             .iter()
-            .filter(|e| matches!(e, harmonigraph_take::CanonicalRecord::Delta(_)));
-        assert_eq!(deltas.count(), usize::from(with_note), "{:?}", take.events);
+            .filter_map(|e| match e {
+                harmonigraph_take::CanonicalRecord::Delta(delta) => Some(delta.event.kind),
+                _ => None,
+            })
+            .collect();
+        use harmonigraph_take::NoteKind;
+        if with_note {
+            assert!(
+                matches!(kinds[..], [NoteKind::On { .. }, NoteKind::SessionReset]),
+                "{:?}",
+                take.events
+            );
+        } else {
+            assert!(kinds.is_empty(), "{:?}", take.events);
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
