@@ -1,5 +1,5 @@
-//! Pure take-lifecycle decisions. No publication, callback ownership or policy
-//! atomics live here; the recorder applies the actions.
+//! Pure take-lifecycle decisions: when a block records, where it sits in the
+//! take's audio, and what ends the take. The recorder applies the actions.
 
 /// Forward motion is stronger evidence than accepting a first playing block.
 /// Only the former qualifies a one-file take's rewind as completion (#839).
@@ -17,7 +17,7 @@ pub(super) enum State {
     Recording {
         motion: Motion,
     },
-    /// A transport end, not a callback/configuration finalization proof.
+    /// The transport ended the take: a Loop end wrap or the stop bar.
     Complete,
 }
 

@@ -378,7 +378,7 @@ Separate-WAV replacement is no longer supported;
 `-a` and `--audio` are rejected as unknown options.
 
 The take's first `Run` gives its WAV's first sample a song time, so sound and picture align without an offset to work out.
-A take with no `Run` starts at zero; manual alignment overrides are no longer supported.
+A take with no `Run` recorded nothing and reads empty; manual alignment overrides are no longer supported.
 
 ## Layouts
 

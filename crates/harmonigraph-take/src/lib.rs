@@ -672,9 +672,6 @@ mod tests {
         (header, notes, params)
     }
 
-    /// Write the sample take to its own file and read it back. Each
-    /// caller gets a distinct path: the tests run in parallel, and a
-    /// shared one raced (one test deleting the file another was reading).
     /// A header line and the one run, from zero, that a file's records are
     /// read in.
     fn opened(header: Header) -> String {
@@ -682,6 +679,9 @@ mod tests {
         format!("{}\n{run}", ron::to_string(&Record::Header(header)).unwrap())
     }
 
+    /// Write the sample take to its own file and read it back. Each
+    /// caller gets a distinct path: the tests run in parallel, and a
+    /// shared one raced (one test deleting the file another was reading).
     fn round_trip(name: &str) -> Take {
         let (header, notes, params) = sample();
         let dir = std::env::temp_dir().join(format!("take-test-{}", std::process::id()));

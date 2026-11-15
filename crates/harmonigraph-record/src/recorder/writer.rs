@@ -425,9 +425,8 @@ impl Recording {
     }
 
     /// Close the take's two files and hand the take back for rendering. A
-    /// take with audio and no MIDI is just as intentional as one with notes;
-    /// the lifecycle defers stopped rewinds so restoration alone opens no
-    /// tail. Attempts both even if one fails.
+    /// take with audio and no MIDI is just as intentional as one with notes.
+    /// Attempts both even if one fails.
     fn finish(&mut self) -> std::io::Result<std::path::PathBuf> {
         let notes = self.writer.flush().map_err(|error| {
             std::io::Error::new(

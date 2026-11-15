@@ -388,9 +388,8 @@ impl Hub {
 
     pub fn begin(&mut self, callback: api::Callback, owner: &mut Owner, presentation: f64) {
         self.callback = Some(callback);
-        // One clock for the life of this Harmonigraph. Nothing advances it any
-        // more, because nothing can hold a record long enough for an old one
-        // to reach the recorder: what this callback sequences, it publishes.
+        // One clock for the life of this Harmonigraph, which a host reset cuts
+        // (`Recording::reset`): what this callback sequences, it publishes.
         if owner.recording.clock.runtime_session == 0 {
             owner.recording.clock.runtime_session = self.id;
         }
@@ -1153,10 +1152,16 @@ impl Hub {
         self.mapping().at(sample)
     }
 
-    /// Everything this callback sequenced, and the snapshot a display or take
-    /// reads after a gap and a take reads at the start of every run: what is
-    /// sounding now, built from what the Hub itself scheduled. It
-    /// reconstructs no history.
+    /// Everything this callback sequenced, then the snapshots owed: what is
+    /// sounding now, built from what the Hub itself scheduled, which a display
+    /// or take reads after a gap and a take reads at the start of every run.
+    /// It reconstructs no history.
+    ///
+    /// A run that ends in a later sub-block of this callback pushes its end
+    /// after this, so the take's lanes hold everything collected before it. One
+    /// that ends at this callback's start pushed its end before this, but what
+    /// this callback collected was played in it or a callback before by a Tune
+    /// that lags, and sounds a delay later, at or after that end.
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         self.flush(recorder);
         if self.callback.is_some() {

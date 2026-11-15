@@ -221,8 +221,8 @@ impl TakeLatches {
 
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
-    /// Pins the writer independently from all GUI Control clones. A retired
-    /// producer may still receive actual remote history after editor teardown.
+    /// Pins the writer independently from all GUI Control clones, so a take
+    /// still recording after editor teardown keeps its writer.
     _writer_lifetime: Option<mpsc::Sender<Command>>,
     fence: Arc<RecordFence>,
     publication: publication::Publisher,
@@ -529,25 +529,18 @@ impl Recorder {
     /// offline export progress. The first stopped observation only seeds history;
     /// rejected jumps also update it, so an export can start at a new position.
     /// A tiny manual scrub in that interval is indistinguishable from export:
-    /// it records one block and can qualify a subsequent rewind as the take's
-    /// end. Repeated accepted tiny scrubs record one block each.
+    /// it records one block. Repeated accepted tiny scrubs record one block
+    /// each.
     ///
-    /// A forward gap beyond 50 ms from the accepted audio's end records on
-    /// under manual/AtBar recording. One-file triggers finish the existing
-    /// prefix instead and report the cutoff with the automatic render. Parked
-    /// observations preserve that audio end, so seek-and-resume has the same
-    /// behavior as seeking during playback.
+    /// A seek, or a loop wrap, records on from the end of the audio already
+    /// recorded. Parked observations preserve that audio end, so
+    /// seek-and-resume has the same behavior as seeking during playback.
     ///
     /// Any stopped backward movement is a rewind, including the restore of a
-    /// single accepted export block. Playing hosts retain the
-    /// 50 ms backward jitter allowance used for loop detection.
-    ///
-    /// **What a backward jump costs is what the host does when an audio export
-    /// finishes: it puts the playhead back, and that lands here as one backward
-    /// block.** Under `end_at_rewind` that block ends the take, which is what
-    /// the export wants — everything the transport does afterwards belongs to no
-    /// take. Under OnDisarm, which has to keep recording across a loop, the
-    /// take records on, each loop after the last in its one WAV.
+    /// single accepted export block, which records nothing. Playing hosts
+    /// retain the 50 ms backward jitter allowance used for loop detection.
+    /// Under `end_at_rewind` (Loop end) a rewind after forward motion ends the
+    /// take; under every other trigger the take records on.
     pub fn observe_transport(
         &mut self,
         position: f64,
@@ -616,8 +609,8 @@ impl Recorder {
     }
 
     /// Capture a callback boundary's arm/disarm intent. A Stop after it cannot
-    /// cut off that callback's audio: the producer closes the epoch only when
-    /// a later boundary observes the disarm.
+    /// cut off that callback's audio: the run ends only when a later boundary
+    /// observes the disarm.
     pub fn capture_recording_intent(&self) -> RecordIntent {
         let intent = self.fence.intent();
         #[cfg(feature = "test-support")]
@@ -868,14 +861,14 @@ impl Control {
     ///
     /// The render is launched by the writer thread, after it has closed
     /// the file — the only place that knows the take is actually complete.
-    /// It renders the take's own recorded look, with the notice only the
-    /// writer can know; a take that failed is never rendered.
+    /// It renders the take's own recorded look; a take that failed is never
+    /// rendered.
     pub fn stop(&self) {
         if !self.is_recording() {
             return;
         }
         // Stop is intent: a callback that observed armed still finishes its
-        // block, audio included, and the writer seals behind it.
+        // block, audio included, and the writer seals once its run ends.
         self.fence.finishing.store(true, Ordering::Release);
         self.fence.disarm();
         let _ = self.commands.send(Command::Stop);
